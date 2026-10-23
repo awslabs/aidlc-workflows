@@ -22,7 +22,7 @@
 //   log-subagent      → SUBAGENT_COMPLETED in the audit.
 //   duplicate delivery → the second identical stdin replays the first
 //                       response (the ×2 idempotency contract) — the audit
-//                       gains NO second row.
+//                       gains NO second row; the Stop check runs again (9d, 9e).
 //   malformed stdin   → fail-open exit 0 (advisory contract).
 //   record-human-turn -> a subagent's prompt (it carries agent_id) is not the
 //                       person's turn: no HUMAN_TURN, no kept words (#1411).
@@ -63,7 +63,7 @@ import {
   humanActedSinceGate,
   humanTurnMarkerPath,
   humanTurnState,
-  personsGateFeedback,
+  personsGateReply,
   readSessionBinding,
   sessionsDir,
   setActiveIntentCursor,
@@ -308,6 +308,10 @@ function runAdapter(
         CLAUDE_PROJECT_DIR: undefined,
         CODEX_THREAD_ID: undefined,
         CODEX_SESSION_ID: undefined,
+        // The Stop hook's block is for a run nobody attends (and autonomous
+        // Construction), so its cases read it there; an attended, gated run
+        // ends its turn (1g).
+        ...(target === "continue-workflow" ? { AIDLC_UNATTENDED: "1" } : {}),
         ...envOverrides,
       } as NodeJS.ProcessEnv,
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -730,10 +734,10 @@ describe("t149 Codex subagent prompts are not the person's turn", () => {
       const gate = { stage: "requirements-analysis", acceptAsIs: false };
       appendEvent(dir, "STAGE_AWAITING_APPROVAL", gate.stage);
       prompt(dir, BRIEF, true);
-      expect(personsGateFeedback(dir, ROOT_SESSION, gate)).toBeNull();
+      expect(personsGateReply(dir, ROOT_SESSION, gate.stage).words).toBeNull();
       prompt(dir, "Please add a p99 latency budget of 200 ms.");
       prompt(dir, BRIEF, true);
-      expect(personsGateFeedback(dir, ROOT_SESSION, gate)).toBe("Please add a p99 latency budget of 200 ms.");
+      expect(personsGateReply(dir, ROOT_SESSION, gate.stage).words).toBe("Please add a p99 latency budget of 200 ms.");
       expect(keptWords(dir)).not.toContain("t149-brief-marker");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -953,12 +957,17 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   });
 
   // The step a tool that hides the note gets after the line (Kiro CLI,
-  // opencode, Kiro IDE); the matcher knows that form too.
-  const AGENT_STEP =
+  // opencode, Kiro IDE), in its wording now (it names the install's park) and
+  // the one before; the matcher knows both by their opening and close.
+  const OLD_AGENT_STEP =
     "If you had just asked the person a question, record it with `log decision` and end your turn saying nothing. " +
     "Otherwise, if you carry on with the work, first say that line to the person once, on its own line; " +
     "it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it. " +
     "Say nothing else about this note.";
+  const AGENT_STEP = OLD_AGENT_STEP.replace(
+    "Otherwise,",
+    "If the person asked you to stop or pause, run `bun .kiro/tools/aidlc-orchestrate.ts park --person-asked` and end your turn. Otherwise,",
+  );
 
   // A turn whose person engaged the work, then a user-role message, then an
   // answer with no engine call: blocks when that message is the hook's own
@@ -975,22 +984,23 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     return runAdapter(dir, "continue-workflow", withCwd({ ...FIXTURES.stop, transcript_path: transcript }, dir)).stdout.trim();
   }
 
-  // Codex puts the note back into the chat as a message of the person's. The
-  // hook still knows it as its own, so the agent that engaged the work and then
-  // only answered the note is still steered on. Each line the hook writes, and
-  // the earlier one-line note still found in older transcripts, counts.
-  test("1c: the stop note put back into the chat is not read as the person talking", () => {
+  // A user message Codex did not wrap as a hook's is a message of the person's,
+  // whatever its words: no text match tells the hook's own lines from theirs,
+  // so an answer to it with no engine call ends the turn. Each line the hook
+  // writes, and the earlier one-line note, alike.
+  test("1c: a message with the stop note's words and no wrapper of Codex's is the person's", () => {
     for (const note of [
       "AI-DLC is carrying on with Requirements Analysis.",
       "AI-DLC is carrying on with Code Generation for alpha.",
       "AI-DLC is carrying on.",
       `AI-DLC is carrying on with Code Generation for alpha.\n${AGENT_STEP}`,
+      `AI-DLC is carrying on with Code Generation for alpha.\n${OLD_AGENT_STEP}`,
       "Requirements Analysis is not finished yet. Next: `bun .codex/tools/aidlc-orchestrate.ts next`.",
       "Code Generation for alpha is not finished yet. Next: finish its steps, then `aidlc engine orchestrate report --stage code-generation --result <outcome>`.",
     ]) {
       const dir = scratchProject(true);
       try {
-        expect((JSON.parse(stopAfterMessage(dir, note) || "{}") as { decision?: string }).decision, note).toBe("block");
+        expect(stopAfterMessage(dir, note), note).toBe("");
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
@@ -1042,9 +1052,10 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   const LIVE_WRAPPED_NOTE =
     'The AI-DLC workflow is not finished (current stage "reverse-engineering"). If you just asked the person a question and are waiting for the answer, run `bun .codex/tools/aidlc.ts engine log decision --stage reverse-engineering --decision "&lt;the question&gt;" --options "&lt;the choices&gt;"`, adding any `--single`, `--checkpoint` or `--questions-file` flags that question\'s own instructions use, and end your turn without asking it again. Otherwise run `bun .codex/tools/aidlc-orchestrate.ts next`, do what the step it prints asks, then run `bun .codex/tools/aidlc-orchestrate.ts report --stage &lt;stage&gt; --result &lt;outcome&gt;`; repeat until it answers `done`. If the person asked to stop here, run `bun .codex/tools/aidlc-orchestrate.ts park`. Never mark a stage done or approved just to end the turn, and tell the person nothing about this note.';
 
-  test("1e: Codex's wrapped stop note is the hook's, so a reply with no engine call is still sent on", () => {
+  test("1e: a message Codex wrapped as a Stop hook's is the hook's, whatever is inside, so a reply with no engine call is still sent on", () => {
     for (const inner of [
       LIVE_WRAPPED_NOTE,
+      "please explain the plan",
       "AI-DLC is carrying on with Requirements Analysis.",
       "AI-DLC is carrying on with Feedback &amp; Optimization.",
       "AI-DLC is carrying on.",
@@ -1061,15 +1072,13 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  // Only that exact wrapper around one of the hook's own lines is unwrapped.
-  // A person's message with the tag and words of their own, a wrapped text
-  // that is not a hook line, or another wrapper stays the person's: the
-  // answer to it with no engine call ends the turn.
+  // Only Codex's Stop wrapper around the whole message is the hook's. A
+  // person's message with the tag and words of their own, or another wrapper,
+  // stays the person's: the answer to it with no engine call ends the turn.
   test("1f: a person's message that only looks like Codex's wrapper is still the person", () => {
     for (const said of [
       (dir: string) => `${hookPrompt(dir, "AI-DLC is carrying on with Requirements Analysis.")} why does this keep showing up?`,
       (dir: string) => `what is this? ${hookPrompt(dir, "AI-DLC is carrying on with Requirements Analysis.")}`,
-      (dir: string) => hookPrompt(dir, "please explain the plan"),
       () => '<hook_prompt hook_run_id="session:1">AI-DLC is carrying on with Requirements Analysis.</hook_prompt>',
       () => "<hook_prompt>AI-DLC is carrying on with Requirements Analysis.</hook_prompt>",
     ]) {
@@ -1080,6 +1089,26 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    }
+  });
+
+  // In an attended run the turn that engaged the work and then asked in prose
+  // ends with no note: the question stays on screen for the person.
+  test("1g: in an attended run an engaged turn ends with no stop note", () => {
+    const dir = scratchProject(true);
+    try {
+      const transcript = join(dir, "rollout-2026-10-22T00-00-00.jsonl");
+      const entry = (payload: Record<string, unknown>) => JSON.stringify({ type: "response_item", payload });
+      writeFileSync(transcript, [
+        entry({ type: "message", role: "user", content: [{ type: "input_text", text: "Guide me through the questions" }] }),
+        entry({ type: "function_call", name: "Bash", arguments: JSON.stringify({ command: "bun .codex/tools/aidlc-orchestrate.ts next" }) }),
+        entry({ type: "message", role: "assistant", content: [{ type: "output_text", text: "Who reads the greeting? 1. A person 2. A script" }] }),
+      ].join("\n") + "\n", "utf-8");
+      const r = runAdapter(dir, "continue-workflow", withCwd({ ...FIXTURES.stop, transcript_path: transcript }, dir), { AIDLC_UNATTENDED: "0" });
+      expect(r.code).toBe(0);
+      expect(r.stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -1423,6 +1452,104 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  // A person who types the same words again while the turn is still closing
+  // lands in the same Codex turn: Codex 0.162.1 sends that UserPromptSubmit,
+  // and the Stop after it, with stdin byte-identical to the first. The agent
+  // has spoken in between; a Codex duplicate of the UserPromptSubmit that comes
+  // with its original finds no new assistant message in the rollout. The Stop
+  // check runs on every delivery, so the rollout changes nothing for it (9d). The rollout carries what 0.162.1
+  // writes around each message: the user's line and the agent_message event
+  // that repeats the assistant's words.
+  const REPEAT_SESSION = "019eb8c2-aa02-72e1-9ab4-53e67fca5d63";
+  function rolloutWith(dir: string, assistantMessages: string[], beingWritten = ""): string {
+    const path = join(dir, `rollout-2026-10-19T09-57-33-${REPEAT_SESSION}.jsonl`);
+    const lines = [
+      { type: "session_meta", payload: { id: REPEAT_SESSION } },
+      { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "1" }] } },
+      ...assistantMessages.flatMap((text) => [
+        { type: "event_msg", payload: { type: "agent_message", message: text, role: "assistant" } },
+        { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text }] } },
+      ]),
+    ].map((entry) => JSON.stringify(entry));
+    writeFileSync(path, `${lines.join("\n")}\n${beingWritten}`, "utf-8");
+    return path;
+  }
+
+  test("9c: the same words typed again after the agent spoke record a second HUMAN_TURN; a duplicate delivery records none", () => {
+    const dir = scratchProject(true);
+    try {
+      const payload = {
+        hook_event_name: "UserPromptSubmit",
+        session_id: REPEAT_SESSION,
+        turn_id: "same-running-turn",
+        cwd: dir,
+        transcript_path: rolloutWith(dir, ["Which deck? 1. Basics 2. Advanced"]),
+        prompt: "1",
+      };
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(1);
+      // The agent's next message still being written does not count yet.
+      rolloutWith(dir, ["Which deck? 1. Basics 2. Advanced"], '{"type":"response_item","payload":{"type":"message","role":"assistant"');
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(1);
+      rolloutWith(dir, ["Which deck? 1. Basics 2. Advanced", "How often? 1. Daily 2. Weekly"]);
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(2);
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("9d: a Stop identical to an earlier one runs the stop check again, whether or not the agent has spoken", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "repeat-runs.ndjson");
+      writeFileSync(
+        join(dir, ".codex", "hooks", "aidlc-continue-workflow.ts"),
+        standInHook(capture, "aidlc-continue-workflow.ts", { code: 0 }),
+        "utf-8",
+      );
+      const stop = withCwd({ ...FIXTURES.stop, session_id: REPEAT_SESSION, transcript_path: rolloutWith(dir, ["1"]) }, dir);
+      runAdapter(dir, "continue-workflow", stop);
+      runAdapter(dir, "continue-workflow", stop);
+      expect(recordedRuns(capture)).toHaveLength(2);
+      rolloutWith(dir, ["1", "1"]);
+      runAdapter(dir, "continue-workflow", stop);
+      runAdapter(dir, "continue-workflow", stop);
+      expect(recordedRuns(capture)).toHaveLength(4);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // After a block, Codex sends the same Stop input again while the agent only
+  // runs tools or says nothing. Each of those Stops reaches the core hook, so
+  // its no-progress count climbs to the cap and the stuck loop lets go.
+  test("9e: identical Stops after a block reach the no-progress cap and let go", () => {
+    const dir = scratchProject(true);
+    try {
+      const guard = join(seededRecordDir(dir), ".aidlc-engine", "stop-hook", "block-count.json");
+      const env = { CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: "4" };
+      const first = withCwd(FIXTURES.stop, dir);
+      const again = withCwd({ ...FIXTURES.stop, stop_hook_active: true }, dir);
+      const outcomes: string[] = [];
+      const counts: number[] = [];
+      for (const stop of [first, again, again, again, again]) {
+        const r = runAdapter(dir, "continue-workflow", stop, env);
+        expect(r.code).toBe(0);
+        outcomes.push(r.stdout.includes('"decision":"block"') ? "block" : "allow");
+        counts.push((JSON.parse(readFileSync(guard, "utf-8")) as { count: number }).count);
+      }
+      expect(counts).toEqual([1, 2, 3, 4, 5]);
+      expect(outcomes).toEqual(["block", "block", "block", "allow", "allow"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

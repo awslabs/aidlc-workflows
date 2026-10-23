@@ -32,7 +32,7 @@ export type Directive = Record<string, unknown> & { kind?: string };
 
 type AuditReader = Pick<
   typeof import("../../dist/claude/.claude/tools/aidlc-lib.ts"),
-  "auditBlockField" | "readAuditShardEvents" | "classifyRuntimeCompileCommand"
+  "auditBlockField" | "readAuditShardEvents" | "classifyRuntimeCompileCommand" | "findStageBySlug" | "summaryConfirmationOwed"
 >;
 let reader: AuditReader | undefined;
 function lib(): AuditReader {
@@ -571,7 +571,7 @@ export function recoveryAsk(said: string): Directive | null {
  * Any other remedy (request-changes needs feedback the scope run never gives)
  * stops the run as the stand-in's limit, never as the engine's deadlock.
  */
-const REMEDY_PREFERENCE = [
+export const REMEDY_PREFERENCE = [
   "finish-unit-step", "produce-stage-output", "present-findings-at-gate", "present-approval-gate",
   "start-recovery-review", "request-review",
 ];
@@ -642,6 +642,8 @@ export interface StandInOptions {
   afterReview?: (stage: string, unit: string | null, agent: AgentStandIn) => void;
   /** While a code plan's approval waits, before the person answers. */
   beforePlanAnswer?: (unit: string | null, agent: AgentStandIn) => void;
+  /** At a stage's open gate, after it opened and before the person answers. */
+  atGate?: (stage: string, unit: string | null, agent: AgentStandIn) => void;
   /** Follow each refusal's named step instead of stopping (the guard matrix). */
   followRefusals?: boolean;
   /** The drive returns when the person stops for the day, before their next chat; `resume` carries on from there. */
@@ -689,7 +691,7 @@ export class AgentStandIn {
   readonly units: string[];
   answers: PersonAnswers;
   readonly afterApproval?: StandInOptions["afterApproval"];
-  readonly hooks: Pick<StandInOptions, "onCode" | "afterCheckpoint" | "afterReview" | "beforePlanAnswer" | "artifactText">;
+  readonly hooks: Pick<StandInOptions, "onCode" | "afterCheckpoint" | "afterReview" | "beforePlanAnswer" | "atGate" | "artifactText">;
   /** Each time an engine step sent the agent to repair the units block: where, and how many questions came before. */
   readonly unitsBlockRepairs: { where: string; asked: number }[] = [];
   private steps = 0;
@@ -714,7 +716,7 @@ export class AgentStandIn {
     this.afterApproval = options.afterApproval;
     this.hooks = {
       onCode: options.onCode, afterCheckpoint: options.afterCheckpoint,
-      afterReview: options.afterReview, beforePlanAnswer: options.beforePlanAnswer,
+      afterReview: options.afterReview, beforePlanAnswer: options.beforePlanAnswer, atGate: options.atGate,
       artifactText: options.artifactText,
     };
     this.followRefusals = options.followRefusals ?? false;
@@ -1444,13 +1446,16 @@ export class AgentStandIn {
       return;
     }
     if (d.gate_only !== true) {
-      const opened = this.report(stage, "--result", "awaiting-approval");
+      // A stage being revised ([R]) shows its gate again as revised.
+      const revising = new RegExp(`^- \\[R\\] ${stage} `, "m").test(readFileSync(activeRecord(this.host.proj).state, "utf-8"));
+      const opened = this.report(stage, "--result", revising ? "revised" : "awaiting-approval");
       // The gate does not open over a units block the engine cannot read: the
       // agent repairs it and runs the same report again.
       if (opened.kind === "print" && this.repairUnitsBlockIfNamed(String(opened.message ?? ""), "gate")) {
         this.actOnPrint(opened as Directive);
       }
     }
+    this.hooks.atGate?.(stage, typeof d.unit === "string" ? d.unit : null, this);
     if (this.answers.stopAt?.(stage) && !this.stopped.has(stage)) {
       this.stopped.add(stage);
       this.stopForTheDay();
@@ -1562,8 +1567,11 @@ export class AgentStandIn {
       const question = String(d.question ?? d.prompt ?? "Approve the code plan?");
       const offered = ((d.options as { label?: string }[] | undefined) ?? []).map((o) => String(o.label ?? o));
       this.hooks.beforePlanAnswer?.(unit, this);
-      this.askPerson("plan approval", "code-generation", question,
+      const choice = this.askPerson("plan approval", "code-generation", question,
         offered.length ? offered : ["Approve Plan", "Request Changes"], this.answers.plan(unit));
+      // The agent records the choice it read; a pick in a question box is on
+      // record already, and recording the same choice again changes nothing.
+      this.must("log", "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", choice);
       return;
     }
     if (type === "construction-staffing") {
@@ -1855,9 +1863,22 @@ export function scopeRunProblems(run: ScopeRun, options: ProblemOptions = {}): s
 
   // 2. Every decision recorded as the person's came from the person.
   for (const line of person.ledger.unbacked()) problems.push(line);
+  // A gate's Person Reply is every reply the decision stands on, in order, one
+  // per line (the audit escapes the line breaks): each line from a message the
+  // person sent.
+  const fromTheirMessages = (reply: string): boolean => {
+    const parts = reply.split("\\n");
+    let at = 0;
+    for (const message of person.said) {
+      const lines = message.split(/\r?\n/);
+      if (lines.every((line, k) => parts[at + k] === line)) at += lines.length;
+      if (at === parts.length) return true;
+    }
+    return false;
+  };
   for (const e of events.filter((e) => e.event === "GATE_APPROVED")) {
     const reply = field(e.block, "Person Reply");
-    if (reply !== null && !person.said.includes(reply)) {
+    if (reply !== null && !fromTheirMessages(reply)) {
       problems.push(`GATE_APPROVED ${field(e.block, "Stage")} records ${JSON.stringify(reply)}, which the person never sent`);
     }
   }
@@ -1958,8 +1979,13 @@ function switchProblems(
   for (const d of runStages) {
     const got = { ...(d.ceremony as Record<string, string> | undefined) };
     if (skipLearnings) delete got.learnings;
-    if (d.ceremony && JSON.stringify(got) !== JSON.stringify(ceremony)) {
-      problems.push(`${String(d.stage)} carried ceremony ${JSON.stringify(got)}, the scope declares ${JSON.stringify(ceremony)}`);
+    const stage = lib().findStageBySlug(String(d.stage));
+    if (!stage) throw new Error(`Missing stage declaration for ${String(d.stage)}`);
+    const effective = { ...ceremony, summary_confirmation: onOff(lib().summaryConfirmationOwed(stage, {
+      scope: run.scope, stateContent: state, ignoreGuardSwitch: true,
+    })) };
+    if (d.ceremony && JSON.stringify(got) !== JSON.stringify(effective)) {
+      problems.push(`${String(d.stage)} carried ceremony ${JSON.stringify(got)}, the stage owes ${JSON.stringify(effective)}`);
     }
   }
   const has = (pred: (d: Directive) => boolean) => runStages.some(pred);

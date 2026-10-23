@@ -222,6 +222,39 @@ async function createIntent(proj: string, label: string, words: string): Promise
   if (created.status !== 0) throw new Error(`intent-create failed: ${created.stdout}${created.stderr}`);
 }
 
+/** A bugfix at Requirements Analysis as a run leaves it before the gate's report: files written, summary confirmed,
+ * the reviewer's READY review on record. */
+export async function reviewedStage(proj: string): Promise<void> {
+  writeFileSync(seededStateFile(proj), midInception(), "utf-8");
+  appendAuditEntry("STAGE_STARTED", { Stage: STAGE }, proj);
+  writeStageFiles(proj, true);
+  // The stage's documents, written through the host's write hook so the record knows them.
+  const questions = join(stageDir(proj), `${STAGE}-questions.md`);
+  recordArtifactWriteViaHook(proj, questions);
+  // The consolidated summary, shown and confirmed by the person (a human turn backs the answer).
+  const summaryArgs = ["--checkpoint", "summary-confirmation", "--stage", STAGE, "--questions-file", questions, "--project-dir", proj];
+  const shown = await exec([process.execPath, LOG, "decision", ...summaryArgs, "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes"], { cwd: proj, env: env(proj) });
+  if (shown.status !== 0) throw new Error(`summary confirmation ask failed: ${shown.stdout}${shown.stderr}`);
+  await say(proj, "Looks correct", "claude");
+  writeFileSync(questions, readFileSync(questions, "utf-8").replace(/\[Answer\]: \n$/, "[Answer]: Looks correct\n"), "utf-8");
+  recordArtifactWriteViaHook(proj, questions, "Edit");
+  const confirmed = await exec([process.execPath, LOG, "answer", ...summaryArgs, "--details", "Looks correct"], { cwd: proj, env: env(proj) });
+  if (confirmed.status !== 0) throw new Error(`summary confirmation answer failed: ${confirmed.stdout}${confirmed.stderr}`);
+  // The stage's document is saved from the confirmed answers, then reviewed.
+  const requirements = join(stageDir(proj), "requirements.md");
+  writeFileSync(requirements, readFileSync(requirements, "utf-8"), "utf-8");
+  recordArtifactWriteViaHook(proj, requirements);
+  const asked = await exec([process.execPath, LOG, "review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "1", "--project-dir", proj], { cwd: proj, env: env(proj) });
+  if (asked.status !== 0) throw new Error(`review request failed: ${asked.stdout}${asked.stderr}`);
+  const reviewFile = (JSON.parse(asked.stdout.split("\n").find((l) => l.startsWith("{")) ?? "{}") as { reviewFile?: string }).reviewFile;
+  if (!reviewFile) throw new Error(`no review file named: ${asked.stdout}`);
+  writeFileSync(join(proj, reviewFile),
+    `## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Date:** 2026-01-01T00:00:00Z\n**Iteration:** 1\n\n` +
+      "### Findings\n\n**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n\n### Summary\n\nReady.\n", "utf-8");
+  const ready = await exec([process.execPath, LOG, "review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { cwd: proj, env: env(proj) });
+  if (ready.status !== 0) throw new Error(`review verdict failed: ${ready.stdout}${ready.stderr}`);
+}
+
 /** A project at one of the corpus states. `proj` already holds the shipped engine and the method tree. */
 export async function buildState(proj: string, state: State): Promise<void> {
   switch (state) {
@@ -262,36 +295,8 @@ export async function buildState(proj: string, state: State): Promise<void> {
       return;
     }
     case "gate-open": {
-      // A bugfix at Requirements Analysis: files written, summary confirmed, the reviewer's READY review on record,
-      // the gate waiting for the person, so an approval goes through under production guards.
-      writeFileSync(seededStateFile(proj), midInception(), "utf-8");
-      appendAuditEntry("STAGE_STARTED", { Stage: STAGE }, proj);
-      writeStageFiles(proj, true);
-      // The stage's documents, written through the host's write hook so the record knows them.
-      const questions = join(stageDir(proj), `${STAGE}-questions.md`);
-      recordArtifactWriteViaHook(proj, questions);
-      // The consolidated summary, shown and confirmed by the person (a human turn backs the answer).
-      const summaryArgs = ["--checkpoint", "summary-confirmation", "--stage", STAGE, "--questions-file", questions, "--project-dir", proj];
-      const shown = await exec([process.execPath, LOG, "decision", ...summaryArgs, "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes"], { cwd: proj, env: env(proj) });
-      if (shown.status !== 0) throw new Error(`summary confirmation ask failed: ${shown.stdout}${shown.stderr}`);
-      await say(proj, "Looks correct", "claude");
-      writeFileSync(questions, readFileSync(questions, "utf-8").replace(/\[Answer\]: \n$/, "[Answer]: Looks correct\n"), "utf-8");
-      recordArtifactWriteViaHook(proj, questions, "Edit");
-      const confirmed = await exec([process.execPath, LOG, "answer", ...summaryArgs, "--details", "Looks correct"], { cwd: proj, env: env(proj) });
-      if (confirmed.status !== 0) throw new Error(`summary confirmation answer failed: ${confirmed.stdout}${confirmed.stderr}`);
-      // The stage's document is saved from the confirmed answers, then reviewed.
-      const requirements = join(stageDir(proj), "requirements.md");
-      writeFileSync(requirements, readFileSync(requirements, "utf-8"), "utf-8");
-      recordArtifactWriteViaHook(proj, requirements);
-      const asked = await exec([process.execPath, LOG, "review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "1", "--project-dir", proj], { cwd: proj, env: env(proj) });
-      if (asked.status !== 0) throw new Error(`review request failed: ${asked.stdout}${asked.stderr}`);
-      const reviewFile = (JSON.parse(asked.stdout.split("\n").find((l) => l.startsWith("{")) ?? "{}") as { reviewFile?: string }).reviewFile;
-      if (!reviewFile) throw new Error(`no review file named: ${asked.stdout}`);
-      writeFileSync(join(proj, reviewFile),
-        `## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Date:** 2026-01-01T00:00:00Z\n**Iteration:** 1\n\n` +
-          "### Findings\n\n**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n\n### Summary\n\nReady.\n", "utf-8");
-      const ready = await exec([process.execPath, LOG, "review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { cwd: proj, env: env(proj) });
-      if (ready.status !== 0) throw new Error(`review verdict failed: ${ready.stdout}${ready.stderr}`);
+      // The gate waiting for the person, so an approval goes through under production guards.
+      await reviewedStage(proj);
       const gate = await exec([process.execPath, ORCHESTRATE, "report", "--stage", STAGE, "--result", "awaiting-approval", "--project-dir", proj], { cwd: proj, env: env(proj) });
       if (gate.status !== 0) throw new Error(`gate did not open: ${gate.stdout}${gate.stderr}`);
       return;

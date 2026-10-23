@@ -22,20 +22,18 @@
 //   3. Override-before-default keyed by basename(outputPath) stem: a
 //      multi-artifact stage resolves EACH artifact against its own template
 //      (requirements.md vs architecture.md), distinctly.
-//   4. Third branch (no template): output keeps the generic >=2-H2 floor.
+//   4. Third branch (no template): no heading is required (#2721).
 //   5. Eligibility gating (the MUST-FIX hazard): an INELIGIBLE artifact's
-//      resolved template is IGNORED (kept on the floor) + a config_warning is
-//      surfaced — so a team dropping requirements-analysis-questions.md does
-//      NOT get spurious findings against a file whose sections are its
-//      questions.
+//      resolved template is IGNORED + a config_warning is surfaced, so a team
+//      dropping requirements-analysis-questions.md does NOT get spurious
+//      findings against a file whose sections are its questions.
 //   6. Advisory severity preserved: the manifest default_severity stays advisory
 //      and the script still exits 0 on a template fail (verdict is data, not an
 //      exit code).
 //   7. Same-file invariant: the bytes the agent would fill (the template file)
 //      ARE the bytes the sensor parses for its expected set — no drift.
-//   Marker handling: a `*-timestamp.md` run record passes whatever its
-//      headings (an ignored template still warns); a `*-questions.md` marker
-//      keeps the floor.
+//   Marker handling: a `*-timestamp.md` run record and a `*-questions.md`
+//      marker pass whatever their headings (an ignored template still warns).
 //
 // Mechanism: cli (spawnSync of the bun script) for the sensor cases + none
 // (in-process import) for the templateEligibleArtifacts cases. No LLM, no
@@ -48,7 +46,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AIDLC_SRC, toPortablePath } from "../harness/fixtures.ts";
@@ -60,6 +58,7 @@ import {
 	memoryTemplatesDir,
 	templateEligibleArtifacts,
 } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+import { parseBoltDag, unitsBlockRepair } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { existsSync, readdirSync } from "node:fs";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -104,6 +103,7 @@ interface SensorResult {
   template_missing?: string[];
   config_warning?: string;
   edge_block?: string;
+  message?: string;
   raw: string;
   status: number | null;
 }
@@ -233,6 +233,32 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
     expect(r.status).toBe(0);
   });
 
+  // #2417: a leading emoji is decoration (headingKey, as in #1385), so
+  // `## 📌 Overview` is the template's `## Overview`, and back.
+  test("emoji-decorated headings match their template headings", () => {
+    const ws = makeWorkspace();
+    writeFile(
+      join(ws.templatesDir, "requirements.md"),
+      "# Requirements\n\n## Overview\n\n## \u{1F4CB} Constraints\n\n## Risks\n",
+    );
+    const out = join(ws.outDir, "requirements.md");
+    writeFile(
+      out,
+      "# Requirements\n\n## \u{1F4CC} Overview\nO1\n\n## Constraints\nC1\n",
+    );
+    const r = runSensor({
+      stage: "requirements-analysis",
+      outputPath: out,
+      templatesDir: ws.templatesDir,
+      eligible: ["requirements"],
+    });
+    expect(r.template).toBe("applied");
+    // A missing section is still reported as the template spells it.
+    expect(r.template_missing).toEqual(["## Risks"]);
+    expect(r.findings_count).toBe(1);
+    expect(r.pass).toBe(false);
+  });
+
   // 3 — override-before-default keyed by stem: a multi-artifact stage resolves
   // EACH artifact against its own template, distinctly. reverse-engineering
   // produces both business-overview and architecture (verified produces list).
@@ -275,8 +301,8 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
     expect(rarch.pass).toBe(false);
   });
 
-  // 4 — third branch: no template resolves → generic >=2-H2 floor.
-  test("no template resolves → generic >=2-H2 floor (template field absent)", () => {
+  // 4 - third branch: no template resolves, so no heading is required.
+  test("no template resolves: nothing required (template field absent)", () => {
     const ws = makeWorkspace();
     const out = join(ws.outDir, "requirements.md");
     writeFile(out, "# Requirements\n\n## One\n\n## Two\n");
@@ -299,11 +325,11 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
     const r = runSensor({ stage: "requirements-analysis", outputPath: out });
     expect(r.template).toBeUndefined();
     expect(r.h2_count).toBe(1);
-    expect(r.pass).toBe(false); // <2 H2 fails the generic floor
-    expect(r.findings_count).toBe(1);
+    expect(r.pass).toBe(true);
+    expect(r.findings_count).toBe(0);
   });
 
-  // --- §10 MIDDLE branch: framework-default templates (team → framework → floor) ---
+  // --- MIDDLE branch: framework-default templates (team, then framework, then none) ---
 
   // 5 - framework default applies when the team dir misses (the middle tier).
   test("framework-default template applies when team dir has none → template:applied", () => {
@@ -353,8 +379,9 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
     expect(r.pass).toBe(true);
   });
 
-  // 7 — GA reality: framework dir present but EMPTY (zero default files) → floor.
-  test("empty framework dir (GA default) falls through to the generic floor", () => {
+  // 7 - GA reality: framework dir present but EMPTY (zero default files), so
+  // no heading is required.
+  test("empty framework dir (GA default) falls through: nothing required", () => {
     const ws = makeWorkspace();
     const out = join(ws.outDir, "requirements.md");
     writeFile(out, "# Requirements\n\n## One\n\n## Two\n");
@@ -371,7 +398,7 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
   });
 
   // 8 — eligibility gate still applies to a framework-default resolution.
-  test("framework default for an ineligible artifact is ignored + config_warning, floor kept", () => {
+  test("framework default for an ineligible artifact is ignored + config_warning", () => {
     const ws = makeWorkspace();
     writeFile(
       join(ws.frameworkDir, "intent-questions.md"),
@@ -387,13 +414,13 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
     });
     expect(r.template).toBe("ineligible");
     expect(r.config_warning).toBeDefined();
-    // keeps the generic floor: 1 H2 → fails
-    expect(r.pass).toBe(false);
+    // The template was ignored, so its 3 headings are not required.
+    expect(r.pass).toBe(true);
   });
 
   // 5 — eligibility gating (the MUST-FIX hazard). A team drops a template for
   // a questions marker; it must be IGNORED + warned, NOT applied.
-  test("ineligible artifact: resolved template ignored + config_warning, floor kept", () => {
+  test("ineligible artifact: resolved template ignored + config_warning", () => {
     const ws = makeWorkspace();
     // Team authored a template for a questions marker (unsound stem key).
     writeFile(
@@ -401,8 +428,7 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
       "## Q1\n\n## Q2\n\n## Q3\n",
     );
     const out = join(ws.outDir, "requirements-analysis-questions.md");
-    // This fixture is deliberately below the floor (one H2), so the verdict
-    // shows which rule governed: the floor, not the ignored template.
+    // One H2, so the verdict shows the ignored template did not govern.
     writeFile(out, "## Questions\n[Q]: ...\n[Answer]: ...\n");
     const r = runSensor({
       stage: "requirements-analysis",
@@ -415,12 +441,10 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
     expect(typeof r.config_warning).toBe("string");
     expect(r.config_warning).toContain("requirements-analysis-questions.md");
     expect(r.template_missing).toBeUndefined();
-    // The template was IGNORED: the file kept the generic floor (1 H2 -> fail,
-    // since the floor for a <2-H2 file would fail — prove it's the FLOOR, not
-    // the template's 3-heading set, that governs).
+    // The template was IGNORED: its 3 headings are not findings.
     expect(r.h2_count).toBe(1);
-    expect(r.pass).toBe(false); // floor (<2 H2), NOT the template's 3 missing
-    expect(r.findings_count).toBe(1); // 2 - 1 floor finding, not 3 template misses
+    expect(r.pass).toBe(true);
+    expect(r.findings_count).toBe(0);
     expect(r.status).toBe(0); // advisory
   });
 
@@ -451,9 +475,8 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
   });
 
   // Timestamp markers are run records, not documents. practices-discovery
-  // specifies its marker as one line, so the generic floor would fail every
-  // to-spec file at the gate. It passes with its headings still reported;
-  // questions markers keep the floor.
+  // specifies its marker as one line; it passes with its headings still
+  // reported.
   test("timestamp marker written to spec (one line, no headings) passes", () => {
     const ws = makeWorkspace();
     const out = join(ws.outDir, "practices-discovery-timestamp.md");
@@ -476,14 +499,14 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
     expect(r.findings_count).toBe(0);
   });
 
-  test("questions marker below the floor still fails (the exemption is timestamp-only)", () => {
+  test("questions marker with no `##` heading passes", () => {
     const ws = makeWorkspace();
     const out = join(ws.outDir, "requirements-analysis-questions.md");
     writeFile(out, "# Questions\n\nQ1: pick one\n[Answer]:\n");
     const r = runSensor({ stage: "requirements-analysis", outputPath: out });
-    expect(r.pass).toBe(false);
+    expect(r.pass).toBe(true);
     expect(r.h2_count).toBe(0);
-    expect(r.findings_count).toBe(2);
+    expect(r.findings_count).toBe(0);
   });
 
   test("template resolving for a timestamp marker is ignored + warned, marker still passes", () => {
@@ -529,4 +552,202 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
     // ...the templates/ floor SEED ships (the .gitkeep guarantees it exists).
     expect(readdirSync(dispatcherDefault)).toContain(".gitkeep");
   });
+});
+
+// #2721: a file written the way its stage shapes it passes. Reverse
+// Engineering gives component-inventory.md and technology-stack.md no headings
+// and Build and Test gives cross-unit-traceability.md none, so an H1 with `###`
+// subsections or a table is to spec; the gate used to say "2 findings" about
+// each. When the check does fail, the result says why in plain words, and the
+// detail file the agent corrects from carries it.
+describe("t155 #2721: no rule the instructions do not give, and a plain reason", () => {
+  const COMPONENT_INVENTORY = [
+    "# Component Inventory",
+    "",
+    "### OrderService",
+    "- Responsibility: takes orders",
+    "- Depends on: PaymentClient",
+    "",
+    "### PaymentClient",
+    "- Responsibility: calls the payment API",
+    "",
+    "| Component | Owner |",
+    "|---|---|",
+    "| OrderService | orders |",
+    "",
+  ].join("\n");
+  const TABLE_ONLY = (title: string) =>
+    `# ${title}\n\n| Item | Value |\n|---|---|\n| Language | TypeScript 5.4 |\n| Runtime | Node.js 20 |\n`;
+
+  for (const [stage, file, body] of [
+    ["reverse-engineering", "component-inventory.md", COMPONENT_INVENTORY],
+    ["reverse-engineering", "technology-stack.md", TABLE_ONLY("Technology Stack")],
+    ["build-and-test", "cross-unit-traceability.md", TABLE_ONLY("Cross-Unit Traceability")],
+  ] as const) {
+    test(`${stage} ${file} with no \`##\` headings, as its stage shapes it, passes`, () => {
+      const ws = makeWorkspace();
+      const out = join(ws.outDir, file);
+      writeFile(out, body);
+      const r = runSensor({
+        stage,
+        outputPath: out,
+        templatesDir: ws.templatesDir,
+        frameworkTemplatesDir: ws.frameworkDir,
+        eligible: [file.replace(/\.md$/, "")],
+      });
+      expect(r.pass).toBe(true);
+      expect(r.findings_count).toBe(0);
+      expect(r.h2_count).toBe(0);
+      expect(r.headings).toEqual([]);
+      expect(r.message).toBeUndefined();
+      expect(r.status).toBe(0);
+    });
+  }
+
+  test("a questions file with one question passes", () => {
+    const ws = makeWorkspace();
+    const out = join(ws.outDir, "requirements-analysis-questions.md");
+    writeFile(
+      out,
+      "# Requirements Questions\n\n## Q1. [Product] Who signs in?\nA. Staff\nB. Customers\nX. Other (please specify)\n\n[Answer]:\n",
+    );
+    const r = runSensor({ stage: "requirements-analysis", outputPath: out });
+    expect(r.h2_count).toBe(1);
+    expect(r.pass).toBe(true);
+    expect(r.findings_count).toBe(0);
+  });
+
+  test("a template miss says which section is missing, in one sentence", () => {
+    const ws = makeWorkspace();
+    writeFile(join(ws.templatesDir, "requirements.md"), "# Requirements\n\n## Scope\n\n## Risks\n");
+    const out = join(ws.outDir, "requirements.md");
+    writeFile(out, "# Requirements\n\n## Scope\nS1\n");
+    const r = runSensor({
+      stage: "requirements-analysis",
+      outputPath: out,
+      templatesDir: ws.templatesDir,
+      eligible: ["requirements"],
+    });
+    expect(r.pass).toBe(false);
+    expect(r.message).toBe("requirements.md is missing the `## Risks` section its template asks for.");
+  });
+
+  test("several template misses are named in the one sentence, in the template's order", () => {
+    const ws = makeWorkspace();
+    writeFile(join(ws.templatesDir, "requirements.md"), "# Requirements\n\n## Scope\n\n## Risks\n\n## Owners\n");
+    const out = join(ws.outDir, "requirements.md");
+    writeFile(out, "# Requirements\n\n## Risks\nR1\n");
+    const r = runSensor({
+      stage: "requirements-analysis",
+      outputPath: out,
+      templatesDir: ws.templatesDir,
+      eligible: ["requirements"],
+    });
+    expect(r.findings_count).toBe(2);
+    expect(r.message).toBe("requirements.md is missing 2 sections its template asks for: `## Scope`, `## Owners`.");
+  });
+
+  test("a template that is met carries no message", () => {
+    const ws = makeWorkspace();
+    writeFile(join(ws.templatesDir, "requirements.md"), "# Requirements\n\n## Scope\n");
+    const out = join(ws.outDir, "requirements.md");
+    writeFile(out, "# Requirements\n\n## Scope\nS1\n");
+    const r = runSensor({
+      stage: "requirements-analysis",
+      outputPath: out,
+      templatesDir: ws.templatesDir,
+      eligible: ["requirements"],
+    });
+    expect(r.pass).toBe(true);
+    expect(r.message).toBeUndefined();
+    expect(r.raw.includes("message")).toBe(false);
+  });
+
+  const UNITS_CYCLE = ["# Unit Dependencies", "", "## Order", "", "```yaml", "units:", "  - name: a", "    depends_on: [b]", "  - name: b", "    depends_on: [a]", "```", "", "## Notes", ""].join("\n");
+  const UNITS_ABSENT = "# Unit Dependencies\n\n## Order\n\na before b\n\n## Notes\n\nnone\n";
+
+  for (const [label, body] of [
+    ["cyclic", UNITS_CYCLE],
+    ["absent", UNITS_ABSENT],
+  ] as const) {
+    test(`units block ${label}: the result says what to write, in the engine's own repair words`, () => {
+      const ws = makeWorkspace();
+      const out = join(ws.outDir, "unit-of-work-dependency.md");
+      writeFile(out, body);
+      const r = runSensor({ stage: "units-generation", outputPath: out });
+      const parsed = parseBoltDag(body);
+      if (parsed.ok) throw new Error("fixture block must not parse");
+      expect(r.pass).toBe(false);
+      expect(r.edge_block).toBe(label);
+      expect(r.message).toBe(unitsBlockRepair(parsed.reason, parsed.detail));
+    });
+  }
+
+  test("a template miss and a broken units block in one file make one message", () => {
+    const ws = makeWorkspace();
+    writeFile(join(ws.templatesDir, "unit-of-work-dependency.md"), "# Unit Dependencies\n\n## Order\n\n## Risks\n");
+    const out = join(ws.outDir, "unit-of-work-dependency.md");
+    writeFile(out, UNITS_ABSENT);
+    const r = runSensor({
+      stage: "units-generation",
+      outputPath: out,
+      templatesDir: ws.templatesDir,
+      eligible: ["unit-of-work-dependency"],
+    });
+    const parsed = parseBoltDag(UNITS_ABSENT);
+    if (parsed.ok) throw new Error("fixture block must not parse");
+    expect(r.pass).toBe(false);
+    expect(r.findings_count).toBe(2);
+    expect(r.message).toBe(
+      `unit-of-work-dependency.md is missing the \`## Risks\` section its template asks for. ${unitsBlockRepair(parsed.reason, parsed.detail)}`,
+    );
+  });
+});
+
+// Build and Test's and Performance Validation's results are artifacts whose
+// file is not named after them: both write test-results.md. The dispatcher
+// passes each stage's eligible artifact NAMES, so a team's
+// templates/test-results.md has to be matched through the artifact's file, or
+// the team's own template is never checked.
+describe("t155 a team's test-results.md template is checked at Build and Test and Performance Validation", () => {
+  const GRAPH = JSON.parse(readFileSync(join(AIDLC_SRC, "tools", "data", "stage-graph.json"), "utf-8")) as Array<{
+    slug: string;
+    produces?: string[];
+    optional_produces?: string[];
+  }>;
+  const eligibleFor = (slug: string): string[] => {
+    const node = GRAPH.find((stage) => stage.slug === slug);
+    if (!node) throw new Error(`stage ${slug} is not in the shipped graph`);
+    return templateEligibleArtifacts([...(node.produces ?? []), ...(node.optional_produces ?? [])]);
+  };
+
+  for (const stage of ["build-and-test", "performance-validation"]) {
+    test(`${stage}: a test-results.md missing the template's sections fails and names them`, () => {
+      const ws = makeWorkspace();
+      writeFile(join(ws.templatesDir, "test-results.md"), "# Test Results\n\n## Summary\n\n## Failures\n\n## Coverage\n");
+      const out = join(ws.outDir, "test-results.md");
+      writeFile(out, "# Test Results\n\n## Summary\nAll 12 tests pass.\n");
+      const r = runSensor({ stage, outputPath: out, templatesDir: ws.templatesDir, eligible: eligibleFor(stage) });
+      expect(r.template).toBe("applied");
+      expect(r.config_warning).toBeUndefined();
+      expect(r.pass).toBe(false);
+      expect(r.template_missing).toEqual(["## Failures", "## Coverage"]);
+      expect(r.findings_count).toBe(2);
+      expect(r.message).toBe(
+        "test-results.md is missing 2 sections its template asks for: `## Failures`, `## Coverage`.",
+      );
+      expect(r.status).toBe(0);
+    });
+
+    test(`${stage}: a test-results.md with every template section passes`, () => {
+      const ws = makeWorkspace();
+      writeFile(join(ws.templatesDir, "test-results.md"), "# Test Results\n\n## Summary\n\n## Failures\n");
+      const out = join(ws.outDir, "test-results.md");
+      writeFile(out, "# Test Results\n\n## Summary\nAll pass.\n\n## Failures\nNone.\n");
+      const r = runSensor({ stage, outputPath: out, templatesDir: ws.templatesDir, eligible: eligibleFor(stage) });
+      expect(r.template).toBe("applied");
+      expect(r.pass).toBe(true);
+      expect(r.findings_count).toBe(0);
+    });
+  }
 });

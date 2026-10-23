@@ -37,6 +37,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { forwardJumpNotice } from "../../core/tools/aidlc-jump.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { stateDigest, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
@@ -350,21 +351,36 @@ describe("t194 recompose - rejections", () => {
     expect(auditText(proj)).toContain("**Reason**: jump to user-stories");
   });
 
-  test("autonomous Construction rejected: recompose refuses and names a setter that runs", () => {
-    // The engine-side anchor for the "never recompose under autonomous
-    // Construction" rule (mirrors the park guard). A created feature project has no
-    // Construction Autonomy Mode field, so inject it as autonomous the way
-    // set-autonomy would, then confirm the verb refuses and the state is
-    // untouched by the rejection.
+  // Under "Continue automatically" the person's own plan change goes through,
+  // as their scope change does; a change nobody asked for is refused, naming
+  // the setter that lets it through. A created feature project has no
+  // Construction Autonomy Mode field, so it is injected as set-autonomy writes
+  // it.
+  const SESSION = "01995000-7a11-7000-8000-00000000c194";
+  const attended: NodeJS.ProcessEnv = { ...process.env, AIDLC_SESSION_OVERRIDE: SESSION, AIDLC_UNATTENDED: "0" };
+  function autonomousProject(): { proj: string; before: string } {
     const proj = createdProject();
     const sp = statePathOf(proj);
-    const withAutonomy = readFileSync(sp, "utf-8").replace(
+    const before = readFileSync(sp, "utf-8").replace(
       /- \*\*Status\*\*: Running/,
       "- **Status**: Running\n- **Construction Autonomy Mode**: autonomous",
     );
-    expect(withAutonomy).toContain("- **Construction Autonomy Mode**: autonomous");
-    writeFileSync(sp, withAutonomy, "utf-8");
-    const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
+    expect(before).toContain("- **Construction Autonomy Mode**: autonomous");
+    writeFileSync(sp, before, "utf-8");
+    return { proj, before };
+  }
+  // What the person types, through the human-turn hook every harness uses.
+  function says(proj: string, prompt: string): void {
+    const res = spawnSync(BUN, [toolIn(proj, "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
+      env: { ...attended, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj } as Record<string, string>,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(res.status, res.stderr).toBe(0);
+  }
+  const refusedNamingTheSetter = (r: { status: number; out: string }): void => {
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("Construction Autonomy Mode is autonomous");
     // The step it names is one that runs: the setter's real command, and no
@@ -372,7 +388,41 @@ describe("t194 recompose - rejections", () => {
     expect(r.out).toMatch(/`[^`]*aidlc[^`]*bolt[^`]* set-autonomy --mode gated`/);
     expect(r.out).not.toContain("(aidlc-bolt set-autonomy");
     expect(r.out).not.toContain("wait for the current build");
-    expect(readState(proj)).toBe(withAutonomy);
+  };
+
+  test("autonomous Construction: the person's own request goes through, and the work keeps running automatically", () => {
+    const { proj, before } = autonomousProject();
+    says(proj, "/aidlc --skip market-research");
+    const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research", "--reason", "the person asked to skip it"], attended);
+    expect(r.status, r.out).toBe(0);
+    const after = readState(proj);
+    expect(after).toContain("- **Construction Autonomy Mode**: autonomous");
+    expect(after).toMatch(/- \[ \] market-research \u2014 SKIP/);
+    // Only the plan changed: the stage rows other than the flip, and the autonomy choice, are as they were.
+    const rows = (content: string) => content.split("\n").filter((line) => /^- \[.\] /.test(line) && !line.includes(" market-research "));
+    expect(rows(after)).toEqual(rows(before));
+    expect(auditText(proj)).toContain("RECOMPOSED");
+  });
+
+  test("autonomous Construction: with no request of the person's on record, recompose refuses and names a setter that runs", () => {
+    const { proj, before } = autonomousProject();
+    refusedNamingTheSetter(run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"], attended));
+    expect(readState(proj)).toBe(before);
+  });
+
+  test("autonomous Construction: the turn that chose Continue automatically is not a request for this change", () => {
+    const { proj, before } = autonomousProject();
+    says(proj, "Continue automatically");
+    appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, proj);
+    refusedNamingTheSetter(run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"], attended));
+    expect(readState(proj)).toBe(before);
+  });
+
+  test("autonomous Construction: an unattended driver is nobody's request, even with a turn on record", () => {
+    const { proj, before } = autonomousProject();
+    says(proj, "/aidlc --skip market-research");
+    refusedNamingTheSetter(run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"], { ...attended, AIDLC_UNATTENDED: "1" }));
+    expect(readState(proj)).toBe(before);
   });
 
   test("gated Construction proceeds: recompose flips as today when autonomy is not autonomous", () => {

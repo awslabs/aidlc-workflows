@@ -46,6 +46,7 @@ import {
   clearPlanApprovalLegacyOffer,
   clearEngineAskMark,
   clearPlanApprovalReceipt,
+  isolatedCodeGenerationTestStrategy,
   readActiveDirectiveMarker,
   authorizedVerificationCommand,
   readIssuedDirectiveMarker,
@@ -66,8 +67,11 @@ import {
   moveProtectedQuestion,
   DECISION_PAIRING_EVENTS,
   decisionAnsweredBy,
+  CONSTRUCTION_POLICY_CHECKPOINT,
+  VERIFICATION_COMMAND_CHECKPOINT,
   sortAttemptEvents,
   planApprovalChallengeRelativePath,
+  agentFileText,
   readRegularFileNoFollowOrThrow,
   recordDir,
   recordFileTargetOrThrow,
@@ -76,6 +80,8 @@ import {
   recordAcceptedChanges,
   recordGuardStoodAside,
   recordHookDrop,
+  rejectionAtRunFloor,
+  rejectionIsFreshAttempt,
   renderChangedPaths,
   renderSourcePathKeys,
   governedChangeControl,
@@ -94,6 +100,7 @@ import {
   serializeSourceListing,
   sourceListingSha256,
   parseSourceListing,
+  parseCheckboxes,
   personSpokeSinceGate,
   structuredField,
   structuredFieldSpan,
@@ -126,6 +133,7 @@ import {
   runtimeSessionHint,
   writePlanApprovalResponse,
   writeProtectedResponse,
+  isoTimestamp,
   markProtectedQuestionReplied,
   readProtectedResponse,
   PROTECTED_RESPONSE_WORDS_MAX_CHARS,
@@ -150,8 +158,11 @@ import {
   TESTING_POSTURE_SUBCOMMANDS,
 } from "./aidlc-lib.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
+import { noReplySince } from "./aidlc-message-store.ts";
 import { aidlcToolInvocation, entrySkillInvocation, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
-import { APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer, isOneOfChoices, pickerOffersChoices } from "./aidlc-reply-reader.ts";
+import {
+  APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer, isOneOfChoices, pickerOffersChoices, protectedQuestionPick,
+} from "./aidlc-reply-reader.ts";
 
 export type TestingMethodology = "tdd" | "bdd" | "atdd" | "test-after" | "custom";
 export type TestStrategy = "minimal" | "standard" | "comprehensive";
@@ -205,8 +216,8 @@ export interface CodeGenerationApproval {
   instructionsExist: boolean;
   approved: boolean;
   contractValid: boolean;
-  fingerprintValid: boolean;
-  receiptValid: boolean;
+  fingerprintValid: boolean | null;
+  receiptValid: boolean | null;
   contractHash: string | null;
   approvalFingerprint: string | null;
   directiveEpoch: string | null;
@@ -561,17 +572,12 @@ export function recordedApprovalFingerprint(questions: string): string | null {
   }
   return null;
 }
-// "Plan approval off" is the engine's own record for a plan built without
-// asking. It grants nothing alone: every reader also needs the engine's receipt.
-const APPROVE_PLAN_RE = /^(?:(?:[A-Z][.)][ \t]*)?["']?Approve Plan["']?|Plan approval off)$/i;
-
 /**
  * The label on a recorded `[Answer]:` line: the option letter the engine's own
  * recorder writes ("A. Approve Plan") or a picker echoes ("B) Request Changes",
- * "a. Approve Plan": APPROVE_PLAN_RE reads the letter in either case, so this
- * does too), and quotes around the label, are not the answer. Every reader
- * compares the label, so the engine's recorded line and a hand-written one
- * read the same.
+ * "a. Approve Plan", in either case), and quotes around the label, are not the
+ * answer. Whether a plan is approved is the engine's receipt's to say, never
+ * this line's.
  */
 export function planApprovalAnswerLabel(answer: string): string {
   return answer.trim().replace(/^[A-Za-z][.)][ \t]*/, "").replace(/^["']|["']$/g, "").trim();
@@ -1220,6 +1226,18 @@ export function resolveTestingPostureFromSections(
   return { ...body, contract_sha256: hashObject(body) };
 }
 
+// The test strategy the engine's own route builds to, set by the engine for
+// the command it is answering: an isolated Code Generation run's recorded one,
+// or null for the workflow's. Unset outside the engine, where the step issued
+// last says whose work is in progress (isolatedCodeGenerationTestStrategy).
+// The engine decides plan approval before it publishes its step, so the
+// previous step's marker cannot speak for its route.
+let routedIsolatedTestStrategy: { value: string | null } | undefined;
+
+export function setTestingPostureRoute(isolatedTestStrategy: string | null): void {
+  routedIsolatedTestStrategy = { value: isolatedTestStrategy };
+}
+
 export function resolveTestingPosture(
   projectDir: string,
 ): TestingPostureContract {
@@ -1239,7 +1257,14 @@ export function resolveTestingPosture(
   }
   return resolveTestingPostureFromSections(sections, {
     scope: (getField(state, "Scope") ?? "feature").trim().toLowerCase(),
-    testStrategy: normalizeStrategy(getField(state, "Test Strategy") ?? "standard"),
+    // An isolated Code Generation run builds to its own test strategy; the
+    // workflow's contract and plan approval keep reading the workflow's.
+    testStrategy: normalizeStrategy(
+      (routedIsolatedTestStrategy !== undefined
+        ? routedIsolatedTestStrategy.value
+        : isolatedCodeGenerationTestStrategy(projectDir)) ??
+        getField(state, "Test Strategy") ?? "standard",
+    ),
     projectType: normalizeProjectType(getField(state, "Project Type") ?? "greenfield"),
   });
 }
@@ -1608,8 +1633,11 @@ export function workerBrief(
   target: CodeGenerationTarget,
 ): WorkerBrief {
   refuseWhileRulesArrive(projectDir);
-  const approval = evaluateCodeGenerationApproval(projectDir, target);
-  const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);
+  // Under Guard Policy off a build step set aside since it was issued is still
+  // the step: its target and the approval for it decide, as when it was current.
+  const issued = setAsideBuildUnderOff(projectDir) ?? undefined;
+  const approval = evaluateCodeGenerationApproval(projectDir, target, issued);
+  const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target, issued);
   if ((!approval.ok && !continuation) ||
     (!continuation && (approval.contractHash === null || approval.approvalFingerprint === null))) {
     throw new Error(
@@ -1626,7 +1654,7 @@ export function workerBrief(
   const plan = continuation?.artifacts.plan ?? readFileSync(join(stageDir, "code-generation-plan.md"), "utf-8");
   const instructions = continuation?.artifacts.instructions ??
     readFileSync(join(stageDir, "unit-test-instructions.md"), "utf-8");
-  const authority = continuation?.authority ?? resolveCodeGenerationAuthority(projectDir, target);
+  const authority = continuation?.authority ?? resolveCodeGenerationAuthority(projectDir, target, issued);
   const contractHash = continuation?.artifacts.contractHash ?? approval.contractHash!;
   const snapshotFingerprint = approvalFingerprint(
     plan,
@@ -1644,7 +1672,7 @@ export function workerBrief(
   const marker = target.unit
     ? `AIDLC-UNIT: ${target.unit}`
     : "AIDLC-STAGE: code-generation";
-  const resume = codeGenerationResume(projectDir, target, { plan, content: snapshotFingerprint });
+  const resume = codeGenerationResume(projectDir, target, { plan, content: snapshotFingerprint, issued });
   // The worker's ticks are what a pick-up reads, so it is told where the plan
   // file is and that ticking is its one change to it.
   const planFile = toPosix(relative(projectDir, join(stageDir, "code-generation-plan.md")));
@@ -1660,6 +1688,7 @@ export function workerBrief(
     `${projectedPlan}\n` +
     `\n${continuation ? instructionHeadings[1] : instructionHeadings[0]}\n\n` +
     projectInstructionsContent(instructions);
+  if (continuation) recordContinuedStaleContract(projectDir, continuation);
   return {
     unit: approval.unit,
     contractHash,
@@ -2418,15 +2447,6 @@ function latestPlanApproval(body: string): {
   };
 }
 
-export function questionsFileApproved(body: string): boolean {
-  const latest = latestPlanApproval(body);
-  return (
-    latest.found &&
-    latest.answer !== null &&
-    APPROVE_PLAN_RE.test(latest.answer)
-  );
-}
-
 export function questionsFileHasPendingPlanApproval(body: string): boolean {
   const latest = latestPlanApproval(body);
   return (
@@ -2587,6 +2607,9 @@ export const FILE_TOOLS_RULE =
   "`printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any " +
   "missing folder). A command the person asks for, or one the plan names (a package install, a build, " +
   "a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. " +
+  "Do not stash, reset, check out over, restore or clean the person's working tree, and do not install " +
+  "what the plan does not name: for a before-and-after comparison, run the check on the unchanged tree " +
+  "before you edit. " +
   "Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the " +
   "project (nothing in /tmp or any folder outside it), and a command's output is read from the tool result, " +
   "never sent to a file; a file the person asks for, or one the plan names, goes where they say. " +
@@ -2783,6 +2806,24 @@ export function codeGenerationRecordDir(
     : join(root, "code-generation");
 }
 
+// The latest answer on record to the plan question for this target and plan:
+// an approval, or plan approval off building it without asking.
+function planApprovedOnRecord(projectDir: string, targetId: string, fingerprint: string): boolean {
+  const last = readAuditShardEvents(projectDir)
+    .filter((row) =>
+      (row.event === "PLAN_APPROVAL_RECORDED" || row.event === "PLAN_APPROVAL_SKIPPED" ||
+        row.event === "QUESTION_ANSWERED") &&
+      auditBlockField(row.block, "Plan Target") === targetId &&
+      auditBlockField(row.block, "Approval Fingerprint") === fingerprint)
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    })
+    .at(-1);
+  return last !== undefined && last.event !== "QUESTION_ANSWERED";
+}
+
 function codeGenerationApprovalArtifacts(
   projectDir: string,
   authority: CodeGenerationAuthority,
@@ -2812,7 +2853,16 @@ function codeGenerationApprovalArtifacts(
     : "";
   const planExists = plan.trim().length > 0;
   const instructionsExist = instructions.trim().length > 0;
-  const approvedAnswer = questionsFileApproved(questions);
+  const recordedFingerprint = questionsFileApprovalFingerprint(questions);
+  // The engine's own records say this question was approved (asked, built
+  // without asking, or overridden): its receipt for this target, attempt and
+  // plan, or its audit row for the target and the plan the file names, so an
+  // approval whose receipt went missing or whose attempt moved on still reads
+  // as approved and is checked as one. The label on the file's `[Answer]:`
+  // line, the person's own words included, decides nothing.
+  const approvedAnswer = recordedFingerprint !== null && (readPlanApprovalReceipt(projectDir, {
+    targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: recordedFingerprint,
+  })?.choice === "Approve Plan" || planApprovedOnRecord(projectDir, authority.targetId, recordedFingerprint));
   const embedded = planExists ? parseTestingContract(plan) : null;
   const current = planExists ? resolveTestingPosture(contractProjectDir) : null;
   const contractHash = embedded?.contract_sha256 ?? null;
@@ -2839,7 +2889,7 @@ function codeGenerationApprovalArtifacts(
     contractValid,
     contractHash,
     expectedFingerprint,
-    recordedFingerprint: questionsFileApprovalFingerprint(questions),
+    recordedFingerprint,
     questionsPath,
   };
 }
@@ -2853,6 +2903,8 @@ interface CodeGenerationContinuation {
   sourceChange?: AcceptedChange;
   /** The approval was given in the attempt the person's own change request closed. */
   carried?: true;
+  /** Where the contract is read from: the project, or a worker's parent. */
+  contractProject: string;
 }
 
 /**
@@ -2907,12 +2959,11 @@ function approvalFromTheirChangeRequest(
 ): PlanApprovalRuntimeReceipt | null {
   const floor = /^GATE_REJECTED:(.+)#\d+$/.exec(authority.runFloor);
   if (floor === null) return null;
-  const rejection = readAuditShardEvents(projectDir).find((row) =>
-    row.event === "GATE_REJECTED" && row.timestamp === floor[1] &&
-    [null, authority.unit].includes(auditBlockField(row.block, "Unit")));
+  const rejection = rejectionAtRunFloor(
+    readAuditShardEvents(projectDir), "code-generation", authority.unit ?? undefined, authority.runFloor,
+  );
   if (rejection === undefined) return null;
-  const reopen = auditBlockField(rejection.block, "Reopen");
-  if (reopen !== null && reopen !== "change") return null;
+  if (rejectionIsFreshAttempt(rejection.block)) return null;
   const plan = readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8");
   const instructions = readFileSync(join(authority.stageDir, "unit-test-instructions.md"), "utf-8");
   const contract = parseTestingContract(plan);
@@ -2944,7 +2995,7 @@ function earlierPlanApproval(
   // A checkout that changed its line endings has not changed the answer.
   const questions = readFileSync(questionsPath, "utf-8").replace(/\r\n/g, "\n");
   const fingerprint = questionsFileApprovalFingerprint(questions);
-  if (!fingerprint || !approvalFingerprintIsCurrentFormat(fingerprint) || !questionsFileApproved(questions)) return null;
+  if (!fingerprint || !approvalFingerprintIsCurrentFormat(fingerprint)) return null;
   const promptSha256 = createHash("sha256")
     .update(`${questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
     .digest("hex");
@@ -3034,7 +3085,9 @@ function codeGenerationContinuation(
     if (fence.decision !== "stand-aside") return null;
     const material = continuationMaterial(projectDir, earlier, contractProject);
     if (material === null) return null;
-    return { authority, receipt, fence, ...material, ...(earlier.carried ? { carried: true as const } : {}) };
+    return {
+      authority, receipt, fence, contractProject, ...material, ...(earlier.carried ? { carried: true as const } : {}),
+    };
   } catch {
     return null;
   }
@@ -3073,6 +3126,79 @@ export function codeGenerationExecutionAllowed(
   const current = approval ?? evaluateCodeGenerationApproval(projectDir, target, issued);
   return !current.executionFailure &&
     (current.ok || codeGenerationContinuation(projectDir, target, issued) !== null);
+}
+
+/** Code Generation is the current stage and its gate is open, waiting for the person's answer. */
+export function codeGenerationGateHeld(state: string): boolean {
+  return (getField(state, "Current Stage") ?? "").trim().toLowerCase().replace(/\s+/g, "-") === CODE_GENERATION_STAGE &&
+    parseCheckboxes(state).some(
+      (entry) => entry.slug === CODE_GENERATION_STAGE && entry.state === "awaiting-approval",
+    );
+}
+
+/**
+ * The build step the engine issued last for this work, when the fence is
+ * lowered and the person's approval for its target still stands, read from its
+ * own record (the marker keeps its stage, its Unit and the kind it was): one a
+ * compaction or a state sync set aside, under Guard Policy off; or, under
+ * relaxed or off, the one whose own report opened the Code Generation gate,
+ * which moved the state past it and published no step after it (`marker` null:
+ * no step is current). Only a build step: a question, any other gate, a
+ * parallel batch and a step whose rules were still arriving are not. Null
+ * otherwise, so every caller keeps its refusal.
+ */
+export function setAsideBuildUnderOff(
+  projectDir: string,
+  marker?: ActiveDirectiveMarker | null,
+): Extract<CodeGenerationIssuance, { kind: "run-stage" }> | null {
+  try {
+    const state = () => readFileSync(stateFilePath(projectDir), "utf-8");
+    const current = marker === undefined ? readActiveDirectiveMarker(projectDir, state()) : marker;
+    const held = current === null && codeGenerationGateHeld(state());
+    const step = held ? readIssuedDirectiveMarker(projectDir) : current;
+    if (
+      step?.version !== 2 || step.stage !== CODE_GENERATION_STAGE || step.ask_type !== undefined ||
+      (held ? step.kind !== "run-stage" : step.kind !== "error" || step.out_of_date?.kind !== "run-stage")
+    ) return null;
+    const issued = codeGenerationIssuance(step, true);
+    if (issued?.kind !== "run-stage") return null;
+    const target = { unit: issued.unit?.trim() || null };
+    const fence = codeGenerationPlanApprovalFence(projectDir, target);
+    if (fence.decision !== "stand-aside" || !(fence.policy === "off" || (held && fence.policy === "relaxed"))) return null;
+    return codeGenerationExecutionAllowed(projectDir, target, undefined, issued) ? issued : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A plan built on under Guard Policy off whose Testing Contract is no longer
+ * the current one (memory, scope, test strategy, project type, or the rules an
+ * AI-DLC update ships changed after the approval): one CHANGE_ACCEPTED row
+ * records it, once per contract pair. Only while the plan, its instructions and
+ * its contract are still what was approved: an edited plan is the lowered
+ * fence's own account (its stand-aside row). Nothing is said, since the cause
+ * may be an update and not the person. A ledger that cannot take the row never
+ * stops the build.
+ */
+function recordContinuedStaleContract(projectDir: string, continuation: CodeGenerationContinuation): void {
+  const { artifacts, receipt } = continuation;
+  if (continuation.fence.policy !== "off" || artifacts.contractValid || artifacts.contractHash === null) return;
+  if (approvalFingerprint(artifacts.plan, artifacts.instructions, artifacts.contractHash, receipt) !== receipt.fingerprint) return;
+  try {
+    const current = resolveTestingPosture(continuation.contractProject).contract_sha256;
+    recordAcceptedChanges(projectDir, [{
+      checkpoint: "plan-approval",
+      stage: CODE_GENERATION_STAGE,
+      unit: continuation.authority.unit,
+      changed: null,
+      recorded: artifacts.contractHash,
+      current,
+      notice: "The Testing Contract changed after the plan was approved; the build follows the plan as approved.",
+    }]);
+  } catch (error) {
+    recordHookDrop(projectDir, "testing-posture", `CHANGE_ACCEPTED row not recorded: ${errorMessage(error)}`);
+  }
 }
 
 /**
@@ -3440,7 +3566,7 @@ function planApprovalBatchSelection(projectDir: string, file: string): PlanAppro
   const record = recordDir(projectDir);
   if (record === null) throw new Error("Cannot resolve the active intent record.");
   const path = recordFileTargetOrThrow(record, recordRelativeFileName(projectDir, record, file));
-  const contents = readRegularFileNoFollowOrThrow(path, "Plan Approval batch manifest", 64 * 1024).toString("utf-8");
+  const contents = agentFileText(readRegularFileNoFollowOrThrow(path, "Plan Approval batch manifest", 64 * 1024));
   let value: unknown;
   try {
     value = JSON.parse(contents);
@@ -3808,18 +3934,18 @@ export function recordPlanApprovalHumanResponse(
     const previous = readPlanApprovalResponse(projectDir, session);
     const earlier = previous?.challengeId === challenge.challengeId ? previous.words : undefined;
     const words = (earlier ? `${earlier}\n${text}` : text).slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
-    // A reply that is exactly one offered option is the person's pick; a
-    // record of the other choice is refused. Legacy nonce labels are hashed.
+    // Legacy nonce labels are a capability the engine minted for the chat that
+    // shows them: a window with no question box sends the person's pick as the
+    // label's text, and only its hash gives this question a reply (another chat
+    // of the same window shares its session). Anywhere else a pick in a
+    // question box that asked this question is the host's own structure, and a
+    // typed reply, grouped approval included, is the conductor's to read.
     const pick = challenge.hashedOptionLabels
       ? challenge.options.indexOf(
         createHash("sha256").update(stripRecommendedDecorator(text).toLowerCase(), "utf-8").digest("hex"),
       )
-      : exactOptionPick(text, challenge.options);
-    // Legacy nonce labels and grouped approval accept only an exact pick: the
-    // picker is the only way those windows answer. Any other reply may still
-    // be the legacy recovery choice below.
-    const exactOnly = challenge.hashedOptionLabels || challenge.requireExactOptionLabels;
-    if (!exactOnly || (pick !== null && pick >= 0)) {
+      : picker === undefined ? null : exactOptionPick(text, challenge.options);
+    if (!challenge.hashedOptionLabels || (pick !== null && pick >= 0)) {
       writePlanApprovalResponse(projectDir, {
         version: 1,
         session,
@@ -3831,25 +3957,47 @@ export function recordPlanApprovalHumanResponse(
       return { recorded: true };
     }
   }
-  const recovery = readPlanApprovalLegacyRecoveryChallenge(
-    projectDir,
-    session,
-  );
+  // The legacy recovery question's one choice, picked in a question box; a
+  // typed yes is the conductor's to read and record
+  // (recordPlanApprovalLegacyRecoveryAnswer).
+  const recovery = readPlanApprovalLegacyRecoveryChallenge(projectDir, session);
   if (
-    recovery &&
-    responseText.trim() === LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE
+    recovery && text && picker !== undefined && picker.severalPicks !== true &&
+    pickerOffersChoices(picker.options ?? [], [LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE]) &&
+    exactOptionPick(text, [LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE]) === 0
   ) {
-    writePlanApprovalLegacyRecoveryResponse(projectDir, {
-      version: 1,
-      session,
-      challengeId: recovery.challengeId,
-      responseSha256: createHash("sha256")
-        .update(LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE, "utf-8")
-        .digest("hex"),
-    });
+    writeLegacyRecoveryChoice(projectDir, session, recovery.challengeId);
     return { recorded: true };
   }
   return { recorded: false };
+  });
+}
+
+function writeLegacyRecoveryChoice(projectDir: string, session: string, challengeId: string): void {
+  writePlanApprovalLegacyRecoveryResponse(projectDir, {
+    version: 1,
+    session,
+    challengeId,
+    responseSha256: createHash("sha256").update(LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE, "utf-8").digest("hex"),
+  });
+}
+
+/**
+ * The person's yes to the legacy recovery question, as the conductor read it
+ * from their reply in any words: the engine writes the response from its own
+ * choice, once a reply of theirs came in this chat after the question was asked
+ * (a question an older engine asked, with no time kept, takes any reply).
+ */
+export function recordPlanApprovalLegacyRecoveryAnswer(
+  projectDir: string,
+  session: string,
+): "recorded" | "no-question" | "no-reply" {
+  return withAuditLock(projectDir, () => {
+    const recovery = readPlanApprovalLegacyRecoveryChallenge(projectDir, session);
+    if (recovery === null) return "no-question";
+    if (noReplySince(projectDir, session, recovery.createdAt ?? new Date(0).toISOString())) return "no-reply";
+    writeLegacyRecoveryChoice(projectDir, session, recovery.challengeId);
+    return "recorded";
   });
 }
 
@@ -3869,16 +4017,16 @@ function pickerAsksProtectedQuestion(
   return isOneOfChoices(picked, APPROVAL_GATE_CHOICES);
 }
 
-// The person may answer a Unit or batch checkpoint question in any chat. With
-// no question of its own in this chat, the checkpoint question another chat
+// The person may answer a question that needs their own reply to it (a Unit or
+// batch checkpoint, the verification command, a Construction policy question)
+// in any chat. With no question of its own in this chat, the one another chat
 // asked moves here, with any reply already kept for it, so this reply pairs
-// with it and its approval needs no second answer. Only the newest question
+// with it and its answer needs no second reply. Only the newest question
 // asked in any chat moves, while nothing has answered it: a reply never pairs
 // with an older question, nor with one when another was asked after it.
-function checkpointQuestionFromAnotherChat(projectDir: string, session: string): ProtectedQuestion | null {
+function protectedQuestionFromAnotherChat(projectDir: string, session: string): ProtectedQuestion | null {
   if (existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, session)))) return null;
-  const elsewhere = protectedQuestionsElsewhere(projectDir, session)
-    .filter((question) => question.kind === "checkpoint-approval");
+  const elsewhere = protectedQuestionsElsewhere(projectDir, session);
   if (elsewhere.length === 0) return null;
   const rows = sortAttemptEvents(readAuditShardEvents(projectDir).filter((row) => DECISION_PAIRING_EVENTS.has(row.event)));
   const at = rows.findLastIndex((row) => row.event === "DECISION_RECORDED");
@@ -3889,12 +4037,23 @@ function checkpointQuestionFromAnotherChat(projectDir: string, session: string):
     auditBlockField(row.block, "Stage") === field("Stage") && decisionAnsweredBy(asked, row.event, row.block))) {
     return null;
   }
-  const askedAbout = (target: Record<string, unknown>): boolean => target.fingerprint === field("Fingerprint") &&
-    (field("Checkpoint") === "Construction Unit Approval"
-      ? target.kind === "unit" && target.unit === field("Unit") && target.checkpointKind === field("Kind")
-      : field("Checkpoint") === "Swarm Batch Approval" && target.kind === "batch" &&
-        String(target.batch) === field("Batch number"));
-  const matching = elsewhere.filter((question) => askedAbout(question.target));
+  const askedAbout = ({ kind, target }: ProtectedQuestion): boolean => {
+    switch (field("Checkpoint")) {
+      case "Construction Unit Approval":
+        return kind === "checkpoint-approval" && target.fingerprint === field("Fingerprint") && target.kind === "unit" &&
+          target.unit === field("Unit") && target.checkpointKind === field("Kind");
+      case "Swarm Batch Approval":
+        return kind === "checkpoint-approval" && target.fingerprint === field("Fingerprint") && target.kind === "batch" &&
+          String(target.batch) === field("Batch number");
+      case VERIFICATION_COMMAND_CHECKPOINT:
+        return kind === "verification-command" && target.commandSha256 === field("Command SHA-256");
+      case CONSTRUCTION_POLICY_CHECKPOINT:
+        return kind === "construction-policy" && target.field === field("Field") && target.value === field("Value");
+      default:
+        return false;
+    }
+  };
+  const matching = elsewhere.filter(askedAbout);
   const question = matching.find((candidate) =>
     readProtectedResponse(projectDir, candidate.session)?.challengeId === candidate.challengeId) ?? matching[0];
   return question ? moveProtectedQuestion(projectDir, question, session) : null;
@@ -3912,7 +4071,7 @@ export function recordProtectedHumanResponse(
   return withAuditLock(projectDir, () => {
     const text = responseText.trim();
     const question = readProtectedQuestion(projectDir, session) ??
-      (text && !isNonAnswer(text) ? checkpointQuestionFromAnotherChat(projectDir, session) : null);
+      (text && !isNonAnswer(text) ? protectedQuestionFromAnotherChat(projectDir, session) : null);
     if (!question) return { recorded: false };
     const picked = question.promptDigest !== undefined && questionText !== null;
     if (picked && !pickerAsksProtectedQuestion(question, questionText, picker, responseText)) {
@@ -3922,18 +4081,17 @@ export function recordProtectedHumanResponse(
     const previous = readProtectedResponse(projectDir, session);
     const earlier = previous?.challengeId === question.challengeId ? previous.words : undefined;
     const words = (earlier ? `${earlier}\n${text}` : text).slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
-    // A reply that is exactly one offered option is the person's pick, kept so
-    // a record of the other choice is refused; any other reply is the
-    // conductor's to read, and the latest reply decides. Every protected
-    // question offers Approve and Request Changes (its stored options are
-    // their digests).
-    const pick = exactOptionPick(text, APPROVAL_GATE_CHOICES);
+    // A pick in a question box that asked this question (or, with no question
+    // text, the one question open) is the host's own structure and is kept as
+    // the choice; a typed reply, in any words, is the conductor's to read.
+    const pick = picker !== undefined ? protectedQuestionPick(question, text) : null;
     markProtectedQuestionReplied(projectDir, question);
     writeProtectedResponse(projectDir, {
       version: 1, session, challengeId: question.challengeId,
-      ...(pick === 0 ? { choice: "Approve" as const } : pick === 1 ? { choice: "Request Changes" as const } : {}),
+      ...(pick === null ? {} : { choice: pick }),
       responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
       words,
+      at: isoTimestamp(),
     });
     return { recorded: true };
   });
@@ -3969,8 +4127,7 @@ export function offersPlanApprovalOverride(error: unknown): boolean {
 export function personAskedForPlanApprovalOverride(projectDir: string): boolean {
   const offered = engineAskMark(projectDir, PLAN_APPROVAL_OVERRIDE_OFFERED);
   if (offered === null || !personRepliedAfter(projectDir, offered)) return false;
-  const state = humanTurnState(projectDir, { replies: true });
-  return state === "acted" || state === "answered";
+  return humanTurnState(projectDir, { replies: true }) === "acted";
 }
 
 /** Their words for the record: their latest reply since the offer, when the host passed any. */
@@ -4671,10 +4828,13 @@ function approvedWorktreeSource(
   if (!parentSource) throw new Error(generationSourceUnavailableMessage());
   // Under a relaxed or off Guard Policy, parent source that moved after Plan
   // Approval is kept, as on the single-agent path: generation start records it
-  // and says it in one line. An AI-DLC update the person took moves only
+  // and says it in one line. So is source that moved after the engine built a
+  // plan with plan approval off (a skipped receipt): nobody approved it, and
+  // `next` would never ask. An AI-DLC update the person took moves only
   // AI-DLC's own files, which is no reason to approve the plan again.
   if (
     !approved.continuing &&
+    approved.receipt.skipped === undefined &&
     !sameWorkspaceSource(approved.receipt.certifiedSourceSha256, parentSource.fingerprint) &&
     !guardPolicyAcceptsChanges(parent) &&
     !onlyAidlcFilesChangedInSwarmStage(parent, CODE_GENERATION_STAGE, parentSource)
@@ -4837,7 +4997,6 @@ export function bindCodeGenerationWorktreeApproval(
     if (childAuthority.intentId !== current.receipt.intentId || childAuthority.runFloor !== current.receipt.runFloor ||
       (copied.expectedFingerprint !== current.receipt.fingerprint &&
         !(current.continuing && decideFence(current.parent, "plan-approval").decision === "stand-aside")) ||
-      !copied.approvedAnswer ||
       copied.recordedFingerprint !== current.receipt.fingerprint ||
       hashObject(finalParent.receipt) !== hashObject(current.receipt) ||
       current.files.some((file) => !readRegularFileNoFollowOrThrow(file.from, "approved parent plan record").equals(file.bytes)) ||
@@ -4880,7 +5039,6 @@ function worktreeDelegationParent(
       provenance.intentUuid !== authority.intentId || provenance.intentUuid !== receipt.intentId ||
     parentAuthority.intentId !== receipt.intentId || parentAuthority.runFloor !== receipt.runFloor ||
     parentAuthority.targetId !== receipt.targetId || parentPrompt !== receipt.promptSha256 ||
-    !questionsFileApproved(parentQuestions) ||
     questionsFileApprovalFingerprint(parentQuestions) !== receipt.fingerprint ||
     hashObject(parentReceipt) !== origin.parentReceiptSha256 ||
     hashObject(copiedReceipt) !== hashObject(parentReceipt) ||
@@ -4939,8 +5097,8 @@ export function evaluateCodeGenerationApproval(
     instructionsExist: false,
     approved: false,
     contractValid: false,
-    fingerprintValid: false,
-    receiptValid: false,
+    fingerprintValid: null,
+    receiptValid: null,
     contractHash: null,
     approvalFingerprint: null,
     directiveEpoch: null,
@@ -5125,15 +5283,15 @@ export function evaluateCodeGenerationApproval(
 }
 
 /** Validate a target while the caller holds both generation authority locks. */
-function prepareCodeGenerationStart(projectDir: string, target: CodeGenerationTarget) {
+function prepareCodeGenerationStart(projectDir: string, target: CodeGenerationTarget, issued?: CodeGenerationIssuance) {
   refuseWhileRulesArrive(projectDir);
-  const approval = evaluateCodeGenerationApproval(projectDir, target);
+  const approval = evaluateCodeGenerationApproval(projectDir, target, issued);
   if (approval.executionFailure) throw new Error(approval.executionFailure);
-  const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);
+  const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target, issued);
   if ((!approval.ok || !approval.approvalFingerprint) && !continuation) {
     throw new Error(approval.reason || "Code Generation requires Plan Approval");
   }
-  const authority = continuation?.authority ?? resolveCodeGenerationAuthority(projectDir, target);
+  const authority = continuation?.authority ?? resolveCodeGenerationAuthority(projectDir, target, issued);
   const receiptKey: PlanApprovalReceiptKey = {
     targetId: authority.targetId,
     // The receipt a continuation builds from is its own: for an approval the
@@ -5158,6 +5316,7 @@ function publishCodeGenerationStart(
   pickUp: boolean,
 ): string[] {
   const { authority, receipt, continuation } = prepared;
+  if (continuation) recordContinuedStaleContract(projectDir, continuation);
   const changeNotices: string[] = continuation && options.recordContinuation !== false
     ? recordCodeGenerationContinuation(projectDir, continuation, "begin") : [];
   if (receipt.status === "generation") return changeNotices;
@@ -5273,12 +5432,13 @@ export function beginCodeGenerationBatch(
   projectDir: string,
   targets: CodeGenerationTarget[],
   options: { recordContinuation?: boolean } = {},
+  issued?: CodeGenerationIssuance,
 ): string[] {
   if (targets.length === 0) throw new Error("Code Generation requires an execution target");
   return withAuditLock(projectDir, () =>
     withActiveDirectiveLock(projectDir, () => {
       const selected = [...new Map(targets.map((target) => [codeGenerationTargetId(target), target])).values()];
-      const prepared = selected.map((target) => prepareCodeGenerationStart(projectDir, target));
+      const prepared = selected.map((target) => prepareCodeGenerationStart(projectDir, target, issued));
       const needsSource = prepared.some(({ authority, receipt }) =>
         receipt.status !== "generation" && receipt.override === undefined &&
         !codeGenerationBuildsWithoutSource(projectDir, { unit: authority.unit }, receipt.skipped !== undefined));
@@ -5291,7 +5451,7 @@ export function beginCodeGenerationBatch(
         for (const target of selected) {
           // Files can change independently of the engine locks. Recheck the
           // target immediately before its publication as well as at preflight.
-          const started = prepareCodeGenerationStart(projectDir, target);
+          const started = prepareCodeGenerationStart(projectDir, target, issued);
           // A fresh build (receipt approved, not yet generation) starts with its
           // steps unticked, so the ticks a later resume reads are this build's
           // own (see "Picking up an interrupted build"). They are cleared before
@@ -5337,8 +5497,9 @@ export function beginCodeGeneration(
   projectDir: string,
   target: CodeGenerationTarget,
   options: { recordContinuation?: boolean } = {},
+  issued?: CodeGenerationIssuance,
 ): string[] {
-  return beginCodeGenerationBatch(projectDir, [target], options);
+  return beginCodeGenerationBatch(projectDir, [target], options, issued);
 }
 
 function flagValue(args: string[], name: string): string | undefined {
@@ -5428,15 +5589,8 @@ export function main(argv: string[]): void {
         const questions = existsSync(questionsPath)
           ? readFileSync(questionsPath, "utf-8")
           : null;
-        // The approved questions file, or null when nothing stands approved.
-        const standing = questions !== null && questionsFileApproved(questions)
-          ? questions
-          : null;
-        if (standing !== null) {
-          throw new Error(
-            "reset the Plan Approval [Answer]: to blank before regenerating its fingerprint",
-          );
-        }
+        // Regenerating changes nothing approved: the same plan in the same
+        // attempt prints the fingerprint its approval already binds.
         const embedded = parseTestingContract(plan);
         const current = resolveTestingPosture(projectDir);
         if (

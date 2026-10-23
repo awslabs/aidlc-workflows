@@ -44,6 +44,8 @@ $stage = $Mode
 $stateRoot = $null
 $git = 'C:\Program Files\Git\cmd\git.exe'
 $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+# The runner's PowerShell 7: Codex's readiness shell, and Copilot's PATH folder.
+$pwsh = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
 # Windows system directories precede Git so MSYS coreutils (whoami, find, sort)
 # never shadow the native tools, matching the hosted runner's own PATH order.
 # npm exposes claude.cmd; native-launch journeys require the actual executable.
@@ -507,6 +509,12 @@ function Get-SafeEnvironment {
     }
     if ($Family -eq 'codex') {
         $environment.AIDLC_CODEX_BIN = Join-Path $tools 'codex-managed.exe'
+    }
+    # Copilot CLI needs PowerShell 6 or later on Windows and looks pwsh.exe up on
+    # PATH; without it, it falls back to a cold Windows PowerShell 5.1, whose start
+    # can pass Copilot's 40 s check and skip a hook. Only a folder the runner has.
+    if ($Family -eq 'copilot' -and [IO.File]::Exists($pwsh)) {
+        $environment.AIDLC_LIVE_PWSH_DIR = [IO.Path]::GetDirectoryName($pwsh)
     }
     return $environment
 }
@@ -2734,7 +2742,7 @@ process.exitCode = result.status === null ? 1 : result.status;
     $body = $body.Replace('__PACKAGE_ROOT__', (ConvertTo-PSLiteral $nativeDirectory))
     $body = $body.Replace('__INITIALIZER__', (ConvertTo-PSLiteral (Join-Path $tools 'codex-initialize-home.ps1')))
     $body = $body.Replace('__PROOF_ROOT__', (ConvertTo-PSLiteral $ProofRoot))
-    $body = $body.Replace('__COMMAND_SHELL__', (ConvertTo-PSLiteral (Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe')))
+    $body = $body.Replace('__COMMAND_SHELL__', (ConvertTo-PSLiteral $pwsh))
     $body = $body.Replace('__SHELL_SOURCE__', (ConvertTo-PSLiteral (Get-CodexShellReadinessSource)))
     $body = $body.Replace('__SIDS__', ('@(' + (($codexSandboxSids | ForEach-Object { ConvertTo-PSLiteral $_ }) -join ',') + ')'))
     return $body.Replace('__FORBIDDEN__', (ConvertTo-PSLiteral (Join-Path $tools 'codex-outside-write-must-not-exist')))

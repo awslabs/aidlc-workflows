@@ -104,8 +104,14 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   carry, so Kiro CLI in VS Code's terminal (`TERM_PROGRAM=vscode`) is not
   taken for Kiro IDE. `agentStepInHost` (`{ env, text }`) does the same for
   `agentStep`, so the agent gets only its own tool's line: given one line
-  per tool, an agent showed the wrong one. Set `notRunYet` only when the
-  harness's hooks leave a heartbeat on every chat message, the first one before
+  per tool, an agent showed the wrong one. `registration`
+  (`{ file, missing, invalid }`) names the project JSON file the host reads
+  AI-DLC's hook registrations from: while it is missing or is not valid JSON
+  no setting brings those hooks back, so the step is the line `missing` (its
+  `<repair>` is doctor's command that puts the file back) or `invalid` for the
+  person instead; Claude Code declares it for `.claude/settings.json`. Set
+  `notRunYet` only when the harness's hooks leave a heartbeat on every chat
+  message, the first one before
   any workflow included (the human-turn hook does, and so do the Copilot and
   Kiro IDE adapters); doctor then warns with that text while no heartbeat
   exists, and with `agentStep` the first `next` stops with the agent's step
@@ -137,8 +143,8 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   stop event runs the `log-subagent` hook (its `SUBAGENT_COMPLETED` row) before
   the agent that dispatched a helper sees the helper's result, for every
   dispatch. `env` names the variables the host sets in its agent's shell. On
-  such a host a review verdict recorded with no agent finished since its
-  request is marked as recorded before any reviewer finished, and the person
+  such a host a review verdict recorded with no completion row of its
+  reviewer since its request is marked as recorded before any reviewer finished, and the person
   hears it in one line. Declare it only after a live check shows the row lands
   first: on a host that writes it later or not at all, the person would be told
   no reviewer finished a review one did. Only Claude Code declares it
@@ -234,7 +240,9 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 - `emit` — the optional plugin (Step 3), `null` for harnesses that need none.
 - `plugin` (optional) — the host plugin manifest directory and delivery kind.
   Omitting it derives `<harnessDir>-plugin` plus store delivery; set `kind:
-  "kiro"` only for a folder-drop host.
+  "kiro"` only for a folder-drop host. Set `marketplaceDir` when the host reads a
+  plugin catalogue from somewhere other than the manifest directory (Codex:
+  `.agents/plugins`).
 
 Claude's manifest is the minimal reference (no rename, no emit); Kiro's adds a
 rename + `harnessFiles` (agent JSONs and adapter) plus split root/native onboarding;

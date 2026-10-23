@@ -544,7 +544,8 @@ function legacyRecoveryBlockReason(
   if (recovery.recoveryRequired) {
     return (
       "Legacy Plan Approval recovery requires a human response. " +
-      "Present exactly `Recover Plan Approval`, end the turn, then retry recovery. " +
+      "Ask the directive's question in plain words and end the turn; when the person says yes, in any words, " +
+      "run its choice's command, then retry recovery. " +
       `The unknown original shell command remains blocked. Directive: ${recovery.detail}`
     );
   }
@@ -2913,8 +2914,8 @@ function buildForward(): Forward {
       }
       const eventSessionId = ide.sessionId?.trim();
       // Who sent the turn (kiroTurnOrigin): a message Kiro's own chat record
-      // marks as its own, or one of Kiro's fixed workflow sentences (a Kiro
-      // Workflows step's brief opens with one), is the host's; a session other
+      // marks as its own, or a Kiro Workflows brief (Kiro leaves it unmarked;
+      // its opening sentence says whose it is), is the host's; a session other
       // than the chat's decides nothing by itself, so a message typed in another
       // chat tab stays the person's. A host's turn is a side worker's: it starts no session here, is not
       // remembered as the chat, opens no turn, and the core hook records it as
@@ -3696,10 +3697,28 @@ function buildForward(): Forward {
         );
         return null;
       }
+      // Kiro answers a dispatch to an agent it has no file for with this one
+      // line and no other sign of failure (measured on Kiro CLI 2.31.0 and IDE
+      // 1.3.0). Nothing ran, so nothing finished: a completion row would read as
+      // that agent having done its work.
+      const ran: Array<{ target: KiroDelegationTarget; input: ReturnType<typeof completion> }> = [];
+      for (const t of targets) {
+        const input = completion(t);
+        if (t.agent === "" || input.last_assistant_message.trim() !== `Agent '${t.agent}' not found in registry`) {
+          ran.push({ target: t, input });
+          continue;
+        }
+        recordHookDrop(
+          projectDir,
+          "kiro-adapter",
+          `log-subagent: Kiro has no agent named ${t.agent} — SUBAGENT_COMPLETED not recorded`,
+        );
+      }
+      if (ran.length === 0) return null;
       // A pipeline finishes every stage in one result: one row per stage, the
       // last through the ordinary forward.
-      for (const t of targets.slice(0, -1)) {
-        const r = runCore("aidlc-log-subagent.ts", completion(t));
+      for (const { target: t, input } of ran.slice(0, -1)) {
+        const r = runCore("aidlc-log-subagent.ts", input);
         if (r.code !== 0) {
           recordHookDrop(
             projectDir,
@@ -3708,7 +3727,7 @@ function buildForward(): Forward {
           );
         }
       }
-      return { hook: "aidlc-log-subagent.ts", input: completion(targets.at(-1)) };
+      return { hook: "aidlc-log-subagent.ts", input: ran[ran.length - 1].input };
     }
 
     case "continue-workflow":

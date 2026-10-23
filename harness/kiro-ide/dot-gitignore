@@ -25,3 +25,4 @@ aidlc/spaces/*/intents/*/runtime-graph.json
 aidlc/spaces/*/intents/*/.aidlc-*
 aidlc/diagnostics/
 .kiro/steering/aidlc-active-memory.md
+.kiro/agents/aidlc-scoped-review-*.md

@@ -73,6 +73,7 @@ import { EARLIER_RELEASE_REGIONS, earlierReleasesReadSkill } from "./earlier-rel
 import { forgetPackagedSources, packageInputsFingerprint, recordPackagedSources } from "./package-sources.ts";
 import {
   buildPluginProjection as emitPluginProjection,
+  writeFirstPartyCatalogues,
   type PluginTarget,
   type PluginTargetTable,
 } from "../core/tools/aidlc-plugin-emit.ts";
@@ -1918,11 +1919,14 @@ function pluginTargets(): PluginTargetTable {
     for (const root of manifest.plugin?.installRoots ?? []) {
       addTopLevel(root);
     }
+    const manifestDir =
+      manifest.plugin?.manifestDir ?? `${manifest.harnessDir}-plugin`;
     pluginTargetCache[harnessName] = {
       harnessName: manifest.name,
-      manifestDir:
-        manifest.plugin?.manifestDir ??
-        `${manifest.harnessDir}-plugin`,
+      manifestDir,
+      marketplaceDir: manifest.plugin?.marketplaceDir ?? manifestDir,
+      hostCatalogue: manifest.plugin?.hostCatalogue ??
+        ["store", "cursor"].includes(manifest.plugin?.kind ?? "store"),
       harnessLeaf: manifest.harnessDir,
       kind: manifest.plugin?.kind ?? "store",
       installRoots: [...installRoots].sort(),
@@ -1954,6 +1958,8 @@ function buildRepositoryPluginProjection(
     outputBoundary,
     templateHooksDir: PLUGIN_HOOKS_TEMPLATE_SRC,
     reviewerAgents: reviewerAgentSet(CORE_ROOT),
+    // This repository's own plugins/ are AI-DLC's: aidlc-<name> in aidlc-plugins.
+    firstParty: true,
   });
 }
 
@@ -1980,6 +1986,10 @@ function emitPlugins(
         console.log(`[plugin:${pluginName}] emitted dist/plugins/${pluginName}/${harnessName}/`);
       }
     }
+  }
+  const built = pluginHarnessesFor(harnesses).map((name) => pluginTargetFor(name) as PluginTarget);
+  for (const file of writeFirstPartyCatalogues(join(distRoot, "plugins"), built)) {
+    if (log) console.log(`[plugins] emitted dist/plugins/${file}`);
   }
 }
 

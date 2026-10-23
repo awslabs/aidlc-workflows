@@ -98,18 +98,22 @@ const TARGETS = [
   "continue-workflow",
 ];
 
-/** A recording stub: append stdin to <capture>/<hook>.jsonl, exit `exitCode`.
- *  A guard stub can be seeded to exit 2 (+stderr) to prove the adapter projects
- *  a deliberate block into the Copilot deny dialect. */
+/** A recording stub: append its input to <capture>/<hook>.jsonl, answer
+ *  `exitCode`. A guard stub can be seeded to exit 2 (+stderr) to prove the
+ *  adapter projects a deliberate block into the Copilot deny dialect. It runs
+ *  the way a core hook runs: its run(input) inside the adapter's process for a
+ *  guard, its own process for every other hook. */
 function stubHookBody(hookName: string, exitCode = 0, stderr = ""): string {
   return [
-    `const raw = await Bun.stdin.text();`,
-    `const dir = process.env.T250_CAPTURE ?? ".";`,
-    `const { appendFileSync } = await import("node:fs");`,
-    `const { join } = await import("node:path");`,
-    `appendFileSync(join(dir, ${JSON.stringify(`${hookName}.jsonl`)}), raw + "\\n");`,
-    stderr ? `process.stderr.write(${JSON.stringify(stderr)});` : ``,
-    `process.exit(${exitCode});`,
+    `export async function run(raw: string): Promise<number> {`,
+    `  const dir = process.env.T250_CAPTURE ?? ".";`,
+    `  const { appendFileSync } = await import("node:fs");`,
+    `  const { join } = await import("node:path");`,
+    `  appendFileSync(join(dir, ${JSON.stringify(`${hookName}.jsonl`)}), raw + "\\n");`,
+    stderr ? `  process.stderr.write(${JSON.stringify(stderr)});` : ``,
+    `  return ${exitCode};`,
+    `}`,
+    `if (import.meta.main) process.exit(await run(await Bun.stdin.text()));`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -123,8 +127,9 @@ function stubHookBody(hookName: string, exitCode = 0, stderr = ""): string {
 const QUESTION_STORE_STUB = `export function keptRestartRun(_p: string, _args: readonly string[]): null { return null; }\n`;
 const AUDIT_TOOL_STUB = `export function appendAuditEntry(_k: string, _d: unknown, _p: string): void {}\nexport function appendSubagentPromptUnmatched(_p: string, _r: unknown): void {}\nexport function appendCoordinationStoodAside(_p: string, _r: unknown): boolean { return false; }\n`;
 const LIB_TOOL_STUB = `import { join } from "node:path";
-// The engine's own reading of a line is pure, so the rig uses the real one.
-export { beforeDelimiter, boundDirectiveMessage, ENGINE_OWNED_STATE_TRANSITIONS, nextLineFlags, readOrchestratorLauncherOptions } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
+// The engine's own reading of a line is pure, so the rig uses the real one, and
+// the real in-process hook runner, which runs the stub guards beside it.
+export { beforeDelimiter, boundDirectiveMessage, ENGINE_OWNED_STATE_TRANSITIONS, nextLineFlags, readOrchestratorLauncherOptions, runHookHere } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
 export function decideFence(): { decision: "hold" | "stand-aside" } {
   return { decision: process.env.T250_STATE_TRANSITION_STANDS_ASIDE === "1" ? "stand-aside" : "hold" };
 }
@@ -849,36 +854,71 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     }
   });
 
-  test("12b: a command that already carries AI-DLC's attempt id is refused for that, and the same command without it runs", () => {
-    // AI-DLC adds --aidlc-attempt-id to each workflow command itself, so an
-    // agent that copies one from an earlier command into a new call was told
-    // to avoid chaining and redirection it never used (#1411).
+  test("12b: a claimed command that already carries AI-DLC's attempt id runs with this call's own id instead", () => {
+    // AI-DLC adds --aidlc-attempt-id to each workflow command itself, and
+    // Copilot shows the agent the command as rewritten, so the agent copies
+    // the flag into later calls. Refusing those looped: the agent re-added it
+    // on every retry, and an approval stalled until the person said it again
+    // (#2495). The copied flag and id are dropped and the call gets its own.
+    const copied = "--aidlc-attempt-id 11111111-1111-4111-8111-111111111111";
+    const rewrite = (command: string) => {
+      const s = scratch();
+      try {
+        seedAidlcScripts(s);
+        return shellDecision(runAdapter(s, "guard-tool-call", shellCall(command))).hookSpecificOutput;
+      } finally {
+        s.cleanup();
+      }
+    };
+    for (const [command, clean] of [
+      [`aidlc engine orchestrate next ${copied}`, "aidlc engine orchestrate next"],
+      [`aidlc engine orchestrate ${copied} next`, "aidlc engine orchestrate next"],
+      [`aidlc continue ABCD1234 ${copied}`, "aidlc continue ABCD1234"],
+      [`bun .aidlc/tools/aidlc-orchestrate.ts next ${copied} 2>&1`, "bun .aidlc/tools/aidlc-orchestrate.ts next 2>&1"],
+      [`aidlc engine orchestrate report --stage requirements-analysis --result completed ${copied}`, "aidlc engine orchestrate report --stage requirements-analysis --result completed"],
+      [`aidlc engine orchestrate report ${copied} --stage requirements-analysis --result approved --user-input 'Approve'`,
+        "aidlc engine orchestrate report --stage requirements-analysis --result approved --user-input 'Approve'"],
+      [`aidlc engine orchestrate next ${copied} ${copied.replace(/1/g, "2")}`, "aidlc engine orchestrate next"],
+      ["aidlc engine orchestrate next --aidlc-attempt-id", "aidlc engine orchestrate next"],
+      // The --resume shorthand reads as `next --resume`, one word more than was typed.
+      [`aidlc engine orchestrate --resume ${copied}`, "aidlc engine orchestrate --resume"],
+      [`bun .aidlc/tools/aidlc.ts --resume ${copied}`, "bun .aidlc/tools/aidlc.ts --resume"],
+    ]) {
+      const ran = rewrite(command);
+      const expected = rewrite(clean);
+      expect(ran?.permissionDecision, command).toBe("allow");
+      expect(ran?.updatedInput?.command, command).toBe(expected?.updatedInput?.command);
+      expect(ran?.updatedInput?.command, command).toContain(STUB_ATTEMPT);
+      expect(ran?.updatedInput?.command, command).not.toContain("11111111");
+    }
+  });
+
+  test("12b-2: a copied attempt id is dropped where AI-DLC does not claim the command, and the person's own words keep the flag", () => {
+    // The agent learns the flag from claimed commands and can carry it to any
+    // other AI-DLC command; refusing it there would loop as #2495 did.
     const s = scratch();
     try {
       seedAidlcScripts(s);
-      const guard = (command: string) => shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
+      const guard = (command: string, session: string | null = "S-ALLOW") =>
+        shellDecision(runAdapter(s, "guard-tool-call", shellCall(command, session))).hookSpecificOutput;
       const copied = "--aidlc-attempt-id 11111111-1111-4111-8111-111111111111";
-      // The refusal is fixed text: the command is never echoed back or edited.
-      const refusal = "AI-DLC adds `--aidlc-attempt-id` to its own commands, so a command that already carries it did not run. " +
-        "Run the same command again without `--aidlc-attempt-id` and the id after it.";
-      for (const [command, retry] of [
-        [`aidlc engine orchestrate next ${copied}`, "aidlc engine orchestrate next"],
-        [`aidlc continue ABCD1234 ${copied}`, "aidlc continue ABCD1234"],
-        [`bun .aidlc/tools/aidlc-orchestrate.ts next ${copied} 2>&1`, "bun .aidlc/tools/aidlc-orchestrate.ts next 2>&1"],
-        [`aidlc engine orchestrate report --stage requirements-analysis --result completed ${copied}`, "aidlc engine orchestrate report --stage requirements-analysis --result completed"],
-        ["aidlc engine orchestrate next --aidlc-attempt-id", "aidlc engine orchestrate next"],
-        [`aidlc engine orchestrate report --stage requirements-analysis --result approved --user-input 'ok \`run this\`' ${copied}`,
-          "aidlc engine orchestrate report --stage requirements-analysis --result approved --user-input 'ok'"],
+      for (const [command, clean] of [
+        [`aidlc engine orchestrate doctor ${copied}`, "aidlc engine orchestrate doctor"],
+        [`aidlc engine orchestrate next --status ${copied}`, "aidlc engine orchestrate next --status"],
+        [`aidlc engine status ${copied}`, "aidlc engine status"],
       ]) {
-        const denied = guard(command);
-        expect(denied.hookSpecificOutput?.permissionDecision, command).toBe("deny");
-        expect(denied.hookSpecificOutput?.permissionDecisionReason, command).toBe(refusal);
-        expect(denied.hookSpecificOutput?.updatedInput, command).toBeUndefined();
-        // The same command without the flag is the next step, and it works.
-        const next = guard(retry);
-        expect(next.hookSpecificOutput?.permissionDecision, retry).toBe("allow");
-        expect(next.hookSpecificOutput?.updatedInput?.command, retry).toContain(STUB_ATTEMPT);
+        const out = guard(command);
+        expect(out?.permissionDecision, command).not.toBe("deny");
+        expect(out?.updatedInput?.command, command).toBe(clean);
       }
+      // With no host session nothing is claimed, and the copied id still never runs.
+      const unclaimed = guard(`aidlc engine orchestrate next ${copied}`, null);
+      expect(unclaimed?.permissionDecision).not.toBe("deny");
+      expect(unclaimed?.updatedInput?.command).toBe("aidlc engine orchestrate next");
+      // Behind the person's words the flag is one of their words, kept as typed.
+      const words = guard("aidlc engine orchestrate next -- add the --aidlc-attempt-id flag docs");
+      expect(words?.updatedInput?.command).toContain("-- add the --aidlc-attempt-id flag docs");
+      expect(words?.updatedInput?.command).toContain(STUB_ATTEMPT);
     } finally {
       s.cleanup();
     }
@@ -1744,6 +1784,9 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "aidlc engine worktree info --slug bolt-a",
         "aidlc unit merge-status U01",
         "aidlc engine intent unarchive auth-service",
+        // recording the checkout the code is in only widens what the review covers
+        "aidlc engine intent add-checkout .claude/worktrees/app",
+        "bun .aidlc/tools/aidlc.ts engine intent add-checkout .claude/worktrees/app",
         "aidlc engine bolt complete --name b1 --batch 1 --merge --slug bolt-a",
         "aidlc engine swarm prepare --batch 1 --units a,b",
         "aidlc engine plugin list",
@@ -1781,6 +1824,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "aidlc engine orchestrate next --add security-review",
         "aidlc engine orchestrate next --add=security-review",
         "aidlc engine orchestrate next config set review none",
+        // taking a recorded checkout out narrows what the review covers
+        "aidlc engine intent remove-checkout .claude/worktrees/app",
         // switching the active intent or space redirects the work that follows
         "aidlc engine intent switch billing",
         "aidlc engine intent billing",
@@ -2055,6 +2100,10 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           [`aidlc engine config set guard.review-freeze off --person-words '${words}'`, {}],
           [`aidlc engine intent create --scope mvp --sensors off --person-words '${words}'`, {}],
           [`aidlc engine recompose --skip security-review --sensors off --person-words '${words}'`, { T250_HUMAN_ACTED: "1" }],
+          [
+            `aidlc engine workspace reclassify --project-type brownfield --intent 261003-tooltip --space default --person-words '${words}'`,
+            { T250_HUMAN_ACTED: "1" },
+          ],
         ] as const) expect(decision(command, env), command).toBe("allow");
       }
       // In a Windows terminal they are checked as any other argument.

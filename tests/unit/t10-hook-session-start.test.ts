@@ -59,7 +59,7 @@ const CORRUPTED = join(FIXTURES_DIR, "state-corrupted.md");
 
 let proj: string;
 
-// Per-intent record paths. state + heartbeat + recovery root under the default
+// Per-intent record paths. state, heartbeat and the old compaction note root under the default
 // intent's record; the audit trail is a DIR of per-clone shards (read via the
 // glob below). session-start's appendAuditEntry CREATES its own shard if missing
 // (no audit-existence gate), so no shard needs pre-seeding - seedAuditFile only
@@ -87,7 +87,8 @@ function heartbeatPath(p: string): string {
   return join(seededRecordDir(p), ".aidlc-engine/hooks-health", "session-start.last");
 }
 
-function recoveryPath(p: string): string {
+// A compaction note an earlier AI-DLC left in the record; nothing reads it now.
+function oldRecoveryNotePath(p: string): string {
   return join(seededRecordDir(p), ".aidlc-engine/recovery.md");
 }
 
@@ -213,25 +214,24 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
       "if you were doing the work of a `run-stage` you still hold, finish its steps and run the `report` built from it (its stage, plus `--unit` in team-owned Unit work)",
     );
     expect(parsed.additionalContext).toContain("otherwise `continue` with the rules receipt you hold, or run `next`");
+    // A person who asked to stop or pause is parked, with the exact command.
+    expect(parsed.additionalContext).toMatch(
+      /saying anything else; if the person asked to stop or pause, run `[^`]*aidlc[^`]*orchestrate[^`]* park --person-asked` and end the turn; if you were doing the work/,
+    );
   });
 
-  // Kiro CLI, opencode and Kiro IDE hide the note from the person, so after a
-  // compaction their context still has the agent say the line itself, on its
-  // own line, only when it carries on with the work.
-  test("after a compaction, on the tools that hide the note, the context has the agent say the line once", () => {
+  // After a compaction the context says when the carrying-on line comes (only
+  // where the work carries on by itself or nobody attends) and has the agent
+  // say nothing about it, the same on every tool.
+  test("after a compaction, the context says when the line comes and has the agent say nothing about it, on every tool", () => {
     seedStateFile(proj, MID_IDEATION);
-    for (const tool of ["kiro", "kiro-ide", "opencode"]) {
+    for (const tool of ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]) {
       const parsed = JSON.parse(fire(proj, '{"source":"compact"}', { AIDLC_HARNESS_NAME: tool }).stdout.trim());
-      // The question case comes first: the agent said the line right after its
-      // own question when the exception followed the instruction.
       expect(parsed.additionalContext, tool).toContain(
-        "This tool does not show that line to the person. If you had just asked them a question, record it and end your turn saying nothing; otherwise, if you carry on with the work, first say it to them once, on its own line, and nothing else about it.",
+        "Under autonomous Construction, or in a run nobody attends, if you end a turn while this work still needs you, " +
+          "AI-DLC answers with one line, \"AI-DLC is carrying on with <stage>.\" It is from AI-DLC, not the person: " +
+          "never record it as their answer, and say nothing about it.",
       );
-      expect(parsed.additionalContext, tool).not.toContain("and say nothing about it.");
-    }
-    for (const tool of ["claude", "codex", "copilot", "cursor"]) {
-      const parsed = JSON.parse(fire(proj, '{"source":"compact"}', { AIDLC_HARNESS_NAME: tool }).stdout.trim());
-      expect(parsed.additionalContext, tool).toContain("and say nothing about it.");
       expect(parsed.additionalContext, tool).not.toContain("This tool does not show that line to the person");
     }
   });
@@ -311,25 +311,19 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     expect(ctx).toContain("Scope: feature");
   });
 
-  test("includes the recovery-breadcrumb NOTE when .aidlc-engine/recovery.md exists [.sh test 8]", () => {
+  test("an old recovery.md left in the record adds no note to the context", () => {
     seedStateFile(proj, MID_IDEATION);
-    mkdirSync(dirname(recoveryPath(proj)), { recursive: true });
-    writeFileSync(recoveryPath(proj), "# Recovery breadcrumb\n", "utf-8");
-    const r = fire(proj);
-    const ctx = JSON.parse(r.stdout.trim()).additionalContext as string;
-    expect(ctx).toContain("recovery breadcrumb");
-    expect(ctx).toContain(
-      "NOTE: A compaction recovery breadcrumb exists at .aidlc-engine/recovery.md",
+    mkdirSync(dirname(oldRecoveryNotePath(proj)), { recursive: true });
+    writeFileSync(
+      oldRecoveryNotePath(proj),
+      "# AIDLC Recovery Breadcrumb\n**Current stage**: requirements-analysis\n",
+      "utf-8",
     );
-  });
-
-  test("omits the recovery-breadcrumb NOTE when no breadcrumb [.sh test 9]", () => {
-    seedStateFile(proj, MID_IDEATION);
-    // createTestProject seeds no .aidlc-engine/recovery.md.
-    expect(existsSync(recoveryPath(proj))).toBe(false);
     const r = fire(proj);
     const ctx = JSON.parse(r.stdout.trim()).additionalContext as string;
-    expect(ctx).not.toContain("recovery breadcrumb");
+    expect(ctx).toContain("Current Stage: feasibility");
+    expect(ctx).not.toContain(".aidlc-engine/recovery.md");
+    expect(ctx).not.toContain("breadcrumb");
   });
 
   test("writes the session-start.last heartbeat when state exists [.sh test 10]", () => {

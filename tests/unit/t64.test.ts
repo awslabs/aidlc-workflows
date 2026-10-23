@@ -955,6 +955,13 @@ outputs: b
     expect(out).toContain("ars.role must be one of initialization | core | phase-gate | structural, got string");
   });
 
+  test("the shipped priors' project-type role is not one a stage block can declare (#2575)", () => {
+    const yaml = withArs("ars:\n  targets: [csu]\n  cost: 4\n  role: project-type\n  project_types: [brownfield]\n");
+    expect(parseAndValidate(yaml)).toContain(
+      "ars.role must be one of initialization | core | phase-gate | structural, got string"
+    );
+  });
+
   test("targets and cost are required; cost stays on the 1..5 scale", () => {
     expect(parseAndValidate(withArs("ars:\n  role: core\n"))).toContain(
       "ars.targets is required (an empty list is allowed)|ars.cost is required (null marks a stage that is not numerically screenable)"

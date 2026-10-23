@@ -227,6 +227,15 @@ describe("t68 version/CHANGELOG/README sync (migrated from t68-version-changelog
     ).toEqual([]);
   });
 
+  // The stable page's entry shape (AGENTS.md, Release Metadata Policy) is
+  // accepted, never required: the entries up to 2.11.1 stay flat as shipped.
+  test("an entry with ### groups and a last Script compatibility group passes", () => {
+    expect(compatibilityProblems(changelog(entry(
+      "2.12.0", "Compatibility: breaking for scripts", summary, "Only scripts that run the tool are affected.",
+      "### Changes\n\n* A change.", `### Script compatibility\n\n${breaking}`,
+    )))).toEqual([]);
+  });
+
   test("each of the three lines passes, and entries up to 2.11.0 need none", () => {
     for (const line of COMPATIBILITY_LINES) {
       expect(compatibilityProblems(changelog(entry("2.12.0", line, summary)))).toEqual([]);

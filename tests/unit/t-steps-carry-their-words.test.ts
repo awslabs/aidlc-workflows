@@ -309,7 +309,10 @@ describe("the engine renders every question it asks", () => {
       ["auth", `${INVOCATION} next --claim auth`],
       ["notes", `${INVOCATION} next --claim notes`],
     ]);
-    expect(by("legacy-plan-approval-recovery")).toEqual([["Recover Plan Approval", `${INVOCATION} next`]]);
+    // The recovery question's one choice is the agent's record of the person's yes, then `next`.
+    expect(by("legacy-plan-approval-recovery")).toEqual([
+      ["Recover Plan Approval", `${LOG} answer --stage code-generation --checkpoint plan-approval --details "Recover Plan Approval"`],
+    ]);
     expect(by("compose-offer")).toEqual([
       ["Tailor a plan to this task", `${INVOCATION} next compose --request a1b2c3d4`],
       ["The bugfix plan", `${INVOCATION} next --scope bugfix --request a1b2c3d4`],
@@ -355,7 +358,8 @@ describe("the engine renders every question it asks", () => {
     expect(note).toContain(`run \`${INVOCATION} next\` when it returns none`);
     expect(note).toContain("read what they meant");
     expect(namesAField(note)).toEqual([]);
-    expect(str(notes(ask("unit-paused")).question_note)).toBe(note);
+    // A paused Unit has one choice, Resume: its note says to say the numbered question instead.
+    expect(str(notes(ask("unit-paused")).question_note)).toBe(questionNote(INVOCATION, true));
     // The plan offer's "Use a different plan" needs the plan named: the note says to show the plans the step lists,
     // each with its length, and run the one named; the menu itself stays three choices plus Other.
     const offer = str(notes(ask("scope-confirm")).question_note);
@@ -397,6 +401,23 @@ describe("a stage step carries its instructions, not the fields to branch on", (
     expect(note).toContain("no mode question and nothing recorded for the mode");
     expect(note).not.toContain("decision --stage");
     expect(notes(runStage()).answer_mode_note).toBeUndefined();
+  });
+
+  // Kiro CLI showed the agent reading the object aloud ("The answer mode needs
+  // to be asked (answer_mode.ask: true)"), so the note is all the step carries.
+  test("the answer mode reaches the agent as its note alone, never as the fields it was made from", () => {
+    for (const mode of [ASK_MODE, REUSED_MODE]) {
+      const step = notes(runStage({ answer_mode: mode }));
+      expect(str(step.answer_mode_note)).toContain(mode.notice);
+      expect("answer_mode" in step).toBe(false);
+      expect(validateDirective(step).valid).toBe(true);
+      // The step goes out twice through the notes (before and after transport): the note stays.
+      expect(notes(step).answer_mode_note).toBe(step.answer_mode_note);
+    }
+    // A step whose body does not run here gets no note, and no field either.
+    const settled = notes(runStage({ answer_mode: ASK_MODE, gate_only: true }));
+    expect(settled.answer_mode_note).toBeUndefined();
+    expect("answer_mode" in settled).toBe(false);
   });
 
   test("what to read first, in order, then the stage file and the inputs, pointed at by meaning", () => {
@@ -510,7 +531,7 @@ describe("a stage step carries its instructions, not the fields to branch on", (
   test("each instruction is a legal field only beside what it is about", () => {
     const valid = (step: Json) => validateDirective(step).valid;
     expect(valid(notes(runStage({ answer_mode: ASK_MODE, gate_only: true, consumes_absent: [{ path: "a", expected: false }] })))).toBe(true);
-    expect(valid({ ...runStage(), answer_mode_note: "x" })).toBe(false);
+    expect(valid({ ...ask("intent-pick"), answer_mode_note: "x" })).toBe(false);
     expect(valid({ ...runStage(), inputs_note: "x" })).toBe(false);
     expect(valid({ ...runStage(), plan_note: "x" })).toBe(false);
     expect(valid({ ...runStage(), context_note: "" })).toBe(false);

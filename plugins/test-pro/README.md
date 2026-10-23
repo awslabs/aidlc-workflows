@@ -41,22 +41,22 @@ bun <tools-dir>/aidlc-plugin-test.ts . --install <claude-project> --harness clau
 
 **Claude Code** (host store):
 ```
-/plugin marketplace add <your-repo-or-path>/dist/plugins/test-pro/claude
+/plugin marketplace add <your-repo-or-path>/dist/plugins   # AI-DLC's own plugins, one catalogue
 /plugin install aidlc-test-pro@aidlc-plugins
 # start a fresh session → the SessionStart hook composes test-pro in
 ```
 
 **Codex CLI** (host store, in a git repo):
 ```
-codex plugin marketplace add <…>/dist/plugins/test-pro/codex
+codex plugin marketplace add <your-repo-or-path>/dist/plugins
 codex plugin add aidlc-test-pro@aidlc-plugins   # approve the one-time hook trust
 ```
 
 **Kiro** (no store — folder-drop + compose):
 ```bash
-cp -r dist/plugins/test-pro/kiro/. <project>/     # or git pull the plugin repo
-AIDLC_PLUGIN_ROOT=<…>/kiro AIDLC_PROJECT_DIR=<project> AIDLC_HARNESS_DIR=.kiro \
-  bun <…>/kiro/hooks/compose.ts
+cp -r dist/plugins/test-pro/kiro/.kiro <project>/   # lands in .kiro/aidlc-plugins/aidlc-test-pro/
+AIDLC_PLUGIN_ROOT=<project>/.kiro/aidlc-plugins/aidlc-test-pro AIDLC_PROJECT_DIR=<project> AIDLC_HARNESS_DIR=.kiro \
+  bun <project>/.kiro/aidlc-plugins/aidlc-test-pro/hooks/compose.ts
 ```
 
 Then confirm and run:

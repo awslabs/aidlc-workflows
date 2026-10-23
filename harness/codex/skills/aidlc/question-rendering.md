@@ -78,10 +78,14 @@ Map the spec fields 1:1:
   option set as the authoritative record.
 - **Answer capture**: the selection returns as the exact option label; record
   it verbatim (protocol: never summarize User Input).
-- **No answer**: the box runs out after about two minutes and returns no
-  answers. Nothing was answered: ask the same question again in your reply as
-  numbered prose, not in the box, and end the turn; never pick an answer for
-  the person.
+- **No answer**: the box runs out after about two minutes, or the person
+  dismisses or closes it, and it returns no answers. Nothing was answered: ask
+  the same question again in your reply as numbered prose, not in the box, and
+  end the turn; never pick an answer for the person. The engine does not leave
+  this to memory — the record-human-turn hook records `QUESTION_UNANSWERED`
+  (which spends any earlier turn, so no answer or gate decision sticks) and
+  hands back the same question already rendered as numbered prose, its labels
+  and their order unchanged; present that and end the turn.
 
 ### Track 2 — numbered prose (the floor)
 
@@ -167,8 +171,13 @@ Rules (both tracks):
   gate (`report --result awaiting-approval` or `revised`), which includes any
   plan change made during the stage, else the run-stage directive's. Render
   `Complete workflow` when `next_stage` is null. Never guess the next stage.
+- **Approval gate Accept as-is**: that reply, or the step that shows the gate
+  again, says whether the gate offers a third option. With
+  `accept_as_is: "offered"`, add `Accept as-is` third and
+  name the round from `revision_cycle`; with `"next-revision"`, keep two options
+  and add the note that it comes after one more revision. Never count the
+  rounds yourself.
 - **No emergent options**: render exactly the spec's options (+ the escape).
-  The NO EMERGENT BEHAVIOR rule applies to the rendering, not just the spec.
 - **Prose response keys**: on Track 2, start every question at `1`, independent
   of numbered content earlier in the message or another question in the batch.
   Use unordered bullets for immediately preceding summaries. Visible `1` maps

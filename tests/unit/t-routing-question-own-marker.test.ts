@@ -1,24 +1,26 @@
 // covers: subcommand:aidlc-orchestrate:next, function:notePlanApprovalAskReply, function:consumeSharedDirectiveAsk,
-// function:planApprovalKeptReplyWaits, function:engineQuestionHoldsReplies, function:recordProtectedHumanResponse
+// function:planApprovalKeptReplyWaits, function:openEngineQuestion, function:recordProtectedHumanResponse
 //
-// A question the engine asks while another of its questions is open answers
-// only itself. With the code plan question open, a person typed "/aidlc also
-// add a test for an empty title"; the agent asked where that work belongs
-// ("Is this (1) part of that work ..."), and the person's "1" was recorded as
-// Approve Plan in their name: the build started without their test. "2" was
-// recorded as Request Changes, "3" as "I'll edit the files". The routing
-// question now holds the open-question marker itself, so:
+// A number typed for a question the engine asks while another of its questions
+// is open answers nothing by itself. With the code plan question open, a
+// person typed "/aidlc also add a test for an empty title"; the agent asked
+// where that work belongs ("Is this (1) part of that work ..."), and the
+// person's "1" was once recorded as Approve Plan in their name: the build
+// started without their test. No hook reads a typed reply for a pick now; the
+// agent reads which question it answers, so:
 //
-//   - its number answers it alone: nothing is recorded for the plan question,
-//     under Guard Policy off and strict, through every harness's human-turn hook;
+//   - the number records nothing for the plan question, under Guard Policy off
+//     and strict, through every harness's human-turn hook;
 //   - "part of that work" asks the plan question again with the person's words
 //     as their reply to it, so the change they asked for reaches the plan;
 //   - the same holds for the new-work plan offer ("/aidlc --new-intent ..."),
 //     a guard-recovery question (a routing "1" picks no remedy), and a Unit
 //     checkpoint or verification-command question, in the chat that asked it
-//     or in a new chat, and a stage's approval gate: the routing "1" or "2" is
-//     never kept as their pick, nor counted as their reply to the gate, nor
-//     handed to a later chat as their answer to the stage's own questions.
+//     or in a new chat, and a stage's approval gate: a message sent while
+//     another engine question is on screen (its HUMAN_TURN row names it) is
+//     never their pick, nor counted as their reply to the gate or checkpoint,
+//     nor handed to a later chat as their answer to the stage's own questions,
+//     unless the agent names it with --message for the question it answered.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -45,7 +47,7 @@ import {
   auditBlockField,
   findStageBySlug,
   latestMainWorkflowStageRunFloorForProject,
-  personsLatestGatePick,
+  personsGateReply,
   readAuditShardEvents,
   readProtectedResponse,
   reviewArtifactFingerprint,
@@ -274,6 +276,14 @@ describe("a stage report of the approval while the plan question is open names t
       expect(step.message).not.toContain("No reply from the person is on record");
       expect(planAnswers(proj)).toEqual(before);
       expect(readAuditShardEvents(proj).some((row) => row.event === "GATE_APPROVED")).toBe(false);
+      // The command the step names: the agent records the answer it read.
+      if (replied) {
+        const recorded = spawnSync(BUN, [
+          LOG, "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
+          "--project-dir", proj,
+        ], { cwd: proj, env: env(proj), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+        expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
+      }
       const after = next(proj);
       if (replied) expect(after.plan_approval?.status, JSON.stringify(after)).toBe("approved");
       else expect(after.ask_type, JSON.stringify(after)).toBe("plan-approval");
@@ -340,6 +350,11 @@ describe("a number for the routing question answers it alone while the code plan
     const proj = project("off");
     expect(next(proj).ask_type).toBe("plan-approval");
     say(proj, "1");
+    const recorded = spawnSync(BUN, [
+      LOG, "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
+      "--project-dir", proj,
+    ], { cwd: proj, env: env(proj), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
     expect(planAnswers(proj)).toEqual(["PLAN_APPROVAL_RECORDED: Approve Plan"]);
     expect(next(proj).plan_approval?.status).toBe("approved");
     const routing = routingQuestionOverThePlan(proj, false);
@@ -381,10 +396,15 @@ describe("a number for the routing question answers it alone while the code plan
 });
 
 describe("a number for the routing question picks no guard-recovery remedy", () => {
-  test('"1" leaves the recovery question waiting for the person', () => {
+  test('"1" picks no remedy: the recovery question waits for the agent\'s reading', () => {
     const proj = project("off");
     expect(next(proj).ask_type).toBe("plan-approval");
     say(proj, "1");
+    const recorded = spawnSync(BUN, [
+      LOG, "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
+      "--project-dir", proj,
+    ], { cwd: proj, env: env(proj), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
     expect(next(proj).plan_approval?.status).toBe("approved");
     writeActiveDirectiveMarker(proj, {
       kind: "ask", ask_type: "guard-recovery", stage: "code-generation",
@@ -401,7 +421,7 @@ describe("a number for the routing question picks no guard-recovery remedy", () 
     expect(next(proj, (request as string).split(" ")).ask_type).toBe("new-work-routing");
     say(proj, "1");
     const marker = JSON.parse(readFileSync(join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json"), "utf-8"));
-    expect(marker.guard_recovery_response).toBeUndefined();
+    expect(marker.guard_recovery_response?.selected_op ?? null).toBeNull();
   });
 });
 
@@ -629,7 +649,7 @@ describe("a number for the routing question is never kept as a Unit checkpoint o
     const proj = checkpointProject("off");
     askCheckpoint(proj);
     routingQuestionOverTheStep(proj);
-    // Words while the routing question is open answer it, never the checkpoint.
+    // Words while the routing question is open are not the checkpoint's by default.
     say(proj, "approve it");
     expect(keptReply(proj).words).toBe("also handle an empty list");
     // The engine asks the checkpoint again (a later second than the routing question).
@@ -637,7 +657,7 @@ describe("a number for the routing question is never kept as a Unit checkpoint o
     const again = engine(proj, ["bolt", "checkpoint", "--action", "ask", "--unit", "alpha", "--kind", "unit"]);
     expect(again.code, again.out).toBe(0);
     say(proj, "approve");
-    expect(keptReply(proj).choice).toBe("Approve");
+    expect(keptReply(proj).choice).toBeNull();
     const approved = engine(proj, ["bolt", "checkpoint", "--action", "approve", "--unit", "alpha", "--kind", "unit", "--user-input", "approve"]);
     expect(approved.code, approved.out).toBe(0);
   });
@@ -686,11 +706,11 @@ function report(proj: string, result: string, extra: string[] = []): { code: num
 describe("an answer to another question is no reply to a stage gate", () => {
   for (const policy of ["off", "strict"] as const) {
     for (const pick of ["1", "2"]) {
-      test(`${policy}: routing "${pick}" is no Approve or Request Changes pick at the gate`, () => {
+      test(`${policy}: routing "${pick}" is no reply the gate's record keeps`, () => {
         const proj = gateProject(policy);
         routingQuestionOverTheStep(proj);
         say(proj, pick);
-        expect(personsLatestGatePick(proj, SESSION, { stage: "feasibility" })).toBeNull();
+        expect((personsGateReply(proj, SESSION, "feasibility").words ?? "").split("\n")).not.toContain(pick);
       });
     }
   }
@@ -704,6 +724,53 @@ describe("an answer to another question is no reply to a stage gate", () => {
     expect(report(proj, "approved", ["--user-input", "Approve"]).out).toContain("no new human reply");
     expect(readAuditShardEvents(proj).filter((row) => row.event === "GATE_APPROVED")).toEqual([]);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(/^- \[\?\] feasibility /m);
+  });
+});
+
+// The latest message id the human-turn hook kept.
+const latestTurnMessage = (proj: string): string =>
+  auditBlockField(readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1)?.block ?? "", "Message Id") ?? "";
+
+describe("a message sent while another engine question was open answers the question the agent names", () => {
+  test('off: an approval typed while the new-work offer is open approves the gate once the agent names it', () => {
+    const proj = gateProject("off");
+    const words = "fix the crash when the export list is empty";
+    say(proj, `/aidlc --new-intent ${words}`);
+    expect(next(proj, ["--new-intent", words]).ask_type).toBe("scope-confirm");
+    say(proj, "approve feasibility first");
+    const id = latestTurnMessage(proj);
+    expect(readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1)?.block)
+      .toContain("**Open Question**: scope-confirm");
+    // By default it answers the offer on screen; the refusal names it for the agent, ids and times only.
+    const refused = report(proj, "approved", ["--user-input", "Approve"]);
+    expect(refused.out).toContain(`If their message ${id}`);
+    expect(refused.out).not.toContain("approve feasibility first");
+    expect(readAuditShardEvents(proj).filter((row) => row.event === "GATE_APPROVED")).toEqual([]);
+    const approved = report(proj, "approved", ["--user-input", "Approve", "--message", id]);
+    expect(approved.code, approved.out).toBe(0);
+    const rows = readAuditShardEvents(proj).filter((row) => row.event === "GATE_APPROVED");
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Person Reply")).toBe("approve feasibility first");
+    expect(auditBlockField(rows[0].block, "Message Id")).toBe(id);
+  });
+
+  test("a checkpoint answer typed while the new-work offer is open is recorded once the agent names it, with no second question", () => {
+    const proj = checkpointProject("off");
+    askCheckpoint(proj);
+    const words = "fix the crash when the export list is empty";
+    say(proj, `/aidlc --new-intent ${words}`);
+    expect(next(proj, ["--new-intent", words]).ask_type).toBe("scope-confirm");
+    say(proj, "approve alpha");
+    const id = latestTurnMessage(proj);
+    expect(keptReply(proj).words ?? "").not.toContain("approve alpha");
+    const approve = ["bolt", "checkpoint", "--action", "approve", "--unit", "alpha", "--kind", "unit", "--user-input", "Approve"];
+    const refused = engine(proj, approve);
+    expect(refused.code).not.toBe(0);
+    expect(refused.out).toContain(`If their message ${id}`);
+    const approved = engine(proj, [...approve, "--message", id]);
+    expect(approved.code, approved.out).toBe(0);
+    const rows = readAuditShardEvents(proj).filter((row) => row.event === "GATE_APPROVED" && auditBlockField(row.block, "Unit") === "alpha");
+    expect(auditBlockField(rows.at(-1)?.block ?? "", "Person Reply")).toBe("approve alpha");
   });
 });
 

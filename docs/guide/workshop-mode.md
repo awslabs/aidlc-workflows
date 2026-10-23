@@ -145,8 +145,9 @@ at the end of each Unit). A plan with one Unit, no Unit plan, or
 Construction already under way is never asked. A reply that picks neither
 leaves this session building, and the first step says to ask for teams before
 the first Unit is built. Team approvals come after every stage (`per-stage`)
-unless the lead runs `set-unit-gate-rhythm unit-end` before the first Unit
-starts; the first team step says so.
+unless the lead asks for one approval at the end of each Unit
+(`set-unit-gate-rhythm unit-end`) before the first team approval question;
+the first team step offers it.
 
 When the scope records `skeleton: on`, the first DAG Unit is the walking
 skeleton. It runs on unscoped main before claims open and needs no merge-back

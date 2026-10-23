@@ -1,10 +1,13 @@
 // covers: scope:bugfix, file:skills/aidlc/SKILL.md, hook:aidlc-record-human-turn, audit:GATE_APPROVED
 //
 // t-tui-kiro-release-journey.serial.test.ts - a person's first day with AI-DLC
-// on Kiro CLI, live in the `kiro-cli chat` terminal the person runs. This is
-// the Kiro CLI release pass (#1345): a maintainer runs it on the exact commit
-// to be tagged, on a machine with a signed-in Kiro CLI, and records its line
-// as a comment on the release-preparation PR (docs/reference/09-testing.md).
+// on Kiro CLI, live in the `kiro-cli chat` terminal the person runs, once on
+// each Kiro tree: `kiro`, which setup lists as "Kiro CLI (V2)", and `kiro-ide`,
+// which setup lists as "Kiro" and whose .kiro/settings/cli.json pins Kiro CLI
+// to its v3 engine. Neither drives Kiro IDE. This is the Kiro CLI
+// release pass (#1345): a maintainer runs it on the selected preview's source
+// commit, on a machine with a signed-in Kiro CLI, and records its two lines in
+// that preview's release notes (docs/reference/09-testing.md).
 //
 // The shared journey is in tests/harness/release-journey.ts: install through
 // the copy channel, doctor, the documented first step, "1" at the plan
@@ -79,6 +82,12 @@ function type(session: string, text: string): void {
 // Kiro's input footer when it waits for the person, and the credits line it
 // prints at the end of every answer (this turn's and the session's credits).
 const IDLE = "ask a question or describe a task";
+// A permission prompt: the conductor's own card ("<tool> requires approval",
+// Allow preselected), or the card Kiro CLI 2.32.0 shows for a delegated agent's
+// tool ("⚠ 1 tool approval pending" over "(a) Approve all pending",
+// preselected). The option line is matched, not the count line above it.
+// Enter takes the preselected answer on both.
+const PROMPT = /requires approval|Approve all pending/;
 function sessionCredits(text: string): number | undefined {
   const all = [...text.matchAll(/Credits: turn [\d.]+ \S+ session ([\d.]+)/g)];
   return all.length ? Number(all[all.length - 1][1]) : undefined;
@@ -94,7 +103,18 @@ function kiroVersion(): string | null {
 // for this comparison), even in a shard of fixture-profile files.
 const PRODUCTION_GUARDS = process.env.AIDLC_TEST_GUARD_PROFILE === "production";
 
-function skipReason(): string | null {
+type KiroTree = "kiro" | "kiro-ide";
+const KIRO_TREES: readonly KiroTree[] = ["kiro", "kiro-ide"];
+// AIDLC_KIRO_RELEASE_TREE=<tree> registers only that tree's journey, to rerun
+// the one whose result is missing or failed; --require-coverage then covers
+// that tree alone.
+const ONLY_TREE = process.env.AIDLC_KIRO_RELEASE_TREE;
+if (ONLY_TREE && !KIRO_TREES.includes(ONLY_TREE as KiroTree)) {
+  throw new Error(`AIDLC_KIRO_RELEASE_TREE must be one of ${KIRO_TREES.join(", ")}, not "${ONLY_TREE}"`);
+}
+const TREES = ONLY_TREE ? [ONLY_TREE as KiroTree] : KIRO_TREES;
+
+function sharedSkipReason(): string | null {
   if (process.env.AIDLC_KIRO_TUI_LIVE !== "1") return "set AIDLC_KIRO_TUI_LIVE=1 to run the Kiro CLI release journey (uses Kiro credits)";
   if (!PRODUCTION_GUARDS) return "run with --production-guards: the journey is the person's own guard profile";
   const runtimeReason = tuiUnavailableReason();
@@ -102,68 +122,76 @@ function skipReason(): string | null {
   if (!kiroVersion()) return "kiro-cli not found";
   const whoami = spawnSync("kiro-cli", ["whoami"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   if (whoami.status !== 0) return "kiro-cli not signed in (run `kiro-cli login`)";
-  if (!existsSync(join(REPO_ROOT, "dist", "kiro"))) return "dist/kiro is missing: run bun scripts/package.ts";
   return null;
 }
-const SKIP_REASON = skipReason();
+const SHARED_SKIP_REASON = sharedSkipReason();
+function skipReason(tree: KiroTree): string | null {
+  if (SHARED_SKIP_REASON) return SHARED_SKIP_REASON;
+  return existsSync(join(REPO_ROOT, "dist", tree)) ? null : `dist/${tree} is missing: run bun scripts/package.ts`;
+}
 
 describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before each release", () => {
-  test.skipIf(SKIP_REASON !== null)(
-    `every line recorded, the plan question asked, Reverse Engineering approved${SKIP_REASON ? ` [SKIP: ${SKIP_REASON}]` : ""}`,
-    () => {
-      const project = setupReleaseJourneyProject("kiro");
-      const session = `aidlc_tui_kiro_release_${process.pid}`;
-      const kiroHome = join(project.root, "kiro-home");
-      mkdirSync(kiroHome, { recursive: true });
-      const launch = process.platform === "linux"
-        ? ["env", `HOME=${kiroHome}`, `XDG_DATA_HOME=${process.env.XDG_DATA_HOME || join(homedir(), ".local", "share")}`, "kiro-cli", "chat"]
-        : ["kiro-cli", "chat"];
-      const report: ReleaseJourneyReport = { harness: "kiro", toolVersion: kiroVersion() ?? "?", turns: [], extra: {}, problems: [] };
-      let prompts = 0;
-      try {
-        runReleaseJourney(report, () => {
-          expect(drive(["start", "--session", session, "--cwd", project.proj, "--width", "200", "--height", "50", "--", ...launch]).rc).toBe(0);
-          // The shipped settings make the aidlc agent the default; its name is in the status bar.
-          expect(waitFor(session, "aidlc", remainingWorkMs(), 400)).toBe(true);
-          expect(waitFor(session, IDLE, remainingWorkMs(), 600)).toBe(true);
-          for (const [index, line] of RELEASE_JOURNEY_TURNS.entries()) {
-            const before = sessionCredits(screen(session)) ?? 0;
-            const started = Date.now();
-            type(session, line);
-            // The turn ends when Kiro prints its credits line again and waits for the person.
-            let ended = false;
-            while (!ended && Date.now() < caseDeadlineMs) {
-              if (!waitFor(session, `${IDLE}|requires approval`, remainingWorkMs(), 1500)) continue;
-              const now = screen(session);
-              const bottom = now.split("\n").slice(-14).join("\n");
-              if (bottom.includes("requires approval") && !bottom.includes(IDLE)) {
-                prompts++;
-                drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
-                continue;
+  for (const tree of TREES) {
+    const skip = skipReason(tree);
+    test.skipIf(skip !== null)(
+      `${tree}: every line recorded, the plan question asked, Reverse Engineering approved${skip ? ` [SKIP: ${skip}]` : ""}`,
+      () => {
+        const project = setupReleaseJourneyProject(tree);
+        const session = `aidlc_tui_${tree.replace("-", "_")}_release_${process.pid}`;
+        const kiroHome = join(project.root, "kiro-home");
+        mkdirSync(kiroHome, { recursive: true });
+        const launch = process.platform === "linux"
+          ? ["env", `HOME=${kiroHome}`, `XDG_DATA_HOME=${process.env.XDG_DATA_HOME || join(homedir(), ".local", "share")}`, "kiro-cli", "chat"]
+          : ["kiro-cli", "chat"];
+        const report: ReleaseJourneyReport = { harness: tree, toolVersion: kiroVersion() ?? "?", turns: [], extra: {}, problems: [] };
+        let prompts = 0;
+        try {
+          runReleaseJourney(report, () => {
+            expect(drive(["start", "--session", session, "--cwd", project.proj, "--width", "200", "--height", "50", "--", ...launch]).rc).toBe(0);
+            // Kiro's own banner says which engine the shipped settings started.
+            if (tree === "kiro-ide") expect(waitFor(session, "Welcome to Kiro CLI V3", remainingWorkMs(), 400)).toBe(true);
+            // The shipped settings make the aidlc agent the default; its name is in the status bar.
+            expect(waitFor(session, "aidlc", remainingWorkMs(), 400)).toBe(true);
+            expect(waitFor(session, IDLE, remainingWorkMs(), 600)).toBe(true);
+            for (const [index, line] of RELEASE_JOURNEY_TURNS.entries()) {
+              const before = sessionCredits(screen(session)) ?? 0;
+              const started = Date.now();
+              type(session, line);
+              // The turn ends when Kiro prints its credits line again and waits for the person.
+              let ended = false;
+              while (!ended && Date.now() < caseDeadlineMs) {
+                if (!waitFor(session, `${IDLE}|${PROMPT.source}`, remainingWorkMs(), 1500)) continue;
+                const now = screen(session);
+                const bottom = now.split("\n").slice(-14).join("\n");
+                if (PROMPT.test(bottom) && !bottom.includes(IDLE)) {
+                  prompts++;
+                  drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
+                  continue;
+                }
+                ended = (sessionCredits(now) ?? 0) > before;
               }
-              ended = (sessionCredits(now) ?? 0) > before;
+              if (!ended) report.problems.push(`"${line}" was still running when the journey's time ran out`);
+              report.turns.push({ line, seconds: Math.round((Date.now() - started) / 1000) });
+              if (ended) checkReleaseJourneyTurn(report, project.proj, index + 1, line);
+              if (report.problems.length) break;
             }
-            if (!ended) report.problems.push(`"${line}" was still running when the journey's time ran out`);
-            report.turns.push({ line, seconds: Math.round((Date.now() - started) / 1000) });
-            if (ended) checkReleaseJourneyTurn(report, project.proj, index + 1, line);
-            if (report.problems.length) break;
-          }
-          if (!report.problems.length) {
-            report.problems.push(...hooksRanProblems(doctorChecks(project, { ...process.env, ...(process.platform === "linux" ? { HOME: kiroHome } : {}) })));
-          }
-          const last = screen(session);
-          report.extra = { credits: sessionCredits(last) ?? 0, "permission prompts": prompts };
-          if (report.problems.length) {
-            report.extra.evidence = { ...releaseJourneyEvidence(project.proj), screen: last.split("\n").slice(-60).join("\n") };
-          }
-        });
-      } finally {
-        assertTuiDriveKill(drive(["kill", "--session", session]), session);
-      }
-      expectPersonFirstInJourney(report);
-      expect(report.problems).toEqual([]);
-      rmSync(project.root, { recursive: true, force: true });
-    },
-    TEST_TIMEOUT_MS,
-  );
+            if (!report.problems.length) {
+              report.problems.push(...hooksRanProblems(doctorChecks(project, { ...process.env, ...(process.platform === "linux" ? { HOME: kiroHome } : {}) })));
+            }
+            const last = screen(session);
+            report.extra = { credits: sessionCredits(last) ?? 0, "permission prompts": prompts };
+            if (report.problems.length) {
+              report.extra.evidence = { ...releaseJourneyEvidence(project.proj), screen: last.split("\n").slice(-60).join("\n") };
+            }
+          });
+        } finally {
+          assertTuiDriveKill(drive(["kill", "--session", session]), session);
+        }
+        expectPersonFirstInJourney(report);
+        expect(report.problems).toEqual([]);
+        rmSync(project.root, { recursive: true, force: true });
+      },
+      TEST_TIMEOUT_MS,
+    );
+  }
 });

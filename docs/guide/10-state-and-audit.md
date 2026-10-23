@@ -71,21 +71,26 @@ Here is part of one, from a Claude Code run on the `mvp` plan just after Intent 
 ```
 
 If `Guard Policy` and the retired `Change Control` both appear with different
-policy words, strict applies and status shows `strict (from conflicting state lines)`;
-memory-held strict still takes precedence. If both agree, the `Guard Policy`
-line is used. Any write of the policy line removes the retired line, leaving one
-setting. Until a conflict is resolved, `next` carries this notice, without
-changing the state file:
+policy words, status shows `strict (from conflicting state lines)` until the next
+`next`, which keeps one and writes it as the only line: the one the audit trail
+shows was set last, else the one you set, else the scope's own, else the stricter
+(a `GUARD_POLICY_SET` row with `Source: command` and a `Settled` field records it).
+It says nothing when it kept your own last choice, and once otherwise, for example:
 
-> This work has two settings for how closely AI-DLC checks changes, and they disagree, so AI-DLC checks everything for now. Do you want it to keep checking everything, carry on with a note when something you approved changes, or also skip some of its own checks? I'll ask again until you choose.
+> This work had two settings for how closely AI-DLC checks changes, and they disagreed. The record does not say which was set last, so AI-DLC keeps the stricter one: it checks everything. You can change it any time.
+
+Memory-held strict still takes precedence and leaves both lines as they are. If
+both agree, the `Guard Policy` line is used. Any write of the policy line removes
+the retired line, leaving one setting.
 
 `Construction Verification Command` records the project check reused at every
 Unit/batch checkpoint. A matching current-workflow human approval receipt is
 required before `state set-construction-verification-command` writes the field;
 the field alone never authorizes execution, and generic `state set` refuses it.
-The human's **Approve** / **Request Changes** reply must come from the
-invoking SessionStart session. Only **Approve** authorizes the receipt; an
-unrelated reply, **Request Changes**, or a reply from another session does not.
+The human's **Approve** / **Request Changes** reply counts in the chat that
+asked or in a new one while it is the newest question asked. Only **Approve**
+authorizes the receipt; an unrelated reply, **Request Changes**, or a reply to
+another question does not.
 See the [recorded-command flow](12-cli-commands.md#construction-verification-command-record-human-authorization).
 
 ### Six-state checkboxes
@@ -151,15 +156,15 @@ means. The write guard is a guardrail, not a security boundary. See
 [Audit Trail Rules](../reference/04-stage-protocol.md#audit-trail-rules) for
 the owning commands and the read-only query contract.
 
-### 119-event taxonomy
+### 123-event taxonomy
 
-Events are organized into 25 categories:
+Events are organized into 26 categories:
 
 | Category | Count | Events |
 |----------|------:|--------|
-| **Workflow Lifecycle** | 7 | `WORKFLOW_STARTED`, `WORKFLOW_COMPLETED`, `WORKFLOW_PARKED`, `WORKFLOW_UNPARKED`, `WORKFLOW_ARCHIVED`, `WORKFLOW_UNARCHIVED`, `INTENT_REPOS_CHANGED` |
+| **Workflow Lifecycle** | 8 | `WORKFLOW_STARTED`, `WORKFLOW_COMPLETED`, `WORKFLOW_PARKED`, `WORKFLOW_UNPARKED`, `WORKFLOW_ARCHIVED`, `WORKFLOW_UNARCHIVED`, `INTENT_REPOS_CHANGED`, `INTENT_CHECKOUTS_CHANGED` |
 | **Phase Lifecycle** | 4 | `PHASE_STARTED`, `PHASE_COMPLETED`, `PHASE_VERIFIED`, `PHASE_SKIPPED` |
-| **Stage Lifecycle** | 7 | `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `STAGE_REVISING`, `STAGE_COMPLETED`, `STAGE_SKIPPED`, `STAGE_JUMPED`, `STAGE_DEFINITION_CHANGED` |
+| **Stage Lifecycle** | 8 | `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `STAGE_REVISING`, `STAGE_COMPLETED`, `STAGE_SKIPPED`, `STAGE_JUMPED`, `STAGE_DEFINITION_CHANGED`, `SOURCE_WORK_NOT_FOUND` (Code Generation found no new code where it looked, and what it did: told the agent, put the question to you, or stood aside under Guard Policy off) |
 | **Session** | 6 | `SESSION_STARTED`, `SESSION_RESUMED`, `SESSION_COMPACTED`, `SESSION_ENDED`, `HUMAN_TURN` (hook-emitted), `HOST_TURN` (hook-emitted, advisory: a prompt the host made for the agent, never a person's turn) |
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` |
 | **Navigation** | 9 | `SCOPE_CHANGED`, `SCOPE_DETECTED`, `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `RECOMPOSED`, `WORKSPACE_RECLASSIFIED`, `SCOPE_SAVED`, `PLUGIN_SELECTION_CHANGED` |
@@ -171,6 +176,7 @@ Events are organized into 25 categories:
 | **Subagent** | 3 | `SUBAGENT_COMPLETED` (log-subagent hook), `SUBAGENT_PROMPT_UNMATCHED` (Copilot adapter, advisory), `REVIEW_VERDICT_DICTATED` (no longer written; earlier releases' plan-approval-guard hook. The reviewer's own `**Verdict Dictated:**` line now rides `REVIEW_COMPLETED`) |
 | **Reviewer Enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED` (reviewer-scope hook), `REVIEW_FREEZE_BLOCKED` (review-freeze hook) |
 | **Plan Approval** | 2 | `PLAN_APPROVAL_BLOCKED`, `GUARD_DISABLED` (plan-approval-guard hook, or a fence you switched off for this piece of work) |
+| **Guard Refusals** | 2 | `STATE_TRANSITION_BLOCKED` (state-transition guard refused a delegated agent's lifecycle or routing command), `STAGE_RULES_BLOCKED` (stage rules refused for size, or a required rule file could not be read); each carries `Guard`, `Reason`, and the `Target`/`Session` it refused, one row per refusal |
 | **Documents** | 3 | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` — space-level shard even when intent-scoped |
 | **Utility** | 1 | `HEALTH_CHECKED` |
 | **Error/Recovery** | 3 | `ERROR_LOGGED`, `RECOVERY_COMPLETED`, `COORDINATION_STOOD_ASIDE` |
@@ -279,8 +285,10 @@ and is reviewed once more, a change nobody meant is undone, or a path that is
 not source is excluded there. Under relaxed or
 off, an uncovered change is kept: completion records it once as
 `CHANGE_ACCEPTED` and names the files in one line ("These files changed outside
-any unit's work in Code Generation: ... Kept them."), and a stage-entry baseline
-that is missing on this machine skips the check with one line.
+any unit's work in Code Generation: ... Kept them."). A stage-entry baseline
+that is missing on this machine (a fresh clone) skips the check with one line
+under every Guard Policy; one that is here and does not match still blocks
+completion under strict.
 
 The workspace-global `Source Fingerprint` is normally the outer post-review
 mutation boundary. One narrow reconciliation makes the documented “revert”

@@ -13,8 +13,10 @@ import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
+  cpSync,
   linkSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
@@ -23,6 +25,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
@@ -47,6 +50,7 @@ import {
   readAllAuditShards,
   singleStageAttemptIsOpen,
   supportAgentsAtOpenGate,
+  toPosix,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -149,6 +153,23 @@ function developerHandoffPath(proj: string, repo?: string): string {
     RE_STAGE,
     repo ? `developer-scan-${repo}.md` : "developer-scan.md",
   );
+}
+
+// The `record` rows a step owes for `links`, as the engine prints them.
+function owed(
+  proj: string,
+  links: string[],
+  options: { repo?: string; single?: boolean; invocation?: string } = {},
+): Array<{ link: string; repo?: string; command: string }> {
+  const invocation = options.invocation ?? "bun .claude/tools/aidlc-log.ts link";
+  return links.map((link) => ({
+    link,
+    ...(options.repo ? { repo: options.repo } : {}),
+    command: `${invocation} --stage ${RE_STAGE} --link ${link}` +
+      (link === LEAD ? ` --artifact ${toPosix(relative(proj, developerHandoffPath(proj, options.repo)))}` : "") +
+      (options.repo ? ` --repo ${options.repo}` : "") +
+      (options.single ? " --single" : ""),
+  }));
 }
 
 function writeDeveloperHandoff(proj: string, repo?: string): void {
@@ -328,7 +349,7 @@ describe("t315 pipeline link receipts", () => {
     expect(audit).toContain("**Position**: 2/2");
   });
 
-  test("refuses an out-of-order final link and a repeated link", () => {
+  test("refuses an out-of-order final link; a repeated link lands with no second receipt", () => {
     const proj = pipelineProject();
     appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
 
@@ -338,8 +359,9 @@ describe("t315 pipeline link receipts", () => {
 
     expect(runLog(proj, LEAD).rc).toBe(0);
     const repeated = runLog(proj, LEAD, undefined, false, false);
-    expect(repeated.rc).not.toBe(0);
-    expect(repeated.out).toContain("already completed this attempt");
+    expect(repeated.rc, repeated.out).toBe(0);
+    expect(repeated.out).toContain('"already_recorded":true');
+    expect(currentPipelineLinkReceipts(proj, RE_STAGE)).toHaveLength(1);
   });
 
   test("a later STAGE_STARTED resets the receipt chain", () => {
@@ -610,6 +632,7 @@ describe("t315 pipeline link receipts", () => {
       expect(next.directive?.pipeline).toEqual({
         links: [LEAD, FINAL],
         completed: [],
+        record: owed(proj, [LEAD, FINAL], { invocation: linkCommand }),
       });
       // Simulate fresh developer work and its architect successor, retaining
       // the real logger's current-attempt, file-identity and ordering checks.
@@ -845,7 +868,7 @@ describe("t315 pipeline link receipts", () => {
     expect(remedies.map((remedy) => remedy.op)).toEqual(["dispatch-pipeline-links"]);
     const action = remedies[0].action;
     expect(action).toContain(`for the current run: ${FINAL}. Dispatch the missing pipeline links`);
-    const record = action.indexOf(`link --stage ${RE_STAGE} --link <agent>`);
+    const record = action.indexOf(`\`${owed(proj, [FINAL])[0].command}\``);
     const showGate = action.indexOf("orchestrate.ts next`, which shows the gate again.");
     expect(record).toBeGreaterThan(0);
     expect(showGate).toBeGreaterThan(record);
@@ -920,6 +943,7 @@ describe("t315 pipeline link receipts", () => {
     expect(result.directive?.pipeline).toEqual({
       links: [LEAD, FINAL],
       completed: [LEAD],
+      record: owed(proj, [FINAL]),
     });
   });
 
@@ -1077,6 +1101,7 @@ describe("t315 pipeline link receipts", () => {
     expect(next.directive?.pipeline).toEqual({
       links: [LEAD, FINAL],
       completed: evidence.completed,
+      record: [],
     });
     expect(state(proj, ["gate-start", RE_STAGE]).rc).toBe(0);
   });
@@ -1134,6 +1159,7 @@ describe("t315 pipeline link receipts", () => {
     expect(first.directive?.pipeline).toEqual({
       links: [LEAD, FINAL],
       completed: [],
+      record: owed(proj, [LEAD, FINAL], { single: true }),
     });
 
     expect(runLog(proj, LEAD, undefined, true).rc).toBe(0);
@@ -1151,6 +1177,7 @@ describe("t315 pipeline link receipts", () => {
     expect(resumed.directive?.pipeline).toEqual({
       links: [LEAD, FINAL],
       completed: [LEAD, FINAL],
+      record: [],
     });
     // The close names the code knowledge base in one plain line, and only
     // when every store the run covers matches the code.
@@ -1211,6 +1238,7 @@ describe("t315 pipeline link receipts", () => {
     expect(first.directive?.pipeline).toEqual({
       links: [LEAD, FINAL],
       completed: [],
+      record: owed(proj, [LEAD, FINAL], { repo: "repo-a", single: true }),
     });
     expect(
       (first.directive?.produces as string[]).every((path) =>
@@ -1239,6 +1267,7 @@ describe("t315 pipeline link receipts", () => {
     expect(resumed.directive?.pipeline).toEqual({
       links: [LEAD, FINAL],
       completed: [`repo-a:${LEAD}`, `repo-a:${FINAL}`],
+      record: [],
     });
     writeAllCodekbArtifacts(proj, "repo-a");
     expect(report(proj, [
@@ -1704,5 +1733,287 @@ describe("t315 an approval given with the collaborators switch stands", () => {
     expect(next.directive?.kind, next.out).toBe("run-stage");
     expect(next.directive?.stage).toBe("practices-discovery");
     expect(next.directive?.support_agents).toEqual(PRACTICES_SUPPORTS);
+  });
+});
+
+// The step hands the agent each link's exact command (`pipeline.record`), so
+// the first call is right: the handoff path, the repo and `--single` come from
+// the engine, not from placeholders. A link the engine already holds lands
+// again without a second receipt, and the reply to Request Changes says what
+// the engine holds under the run's Guard Policy (tf-re-link-command).
+describe("t315 each link's exact command, and a held link lands again", () => {
+  const FULL_NODE = { slug: RE_STAGE, lead_agent: LEAD, support_agents: [FINAL] };
+  const parents: string[] = [];
+  afterEach(() => {
+    while (parents.length > 0) rmSync(parents.pop() as string, { recursive: true, force: true });
+  });
+
+  function withGuardPolicy(proj: string, policy: "strict" | "off"): string {
+    const statePath = seededStateFile(proj);
+    const content = readFileSync(statePath, "utf-8");
+    const line = `- **Guard Policy**: ${policy} (set by you)`;
+    writeFileSync(
+      statePath,
+      /^- \*\*(Change Control|Guard Policy)\*\*: .*/m.test(content)
+        ? content.replace(/^- \*\*(Change Control|Guard Policy)\*\*: .*/m, line)
+        : content.replace(/^(- \*\*Scope\*\*: .*)$/m, `$1\n${line}`),
+    );
+    return proj;
+  }
+
+  // A project in a folder whose path holds a space, with its own copy of the
+  // harness, so a printed command runs exactly as printed from it.
+  function spacedProject(scope: "enterprise" | null): string {
+    const parent = mkdtempSync(join(tmpdir(), "aidlc t315 "));
+    parents.push(parent);
+    const saved = process.env.TMPDIR;
+    process.env.TMPDIR = parent;
+    let proj: string;
+    try {
+      proj = createTestProject();
+    } finally {
+      if (saved === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = saved;
+    }
+    projects.push(proj);
+    seedAidlcMemory(proj);
+    seedStateFile(proj, "state-brownfield-init-done.md");
+    if (scope !== null) {
+      const statePath = seededStateFile(proj);
+      writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*/m, `- **Scope**: ${scope}`));
+    }
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    return proj;
+  }
+
+  // The words of a printed command, quoted as quoteCommandArgument quotes them.
+  function printedWords(printed: string): string[] {
+    const words: string[] = [];
+    let word: string | null = null;
+    for (let index = 0; index < printed.length; index++) {
+      const character = printed[index];
+      if (/\s/.test(character)) {
+        if (word !== null) words.push(word);
+        word = null;
+        continue;
+      }
+      word ??= "";
+      if (character === "'") {
+        for (index++; index < printed.length; index++) {
+          if (printed[index] !== "'") word += printed[index];
+          else if (process.platform === "win32" && printed[index + 1] === "'") word += printed[++index];
+          else break;
+        }
+      } else {
+        word += character;
+      }
+    }
+    if (word !== null) words.push(word);
+    return words;
+  }
+
+  function runPrinted(proj: string, printed: string): { rc: number; out: string } {
+    const words = printedWords(printed);
+    expect(words[0]).toBe("bun");
+    const result = spawnSync(BUN, words.slice(1), {
+      cwd: proj,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: childEnv(),
+    });
+    return { rc: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  }
+
+  function linkWithout(proj: string, args: string[]): { rc: number; out: string } {
+    const result = spawnSync(BUN, [LOG, "link", "--stage", RE_STAGE, ...args, "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: childEnv(),
+    });
+    return { rc: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  }
+
+  const handoffArg = (proj: string, repo?: string): string => toPosix(relative(proj, developerHandoffPath(proj, repo)));
+  const linkCommand = (link: string, tail = ""): string =>
+    `bun .claude/tools/aidlc-log.ts link --stage ${RE_STAGE} --link ${link}${tail}`;
+  type Recorded = { link: string; repo?: string; command: string };
+  const recordOf = (directive: Record<string, unknown> | null | undefined): Recorded[] =>
+    ((directive?.pipeline as { record?: Recorded[] } | undefined)?.record) ?? [];
+
+  test.each([
+    ["lead-only", null],
+    ["full roster", "enterprise"],
+  ] as const)("%s: the step names each link's exact command, and running them as printed opens the gate", (_label, scope) => {
+    const proj = spacedProject(scope);
+    expect(proj).toContain(" ");
+    writeAllCodekbArtifacts(proj);
+    expect(state(proj, ["checkbox", `${RE_STAGE}=in-progress`]).rc).toBe(0);
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    const next = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
+    expect(next.directive?.kind, next.out).toBe("run-stage");
+    const expected = [
+      { link: LEAD, command: linkCommand(LEAD, ` --artifact ${handoffArg(proj)}`) },
+      ...(scope === null ? [] : [{ link: FINAL, command: linkCommand(FINAL) }]),
+    ];
+    expect(recordOf(next.directive)).toEqual(expected);
+    if (scope === null) expect(linkWithout(proj, ["--link", FINAL]).out).toContain("not in its declared lead/support chain");
+
+    writeDeveloperHandoff(proj);
+    for (const { command } of expected) {
+      const recorded = runPrinted(proj, command);
+      expect(recorded.rc, recorded.out).toBe(0);
+    }
+    const gate = report(proj, ["--stage", RE_STAGE, "--result", "awaiting-approval"]);
+    expect(gate.directive?.kind, gate.out).toBe("print");
+  });
+
+  test("two registered repos: one exact chain per repo, each command lands", () => {
+    const proj = spacedProject("enterprise");
+    rewriteIntentRepos(proj, ["repo-a", "repo-b"]);
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    const next = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
+    expect(next.directive?.kind, next.out).toBe("run-stage");
+    const record = recordOf(next.directive);
+    expect(record).toEqual(["repo-a", "repo-b"].flatMap((repo) => [
+      { link: LEAD, repo, command: linkCommand(LEAD, ` --artifact ${handoffArg(proj, repo)} --repo ${repo}`) },
+      { link: FINAL, repo, command: linkCommand(FINAL, ` --repo ${repo}`) },
+    ]));
+    for (const repo of ["repo-a", "repo-b"]) writeDeveloperHandoff(proj, repo);
+    for (const { command } of record) {
+      const recorded = runPrinted(proj, command);
+      expect(recorded.rc, recorded.out).toBe(0);
+    }
+    expect(pipelineLinkEvidence(proj, FULL_NODE).missing).toEqual([]);
+  });
+
+  test("an isolated run's commands carry --single and land in its own stream", () => {
+    const proj = spacedProject("enterprise");
+    const first = runOrchestrateNext(ORCH, proj, ["--scope", "enterprise", "--stage", RE_STAGE, "--single"], { env: childEnv() });
+    expect(first.directive?.kind, first.out).toBe("run-stage");
+    const record = recordOf(first.directive);
+    expect(record).toEqual([
+      { link: LEAD, command: linkCommand(LEAD, ` --artifact ${handoffArg(proj)} --single`) },
+      { link: FINAL, command: linkCommand(FINAL, " --single") },
+    ]);
+    writeDeveloperHandoff(proj);
+    for (const { command } of record) {
+      const recorded = runPrinted(proj, command);
+      expect(recorded.rc, recorded.out).toBe(0);
+    }
+    expect(pipelineLinkEvidence(proj, FULL_NODE, { singleRun: true }).missing).toEqual([]);
+  });
+
+  test.each(["strict", "off"] as const)("Guard Policy %s: a link already recorded this attempt lands again and adds no receipt", (policy) => {
+    const proj = withGuardPolicy(pipelineProject(), policy);
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    expect(runLog(proj, LEAD).rc).toBe(0);
+    expect(runLog(proj, FINAL).rc).toBe(0);
+    const before = currentPipelineLinkReceipts(proj, RE_STAGE).length;
+
+    for (const again of [
+      runLog(proj, LEAD, undefined, false, false),
+      linkWithout(proj, ["--link", LEAD]),
+      runLog(proj, FINAL),
+    ]) {
+      expect(again.rc, again.out).toBe(0);
+      expect(again.out).toContain('"already_recorded":true');
+    }
+    expect(currentPipelineLinkReceipts(proj, RE_STAGE).length).toBe(before);
+
+    const elsewhere = linkWithout(proj, ["--link", LEAD, "--artifact", "aidlc/elsewhere.md"]);
+    expect(elsewhere.rc).not.toBe(0);
+    expect(elsewhere.out).toContain("--artifact must resolve to");
+  });
+
+  test("the developer link without its handoff path is refused with the exact command, for the root and a registered repo", () => {
+    const root = pipelineProject();
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, root);
+    writeDeveloperHandoff(root);
+    const bare = linkWithout(root, ["--link", LEAD]);
+    expect(bare.rc).not.toBe(0);
+    expect(bare.out).toContain(linkCommand(LEAD, ` --artifact ${handoffArg(root)}`));
+    expect(runLog(root, LEAD, undefined, false, false).rc).toBe(0);
+
+    const repo = pipelineProject();
+    rewriteIntentRepos(repo, ["repo-a"]);
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, repo);
+    const bareRepo = linkWithout(repo, ["--link", LEAD, "--repo", "repo-a"]);
+    expect(bareRepo.rc).not.toBe(0);
+    expect(bareRepo.out).toContain(linkCommand(LEAD, ` --artifact ${handoffArg(repo, "repo-a")} --repo repo-a`));
+  });
+
+  function atGate(policy: "strict" | "off"): string {
+    const proj = withGuardPolicy(pipelineProject(), policy);
+    writeAllCodekbArtifacts(proj);
+    expect(state(proj, ["checkbox", `${RE_STAGE}=in-progress`]).rc).toBe(0);
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    expect(runLog(proj, LEAD).rc).toBe(0);
+    expect(runLog(proj, FINAL).rc).toBe(0);
+    expect(report(proj, ["--stage", RE_STAGE, "--result", "awaiting-approval"]).directive?.kind).toBe("print");
+    return proj;
+  }
+
+  function reject(proj: string): string {
+    const rejected = report(proj, [
+      "--stage", RE_STAGE, "--result", "rejected",
+      "--user-input", "Request Changes", "--reason", "Add a Persistence Design section to architecture.md.",
+    ]);
+    expect(rejected.directive?.kind, rejected.out).toBe("print");
+    return String(rejected.directive?.message ?? "");
+  }
+
+  test("Guard Policy off: Request Changes keeps the recorded links, the reply says so, and following it reaches the gate again", () => {
+    const proj = atGate("off");
+    const message = reject(proj);
+    expect(message).toContain("The links already recorded still hold");
+    expect(message).not.toContain("prior receipts no longer apply");
+
+    const next = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
+    expect(next.directive?.kind, next.out).toBe("run-stage");
+    expect(recordOf(next.directive)).toEqual([]);
+    // The architect makes the person's change and its link is recorded again.
+    appendFileSync(
+      join(proj, "aidlc", "spaces", DEFAULT_SPACE, "codekb", basename(proj), "architecture.md"),
+      "\n## Persistence Design\n\nHydrate on mount.\n",
+    );
+    expect(runLog(proj, FINAL).out).toContain('"already_recorded":true');
+    expect(report(proj, ["--stage", RE_STAGE, "--result", "revised"]).directive?.kind).toBe("print");
+  });
+
+  test("Guard Policy off with the developer's handoff gone: the reply keeps the off rule and names the command still to run", () => {
+    const proj = atGate("off");
+    unlinkSync(developerHandoffPath(proj));
+    const message = reject(proj);
+    expect(message).toContain("The links already recorded still hold");
+    expect(message).toContain(linkCommand(LEAD, ` --artifact ${handoffArg(proj)}`));
+  });
+
+  test("Guard Policy strict: the reply starts a fresh chain and names each link's exact command, as the refusal before it does", () => {
+    const proj = atGate("strict");
+    const message = reject(proj);
+    expect(message).toContain("The rejection starts a new pipeline attempt");
+    expect(message).toContain(linkCommand(LEAD, ` --artifact ${handoffArg(proj)}`));
+    expect(message).toContain(linkCommand(FINAL));
+    const early = report(proj, ["--stage", RE_STAGE, "--result", "revised"]);
+    expect(early.directive?.kind).toBe("error");
+    expect(early.out).toContain(linkCommand(LEAD, ` --artifact ${handoffArg(proj)}`));
+  });
+
+  test("the stage file and the protocols hand no link-command template and say the strict rule as strict", () => {
+    const read = (...parts: string[]): string => readFileSync(join(AIDLC_SRC, "aidlc-common", ...parts), "utf-8");
+    const ensemble = read("protocols", "stage-protocol-ensemble.md");
+    const stage = read("stages", "inception", "reverse-engineering.md");
+    const collaborators = read("protocols", "stage-protocol-collaborators.md");
+    for (const text of [ensemble, stage, collaborators]) {
+      expect(text).not.toMatch(/aidlc-log\.ts link/);
+      expect(text).toContain("directive.pipeline.record");
+    }
+    const rules = ensemble.split("\n").filter((line) => line.startsWith("**Pipeline receipt rule:**"));
+    expect(rules.length).toBeGreaterThan(0);
+    for (const rule of rules) expect(rule).toContain("directive.pipeline.record");
+    const flat = (text: string): string => text.replace(/\s+/g, " ");
+    expect(flat(stage)).toContain("Under Guard Policy strict, a rejection or resume cannot reuse an older file");
+    expect(flat(read("protocols", "stage-protocol.md"))).toContain("Under Guard Policy strict, the developer must perform fresh analysis");
+    expect(flat(ensemble)).toContain("a rejection under Guard Policy strict");
   });
 });

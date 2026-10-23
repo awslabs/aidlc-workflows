@@ -28,8 +28,8 @@ The frontmatter is a flat block of YAML keys. Some are mechanical — `slug`, `p
 | Field | What it decides | The judgment call |
 |-------|-----------------|-------------------|
 | `requires_stage` | Dependency and ordering edges | Does this stage genuinely consume another's output, or just need to run after it? |
-| `consumes` | The artifacts this stage reads | Per artifact: is it `required`, and is it `conditional_on` brownfield/greenfield? |
-| `cites` | Which optional inputs the output must cite when they exist | Is there an optional input that, whenever it is there, the output builds on? The `upstream-coverage` check then asks for its citation. |
+| `consumes` | The artifacts this stage reads | Per artifact: is it `required`, is it `conditional_on` brownfield/greenfield, and is it `cited`? |
+| `consumes[].cited` | Which optional inputs the output must cite when they exist | Is there an optional input that, whenever it is there, the output builds on? Mark it `cited: true`; the `upstream-coverage` check then asks for its citation. |
 | `produces` | The artifacts this stage writes | These are the forward edges other stages discover. |
 | `lead_agent` / `support_agents` | Who runs the stage | One persona owns it; supporters add perspective. |
 | `mode` | Communication topology | `inline` (voices in the conductor's context), `subagent` (hub-and-spoke dispatch), `pipeline` (chain), or `mob` (mesh in bounded rounds). |

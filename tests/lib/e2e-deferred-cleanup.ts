@@ -4,7 +4,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { IsolatedProcessRetirement } from "./e2e-process.ts";
 
 /** The live Codex files whose Windows fixtures may be handed to the runner for cleanup. */
-export const CODEX_FILE = /^t-exec-codex-(?:status|memory-include|compose-front|compose-inflight|journey-workspace|journey-code-arrives)\.serial\.test\.ts$/;
+export const CODEX_FILE = /^t-exec-codex-(?:status|memory-include|compose-front|compose-inflight|journey-workspace|journey-code-arrives|journey-golden-bugfix)\.serial\.test\.ts$/;
 const samePath = (a: string, b: string): boolean => resolve(a).toLowerCase() === resolve(b).toLowerCase();
 
 function plainDirectory(path: string): (atPath?: string) => void {

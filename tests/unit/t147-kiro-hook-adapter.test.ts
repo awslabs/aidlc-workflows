@@ -450,10 +450,13 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     expect(hostEnvelopeTurnText("see [CURRENT USER REQUEST] above")).toBe("see [CURRENT USER REQUEST] above");
   });
 
-  test("1: stop blocks with a reason while the workflow has pending work", () => {
+  // The block is for a run nobody attends (and autonomous Construction); an
+  // attended, gated run ends its turn (1b2).
+  const NOBODY = { AIDLC_UNATTENDED: "1" };
+  test("1: where nobody attends, stop blocks with a reason while the workflow has pending work", () => {
     const dir = scratchProject(true);
     try {
-      const r = runAdapter(dir, "continue-workflow", FIXTURES.stop);
+      const r = runAdapter(dir, "continue-workflow", FIXTURES.stop, [], NOBODY);
       expect(r.code).toBe(0);
       const out = JSON.parse(r.stdout) as { decision?: string; reason?: string };
       expect(out.decision).toBe("block");
@@ -463,22 +466,40 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  // Kiro CLI shows the person nothing of a Stop block (live, 2.23.1), so the
-  // reason carries the agent's step after the line: the agent says the line
-  // itself, on its own line, even when the aidlc skill is not in its context.
+  // The reason is the plain line on Kiro CLI as on every tool: it comes only
+  // where nobody attends or the work carries on by itself, so no step for the
+  // agent follows it.
   const KIRO_LINE = "AI-DLC is carrying on with Requirements Analysis.";
-  const KIRO_AGENT_STEP =
-    "If you had just asked the person a question, record it with `log decision` and end your turn saying nothing. " +
-    "Otherwise, if you carry on with the work, first say that line to the person once, on its own line; " +
-    "it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it. " +
-    "Say nothing else about this note.";
-  test("1b: on Kiro CLI the reason is the line, then the agent's step to say it", () => {
+  test("1b: on Kiro CLI the reason is the one plain line", () => {
     const dir = scratchProject(true);
     try {
-      const r = runAdapter(dir, "continue-workflow", FIXTURES.stop, [], { AIDLC_HARNESS_NAME: undefined });
+      const r = runAdapter(dir, "continue-workflow", FIXTURES.stop, [], { ...NOBODY, AIDLC_HARNESS_NAME: undefined });
       const out = JSON.parse(r.stdout) as { decision?: string; reason?: string };
       expect(out.decision).toBe("block");
-      expect(out.reason).toBe(`${KIRO_LINE}\n${KIRO_AGENT_STEP}`);
+      expect(out.reason).toBe(KIRO_LINE);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // measure-kiro-loops F2: the agent asked in prose with nothing logged, and
+  // Kiro CLI v3 showed the carrying-on line as the agent speaking while it
+  // waited. In an attended run the stop says nothing, and the person's next
+  // message carries the work on, with nothing asked again.
+  test("1b2: in an attended run the stop says nothing, and the person's next message carries the work on", () => {
+    const dir = scratchProject(true);
+    try {
+      const stop = runAdapter(dir, "continue-workflow", FIXTURES.stop);
+      expect(stop.code).toBe(0);
+      expect(stop.stdout.trim()).toBe("");
+      expect(runAdapter(dir, "verb-intercept", {
+        ...(FIXTURES.userPromptSubmit as Record<string, unknown>),
+        cwd: dir,
+        prompt: "carry on",
+      }).code).toBe(0);
+      const moved = runEngine(dir, ["next"]).directive as { kind: string; stage?: string };
+      expect(moved.kind, JSON.stringify(moved)).toBe("run-stage");
+      expect(moved.stage).toBe("requirements-analysis");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -871,18 +892,18 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("2a: stop stays silent for an open logged question and blocks after its answer", () => {
+  test("2a: where nobody attends, stop stays silent for an open logged question and blocks after its answer", () => {
     const dir = scratchProject(true);
     try {
       appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
       appendInteractionEvent(dir, "DECISION_RECORDED", "requirements-analysis");
 
-      const waiting = runAdapter(dir, "continue-workflow", FIXTURES.stop);
+      const waiting = runAdapter(dir, "continue-workflow", FIXTURES.stop, [], NOBODY);
       expect(waiting.code).toBe(0);
       expect(waiting.stdout.trim()).toBe("");
 
       appendInteractionEvent(dir, "QUESTION_ANSWERED", "requirements-analysis");
-      const resolved = runAdapter(dir, "continue-workflow", FIXTURES.stop);
+      const resolved = runAdapter(dir, "continue-workflow", FIXTURES.stop, [], NOBODY);
       expect(resolved.code).toBe(0);
       expect(
         (JSON.parse(resolved.stdout) as { decision?: string }).decision,
@@ -2479,7 +2500,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
    *  {hook_event_name,stop_hook_active} only), and the core hook reads it from
    *  the inherited process env (aidlc-continue-workflow.ts). */
   function runStopNoCapEnv(projectDir: string): { stdout: string; code: number } {
-    const env = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
+    const env = { ...process.env, CLAUDE_PROJECT_DIR: projectDir, AIDLC_UNATTENDED: "1" };
     delete (env as Record<string, string | undefined>).CLAUDE_CODE_STOP_HOOK_BLOCK_CAP;
     const r = spawnSync(
       "bun",
@@ -2497,9 +2518,10 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     return { stdout: r.stdout ?? "", code: r.status ?? -1 };
   }
 
-  test("12: INTERACTIVE CAP RELEASE - Kiro stop blocks once then releases at the default cap 2 (no transcript -> cap is the chat release path)", () => {
-    // Interactive: state has NO Construction Autonomy Mode field, so the
-    // mode-aware default cap is INTERACTIVE_BLOCK_CAP=2. The brownfield-feature
+  test("12: GATED CAP RELEASE - where nobody attends, Kiro stop blocks once then releases at the default cap 2", () => {
+    // Gated, nobody attending: state has NO Construction Autonomy Mode field, so
+    // the mode-aware default cap is INTERACTIVE_BLOCK_CAP=2 (an attended run
+    // ends its turn before the cap). The brownfield-feature
     // fixture (Current Stage requirements-analysis [-], no [?]/[R] carve-out, no
     // questions file) yields a pending run-stage, so without the cap the hook
     // would block forever. Repeated identical no-progress stops at the same

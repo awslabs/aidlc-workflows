@@ -233,9 +233,8 @@ When both files from Step 2 are written, run `next`:
   When the person says they answered in the file, in whatever words they use
   ("done", "I put my answer in the file", "my answer is in the questions file"),
   their answer is on the `[Answer]:` line of `questions_path`: read it and record
-  the choice they made, exactly as you would a reply typed in chat. An answer
-  there that is one of the choices is already recorded for you, and the engine
-  says so in one line; never ask them to type it again in chat.
+  the choice they made, exactly as you would a reply typed in chat; never ask
+  them to type it again in chat.
 - **Edit mode.** For "I'll edit the files", `next` returns the question with
   `plan_approval.editing: true`. Tell the person they can change `plan_path` and
   `instructions_path`; then end the turn and wait for them to say done. While
@@ -402,7 +401,7 @@ Include in the delegation prompt:
   different, or stale hash. Do not write either marker yourself and do not repeat either marker
   for contextual dependencies.
 - Design artifacts for the CURRENT UNIT ONLY (not all units)
-- A 1-2 line summary of each inception-phase artifact with its file path (requirements summary, stories summary, app design summary) — the subagent can Read specific files if it needs full content
+- A 1-2 line summary of each inception-phase artifact with its file path (requirements summary, stories summary, domain design summary) — the subagent can Read specific files if it needs full content
 - The current plan and unit-test-instructions.md are already in that output:
   the plan with a terminal `## Review` appendix removed (when a review recorded under the
   earlier protocol left one), task markers reset to `[ ]`, and spacing
@@ -490,6 +489,12 @@ to record the unit review without this manifest. Under Guard Policy strict,
 unclaimed changed paths block stage completion; under relaxed or off they are
 kept, and the person is told once which files changed outside the units.
 
+When you keep the code in a checkout the review does not otherwise see (a
+worktree in the harness folder, or one outside the project), record it before
+the review with `{{INVOKE}} engine intent add-checkout <its path>`; a Unit names
+a checkout outside the project in its manifest by the name that command prints
+(`<label>@checkout/<path>`).
+
 A zero-Unit directive (`directive.unit` absent) writes no
 `source-manifest.json` and creates no Unit directory for one: the engine reads
 the manifest only for a Unit, and a zero-Unit review binds the whole workspace
@@ -498,11 +503,12 @@ source instead. Its Step 5 files are
 `<record>/construction/code-generation/traceability.json`.
 
 Create
-`<code-generation-record>/traceability.json`.
-Enumerate every assigned AC, detailed `NFRx.y`, and `BRx.y` (or direct `FR` /
-`NFR` IDs when incremental scope skipped the design chain); a requirement with
-sub-requirements is traced through its `FR{n}.{m}` IDs and needs no row of its
-own. Every `OK` target
+`<code-generation-record>/traceability.json` by running
+`{{INVOKE}} engine sensor-traceability --stage code-generation --output-path <that path> --write-upstream`:
+it lists every assigned AC, detailed `NFRx.y`, and `BRx.y` (or direct `FR` /
+`NFR` IDs when incremental scope skipped the design chain), each with a `GAP`
+row; a requirement with sub-requirements is traced through its `FR{n}.{m}` IDs
+and needs no row of its own. Set each row's `status` and `target`: every `OK` target
 must be one existing workspace-relative implementation or test file. When the
 person asks to leave planned work out of this build (for example "skip the
 remaining stories"), do it: list each item they left out as `Deferred` (not
@@ -566,9 +572,7 @@ the record dir); the planning, plan-approval, and summary artefacts
 
 Imports: `required-sections`, `traceability`.
 
-`required-sections` checks each planning and summary artefact for at least two
-H2 headings, and `traceability` verifies the per-Unit coverage table and every
-`OK` target.
+`traceability` verifies the per-Unit coverage table and every `OK` target.
 
 `linter` and `type-check` are not imported here: they ran on every file write
 and nothing read their results; Build and Test runs the project's build and

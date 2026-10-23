@@ -20,6 +20,7 @@ import {
   readPluginDropText,
   runPluginCompose,
 } from "../../dist/claude/.claude/tools/aidlc-plugin-test.ts";
+import { projectionPluginRoot } from "../../dist/claude/.claude/tools/aidlc-plugin-emit.ts";
 import type { DriveOptions } from "./sdk-drive.ts";
 import { driveAidlc } from "./sdk-drive.ts";
 import type { AcpDriveOptions } from "./kiro-acp-drive.ts";
@@ -87,6 +88,13 @@ export function buildPluginProjection(
     );
   }
   return outDir;
+}
+
+// The plugin inside a built projection: the projection itself, or on Kiro the
+// plugin's own folder under .kiro/aidlc-plugins/.
+export function pluginRootIn(projection: string, harness: ShippedHarnessName): string {
+  const { capabilities, manifest } = harnessByName(harness);
+  return projectionPluginRoot(projection, { kind: capabilities.plugin.kind, harnessLeaf: manifest.harnessDir });
 }
 
 export function copyHarnessInstall(
@@ -167,7 +175,7 @@ export function composePluginFixture(
     harness: options.harness,
     harnessLeaf: harnessByName(options.harness).manifest.harnessDir,
     projectDir,
-    pluginBuilt,
+    pluginBuilt: pluginRootIn(pluginBuilt, options.harness),
     env: options.env,
     timeoutMs: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS, { phase: "plugin fixture" })!,
   });

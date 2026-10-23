@@ -125,7 +125,8 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   invalid JSON, so the IDE blocks the call; malformed input also denies the
   operation. A guard that is missing or crashes refuses nothing, as on every
   other harness, and `doctor` names it. Cursor names its shell tool `Shell`; the adapter
-  maps it to the core hooks' `Bash`. Cursor's
+  maps it to the core hooks' `Bash`. An edit that arrives as `StrReplace` with the file
+  in `path` is handled as `Edit`, so it is recorded and checked like any other edit. Cursor's
     first-class `Delete` tool (unique to this harness - everywhere else deletion
     goes through the shell) is presented to the reviewer-scope guard as a write so a
     unit-scoped reviewer cannot delete a sibling unit's artifacts. Shell payloads'
@@ -180,11 +181,14 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   fail closed rather than losing delegated-agent attribution. Delegates may use
   ordinary Shell commands, but general-purpose interpreters and dynamic command
   evaluation are denied; use Cursor's native read/search tools and let the parent
-  conversation run executable probes. These delegate limits apply only while the
-  reviewer read-scope or state-transition check holds for the piece of work:
-  when both stand aside (Guard Policy off does that), delegates run builds,
-  tests and searches like the main conversation, a Task starts even when its
-  record cannot be written, and Cursor's own approval applies.
+  conversation run executable probes. AI-DLC's own commands that a delegate is
+  given, such as Reverse Engineering's scope fingerprint and its check, run as
+  their instructions spell them, one plain command at a time. These delegate
+  limits apply only while the reviewer read-scope or state-transition check
+  holds for the piece of work: when both stand aside (Guard Policy off does
+  that), delegates run builds, tests and searches like the main conversation, a
+  Task starts even when its record cannot be written, and Cursor's own approval
+  applies.
 - **Generated stage and scope runners are explicit-only.** Cursor receives
   `disable-model-invocation: true` on generated runner skills, including plugin
   runners, so ordinary coding prompts cannot auto-activate state-mutating

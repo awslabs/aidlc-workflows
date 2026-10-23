@@ -44,7 +44,8 @@ const DISPATCH = join(AIDLC_SRC, "tools", "aidlc.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const SESSION = "t-approve-needs-reply-to-question";
 const WAITS = "no new human reply has been received for this approval question";
-const SHOW_IT = "Show the gate and end your turn; their next reply answers it.";
+// The step: show the gate and end the turn, wherever the sentence puts it.
+const SHOW_IT = "show the gate and end your turn; their next reply answers it.";
 // The checkbox separator the state file uses.
 const SEP = "\u2014";
 
@@ -178,7 +179,7 @@ describe("t-approve-needs-reply-to-question: only the person's reply to the appr
   function expectWaits(out: string, slug: string) {
     expect(out).toContain('"kind":"print"');
     expect(out).toContain(WAITS);
-    expect(out).toContain(SHOW_IT);
+    expect(out.toLowerCase()).toContain(SHOW_IT);
     expect(rows(proj, "GATE_APPROVED")).toEqual([]);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(`- [?] ${slug}`);
   }
@@ -238,7 +239,7 @@ describe("t-approve-needs-reply-to-question: only the person's reply to the appr
       const early = state(team, ["approve", "functional-design", "--unit", "alpha", "--user-input", "Approve"], TEAM_FIXTURE);
       expect(early.rc).not.toBe(0);
       expect(early.out).toContain(WAITS);
-      expect(early.out).toContain(SHOW_IT);
+      expect(early.out.toLowerCase()).toContain(SHOW_IT);
       expect(rows(team, "GATE_APPROVED")).toEqual([]);
       person(team, "Approve");
       const approved = state(team, ["approve", "functional-design", "--unit", "alpha", "--user-input", "Approve"], TEAM_FIXTURE);
@@ -263,7 +264,7 @@ describe("t-approve-needs-reply-to-question: only the person's reply to the appr
       expect(opened.rc, opened.out).toBe(0);
       const early = state(team, ["approve", "functional-design", "--unit", "alpha", "--user-input", "please finish functional design"], TEAM_FIXTURE);
       expect(early.rc).not.toBe(0);
-      expect(early.out).toContain(SHOW_IT);
+      expect(early.out.toLowerCase()).toContain(SHOW_IT);
       expect(rows(team, "GATE_APPROVED")).toEqual([]);
       expect(readAuditShardEvents(team).some((row) => row.block.includes("Accepted risk"))).toBe(false);
       person(team, "Approve");

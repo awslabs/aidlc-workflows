@@ -1,4 +1,4 @@
-// covers: function:applyIntentSettings, function:settingTheirs, function:replyOfTheirs, subcommand:aidlc-utility:config-change, audit:CEREMONY_SET, audit:GUARD_POLICY_SET, audit:GUARD_DISABLED
+// covers: function:applyIntentSettings, function:settingTheirs, function:saidInChat, function:replyOfTheirs, subcommand:aidlc-utility:config-change, audit:CEREMONY_SET, audit:GUARD_POLICY_SET, audit:GUARD_DISABLED
 //
 // A setting the agent runs the setter for is the person's ("set by you", their
 // words on the row) only when a reply of theirs that asked for it is on record:
@@ -496,6 +496,25 @@ describe("who may lower a check is unchanged", () => {
 });
 
 describe("a typed line and their own terminal stay theirs", () => {
+  test("their own terminal makes a setting theirs; the chat half of the rule (saidInChat) reads only the chat", () => {
+    const { proj } = project();
+    const env: NodeJS.ProcessEnv = { AIDLC_TEST_CONFIG_TTY: "1", AIDLC_PROJECT_DIR: proj };
+    for (const [key, value] of Object.entries(process.env)) {
+      if (!/^(CLAUDE|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_|TERM_PROGRAM|AIDLC_SESSION_OVERRIDE)/i.test(key)) {
+        env[key] ??= value;
+      }
+    }
+    const tool = JSON.stringify(join(AIDLC_SRC, "tools", "aidlc-guard-switch.ts"));
+    const at = JSON.stringify(proj);
+    const result = spawnSync(BUN, [
+      "-e",
+      `const gs = await import(${tool}); console.log(JSON.stringify(` +
+        `[gs.settingTheirs(${at}, null, "sensors", "off"), gs.saidInChat(${at}, null, "sensors", "off")]));`,
+    ], { cwd: proj, env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual([{ words: null }, null]);
+  });
+
   test("a setting typed on their line: set by you without --person-words", () => {
     const { proj, state } = project();
     said(proj, "/aidlc --sensors off");
@@ -513,8 +532,8 @@ describe("a typed line and their own terminal stay theirs", () => {
       const routing = asked.directive as { ask_type?: string; continue_command?: string };
       expect(routing.ask_type, asked.out).toBe("new-work-routing");
       said(proj, answer);
-      // A number answers the question itself; other words are the agent's to map to the continue route.
-      const route = answer === "1" ? ["1"] : String(routing.continue_command).split(" ").slice(3);
+      // A number or other words: the agent maps the reply to the continue route.
+      const route = String(routing.continue_command).split(" ").slice(3);
       const step = runOrchestrateNext(ORCHESTRATE, proj, route, { env: env(proj, SESSION) });
       const message = String((step.directive as { message?: unknown } | null)?.message);
       expect(message).toContain("config set learnings off` to update the configuration");
@@ -530,9 +549,11 @@ describe("a typed line and their own terminal stay theirs", () => {
     const task = "skip the market research for this work";
     said(proj, `/aidlc --sensors off ${task}`);
     const asked = runOrchestrateNext(ORCHESTRATE, proj, ["--sensors", "off", task], { env: env(proj, SESSION) });
-    expect((asked.directive as { ask_type?: string }).ask_type, asked.out).toBe("new-work-routing");
+    const routing = asked.directive as { ask_type?: string; compose_command?: string };
+    expect(routing.ask_type, asked.out).toBe("new-work-routing");
     said(proj, "3");
-    const step = runOrchestrateNext(ORCHESTRATE, proj, ["3"], { env: env(proj, SESSION) });
+    // The agent reads "3" and runs the reshape answer's own command.
+    const step = runOrchestrateNext(ORCHESTRATE, proj, String(routing.compose_command).split(" ").slice(3), { env: env(proj, SESSION) });
     const message = String((step.directive as { message?: unknown } | null)?.message);
     expect(message).toContain("config set sensors off` to apply the settings typed with this request to the work being reshaped");
     expect(configSet(proj, ["sensors", "off"]).status).toBe(0);

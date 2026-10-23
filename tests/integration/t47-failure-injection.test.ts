@@ -1,12 +1,12 @@
 // covers: subcommand:aidlc-state:acknowledge-compaction, subcommand:aidlc-state:gate-start, subcommand:aidlc-state:advance
+// covers: audit:ERROR_LOGGED
 //
 // Mechanism = cli. The covered units are the three aidlc-state subcommands
 // driven through chaos conditions - acknowledge-compaction (F1), gate-start (F2
 // + F4), and advance (F3). This is the INTEGRATION angle on the failure-injection
 // subject: the audit-first invariant proven end-to-end across the state
-// machine's subcommand dispatch. (The sibling tests/integration/t137.test.ts
-// covers the same four injections from the audit:ERROR_LOGGED emitter angle;
-// this test's covered units are the three subcommand dispatch surfaces.)
+// machine's subcommand dispatch. The same cases prove the audit:ERROR_LOGGED
+// emitter contract as well as the three subcommand dispatch surfaces.
 //
 // Mechanism = cli (NOT none). Every assertion is a process-boundary
 // observable: the exit code that emitError -> process.exit(1)

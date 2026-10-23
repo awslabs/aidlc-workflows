@@ -10,7 +10,10 @@
 // writes, one STAGE_STARTED row, the registry row back in flight), and `next`
 // tells the agent to carry on into it instead of ending the turn. One lib
 // predicate decides both, so the print can never promise work the tool leaves
-// finished. Nothing approved before is asked again.
+// finished. Nothing approved before is asked again. Over running work the
+// switch follows the setting's rule: it carries on while the stage simply
+// runs, and with a gate open it ends the turn, naming where the work picks up
+// only where the new plan keeps that place.
 
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -285,7 +288,9 @@ describe("t-scope-change-reopens-finished-work: a scope switch on finished work 
     expect(next(proj).kind).toBe("done");
   });
 
-  test("next tells the agent to carry on into the added stage, and still stops where nothing is added or the work runs", () => {
+  // A switch over a stage that is simply running carries on, as a setting
+  // does (Arden 2026-10-21).
+  test("next tells the agent to carry on into the added stage and over a running stage, and still stops where nothing is added", () => {
     const finished = finishedBugfix();
     const carry = next(finished, ["--scope", "express"]);
     expect(carry.kind).toBe("print");
@@ -297,13 +302,17 @@ describe("t-scope-change-reopens-finished-work: a scope switch on finished work 
     expect(nothingAdded.kind).toBe("print");
     expect(nothingAdded.message).toContain("engine scope change --scope security-patch");
     expect(nothingAdded.message).toContain(STOP);
+    // The work is over, so no place is named for it.
+    expect(nothingAdded.narration).toBeUndefined();
 
     const running = createOrchestrationTestProject();
     created.push(running);
     seedStateFile(running, "state-mid-ideation.md");
-    const stops = next(running, ["--scope", "mvp"]);
-    expect(stops.kind).toBe("print");
-    expect(stops.message).toContain(`to change scope, then ${STOP}`);
+    const goesOn = next(running, ["--scope", "mvp"]);
+    expect(goesOn.kind).toBe("print");
+    expect(goesOn.message).toContain(`to change scope, then ${CARRY_ON}`);
+    expect(goesOn.message).not.toMatch(/\bstop\b/);
+    expect(goesOn.narration).toBeUndefined();
   });
 
   // The deadlock check: from the switch, the chain reaches the added stage
@@ -386,4 +395,115 @@ describe("t-scope-change-reopens-finished-work: a scope switch on finished work 
       }
     }
   });
+});
+
+/** A feature run on Feasibility, as `advance` leaves it: the stage running, or waiting at its gate. */
+function featureAtFeasibility(box: "in-progress" | "awaiting-approval"): string {
+  const proj = createOrchestrationTestProject();
+  created.push(proj);
+  expect(run(UTILITY, proj, ["intent-create", "--scope", "feature"]).rc).toBe(0);
+  const done = ["workspace-scaffold", "workspace-detection", "state-init", "intent-capture", "market-research"];
+  expect(run(STATE, proj, ["checkbox", ...done.map((s) => `${s}=completed`), `feasibility=${box}`]).rc).toBe(0);
+  expect(run(STATE, proj, [
+    "set", "Current Stage=feasibility", "Status=Running", "Lifecycle Phase=IDEATION",
+    "Next Stage=scope-definition", "In Progress=feasibility", "Last Completed Stage=market-research",
+  ]).rc).toBe(0);
+  return proj;
+}
+
+// A person who switches scope while the stage simply runs has nothing to
+// answer, so the agent carries on in the same turn instead of asking them to
+// say go on (a live Claude Code run asked it after a switch made while
+// Requirements Analysis ran). With a gate open the turn ends, and the switch
+// says where the work picks up only where that stays true on the new plan.
+describe("t-scope-change-reopens-finished-work: a scope switch over running work carries on when nothing waits on the person", () => {
+  test("at the stage's open gate the switch ends the turn and says where the work picks up", () => {
+    const proj = featureAtFeasibility("awaiting-approval");
+    const print = next(proj, ["--scope", "mvp"]);
+    expect(print.message).toContain(`to change scope, then ${STOP}`);
+    expect(print.narration).toBe("The work picks up at Feasibility & Constraints.");
+    expect(actOnScopeChangePrint(proj, print)).toContain("Switched to mvp");
+    expect(box(state(proj), "feasibility")).toBe("?");
+  });
+
+  // The new scope drops the stage they had open, which the switch says, so
+  // no place on the old plan is named after it.
+  test("a switch whose scope drops the stage waiting at its gate ends the turn on the switch's own line", () => {
+    const proj = featureAtFeasibility("awaiting-approval");
+    const print = next(proj, ["--scope", "bugfix"]);
+    expect(print.message).toContain(`to change scope, then ${STOP}`);
+    expect(print.narration).toBeUndefined();
+    expect(actOnScopeChangePrint(proj, print)).toContain(
+      "Skipped Feasibility & Constraints (it was waiting for your approval): bugfix does not run it.",
+    );
+  });
+
+  // Said with the switch at Reverse Engineering's gate on existing code, "it is
+  // a new project" takes Reverse Engineering off the work's own plan first,
+  // and the switch then skips it, so no place on it is named (AIDA F1 on #2876).
+  test("a new-project word typed with the switch at Reverse Engineering's gate names no place there", () => {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "app.py"), "def greet(name):\n    return f'Hello, {name}!'\n", "utf-8");
+    writeFileSync(join(proj, "pyproject.toml"), "[project]\nname = 'app'\nversion = '0.1.0'\n", "utf-8");
+    expect(run(UTILITY, proj, ["intent-create", "--scope", "bugfix"]).rc).toBe(0);
+    expect(field(state(proj), "Project Type")).toBe("Brownfield");
+    const setup = ["workspace-scaffold", "workspace-detection", "state-init"];
+    expect(run(STATE, proj, ["checkbox", ...setup.map((s) => `${s}=completed`), "reverse-engineering=awaiting-approval"]).rc).toBe(0);
+    expect(run(STATE, proj, [
+      "set", "Current Stage=reverse-engineering", "Status=Running", "Lifecycle Phase=INCEPTION",
+      "Next Stage=requirements-analysis", "In Progress=reverse-engineering", "Last Completed Stage=state-init",
+    ]).rc).toBe(0);
+    const typed = ["--project-type", "greenfield", "--scope", "enterprise"];
+    expect(next(proj, typed).message).toContain("engine workspace reclassify --project-type greenfield");
+    expect(run(UTILITY, proj, ["reclassify", "--project-type", "greenfield", "--then-rerun"]).rc).toBe(0);
+    const print = next(proj, typed);
+    expect(print.message).toContain(`to change scope, then ${STOP}`);
+    expect(print.narration).toBeUndefined();
+    expect(actOnScopeChangePrint(proj, print)).toContain("Skipped Reverse Engineering (it was waiting for your approval)");
+    expect(box(state(proj), "reverse-engineering")).toBe("S");
+  });
+
+  // The deadlock check: from the switch the chain reaches a stage's step within
+  // 4 engine calls, repeats no print and asks nothing, whether the new scope
+  // runs the stage (it goes on) or drops it (the stale cursor is skipped and the
+  // next stage starts). Agents re-run the flagged command as often as a bare
+  // `next`; the same scope then takes the normal route.
+  for (const { scope, reaches } of [
+    { scope: "mvp", reaches: "feasibility" },
+    { scope: "bugfix", reaches: "requirements-analysis" },
+  ]) {
+    for (const rerun of [[], ["--scope", scope]]) {
+      test(`switched to ${scope} while Feasibility runs, \`next${rerun.length ? ` ${rerun.join(" ")}` : ""}\` goes on to ${reaches}`, () => {
+        const proj = featureAtFeasibility("in-progress");
+        const prints: string[] = [];
+        let calls = 0;
+        const switched = next(proj, ["--scope", scope]);
+        calls++;
+        prints.push(switched.message ?? "");
+        expect(switched.message).toContain(`to change scope, then ${CARRY_ON}`);
+        expect(switched.narration).toBeUndefined();
+        expect(actOnScopeChangePrint(proj, switched)).toContain(`Switched to ${scope}`);
+        let step = next(proj, rerun);
+        calls++;
+        while (step.kind === "print" && calls < 4) {
+          prints.push(step.message ?? "");
+          const named = /`bun \.claude\/tools\/aidlc-orchestrate\.ts report --stage ([a-z0-9-]+) --result skipped --reason '([^']*)'`/
+            .exec(step.message ?? "");
+          expect(named, step.message).not.toBeNull();
+          const skipped = report(proj, named![1], ["--result", "skipped", "--reason", named![2]]);
+          calls++;
+          expect(skipped.kind, JSON.stringify(skipped)).not.toBe("error");
+          step = next(proj, rerun);
+          calls++;
+        }
+        expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+        expect(step.stage).toBe(reaches);
+        expect(calls).toBeLessThanOrEqual(4);
+        expect(new Set(prints).size).toBe(prints.length);
+        expect(field(state(proj), "Scope")).toBe(scope);
+      });
+    }
+  }
 });

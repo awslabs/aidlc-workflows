@@ -7,6 +7,12 @@ export interface ShardConfig {
   defaultSeconds: number;
   weights: Record<string, number>;
   affinityGroups: string[][];
+  /** Per-OS measurements override the conservative fallback, never the inventory. */
+  platformWeights?: Record<string, Record<string, number>>;
+}
+
+export function shardConfigForPlatform(config: ShardConfig, platform: string): ShardConfig {
+  return { ...config, weights: { ...config.weights, ...config.platformWeights?.[platform] } };
 }
 
 interface WeightedGroup {
@@ -95,7 +101,7 @@ export function assignWeightedShards(
 
   if (total > groups.length) {
     throw new Error(
-      `--shard count ${total} exceeds ${groups.length} assignable unit-test groups`,
+      `--shard count ${total} exceeds ${groups.length} assignable test groups`,
     );
   }
 

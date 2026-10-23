@@ -8,7 +8,7 @@ This chapter is the user-facing tour. It covers where rules live, how the five l
 
 ## Rules at a glance
 
-Rules live as Markdown files in the active space memory layer at `aidlc/spaces/<active-space>/memory/`, a single hand-editable set at the workspace root, read by every harness via its native include (Claude `@`-import stub, Kiro CLI resources or IDE steering, the engine's per-step rules delivery on Codex, opencode `instructions` glob, Copilot `AGENTS.md` `@`-imports). Each file is named for its scope:
+Rules live as Markdown files in the active space memory layer at `aidlc/spaces/<active-space>/memory/`, a single hand-editable set at the workspace root, read by every harness via its native include (Claude `@`-import stub, Kiro CLI resources or IDE steering, the engine's per-step rules delivery on Codex, Cursor's always-applied `.cursor/rules/aidlc.mdc` rule, opencode `instructions` glob, Copilot `AGENTS.md` `@`-imports). Each file is named for its scope:
 
 ```
 aidlc/spaces/<active-space>/memory/
@@ -225,8 +225,8 @@ Six sensors ship with the framework:
 | Sensor | Fires on | Checks |
 |--------|----------|--------|
 | `claim-sources` | Intent Capture record-dir outputs | Every claim has a visible source tag; registered description, workflow scope, and memory text match authoritative inputs; retained assumptions exactly match explicit confirmation |
-| `required-sections` | Any record-dir markdown output, plus reverse-engineering's `codekb/` files | The output contains the required H2 headings (a generic content-shape check). Timestamp run records such as `practices-discovery-timestamp.md` always pass |
-| `upstream-coverage` | Any record-dir markdown output, plus reverse-engineering's `codekb/` files | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it requires (`required: true`) or lists under `cites:`, by slug, wikilink, or the producing stage's directory path |
+| `required-sections` | Any record-dir markdown output, plus reverse-engineering's `codekb/` files | The output contains the `##` headings of its template, when your team has written one in `memory/templates/`; with no template nothing is required |
+| `upstream-coverage` | Any record-dir markdown output, plus reverse-engineering's `codekb/` files | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it requires (`required: true`) or marks `cited: true`, by slug, wikilink, or the producing stage's directory path |
 | `traceability` | `traceability.json` stage artifacts | Stable upstream IDs are declared and covered, statuses and targets are valid, and deterministic downstream targets exist |
 | `linter` | `.ts` / `.js` code outputs | Wraps your configured linter (ESLint by default) |
 | `type-check` | `.ts` / `.tsx` code outputs | Wraps your configured type-checker (`tsc` by default) |

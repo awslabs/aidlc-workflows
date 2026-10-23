@@ -8,11 +8,13 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import {
+  asksForHelp,
   type AuditShardEvent,
   attemptEventAfterFrontier,
   ENGINE_DIR,
   attemptEventDefinitelyBefore,
   auditBlockField,
+  backwardJumpBoundary,
   changesSinceLastReview,
   constructionCheckpointsApply,
   errorMessage,
@@ -24,6 +26,7 @@ import {
   pairedReviewRecordForCompletion,
   parseReviewSection,
   parseReviewerFindingsReport,
+  printUsageAndExit,
   readFindingsTable,
   readAuditShardEvents,
   readUnitSourceSnapshot,
@@ -53,6 +56,7 @@ import {
   validateUnitName,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.js";
+import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
 import {
   constructionCheckpointKind,
   resolveConstructionCheckpoint,
@@ -79,6 +83,9 @@ export interface ReviewArtifactContext {
   reviewerResolvedCount?: number;
   // The latest review is the retried incomplete fallback: it re-checked nothing.
   incompleteReview?: boolean;
+  // The gate brief's open findings, by ID, that Approve records as `Changed
+  // after review` (reviewedWorkChanged).
+  changedAfterReview?: string[];
 }
 
 export interface ReviewFindingDisposition {
@@ -87,11 +94,17 @@ export interface ReviewFindingDisposition {
   fingerprint: string;
   status:
     | "Accepted risk"
+    | "Changed after review"
+    | "Approved autonomously"
     | `Rejected: ${string}`
     | `Reopened: ${string}`;
   decided_at_severity?: string;
   reviewed_record?: { path: string; digest: string };
 }
+
+// Who gave an approval: the person, or nobody (Construction they let run on
+// its own).
+export type ApprovalDecider = "person" | "nobody";
 
 interface ReviewFindingDispositionEnvelope {
   version: 1;
@@ -583,6 +596,18 @@ function parsedDispositions(block: string): ReviewFindingDisposition[] {
   );
 }
 
+// The Units a gate row names: a Unit's checkpoint or team gate names its
+// `Unit`, a swarm batch its `Units`. A stage's own gate names none and covers
+// every Unit.
+function gateUnits(event: AuditShardEvent): string[] | null {
+  const unit = auditBlockField(event.block, "Unit");
+  if (unit !== null) return [unit];
+  const units = auditBlockField(event.block, "Units");
+  return units === null
+    ? null
+    : units.split(",").map((entry) => entry.trim()).filter(Boolean);
+}
+
 function gateAppliesToScope(
   event: AuditShardEvent,
   stageSlug: string,
@@ -601,8 +626,8 @@ function gateAppliesToScope(
   ) {
     return false;
   }
-  const eventUnit = auditBlockField(event.block, "Unit");
-  return unit === undefined || eventUnit === null || eventUnit === unit;
+  const units = gateUnits(event);
+  return unit === undefined || units === null || units.includes(unit);
 }
 
 // Redo from scratch begins a new list for the scope it covers. The row carries
@@ -737,6 +762,8 @@ function applyDisposition(
     return;
   }
   if (!findingIsOpen(finding)) return;
+  // `Changed after review` and `Approved autonomously` are no decision: the
+  // finding stays open, so the next review re-checks it.
   const status = disposition.status === "Accepted risk" ||
       disposition.status.startsWith("Rejected: ")
     ? disposition.status as ReviewFindingStatus
@@ -1160,6 +1187,8 @@ function parseDispositionField(
       /^sha256:[0-9a-f]{64}$/.test(row.fingerprint ?? "") &&
       (
         row.status === "Accepted risk" ||
+        row.status === "Changed after review" ||
+        row.status === "Approved autonomously" ||
         /^Rejected: \S[\s\S]*$/.test(row.status ?? "") ||
         /^Reopened: \S[\s\S]*$/.test(row.status ?? "")
       ) &&
@@ -1278,6 +1307,12 @@ export function hydrateReviewArtifactContexts(
             }
           : finding;
       }
+      if (
+        disposition.status === "Changed after review" ||
+        disposition.status === "Approved autonomously"
+      ) {
+        return finding;
+      }
       const status = disposition.status === "Accepted risk" ||
           disposition.status.startsWith("Rejected: ")
         ? disposition.status as ReviewFindingStatus
@@ -1292,29 +1327,143 @@ export function hydrateReviewArtifactContexts(
   }));
 }
 
-export function acceptedRiskDispositionField(
+interface UnitApproval {
+  // What it recorded for the Unit's findings; null when it carries no field.
+  recorded: ReviewFindingDisposition[] | null;
+  decider: ApprovalDecider;
+  row: AuditShardEvent;
+}
+
+// Whether the review a Unit's list was last read from finished before `row`.
+// A list a legacy `## Review` section seeded names no review: that section is
+// from before review records, so it stands with the approval as it did.
+function reviewedBefore(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  context: ReviewArtifactContext,
+  row: AuditShardEvent,
+): boolean {
+  const ref = context.reviewRecord;
+  if (ref === undefined) return true;
+  const review = pairedReviews(projectDir, stage, context.unit).find((pair) =>
+    pair.ref.path === ref.path && pair.ref.digest === ref.digest
+  );
+  return review !== undefined && attemptEventDefinitelyBefore(review.event, row);
+}
+
+// The Unit's own latest approval of a stage: its checkpoint or team gate, or
+// the swarm batch it was in.
+function latestUnitApproval(
+  approvals: readonly AuditShardEvent[],
+  stageSlug: string,
+  unit: string,
+): UnitApproval | null {
+  const row = approvals.findLast((event) =>
+    gateAppliesToScope(event, stageSlug, unit) &&
+    gateUnits(event)?.includes(unit) === true
+  );
+  if (row === undefined) return null;
+  return {
+    recorded: auditBlockField(row.block, REVIEW_FINDING_DISPOSITIONS_FIELD) === null
+      ? null
+      : parsedDispositions(row.block),
+    decider: auditBlockField(row.block, "User Input") !== null &&
+        auditBlockField(row.block, "Autonomous") !== "true"
+      ? "person"
+      : "nobody",
+    row,
+  };
+}
+
+// Whether the work a context's review covered changed after that review and no
+// finished review has seen the change: Approve then records its open findings
+// as `Changed after review`, and the gate's brief shows them that way.
+function reviewedWorkChanged(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  context: ReviewArtifactContext,
+): boolean {
+  return acceptedReviewChanges(
+    projectDir,
+    stage.slug,
+    stage.for_each === "unit-of-work" ? context.unit : undefined,
+  ).length > 0;
+}
+
+// What an approval records for each open finding: `Accepted risk` when the
+// person approved, `Approved autonomously` when nobody did (no decision: the
+// finding stays open for the next review), and, whoever approved, `Changed
+// after review` when the work its review covered changed afterwards and no
+// finished review has seen the change (the change the brief names), so a
+// finding the work was changed to fix never reads as a risk the person accepted.
+// `units` are the Units a Unit's own approval covers. A stage's approval
+// nobody gave leaves each Unit's findings to the Unit's own approval: it
+// records nothing for a finding that approval recorded as it is now, and a
+// Unit approval that records none (an earlier release wrote it, or nothing was
+// open) stands for its own decision only on a finding whose review finished
+// before it. One a review raised afterwards, such as a reviewer that finished
+// after the person approved the Unit as it is, nobody saw.
+export function approvalDispositionField(
   projectDir: string,
   stages: ReviewDispositionStages,
-  unit?: string,
+  units: string | readonly string[] | undefined,
+  decider: ApprovalDecider,
 ): string | undefined {
+  const scopes: ReadonlyArray<string | undefined> = units === undefined
+    ? [undefined]
+    : typeof units === "string"
+      ? [units]
+      : units;
+  let approvals: AuditShardEvent[] | undefined;
+  const unitApprovals = (): AuditShardEvent[] => {
+    approvals ??= sortAttemptEvents(readAuditShardEvents(projectDir))
+      .filter((event) => event.event === "GATE_APPROVED");
+    return approvals;
+  };
   const dispositions = dispositionStages(stages).flatMap((stage) => {
     if (!stage.reviewer) return [];
-    return readReviewArtifactContexts(projectDir, stage, unit).flatMap((context) =>
-      context.findings
-        .filter((finding) =>
-          finding.status === "New" || finding.status === "Unresolved"
-        )
-        .map((finding): ReviewFindingDisposition => ({
+    return scopes.flatMap((unit) =>
+      readReviewArtifactContexts(projectDir, stage, unit)
+    ).flatMap((context) => {
+      const open = context.findings.filter((finding) =>
+        finding.status === "New" || finding.status === "Unresolved"
+      );
+      if (open.length === 0) return [];
+      const changed = reviewedWorkChanged(projectDir, stage, context);
+      const own = units === undefined && decider === "nobody" &&
+          stage.for_each === "unit-of-work" && context.unit !== undefined
+        ? latestUnitApproval(unitApprovals(), stage.slug, context.unit)
+        : null;
+      const decidedBy = own !== null && own.recorded === null &&
+          reviewedBefore(projectDir, stage, context, own.row)
+        ? own.decider
+        : decider;
+      return open.flatMap((finding): ReviewFindingDisposition[] => {
+        if (
+          own?.recorded?.some((recorded) =>
+            recorded.artifact === finding.artifact &&
+            recorded.id === finding.id &&
+            recorded.fingerprint === finding.fingerprint
+          )
+        ) {
+          return [];
+        }
+        return [{
           artifact: finding.artifact,
           id: finding.id,
           fingerprint: finding.fingerprint,
-          status: "Accepted risk",
+          status: changed
+            ? "Changed after review"
+            : decidedBy === "person"
+              ? "Accepted risk"
+              : "Approved autonomously",
           decided_at_severity: finding.severity,
           ...(context.reviewRecord
             ? { reviewed_record: context.reviewRecord }
             : {}),
-        }))
-    );
+        }];
+      });
+    });
   });
   return serializeReviewFindingDispositions(dispositions);
 }
@@ -1595,7 +1744,11 @@ export function renderFindingsContext(
         ? `${finding.finding} (worse than ${finding.relatedFindingId})`
         : finding.finding;
     const displayStatus = (finding: ReviewFinding): string =>
-      finding.resolvedByReviewer ? "Resolved (reviewer)" : finding.status;
+      finding.resolvedByReviewer
+        ? "Resolved (reviewer)"
+        : context.changedAfterReview?.includes(finding.id)
+          ? "Changed after review"
+          : finding.status;
     if (audience === "copy") {
       lines.push(
         "| ID | Severity | Location | Finding | Required action | Status |",
@@ -1623,16 +1776,20 @@ export function renderFindingsContext(
         lines.push("| - | - | - | No findings |");
       }
       // A place or status too long for its cell (the person's own reason for
-      // a decision, say) is written out in full here, so nothing is cut.
+      // a decision, say) is written out in full here, so nothing is cut. A
+      // Minor point in a review that says ready is a suggestion.
       for (const finding of context.findings) {
         const where = whereText(finding.location);
         const status = displayStatus(finding);
+        const action = context.verdict === "READY" && findingSeverityRank(finding.severity) === 0
+          ? "Suggested change"
+          : "Required action";
         lines.push(
           "",
           `> ${finding.id} Finding: ${markdownCell(displayFinding(finding))}`,
           ...(where.length > SHORT_CELL_MAX ? ["", `> ${finding.id} Where: ${markdownCell(where)}`] : []),
           "",
-          `> ${finding.id} Required action: ${markdownCell(finding.requiredAction)}`,
+          `> ${finding.id} ${action}: ${markdownCell(finding.requiredAction)}`,
           ...(status.length > SHORT_CELL_MAX ? ["", `> ${finding.id} Status: ${markdownCell(status)}`] : []),
         );
       }
@@ -1948,13 +2105,8 @@ export function reviewInvalidationDetails(
   // A backward jump is itself an attempt boundary. Remove downstream paths
   // whose own stage gate has since consumed them, while preserving the changed
   // upstream source as context for stages that still require re-check.
-  const boundary = attemptFrontier.length === 1
-    ? attemptFrontier[0]
-    : undefined;
-  if (
-    boundary?.event === "STAGE_JUMPED" &&
-    auditBlockField(boundary.block, "Direction") === "BACKWARD"
-  ) {
+  const boundary = backwardJumpBoundary(attemptFrontier);
+  if (boundary) {
     const jumpChanged = parseAuditPathArray(
       auditBlockField(boundary.block, "Changed Upstream Artifacts"),
     );
@@ -2020,8 +2172,7 @@ export function reviewInvalidationDetails(
 export function acceptedReviewChanges(
   projectDir: string,
   stageSlug: string,
-  // A Unit's own approval: only that Unit's changes. Each was already said once
-  // when it was kept, so another Unit's change is not said again here.
+  // A Unit's own approval: only that Unit's changes.
   unit?: string,
 ): Array<{ notice: string; changed: string[] | null }> {
   const attemptView = reviewInvalidationAttemptView(
@@ -2090,6 +2241,15 @@ export function renderReviewBrief(
     ? undefined
     : unit;
   let contexts = readReviewArtifactContexts(projectDir, stage, contextUnit, true);
+  // An open finding on work kept after its review (relaxed or off) shows as
+  // Approve records it. The change itself was said once, as change_notices,
+  // when it was recorded, so the brief does not say it again. Marked before the
+  // brief adds its own finding below, which no approval records.
+  contexts = contexts.map((context) =>
+    reviewedWorkChanged(projectDir, stage, context)
+      ? { ...context, changedAfterReview: context.findings.filter(findingIsOpen).map((finding) => finding.id) }
+      : context
+  );
   // The incomplete fallback re-checked nothing: the record says the review did
   // not finish, and the conductor's --fallback-finding, given only when what
   // the reviewer returned says why, follows it. A list carried from earlier
@@ -2139,16 +2299,20 @@ export function renderReviewBrief(
     }];
   }
   const findings = contexts.flatMap((context) => context.findings);
-  const open = findings.filter((finding) =>
-    finding.status === "New" || finding.status === "Unresolved"
-  );
+  const open = findings.filter(findingIsOpen);
   const reviewerResolved = contexts.reduce(
     (count, context) => count + (context.reviewerResolvedCount ?? 0),
     0,
   );
+  // Minor points in a review that says ready are the person's to weigh, not
+  // concerns that remain.
+  const minorPoints = contexts.every((context) => context.verdict === "READY") &&
+    open.every((finding) => findingSeverityRank(finding.severity) === 0);
   const outcome =
     open.length > 0
-      ? "Concerns remain for your decision."
+      ? minorPoints
+        ? `Ready, with ${open.length} minor ${open.length === 1 ? "point" : "points"} to weigh.`
+        : "Concerns remain for your decision."
       : reviewerResolved > 0
         ? `${reviewerResolved} ${
             reviewerResolved === 1 ? "finding" : "findings"
@@ -2165,19 +2329,6 @@ export function renderReviewBrief(
     `**Stage:** ${stage.name}`,
     `**Review outcome:** ${outcome}`,
   ];
-  // Reviewed content that changed after the review and was kept under a relaxed
-  // or off Guard Policy, and that no later finished review covered. The verdict
-  // above is the reviewer's; this tells the person what it did not see. The
-  // paths say it; the change's own sentence is said only when there are none.
-  // The final gate of a per-Unit stage omits --unit and says every Unit's change.
-  const changesFor = stage.for_each === "unit-of-work" ? unit : undefined;
-  for (const accepted of acceptedReviewChanges(projectDir, stage.slug, changesFor)) {
-    lines.push(
-      accepted.changed !== null
-        ? `**Changed after review:** ${accepted.changed.map((path) => `\`${path}\``).join(", ")}`
-        : `**Reviewed content differs:** ${accepted.notice}`,
-    );
-  }
   if (reason === "stale") {
     const invalidation = reviewInvalidationDetails(
       projectDir,
@@ -2204,17 +2355,26 @@ export function renderReviewBrief(
       );
     }
   }
+  // Approve says what it records: the open findings accepted, and those on
+  // work changed after its review as that change.
+  const openChanged = contexts.flatMap((context) =>
+    context.findings.filter(findingIsOpen).map((finding) => context.changedAfterReview?.includes(finding.id) === true)
+  );
+  const accepted = openChanged.includes(false);
+  const changed = openChanged.includes(true);
+  const approve = accepted && changed
+    ? "continue with the open findings accepted and the work as changed after review."
+    : accepted
+      ? "continue with the open findings accepted."
+      : changed
+        ? "continue with the work as changed after review."
+        : "continue; no findings are open.";
   lines.push(
     "",
     renderFindingsContext(contexts),
     "",
     "**Decision options:**",
-    // Approve says what it accepts: open findings only when there are some.
-    contexts.some((context) =>
-        context.findings.some((finding) => finding.status === "New" || finding.status === "Unresolved")
-      )
-      ? "- **Approve** - continue with the open findings accepted."
-      : "- **Approve** - continue; no findings are open.",
+    `- **Approve** - ${approve}`,
     "- **Request Changes** - return to the listed artifacts so the required actions can be addressed.",
   );
   return lines.join("\n");
@@ -2240,7 +2400,11 @@ export function renderSummaryConfirmationBrief(
       `Summary confirmation questions file must exist inside the active intent record: ${questionsFile}`,
     );
   }
-  const entries = reviewArtifactEntries(projectDir, stage, unit) ?? [];
+  // The questions file is what the person confirms, never one of the files made
+  // from it; and the brief names the person's documents, not the agent's own
+  // coverage record (traceability.json).
+  const entries = (reviewArtifactEntries(projectDir, stage, unit) ?? [])
+    .filter((entry) => !entry.summaryInput && entry.logicalPath.endsWith(".md"));
   const artifacts = entries.map((entry) =>
     `\`${workspaceArtifactPath(projectDir, entry)}\``
   );
@@ -2251,7 +2415,6 @@ export function renderSummaryConfirmationBrief(
   return [
     `**Stage:** ${stage.name}`,
     `**Confirming:** Consolidated answers in \`${questions}\` before generating ${generated}.`,
-    "**Why now:** All stage questions are answered; artifact generation will use this confirmed summary.",
     "**Decision options:**",
     "- **Looks correct** - record this confirmation and generate the named artifacts.",
     "- **Request changes** - nothing is generated yet; say what to change in your answers, and they are updated first.",
@@ -2303,8 +2466,38 @@ function keepGateBrief(
   }
 }
 
+const REVIEW_BRIEF_VERBS = ["review", "context", "summary"] as const;
+
+// Each verb's usage, with the flags its branch in main reads (#2449's shape).
+function reviewBriefUsage(verb: string | undefined): string {
+  const invoke = (name: string) => aidlcDispatcherInvocation(`review-brief ${name}`);
+  const usage: Record<(typeof REVIEW_BRIEF_VERBS)[number], string[]> = {
+    review: [
+      `${invoke("review")} --stage <slug> --why <first|revision|stale> [--unit <unit>] [--fallback-finding "<why>"]`,
+      "  Prints the Review brief that opens a reviewer-backed approval gate. Required: --stage, --why.",
+    ],
+    context: [
+      `${invoke("context")} --stage <slug> [--unit <unit>]`,
+      "  Prints the findings context a reviewer is sent with. Required: --stage.",
+    ],
+    summary: [
+      `${invoke("summary")} --stage <slug> --questions-file <path> [--unit <unit>]`,
+      "  Prints the summary confirmation brief. Required: --stage, --questions-file.",
+    ],
+  };
+  if (verb !== undefined && verb in usage) return usage[verb as keyof typeof usage].join("\n");
+  return `Usage: aidlc-review-brief <subcommand>\n\n${Object.values(usage).map((lines) => lines.join("\n")).join("\n\n")}`;
+}
+
 export function main(argv: string[]): void {
   const command = argv[0];
+  // The verb is read before any flag, so help, and a flag where the verb goes,
+  // are answered with the verbs instead of a flag error.
+  if (command === undefined || asksForHelp([command])) printUsageAndExit(reviewBriefUsage(undefined));
+  if (!(REVIEW_BRIEF_VERBS as readonly string[]).includes(command)) {
+    throw new Error(`Unknown subcommand: ${command}. Valid: ${REVIEW_BRIEF_VERBS.join(", ")}.`);
+  }
+  if (asksForHelp(argv.slice(1))) printUsageAndExit(reviewBriefUsage(command));
   const flags = parseCliFlags(argv.slice(1));
   const projectDir = resolveProjectDir(flags["project-dir"]);
   const stageSlug = flags.stage;
@@ -2355,9 +2548,6 @@ export function main(argv: string[]): void {
     );
     return;
   }
-  throw new Error(
-    `Unknown subcommand: ${command}. Valid: review, context, summary.`,
-  );
 }
 
 if (import.meta.main) {

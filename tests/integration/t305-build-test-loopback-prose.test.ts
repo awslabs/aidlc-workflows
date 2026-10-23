@@ -16,9 +16,8 @@
 //      Code Generation and Build and Test, including the ledger, engine-routed jump,
 //      settlement paths, swarm path, question variants, and second
 //      autonomous-stop case.
-//   3. dist/claude/.claude/aidlc-common/protocols/stage-protocol.md — the
-//      NO EMERGENT carve-out and both Artifact
-//      Re-use overrides.
+//   3. dist/claude/.claude/aidlc-common/protocols/stage-protocol.md: both
+//      Artifact Re-use overrides.
 //   4. dist/claude/.claude/aidlc-common/protocols/stage-protocol-recovery.md
 //      - the crash-resume bullet (logged-but-not-jumped detection), under
 //      "Session resume".
@@ -184,12 +183,6 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     expect(CONSTRUCTION_PROTOCOL).toContain("**Halt-and-ask on failure**");
     expect(CONSTRUCTION_PROTOCOL).not.toContain("### Build-and-Test failure loop-back (3.6 → 3.5)");
     expect(LOOPBACK_PROTOCOL.startsWith("# Loop-back Protocol Module\n")).toBe(true);
-  });
-
-  test("sanctioned-exception sentence on the NO EMERGENT BEHAVIOR RULE paragraph", () => {
-    expect(MAIN_PROTOCOL).toContain(
-      "Two sanctioned carve-outs exist: the revision loop escape hatch (below) and the Build-and-Test failure loop-back in the loop-back protocol module (`aidlc-common/protocols/stage-protocol-loopback.md`).",
-    );
   });
 
 

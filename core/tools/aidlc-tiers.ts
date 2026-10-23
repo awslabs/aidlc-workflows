@@ -36,8 +36,10 @@
 //                   fallback: "If not specified, uses the default model" —
 //                   the session model at its own default effort. kiro-cli
 //                   also fail-closes on any effort-like key in agent JSON,
-//                   so no Kiro agent surface may EVER carry one; a per-model
-//                   effort default can only ride on cli.json
+//                   so no tier writes one into a Kiro agent (a person's own
+//                   per-agent `effortLevel` on the kiro-ide row is written by
+//                   aidlc-model-policy.ts);
+//                   a per-model effort default can only ride on cli.json
 //                   chat.modelDefaults (see kiroModelDefaults below). The
 //                   session's own model and effort live in the person's
 //                   PERSONAL Kiro settings (aidlc-kiro-session.ts): a project

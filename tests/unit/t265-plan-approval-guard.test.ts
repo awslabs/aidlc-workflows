@@ -41,7 +41,6 @@ import {
   mutationBlockReason,
   promptStageMarkers,
   promptUnitMarkers,
-  questionsFileApproved,
   questionsFileHasPendingPlanApproval,
   normalizeStageName,
   type UnitEvidence,
@@ -334,64 +333,6 @@ describe("t265a plan-approval decision table", () => {
     ).toEqual(["code-generation"]);
   });
 
-  test("only an explicit answer on the Plan Approval question authorizes generation", () => {
-    expect(questionsFileApproved("## Plan Approval\n[Answer]:\n")).toBe(false);
-    expect(questionsFileApproved("## Plan Approval\n[Answer]: ___\n")).toBe(false);
-    expect(questionsFileApproved("## Plan Approval\n[Answer]: A. Approve Plan\n")).toBe(true);
-    expect(questionsFileApproved("## Q1: Plan Approval\n[Answer]: A. Approve Plan\n")).toBe(true);
-    expect(
-      questionsFileApproved("## Question 1 - Plan Approval\n[Answer]: A. Approve Plan\n"),
-    ).toBe(true);
-    expect(
-      questionsFileApproved(
-        "## Q1\n\nPlan Approval\n\nA. Approve Plan\nB. Request Changes\n[Answer]: A. Approve Plan\n",
-      ),
-    ).toBe(true);
-    expect(
-      questionsFileApproved("## Question 1\n\n**Plan Approval**\n[Answer]: A. Approve Plan\n"),
-    ).toBe(true);
-    expect(
-      questionsFileApproved("## Q1\n\nPlan Approval\n[Answer]: B. Request Changes\n"),
-    ).toBe(false);
-    expect(questionsFileApproved("## Plan Approval\n[Answer]: B. Request Changes\n")).toBe(false);
-    expect(
-      questionsFileApproved(
-        "## Implementation Question\n[Answer]: A. Approve Plan\n## Plan Approval\n[Answer]:\n",
-      ),
-    ).toBe(false);
-    expect(
-      questionsFileApproved(
-        "## Plan Approval\n[Answer]: A. Approve Plan\n## Notes\n[Answer]: B. Request Changes\n",
-      ),
-    ).toBe(true);
-    expect(
-      questionsFileApproved(
-        "## Plan Approval\n[Answer]: A. Approve Plan\n## Q2\n\nPlan Approval\n[Answer]:\n",
-      ),
-    ).toBe(false);
-    expect(
-      questionsFileApproved(
-        "## Q1\n\nWhich checkpoint applies?\n\nA. Plan Approval\n[Answer]: A. Approve Plan\n",
-      ),
-    ).toBe(false);
-    expect(
-      questionsFileApproved(
-        "<!--\n## Plan Approval\n[Answer]: A. Approve Plan\n-->\n## Plan Approval\n[Answer]:\n",
-      ),
-    ).toBe(false);
-    expect(
-      questionsFileApproved(
-        "```markdown\n## Plan Approval\n[Answer]: A. Approve Plan\n```\n",
-      ),
-    ).toBe(false);
-    expect(
-      questionsFileApproved(
-        "~~~markdown\n## Q1\nPlan Approval\n[Answer]: A. Approve Plan\n~~~\n",
-      ),
-    ).toBe(false);
-    expect(questionsFileApproved("")).toBe(false);
-  });
-
   test("only a blank visible Plan Approval section is a pending mandatory stop", () => {
     expect(questionsFileHasPendingPlanApproval("## Plan Approval\n[Answer]:\n")).toBe(true);
     expect(questionsFileHasPendingPlanApproval("## Q1\nPlan Approval\n[Answer]: ___\n")).toBe(
@@ -565,6 +506,7 @@ function scratchProject(): string {
     "aidlc-artifact-vocabulary.ts",
     "aidlc-runtime-paths.ts",
     "aidlc-runtime-budget.ts",
+    "aidlc-lock-line.ts",
     "aidlc-guard-fences.ts",
     // The hook reads the plan approval setting when it refuses (the setting
     // decides the refusal's last clause); the setting resolver and what it imports.
@@ -578,6 +520,8 @@ function scratchProject(): string {
     // aidlc-log.ts imports the note builders from here.
     "aidlc-directive.ts",
     "aidlc-log.ts",
+    // aidlc-log.ts writes and removes the Kiro reviewer copy through this.
+    "aidlc-kiro-review-copy.ts",
     "aidlc-message-store.ts",
     "aidlc-review-brief.ts",
     "aidlc-construction-checkpoints.ts",
@@ -685,7 +629,15 @@ function publishRestartRecovery(
   });
 }
 
-function recordRecoverySelection(proj: string, prompt = "Restart code-generation."): void {
+// The person's reply to the recovery question, then the agent's record of the
+// remedy it read from it (`details`, by default the reply's own words; null when
+// the reply names none). A record that names no offered remedy is refused and
+// records nothing, as the agent's would be.
+function recordRecoverySelection(
+  proj: string,
+  prompt = "Restart code-generation.",
+  details: string | null = prompt,
+): void {
   const started = performance.now();
   const result = spawnSync(
     BUN,
@@ -711,6 +663,21 @@ function recordRecoverySelection(proj: string, prompt = "Restart code-generation
     stdout: result.stdout,
     stderr: result.stderr,
   })).toBe(0);
+  if (details === null) return;
+  spawnSync(
+    BUN,
+    [join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "guard-recovery",
+      "--details", details, "--project-dir", proj],
+    {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: proj,
+      env: {
+        ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0",
+        AIDLC_SESSION_OVERRIDE: "01995000-0265-7000-8000-000000000001",
+      },
+      encoding: "utf-8",
+    },
+  );
 }
 
 function seedUnit(
@@ -1109,8 +1076,13 @@ describe("t265b hook lifecycle", () => {
       expect(withBom.status, withBom.stderr).toBe(0);
       expect(withBom.stdout.endsWith(readFileSync(instructionsPath, "utf-8"))).toBe(true);
       expect(withBom.stdout).toContain("\n\n\uFEFF# Unit Test Instructions");
-      // And the brief refuses before approval, so it can never precede authority.
+      // And the brief refuses before approval, so it can never precede authority:
+      // the engine's receipt is the approval, and none is on record now.
       seedUnit(proj, "todo-core", { plan: true, answer: null });
+      const receipts = dirname(planApprovalRuntimeFile(proj, "receipt.json"));
+      for (const name of readdirSync(receipts).filter((entry) => /^receipt-.*\.json$/.test(entry))) {
+        rmSync(join(receipts, name));
+      }
       const unapproved = spawnSync(
         BUN,
         [
@@ -1336,17 +1308,20 @@ describe("t265b hook lifecycle", () => {
   // #1369 follow-up: `report --result awaiting-approval` moves the state past the
   // issued run-stage directive (a checkbox is part of the state digest) and
   // publishes no successor, so the held gate has no current directive. The
-  // human's answer to that gate must still reach the engine, while generation
-  // and every other lifecycle report stay fenced. Both fence decisions are
-  // covered: strict holds, and relaxed (poc's scope default) stands aside.
-  for (const relaxed of [false, true]) {
-    test(`the held Code Generation gate admits the human's answer (${relaxed ? "relaxed" : "strict"}, #1369)`, () => {
+  // human's answer to that gate must still reach the engine, and so must the
+  // gate's own report showing it again (the step `next` prints when a reviewed
+  // file changed after the review), while every other completion report stays
+  // fenced. All three Guard Policies are covered: strict holds the rest; under
+  // relaxed (poc's scope default) and off the step the opening retired stands
+  // for every call but AI-DLC's own commands the admission holds.
+  for (const policy of ["strict", "relaxed", "off"] as const) {
+    test(`the held Code Generation gate admits the human's answer and its own report (${policy}, #1369)`, () => {
       const proj = scratchProject();
       try {
         seedState(proj);
         const statePath = join(proj, RECORD_REL, "aidlc-state.md");
-        const policy = relaxed ? "\n## Scope Configuration\n- **Guard Policy**: relaxed (from scope poc)\n" : "";
-        writeFileSync(statePath, `${readFileSync(statePath, "utf-8")}${policy}
+        const scopePolicy = policy === "strict" ? "" : `\n## Scope Configuration\n- **Guard Policy**: ${policy} (from scope poc)\n`;
+        writeFileSync(statePath, `${readFileSync(statePath, "utf-8")}${scopePolicy}
 ## Stage Progress
 - [x] requirements-analysis \u2014 EXECUTE
 - [-] code-generation \u2014 EXECUTE
@@ -1376,15 +1351,20 @@ describe("t265b hook lifecycle", () => {
           approve,
           `${report} --result rejected --user-input "Request Changes" --reason "Rename the flag."`,
           'aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"',
+          // The gate's own report showing it again, in either spelling.
+          `${report} --result awaiting-approval`,
+          "aidlc engine orchestrate report --stage code-generation --result awaiting-approval",
         ]) {
           const result = runHook(proj, BASH(command));
           expect(result.code, `${command}\n${result.stderr}`).toBe(0);
         }
         // At the held gate only the person's answer completes the stage; another
-        // completion report still waits for a current step.
+        // completion report, and AI-DLC's answer through a wrapper, still wait for
+        // a current step under every Guard Policy.
         for (const command of [
           `${report} --result completed`,
           `${report} --result approved --result completed`,
+          `env -C other ${approve}`,
         ]) {
           expect(runHook(proj, BASH(command)).code, command).toBe(2);
         }
@@ -1396,22 +1376,48 @@ describe("t265b hook lifecycle", () => {
         ]) {
           expect(runHook(proj, BASH(command)).code, command).toBe(0);
         }
-        // A write to code beside the answer, a wrapper, or code alone still waits.
-        for (const command of [
+        // The stage's own record files, read and written by file tool and by a
+        // shell the guard reads, pass under every Guard Policy.
+        const record = join(RECORD_REL, "construction", "code-generation");
+        const trace = join(record, "traceability.json");
+        writeFileSync(join(proj, trace), "{}\n");
+        // A shell line names the file with forward slashes, as an agent writes it
+        // under Bash (Git Bash on Windows): a backslash there is an escape, and
+        // the line would write another file.
+        const traceLine = toPosix(trace);
+        for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-summary.md", "traceability.json"]) {
+          const write = runHook(proj, WRITE(join(proj, record, name)));
+          expect(write.code, `${name}: ${write.stderr}`).toBe(0);
+        }
+        for (const command of [`cat ${traceLine}`, `jq . ${traceLine}`, `printf '{}' > ${traceLine}`, `sed -i 's/a/b/' ${traceLine}`]) {
+          expect(runHook(proj, BASH(command)).code, command).toBe(0);
+        }
+        // Code beside the answer, a command whose writes cannot be seen, and code
+        // alone: strict waits for a current step, naming the fresh `next`;
+        // relaxed and off go on from the approved plan.
+        const code = [
           `${approve} > src/inline.ts`,
           `${approve}; printf code > src/inline.ts`,
-          `env -C other ${approve}`,
           "printf code > src/inline.ts",
-        ]) {
-          expect(runHook(proj, BASH(command)).code, command).toBe(2);
+          `python3 -c "open('${traceLine}','w').write('{}')"`,
+        ];
+        for (const command of code) {
+          expect(runHook(proj, BASH(command)).code, command).toBe(policy === "strict" ? 2 : 0);
         }
         const write = runHook(proj, WRITE(join(proj, "src", "inline.ts")));
-        expect(write.code).toBe(2);
-        // Either fence decision names the way back, spelled the way this tree
-        // runs it: a fresh `next` re-issues the step.
-        expect(write.stderr).toContain(
-          "Run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own",
-        );
+        expect(write.code, write.stderr).toBe(policy === "strict" ? 2 : 0);
+        if (policy === "strict") {
+          expect(write.stderr).toContain(
+            "Run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own",
+          );
+        } else {
+          expect(write.stdout).toBe("");
+          // An approval that no longer lets the plan build keeps the refusal:
+          // the plan is emptied, so no approved plan stands behind the step.
+          writeFileSync(join(proj, record, "code-generation-plan.md"), "  \n");
+          expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+          expect(runHook(proj, BASH("printf code > src/inline.ts")).code).toBe(2);
+        }
       } finally {
         rmSync(proj, { recursive: true, force: true });
       }
@@ -1592,6 +1598,33 @@ describe("t265b hook lifecycle", () => {
     // hosted Windows 15s default expired partway through that sequence.
   });
 
+  test("a Unit reopen the recovery question offers waits for the person's pick of it", () => {
+    const proj = scratchProject();
+    try {
+      const state = seedRestartRecoveryState(proj);
+      writeActiveDirectiveMarker(proj, {
+        kind: "ask",
+        ask_type: GUARD_RECOVERY_ASK_TYPE,
+        stage: "code-generation",
+        state_sha256: stateDigest(state),
+        remedies: [{
+          op: "reopen-unit-step",
+          action: "Reopen code-generation for api.",
+          interaction: "command",
+          operation: { kind: "reopen-unit", stage: "code-generation", unit: "api" },
+        }, {
+          op: "request-changes",
+          action: "Ask what should change.",
+          interaction: "human-input",
+        }] as never,
+      });
+      recordRecoverySelection(proj, "Can we look at the api part again?");
+      expect(runHook(proj, BASH("aidlc engine jump reopen --target code-generation --units api --scope poc")).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   test("an open recovery ask admits the answer the person picked and keeps code changes waiting (#1317)", () => {
     const publishAsk = (proj: string, remedies: Array<Record<string, unknown>>) => {
       const state = readFileSync(join(proj, RECORD_REL, "aidlc-state.md"), "utf-8");
@@ -1620,8 +1653,8 @@ describe("t265b hook lifecycle", () => {
         // Offered but not answered: the report is the engine's own command,
         // and the engine refuses an answer nobody gave.
         expect(runHook(proj, BASH(reject)).code).toBe(0);
-        // With Request Changes the only choice, the person's words are the feedback.
-        recordRecoverySelection(proj, "Rework the payload contract.");
+        // The agent records the person's words as the Request Changes they asked for.
+        recordRecoverySelection(proj, "Rework the payload contract.", "Request Changes: Rework the payload contract.");
         for (const admitted of [
           reject,
           reject.replace("aidlc engine orchestrate", "bun .claude/tools/aidlc-orchestrate.ts"),
@@ -1673,7 +1706,7 @@ describe("t265b hook lifecycle", () => {
         const revised = "aidlc engine orchestrate report --stage code-generation --result revised";
         expect(runHook(proj, BASH(revised)).code).toBe(2);
         expect(runHook(proj, WRITE(plan)).code).toBe(0);
-        recordRecoverySelection(proj, "1");
+        recordRecoverySelection(proj, "1", "finish-revision");
         expect(runHook(proj, BASH(revised)).code).toBe(0);
         expect(runHook(proj, WRITE(plan)).code).toBe(0);
         expect(runHook(proj, BASH(reject)).code).toBe(0);
@@ -1891,6 +1924,7 @@ describe("t265b hook lifecycle", () => {
         "config providers --provider amazon-bedrock --region us-east-1 --profile dev --yes",
         "config trust --acknowledge --yes",
         "config trust --kiro-workflows off --yes",
+        "config trust --kiro-cli-workflows off --yes",
         "config trust --kiro-terminal powershell --yes",
         "config flags --default-scope feature --swarm on --local --yes",
         "config flags --hook-debug on --question-retention-days 30 --global --yes",
@@ -1907,6 +1941,7 @@ describe("t265b hook lifecycle", () => {
       }
       const asked = [
         "config trust --kiro-workflows on --yes",
+        "config trust --kiro-cli-workflows on --yes",
         "config flags --sensor-timeout-ms 5 --local --yes",
         "config flags --default-scope feature --sensor-timeout-ms 5 --local --yes",
         "config project --plugins all --yes",
@@ -3295,11 +3330,13 @@ describe("t265b hook lifecycle", () => {
         answer: "Approve Plan",
         receipt: false,
       });
+      // The line in the file approves nothing: only the engine's receipt does.
       const approval = evaluateCodeGenerationApproval(proj, { unit: null });
       expect(approval.ok).toBe(false);
-      expect(approval.approved).toBe(true);
-      expect(approval.receiptValid).toBe(false);
-      expect(approval.reason).toContain("no current Plan Approval receipt matches this question, target");
+      expect(approval.approved).toBe(false);
+      // Nothing approved it, so the receipt check is never reached.
+      expect(approval.receiptValid).toBeNull();
+      expect(approval.reason).toContain("the plan is not approved yet");
       const authority = resolveCodeGenerationAuthority(proj, { unit: null });
       const questionsPath = join(
         codeGenerationRecordDir(proj, null),
@@ -4123,7 +4160,8 @@ describe("t265b hook lifecycle", () => {
       seedActiveDirective(proj, "code-generation", "auth");
       const crossTarget = evaluateCodeGenerationApproval(proj, { unit: "auth" });
       expect(crossTarget.ok).toBe(false);
-      expect(crossTarget.fingerprintValid).toBe(false);
+      // No approval of the engine's is for that target: the copied bytes approve nothing there.
+      expect(crossTarget.approved).toBe(false);
 
       // Re-issuing the directive for the SAME target and attempt, on the other
       // hand, must leave the approval standing. The engine reissues constantly (a
@@ -4279,7 +4317,11 @@ describe("t265b hook lifecycle", () => {
       expect(r.code).toBe(2);
       const shard = readFileSync(shardPath, "utf-8");
       expect(shard).toContain("PLAN_APPROVAL_BLOCKED");
+      expect(shard).toContain("**Reason**: plan-approval");
       expect(shard).toContain("todo-core");
+      expect(runHook(proj, DISPATCH(proj, "Generate code for todo-core")).code).toBe(2);
+      const rows = readFileSync(shardPath, "utf-8").match(/PLAN_APPROVAL_BLOCKED/g) ?? [];
+      expect(rows).toHaveLength(2);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }

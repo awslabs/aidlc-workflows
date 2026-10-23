@@ -70,9 +70,10 @@ The human can also open `<record>/verification-command.txt`. The canonical
 command is a nonblank single line of at most 1024 characters. Control characters
 and display-spoofing characters (Unicode format characters, including zero-width
 and bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
-The human's **Approve** / **Request Changes** reply in that session binds
-the answer to the pending command. Only **Approve** authorizes the receipt;
-an unrelated reply, **Request Changes**, or a reply from another session does not.
+The human's **Approve** / **Request Changes** reply binds the answer to the
+pending command, in the chat that asked or in a new one while it is the newest
+question asked. Only **Approve** authorizes the receipt; an unrelated reply,
+**Request Changes**, or a reply to another question does not.
 Never write `--details "Approve"` unless the human chose it; only then run
 `state set-construction-verification-command --command-file verification-command.txt` to write the matching Runtime
 State field. A human may defer when no runnable
@@ -132,8 +133,8 @@ When the Unit `ask` returns `earlier_reply`, the person already answered in
 this chat while the Unit's review ran: do not show the question, and run
 `approve` or `reject` as their words chose; when their words answer nothing,
 show the question and wait. Otherwise present **Approve** / **Request
-Changes** and wait. The human's exact reply
-to this checkpoint question authorizes the matching action, in that chat or a
+Changes** and wait. The human's reply
+to this checkpoint question authorizes the action the conductor reads from it, in that chat or a
 new one: with no question of its own, a new chat's reply is kept for the
 checkpoint question another chat asked, while it is the newest question asked
 and still open. An unrelated reply, the agent's own words, or a reply to a
@@ -985,21 +986,19 @@ This stage has a **two-part structure**: planning followed by generation.
    and **I'll edit the files**. The engine writes `code-generation-questions.md`
    (the question, both tags, and a blank `[Answer]:`) and records the question
    in the protected runtime directory; the conductor shows it and ends the turn.
-   The human-turn hook keeps the person's reply, from any chat on this piece of
-   work, except one typed in a chat where the agent has asked a question of its
-   own since the plan question was last shown in that chat, still open (the
-   verification command, say), which answers that question; the conductor
-   reads it and records their choice with `answer --checkpoint plan-approval`,
+   The human-turn hook keeps every reply of the person's after the question,
+   from any chat on this piece of work, and picks nothing from typed words (a
+   pick in a question box is the host's own structure); the conductor reads
+   which question a reply answers and records their choice with
+   `answer --checkpoint plan-approval`,
    which takes the fingerprint of the files as they
    are then and writes the answer, the receipt, and the `PLAN_APPROVAL_RECORDED`
    row with the person's words. The person may instead write their answer on the
    questions file's own `[Answer]:` line, as that file invites, and say so: the
    engine never overwrites an answer they wrote there while the same question
-   stands, and on an exact "done" it reads that line and records an answer that
-   is one of the choices, the same way it records an exact pick typed in chat,
-   naming the file in one line for the conductor. When the person says it in
-   their own words instead ("I put my answer in the file"), the conductor reads
-   the line and records the choice they made. When the person's message in
+   stands. When they say so, in any words ("done", "I put my answer in the
+   file"), the conductor reads the line and records the choice they made; the
+   line itself approves nothing, the engine's receipt does. When the person's message in
    this chat that the question opened for already asked for a change ("go back
    to code generation: also accept -S", on finished work too) and no decision
    has used it, the conductor records it as that question's Request Changes,
@@ -1028,7 +1027,12 @@ This stage has a **two-part structure**: planning followed by generation.
    Code Generation completion gate, a Unit checkpoint, or a swarm batch
    checkpoint), while the plan is still the one approved before, `next` first
    returns `revise` with the person's words from that gate, so the question
-   that follows shows the revised plan. Re-running `next`, or a
+   that follows shows the revised plan. Reopening the step through
+   `/aidlc --stage code-generation` (`Reopen: jump`) starts a fresh attempt
+   and asks about the plan as it stands, without requiring an arbitrary edit.
+   Redo (`Reopen: redo`) starts the step again, including its plan, before
+   asking for approval. `Reopen: change` and a gate's Request Changes still
+   return `revise` with the person's feedback. Re-running `next`, or a
    reissued directive for the same target and attempt, never reopens it, and
    neither does whatever the engine said in between: a chat that compacted, a
    piece of work parked and resumed, or a guard-recovery question. `next` reads
@@ -1096,7 +1100,7 @@ This stage has a **two-part structure**: planning followed by generation.
      hashes. Contextual dependencies do not receive additional target markers.
    - Design artifacts for the CURRENT UNIT ONLY (not all units)
    - A 1-2 line summary of each inception-phase artifact with its file path
-     (requirements summary, stories summary, app design summary) -- the
+     (requirements summary, stories summary, domain design summary) -- the
      subagent can Read specific files if it needs full content
    - The current plan and unit-test-instructions.md, which that
      output already carries using the approval-content projection: the plan
@@ -1267,7 +1271,7 @@ Strictly 2-option: Approve / Request Changes.
 | support_agents    | aidlc-devsecops-agent                                                                                   |
 | mode              | inline                                                                                            |
 | Inputs            | ALL code generation outputs across all units                                                      |
-| Outputs           | `<record>/construction/build-and-test/` -- build-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, plus conditional test instruction files |
+| Outputs           | `<record>/construction/build-and-test/` -- build-instructions.md, build-and-test-summary.md, test-results.md; strategy-dependent (declared under `optional_produces`): integration-test-instructions.md (Standard and above), performance-test-instructions.md and security-test-instructions.md (Comprehensive, when that NFR kind exists), plus other conditional test instruction files |
 
 ### Purpose
 

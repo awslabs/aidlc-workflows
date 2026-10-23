@@ -14,9 +14,8 @@ what they say, in their own words and in context, and do it.
   colleague would. A question they ask is answered, and their next reply
   decides.
 - Never make them repeat themselves, retype an option, or confirm what they
-  already said. A reply that is exactly one option ("1", "Approve Plan") is
-  already recorded where the engine asks; recording the same choice again is
-  fine.
+  already said. A pick in a question box is already recorded where the engine
+  asks; recording the same choice again is fine.
 - If they say you recorded the wrong choice, fix it in one step and say so.
   After a wrong Request Changes at a gate, `{{INVOKE}} engine orchestrate report
   --stage <slug> --result revised` shows the gate again. After a wrong approval,
@@ -31,9 +30,6 @@ what they say, in their own words and in context, and do it.
   say in one line that it is off for this piece of work, comes back on for the
   next one, and that they can ask you to turn it back on. Never hand them a
   command to type.
-- A rule the team recorded in memory (a strict Guard Policy, say) wins over one
-  person's request in chat. Say in one line that the team's rule holds, in which
-  file, and that changing that line changes it.
 - When they ask for a review of a stage or of a Unit ("review Unit 1 again",
   "have the reviewer look at the design", or yes to "Do you want me to have the
   new approach checked before you decide?"), record it through AI-DLC the first
@@ -224,9 +220,6 @@ Construction completion-only bookkeeping. It grants no approval itself.
 
 When you present an approval gate question, you MUST end your turn immediately and wait for the user's explicit response. Do NOT call any tool until the user has typed their choice in a new message. An approval gate is a mandatory human checkpoint that cannot be inferred, auto-approved, or skipped.
 
-### NO EMERGENT BEHAVIOR RULE
-Construction and Operation stages MUST use standardized 2-option completion messages. DO NOT create 3-option menus or other emergent navigation patterns. Only IDEATION and INCEPTION stages may conditionally include a 3rd option (to add a previously skipped stage). Any deviation from these patterns is a protocol violation. Two sanctioned carve-outs exist: the revision loop escape hatch (below) and the Build-and-Test failure loop-back in the loop-back protocol module (`aidlc-common/protocols/stage-protocol-loopback.md`).
-
 ### For simple decisions (3 or fewer options):
 Present a structured question:
 
@@ -272,7 +265,8 @@ ready yet, do what its reply names, then report that stage approved with the
 same choice: do not ask the person again.
 
 ### For stages with conditional options:
-IDEATION and INCEPTION stages may include a 3rd option to add a previously skipped stage:
+IDEATION and INCEPTION stages may offer to add a previously skipped stage
+together with the approval, as one answer:
 
 ```question
 prompt: "[Stage Name] complete. How to proceed?"
@@ -283,11 +277,16 @@ options:
     description: Continue to [next stage]
   - label: Request Changes
     description: Provide revision feedback
-  - label: Add [Skipped Stage]
-    description: Include [stage] which was skipped
+  - label: Approve, and add [Skipped Stage] next
+    description: Include [stage], which was skipped, and start it now
 ```
 
-CONSTRUCTION and OPERATION stages: Strictly 2-option only (Approve / Request Changes).
+When they pick it, run `{{INVOKE}} engine orchestrate next --add <slug>` and
+follow its step, which names the report that records their approval; the
+added stage runs next. When they only ask to add the stage, with no approval
+in it, run the same `next --add <slug>`, say in one line that it is on the
+plan, and ask once whether they approve this stage as it is or want anything
+changed.
 
 ### Reading the person's reply at a checkpoint
 
@@ -314,7 +313,8 @@ recovery protocol's Session resume says, never as Request Changes.
   feedback; pass `--reason` only to add your own summary beside them. Ask
   "What should change?" only when they did not say.
 - **They asked a question:** answer it and end the turn. Their next reply
-  decides.
+  decides. When the same reply also answered a question you record, add
+  `--ends-turn` to that `log answer`.
 - **Their intent is genuinely unclear:** ask one short question, as a colleague
   would, and end the turn.
 - **Their words on a command line:** where the engine keeps their words (a
@@ -334,11 +334,16 @@ recovery protocol's Session resume says, never as Request Changes.
 - **They also asked to stop for now:** record their choice with `--park`, or run
   `park --person-asked`, and tell them how to resume.
 
-A record is refused only when the person has not replied since the question
-was shown (end the turn and wait for them), or when it contradicts an option
-they picked exactly (record their pick, or ask them). A refusal that asks you to
-re-present the held gate means re-render it with every option it offered,
-because conditional choices are not reconstructible from a fixed fallback list.
+A record is refused when the person has not replied since the last decision
+(end the turn and wait for them). At a stage gate it is also refused when all
+their replies came before the gate was shown: when one of them already
+answered it, run the same report with `--message <id>` (the refusal names the
+ids), otherwise show the gate and end the turn. At a Construction checkpoint,
+Plan Approval or a recovery question it is also refused when it contradicts an
+option they picked exactly from the engine's list (record their pick, or ask
+them). A refusal that asks you to re-present the held gate means
+re-render it with every option it offered, because conditional choices are
+not reconstructible from a fixed fallback list.
 
 A harness-supplied **Other** escape is an offered UI choice but is not a
 persisted summary answer or lifecycle decision. Words the human typed there are
@@ -349,7 +354,7 @@ the checkpoint as resolved. Discuss what they want instead, then re-present the
 same structured question with every offered choice, end the turn, and wait.
 
 ### Revision loop escape hatch
-After 3 "Request Changes" cycles on the same stage, add a third option to all subsequent approval gates for that stage:
+The reply or step that shows the gate (the reply to `report --result awaiting-approval` or `revised`, or the `gate_only` step `next` shows it again with) says how many times the person asked for changes at it: `revision_cycle`, counted by the engine from the record, so it holds across a park and a new chat. Never count the rounds yourself. When it carries `accept_as_is: "offered"`, add a third option, with `[N]` read from `revision_cycle`:
 
 ```question
 prompt: "[Stage Name] — this is revision cycle [N]. How would you like to proceed?"
@@ -364,9 +369,9 @@ options:
     description: Archive current version and move on
 ```
 
-If the person chooses "Accept as-is": report it as the gate's approval, for example `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "Accept as-is"`; the engine records the choice (`GATE_APPROVED`) and completes the stage. Never write the decision into the audit trail yourself. This overrides the NO EMERGENT BEHAVIOR RULE for Construction stages only when the revision threshold is reached.
+If the person chooses "Accept as-is": report it as the gate's approval, for example `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "Accept as-is"`; the engine records the choice (`GATE_APPROVED`) and completes the stage. Never write the decision into the audit trail yourself.
 
-After the 2nd revision cycle (before the escape hatch activates), include a note in the approval question: "After one more revision, an 'Accept as-is' option will become available."
+When the reply carries `accept_as_is: "next-revision"`, show the usual two options and include a note in the approval question: "After one more revision, an 'Accept as-is' option will become available." With no `accept_as_is`, show neither.
 
 ---
 
@@ -382,10 +387,10 @@ Entering the gate:
 3. Present Part 3 (the approval question). This is a lifecycle gate, not an interview question: do not call `aidlc-log.ts decision` or `aidlc-log.ts answer` for it. Word it per the voice contract at the top of this file: what you produced, what to look at, what happens next.
 4. Based on the user response:
    - **Approve** → `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "Approve"`. When they approved and asked for something in the same reply ("looks fine but rename the handler"), record the approval, then do what they asked and say in one line what you changed. When they also asked to stop for now, add `--park`. That call emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
-   - **Request Changes** → `{{INVOKE}} engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"`. Where the human-turn hook kept what they typed in this chat, the engine records their words as the feedback, keeps any `--reason` you add beside them as the Conductor Summary, and its returned `print` quotes their words: revise from that quote. Where it kept nothing, pass what they asked for in `--reason`. Ask "What should change?" only when they did not say. On a reviewer-backed gate, add the reviewer module's `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` once for each open finding the human explicitly rejects as inapplicable. When the human says a `Resolved (reviewer)` finding is not fixed, add `--reopen-finding "<review-artifact>#R-NN=<exact human reason>"`. Never pass the same ID in both flags; ordinary change requests carry no disposition flag. That call emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt - a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised - fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (When the directive lists the `learnings` module, its §13 ritual runs once at the initial gate and is not re-run for gate revisions.) Then call `{{INVOKE}} engine orchestrate report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` - always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
-   - **Accept as-is** (after 3 rejection cycles) → same as Approve, with `--user-input "Accept as-is"`.
+   - **Request Changes** → `{{INVOKE}} engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"`. Where the human-turn hook kept what they typed in this chat, the engine records their words as the feedback, keeps any `--reason` you add beside them as the Conductor Summary, and its returned `print` says so: revise from what they asked for. Where it kept nothing, pass what they asked for in `--reason`. Ask "What should change?" only when they did not say. On a reviewer-backed gate, add the reviewer module's `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` once for each open finding the human explicitly rejects as inapplicable. When the human says a `Resolved (reviewer)` finding is not fixed, add `--reopen-finding "<review-artifact>#R-NN=<exact human reason>"`. Never pass the same ID in both flags; ordinary change requests carry no disposition flag. That call emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt - a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised - fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (When the directive lists the `learnings` module, its §13 ritual runs once at the initial gate and is not re-run for gate revisions.) Then call `{{INVOKE}} engine orchestrate report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` - always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
+   - **Accept as-is** (offered when the gate's reply carries `accept_as_is: "offered"`) → same as Approve, with `--user-input "Accept as-is"`.
 
-**Pipeline revisions keep the declared topology.** After a `mode: pipeline` rejection, run `{{INVOKE}} engine orchestrate next` and follow its fresh `directive.pipeline` ledger. Re-dispatch each missing link in order with the exact feedback, even when the requested change affects only one final artifact. The developer must perform fresh analysis and rewrite its handoff for this attempt; the successor then applies the requested revision using that handoff. Record each link only after its agent returns, and retain the configured reviewer step before reporting `revised`. Keep/Modify/Redo describes the requested artifact changes, not permission for the conductor to replace a dispatched pipeline with an inline edit. Under Guard Policy `strict`, a rejection intentionally invalidates earlier receipts: re-stamping old files, touching their timestamps, or setting guard opt-outs is not revision recovery. Under `relaxed` or `off`, a rejection keeps the earlier links' receipts current, so the ledger may show none missing: re-dispatch, with the exact feedback, each link whose work the person's words ask to redo ("scan the payments module again", "start the analysis over"), and apply a change limited to the final artifact through its own link. A fresh run of every link is `/aidlc --stage <stage>`.
+**Pipeline revisions keep the declared topology.** After a `mode: pipeline` rejection, run `{{INVOKE}} engine orchestrate next` and follow its fresh `directive.pipeline` ledger. Re-dispatch each missing link in order with the exact feedback, even when the requested change affects only one final artifact. Under Guard Policy strict, the developer must perform fresh analysis and rewrite its handoff for this attempt; the successor then applies the requested revision using that handoff. Record each link only after its agent returns, and retain the configured reviewer step before reporting `revised`. Keep/Modify/Redo describes the requested artifact changes, not permission for the conductor to replace a dispatched pipeline with an inline edit. Under Guard Policy `strict`, a rejection intentionally invalidates earlier receipts: re-stamping old files, touching their timestamps, or setting guard opt-outs is not revision recovery. Under `relaxed` or `off`, a rejection keeps the earlier links' receipts current, so the ledger may show none missing: re-dispatch, with the exact feedback, each link whose work the person's words ask to redo ("scan the payments module again", "start the analysis over"), and apply a change limited to the final artifact through its own link. A fresh run of every link is `/aidlc --stage <stage>`.
 
 ### Part 1: Announcement (mandatory)
 ```markdown
@@ -477,12 +482,15 @@ redo the person asked for starts a fresh one), and give a follow-up question
 the next unused number and its trade, at the end. The summary and assumption
 confirmations, the `## Requested Changes Feedback` question and approval
 headings such as `## Plan Approval`, numbered or not, carry no trade.
+Each ordinary question you ask the person, whether or not it is in the file
+yet, shows the trade its heading names or will name in front of the question
+text, so they see who it is for; a heading without a trade shows none.
 
 ### Depth-aware question generation
 
 Stage files list **topic areas and example questions** — they are guidance, not a script. The agent determines what to actually ask based on three factors:
 
-1. **Depth level** (from `aidlc-state.md` → `**Depth**`) — sets the expected question volume
+1. **Depth level** (from `aidlc-state.md` → `**Depth**`, or the run-stage's `depth` when an isolated run carries one) — sets the expected question volume
 2. **Project context** — what's already known from prior stages, codebase analysis, and the user's description
 3. **Phase progression** — Questions naturally decrease as the lifecycle advances:
    - **Ideation**: Most questions. Business/strategic focus ("why?", "for whom?", "what market?")
@@ -510,7 +518,7 @@ Stage files list **topic areas and example questions** — they are guidance, no
 **How to apply**: When creating the questions file in Step 1, use the stage file's topic areas and examples as a starting point. Generate context-appropriate questions within the depth range. For Minimal, focus on the fewest questions that unblock artifact generation. For Comprehensive, proactively explore areas the user may not have considered.
 
 **Questions must be self-explanatory.** A question the user cannot answer without asking you to rephrase it is a defect, not a saved token. Every question MUST stand on its own:
-- **Expand every identifier in each question that uses it.** Never present a bare reference like `FR3`, `url1`, `NFR-2`, or `unit-4` as if the user carries the mapping. Write the thing it names, then the tag once in parentheses — "the requirement that the export must finish within 5 minutes (FR3)" — not "Is FR3 still correct?".
+- **Expand every identifier in each question that uses it.** Never present a bare reference like `FR3`, `url1`, `NFR2`, or `unit-4` as if the user carries the mapping. Write the thing it names, then the tag once in parentheses — "the requirement that the export must finish within 5 minutes (FR3)" — not "Is FR3 still correct?".
 - **Give each question one line of context** — why it is being asked or what depends on the answer — when the reason is not obvious from the prompt itself. "We found two conflicting retention values in the requirements (30 days vs 90 days); which governs?" beats "What is the retention period?".
 - **Prefer a concrete phrasing over an abstract one.** Ask about the actual decision in the user's domain terms, not the framework's internal vocabulary. If you would need to explain the question when asked to rephrase it, phrase it that clear way the first time.
 
@@ -548,7 +556,7 @@ record the new choice the same way, with `--on-instruction '<their words>'`, so
 the later stages use it too.
 
 **Step 3a: If "Guide me" (interactive mode):**
-- Present questions as structured questions in batches (batching limits are harness-specific — see the question-rendering annex)
+- Present questions as structured questions in batches, each with the trade its heading names in front of its text (Step 1; none when the heading has none; batching limits are harness-specific — see the question-rendering annex)
 - Where the tool shows questions as a numbered list, number every option and never ask for a file letter: a batch ends with "Reply with each question's number and the number of your choice (for example Q1: 2, Q2: 1), or just tell me." and a single question with "Reply with a number (or just tell me)."
 - For questions with 5+ options (single-select or multi-select): present ALL answer options, splitting across multiple structured questions if the harness's per-question option limit requires it (e.g., options A-D first, then options E+ in a follow-up). The user must see every option to make an informed choice. The file retains the full option set as the authoritative record.
 - Every structured question offers an "Other" escape (built into the harness UI or rendered as an explicit option per the annex). In interactive mode, when the user selects "Other" and answers in their own words, those words are their answer for that question. When they select it to ask about the question or talk it through, engage in conversation, then record what they settle on before continuing the batch. Explicitly tell the user this before the first batch, naming the escape the way their tool labels it (Claude Code's picker: "Type something"; Codex's question tool: "None of the above"; a numbered list: "Other"; the question-rendering annex gives it too): "Pick "[the escape's label]" on any question to answer in your own words or talk it through."
@@ -930,7 +938,7 @@ The orchestrator determines appropriate depth based on scope selection. Users ca
 
 ### Test Strategy
 
-Test volume scales with the active test strategy. The test strategy defaults to the current depth level unless the scope declares its own override. It can be overridden independently via `--test-strategy`, allowing combinations such as Standard depth with Minimal testing for a time-boxed workshop.
+Test volume scales with the active test strategy. The test strategy defaults to the current depth level unless the scope declares its own override. It can be overridden independently via `--test-strategy`, allowing combinations such as Standard depth with Minimal testing for a time-boxed workshop. An isolated `--single` run typed with `--depth` or `--test-strategy` carries them on its run-stage (`depth`, `test_strategy`); for that run they win over `aidlc-state.md`, which the run never changes.
 
 **Minimal — Nyquist model** (inspired by GSD's Nyquist validation layer):
 

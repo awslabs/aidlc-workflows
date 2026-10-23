@@ -8,8 +8,6 @@
 
 import { guardMatrixSuite } from "../harness/guard-matrix.ts";
 
-const BLOCK_7 = "a hand edit's change row names no changed path";
-
 guardMatrixSuite("Unit 1's approved code plan is edited while Unit 2 builds", [
   { cell: { policy: "off", review: "none", plan: "on" }, change: "plan-edit-after-approval-agent" },
   { cell: { policy: "off", review: "advisory", plan: "on" }, change: "plan-edit-after-approval-agent" },
@@ -20,13 +18,4 @@ guardMatrixSuite("Unit 1's approved code plan is edited while Unit 2 builds", [
   { cell: { policy: "strict", review: "none", plan: "on" }, change: "plan-edit-after-approval-agent" },
   { cell: { policy: "strict", review: "advisory", plan: "on" }, change: "plan-edit-after-approval-agent" },
   { cell: { policy: "strict", review: "adversarial", plan: "on" }, change: "plan-edit-after-approval-agent" },
-  { cell: { policy: "off", review: "none", plan: "on" }, change: "plan-edit-after-approval-hand" },
-  { cell: { policy: "off", review: "advisory", plan: "on" }, change: "plan-edit-after-approval-hand", recordBlocked: BLOCK_7 },
-  { cell: { policy: "off", review: "adversarial", plan: "on" }, change: "plan-edit-after-approval-hand", recordBlocked: BLOCK_7 },
-  { cell: { policy: "relaxed", review: "none", plan: "on" }, change: "plan-edit-after-approval-hand" },
-  { cell: { policy: "relaxed", review: "advisory", plan: "on" }, change: "plan-edit-after-approval-hand", recordBlocked: BLOCK_7 },
-  { cell: { policy: "relaxed", review: "adversarial", plan: "on" }, change: "plan-edit-after-approval-hand", recordBlocked: BLOCK_7 },
-  { cell: { policy: "strict", review: "none", plan: "on" }, change: "plan-edit-after-approval-hand" },
-  { cell: { policy: "strict", review: "advisory", plan: "on" }, change: "plan-edit-after-approval-hand" },
-  { cell: { policy: "strict", review: "adversarial", plan: "on" }, change: "plan-edit-after-approval-hand" },
 ]);

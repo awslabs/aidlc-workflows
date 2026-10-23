@@ -44,6 +44,8 @@ function traceFixture(root: string): string[] {
     "nested/tui-drive-session/deeper/output.log",
     "e2e-artifacts/traces/raw.txt",
     "nested/e2e-artifacts/run/harness/traces/raw.bin",
+    "leg-evidence/not-kept.txt",
+    "nested/e2e-artifacts/t/attempt-1/leg-evidence/audit/0123456789ab/aidlc/spaces/default/audit/host-a.md",
   ];
   for (const path of paths) put(root, path, "Bearer fixture-trace\n");
   put(root, "nested/traces/summary.txt", "safe transcript summary\n");

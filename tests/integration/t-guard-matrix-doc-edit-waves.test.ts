@@ -9,8 +9,6 @@
 
 import { guardMatrixSuite } from "../harness/guard-matrix.ts";
 
-const BLOCK_7 = "a hand edit's change row names no changed path";
-
 guardMatrixSuite("Unit 1's functional design is edited while Unit 2 builds, stage by stage", [
   { cell: { policy: "off", review: "none", plan: "on" }, change: "doc-edit-agent", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
   { cell: { policy: "off", review: "advisory", plan: "on" }, change: "doc-edit-agent", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
@@ -21,13 +19,4 @@ guardMatrixSuite("Unit 1's functional design is edited while Unit 2 builds, stag
   { cell: { policy: "strict", review: "none", plan: "on" }, change: "doc-edit-agent", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
   { cell: { policy: "strict", review: "advisory", plan: "on" }, change: "doc-edit-agent", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
   { cell: { policy: "strict", review: "adversarial", plan: "on" }, change: "doc-edit-agent", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
-  { cell: { policy: "off", review: "none", plan: "on" }, change: "doc-edit-hand", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
-  { cell: { policy: "off", review: "advisory", plan: "on" }, change: "doc-edit-hand", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time", recordBlocked: BLOCK_7 },
-  { cell: { policy: "off", review: "adversarial", plan: "on" }, change: "doc-edit-hand", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time", recordBlocked: BLOCK_7 },
-  { cell: { policy: "relaxed", review: "none", plan: "on" }, change: "doc-edit-hand", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
-  { cell: { policy: "relaxed", review: "advisory", plan: "on" }, change: "doc-edit-hand", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time", recordBlocked: BLOCK_7 },
-  { cell: { policy: "relaxed", review: "adversarial", plan: "on" }, change: "doc-edit-hand", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time", recordBlocked: BLOCK_7 },
-  { cell: { policy: "strict", review: "none", plan: "on" }, change: "doc-edit-hand", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
-  { cell: { policy: "strict", review: "advisory", plan: "on" }, change: "doc-edit-hand", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
-  { cell: { policy: "strict", review: "adversarial", plan: "on" }, change: "doc-edit-hand", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
 ]);

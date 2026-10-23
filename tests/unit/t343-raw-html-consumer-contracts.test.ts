@@ -1,5 +1,5 @@
 // covers: function:summaryConfirmationContentHash, function:summaryConfirmationAnswer,
-// function:memorySectionBody, function:questionsFileApproved,
+// function:memorySectionBody,
 // function:questionsFilePlannedSource, function:codeGenerationPlanApprovalQuestionEvidence
 
 import { describe, expect, test } from "bun:test";
@@ -19,7 +19,6 @@ import {
 import {
   codeGenerationPlanApprovalQuestionEvidence,
   codeGenerationRecordDir,
-  questionsFileApproved,
   questionsFilePlannedSource,
   renderTestingContract,
   resolveTestingPosture,
@@ -118,14 +117,6 @@ describe("t343 raw HTML consumer contracts", () => {
       .toBe("- **Mode**: strict");
     expect(memorySectionBody(`## Change Control\n${rawHtml("- **Mode**: relaxed")}- **Mode**: strict\n`, "## Change Control").trim())
       .toBe("- **Mode**: strict");
-  });
-
-  test("latest Plan Approval ignores raw HTML headings and answers", () => {
-    const approval = "## Plan Approval\n[Answer]: Approve Plan";
-    expect(questionsFileApproved(rawHtml(approval))).toBe(false);
-    expect(questionsFileApproved(`${approval}\n`)).toBe(true);
-    expect(questionsFileApproved(`${approval}\n\n${rawHtml("## Plan Approval\n[Answer]: Request Changes")}`))
-      .toBe(true);
   });
 
   test("Planned Source selection ignores a raw HTML tag and selects the visible one", () => {

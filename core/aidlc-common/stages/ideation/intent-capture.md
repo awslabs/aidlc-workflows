@@ -168,7 +168,8 @@ Apply this grounding contract to both artifacts:
    `[Q<n>]`. Without a pasted document, `[desc]` may ground the user's request.
 3. Every substantive claim block — a paragraph, list item, or table data row —
    MUST carry one or more inline source tags.
-4. `[scope]` proves only workflow-selected scope. Label it
+4. `[scope]` proves only the workflow-selected scope, so it goes only on the
+   Initial Scope Signal line that names that scope, labelled
    `workflow-selected`; use the boundary question's `[Q<n>]` tag for any
    user-confirmed product boundary.
 5. Never turn an unselected option into an exclusion or requirement.

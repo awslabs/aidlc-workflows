@@ -18,6 +18,7 @@ import { basename, join } from "node:path";
 import {
   AUDIT_TRAIL_REFUSAL,
   RUNTIME_INTEGRITY_REFUSAL,
+  refuseRuntimeIntegrityViolation,
   runtimeIntegrityViolationKind,
   violatesRuntimeIntegrity,
 } from "../../dist/claude/.claude/hooks/runtime-integrity.ts";
@@ -130,6 +131,36 @@ describe("t349 audit trail guard: file-write tools", () => {
     expect(kind("Read", { file_path: SHARD })).toBeNull();
     expect(kind("Grep", { pattern: "GATE_APPROVED", path: AUDIT })).toBeNull();
     expect(kind("Glob", { pattern: `${AUDIT}/*.md` })).toBeNull();
+  });
+
+  test("a refusal names the path that matched, for a guarded write and for content that reaches hooks", () => {
+    const captured = (input: Record<string, unknown>): string => {
+      const original = process.stderr.write;
+      let out = "";
+      process.stderr.write = ((chunk: unknown) => {
+        out += String(chunk);
+        return true;
+      }) as typeof process.stderr.write;
+      try {
+        expect(refuseRuntimeIntegrityViolation({
+          hook_event_name: "PreToolUse",
+          cwd: CWD,
+          ...input,
+        } as never)).toBe(true);
+      } finally {
+        process.stderr.write = original;
+      }
+      return out;
+    };
+    expect(captured({ tool_name: "Write", tool_input: { file_path: "aidlc/.aidlc-sessions/foo.json" } }))
+      .toContain("Matched: aidlc/.aidlc-sessions/foo.json.");
+    expect(captured({
+      tool_name: "Write",
+      tool_input: {
+        file_path: "infra/aws/deploy.sh",
+        content: "printf x > .claude/hooks/aidlc-write-audit-log.ts\n",
+      },
+    })).toContain("Matched: .claude/hooks/aidlc-write-audit-log.ts.");
   });
 
   test("runtime records still classify as runtime, ahead of the audit class", () => {

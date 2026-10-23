@@ -2,8 +2,8 @@
 
 Changes reach users through this sequence:
 
-**Pull request → AI review and PR checks → merge to `main` → optional preview
-validation or stable release.**
+**Pull request → AI review and PR checks → merge to `main` → published preview
+→ stable promotion.**
 
 `main` is the integration branch. A merge makes a change available for the next
 preview; publishing a stable release is a separate maintainer decision. This
@@ -19,7 +19,7 @@ you tested.
 
 Ordinary PRs leave the version in `core/tools/aidlc-version.ts`, the README
 version badge, and release entries in `CHANGELOG.md` unchanged. Maintainers
-update those together in a release-preparation PR.
+update those together during preview promotion and its metadata synchronization PR.
 
 Two kinds of feedback arrive before merge:
 
@@ -138,8 +138,8 @@ gh workflow run full-suite.yml --ref '<candidate-branch>' \
 ```
 
 Every job uses the resolved commit SHA. Stable publication separately requires
-a tagged commit on `main` and evidence from a trusted workflow on `main`;
-a candidate-branch run does not qualify for publication.
+a published preview whose source is on `main`; an unmerged candidate run is not
+a published preview.
 
 To reproduce a deterministic failure on one fresh runner, dispatch the shared
 deterministic workflow directly:
@@ -195,8 +195,8 @@ a stable release it holds publication back, like the lifecycle checks. Its log
 names the harness and step that failed. Rerun the job only for a passing
 problem such as a download that failed. A stable release runs on its tagged
 commit, so a fault in the build needs the fix on `main` and a new
-release-preparation PR, version and tag; the next nightly preview runs the
-check again on its own.
+preview, version and promotion; the next nightly preview runs the check again
+on its own.
 
 PR/merge CI and manual Full Suite `full_verification` share
 [one deterministic test definition](.github/workflows/deterministic-tests.yml).
@@ -204,9 +204,9 @@ Each call owns its checkout. Default PR CI includes Linux integration; the merge
 queue and expanded manual CI also run deterministic E2E. Ordinary nightly and
 release Full Suite runs do not repeat those tiers or production-guard jobs.
 
-Hosted live coverage uses 27 jobs: on each existing OS, two Claude SDK shards
-(five on Linux), three Claude TUI shards, one Codex shard, one Copilot CLI shard
-and one opencode shard. Each shard runs
+Hosted live coverage uses 30 jobs: on each existing OS, two Claude SDK shards
+(five on Linux, three on Windows), three Claude TUI shards, one Codex shard (two
+on Linux and Windows), one Copilot CLI shard and one opencode shard. Each shard runs
 at most two files concurrently, restoring the checkout and application home
 between files and retrying only a failed file after confirmed cleanup. Platform
 preparation is independent, so Linux and Windows do not wait for macOS.
@@ -237,44 +237,104 @@ testing, cancel that run.
 To try a published preview, follow the
 [preview-channel instructions](docs/guide/18-install-and-lifecycle.md#release-channels).
 
-## 4. Release to production from an approved source
+## 4. Promote a preview to production
 
-The production channel is **stable**. By maintainer decision on 2026-09-26,
-reversing the 2026-09-21 decision, stable publication requires a passing
-release-purpose Full Suite for the exact tagged commit. Maintainers select a release-preparation
-commit on `main` whose required branch checks passed and publish it through the
-[Release workflow](.github/workflows/release.yml). Stable assets are rebuilt
-from that commit; the workflow does not rename or republish preview binaries.
+Stable releases start from the **commit that produced a published preview**.
+The promotion adds one commit containing the version, README badge, CHANGELOG
+entry and publication controls. Later product changes on `main` are excluded.
+The stable binaries are rebuilt with the final version; preview assets are not
+renamed or reused.
 
-1. **Prepare the release in a PR.** Choose the stable version and update
-   `core/tools/aidlc-version.ts`, the README badge, and the matching changelog
-   entry together. Summarize changes since the previous stable release and
-   include any upgrade instructions. Review and merge this PR to `main`.
-2. **Confirm the release commit.** Verify that the release-preparation PR passed
-   its required branch checks and select its exact commit on `main`. On that
-   commit, run the Kiro CLI release journey on a machine with a signed-in Kiro
-   CLI and post its one-line result as a comment on the release-preparation PR
-   ([Kiro CLI release pass](docs/reference/09-testing.md)).
-3. **Push the matching stable tag.** Tag that commit as `vX.Y.Z`, matching the
-   version in `core/tools/aidlc-version.ts`. The commit must be contained in
-   `main`, but it does not need to remain the tip.
-4. **Monitor Release.** The tag push validates the tag and source, then reuses a
-   passing Full Suite result for the tagged commit or runs the Full Suite
-   itself, while it runs contract checks, builds native assets, and checks
-   installers, lifecycle flows, checksums, and provenance. Publication waits for
-   **Require a passing Full Suite** and runs through the `release` environment;
-   complete any approval configured there.
-5. **Verify publication.** Confirm the workflow succeeds and the stable GitHub
-   Release contains the binaries, runtime archives, installers, `version.json`,
-   checksums, and provenance bundle.
+1. **List previews.** Run **Promote preview** on `main` with all inputs empty.
+   Its summary lists every published preview, source commit, compatibility with
+   the current release tooling and recorded warnings. Incompatible previews stay
+   listed with the reason; preparation rejects them before reserving a version.
+   A published preview is not automatically an approved preview.
+   You can also list them locally:
 
-A passing `full-suite-result` from a successful preview of the release commit,
-or from a manual `full-suite.yml` dispatch on `main` with `ref=<sha>`, is
-reused. Without one, the release runs the Full Suite and takes hours longer, so
-let the nightly preview build the release commit first when you can. A tag
-outside `main` fails validation.
+   ```bash
+   bun scripts/release-promotion.ts list --repository awslabs/aidlc-workflows
+   ```
+
+2. **Choose the preview, version and notes.** Review the preview's existing test
+   report and the manual Kiro release-journey results for its source commit,
+   one for `kiro` and one for `kiro-ide`. Record both and the source SHA in the
+   selected preview's release notes. Reuse existing results for that SHA; if
+   missing, run the
+   [Kiro journey](docs/reference/09-testing.md#nightly-full-suite-matrix-and-provisioning)
+   on that source before selecting it. Put the stable release notes in a
+   file, in the entry shape of the Release Metadata Policy in
+   [AGENTS.md](AGENTS.md): the line `Compatibility: refresh only`,
+   `Compatibility: refresh plus a step` or `Compatibility: breaking for
+   scripts`; the summary paragraph; for breaking for scripts, one paragraph
+   saying who is affected; each extra upgrade step as a paragraph starting
+   with its bold label, such as `**Plugins:**`; then the bullets under
+   `### <group>` headings, the `Breaking for scripts:` bullets last, under
+   `### Script compatibility`. The stable page adds the upgrade and install
+   commands itself.
+
+   Make the contributor list on your machine. This command is the only way to
+   make it: it runs `.git/info/scan-private-names` and leaves out any login
+   the scan flags, and with no scanner it prints nothing.
+
+   ```bash
+   bun scripts/release-promotion.ts contributors --repository awslabs/aidlc-workflows \
+     --preview v2.11.1-preview.20261016.1 --version 2.11.1 >contributors.txt
+   ```
+
+   Read the exact page the promotion will publish:
+
+   ```bash
+   bun scripts/release-promotion.ts page --repository awslabs/aidlc-workflows \
+     --preview v2.11.1-preview.20261016.1 --version 2.11.1 \
+     --notes-file release-notes.md --contributors-file contributors.txt
+   ```
+
+   Then dispatch:
+
+   ```bash
+   gh workflow run promote-release.yml --ref main \
+     -f preview=v2.11.1-preview.20261016.1 \
+     -f version=2.11.1 -F notes=@release-notes.md -F contributors=@contributors.txt
+   ```
+
+   The same fields are available in Actions. GitHub's input choices are static,
+   so the preview tag is a text field and the empty dispatch provides the live
+   list. Supply preview, version and notes to promote; a partial submission
+   names the missing fields and creates no tag. Without `contributors` the
+   page has no contributor sections. The stable version may be a patch, minor
+   or major; it must be newer than the source version and published stable releases.
+
+3. **Follow the Release run.** Preparation creates the stable tag and explicitly
+   dispatches `release.yml` on it. That preserves the tag and source identity
+   expected by installed clients' provenance checks. The stable build checks
+   the metadata-only relationship, packaging determinism, native binaries,
+   installers, lifecycle flows, upgrades, checksums and provenance. It does not
+   rerun PR CI or Full Suite. Existing test failures remain on the preview's
+   page, the promotion record keeps their warning lines, and the stable page
+   links that preview; selecting a preview is the maintainer's release
+   decision, not a new passing test result. The `release` environment's existing
+   publication approval still applies. The release publishes the page `page`
+   printed, and nobody edits it afterwards.
+
+4. **Record the version on main.** After publication, **Prepare main version
+   update** pushes `release-metadata/vX.Y.Z` and provides a link to open its PR.
+   Open and merge that metadata-only PR through the normal branch checks. It
+   keeps later product changes and README content on `main`. It never moves
+   `main` back to the preview or downgrades a newer source version. If needed,
+   rerun just this step or run:
+
+   ```bash
+   bun scripts/release-promotion.ts sync --tag v2.11.1 \
+     --repository awslabs/aidlc-workflows
+   ```
+
+A retry before publication reuses a reserved tag only when its verified preview,
+version, notes and contributor list match. A different decision needs a different version; tags
+and published assets are never overwritten. A failed build can be retried with
+`gh workflow run release.yml --ref vX.Y.Z`. Preparation success means the build
+was dispatched, not that publication succeeded.
 
 See [Creating a release](docs/reference/19-supply-chain-security.md#creating-a-release)
-for tagging commands, asset details, and recovery guidance. The
-[`release-pr.yml` workflow](.github/workflows/release-pr.yml) is a dispatcher
-for the `v1` line; it does not prepare releases for `main`.
+for the source and provenance contract. `release-pr.yml` remains a dispatcher
+for the `v1` line.

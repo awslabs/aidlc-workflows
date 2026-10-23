@@ -1,16 +1,16 @@
-// Test-duration weights for CI scheduling. Weights only balance unit shards and
-// order integration files; they never select, skip, or fail a test.
+// Test-duration weights for CI scheduling. Weights balance unit/integration
+// shards and order integration files; they never remove a test from the suite.
 //
 //   refresh <evidence-dir>       rewrite the checked-in weights from downloaded
-//                                deterministic CI evidence (each file at its
-//                                slowest OS)
+//                                deterministic CI evidence (per OS, with a
+//                                slowest-OS fallback for unmeasured files)
 //   report <tier> <stamp-file>   warn about files that outgrew their weight;
 //                                always exits 0, because a stale weight only
 //                                makes CI slower
 import { appendFileSync, existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
-  type OrderWeights, readSummaryRows, type ShardConfig, validateShardConfig,
+  type OrderWeights, readSummaryRows, shardConfigForPlatform, type ShardConfig, validateShardConfig,
 } from "../tests/lib/test-sharding.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
@@ -85,6 +85,19 @@ export function slowestOsWeights(samples: Map<string, Map<string, number[]>>): R
   return weights;
 }
 
+export function platformUnitWeights(samples: Map<string, Map<string, number[]>>): Record<string, Record<string, number>> {
+  const result: Record<string, Record<string, number>> = {};
+  for (const [os, platform] of Object.entries({ Linux: "linux", macOS: "darwin", Windows: "win32" })) {
+    const weights: Record<string, number> = {};
+    for (const [name, byOs] of samples) {
+      const values = byOs.get(os);
+      if (values?.length) weights[`${name}.test.ts`] = Math.max(0.1, Math.round(median(values) * 10) / 10);
+    }
+    if (Object.keys(weights).length) result[platform] = weights;
+  }
+  return result;
+}
+
 /** Result-row names of the current integration tier, as summaries print them. */
 export function integrationNames(repoRoot: string): string[] {
   const names = readdirSync(join(repoRoot, "tests", "integration"))
@@ -138,7 +151,15 @@ export function refreshWeights(evidenceRoot: string, repoRoot = REPO_ROOT): { un
     weights: merged(unitFiles, measuredUnit, unit.weights),
     affinityGroups: unit.affinityGroups,
   };
+  const measuredPlatforms = platformUnitWeights(samples.unit);
+  nextUnit.platformWeights = Object.fromEntries(
+    [...new Set([...Object.keys(unit.platformWeights ?? {}), ...Object.keys(measuredPlatforms)])].sort()
+      .map((platform) => [platform, merged(unitFiles, measuredPlatforms[platform] ?? {}, unit.platformWeights?.[platform] ?? {})]),
+  );
   validateShardConfig(unitFiles, nextUnit);
+  for (const weights of Object.values(nextUnit.platformWeights)) {
+    validateShardConfig(unitFiles, { ...nextUnit, weights });
+  }
 
   const integrationPath = join(repoRoot, INTEGRATION_WEIGHTS);
   const previous = existsSync(integrationPath)
@@ -181,7 +202,8 @@ export function reportDrift(tier: WeightTier, stampFile: string, env = process.e
   try {
     const summary = summaryFromStamp(stampFile, join(repoRoot, "tests", "logs"));
     if (!summary) return [`Test weights: no ${tier} summary to check.`];
-    const config = JSON.parse(readFileSync(join(repoRoot, tier === "unit" ? UNIT_WEIGHTS : INTEGRATION_WEIGHTS), "utf8")) as OrderWeights;
+    const raw = JSON.parse(readFileSync(join(repoRoot, tier === "unit" ? UNIT_WEIGHTS : INTEGRATION_WEIGHTS), "utf8"));
+    const config: OrderWeights = tier === "unit" ? shardConfigForPlatform(raw as ShardConfig, process.platform) : raw;
     const drift = weightDrift(readFileSync(summary, "utf8"), tier, config);
     const os = env.RUNNER_OS ?? process.platform;
     if (drift.length === 0) return [`Test weights: every ${tier} file ran within its weight on ${os}.`];

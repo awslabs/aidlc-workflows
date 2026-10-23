@@ -641,21 +641,23 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     const { project, globalFile, env } = setupProject();
     const repo = fileURLToPath(new URL("../../", import.meta.url));
     cpSync(join(repo, "dist", "kiro-ide"), project, { recursive: true });
-    cpSync(join(repo, "dist", "plugins", "test-pro", "kiro-ide"), project, { recursive: true });
+    // The drop is one copy of the projection's .kiro folder; the registration
+    // runs the launcher in the plugin's own folder.
+    cpSync(join(repo, "dist", "plugins", "test-pro", "kiro-ide", ".kiro"), join(project, ".kiro"), { recursive: true });
     const composeEnv: NodeJS.ProcessEnv = { ...process.env, PATH: "" };
     for (const name of ["AIDLC_HARNESS_DIR", "AIDLC_HARNESS_NAME", "AIDLC_PLUGIN_ROOT", "AIDLC_PROJECT_DIR", "CLAUDE_PLUGIN_ROOT", "CLAUDE_PROJECT_DIR", "PLUGIN_ROOT"]) {
       delete composeEnv[name];
     }
-    const compose = spawnSync(process.execPath, ["./hooks/aidlc-plugin-compose.ts", ".kiro", "kiro-ide"], {
+    const compose = spawnSync(process.execPath, ["./.kiro/aidlc-plugins/aidlc-test-pro/hooks/aidlc-plugin-compose.ts", ".kiro", "kiro-ide"], {
       cwd: project,
       encoding: "utf-8",
       env: composeEnv,
     });
     expect(compose.status, compose.stderr).toBe(0);
-    // With no aidlc on PATH the launcher ran the compose hook itself, not
-    // `plugin sync`: compose records the files it installed, but only sync
-    // writes the composition stamp.
-    expect(existsSync(join(project, ".kiro", "tools", "data", "plugin-compose-test-pro.json"))).toBe(false);
+    // With no aidlc on PATH the launcher ran the project's own `plugin sync`
+    // with Bun: it records the files it installed and writes the composition
+    // stamp, as a native install does.
+    expect(existsSync(join(project, ".kiro", "tools", "data", "plugin-compose-test-pro.json"))).toBe(true);
     expect(existsSync(join(project, ".kiro", "tools", "data", "plugin-owned-test-pro.json"))).toBe(true);
 
     const cases: [rule: string, folder: string][] = [

@@ -12,7 +12,7 @@ import {
 } from "../../scripts/ci-test-weights.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
-  orderLongestFirst, parseOrderWeights, readSummaryRows, type ShardConfig, validateShardConfig,
+  assignWeightedShards, orderLongestFirst, parseOrderWeights, readSummaryRows, shardConfigForPlatform, type ShardConfig, validateShardConfig,
 } from "../lib/test-sharding.ts";
 
 const roots: string[] = [];
@@ -45,6 +45,26 @@ function artifact(root: string, name: string, rows: Array<[string, string, numbe
 }
 
 describe("summary rows and longest-first order", () => {
+  test("platform timings reduce imbalance without changing inventory or affinity", () => {
+    const files = ["a", "b", "c", "d", "producer", "consumer"];
+    const config: ShardConfig = {
+      defaultSeconds: 1,
+      weights: { a: 100, b: 90, c: 80, d: 70 },
+      platformWeights: { linux: { a: 1, b: 90, c: 1, d: 70 } },
+      affinityGroups: [["producer", "consumer"]],
+    };
+    const linux = shardConfigForPlatform(config, "linux");
+    const before = assignWeightedShards(files, 2, config);
+    const after = assignWeightedShards(files, 2, linux);
+    const duration = (shards: string[][]) => Math.max(...shards.map((shard) =>
+      shard.reduce((sum, file) => sum + (linux.weights[file] ?? 1), 0)));
+    expect(duration(after)).toBeLessThan(duration(before));
+    expect(after.flat().sort()).toEqual(files.toSorted());
+    expect(after.find((shard) => shard.includes("producer"))).toContain("consumer");
+    expect(shardConfigForPlatform(config, "unmeasured").weights).toEqual(config.weights);
+    expect(linux.weights).toEqual({ a: 1, b: 90, c: 1, d: 70 });
+  });
+
   test("reads every per-file row with its status and raw duration", () => {
     expect(readSummaryRows(summary([["t08", "PASS", 1.5], ["t-live", "SKIP", 0], ["t09", "FAIL", 22.25]]))).toEqual([
       { name: "t08", status: "PASS", seconds: 1.5, duration: "1.5" },
@@ -84,6 +104,15 @@ describe("summary rows and longest-first order", () => {
     const config = JSON.parse(readFileSync(join(REPO_ROOT, "tests/unit-shard-weights.json"), "utf8")) as ShardConfig;
     const unit = readdirSync(join(REPO_ROOT, "tests/unit")).filter((file) => file.endsWith(".test.ts"));
     expect(() => validateShardConfig(unit, config)).not.toThrow();
+    for (const platform of ["linux", "darwin", "win32"]) {
+      const selected = shardConfigForPlatform(config, platform);
+      expect(() => validateShardConfig(unit, selected)).not.toThrow();
+      const shards = assignWeightedShards(unit.sort(), 16, selected);
+      expect(shards.flat().sort()).toEqual(unit);
+      expect(new Set(shards.flat()).size).toBe(unit.length);
+      const producer = shards.find((shard) => shard.includes("t238-build-binaries.test.ts"))!;
+      expect(producer.indexOf("t249-copilot-adapter.test.ts")).toBeGreaterThan(producer.indexOf("t238-build-binaries.test.ts"));
+    }
     expect(config.affinityGroups).toContainEqual(["t238-build-binaries.test.ts", "t249-copilot-adapter.test.ts"]);
   });
 });
@@ -123,6 +152,10 @@ describe("refresh", () => {
       // t-c keeps its old weight (its only row failed); t-gone is dropped; t-new stays unweighted.
       weights: { "t-a.test.ts": 110, "t-b.test.ts": 10, "t-c.test.ts": 40 },
       affinityGroups: [["t-a.test.ts", "t-b.test.ts"]],
+      platformWeights: {
+        darwin: { "t-a.test.ts": 30, "t-b.test.ts": 10 },
+        win32: { "t-a.test.ts": 110, "t-b.test.ts": 3 },
+      },
     });
     const integration = JSON.parse(readFileSync(join(root, INTEGRATION_WEIGHTS), "utf8"));
     expect(integration).toEqual({

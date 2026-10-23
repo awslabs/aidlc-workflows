@@ -25,9 +25,9 @@
 // Stop enforcement: session.idle is a REACTIVE event (opencode has no blocking
 // continue-workflow channel), so when the core continue-workflow hook answers {"decision":"block",
 // "reason":...} this plugin re-engages the loop by injecting the reason as a new
-// session prompt via the SDK client. The injected prompt carries the NUDGE
-// sentinel so the chat.message arm never mints HUMAN presence for it (a
-// synthetic nudge is not a human turn), and loop-guarding stays with the core
+// session prompt via the SDK client. The plugin knows that prompt by the id of
+// the part it sent, so the chat.message arm never mints HUMAN presence for it
+// (a synthetic nudge is not a human turn), and loop-guarding stays with the core
 // hook's run-mode-aware no-progress ceiling; this shim never counts. The
 // prompt's part is synthetic, so the agent reads it and the person's chat does
 // not show it. After the person stops a turn (Esc, a session.error
@@ -53,9 +53,11 @@
 //     but never scopes the main session.
 
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { isAbsolute, join } from "node:path";
+// emit.ts points this at the projected .aidlc/tools/ copy.
+import { windowsScriptLaunch } from "../../../core/tools/aidlc-executable-path.ts";
 
-const NUDGE_SENTINEL = "[aidlc-forwarding-nudge]";
 const PROJECTED_INVOKE = "{{INVOKE}}";
 const TRUSTED_NAMESPACE = "{{TRUSTED_NAMESPACE}}";
 const PROJECTED_TRUSTED_NAMESPACE = TRUSTED_NAMESPACE.startsWith("{{")
@@ -70,21 +72,30 @@ function runCoreHook(
   input: Record<string, unknown>,
   cwd: string,
   aidlcCommand: readonly string[],
+  platform: NodeJS.Platform,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    const [bin, ...prefix] = aidlcCommand;
     const hook = hookFile.replace(/^aidlc-/, "").replace(/\.ts$/, "");
+    const env = {
+      ...process.env,
+      AIDLC_PROJECT_DIR: cwd,
+      CLAUDE_PROJECT_DIR: cwd,
+    };
+    const [bin, ...prefix] = aidlcCommand;
     if (!bin) return resolve({ stdout: "", stderr: "", code: 0 });
+    // Windows starts the native install's aidlc.cmd only through cmd.exe; the
+    // project folder then goes by the environment above.
+    const viaCmd = windowsScriptLaunch(bin, [...prefix, "hook", hook], platform, env);
+    if (viaCmd === "refused") return resolve({ stdout: "", stderr: "", code: 0 }); // fail open
     try {
-      const child = spawn(bin, [...prefix, "hook", hook, "--project-dir", cwd], {
-        cwd,
-        stdio: ["pipe", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          AIDLC_PROJECT_DIR: cwd,
-          CLAUDE_PROJECT_DIR: cwd,
-        },
-      });
+      const child = viaCmd
+        ? spawn(viaCmd.file, viaCmd.args, {
+          cwd,
+          stdio: ["pipe", "pipe", "pipe"],
+          env: { ...env, ...viaCmd.env },
+          windowsVerbatimArguments: true,
+        })
+        : spawn(bin, [...prefix, "hook", hook, "--project-dir", cwd], { cwd, stdio: ["pipe", "pipe", "pipe"], env });
       let out = "";
       let err = "";
       child.stdout.on("data", (d: Buffer) => {
@@ -134,7 +145,7 @@ export type PluginInput = {
       get: (opts: { path: { id: string } }) => Promise<{ data?: { parentID?: string } }>;
       prompt: (opts: {
         path: { id: string };
-        body: { parts: Array<{ type: "text"; text: string; synthetic?: boolean }> };
+        body: { parts: Array<{ id?: string; type: "text"; text: string; synthetic?: boolean }> };
       }) => Promise<unknown>;
     };
     // opencode's merged settings; `shell` names the shell bash-tool commands run in.
@@ -541,7 +552,7 @@ export default async ({
     hookFile: string,
     input: Record<string, unknown>,
     _cwd = directory,
-  ) => runCoreHook(hookFile, input, directory, aidlcCommand);
+  ) => runCoreHook(hookFile, input, directory, aidlcCommand, platform);
 
   // The rebuild-stage-graph hook's only stdout on this harness is the
   // engine-error relay: one {"systemMessage": <exact directive.message>} line.
@@ -589,6 +600,10 @@ export default async ({
   // What the person typed through /aidlc, by session, set by opencode's own
   // command hook. Only the message carrying the part it added reads it.
   const typedCommands = new Map<string, string>();
+  // The ids of the nudge parts this plugin sent. opencode hands a part to
+  // chat.message with the id it was sent with (1.18.18), so the plugin knows
+  // its own nudge by that, never by its words.
+  const ownNudgeParts = new Set<string>();
   // The shell opencode runs bash-tool commands in, read once from its settings.
   // An unreadable setting reads every command strictly and is asked again.
   let dialect: ShellDialect | null = null;
@@ -671,8 +686,8 @@ export default async ({
       // Another message (a nudge sent at the same moment) leaves it for the command's own.
       if (typed !== null) typedCommands.delete(input.sessionID);
       // Never treat this plugin's own continue-workflow-nudge injection as a human turn.
+      if (output.parts.some((p) => p.id !== undefined && ownNudgeParts.delete(p.id))) return;
       const first = output.parts.find((p) => p.type === "text");
-      if (first?.text?.startsWith(NUDGE_SENTINEL)) return;
       if (!(await isMainSession(input.sessionID))) return;
       sawHumanTurn.add(input.sessionID);
       interrupted.delete(input.sessionID);
@@ -1087,9 +1102,11 @@ export default async ({
       // deliver the continuation's next idle while this promise is pending.
       if (nudgeReason) {
         // Synthetic: the agent reads it, the person's chat does not show it.
+        const id = `prt_${randomUUID()}`;
+        ownNudgeParts.add(id);
         await client.session.prompt({
           path: { id: sessionID },
-          body: { parts: [{ type: "text", text: `${NUDGE_SENTINEL} ${nudgeReason}`, synthetic: true }] },
+          body: { parts: [{ id, type: "text", text: nudgeReason, synthetic: true }] },
         });
       }
     },

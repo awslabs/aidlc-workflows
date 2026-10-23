@@ -286,7 +286,7 @@ export function nextKiroNumberedProseAnswer(
   }
   if (learningPromptIndex > approvalPromptIndex) {
     state.learningsAnswered += 1;
-    return /(?:Keep c\d+|Nothing to keep|discard (?:all|both))/i.test(screen)
+    return /(?:Keep c\d+|Keep none of these|Nothing to keep|discard (?:all|both))/i.test(screen)
       ? "Nothing to keep. Nothing to add."
       : "Nothing to add";
   }

@@ -642,25 +642,29 @@ describe("t325 atomic team Unit claims", () => {
         "**Iteration:** 1\n\n" +
         "### Findings\n\nNo blocking findings.\n",
     );
-    expect(
-      run(
-        LOG,
-        [
-          "review",
-          "--stage",
-          "functional-design",
-          "--reviewer",
-          "aidlc-architecture-reviewer-agent",
-          "--iteration",
-          "1",
-          "--verdict",
-          "READY",
-          "--unit",
-          "alpha",
-        ],
-        checkout,
-      ).status,
-    ).toBe(0);
+    const verdict = run(
+      LOG,
+      [
+        "review",
+        "--stage",
+        "functional-design",
+        "--reviewer",
+        "aidlc-architecture-reviewer-agent",
+        "--iteration",
+        "1",
+        "--verdict",
+        "READY",
+        "--unit",
+        "alpha",
+      ],
+      checkout,
+    );
+    expect(verdict.status, verdict.out).toBe(0);
+    // The verdict's step records the Unit's completion first, the step the
+    // route itself names for it; following it reaches the Unit gate.
+    const step = String(JSON.parse(verdict.stdout.trim().split("\n").at(-1) ?? "{}").agent_note);
+    const named = [...step.matchAll(/`([^`]+)`/g)].map((match) => match[1].replace(/^.* engine /, ""));
+    expect(named, step).toEqual(["state unit complete --stage functional-design --unit alpha", "orchestrate next"]);
     expect(
       run(
         STATE,
@@ -668,6 +672,9 @@ describe("t325 atomic team Unit claims", () => {
         checkout,
       ).status,
     ).toBe(0);
+    expect(nextDirective(checkout)).toMatchObject({
+      kind: "run-stage", stage: "functional-design", unit: "alpha", gate: true, unit_gate: "per-stage",
+    });
     expect(
       JSON.parse(
         run(

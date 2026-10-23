@@ -2,6 +2,8 @@
 // function:splitSlugList, function:composedPlanLabel, function:PLAN_NAME_PATTERN,
 // function:firstPlannedStageOfPhase, function:customPlanBase, function:customPlanStart,
 // function:guardPolicyAtLeast,
+// function:composerScoresPath, function:openComposerScores, function:takeComposerScores,
+// function:approvedComposerPlan,
 // function:saveComposedScope, function:writeCompiledGraphLocked,
 // function:delegatedLifecycleCommand,
 // subcommand:aidlc-graph:validate-grid, subcommand:aidlc-utility:intent-create,
@@ -18,7 +20,10 @@
 // work's plan as a durable scope record and projects it. Approved stage changes
 // and settings land in one recompose write, so a mixed approval is never left
 // half-applied, and next checks every depth, test-strategy, and stage value it
-// echoes into a command.
+// echoes into a command. The plan the composer validated keeps its scores on
+// its first audit entry, and no other plan or work picks them up (#2575). The
+// stage changes that plan's approval creates are the ones the validator kept
+// for its request, whatever list was typed on Approve.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -483,6 +488,40 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(previewed).toBe(executed.filter((n) => !n.startsWith("0.")).length);
   });
 
+  test("an empty --skip or --add list changes nothing, and the plan is still created", () => {
+    const proj = installedProject();
+    const forms: Array<[string[], string]> = [
+      [["--skip", "", "--add", "intent-capture"], "--add intent-capture"],
+      [["--skip", "--add", "intent-capture"], "--add intent-capture"],
+      [["--add", "intent-capture", "--skip"], "--add intent-capture"],
+      [["--skip", "deployment-pipeline", "--add", ""], "--skip deployment-pipeline"],
+      [["--skip", "deployment-pipeline", "--add"], "--skip deployment-pipeline"],
+    ];
+    for (const [lists, carried] of forms) {
+      const d = nextDirective(proj, ["--scope", "express", ...lists, "--", "fix the parser"]);
+      expect(d.kind, lists.join(" ")).toBe("print");
+      const creation = [...d.message.matchAll(/`([^`]*)`/g)].map((m) => m[1]).find((span) => span.includes("--scope express"));
+      expect(creation, d.message).toContain(carried);
+      expect(creation, d.message).not.toContain(carried.startsWith("--add") ? "--skip" : "--add");
+    }
+  });
+
+  test("a --skip or --add naming no stage, with no other list naming one, is refused as before and starts nothing", () => {
+    const proj = installedProject();
+    expect(runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix"]).status).toBe(0);
+    const forms: Array<[string[], string]> = [
+      [["--skip"], "--skip requires <stage,...>."],
+      [["--skip", ""], `--skip requires stage slugs; "" is not a stage.`],
+      [["--add"], "--add requires <stage,...>."],
+      [["--skip", "", "--add", ""], `--skip requires stage slugs; "" is not a stage.`],
+    ];
+    for (const [lists, message] of forms) {
+      const d = nextDirective(proj, lists);
+      expect(d.kind, lists.join(" ")).toBe("error");
+      expect(d.message).toBe(message);
+    }
+  });
+
   test("hostile depth, test-strategy, and stage values never reach a command", () => {
     const proj = createTestProject();
     tempDirs.push(proj);
@@ -680,6 +719,15 @@ describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
     const stages = grid["quick-fix"].stages;
     expect(stages[ADD]).toBe("EXECUTE");
     expect(stages["deployment-pipeline"]).toBe("SKIP");
+    // The count is the stages the saved plan runs after Initialization, the
+    // count its plan offer gives on existing code.
+    const graph = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "stage-graph.json"), "utf-8")) as Array<{
+      slug: string;
+      phase: string;
+    }>;
+    const runs = graph.filter((stage) => stage.phase !== "initialization" && stages[stage.slug] === "EXECUTE").length;
+    expect(saved.out).toContain(`Saved as scope quick-fix (${runs} stages, `);
+    expect(record).toContain(`scope: ${runs} stages.`);
     // The empty project scanned greenfield, which skips reverse-engineering for
     // this run only; the saved scope keeps it for the next project.
     expect(suffixOf(stateBefore, "reverse-engineering")).toBe("SKIP");
@@ -1051,5 +1099,305 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
     const dispatch = read("core/tools/aidlc-orchestrate.ts");
     expect(dispatch).toContain("a custom one starts from the classic scope's default, which the validator echoes as custom_start");
     expect(dispatch).not.toContain("a custom one the composer's choice");
+  });
+});
+
+describe("t351 (9) a tailored plan's scores are on its first audit entry (#2575)", () => {
+  // The front compose dispatch opens a score record for its request, the
+  // composer's `graph ars` fills it, and creation of the plan the composer
+  // validated writes the scores on WORKFLOW_STARTED and spends the record.
+  const SCORES = ["--iae", "0.35", "--csu", "0.39", "--ve", "0.40", "--r", "0.35", "--ua", "0.30"];
+  const RECORDED = "**ARS Scores**: IAE 0.35, CSU 0.39, VE 0.40, R 0.35, UA 0.30";
+  const engineDir = (proj: string) => join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-engine");
+  const recordOf = (proj: string) => join(engineDir(proj), "composer-scores.json");
+  const requestOf = (message: string): string => {
+    const id = /--request ([0-9a-f]{8})/.exec(message)?.[1];
+    expect(id, message).toBeDefined();
+    return id as string;
+  };
+  function compose(proj: string, args: string[] = ["compose", "fix the flaky date parser"]): string {
+    const d = nextDirective(proj, args);
+    expect(d.kind, d.message).toBe("print");
+    return requestOf(d.message);
+  }
+  function screen(proj: string, extra: string[] = ["--method", "codekb"]): void {
+    const ars = runTool(proj, "aidlc-graph.ts", ["ars", ...SCORES, "--project-type", "brownfield", ...extra]);
+    expect(ars.status, ars.out).toBe(0);
+  }
+  function propose(proj: string, grid: unknown): void {
+    mkdirSync(engineDir(proj), { recursive: true });
+    writeFileSync(join(engineDir(proj), "composer-proposal.json"), typeof grid === "string" ? grid : JSON.stringify({ stages: grid }));
+  }
+
+  test("the plan the composer validated records the five scores and the method, then the record is spent", () => {
+    const proj = installedProject();
+    const id = compose(proj);
+    expect(JSON.parse(readFileSync(recordOf(proj), "utf-8"))).toEqual({ request: id });
+    screen(proj);
+    propose(proj, composedGrid());
+    const created = createComposed(proj, ["--plan-name", "date-parser-fix", "--request", id]);
+    expect(created.status, created.out).toBe(0);
+    const audit = auditOf(proj);
+    expect(audit).toContain(RECORDED);
+    expect(audit).toContain("**ARS Method**: codekb");
+    expect(existsSync(recordOf(proj))).toBe(false);
+    // Nothing is added to what the person sees, and the work moves on.
+    expect(created.out).not.toContain("ARS");
+    const after = nextDirective(proj, []);
+    expect(after.kind).not.toBe("error");
+    expect(after.message).not.toContain("intent create");
+  });
+
+  test("a matched plan records them too, and a screen with no method leaves the method out", () => {
+    const proj = installedProject();
+    const id = compose(proj);
+    screen(proj, []);
+    propose(proj, stockGrid("bugfix"));
+    const created = runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix", "--request", id, "--label", "date parser"]);
+    expect(created.status, created.out).toBe(0);
+    expect(auditOf(proj)).toContain(RECORDED);
+    expect(auditOf(proj)).not.toContain("**ARS Method**");
+  });
+
+  test("an install with a stage switched off still records them (the plan is compared by its changes)", () => {
+    const proj = installedProject();
+    // A plugin selection marks a stage it leaves out `enabled: false`; the
+    // proposal still names it, from the scope grid.
+    const graphPath = join(proj, ".claude", "tools", "data", "stage-graph.json");
+    const graph = JSON.parse(readFileSync(graphPath, "utf-8")) as Array<{ slug: string; enabled?: boolean }>;
+    writeFileSync(graphPath, JSON.stringify(graph.map((s) => (s.slug === "market-research" ? { ...s, enabled: false } : s))));
+    const id = compose(proj);
+    screen(proj);
+    const grid = composedGrid();
+    expect(grid["market-research"]).toBe("SKIP");
+    propose(proj, grid);
+    const created = createComposed(proj, ["--request", id]);
+    expect(created.status, created.out).toBe(0);
+    expect(auditOf(proj)).toContain(RECORDED);
+  });
+
+  test("a report-only composition binds through the request its approval saved", () => {
+    const proj = installedProject();
+    const entry = compose(proj, ["compose", "--report", "scan.json"]);
+    screen(proj);
+    propose(proj, composedGrid());
+    const approval = nextDirective(proj, [
+      "--scope", "bugfix", "--add", ADD, "--skip", SKIP, "--plan-name", "date-parser-fix", "--request", entry, "--", "fix the parser",
+    ]);
+    expect(approval.kind, approval.message).toBe("print");
+    const described = requestOf(approval.message);
+    expect(described).not.toBe(entry);
+    const created = createComposed(proj, ["--plan-name", "date-parser-fix", "--request", described]);
+    expect(created.status, created.out).toBe(0);
+    expect(auditOf(proj)).toContain(RECORDED);
+  });
+
+  test("another plan for the same request, or other work, records no scores", () => {
+    // After a Reject the person names another plan for the same request.
+    const rejected = installedProject();
+    const id = compose(rejected);
+    screen(rejected);
+    propose(rejected, composedGrid());
+    const other = runTool(rejected, "aidlc-utility.ts", ["intent-create", "--scope", "feature", "--request", id, "--label", "date parser"]);
+    expect(other.status, other.out).toBe(0);
+    expect(auditOf(rejected)).not.toContain("**ARS Scores**");
+    expect(existsSync(recordOf(rejected))).toBe(false);
+    // A plan created for other work never takes an open record's scores.
+    const later = installedProject();
+    compose(later);
+    screen(later);
+    propose(later, composedGrid());
+    const plain = createComposed(later);
+    expect(plain.status, plain.out).toBe(0);
+    expect(auditOf(later)).not.toContain("**ARS Scores**");
+    expect(existsSync(recordOf(later))).toBe(true);
+  });
+
+  test("a missing or unreadable proposal writes no scores and stops nothing", () => {
+    for (const proposal of [null, "{"]) {
+      const proj = installedProject();
+      const id = compose(proj);
+      screen(proj);
+      if (proposal !== null) propose(proj, proposal);
+      const created = createComposed(proj, ["--request", id]);
+      expect(created.status, created.out).toBe(0);
+      expect(auditOf(proj)).not.toContain("**ARS Scores**");
+    }
+  });
+
+  test("a second dispatch opens a fresh record, and a mid-workflow compose opens none", () => {
+    const proj = installedProject();
+    compose(proj);
+    screen(proj);
+    const second = compose(proj, ["compose", "fix the date parser and its tests"]);
+    expect(JSON.parse(readFileSync(recordOf(proj), "utf-8"))).toEqual({ request: second });
+    propose(proj, composedGrid());
+    expect(createComposed(proj, ["--request", second]).status).toBe(0);
+    expect(existsSync(recordOf(proj))).toBe(false);
+    // The work now runs: a compose reshapes it, and its screen is not kept.
+    const reshape = nextDirective(proj, ["compose", "drop the deployment stages"]);
+    expect(reshape.kind, reshape.message).toBe("print");
+    expect(reshape.message).toContain("RUNNING workflow");
+    expect(existsSync(recordOf(proj))).toBe(false);
+    screen(proj);
+    expect(existsSync(recordOf(proj))).toBe(false);
+  });
+});
+
+describe("t351 (10) the plan the person approved is the plan created", () => {
+  // On Approve the agent types the custom plan's stage changes into the
+  // creation command. The validator already worked them out and keeps them for
+  // the request, so a list typed by hand that leaves a stage out still creates
+  // every stage the person approved.
+  const TASK = "harden the deployment pipeline and add observability for our existing service";
+  // The custom plan from the 2026-10-22 nightly (Codex, macOS): 18 stages after
+  // Initialization, Intent Capture first.
+  const RUNS = new Set([
+    "workspace-scaffold", "workspace-detection", "state-init", "intent-capture", "feasibility", "scope-definition",
+    "approval-handoff", "reverse-engineering", "practices-discovery", "requirements-analysis", "units-generation",
+    "contract-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation", "build-and-test",
+    "ci-pipeline", "deployment-pipeline", "deployment-execution", "observability-setup",
+  ]);
+  const SETTINGS = { sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on", collaborators: "off", review_cap: "advisory" };
+  const engineDir = (proj: string) => join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-engine");
+  type Validated = { base_scope?: string; plan_changes?: { skip: string[]; add: string[] }; creation_depth?: string };
+  type Printed = { kind: string; message: string; narration: string };
+
+  function plannedGrid(): Record<string, "EXECUTE" | "SKIP"> {
+    return Object.fromEntries(Object.keys(stockGrid("classic")).map((slug) => [slug, RUNS.has(slug) ? "EXECUTE" : "SKIP"]));
+  }
+  function compose(proj: string, task = TASK): string {
+    const d = nextDirective(proj, ["compose", task]);
+    expect(d.kind, d.message).toBe("print");
+    return /--request ([0-9a-f]{8})/.exec(d.message)?.[1] as string;
+  }
+  /** What the composer does before the gate: write its grid, validate it on its route. */
+  function validate(proj: string, proposal: Record<string, unknown>, route: string[]): Validated {
+    mkdirSync(engineDir(proj), { recursive: true });
+    writeFileSync(join(engineDir(proj), "composer-proposal.json"), JSON.stringify(proposal));
+    const run = runTool(proj, "aidlc-graph.ts", ["validate-grid", ...route]);
+    expect(run.status, run.out).toBe(0);
+    return JSON.parse(run.out.slice(run.out.indexOf("{"))) as Validated;
+  }
+  function next(proj: string, args: string[]): Printed {
+    const res = runOrchestrateNext(ORCH, proj, args, { cwd: proj, env: process.env });
+    const parsed = JSON.parse(res.out.split("\n").find((entry) => entry.trim().startsWith("{")) ?? "{}");
+    return { kind: String(parsed.kind), message: String(parsed.message ?? ""), narration: String(parsed.narration ?? "") };
+  }
+  /** The `intent create` command a creation print names, its placeholders filled. */
+  function creationOf(printed: Printed): string {
+    const span = [...printed.message.matchAll(/`([^`]*)`/g)].map((m) => m[1]).find((s) => s.includes("intent create"));
+    expect(span, printed.message).toBeDefined();
+    return span as string;
+  }
+  function runCreation(proj: string, printed: Printed): { status: number; out: string } {
+    const args = creationOf(printed).split(" intent create ")[1]
+      .replace(/--label "[^"]*"/, "--label hardening")
+      .replace(/--person-words '[^']*'/, "--person-words Approve")
+      .split(/\s+/).filter(Boolean);
+    return runTool(proj, "aidlc-utility.ts", ["intent-create", ...args]);
+  }
+  const lists = (changes: { skip: string[]; add: string[] }): string[] => [
+    ...(changes.skip.length > 0 ? ["--skip", changes.skip.join(",")] : []),
+    ...(changes.add.length > 0 ? ["--add", changes.add.join(",")] : []),
+  ];
+
+  for (const policy of ["off", "relaxed", "strict"] as const) {
+    test(`Guard Policy ${policy}: a typed list that leaves out Intent Capture still creates every approved stage`, () => {
+      const proj = installedProject();
+      const id = compose(proj);
+      const echoed = validate(
+        proj,
+        { stages: plannedGrid(), scopeSettings: SETTINGS, guardPolicy: policy, depth: "standard" },
+        ["--custom"],
+      );
+      const base = echoed.base_scope as string;
+      const approved = echoed.plan_changes as { skip: string[]; add: string[] };
+      expect(approved.add).toContain("intent-capture");
+      // The composer's screen after its validation keeps the plan too.
+      expect(runTool(proj, "aidlc-graph.ts", ["ars", "--iae", "0.45", "--csu", "0.6", "--ve", "0.7", "--r", "0.65", "--ua", "0.55", "--method", "fallback"]).status).toBe(0);
+      // The list the agent typed on Approve, Intent Capture left out.
+      const typed = { skip: approved.skip, add: approved.add.filter((slug) => slug !== "intent-capture") };
+      const printed = next(proj, [
+        "--scope", base, ...lists(typed),
+        ...(echoed.creation_depth ? ["--depth", echoed.creation_depth] : []),
+        ...(policy === "off" ? [] : ["--guard-policy", policy]),
+        "--request", id,
+      ]);
+      expect(printed.kind, printed.message).toBe("print");
+      const creation = creationOf(printed);
+      expect(creation).toContain(`--add ${approved.add.join(",")}`);
+      if (approved.skip.length > 0) expect(creation).toContain(`--skip ${approved.skip.join(",")}`);
+      expect(printed.narration).toContain("Setting up the plan you approved for this:");
+      const previewed = Number(/\((\d+) stages?, /.exec(printed.message)?.[1]);
+      const created = runCreation(proj, printed);
+      expect(created.status, created.out).toBe(0);
+      const state = stateOf(proj);
+      for (const slug of approved.add) expect(suffixOf(state, slug), slug).toBe("EXECUTE");
+      for (const slug of approved.skip) expect(suffixOf(state, slug), slug).toBe("SKIP");
+      // The count the person heard is the plan created.
+      const executed = (/^- \*\*Stages to Execute\*\*: (.+)$/m.exec(state)?.[1] ?? "")
+        .split(",").map((n) => n.trim()).filter((n) => n && !n.startsWith("0."));
+      expect(previewed).toBe(executed.length);
+      // The record names the plan approved at the gate, scores and all.
+      const audit = auditOf(proj);
+      expect(audit).toContain(`**Stages added**: ${approved.add.join(", ")}`);
+      expect(audit).toContain("**ARS Scores**");
+      // The work moves on to its first stage; creation is not offered again.
+      const after = next(proj, []);
+      expect(after.kind, after.message).not.toBe("error");
+      expect(after.message).not.toContain("intent create");
+    });
+  }
+
+  test("a matched plan is created as its stock scope, without a stage change typed beside it", () => {
+    const proj = installedProject();
+    const id = compose(proj, "fix the flaky date parser");
+    const bugfix = withEnvAndFreshCaches(POLICY_ENV, () => ({ settings: scopeSettingsOf("bugfix")!, policy: scopeGuardPolicyDefault("bugfix") }));
+    validate(proj, { stages: stockGrid("bugfix"), scopeSettings: bugfix.settings, guardPolicy: bugfix.policy }, ["--matched", "bugfix"]);
+    const printed = next(proj, ["--scope", "bugfix", "--skip", "deployment-pipeline", "--request", id]);
+    expect(printed.kind, printed.message).toBe("print");
+    expect(creationOf(printed)).not.toContain("--skip");
+    expect(printed.narration).toContain("Setting up a bugfix workflow for this:");
+  });
+
+  test("a report-only composition's approval creates the plan kept for the entry it was composed from", () => {
+    const proj = installedProject();
+    const d = nextDirective(proj, ["compose", "--report", "scan.json"]);
+    const entry = /--request ([0-9a-f]{8})/.exec(d.message)?.[1] as string;
+    const echoed = validate(proj, { stages: composedGrid(), scopeSettings: STOCK_ON, guardPolicy: "strict", depth: "standard" }, ["--custom", "--report"]);
+    const approved = echoed.plan_changes as { skip: string[]; add: string[] };
+    expect(approved.add).toContain(ADD);
+    const typed = { skip: approved.skip, add: approved.add.filter((slug) => slug !== ADD) };
+    const printed = next(proj, ["--scope", echoed.base_scope as string, ...lists(typed), "--request", entry, "--", "fix the parser"]);
+    expect(printed.kind, printed.message).toBe("print");
+    expect(creationOf(printed)).toContain(`--add ${approved.add.join(",")}`);
+  });
+
+  test("with no plan kept for this request and scope, the typed list stands", () => {
+    // A record an older version wrote: the request, no plan.
+    const older = installedProject();
+    const olderId = compose(older, "fix the flaky date parser");
+    writeFileSync(join(engineDir(older), "composer-proposal.json"), JSON.stringify({ stages: composedGrid() }));
+    expect(creationOf(next(older, ["--scope", "bugfix", "--add", ADD, "--skip", SKIP, "--request", olderId])))
+      .toContain(`--skip ${SKIP} --add ${ADD}`);
+
+    const proj = installedProject();
+    const id = compose(proj);
+    const echoed = validate(proj, { stages: plannedGrid(), scopeSettings: SETTINGS, guardPolicy: "off", depth: "standard" }, ["--custom"]);
+    const base = echoed.base_scope as string;
+    expect(base).not.toBe("feature");
+    // After a Reject the person names another plan with its own stage change.
+    expect(creationOf(next(proj, ["--scope", "feature", "--skip", "code-generation", "--request", id])))
+      .toContain("--skip code-generation");
+    // Or picks the plan's own base with no stage changes: its stock grid.
+    const plain = creationOf(next(proj, ["--scope", base, "--request", id]));
+    expect(plain).not.toContain("--add");
+    expect(plain).not.toContain("--skip");
+    // A later compose dispatch replaces the record, so the earlier request keeps its typed list.
+    compose(proj, "add observability only");
+    const approved = echoed.plan_changes as { skip: string[]; add: string[] };
+    const typed = { skip: approved.skip, add: approved.add.filter((slug) => slug !== "intent-capture") };
+    expect(creationOf(next(proj, ["--scope", base, ...lists(typed), "--request", id]))).toContain(`--add ${typed.add.join(",")}`);
   });
 });

@@ -142,8 +142,11 @@ interface Project {
   probeNext: () => Run;
   report: (args: string[]) => Run;
   stopHook: (entries: TranscriptEntry[], stopHookActive: boolean) => Run;
-  humanPick: (question: string, label: string) => Run;
+  // A pick in the question box; `labels` are the options it showed (only the picked one by default).
+  humanPick: (question: string, label: string, labels?: string[]) => Run;
   humanPrompt: (text: string) => Run;
+  // The agent's record of the remedy it read from the person's reply.
+  record: (details: string) => Run;
 }
 
 const RUNNER_GUARD_SKIPS = [
@@ -266,7 +269,7 @@ function project(): Project {
         }),
       );
     },
-    humanPick: (question, label) =>
+    humanPick: (question, label, labels = [label]) =>
       spawn(
         [BUN, join(dir, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
         env,
@@ -275,9 +278,9 @@ function project(): Project {
           hook_event_name: "PostToolUse",
           session_id: SESSION,
           tool_name: "AskUserQuestion",
-          tool_input: { questions: [{ question, options: [{ label }] }] },
+          tool_input: { questions: [{ question, options: labels.map((option) => ({ label: option })) }] },
           tool_response: {
-            questions: [{ question, options: [{ label }] }],
+            questions: [{ question, options: labels.map((option) => ({ label: option })) }],
             answers: { [question]: label },
           },
         }),
@@ -293,8 +296,19 @@ function project(): Project {
           prompt: text,
         }),
       ),
+    record: (details) =>
+      spawn(
+        [BUN, join(dir, ".claude", "tools", "aidlc-log.ts"), "answer", "--stage", "functional-design",
+          "--checkpoint", "guard-recovery", "--details", details, "--project-dir", dir],
+        env,
+        dir,
+      ),
   };
 }
+
+// A remedy as the recovery question shows it.
+const shown = (remedy: Record<string, unknown> | undefined): string => (remedy?.label ?? remedy?.action) as string;
+const shownAll = (ask: Record<string, unknown>): string[] => (ask.remedies as Array<Record<string, unknown>>).map(shown);
 
 // Route the way a conductor does, following rule delivery to its run-stage or
 // ask, until the guard-recovery ask appears: the first `next` may present the
@@ -382,11 +396,11 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     );
     expect(actionOnly).toBeDefined();
     const question = ask.question as string;
-    const label = actionOnly?.action as string;
+    const label = shown(actionOnly);
 
     // The human picks through the same-turn question widget; the conductor asks
     // "What should change?" and ends the turn.
-    expect(p.humanPick(question, label).code).toBe(0);
+    expect(p.humanPick(question, label, shownAll(ask)).code).toBe(0);
     entries.push(
       transcript.askTool(question, remedies.map((remedy) => remedy.action as string)),
       transcript.toolResult(JSON.stringify({ answers: { [question]: label } })),
@@ -441,11 +455,14 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     );
     const prematureDirective = directive(premature);
     expect(prematureDirective.kind, JSON.stringify(prematureDirective)).toBe("print");
-    expect(String(prematureDirective.message)).toContain("not revision feedback");
+    expect(String(prematureDirective.message)).toContain("is not on the recovery record yet");
 
-    // The human answers; the marker binds the feedback text.
+    // The human answers; the conductor records what they said should change,
+    // and the marker binds the feedback text.
     const feedback = "Split the save-search workflow into two steps";
     expect(p.humanPrompt(feedback).code).toBe(0);
+    const withWords = p.record(`Request Changes: ${feedback}`);
+    expect(withWords.code, withWords.stdout + withWords.stderr).toBe(0);
     expect(p.marker()?.guard_recovery_response).toMatchObject({
       status: "ready",
       selected_op: "request-changes",
@@ -480,7 +497,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     );
     expect(requestChanges).toBeDefined();
     expect(
-      p.humanPick(ask.question as string, requestChanges?.action as string).code,
+      p.humanPick(ask.question as string, shown(requestChanges), shownAll(ask)).code,
     ).toBe(0);
 
     const statePath = join(seededRecordDir(p.dir), "aidlc-state.md");
@@ -495,13 +512,12 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     ]);
     const rejection = directive(rejected);
     expect(rejection.kind, JSON.stringify(rejection)).toBe("print");
-    expect(String(rejection.message)).toContain("guard-recovery choice is not revision feedback");
+    expect(String(rejection.message)).toContain("is not on the recovery record yet");
     expect(String(rejection.message)).toContain("What should change?");
-    expect(String(rejection.message)).toContain("separate response");
     expect(readFileSync(statePath, "utf-8")).toBe(stateBeforeReport);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a tolerant Request Changes selection binds later exact feedback", () => {
+  test("a typed Request Changes the conductor recorded binds later exact feedback", () => {
     const p = project();
     const entries: TranscriptEntry[] = [transcript.human("Continue the AIDLC workflow")];
     const ask = routeToAsk(p, entries);
@@ -511,20 +527,24 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
       ),
     ).toBe(true);
 
-    expect(p.humanPick(ask.question as string, "B.  Request   Changes").code).toBe(0);
+    // Typed loosely, the reply picks nothing; the conductor records the remedy it read.
+    expect(p.humanPrompt("B.  Request   Changes").code).toBe(0);
+    expect(p.marker()?.guard_recovery_response).toMatchObject({ selected_op: null });
+    expect(p.record("request-changes").code).toBe(0);
     expect(p.marker()?.guard_recovery_response).toMatchObject({
       status: "awaiting-feedback",
       selected_op: "request-changes",
     });
     const feedback = "Keep saved searches private until their owner shares them";
     expect(p.humanPrompt(feedback).code).toBe(0);
+    expect(p.record(`Request Changes: ${feedback}`).code).toBe(0);
     const accepted = rejectedReport(p, "Request Changes", feedback);
     expect(accepted.code, accepted.stderr).toBe(0);
     const state = readFileSync(join(seededRecordDir(p.dir), "aidlc-state.md"), "utf-8");
     expect(state).toMatch(/^- \[R\] functional-design/m);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a different recovery choice cannot authorize a later rejection", () => {
+  test("a different recovery choice does not carry over to a later rejection", () => {
     const p = project();
     const entries: TranscriptEntry[] = [transcript.human("Continue the AIDLC workflow")];
     const ask = routeToAsk(p, entries);
@@ -532,7 +552,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
       (remedy) => remedy.op === "reconfirm-summary",
     );
     expect(reconfirm).toBeDefined();
-    expect(p.humanPick(ask.question as string, reconfirm?.action as string).code).toBe(0);
+    expect(p.humanPick(ask.question as string, shown(reconfirm), shownAll(ask)).code).toBe(0);
     expect(p.marker()?.guard_recovery_response).toMatchObject({
       status: "awaiting-feedback",
       selected_op: "reconfirm-summary",
@@ -548,11 +568,13 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(refused.code, refused.stderr).toBe(0);
     const refusal = directive(refused);
     expect(refusal.kind, JSON.stringify(refusal)).toBe("print");
+    // Their later message is a new reply: the conductor records what it read
+    // from it before a rejection stands on it.
     expect(String(refusal.message)).toContain(
-      "recovery-question choice was not Request Changes",
+      "no recovery choice is recorded on the person's latest reply yet",
     );
     // The state tool's refusal reaches the agent as plain text, never its JSON.
-    expect(String(refusal.message)).toContain(reconfirm?.action as string);
+    expect(String(refusal.message)).toContain("--checkpoint guard-recovery");
     const state = readFileSync(join(seededRecordDir(p.dir), "aidlc-state.md"), "utf-8");
     expect(state).toBe(stateBeforeRefusal);
     expect(state).toMatch(/^- \[-\] functional-design/m);
@@ -567,9 +589,10 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
       (remedy) => remedy.op === "request-changes",
     );
     expect(requestChanges).toBeDefined();
-    expect(p.humanPick(ask.question as string, requestChanges?.action as string).code).toBe(0);
+    expect(p.humanPick(ask.question as string, shown(requestChanges), shownAll(ask)).code).toBe(0);
     const feedback = "Separate query validation from persistence";
     expect(p.humanPrompt(feedback).code).toBe(0);
+    expect(p.record(`Request Changes: ${feedback}`).code).toBe(0);
 
     const legacyMarker = p.marker();
     const legacyResponse = {
@@ -594,7 +617,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     const refusal = directive(refused);
     expect(refusal.kind, JSON.stringify(refusal)).toBe("print");
     expect(String(refusal.message)).toContain(
-      "recovery-question choice was not Request Changes",
+      "no recovery choice is recorded on the person's latest reply yet",
     );
     const state = readFileSync(join(seededRecordDir(p.dir), "aidlc-state.md"), "utf-8");
     expect(state).toBe(stateBeforeRefusal);
@@ -607,13 +630,13 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     const entries: TranscriptEntry[] = [transcript.human("Continue the AIDLC workflow")];
     const ask = routeToAsk(p, entries);
     const question = ask.question as string;
-    const label = (ask.remedies as Array<Record<string, unknown>>)[0].action as string;
-    expect(p.humanPick(question, `  ${label.replace(/ /g, "  ")}  `).code).toBe(0);
+    const label = shown((ask.remedies as Array<Record<string, unknown>>)[0]);
+    expect(p.humanPick(question, `  ${label.replace(/ /g, "  ")}  `, shownAll(ask)).code).toBe(0);
     const marker = p.marker();
     const expected = createHash("sha256")
       .update(label.replace(/\s+/g, " ").trim(), "utf-8")
       .digest("hex");
-    // Exactly one remedy's label: the person's pick, which the agent cannot overrule.
+    // A pick in the question box that offered the remedies is recorded where it lands.
     expect(marker?.guard_recovery_response).toEqual({
       status: "awaiting-feedback",
       selection_sha256: expected,

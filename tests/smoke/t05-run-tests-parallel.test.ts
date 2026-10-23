@@ -52,6 +52,7 @@ import {
   orderLongestFirst,
   parseOrderWeights,
   parseShardSpec,
+  shardConfigForPlatform,
   type ShardConfig,
 } from "../lib/test-sharding.ts";
 
@@ -60,9 +61,9 @@ import {
 // in the test path, and `bash <script>` is the runner's documented entrypoint.
 const TESTS_ROOT = join(REPO_ROOT, "tests");
 const RUNNER = join(TESTS_ROOT, "run-tests.sh");
-const UNIT_SHARD_CONFIG = JSON.parse(
+const UNIT_SHARD_CONFIG = shardConfigForPlatform(JSON.parse(
   readFileSync(join(TESTS_ROOT, "unit-shard-weights.json"), "utf-8"),
-) as ShardConfig;
+) as ShardConfig, process.platform);
 
 interface RunResult {
   status: number;
@@ -178,17 +179,17 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     expect(missing.out).toContain("ERROR: --shard");
   }, PER_TEST_TIMEOUT);
 
-  test("--shard is restricted to a unit-only invocation", () => {
+  test("--shard is restricted to one unit or integration tier", () => {
     const smoke = run(["--smoke", "--shard", "1/4"]);
     expect(smoke.status).toBe(2);
     expect(smoke.out).toContain(
-      "ERROR: --shard requires --unit with no other level or profile flags",
+      "ERROR: --shard requires --unit or --integration with no other level or profile flags",
     );
 
     const profile = run(["--ci", "--shard", "1/4"]);
     expect(profile.status).toBe(2);
     expect(profile.out).toContain(
-      "ERROR: --shard requires --unit with no other level or profile flags",
+      "ERROR: --shard requires --unit or --integration with no other level or profile flags",
     );
   }, PER_TEST_TIMEOUT);
 
@@ -204,7 +205,7 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     expect(() =>
       assignWeightedShards(files, invalidCount, UNIT_SHARD_CONFIG)
     ).toThrow(
-      `--shard count ${invalidCount} exceeds ${assignableGroups} assignable unit-test groups`,
+      `--shard count ${invalidCount} exceeds ${assignableGroups} assignable test groups`,
     );
 
     const r = run(
@@ -213,16 +214,27 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     );
     expect(r.status).toBe(2);
     expect(r.out).toContain(
-      `ERROR: --shard count ${invalidCount} exceeds ${assignableGroups} assignable unit-test groups`,
+      `ERROR: --shard count ${invalidCount} exceeds ${assignableGroups} assignable test groups`,
     );
     expect(r.out).not.toContain("RESULT: PASS");
   }, PER_TEST_TIMEOUT);
 
-  test("sixteen weighted unit shards cover every file once and preserve binary affinity", () => {
+  test("oversized integration shards return an argument error before running tests", () => {
+    const r = run([
+      "--integration", "--no-llm", "--filter", "^t-guard-matrix-doc-delete$", "--shard", "2/2",
+    ], { AIDLC_TEST_PACKAGE_READY: "1" });
+    expect(r.status, r.out).toBe(2);
+    expect(r.out).toContain("ERROR: --shard count 2 exceeds 1 assignable test groups");
+    expect(r.out).not.toContain("unit-test groups");
+    expect(r.out).not.toMatch(/^\s+at /m);
+    expect(r.out).not.toContain("=== START");
+  }, PER_TEST_TIMEOUT);
+
+  test.each([10, 16])("%i weighted unit shards cover every file once and preserve binary affinity", (total) => {
     const files = readdirSync(join(TESTS_ROOT, "unit"))
       .filter((file) => file.endsWith(".test.ts"))
       .sort();
-    const shards = assignWeightedShards(files, 16, UNIT_SHARD_CONFIG);
+    const shards = assignWeightedShards(files, total, UNIT_SHARD_CONFIG);
     const flattened = shards.flat();
 
     expect(shards.every((shard) => shard.length > 0)).toBe(true);
@@ -273,7 +285,7 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     const execution = JSON.parse(readFileSync(join(stamp!, file.replace(/\.test\.ts$/, ".execution.json")), "utf8"));
     expect(execution.noLlm).toBe(true);
     expect(r.out).toContain(
-      `## Unit Tests (single-component isolation) (shard=${selected}/8)`,
+      `## Unit Tests (unit, process, and workflow contracts) (shard=${selected}/8)`,
     );
     expect(r.out).toContain(`=== START ${file} ===`);
     expect(r.out).toContain("Test files: 1");

@@ -7,6 +7,7 @@ import {
   fixLabel,
   heading,
 } from "./aidlc-color.ts";
+import { aidlcInvocation } from "./aidlc-runtime-paths.ts";
 
 export const ROUTE_NAMESPACE_DECLARATIONS = {
   public: { trustedPrefix: false },
@@ -197,11 +198,14 @@ const DISPATCHER_INTENT_VERBS = new Set([
   "unarchive",
   "add-repo",
   "remove-repo",
+  "set-repos",
+  "add-checkout",
+  "remove-checkout",
 ]);
 const DISPATCHER_SPACE_VERBS = new Set(["list", "switch", "create"]);
 
 type DispatcherIntentLifecycleVerb = "archive" | "unarchive";
-type DispatcherIntentRepoVerb = "add-repo" | "remove-repo";
+type DispatcherIntentRepoVerb = "add-repo" | "remove-repo" | "set-repos" | "add-checkout" | "remove-checkout";
 
 export type DispatcherWorkspaceCommand =
   | { kind: "list"; noun: DispatcherWorkspaceNoun; json: boolean; all?: true }
@@ -233,7 +237,9 @@ function missingDispatcherWorkspaceName(
 ): DispatcherWorkspaceCommand {
   const usage = verb === "space-create"
     ? "space-create <name>"
-    : `${noun} ${verb} <name>`;
+    : `${noun} ${verb} ${
+      verb === "add-checkout" || verb === "remove-checkout" ? "<path>" : verb === "set-repos" ? "<name,...|--all>" : "<name>"
+    }`;
   return {
     kind: "error",
     noun,
@@ -256,7 +262,8 @@ function isDispatcherIntentLifecycleVerb(
 function isDispatcherIntentRepoVerb(
   token: string | undefined,
 ): token is DispatcherIntentRepoVerb {
-  return token === "add-repo" || token === "remove-repo";
+  return token === "add-repo" || token === "remove-repo" || token === "set-repos" || token === "add-checkout" ||
+    token === "remove-checkout";
 }
 
 // `intent list [--json] [--all]` / `space list [--json]`: the flags may appear
@@ -311,7 +318,7 @@ export function parseDispatcherWorkspaceCommand(
     }
     if (isDispatcherIntentLifecycleVerb(verbOrName) || isDispatcherIntentRepoVerb(verbOrName)) {
       const name = tokens[2];
-      return name === undefined || name.startsWith("--")
+      return name === undefined || (name.startsWith("--") && !(verbOrName === "set-repos" && name === "--all"))
         ? missingDispatcherWorkspaceName(noun, verbOrName)
         : { kind: verbOrName, noun, name, rest: tokens.slice(3) };
     }
@@ -357,6 +364,9 @@ export function dispatcherWorkspaceUtilityArgv(
     case "unarchive":
     case "add-repo":
     case "remove-repo":
+    case "set-repos":
+    case "add-checkout":
+    case "remove-checkout":
       // Lifecycle and repo verbs forward verbatim, trailing flags included:
       // `intent archive <name> --reason <text>`.
       return [command.noun, command.kind, command.name, ...command.rest];
@@ -658,4 +668,20 @@ export function readTerminalLine(
   }
   if (sawEof && bytes.length === 0) return null;
   return Buffer.from(bytes).toString("utf-8").replace(/\r$/, "");
+}
+
+// Plugin Markdown is projected at compose/sync time, not by the packager, so it
+// gets the same invocation tokens core prose does, for the channel this tree
+// was projected for (native `aidlc`, or the copy channel's bun dispatcher).
+export function projectInvocationTokens(text: string, harnessDir: string): string {
+  const invoke = aidlcInvocation();
+  const toolPrefix = invoke === "aidlc" ? `${TRUSTED_COMMAND_PREFIX} ` : `bun ${harnessDir}/tools/`;
+  // Token names are assembled, not written whole: the packager would otherwise
+  // project the literals in this file's own source.
+  const token = (name: string): string => `{{${name}}}`;
+  return text
+    .replaceAll(token("HARNESS_DIR"), harnessDir)
+    .replaceAll(token("INVOKE"), invoke)
+    .replaceAll(token("TOOL_PREFIX"), toolPrefix)
+    .replaceAll(token("TRUSTED_NAMESPACE"), TRUSTED_ROUTE_NAMESPACE);
 }

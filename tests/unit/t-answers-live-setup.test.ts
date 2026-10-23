@@ -1,10 +1,13 @@
 // covers: file:tests/harness/aidlc-answers-corpus.ts
 //
-// What the live answers check can set up in a fresh chat, the way a person meets it. A question the agent asked in
-// chat is not shown again by a bare `/aidlc`, so only its replies typed with `/aidlc` are driven live. A verification
-// command or Construction policy answer is bound to the chat that asked, and guard recovery's fixture cannot be met,
-// so those are not driven live at all. And the open work carrying on after a routing reply is counted from that reply,
-// not from the rows the chat writes as it opens.
+// What the live answers check can set up in a fresh chat, the way a person meets it. A bare `/aidlc` shows again a
+// question the agent asked in chat that has no step of its own. Every reply to a Construction policy question is driven
+// live; a stage question and learnings keep to their replies typed with `/aidlc` while the drive cannot judge the
+// agent's words after a chat reply. The verification command comes back at its own checkpoint step, which the fixture
+// does not reach, so only its replies typed with `/aidlc` are driven; its answer typed in a fresh chat is recorded there.
+// Guard recovery's fixture cannot be met, so it is not driven live at all. The open work carrying on after a routing
+// reply is counted from that reply, not from the rows the chat writes as it opens. And a gate a blocking sensor refused
+// is met as a run leaves it, the summary confirmed and the review READY, so the override the person picks opens it.
 //
 // Mechanism: function - the live pool over the corpus, and the engine's own steps on the fixtures (the human-turn
 // hook, the session-start hook, `next`); no agent runs.
@@ -13,7 +16,7 @@ import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { listIntents, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
-  ANSWERS, ASKED_IN_CHAT, NOT_LIVE, SESSION, buildQuestion, env, exec, liveReply, next, say, workCarriedOn,
+  ANSWERS, ASKED_IN_CHAT, NOT_LIVE, SESSION, STAGE, buildQuestion, env, exec, liveReply, next, say, workCarriedOn,
 } from "../harness/aidlc-answers-corpus.ts";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -41,51 +44,53 @@ function project(): string {
 }
 
 describe("the live answers check in a fresh chat", () => {
-  test("a question asked in chat is driven live only by its /aidlc replies, and the chat-bound ones and guard recovery not at all", () => {
+  test("a question asked in chat is driven live only by its /aidlc replies, a Construction policy question by every reply, and guard recovery not at all", () => {
     const live = (question: string) => ANSWERS.filter((item) => item.question === question && liveReply(item)).map((item) => item.via);
     for (const question of ASKED_IN_CHAT) expect(live(question).every((via) => via === "aidlc"), question).toBe(true);
-    expect(live("verification-command")).toEqual([]);
-    expect(live("construction-policy")).toEqual([]);
+    expect(live("verification-command")).toEqual(["aidlc", "aidlc"]);
     expect(live("stage-question")).toEqual(["aidlc"]);
     expect(live("learnings")).toEqual([]);
+    // A bare /aidlc shows it again, so every reply to it is driven.
+    expect(live("construction-policy")).toHaveLength(ANSWERS.filter((item) => item.question === "construction-policy").length);
     for (const question of NOT_LIVE) expect(live(question), question).toEqual([]);
     // Every other question keeps every reply.
     const others = ANSWERS.filter((item) => !ASKED_IN_CHAT.has(item.question) && !NOT_LIVE.has(item.question));
     expect(others.every(liveReply)).toBe(true);
   });
 
-  test("a bare /aidlc in a fresh chat resumes the stage without the open chat question; with words it hands the question back", async () => {
-    // If a bare re-entry ever shows the open question, the chat replies of these questions can be driven live again.
+  test("a bare /aidlc in a fresh chat shows the open chat question again; with words it hands the question back", async () => {
     const proj = project();
     await buildQuestion(proj, "stage-question");
-    await say(proj, "/aidlc", "claude");
-    const bare = await next(proj, []);
-    expect(bare.directive?.kind).toBe("run-stage");
-    await say(proj, "/aidlc PostgreSQL", "claude");
-    const words = await next(proj, ["PostgreSQL"]);
+    await opens(proj, OTHER_CHAT);
+    await say(proj, "/aidlc", "claude", { session: OTHER_CHAT });
+    const bare = await next(proj, [], { session: OTHER_CHAT });
+    expect(bare.directive?.kind).toBe("print");
+    expect(String(bare.directive?.message ?? "")).toContain('"Which database should the to-do app use?"');
+    await say(proj, "/aidlc PostgreSQL", "claude", { session: OTHER_CHAT });
+    const words = await next(proj, ["PostgreSQL"], { session: OTHER_CHAT });
     expect(words.directive?.kind).toBe("print");
     expect(String(words.directive?.message ?? "")).toContain("has a question you asked that the person has not answered yet");
   });
 
-  // If a new chat can ever record these answers, their /aidlc replies can be driven live again.
-  for (const [question, stage, flags] of [
-    ["verification-command", "code-generation", ["--command", "npm test"]],
-    ["construction-policy", "functional-design", ["--field", "Construction Execution", "--value", "swarm"]],
+  for (const [question, flags] of [
+    ["verification-command", ["--command", "npm test"]],
+    ["construction-policy", ["--field", "Construction Execution", "--value", "swarm"]],
   ] as const) {
-    test(`a ${question} answer is recorded only from the chat that asked it`, async () => {
+    test(`a ${question} answer is recorded in the chat that asked it and in a new one`, async () => {
       const answer = async (session: string) => {
         const proj = project();
         await buildQuestion(proj, question);
         if (session !== SESSION) await opens(proj, session);
         await say(proj, "/aidlc 2", "claude", { session });
         await next(proj, ["2"], { session });
-        return exec([process.execPath, join(proj, ".claude", "tools", "aidlc-log.ts"), "answer", "--stage", stage, "--checkpoint", question,
-          ...flags, "--details", "Request Changes"], { cwd: proj, env: env(proj, { session }) });
+        return exec([process.execPath, join(proj, ".claude", "tools", "aidlc-log.ts"), "answer", "--stage", "functional-design",
+          "--checkpoint", question, ...flags, "--details", "Request Changes"], { cwd: proj, env: env(proj, { session }) });
       };
-      expect((await answer(SESSION)).status).toBe(0);
+      const here = await answer(SESSION);
+      expect(here.status, here.stdout + here.stderr).toBe(0);
       const elsewhere = await answer(OTHER_CHAT);
-      expect(elsewhere.status).toBe(1);
-      expect(elsewhere.stdout + elsewhere.stderr).toContain("Session exists in the current workflow");
+      expect(elsewhere.status, elsewhere.stdout + elsewhere.stderr).toBe(0);
+      expect(JSON.parse(elsewhere.stdout.trim()).emitted).toBe("QUESTION_ANSWERED");
     });
   }
 
@@ -111,5 +116,22 @@ describe("the live answers check in a fresh chat", () => {
     expect(workCarriedOn(proj, records, reply)).toBe(false);
     appendAuditEntry("STAGE_STARTED", { Stage: "requirements-analysis" }, proj);
     expect(workCarriedOn(proj, records, reply)).toBe(true);
+  });
+
+  test("after \"just approve it\" at a gate a blocking sensor refused, the override the person picked opens the gate", async () => {
+    const proj = project();
+    await buildQuestion(proj, "stage-gate-sensor-failure");
+    await say(proj, "just approve it", "claude");
+    // The agent's two steps for the override (stage-protocol-sensors.md): the answer, then the same report again.
+    const tool = (name: string, args: string[]) =>
+      exec([process.execPath, join(proj, ".claude", "tools", name), ...args, "--project-dir", proj], { cwd: proj, env: env(proj) });
+    const answered = await tool("aidlc-log.ts", ["answer", "--stage", STAGE, "--details", "Override blocking sensors"]);
+    expect(answered.status, answered.stdout + answered.stderr).toBe(0);
+    const reported = await tool("aidlc-orchestrate.ts", ["report", "--stage", STAGE, "--result", "awaiting-approval",
+      "--override-blocking-sensors", "--user-input", "Override blocking sensors"]);
+    const out = reported.stdout + reported.stderr;
+    expect(reported.status, out).toBe(0);
+    expect(out).not.toContain('"ask_type":"guard-recovery"');
+    expect(readAuditShardEvents(proj).at(-1)?.event, out).toBe("STAGE_AWAITING_APPROVAL");
   });
 });

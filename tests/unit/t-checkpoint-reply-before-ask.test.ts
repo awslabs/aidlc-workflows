@@ -1,4 +1,5 @@
 // covers: subcommand:aidlc-bolt:checkpoint, hook:aidlc-record-human-turn, function:gateWordsSinceUnitReview
+// covers: function:protectedQuestionPick
 //
 // The person drives. While a Unit's review runs, they type their answer to the
 // checkpoint question that has not been asked yet: "approve it as it is", or
@@ -28,7 +29,7 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename, auditBlockField, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
-  readAuditShardEvents, reviewArtifactFingerprint,
+  readAuditShardEvents, readProtectedResponse, reviewArtifactFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -264,6 +265,23 @@ describe("t-checkpoint-reply-before-ask: the person answers before the Unit's qu
       expect(auditBlockField(unitGates(p, "GATE_APPROVED")[0].block, "Person Reply")).toBe("approve it as it is");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
+
+  // A number typed while the review runs is the person's reply, kept whole:
+  // the agent reads it against the choices the Unit's question offers, and its
+  // reading is recorded, as for a reply after the question.
+  test("\"2\" typed while the review runs is kept as the reply, and the agent's reading of it is recorded", () => {
+    const p = fixture("strict");
+    const file = requestReview(p);
+    says(p, "2");
+    const asked = verifyAndAsk(p, file);
+    expect(asked.earlier_reply).toBe("2");
+    expect(readProtectedResponse(p, SESSION)?.choice).toBeUndefined();
+    expect(readProtectedResponse(p, SESSION)?.words).toBe("2");
+    const rejected = checkpoint(p, "reject", ["--user-input", "2", "--reason", "rename the handler"]);
+    expect(rejected.status, rejected.out).toBe(0);
+    expect(rejected.out).not.toContain("picked");
+    expect(auditBlockField(unitGates(p, "GATE_REJECTED")[0].block, "Person Reply")).toBe("2");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A question asked since and not answered yet holds what the person types
   // next: nothing is taken for the Unit while it waits.

@@ -308,8 +308,9 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toContain(MISSING_VERDICT_REASON);
       expect(labelled).not.toContain("within its turn budget");
       expect(labelled).toMatch(
-        /record the\s+terminal receipt with `--verdict NOT-READY` and no review file/,
+        /record the\s+terminal receipt with `--verdict NOT-READY` and no `--review-file`/,
       );
+      expect(labelled).toMatch(/accepts a missing or incomplete review only for this retried\s+NOT-READY fallback/);
       expect(labelled).toMatch(/on `advisory` it is terminal/);
       expect(labelled).toMatch(/skip the lead re-invoke/);
       expect(labelled).toMatch(

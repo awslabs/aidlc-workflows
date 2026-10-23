@@ -1,0 +1,81 @@
+name: Promote preview
+run-name: ${{ inputs.preview && format('Promote {0} to {1}', inputs.preview, inputs.version) || 'List available previews' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      preview:
+        description: 'Published preview tag. Leave all inputs empty to list previews.'
+        type: string
+      version:
+        description: 'Stable version, for example 2.11.1.'
+        type: string
+      notes:
+        description: 'Release notes: Compatibility line, summary, upgrade steps, and grouped bullets. Required when promoting.'
+        type: string
+      contributors:
+        description: 'Contributor list from release-promotion.ts contributors, made on your machine. Leave empty for no contributor sections.'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-stable-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: main
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - name: List or prepare a promotion
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW: ${{ inputs.preview }}
+          VERSION: ${{ inputs.version }}
+          NOTES: ${{ inputs.notes }}
+          CONTRIBUTORS: ${{ inputs.contributors }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PREVIEW$VERSION$NOTES${CONTRIBUTORS:-}" ]; then
+            bun scripts/release-promotion.ts list --repository "$GITHUB_REPOSITORY"
+            exit 0
+          fi
+          missing=()
+          [ -n "$PREVIEW" ] || missing+=(preview)
+          [ -n "$VERSION" ] || missing+=(version)
+          [ -n "$NOTES" ] || missing+=(notes)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing promotion inputs: ${missing[*]}. Supply preview, version and notes to promote. Leave all inputs empty to list previews." >&2
+            exit 1
+          fi
+          printf '%s\n' "$NOTES" >"$RUNNER_TEMP/release-notes.md"
+          printf '%s\n' "${CONTRIBUTORS:-}" >"$RUNNER_TEMP/contributors.txt"
+          bun scripts/release-promotion.ts prepare \
+            --repository "$GITHUB_REPOSITORY" \
+            --preview "$PREVIEW" --version "$VERSION" \
+            --controls "$(git rev-parse HEAD)" --notes-file "$RUNNER_TEMP/release-notes.md" \
+            --contributors-file "$RUNNER_TEMP/contributors.txt"
+      # A tag written with GITHUB_TOKEN does not trigger a push workflow.
+      # Dispatch explicitly on the prepared tag: provenance must name that
+      # commit and tag, not the main commit running this preparation.
+      - name: Start the stable build on the prepared tag
+        if: steps.prepare.outputs.tag != '' && steps.prepare.outputs.published != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.prepare.outputs.tag }}
+        run: |
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$RELEASE_TAG"
+          echo "Stable build dispatched for $RELEASE_TAG. Follow the Release workflow for publication." >>"$GITHUB_STEP_SUMMARY"

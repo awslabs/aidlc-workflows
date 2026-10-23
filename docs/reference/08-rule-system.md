@@ -6,7 +6,7 @@ This chapter is the schema-level reference for the rule system: where rule files
 
 ## Layout
 
-Rules live in the active space memory layer at `aidlc/spaces/<active-space>/memory/` (one hand-editable set at the workspace root, read by every harness via its native include: Claude `@`-import stub, Kiro CLI agent resources, Kiro IDE always-included steering that carries the memory text, the engine's per-step rules delivery on Codex) with neutral scope-named files:
+Rules live in the active space memory layer at `aidlc/spaces/<active-space>/memory/` (one hand-editable set at the workspace root, read by every harness via its native include: Claude `@`-import stub, Kiro CLI agent resources, Kiro IDE always-included steering that carries the memory text, the engine's per-step rules delivery on Codex, Cursor's always-applied `.cursor/rules/aidlc.mdc` rule, the opencode `instructions` glob, Copilot `AGENTS.md` `@`-imports) with neutral scope-named files:
 
 ```
 aidlc/spaces/<active-space>/memory/

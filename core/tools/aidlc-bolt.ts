@@ -51,6 +51,7 @@ import {
   emitError,
   errorMessage,
   claimAttemptFields,
+  findStageBySlug,
   getField,
   holdsAuditLock,
   commandTurnHint,
@@ -93,8 +94,10 @@ import {
   rejectConstructionCheckpoint,
   resolveConstructionCheckpoint,
   verifyConstructionCheckpoint,
+  type ApprovalFindingDispositions,
   type ConstructionCheckpointKind,
 } from "./aidlc-construction-checkpoints.ts";
+import { approvalDispositionField, REVIEW_FINDING_DISPOSITIONS_FIELD } from "./aidlc-review-brief.ts";
 import {
   askSwarmCheckpoint,
   approveSwarmCheckpoint,
@@ -1328,13 +1331,27 @@ const CHECKPOINT_KINDS: readonly ConstructionCheckpointKind[] = ["unit", "skelet
 const CHECKPOINT_ACTIONS: readonly string[] = ["status", "ask", "verify", "approve", "reject"];
 const SWARM_CHECKPOINT_ACTIONS: readonly string[] = ["status", "ask", "approve", "reject"];
 
-function handleCheckpoint(args: string[]): void {
+// A checkpoint's approval records the open review findings of the stages and
+// Units it covers, through the review ledger's writer.
+function checkpointFindingDispositions(pd: string): ApprovalFindingDispositions {
+  return (stages, units, decider): Record<string, string> => {
+    const field = approvalDispositionField(
+      pd, stages.flatMap((slug) => findStageBySlug(slug) ?? []), units, decider,
+    );
+    return field === undefined ? {} : { [REVIEW_FINDING_DISPOSITIONS_FIELD]: field };
+  };
+}
+
+async function handleCheckpoint(args: string[]): Promise<void> {
   // The person said to approve the Unit as it is over a review that did not
   // finish; verify reads it, and the engine checks their words are on record.
   const overUnfinishedReview = args.includes("--over-unfinished-review");
   const flags = parseFlags(args.filter((arg) => arg !== "--over-unfinished-review"));
   if (overUnfinishedReview && flags.action !== "verify") {
     error("checkpoint --over-unfinished-review goes with --action verify.");
+  }
+  if (flags["timeout-ms"] !== undefined && flags.action !== "verify") {
+    error("checkpoint --timeout-ms goes with --action verify.");
   }
   if (flags["check-cmd"] !== undefined) {
     error("checkpoint no longer accepts --check-cmd. " + verificationCommandRecovery() + " Run checkpoint --action verify without --check-cmd.");
@@ -1355,18 +1372,20 @@ function handleCheckpoint(args: string[]): void {
       result = askConstructionCheckpoint(pd, flags.unit, checkpointKind, checkpointSession(pd, flags.session, true));
       break;
     case "verify":
-      result = verifyConstructionCheckpoint(
-        pd, flags.unit, checkpointKind, { overUnfinishedReview },
+      result = await verifyConstructionCheckpoint(
+        pd, flags.unit, checkpointKind, { overUnfinishedReview, timeoutMs: flags["timeout-ms"] === undefined ? undefined : Number(flags["timeout-ms"]) },
       );
       break;
     case "approve":
       result = approveConstructionCheckpoint(
         pd, flags.unit, checkpointKind, flags["user-input"], checkpointSession(pd, flags.session, flags["user-input"] !== undefined),
+        checkpointFindingDispositions(pd), flags.message,
       );
       break;
     case "reject":
       result = rejectConstructionCheckpoint(
         pd, flags.unit, checkpointKind, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true),
+        flags.message,
       );
       break;
     default:
@@ -1394,10 +1413,13 @@ function handleSwarmCheckpoint(args: string[]): void {
     case "approve":
       result = approveSwarmCheckpoint(
         pd, batch, units, flags["user-input"], checkpointSession(pd, flags.session, flags["user-input"] !== undefined),
+        checkpointFindingDispositions(pd), flags.message,
       );
       break;
     case "reject":
-      result = rejectSwarmCheckpoint(pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true));
+      result = rejectSwarmCheckpoint(
+        pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true), flags.message,
+      );
       break;
     default:
       error(`swarm-checkpoint --action must be one of: ${SWARM_CHECKPOINT_ACTIONS.join(", ")}`);
@@ -1448,13 +1470,15 @@ function boltUsage(subcommand: string | undefined): string {
     checkpoint: [
       `${invoke("checkpoint")} --unit <name> [--action ${CHECKPOINT_ACTIONS.join("|")}]`,
       "  The Unit's Construction checkpoint. Required: --unit. --action defaults to status.",
-      `  --kind: ${CHECKPOINT_KINDS.join(", ")} (default unit). --over-unfinished-review goes with --action verify.`,
-      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject)",
+      `  --kind: ${CHECKPOINT_KINDS.join(", ")} (default unit). --over-unfinished-review and --timeout-ms <milliseconds> go with --action verify.`,
+      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject),",
+      "  --message <id> (approve, reject: the person's message the choice was read from)",
     ],
     "swarm-checkpoint": [
       `${invoke("swarm-checkpoint")} --batch <n> --units <unit,unit> [--action ${SWARM_CHECKPOINT_ACTIONS.join("|")}]`,
       "  A swarm batch's checkpoint. Required: --batch, --units. --action defaults to status.",
-      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject)",
+      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject),",
+      "  --message <id> (approve, reject: the person's message the choice was read from)",
     ],
     "dispatch-event": [
       `${invoke("dispatch-event")} --event ${DISPATCH_EVENTS.join("|")} --slug <kebab-slug>`,
@@ -1473,7 +1497,7 @@ function boltUsage(subcommand: string | undefined): string {
 
 let projectDir: string | undefined;
 
-export function main(argv: string[]): void {
+export async function main(argv: string[]): Promise<void> {
   const rawArgs = argv;
 
   const filteredArgs: string[] = [];
@@ -1508,7 +1532,7 @@ export function main(argv: string[]): void {
         handleSetAutonomy(filteredArgs.slice(1));
         break;
       case "checkpoint":
-        handleCheckpoint(filteredArgs.slice(1));
+        await handleCheckpoint(filteredArgs.slice(1));
         break;
       case "swarm-checkpoint":
         handleSwarmCheckpoint(filteredArgs.slice(1));
@@ -1586,5 +1610,5 @@ function failJson(
 }
 
 if (import.meta.main) {
-  main(process.argv.slice(2));
+  await main(process.argv.slice(2));
 }

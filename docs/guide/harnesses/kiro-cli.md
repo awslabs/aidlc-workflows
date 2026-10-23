@@ -121,6 +121,15 @@ so the AI-DLC conductor agent is active by default — `/aidlc` just works.
 have configured**; if you prefer your own default, remove that setting and use
 `kiro-cli chat --agent aidlc` instead.
 
+Kiro CLI cancels a helper (a reviewer, a persona, a Unit builder) that shows
+no progress for `api.subagentTimeout` seconds; its default is 3600, and AI-DLC
+does not set it. If a helper that never starts holds a stage for an hour, you
+can lower it in your own Kiro CLI settings (`~/.kiro/settings/cli.json`; `900`
+is 15 minutes). Output counts as progress, silence does not: a helper whose
+command prints nothing for longer than that is cancelled too, and the command
+keeps running on its own, so keep the deadline above your longest quiet command
+(a deploy, a test run that prints only at the end).
+
 No shipped agent pins a model: a pinned ID resolves only when that
 model is enabled on the user's Kiro install. A chat, and each of the 14
 personas the conductor dispatches, starts on your session model: the one
@@ -285,12 +294,37 @@ CLI on its v3 engine, use the
 `aidlc/`. See
 [Kiro CLI hooks not running](../15-troubleshooting.md#kiro-cli-hooks-not-running).
 
+### When the chat fills up
+
+Kiro shows you how full the chat is, but gives AI-DLC no figure while it works.
+So AI-DLC reads the figure Kiro saves for the chat at the end of each turn
+(`~/.kiro/sessions/cli/<chat id>.json`, read only). Once it is 80% or more, the
+next approval question or Unit checkpoint carries one line saying how full the
+chat is, with an offer to pause and carry on in a new chat. Your answer
+decides: nothing pauses on its own, and the line is said once in a chat.
+
+The line cannot appear in the middle of a stage (it comes only with a question
+you are asked anyway), before Kiro has saved the chat's first turn, for a chat
+with no record on this machine, or if a Kiro update changes how Kiro saves the
+figure. When you see Kiro's own figure climb, you can do the same by hand:
+
+1. Stop at a stage boundary: approve and say you want to stop for now in the
+   same reply, or type `/aidlc park`. `/aidlc --status` now shows
+   `Paused at <stage> (you stopped it); pick it back up with /aidlc --resume`.
+2. Type `/chat new` for a new chat. Kiro keeps the old one, and `/chat resume`
+   brings it back. Use it rather than `/clear`, which resets the chat you are in.
+3. Type `/aidlc --resume`. `/aidlc --status` no longer says Paused.
+
+Anything the old chat discussed but did not write to a file does not carry
+over, which is why the end of a stage is the best moment (see
+[Changing Model Mid-Workflow](../11-session-management.md#changing-model-mid-workflow)).
+
 ## What's different on Kiro
 
 | Area | Claude Code | Kiro CLI |
 |------|-------------|----------|
 | Gates & questions | `AskUserQuestion` widget | Numbered prose options (reply with a number); the questions FILE with `[Answer]:` tags stays the source of truth |
-| Statusline | Current stage + model + context % | Not available — use `/aidlc --status` and the progress line at each gate |
+| Statusline | Current stage + model + context % | Not available: use `/aidlc --status` and the progress line at each gate; for a chat that is filling up, see [When the chat fills up](#when-the-chat-fills-up) |
 | Dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent) | `Task` tool | Kiro `subagent` tool → the agent configs (all 14 personas ship configs) |
 | Construction swarm | Parallel `Task` floor, optional ultracode Workflow | Subagent fan-out only; `AIDLC_USE_SWARM=1` is announced as a no-op |
 | Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` only (Kiro has no session-end / pre-compaction hooks) |

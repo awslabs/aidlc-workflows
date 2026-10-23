@@ -23,11 +23,18 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { workspaceManifestChecks } from "../../core/tools/aidlc-workspace-doctor.ts";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import {
+  REPO_ROOT,
+  seedAuditFile,
+  seededAuditDir,
+  seededAuditShard,
+  seedStateFile,
+  seedWorkspaceShell,
+} from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -468,5 +475,95 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
       expect(repos?.label).toContain("invalid");
       expect(repos?.label).not.toContain("in sync");
     }
+  });
+});
+
+// Every doctor run in a project with an audit trail writes its own entries
+// (Guardrail Loaded, Health Check) into this clone's audit log. Those entries
+// are doctor's receipt, not records a teammate needs, so the next run must not
+// count them as uncommitted records and tell the person to commit and push.
+describe("t256 workspace-doctor - doctor's own audit log entries", () => {
+  // A committed project laid out as the Claude install lays it out (managed
+  // .gitignore included), with an intent whose audit log is committed.
+  function committedProject(prepare?: (ws: string) => void, folder = ""): { ws: string; g: (...args: string[]) => ReturnType<typeof spawnSync> } {
+    const repo = freshGitWorkspace();
+    const ws = folder ? join(repo, folder) : repo;
+    const g = (...args: string[]) => spawnSync("git", ["-C", ws, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    cpSync(join(REPO_ROOT, "dist", "claude"), ws, { recursive: true });
+    seedWorkspaceShell(ws);
+    seedAuditFile(ws);
+    seedStateFile(ws, "state-mid-ideation.md");
+    prepare?.(ws);
+    g("add", "-A");
+    g("commit", "-q", "-m", "clean project");
+    expect(g("status", "--porcelain").stdout).toBe("");
+    return { ws, g };
+  }
+
+  function doctorRecordsRow(ws: string): { pass: boolean; severity?: string; label: string } {
+    const run = spawnSync(process.execPath, [join(ws, ".claude", "tools", "aidlc-doctor.ts"), "--json", "--project-dir", ws], {
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const checks = (JSON.parse(run.stdout) as { data: { checks: Array<{ pass: boolean; severity?: string; label: string }> } }).data.checks;
+    const row = checks.find((check) => check.label.startsWith("Workspace records:"));
+    expect(row, run.stdout).toBeDefined();
+    return row as { pass: boolean; severity?: string; label: string };
+  }
+
+  const OWN_ENTRIES_ONLY = "Workspace records: no uncommitted changes under aidlc/ other than doctor's own entries in the audit log";
+  const STAGE_ROW = "\n## Stage Started\n**Timestamp**: 2026-10-20T01:00:00Z\n**Event**: STAGE_STARTED\n**Stage**: requirements-analysis\n\n---\n";
+
+  test("a clean project run through doctor twice is not told to commit doctor's own entries", () => {
+    const { ws, g } = committedProject();
+    expect(doctorRecordsRow(ws).label).toBe("Workspace records: no uncommitted changes under aidlc/");
+    const second = doctorRecordsRow(ws);
+    // Doctor still keeps its receipt: the audit log is the one changed file.
+    const shard = seededAuditShard(ws).slice(ws.length + 1).replaceAll("\\", "/");
+    expect(g("status", "--porcelain").stdout).toBe(` M ${shard}\n`);
+    expect(second).toEqual({ pass: true, label: OWN_ENTRIES_ONLY });
+  });
+
+  test("a record of the person's work is still counted, in its own file or next to doctor's entries", () => {
+    const { ws } = committedProject();
+    doctorRecordsRow(ws);
+    writeFileSync(join(ws, "aidlc", "note.md"), "a record\n", "utf-8");
+    let row = workspaceManifestChecks(ws)[0];
+    expect(row).toMatchObject({ pass: false, severity: "warn" });
+    expect(row.label).toContain("Workspace records: 1 uncommitted change(s) under aidlc/");
+    appendFileSync(seededAuditShard(ws), STAGE_ROW, "utf-8");
+    row = workspaceManifestChecks(ws)[0];
+    expect(row.label).toContain("Workspace records: 2 uncommitted change(s) under aidlc/");
+    expect(row.label).toContain("`git add aidlc/ && git commit && git push`");
+  });
+
+  test("a clone whose audit log doctor started, beside a teammate's, is not told to commit it", () => {
+    const { ws, g } = committedProject((dir) => {
+      renameSync(seededAuditShard(dir), join(seededAuditDir(dir), "teammate-box-0123456789abcdef.md"));
+    });
+    doctorRecordsRow(ws);
+    const own = basename(seededAuditShard(ws));
+    expect(g("status", "--porcelain").stdout).toContain(`?? ${seededAuditShard(ws).slice(ws.length + 1).replaceAll("\\", "/")}`);
+    expect(readFileSync(seededAuditShard(ws), "utf-8")).toStartWith("# AI-DLC Audit Log\n");
+    expect(workspaceManifestChecks(ws)[0], own).toEqual({ pass: true, label: OWN_ENTRIES_ONLY });
+    appendFileSync(seededAuditShard(ws), STAGE_ROW, "utf-8");
+    expect(workspaceManifestChecks(ws)[0].label).toContain("Workspace records: 1 uncommitted change(s) under aidlc/");
+  });
+
+  test("a project below its repository root is read the same way", () => {
+    const { ws } = committedProject(undefined, "app");
+    doctorRecordsRow(ws);
+    expect(workspaceManifestChecks(ws)[0]).toEqual({ pass: true, label: OWN_ENTRIES_ONLY });
+  });
+
+  test("an audit log checked out with Windows line endings is read the same way", () => {
+    const { ws, g } = committedProject();
+    const shard = seededAuditShard(ws);
+    g("config", "core.autocrlf", "true");
+    rmSync(shard);
+    expect(g("checkout", "--", shard.slice(ws.length + 1).replaceAll("\\", "/")).status).toBe(0);
+    expect(readFileSync(shard, "utf-8")).toContain("\r\n");
+    doctorRecordsRow(ws);
+    expect(workspaceManifestChecks(ws)[0]).toEqual({ pass: true, label: OWN_ENTRIES_ONLY });
   });
 });

@@ -5,8 +5,8 @@
 // the plan builds code in Units. A plan whose Construction builds no code
 // (stock infra, or a plan made for an analysis that skips Code Generation) is
 // not starting a build pass, and a plan with no Units (refactor,
-// security-patch) has no Bolt, so their first Construction step gets the
-// ordinary line instead.
+// security-patch, or a jump over a Units Generation that never ran) has no
+// Bolt, so their first Construction step gets the ordinary line instead.
 //
 // Mechanism: cli - spawns the shipped tools against temp projects created via
 // intent-create, then a forward jump to the first Construction stage.
@@ -40,21 +40,25 @@ afterAll(() => {
   for (const dir of tempDirs) cleanupTestProject(dir);
 });
 
-function run(proj: string, tool: string, args: string[]): { status: number; out: string } {
+function run(proj: string, tool: string, args: string[], extra: Record<string, string> = {}): { status: number; out: string } {
   const res = spawnSync(process.execPath, [join(proj, ".claude", "tools", tool), ...args, "--project-dir", proj], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
-    env,
+    env: { ...env, ...extra },
     cwd: proj,
   });
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 
-function firstConstructionLine(createArgs: string[], first: string): string {
+function firstConstructionLine(createArgs: string[], first: string, unitsGenerated = false): string {
   const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
   tempDirs.push(proj);
   const created = run(proj, "aidlc-utility.ts", ["intent-create", ...createArgs]);
   expect(created.status, created.out).toBe(0);
+  if (unitsGenerated) {
+    const done = run(proj, "aidlc-state.ts", ["checkbox", "units-generation=completed"], { AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" });
+    expect(done.status, done.out).toBe(0);
+  }
   const jumped = run(proj, "aidlc-jump.ts", ["execute", "--target", first, "--direction", "forward"]);
   expect(jumped.status, jumped.out).toBe(0);
   const step = runOrchestrateNext(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), proj, [], { env });
@@ -81,8 +85,15 @@ describe("the first Construction step names a Bolt only where code is built", ()
   });
 
   test("a plan that builds code in Units still starts the first Bolt", () => {
-    expect(firstConstructionLine(["--scope", "feature"], "functional-design"))
-      .toBe(`${BOLT_LINE} First step is Functional Design (stage 1 of 14).`);
+    // Units Generation, done, counts among the stages: Functional Design is the second.
+    expect(firstConstructionLine(["--scope", "feature"], "functional-design", true))
+      .toBe(`${BOLT_LINE} First step is Functional Design (stage 2 of 15).`);
+  });
+
+  test("a jump over a Units Generation that never ran makes no Units: the ordinary line", () => {
+    const line = firstConstructionLine(["--scope", "feature"], "functional-design");
+    expect(line).not.toContain("Bolt");
+    expect(line).toBe("Now working on Functional Design (stage 1 of 14), wearing the architect hat.");
   });
 
   test("a plan that builds code without Units starts no Bolt: security-patch gets the ordinary line", () => {

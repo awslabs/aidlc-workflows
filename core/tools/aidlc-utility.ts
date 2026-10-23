@@ -35,6 +35,7 @@ import {
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { QUESTION_UNAVAILABLE, readQuestion, retireRequest, startedRequestFor } from "./aidlc-question-store.ts";
+import { planApprovalAskState } from "./aidlc-plan-approval-ask.ts";
 import {
   appendAuditEntries,
   appendAuditEntry,
@@ -72,6 +73,7 @@ import {
 } from "./aidlc-guard-switch.ts";
 import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
+import { droppedPluginRegistrations } from "./aidlc-plugin-emit.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
   ARCHIVED_FROM_FIELD,
@@ -111,6 +113,7 @@ import {
   selectionDroppedOrderingEdges,
   stageGraphDrift,
   type GraphStage,
+  takeComposerScores,
   validateGrid,
   validateScope,
 } from "./aidlc-graph.ts";
@@ -169,7 +172,9 @@ import {
   GIT_PLATFORM_ARGS,
   auditBlockField,
   auditFilePath,
+  auditShardHost,
   auditShards,
+  knownAuditShardName,
   assertChangeControlLedgerWritable,
   GUARD_POLICY_FIELD,
   GUARD_POLICY_VALUES,
@@ -233,6 +238,8 @@ import {
   getField,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
+  acquireAuditLock,
+  releaseAuditLock,
   hooksHealthReadDir,
   isAutonomousMode,
   isPlainObject,
@@ -306,6 +313,7 @@ import {
   PLAN_FIELD,
   type PlanChanges,
   plannedStages,
+  cursorPastStage,
   planWithChanges,
   composedPlanLabel,
   PLAN_NAME_PATTERN,
@@ -313,11 +321,14 @@ import {
   readAllAuditShards,
   readAuditShardEvents,
   resolveBoltDag,
+  ACCEPT_AS_IS_REVISION_CYCLES,
+  stageRevisionCycles,
   unitGateStatus,
   unitLifecycleSnapshot,
   unitPlainName,
   recoveryRepoCandidates,
   readActiveDirectiveMarker,
+  openPlanApprovalAsk,
   activeDirectiveOutOfDateReason,
   readUnitClaimRegistryCache,
   readUnitScopeStamp,
@@ -341,6 +352,7 @@ import {
   keepPlanApprovalAskOverStateWrite,
   refreshActiveDirectiveMarker,
   resolveIntentRepoSet,
+  MANY_REPOS,
   isGitRepoDir,
   resolveProjectDir,
   setActiveIntentCursor,
@@ -364,6 +376,12 @@ import {
   inspectSubagentInflight,
   harnessDataPath,
   pluginsEnabled,
+  pluginsSelected,
+  pausedPlugins,
+  pausedBySelection,
+  pausedLine,
+  resumedLine,
+  composedPluginBase,
   projectDescriptionFilePath,
   PROJECT_DESCRIPTION_FILE,
   scalarField,
@@ -375,6 +393,7 @@ import {
   commandAtPersonsTerminal,
   clearSessionIntentUuid,
   sourceBaselineAuditFields,
+  workspaceBaselineStageSlugs,
   unitDependencyPath,
   withAuditLock,
   validScopes,
@@ -407,8 +426,16 @@ import {
   fillHookActivationText,
   hookActivation,
   hookExecutionRecoveryText,
+  projectSettingsRepair,
   hookLiveness,
   workspaceSourceState,
+  hasRealGitEntry,
+  readRecordedSourceCheckouts,
+  recordedCheckoutAt,
+  sourceCheckoutLabelFor,
+  sourceCheckoutListingRel,
+  sourceWalkReach,
+  writeRecordedSourceCheckouts,
   type WorkspaceSourceState,
   boltName,
   legacyBoltName,
@@ -419,7 +446,7 @@ import {
   OWN_TERMINAL_PRESENCE_STEP,
   personAtOwnTerminal,
   personAskedForThisLowering,
-  personSpokeSinceGate,
+  personAskedSinceGate,
   personSaidProjectType,
   clearProjectTypeAsked,
   readAnswerTextFile,
@@ -429,6 +456,7 @@ import {
   UTILITY_COMMANDS,
   carryPendingPersonLines,
   isKiroConductorAgentFile,
+  isScopedReviewCopy,
   KIRO_CONDUCTOR_AGENT_FILE,
   PERSON_ASKED_SKIP_REASON,
 } from "./aidlc-lib.ts";
@@ -445,13 +473,23 @@ import {
 } from "./aidlc-validity.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
+  contributionRecordError,
+  contributionSources,
   copyProjectSurfaces,
   cutPluginFragment,
+  hostListsPlugins,
+  nextCompose,
+  noPluginListLine,
   personaTwinRels,
   projectDiffPlan,
+  recordedContributionGaps,
+  type StageContribRecord,
+  stripRecordedAdds,
+  syncCommand,
   tomlFragmentText,
   withFileLineEndings,
 } from "./aidlc-plugin.ts";
+import { resolveHookPath } from "./aidlc.ts";
 import { executePlan } from "./aidlc-transaction.ts";
 import {
   aidlcDispatcherInvocation,
@@ -479,10 +517,16 @@ import {
   inspectInstalledVersion,
   gitBashLauncherRecovery,
   installRoot,
+  pluginCatalogueRoot,
   readActiveExecutable,
   rollbackVersionPath,
   versionRoot as installedVersionRoot,
 } from "./aidlc-install-paths.ts";
+import {
+  pluginCatalogueOwnership,
+  readPluginCatalogueRecord,
+  untrustedPathList,
+} from "./aidlc-uninstall-plan.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -697,6 +741,21 @@ function appendAuditEvent(
   }
 }
 
+// Doctor's own receipt rows (DOCTOR_RUN_AUDIT_EVENTS) are not work: a busy lock
+// skips the row after the tight bound the guard rows use, instead of holding
+// doctor for the whole acquire budget. A lock that never frees has its own
+// leaked-lock row in the report. A write failure still throws. The caller
+// passes the append itself, so each row's event stays at its call site, where
+// t48 looks for it.
+function appendDoctorReceipt(projectDir: string, append: () => void): void {
+  if (!acquireAuditLock(projectDir, 5, 50)) return;
+  try {
+    append();
+  } finally {
+    releaseAuditLock(projectDir);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // help
 // ---------------------------------------------------------------------------
@@ -736,6 +795,9 @@ Utilities:
   intent unarchive <name>  Bring an archived intent back as it was (in-flight or complete)
   intent add-repo <name>  Add a sibling repo to the active piece of work (until Units Generation is approved)
   intent remove-repo <name>  Take a sibling repo out of the active piece of work (never the last one)
+  intent set-repos <name,...> | --all  Set exactly which sibling repos the active piece of work covers, or keep them all (until Units Generation is approved)
+  intent add-checkout <path>  Record a checkout outside the review's reach (a harness-folder worktree, or one outside the project) so the review covers the code there
+  intent remove-checkout <path>  Take a recorded checkout out of the active piece of work's review
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
@@ -745,7 +807,7 @@ Utilities:
   plugin select [names]  Show or set the enabled plugin list
   plugin list       List installed plugins and enabled state (--json for structured output)
   plugin sync       Compose installed plugins into the current install
-  plugin validate [path]  Validate authored plugin content (--json for structured output)
+  plugin validate [path]  Validate authored plugin content (--with <base-root> checks a base plugin's agents; --json for structured output)
   plugin build <harness> [outDir]  Build a host plugin projection (--plugin-root <path>)
   knowledge onboard [path]  Index customer documents into the space DocumentKB
   knowledge sync    Reconcile the catalog with disk; retries extractor_unavailable rows
@@ -800,11 +862,13 @@ export function renderHelpText(): string {
   const mapping = loadScopeMapping();
   const defaultResolution = defaultScopeResolution();
   const effectiveDefaultScope = defaultResolution.error ? "" : defaultResolution.scope;
+  // The stages a scope runs after Initialization, of all the stages after it:
+  // the count its plan offer gives on existing code. Help has no project, so a
+  // new project's Reverse Engineering skip is the offer's to say.
+  const total = loadStageGraph().filter((stage) => stage.phase !== "initialization").length;
   const scopeLines = [...validScopes()].map((name) => {
     const def = mapping[name];
-    const execute = Object.values(def.stages).filter((v) => v === "EXECUTE")
-      .length;
-    const total = Object.keys(def.stages).length;
+    const execute = gridCostSummary(def.stages).shown;
     const depth = def.depth.toLowerCase();
     const ts = def.testStrategy
       ? `, ${def.testStrategy.toLowerCase()} test strategy`
@@ -1056,24 +1120,7 @@ export function regenerateSelectionSurfaces(
 // (tools/data/plugin-contrib-<key>.json). Prose fragments carry their own
 // sentinel markers. On disable, select-plugins strips both, so a disabled
 // plugin's contributions stop steering enabled stages; re-enabling restores
-// them on the next session start (the plugin's compose hook re-merges).
-
-interface ConsumeContribRecord {
-  artifact: string;
-  required: boolean;
-  conditional_on?: string;
-}
-
-interface StageContribRecord {
-  produces?: string[];
-  sensors?: string[];
-  consumes?: Array<string | ConsumeContribRecord>;
-  scopes?: string[];
-  requires_stage?: string[];
-  required_sections?: string[];
-  required_sections_created?: boolean;
-  fragments?: Array<{ anchor: string; order: number; hash: string }>;
-}
+// them at the plugin's next compose (`nextCompose` in aidlc-plugin.ts).
 
 function pluginContribSidecarPath(plugin: string): string {
   return resolveHarnessPath(
@@ -1084,213 +1131,6 @@ function pluginContribSidecarPath(plugin: string): string {
 
 function installedStagesRoot(): string {
   return resolveHarnessPath(["aidlc-common", "stages"], { mutable: true });
-}
-
-// Remove recorded values from a `field:` block. An emptied block collapses to
-// the inline `field: []` form (the shape compose's merge expanded from); a
-// created-by-compose required_sections field is deleted outright.
-function removeListValues(content: string, field: string, values: ReadonlySet<string>, dropEmptyField: boolean): string {
-  const blockRe = new RegExp(`^${field}:\\n((?:  - .+\\n)*)`, "m");
-  const m = content.match(blockRe);
-  if (!m) return content;
-  const entries = [...m[1].matchAll(/^ {2}- (.+)$/gm)].map((x) => x[1]);
-  const removeIndexes = new Set<number>();
-  const remaining = new Set(values);
-  // Compose renders ordinary structural additions unquoted. Prefer that exact
-  // spelling so a legacy sidecar cannot remove an equivalent quoted membership
-  // that predated the plugin.
-  for (let i = 0; i < entries.length; i++) {
-    if (remaining.delete(entries[i].trim())) removeIndexes.add(i);
-  }
-  // required_sections are rendered quoted while their sidecar values are bare.
-  // Remove at most one canonical match for each recorded addition.
-  for (const value of remaining) {
-    const index = entries.findIndex((entry, i) => {
-      if (removeIndexes.has(i)) return false;
-      const bare = entry.trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
-      return bare === value;
-    });
-    if (index !== -1) removeIndexes.add(index);
-  }
-  const kept = entries.filter((_, i) => !removeIndexes.has(i));
-  const replacement = kept.length > 0
-    ? `${field}:\n${kept.map((v) => `  - ${v}`).join("\n")}\n`
-    : dropEmptyField ? "" : `${field}: []\n`;
-  return content.replace(blockRe, replacement);
-}
-
-function removeConsumesEntries(content: string, artifacts: ReadonlySet<string>): string {
-  const blockRe = /^consumes:\n((?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m;
-  const m = content.match(blockRe);
-  if (!m) return content;
-  const kept = [...m[1].matchAll(/^ {2}- artifact:\s*([\w-]+).*\n(?: {4}(?:required|conditional_on):.*\n)*/gm)]
-    .filter((entry) => !artifacts.has(entry[1]))
-    .map((entry) => entry[0]);
-  const replacement = kept.length > 0 ? `consumes:\n${kept.join("")}` : "consumes: []\n";
-  return content.replace(blockRe, replacement);
-}
-
-function fragmentProseHash(content: string): string {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < content.length; i++) {
-    hash ^= content.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-}
-
-function missingRecordedContributions(
-  parsed: Record<string, unknown>,
-  content: string,
-  plugin: string,
-  record: StageContribRecord,
-  // How a fragment's text reads back from this file (a Codex persona twin
-  // holds it escaped inside a TOML string).
-  fragmentText: (raw: string) => string = (raw) => raw,
-): string[] {
-  const missing: string[] = [];
-  for (const field of ["produces", "sensors", "scopes", "requires_stage", "required_sections"] as const) {
-    const recorded = record[field];
-    if (!Array.isArray(recorded) || recorded.length === 0) continue;
-    const present = new Set(
-      (Array.isArray(parsed[field]) ? parsed[field] : [])
-        .filter((value): value is string => typeof value === "string"),
-    );
-    const absent = recorded.filter((value) => !present.has(value));
-    if (absent.length > 0) missing.push(`${field}=[${absent.join(", ")}]`);
-  }
-
-  if (Array.isArray(record.consumes) && record.consumes.length > 0) {
-    const present = (Array.isArray(parsed.consumes) ? parsed.consumes : [])
-      .flatMap((entry): ConsumeContribRecord[] => {
-        if (
-          !isPlainObject(entry) ||
-          typeof entry.artifact !== "string" ||
-          typeof entry.required !== "boolean"
-        ) {
-          return [];
-        }
-        return [{
-          artifact: entry.artifact,
-          required: entry.required,
-          ...(typeof entry.conditional_on === "string"
-            ? { conditional_on: entry.conditional_on }
-            : {}),
-        }];
-      });
-    const absent = record.consumes.filter((expected) => {
-      if (typeof expected === "string") {
-        return !present.some((entry) => entry.artifact === expected);
-      }
-      return !present.some((entry) =>
-        entry.artifact === expected.artifact &&
-        entry.required === expected.required &&
-        entry.conditional_on === expected.conditional_on
-      );
-    }).map((expected) =>
-      typeof expected === "string"
-        ? expected
-        : `${expected.artifact}(required=${expected.required}${
-          expected.conditional_on ? `, conditional_on=${expected.conditional_on}` : ""
-        })`
-    );
-    if (absent.length > 0) missing.push(`consumes=[${absent.join(", ")}]`);
-  }
-  if (Array.isArray(record.fragments) && record.fragments.length > 0) {
-    const absent = record.fragments.flatMap((fragment) => {
-      const id = `${fragment.anchor}@${fragment.order}:${fragment.hash}`;
-      const open =
-        `<!-- plugin:${plugin}:${fragment.anchor}:${fragment.order}:${fragment.hash} -->`;
-      const close =
-        `<!-- /plugin:${plugin}:${fragment.anchor}:${fragment.order}:${fragment.hash} -->`;
-      const openIdx = content.indexOf(open);
-      if (openIdx === -1) return [id];
-      const bodyStart = openIdx + open.length;
-      const closeIdx = content.indexOf(close, bodyStart);
-      if (closeIdx === -1) return [id];
-      const wrapped = content.slice(bodyStart, closeIdx);
-      if (!wrapped.startsWith("\n") || !wrapped.endsWith("\n")) return [id];
-      return fragmentProseHash(fragmentText(wrapped.slice(1, -1))) === fragment.hash ? [] : [id];
-    });
-    if (absent.length > 0) missing.push(`fragments=[${absent.join(", ")}]`);
-  }
-  return missing;
-}
-
-function contributionRecordError(value: unknown): string | undefined {
-  if (!isPlainObject(value)) return "expected an object";
-  let hasContribution = false;
-  for (const field of ["produces", "sensors", "scopes", "requires_stage", "required_sections"] as const) {
-    if (!(field in value)) continue;
-    if (!Array.isArray(value[field])) return `${field} must be an array`;
-    if (value[field].some((entry) => typeof entry !== "string" || entry.length === 0)) {
-      return `${field} must contain non-empty strings`;
-    }
-    if (value[field].length > 0) hasContribution = true;
-  }
-  if ("consumes" in value) {
-    if (!Array.isArray(value.consumes)) return "consumes must be an array";
-    for (const [index, consume] of value.consumes.entries()) {
-      if (typeof consume === "string") {
-        if (consume.length === 0) return `consumes[${index}] must be a non-empty string`;
-        continue;
-      }
-      if (!isPlainObject(consume)) {
-        return `consumes[${index}] must be a legacy string or an object`;
-      }
-      if (typeof consume.artifact !== "string" || consume.artifact.length === 0) {
-        return `consumes[${index}].artifact must be a non-empty string`;
-      }
-      if (typeof consume.required !== "boolean") {
-        return `consumes[${index}].required must be a boolean`;
-      }
-      if (
-        "conditional_on" in consume &&
-        consume.conditional_on !== undefined &&
-        consume.conditional_on !== "brownfield" &&
-        consume.conditional_on !== "greenfield"
-      ) {
-        return `consumes[${index}].conditional_on must be brownfield or greenfield`;
-      }
-    }
-    if (value.consumes.length > 0) hasContribution = true;
-  }
-  if (
-    "required_sections_created" in value &&
-    typeof value.required_sections_created !== "boolean"
-  ) {
-    return "required_sections_created must be a boolean";
-  }
-  if ("fragments" in value) {
-    if (!Array.isArray(value.fragments)) return "fragments must be an array";
-    const identities = new Set<string>();
-    for (const [index, fragment] of value.fragments.entries()) {
-      if (!isPlainObject(fragment)) return `fragments[${index}] must be an object`;
-      if (
-        typeof fragment.anchor !== "string" ||
-        !/^\S+$/.test(fragment.anchor)
-      ) {
-        return `fragments[${index}].anchor must be a non-empty token`;
-      }
-      if (
-        typeof fragment.order !== "number" ||
-        !Number.isSafeInteger(fragment.order) ||
-        fragment.order < 0
-      ) {
-        return `fragments[${index}].order must be a non-negative integer`;
-      }
-      if (typeof fragment.hash !== "string" || !/^[0-9a-f]{8}$/.test(fragment.hash)) {
-        return `fragments[${index}].hash must be an 8-character lowercase hex hash`;
-      }
-      const identity = `${fragment.anchor}\0${fragment.order}`;
-      if (identities.has(identity)) {
-        return `fragments contains duplicate identity ${fragment.anchor}@${fragment.order}`;
-      }
-      identities.add(identity);
-    }
-    if (value.fragments.length > 0) hasContribution = true;
-  }
-  return hasContribution ? undefined : "record has no contributions";
 }
 
 // Strip every sentinel-marked prose fragment this plugin spliced. The open
@@ -1342,28 +1182,8 @@ function stripDisabledPluginContributions(
         const before = readFileSync(path, "utf-8");
         // A CRLF checkout strips as the LF text compose wrote, in its own line endings.
         const content = withFileLineEndings(before, (text) => {
-          let content = text;
           const record = manifest[f.replace(/\.md$/, "")];
-          if (record) {
-            if (record.produces?.length) content = removeListValues(content, "produces", new Set(record.produces), false);
-            if (record.sensors?.length) content = removeListValues(content, "sensors", new Set(record.sensors), false);
-            if (record.scopes?.length) content = removeListValues(content, "scopes", new Set(record.scopes), false);
-            if (record.requires_stage?.length) content = removeListValues(content, "requires_stage", new Set(record.requires_stage), false);
-            if (record.consumes?.length) {
-              const artifacts = record.consumes.flatMap((entry) =>
-                typeof entry === "string"
-                  ? [entry]
-                  : entry && typeof entry.artifact === "string"
-                    ? [entry.artifact]
-                    : []
-              );
-              content = removeConsumesEntries(content, new Set(artifacts));
-            }
-            if (record.required_sections?.length) {
-              content = removeListValues(content, "required_sections", new Set(record.required_sections), record.required_sections_created === true);
-            }
-          }
-          return removePluginFragments(content, plugin);
+          return removePluginFragments(record ? stripRecordedAdds(text, record) : text, plugin);
         });
         if (content !== before) {
           writeFileSync(path, content, "utf-8");
@@ -1399,6 +1219,19 @@ function stripDisabledPluginContributions(
     if (pluginTouched) stripped.push(plugin);
   }
   return stripped;
+}
+
+// The one turn-off rule, run in the staged tree a selection is built in by
+// plugin select and by every config refresh: a plugin that tree's selection
+// leaves off or pauses keeps nothing it merged into core stages and personas,
+// nor its record of it, so its compose merges it back once it is on again.
+// The implicit core plugin merges nothing.
+export function stripPluginsTurnedOff(): string[] {
+  const active = pluginsEnabled();
+  if (active === null) return [];
+  return stripDisabledPluginContributions(
+    knownPluginNames().filter((name) => name !== "aidlc" && !active.has(name)),
+  );
 }
 
 // A selection change must not strand a live workflow: after disable, a state
@@ -1479,7 +1312,7 @@ export function activeWorkflowPluginDependencies(
 
 function handleSelectPlugins(projectDir: string, positional: string[]): void {
   if (positional.length === 1) {
-    const selection = renderPluginSelection(pluginsEnabled());
+    const selection = renderPluginSelection(pluginsSelected());
     process.stdout.write(
       `Current plugin selection: ${selection}\nKnown plugins: ${knownPluginNames().join(", ")}\n`,
     );
@@ -1506,22 +1339,29 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
     if (unknown.length > 0) {
       die(`Unknown plugin name(s): ${unknown.join(", ")}. Valid plugins: ${known.join(", ")}.`);
     }
-    const violations = activeWorkflowDependencyViolations(projectDir, new Set(names));
+    // A plugin kept in the list whose base is left out is paused: off for
+    // everything that runs, still in the person's list.
+    const nameSet = new Set(names);
+    const pausedBefore = pausedPlugins();
+    const pausedAfter = pausedBySelection(nameSet, (plugin) => composedPluginBase(dirname(harnessDataPath()), plugin));
+    const active = new Set(names.filter((name) => !pausedAfter.has(name)));
+    const violations = activeWorkflowDependencyViolations(projectDir, active);
     if (violations.length > 0) {
+      const pausedWhy = [...pausedAfter]
+        .filter(([plugin]) => violations.some((v) => v.includes(`plugin "${plugin}"`)))
+        .map(([plugin, base]) => `  ${plugin} would be paused: ${plugin} builds on ${base}, which this selection leaves off.\n`)
+        .join("");
       die(
         `select-plugins refused: the new selection would strand ${violations.length} active workflow dependency(ies):\n` +
           violations.map((v) => `  - ${v}`).join("\n") +
+          (pausedWhy ? `\n${pausedWhy.trimEnd()}` : "") +
           `\nComplete or archive the workflow(s) first (\`${entrySkillInvocation()} intent archive <name>\`; a parked workflow ` +
           "still needs its plugin when it resumes), or keep the plugin enabled, then re-run select-plugins.",
       );
     }
 
-    const previousSelection = renderPluginSelection(pluginsEnabled());
+    const previousSelection = renderPluginSelection(pluginsSelected());
     const newSelection = names.join(", ");
-    const nameSet = new Set(names);
-    // Plugins this change DISABLES (known but not selected; the implicit core
-    // plugin has no composed contributions to strip).
-    const disabling = known.filter((n) => n !== "aidlc" && !nameSet.has(n));
 
     const stagingRoot = mkdtempSync(join(tmpdir(), "aidlc-plugin-select-"));
     const stagedProject = join(stagingRoot, "project");
@@ -1542,10 +1382,11 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
         process.env.AIDLC_HARNESS_DIR = selectedHarness;
         process.env.AIDLC_RUNTIME_HARNESS_ROOT = join(stagedProject, selectedHarness);
         resetSelectionSensitiveCaches();
-        // Strip disabled contributions in staging before recompiling. The live
-        // project remains byte-untouched until the shared transaction commits.
-        strippedPlugins = stripDisabledPluginContributions(disabling);
+        // Strip what the new selection turns off in staging before recompiling.
+        // The live project remains byte-untouched until the shared transaction
+        // commits.
         writePluginSelection(stagedProject, names);
+        strippedPlugins = stripPluginsTurnedOff();
         regenerateSelectionSurfaces(stagedProject, projectDir);
       } finally {
         for (const key of envKeys) {
@@ -1569,12 +1410,34 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
         },
       });
       resetSelectionSensitiveCaches();
-      if (strippedPlugins.length > 0) {
+      // No record keeps the folder a plugin composed from, so a sync line names
+      // it in words.
+      const harnessName = runtimeHarnessName(projectDir, harnessDir());
+      // A paused plugin is stripped too, but it comes back when its base is on
+      // again, not when it is: its pause line says so.
+      for (const plugin of strippedPlugins.filter((name) => !pausedAfter.has(name))) {
         process.stdout.write(
-          `Stripped merged contributions of disabled plugin(s): ${strippedPlugins.join(", ")} (re-enabling restores them on the next session start)\n`,
+          `What ${plugin} added to other stages and agents is taken out; turn ${plugin} back on and it returns ${
+            nextCompose(harnessName, plugin, null)
+          }.\n`,
         );
       }
       process.stdout.write(`Enabled plugins: ${names.join(", ")}\n`);
+      // Said once: at the select that pauses a plugin, never again after.
+      for (const [plugin, base] of pausedAfter) {
+        if (pausedBefore.get(plugin) === base) continue;
+        const rest = names.filter((name) => name !== plugin);
+        process.stdout.write(`${pausedLine(
+          plugin,
+          base,
+          rest.length > 0 ? `${entrySkillInvocation()} plugin select ${rest.join(",")}` : null,
+        )}\n`);
+      }
+      // And once at the select that turns a paused plugin's base back on.
+      for (const [plugin, base] of pausedBefore) {
+        if (pausedAfter.has(plugin) || !nameSet.has(plugin)) continue;
+        process.stdout.write(`${resumedLine(plugin, base, nextCompose(harnessName, plugin, null))}\n`);
+      }
     } catch (err) {
       resetSelectionSensitiveCaches();
       die(`select-plugins failed: ${errorMessage(err)}`);
@@ -1584,16 +1447,18 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
-function pluginListRows(): Array<{ name: string; enabled: boolean }> {
-  const selected = pluginsEnabled();
+function pluginListRows(): Array<{ name: string; enabled: boolean; pausedFor?: string }> {
+  const active = pluginsEnabled();
+  const paused = pausedPlugins();
   return knownPluginNames().map((name) => ({
     name,
-    enabled: selected === null || selected.has(name),
+    enabled: active === null || active.has(name),
+    ...(paused.has(name) ? { pausedFor: paused.get(name) } : {}),
   }));
 }
 
 function handlePluginList(flags: Record<string, string>): void {
-  const selected = pluginsEnabled();
+  const selected = pluginsSelected();
   const rows = pluginListRows();
   if (flags.json === "true") {
     process.stdout.write(
@@ -1607,7 +1472,11 @@ function handlePluginList(flags: Record<string, string>): void {
 
   process.stdout.write(
     `Plugin selection: ${renderPluginSelection(selected)}\n` +
-      rows.map((row) => `${row.name} ${row.enabled ? "enabled" : "disabled"}`).join("\n") +
+      rows.map((row) =>
+        row.pausedFor
+          ? `${row.name} paused: needs ${row.pausedFor}, which is off`
+          : `${row.name} ${row.enabled ? "enabled" : "disabled"}`
+      ).join("\n") +
       (rows.length > 0 ? "\n" : ""),
   );
 }
@@ -1619,11 +1488,16 @@ function pluginAuthorCommandCode(code: number): void {
 function handlePluginValidate(
   positional: string[],
   flags: Record<string, string>,
+  missingValueFlags: ReadonlySet<string>,
 ): void {
   const unknown = Object.keys(flags).filter(
-    (key) => key !== "json" && key !== "help",
+    (key) => key !== "json" && key !== "help" && key !== "with",
   );
-  if (unknown.length > 0 || positional.length > 2) {
+  if (
+    unknown.length > 0 ||
+    positional.length > 2 ||
+    missingValueFlags.has("with")
+  ) {
     pluginAuthorCommandCode(pluginValidateMain([]));
     return;
   }
@@ -1636,6 +1510,7 @@ function handlePluginValidate(
     return;
   }
   const args = [positional[1] ?? process.cwd()];
+  if (flags.with !== undefined) args.push("--with", flags.with);
   if (flags.json === "true") args.push("--json");
   pluginAuthorCommandCode(pluginValidateMain(args));
 }
@@ -1676,6 +1551,17 @@ function handlePluginBuild(
   pluginAuthorCommandCode(pluginBuildMain(args));
 }
 
+// The sync doctor names for these plugins: where the host lists its plugins,
+// the chat command or the engine's with the root set; elsewhere one command
+// per plugin, with its folder.
+function doctorSyncHint(projectDir: string, keys: Iterable<string>): string {
+  const harnessName = runtimeHarnessName(projectDir, harnessDir());
+  if (hostListsPlugins(harnessName)) {
+    return `\`${entrySkillInvocation()} plugin sync\` (or \`${aidlcDispatcherInvocation("plugin sync")}\` with the plugin root environment set)`;
+  }
+  return [...new Set(keys)].sort().map((key) => `\`${syncCommand(harnessName, key, null)}\``).join(", ");
+}
+
 function pluginRootCandidatesFromEnv(): string[] {
   const roots = [
     process.env.CLAUDE_PLUGIN_ROOT,
@@ -1687,10 +1573,10 @@ function pluginRootCandidatesFromEnv(): string[] {
   return [...new Set(roots)];
 }
 
-async function handlePluginSync(projectDir: string): Promise<void> {
-  const roots = pluginRootCandidatesFromEnv();
+async function handlePluginSync(projectDir: string, pluginRoot: string | undefined): Promise<void> {
+  const roots = [...new Set([...pluginRootCandidatesFromEnv(), ...(pluginRoot ? [resolve(pluginRoot)] : [])])];
   if (roots.length === 0) {
-    process.stdout.write("no installed plugins; nothing to sync\n");
+    process.stdout.write(`${noPluginListLine(projectDir, harnessDir()) ?? "no installed plugins; nothing to sync"}\n`);
     return;
   }
 
@@ -2085,6 +1971,8 @@ To get started:
   // aidlc-orchestrate.ts). The line carries the way back, in the harness's own
   // entry word. A live run read "Status: Running" over paused work and the
   // agent had to correct it.
+  // Read for the selected work only, as the step marker below is.
+  const planAsk = flags.intent || flags.space ? null : openPlanApprovalAsk(projectDir);
   const parkedAt = (getField(content, "Parked At Stage") ?? "").trim();
   const parked = (getField(content, "Parked") ?? "").trim().length > 0 &&
     parkedAt.length > 0 && parkedAt === currentStage &&
@@ -2100,6 +1988,17 @@ To get started:
       ? `${stageLabel(unitStage, unitStage.slug) ?? unitStage.slug} for ${activeUnit}`
       : currentName;
     statusLine = `Paused at ${at}${stopped}; pick it back up with ${entrySkillInvocation()} --resume`;
+  } else if (planAsk !== null) {
+    // The code plan question is open: the work waits on the person, in the
+    // question's own words, not on the agent; while they edit the files
+    // themselves (the question's own record says so), on their edit.
+    const units = planAsk.units ?? (typeof planAsk.unit === "string" ? [planAsk.unit] : []);
+    const plans = units.length > 1
+      ? `code plans for ${units.join(", ")}`
+      : `code plan${units.length === 1 ? ` for ${units[0]}` : ""}`;
+    statusLine = planApprovalAskState(projectDir) === "editing"
+      ? `Waiting for you to finish editing the ${plans}`
+      : `Awaiting your approval on the ${plans}`;
   } else if (currentCheckbox?.state === "awaiting-approval") {
     const displayName = currentName;
     statusLine = `Awaiting your approval on ${displayName}`;
@@ -2118,12 +2017,20 @@ To get started:
     }
   } else if (currentCheckbox?.state === "revising") {
     const displayName = currentName;
-    const revisionCount = getField(content, "Revision Count");
-    // If the Revision Count field is missing, omit the count rather than
-    // render a literal "?" — state files authored before the field existed
-    // would otherwise render "revision ? of 3".
-    statusLine = revisionCount
-      ? `Revising ${displayName} (revision ${revisionCount} of 3)`
+    // This stage's own change requests, the count its Accept as-is waits on;
+    // the state file's Revision Count runs across the whole workflow. With no
+    // readable request on record, the count is left out.
+    let revisionCount = 0;
+    try {
+      revisionCount = stageRevisionCycles(
+        readAuditShardEvents(projectDir, flags.intent, flags.space),
+        currentStage,
+      );
+    } catch {
+      // Status remains useful when the ledger is absent or unreadable.
+    }
+    statusLine = revisionCount > 0
+      ? `Revising ${displayName} (revision ${revisionCount} of ${ACCEPT_AS_IS_REVISION_CYCLES})`
       : `Revising ${displayName}`;
   } else if (currentCheckbox?.state === "completed" && status === "Running") {
     // Post-approve window: the stage was approved (→ [x]) but the orchestrator
@@ -3119,14 +3026,6 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function projectSettingsRepair(distribution: string): string {
-  const invoke = aidlcInvocation();
-  const source = invoke === "aidlc"
-    ? ""
-    : ` --from <the runtime/${distribution} root you copied from>`;
-  return `run \`${invoke} config --harness ${distribution}${source}\` to put back AI-DLC's hooks (your own hooks are kept)`;
-}
-
 const FLOW_ALTERING_CLAUDE_HOOKS = new Set([
   "continue-workflow",
   "deliver-stage-rules",
@@ -3353,12 +3252,15 @@ function kiroPluginSelection(root: string): ReadonlySet<string> | null {
   try {
     const value = JSON.parse(text) as Record<string, unknown>;
     if (!value || typeof value !== "object" || !Array.isArray(value.plugins)) return null;
-    return new Set(
+    const selected = new Set(
       value.plugins
         .filter((name): name is string => typeof name === "string")
         .map((name) => name.trim())
         .filter((name) => name.length > 0),
     );
+    // A paused plugin reads as off, as everywhere else that runs.
+    const paused = pausedBySelection(selected, (plugin) => composedPluginBase(join(root, "tools", "data"), plugin));
+    return new Set([...selected].filter((name) => !paused.has(name)));
   } catch {
     return null;
   }
@@ -3409,7 +3311,9 @@ function kiroIdeFrameworkReads(projectDir: string, harness: string): string[] {
   const inactiveRunners = new Set<string>();
   if (graph === null) {
     for (const path of markdownUnder("aidlc-common/stages")) reads.add(path);
-    for (const path of markdownUnder("agents")) if (!isKiroConductorAgentFile(path)) reads.add(path);
+    for (const path of markdownUnder("agents")) {
+      if (!isKiroConductorAgentFile(path) && !isScopedReviewCopy(path)) reads.add(path);
+    }
     for (const path of markdownUnder("knowledge")) reads.add(path);
   } else {
     for (const node of graph) {
@@ -3878,6 +3782,42 @@ export function harnessTreeVersionsCheck(projectDir: string): DoctorCheck | null
   };
 }
 
+// The path a person adds to Claude Code or Codex once, named so it can be
+// copied. It warns when the folder lists another release's plugins, or holds
+// files AI-DLC did not write, which keep updates from refreshing it.
+function pluginCatalogueDoctorCheck(active: string | null): DoctorCheck | null {
+  if (!active || !existsSync(join(installedVersionRoot(active), "plugins"))) return null;
+  const path = pluginCatalogueRoot();
+  const retry = `aidlc use ${active}`;
+  if (!existsSync(path)) {
+    return { pass: true, label: `Plugin marketplace: not created yet; run \`${retry}\` to create it at ${path}` };
+  }
+  const unowned = pluginCatalogueOwnership().preserved;
+  if (unowned.length > 0) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `Plugin marketplace: ${path} holds files AI-DLC did not write, so updates do not refresh it: ${
+        untrustedPathList(unowned).join(", ")
+      }`,
+      fix: `move them out, then run \`${retry}\``,
+    };
+  }
+  const record = readPluginCatalogueRecord();
+  if (record?.version !== active) {
+    // Only Windows keeps a folder from moving while a tool holds a file in it.
+    return {
+      pass: false,
+      severity: "warn",
+      label: `Plugin marketplace: ${path} lists the plugins of AI-DLC ${record?.version ?? "an earlier release"}, not ${active}`,
+      fix: process.platform === "win32"
+        ? `close Claude Code and Codex, then run \`${retry}\``
+        : `run \`${retry}\`; it names anything that stops the refresh`,
+    };
+  }
+  return { pass: true, label: `Plugin marketplace: ${path}` };
+}
+
 export async function collectDoctorReport(
   projectDir: string,
   extraChecks: readonly DoctorCheck[] = [],
@@ -3908,6 +3848,8 @@ export async function collectDoctorReport(
         ? `run \`${aidlcInvocation()} config --harness <name>\``
         : `run \`${aidlcInvocation()} config --harness <name>\``,
     });
+    const catalogue = pluginCatalogueDoctorCheck(installedVersion);
+    if (catalogue) results.push(catalogue);
     const command = commandPath();
     const expectedExecutable = installedVersion
       ? join(installedVersionRoot(installedVersion), process.platform === "win32" ? "aidlc.exe" : "aidlc")
@@ -4025,8 +3967,13 @@ export async function collectDoctorReport(
       }
       const hooksDir = join(harnessRoot, "hooks");
       if (existsSync(hooksDir)) {
+        // A dropped plugin's session-start registration, exactly as its build
+        // wrote it, is the plugin's own: its Bun fallback is not an AI-DLC
+        // entry left from before the native install.
+        const pluginOwned = new Set(droppedPluginRegistrations(projectDir, currentHarnessDir));
         trustFiles.push(...readdirSync(hooksDir)
           .filter((name) => name.endsWith(".kiro.hook") || name.endsWith(".json"))
+          .filter((name) => !pluginOwned.has(`${currentHarnessDir}/hooks/${name}`))
           .map((name) => join(hooksDir, name)));
       }
       for (const path of trustFiles) {
@@ -4361,6 +4308,19 @@ export async function collectDoctorReport(
       });
     } else {
       for (const h of expectedHooks) {
+        if (compiled) {
+          const packaged = resolveHookPath(h, undefined, projectDir);
+          const runs = packaged !== "" && existsSync(packaged);
+          const name = h.replace(/^aidlc-/, "").replace(/\.ts$/, "");
+          results.push({
+            pass: runs,
+            label: runs
+              ? `${h} present`
+              : `${h} is not in this install's runtime: \`${aidlcInvocation()} engine hook ${name}\` exits 1 without running it`,
+            fix: `\`${aidlcInvocation()} engine hook\` runs only the hooks the installed runtime ships; register a project hook in .claude/settings.json with a command that runs its own file`,
+          });
+          continue;
+        }
         const hookPath = join(projectDir, harness, "hooks", h);
         results.push({
           pass: existsSync(hookPath),
@@ -4799,26 +4759,23 @@ export async function collectDoctorReport(
   const treeVersions = harnessTreeVersionsCheck(projectDir);
   if (treeVersions) results.push(treeVersions);
 
-  // 4a. Project-default scope — real env overrides the recorded project flag.
-  // The framework fallback is not a configured project default.
+  // 4a. Project-default scope: real env overrides the recorded project flag.
+  // The framework fallback is not a configured project default, so with
+  // nothing set there is no row: in a terminal this process cannot see the
+  // value Claude Code passes from .claude/settings.json, and "unset" would be
+  // false there.
   const defaultResolution = defaultScopeResolution();
   const envScope = defaultResolution.scope;
-  if (defaultResolution.source !== "env") {
-    results.push({
-      pass: true,
-      label: "AWS_AIDLC_DEFAULT_SCOPE (unset - no project default)",
-    });
-  } else if (!defaultResolution.error && validScopes().has(envScope)) {
-    results.push({
-      pass: true,
-      label: `AWS_AIDLC_DEFAULT_SCOPE=${envScope} (valid)`,
-    });
-  } else {
-    results.push({
-      pass: false,
-      label: `AWS_AIDLC_DEFAULT_SCOPE=${envScope} (invalid)`,
-      fix: `valid values: ${[...validScopes()].join(", ")}`,
-    });
+  if (defaultResolution.source === "env") {
+    results.push(
+      !defaultResolution.error && validScopes().has(envScope)
+        ? { pass: true, label: `AWS_AIDLC_DEFAULT_SCOPE=${envScope} (valid)` }
+        : {
+          pass: false,
+          label: `AWS_AIDLC_DEFAULT_SCOPE=${envScope} (invalid)`,
+          fix: `valid values: ${[...validScopes()].join(", ")}`,
+        },
+    );
   }
 
   // 4c. Plugin selection — doctor is a full-graph consumer. Runtime consumers
@@ -4863,7 +4820,7 @@ export async function collectDoctorReport(
         : `Plugin selection flags: ${disagreements.length} disagreement(s)`,
       fix: disagreements.length > 0
         ? `${disagreements.join("; ")} - run \`${aidlcDispatcherInvocation("plugin select")} ${
-            selected === null ? knownPluginNames().join(",") : [...selected].sort().join(",")
+            [...(pluginsSelected() ?? knownPluginNames())].sort().join(",")
           }\` to recover`
         : undefined,
     });
@@ -4871,67 +4828,27 @@ export async function collectDoctorReport(
     const graphSlugs = new Set(graphAll.map((s) => s.slug));
     const missingEnabled: string[] = [];
     const missingPluginStages: string[] = [];
-    const stageSources = new Map<
-      string,
-      {
-        path: string;
-        content: string;
-        parsed: Record<string, unknown>;
-        kind: "stage" | "agent";
-        // A twin the harness should have but that is gone or unreadable keeps
-        // its entry with null content, so doctor names it.
-        twins?: Array<{ path: string; rel: string; content: string | null; toml: boolean }>;
-      }
-    >();
     const stagesRoot = resolveHarnessPath(["aidlc-common", "stages"]);
     // Persona contributions (prose fragments into <harness>/agents/*.md) are
     // verified from the same sidecar records, keyed by the agent slug, in the
-    // persona and in each native twin compose keeps in step with it. A
-    // persona has no structural fields, so its parsed view is empty. CRLF
-    // reads as LF, as for stage sources below.
-    const personasRoot = resolveHarnessPath(["agents"]);
-    if (existsSync(personasRoot)) {
-      const harness = runtimeHarnessName(projectDir, harnessDir());
-      for (const f of readdirSync(personasRoot).filter((name) => name.endsWith(".md")).sort()) {
-        const path = join(personasRoot, f);
-        const slug = f.replace(/\.md$/, "");
-        try {
-          const twins = personaTwinRels(harness, harnessDir(), slug).map((rel) => {
-            const twinPath = join(projectDir, rel);
-            let content: string | null = null;
-            try {
-              content = readFileSync(twinPath, "utf-8").replace(/\r\n/g, "\n");
-            } catch {
-              // Gone or unreadable: reported below when a fragment is recorded for it.
-            }
-            return { path: twinPath, rel, content, toml: rel.endsWith(".toml") };
-          });
-          stageSources.set(slug, {
-            path,
-            content: readFileSync(path, "utf-8").replace(/\r\n/g, "\n"),
-            parsed: {},
-            kind: "agent",
-            twins,
-          });
-        } catch {
-          // An unreadable persona surfaces through the agent roster checks.
-        }
-      }
-    }
+    // persona and in each native twin compose keeps in step with it.
+    const stageSources = contributionSources(
+      stagesRoot,
+      resolveHarnessPath(["agents"]),
+      projectDir,
+      runtimeHarnessName(projectDir, harnessDir()),
+      harnessDir(),
+    );
     for (const phase of PHASES) {
       const dir = join(stagesRoot, phase);
       if (!existsSync(dir)) continue;
       for (const f of readdirSync(dir).filter((name) => name.endsWith(".md")).sort()) {
         const path = join(dir, f);
         try {
-          // CRLF read as LF: compose hashes fragment prose over that text, and a
-          // checkout that turns line endings must not read as a missing fragment.
-          const content = readFileSync(path, "utf-8").replace(/\r\n/g, "\n");
-          const parsed = parseStageFrontmatter(content) as Record<string, unknown>;
+          const parsed = parseStageFrontmatter(readFileSync(path, "utf-8").replace(/\r\n/g, "\n"));
           const slug = typeof parsed.slug === "string" ? parsed.slug : f.replace(/\.md$/, "");
           const plugin = typeof parsed.plugin === "string" ? parsed.plugin : undefined;
           const stagePhase = typeof parsed.phase === "string" ? parsed.phase : phase;
-          stageSources.set(slug, { path, content, parsed, kind: "stage" });
           if (
             expectedEnabledBySelection({ plugin, phase: stagePhase }) &&
             !graphSlugs.has(slug)
@@ -5011,7 +4928,7 @@ export async function collectDoctorReport(
             );
             continue;
           }
-          const missing = missingRecordedContributions(
+          const { missing } = recordedContributionGaps(
             source.parsed,
             source.content,
             plugin,
@@ -5029,7 +4946,7 @@ export async function collectDoctorReport(
               );
               continue;
             }
-            const twinMissing = missingRecordedContributions(
+            const { missing: twinMissing } = recordedContributionGaps(
               {},
               twin.content,
               plugin,
@@ -5049,7 +4966,9 @@ export async function collectDoctorReport(
         ? "Composed plugin surface: all enabled plugin stages and recorded contributions are present"
         : `Composed plugin surface: ${missingComposition.length} missing composition item(s)`,
       fix: missingComposition.length > 0
-        ? `${missingComposition.join("; ")} - correct any sidecar or target issue named above, then re-run \`${entrySkillInvocation()} plugin sync\` (or \`${aidlcDispatcherInvocation("plugin sync")}\` with the plugin root environment set). Hook-carrying hosts retry sync on the next session start.`
+        ? `${missingComposition.join("; ")} - correct any sidecar or target issue named above, then re-run ${
+          doctorSyncHint(projectDir, missingComposition.map((item) => item.slice(0, item.indexOf(":"))))
+        }. Hook-carrying hosts retry sync on the next session start.`
         : undefined,
     });
 
@@ -5292,7 +5211,8 @@ export async function collectDoctorReport(
   //       before workflow progress → hooks have not had a chance to fire. Pass.
   //       This preserves debug-only dirs and ignores doctor's HEALTH_CHECKED.
   //   (b) No readable heartbeat after progress, or unreadable .last files →
-  //       hooks should have fired. Fail.
+  //       hooks should have fired. Fail, or warn when only other clones'
+  //       audit shards record the progress.
   //   (c) Readable .last files exist → compare the newest one to progress.
   // The comparison itself lives in aidlc-lib.ts (hookLiveness) because the Plan
   // Approval decision refuses on the same staleness.
@@ -5321,12 +5241,38 @@ export async function collectDoctorReport(
     !heartbeatDirExists &&
     workflowHasProgress
   ) {
-    const stages = progressedStageCount === 1 ? "stage" : "stages";
-    results.push({
-      pass: false,
-      label: `Hooks have never executed although this workflow has progressed ${progressedStageCount} ${stages}`,
-      fix: hookExecutionRecovery,
-    });
+    // Heartbeats are git-ignored and stay in the clone whose hooks wrote them,
+    // while audit shards travel in commits. Progress that only other clones'
+    // shards record says nothing about this clone's hooks, and the hooks step
+    // would be aimed at the wrong machine.
+    const ownShard = knownAuditShardName(projectDir);
+    const ranElsewhere = stageOrGateEvents.length > 0 &&
+      stageOrGateEvents.every((event) => basename(event.shard) !== ownShard);
+    if (ranElsewhere) {
+      const hosts = [
+        ...new Set(
+          stageOrGateEvents
+            .map((event) => auditShardHost(event.shard))
+            .filter((host): host is string => host !== null),
+        ),
+      ].sort();
+      const clones = hosts.length > 1 ? "other clones" : "another clone";
+      results.push({
+        pass: false,
+        severity: "warn",
+        label: `This workflow was run in ${clones}${hosts.length > 0 ? ` (${hosts.join(", ")})` : ""}; this clone has no hook record for it yet`,
+        fix:
+          "nothing to fix in this clone: its hooks record this workflow once you carry on with it here. " +
+          `To check the hooks where it ran, run doctor in ${hosts.length > 1 ? "those clones" : "that clone"}`,
+      });
+    } else {
+      const stages = progressedStageCount === 1 ? "stage" : "stages";
+      results.push({
+        pass: false,
+        label: `Hooks have never executed although this workflow has progressed ${progressedStageCount} ${stages}`,
+        fix: hookExecutionRecovery,
+      });
+    }
   } else if (
     heartbeatDirExists &&
     !hasHookFiredContent &&
@@ -5596,9 +5542,9 @@ export async function collectDoctorReport(
   }
 
   // Leaked-lock probe (P3 reaper surface). Doctor automatically clears only a
-  // provably-dead valid owner or an old genuinely-missing stamp. Live,
-  // malformed, and unreadable owners fail closed and require quiescent manual
-  // recovery.
+  // provably-dead valid owner or an old stamp that never finished. Live
+  // owners, stamps that name no valid owner, and unreadable ones fail closed and
+  // require quiescent manual recovery.
   try {
     const leaks = detectLeakedLocks(projectDir, true);
     if (leaks.length === 0) {
@@ -6572,6 +6518,7 @@ export async function collectDoctorReport(
     // the label so the operator can act on it, mirroring the MERGE_DISPATCH /
     // rule-drift advisory rows that carry their detail inline.
     const uncompiledPluginStages: string[] = [];
+    const uncompiledPlugins = new Set<string>();
     if (uncompiledStages.length > 0) {
       const uncompiled = new Set(uncompiledStages);
       const stagesRoot = resolveHarnessPath(["aidlc-common", "stages"]);
@@ -6585,7 +6532,10 @@ export async function collectDoctorReport(
             const parsed = parseStageFrontmatter(readFileSync(join(dir, file), "utf-8"));
             const slug = typeof parsed.slug === "string" ? parsed.slug : fallbackSlug;
             const plugin = typeof parsed.plugin === "string" ? parsed.plugin : undefined;
-            if (plugin) uncompiledPluginStages.push(`${slug} (${plugin})`);
+            if (plugin) {
+              uncompiledPluginStages.push(`${slug} (${plugin})`);
+              uncompiledPlugins.add(plugin);
+            }
           } catch {
             // Schema validation below owns malformed frontmatter.
           }
@@ -6593,7 +6543,7 @@ export async function collectDoctorReport(
       }
     }
     const uncompiledHint = uncompiledPluginStages.length > 0
-      ? ` - plugin-owned files ${uncompiledPluginStages.join(", ")} require \`${entrySkillInvocation()} plugin sync\` (or \`${aidlcDispatcherInvocation("plugin sync")}\` with the plugin root environment set); run \`${aidlcToolInvocation("graph")} compile\` for other authored stages`
+      ? ` - plugin-owned files ${uncompiledPluginStages.join(", ")} require ${doctorSyncHint(projectDir, uncompiledPlugins)}; run \`${aidlcToolInvocation("graph")} compile\` for other authored stages`
       : ` - run \`${aidlcToolInvocation("graph")} compile\` to include them`;
     results.push({
       pass: true,
@@ -7007,9 +6957,9 @@ export async function collectDoctorReport(
   // self-creates the audit shard/dir, so an unconditional emit on a pristine
   // project would create a record as a side effect, making --doctor NOT
   // read-only. Doctor runs on a fresh checkout before any workflow is created, so
-  // it must create nothing. On a project with a created intent the emit fires
-  // exactly as before (BARE appendAuditEvent — the only throw is a real write
-  // failure, which the rest of the codebase lets propagate).
+  // it must create nothing. On a project with a created intent the emit goes
+  // through appendDoctorReceipt (a busy lock skips it; a real write failure
+  // still propagates).
   let pairedRuleCount: number | null = null;
   try {
     const pairedRules = loadRules();
@@ -7154,11 +7104,11 @@ export async function collectDoctorReport(
   const auditExists = auditShards(projectDir).length > 0;
 
   if (auditExists && pairedRuleCount !== null) {
-    appendAuditEvent(projectDir, "GUARDRAIL_LOADED", {
+    appendDoctorReceipt(projectDir, () => appendAuditEntryUnlocked("GUARDRAIL_LOADED", {
       Scope: "all",
       Path: `${harnessDir()}/${rulesSubdir()}/`,
       "Rule count": String(pairedRuleCount),
-    });
+    }, projectDir));
   }
 
   let passed = 0;
@@ -7178,10 +7128,10 @@ export async function collectDoctorReport(
   // see auditExists above). A pristine project gets the stdout report and no
   // file side effects; an initialized project records HEALTH_CHECKED as before.
   if (auditExists) {
-    appendAuditEvent(projectDir, "HEALTH_CHECKED", {
+    appendDoctorReceipt(projectDir, () => appendAuditEntryUnlocked("HEALTH_CHECKED", {
       Request: `/aidlc --doctor`,
       Details: `${passed} passed, ${failed} failed`,
-    });
+    }, projectDir));
   }
 
   return { checks: reportResults, passed, warnings, failed, parked_attempts: parkedAttempts };
@@ -7943,11 +7893,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   // An engine question's answer names its request by id. The copy is removed
   // once the answer starts work, so look for that work before the copy.
   const questionId = flags.request;
+  // The requests this creation answers: its own and the one it was composed
+  // from (a report-only or task-less composition), for the composer's scores.
+  const answers: string[] = [];
   if (questionId !== undefined) {
     const session = resolveWorkflowSelection(projectDir, { space: flags.space }).sessionId ?? undefined;
     if (answerAlreadyStarted(projectDir, questionId, session)) return;
     const question = readQuestion(projectDir, questionId);
     if (!question) die(QUESTION_UNAVAILABLE);
+    answers.push(questionId, ...(question.composedFrom ? [question.composedFrom] : []));
     flags.arguments = question.text;
     flags.scope ||= question.proposedScope;
     // Depth, test strategy and review the person set in this chat before any
@@ -8407,7 +8361,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       // not from the registry.
       ...sourceBaselineAuditFields(
         projectDir,
-        "code-generation",
+        workspaceBaselineStageSlugs(),
         created.dirName,
         created.space,
         repos,
@@ -8428,6 +8382,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
             "Stages added": planChanges.add.join(", ") || "none",
           }
         : {}),
+      ...takeComposerScores(projectDir, answers, plannedStages.stages),
     }, created.dirName, created.space);
 
     // PHASE_STARTED for the Init phase — Init always runs. Other phases emit
@@ -8530,6 +8485,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       repos,
       initialSelection.sessionId ?? undefined,
       questionId,
+      (flags.repos ?? "").trim().length > 0,
     );
     failIntentCreateAt("after-list");
     if (teamKeptCheck !== null && initialSelection.sessionId) {
@@ -8701,6 +8657,9 @@ function handleIntentCreateStateBuild(
 
   const totalInScope = executeStages.length;
   const completedInit = graph.filter((s) => s.phase === "initialization").length;
+  // The lines the person reads count the stages the plan runs after
+  // Initialization, from the list the offer and each stage's start count.
+  const shownInScope = plannedStages(stageProgress, scope).length;
 
   const firstPostInitEntry = graph.find((s) => s.slug === firstPostInit);
   const firstPostInitPhase = firstPostInitEntry
@@ -8843,11 +8802,11 @@ ${stageProgress}
     Languages: scan.languages,
     Frameworks: scan.frameworks,
     "Build System": scan.buildSystem,
-    Details: `${totalInScope} stages in scope, routing to ${firstPostInit}`,
+    Details: `${shownInScope} stages in scope, routing to ${firstPostInit}`,
   }, createdDir, createdSpace);
   appendAuditEvent(projectDir, "STAGE_COMPLETED", {
     Stage: "state-init",
-    Details: `State initialized: ${scope} scope, ${totalInScope} stages, routing to ${firstPostInit}`,
+    Details: `State initialized: ${scope} scope, ${shownInScope} stages, routing to ${firstPostInit}`,
   }, createdDir, createdSpace);
 
   // Phase hand-off: initialization → first post-init phase. The state file
@@ -8889,7 +8848,7 @@ ${stageProgress}
       : "";
   process.stdout.write(
     `Intent created: ${createdDir} (space: ${createdSpace})
-State initialized: ${scope} scope, ${totalInScope} stages, ${effectiveDepth} depth
+State initialized: ${scope} scope, ${shownInScope} stages, ${effectiveDepth} depth
 ${composedPlan ? `Plan: ${composedPlanLabel(flags["plan-name"])}, for this piece of work only (no scope file written)\n` : ""}Project type: ${projectType}${declaredType ? " (you said so)" : ""}
 ${declaredType === "Brownfield" && scan.projectType !== "Brownfield" ? `${NO_CODE_FOUND_YET}\n` : ""}Languages: ${scan.languages}
 Frameworks: ${scan.frameworks}
@@ -9065,6 +9024,15 @@ function handleIntent(
   }
   if (verbOrTarget === "add-repo" || verbOrTarget === "remove-repo") {
     handleIntentRepos(projectDir, verbOrTarget, positional[2]);
+    return;
+  }
+  if (verbOrTarget === "set-repos") {
+    // Every word after the verb: "a, b" typed with a space is still both names.
+    handleIntentSetRepos(projectDir, positional.slice(2).join(","), flags.all === "true");
+    return;
+  }
+  if (verbOrTarget === "add-checkout" || verbOrTarget === "remove-checkout") {
+    handleIntentCheckouts(projectDir, verbOrTarget, positional[2]);
     return;
   }
   const target = verbOrTarget === "switch" ? positional[2] : verbOrTarget;
@@ -9495,6 +9463,197 @@ function handleIntentRepos(
       break;
   }
   process.stdout.write(`${lines.join(" ")}\n`);
+}
+
+// `/aidlc intent set-repos <name,...>`: the whole repo set at once, the exact
+// names the agent read from the person's words (Reverse Engineering's question,
+// or their own "only these"); `--all` keeps the set recorded. Either way the set
+// is then the person's (`repos_named`), so that question is not put again. Each
+// name passes add-repo's checks before anything changes; same locks,
+// audit-first order and Units Generation cut-off as add-repo.
+function handleIntentSetRepos(projectDir: string, list: string | undefined, all: boolean): void {
+  const names = all ? null : [...new Set((list ?? "").split(",").map((name) => name.trim()).filter((name) => name.length > 0))].sort();
+  if (names !== null && names.length === 0) die("Usage: aidlc-utility intent set-repos <name,...> | --all");
+  for (const name of names ?? []) {
+    if (!isValidRepoName(name)) {
+      die(`intent set-repos refused: "${name}" is not a repo name (one folder name under the workspace, no separators). Nothing was changed.`);
+    }
+  }
+  const selection = resolveWorkflowSelection(projectDir);
+  const space = selection.space;
+  const dirName = selection.intent;
+  if (!dirName) {
+    die(`No piece of work is active in space "${space}"; switch to one first (${entrySkillInvocation()} intent list).`);
+  }
+  const outcome = withAuditLock(projectDir, () =>
+    withAuditLock(projectDir, () => {
+      const rows = readIntentRegistry(projectDir, space);
+      const row = rows.find((entry) => recordDirMatches(entry, dirName));
+      if (!row) {
+        die(`Intent "${dirName}" has no intents.json row in space "${space}"; nothing was changed. Repair the registry first (${entrySkillInvocation()} --doctor names the mismatch).`);
+      }
+      const current = row.repos ?? [];
+      if (current.length === 0) {
+        die("intent set-repos refused: this piece of work treats the workspace folder itself as its code repo, so it records no repos to change.");
+      }
+      const next = names ?? current;
+      const added = next.filter((repo) => !current.includes(repo));
+      const removed = current.filter((repo) => !next.includes(repo));
+      const state = readStateFile(projectDir, dirName, space);
+      const boxes = new Map(parseCheckboxes(state).map((box) => [box.slug, box.state]));
+      if ((added.length > 0 || removed.length > 0) && boxes.get("units-generation") === "completed") {
+        return { kind: "cutoff" as const, next };
+      }
+      for (const name of added) {
+        if (!isGitRepoDir(repoDir(projectDir, name))) {
+          die(`intent set-repos refused: "${name}" is not a Git checkout under the workspace folder (no .git entry at ${repoDir(projectDir, name)}). Nothing was changed.`);
+        }
+      }
+      appendAuditEntryUnlocked(
+        "INTENT_REPOS_CHANGED",
+        {
+          Stage: (getField(state, "Current Stage") ?? "").trim() || "none",
+          ...(added.length > 0 ? { Added: added.join(", ") } : {}),
+          ...(removed.length > 0 ? { Removed: removed.join(", ") } : {}),
+          Repos: next.join(", "),
+          Named: "by the person",
+        },
+        projectDir,
+        dirName,
+        space,
+      );
+      row.repos = next;
+      row.repos_named = true;
+      writeIntentRegistry(projectDir, rows, space);
+      return { kind: "changed" as const, next, removed };
+    }, dirName, space),
+  );
+  const named = (repos: string[]): string =>
+    repos.length >= MANY_REPOS ? `${repos.length} repositories`
+    : repos.length === 1 ? repos[0]
+    : `${repos.slice(0, -1).join(", ")} and ${repos[repos.length - 1]}`;
+  if (outcome.kind === "cutoff") {
+    process.stdout.write(
+      `Units Generation is already approved, so its Units are written for the repos this work recorded. Do you want me to go back to Units Generation with ${named(outcome.next)}?\n`,
+    );
+    return;
+  }
+  const covers = all ? `This work covers all ${outcome.next.length} of its repositories.` : `This work now covers ${named(outcome.next)}.`;
+  const back = outcome.removed.length === 0 ? ""
+    : outcome.removed.length === 1 ? ` ${outcome.removed[0]} can be added back any time.`
+    : ` The ${outcome.removed.length} left out can be added back any time.`;
+  process.stdout.write(`${covers}${back}\n`);
+}
+
+// `/aidlc intent add-checkout <path>` / `/aidlc intent remove-checkout <path>`:
+// name a checkout the work's code is kept in where the review would not see it
+// (a worktree in a harness folder such as .claude/worktrees/, or one outside
+// the project), so the review binds it and the source-work check finds it; or
+// take it out again. The agent runs it from its own knowledge of where it wrote
+// the code, or the person does; it never asks. Unlike add-repo it has no Units
+// Generation cut-off (it is needed in Code Generation), works for work that
+// records no repos, and takes a path. The folder needs a real .git entry; a
+// path the review already reaches, or inside AI-DLC's own folders, is refused
+// with the reason. Same locks and audit-first order as add-repo; the record is
+// the intent's per-clone .aidlc-engine/ file, never the audit row.
+function handleIntentCheckouts(
+  projectDir: string,
+  verb: "add-checkout" | "remove-checkout",
+  typed: string | undefined,
+): void {
+  if (!typed) die(`Usage: aidlc-utility intent ${verb} <path>`);
+  const selection = resolveWorkflowSelection(projectDir);
+  const space = selection.space;
+  const dirName = selection.intent;
+  if (!dirName) {
+    die(`No piece of work is active in space "${space}"; switch to one first (${entrySkillInvocation()} intent list).`);
+  }
+  const target = resolve(projectDir, typed);
+  const outcome = withAuditLock(projectDir, () =>
+    withAuditLock(projectDir, () => {
+      const checkouts = readRecordedSourceCheckouts(projectDir, dirName, space);
+      const state = readStateFile(projectDir, dirName, space);
+      const stage = (getField(state, "Current Stage") ?? "").trim() || "none";
+      if (verb === "remove-checkout") {
+        const known = recordedCheckoutAt(target, checkouts) ??
+          checkouts.find((entry) => entry.label === typed || entry.path === typed) ?? null;
+        if (known === null) return { kind: "absent" as const };
+        const next = checkouts.filter((entry) => entry.label !== known.label);
+        appendAuditEntryUnlocked(
+          "INTENT_CHECKOUTS_CHANGED",
+          { Stage: stage, Removed: known.label, Path: known.path, Checkouts: next.map((entry) => entry.label).join(", ") || "none" },
+          projectDir,
+          dirName,
+          space,
+        );
+        writeRecordedSourceCheckouts(projectDir, next, dirName, space);
+        return { kind: "removed" as const, checkout: known };
+      }
+      let real = "";
+      try {
+        real = realpathSync(target);
+        if (!statSync(real).isDirectory()) real = "";
+      } catch {
+        real = "";
+      }
+      if (real === "") {
+        die(`intent add-checkout refused: ${typed} is not a folder on this machine. Make the checkout there first.`);
+      }
+      if (!hasRealGitEntry(real)) {
+        die(`intent add-checkout refused: ${typed} is not a Git checkout (no .git entry in it). Name the worktree or clone itself.`);
+      }
+      const known = recordedCheckoutAt(real, checkouts);
+      if (known !== null) return { kind: "already" as const, checkout: known };
+      for (const own of ["aidlc", ".aidlc"]) {
+        let ownReal = join(projectDir, own);
+        try {
+          ownReal = realpathSync(ownReal);
+        } catch {
+          // Not there: nothing can be inside it.
+        }
+        const rel = relative(ownReal, real);
+        if (rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))) {
+          die(`intent add-checkout refused: ${typed} is inside AI-DLC's own ${own}/ folder, which holds no code of yours.`);
+        }
+      }
+      if (sourceWalkReach(projectDir, workspaceSourceState(projectDir, dirName, space)?.listing ?? null, checkouts)(real)) {
+        return { kind: "reached" as const };
+      }
+      const checkout = { label: sourceCheckoutLabelFor(real, checkouts), path: typed, real };
+      const next = [...checkouts, checkout];
+      appendAuditEntryUnlocked(
+        "INTENT_CHECKOUTS_CHANGED",
+        { Stage: stage, Added: checkout.label, Path: typed, Checkouts: next.map((entry) => entry.label).join(", ") },
+        projectDir,
+        dirName,
+        space,
+      );
+      writeRecordedSourceCheckouts(projectDir, next, dirName, space);
+      return { kind: "added" as const, checkout };
+    }, dirName, space),
+  );
+  // What happened and the way back, in a line; never this command's own line.
+  switch (outcome.kind) {
+    case "absent":
+      process.stdout.write(`${typed} is not one of the checkouts this piece of work records; nothing changed.\n`);
+      break;
+    case "already":
+      process.stdout.write(
+        `${typed} is already recorded for this piece of work's review (as ${sourceCheckoutListingRel(outcome.checkout.label)}); nothing changed.\n`,
+      );
+      break;
+    case "reached":
+      process.stdout.write(`The review already covers ${typed}; nothing to record.\n`);
+      break;
+    case "added":
+      process.stdout.write(
+        `Recorded ${typed} for this piece of work's review, as ${sourceCheckoutListingRel(outcome.checkout.label)}. You can remove it any time.\n`,
+      );
+      break;
+    case "removed":
+      process.stdout.write(`Removed ${outcome.checkout.path} from this piece of work's review. You can add it back any time.\n`);
+      break;
+  }
 }
 
 // `/aidlc space` (list) · `/aidlc space <name>` (switch the active-space
@@ -11260,8 +11419,8 @@ function projectTypeWords(type: string): string {
 // write, audited first. Moving the workflow back to run it is `next`'s job.
 function handleReclassify(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
   const usage = (message: string): never =>
-    die(`${message}\nUsage: workspace reclassify --project-type <greenfield|brownfield> [--intent <slug>] [--space <name>] [--then-rerun] [--project-dir <path>]`);
-  const allowed = new Set(["project-type", "intent", "space", "then-rerun", "project-dir"]);
+    die(`${message}\nUsage: workspace reclassify --project-type <greenfield|brownfield> [--intent <slug>] [--space <name>] [--person-words <their words> | --person-words-file <file>] [--then-rerun] [--project-dir <path>]`);
+  const allowed = new Set(["project-type", "intent", "space", "person-words", "person-words-file", "then-rerun", "project-dir"]);
   for (const arg of rawArgs) {
     if (!arg.startsWith("--")) continue;
     const name = arg.slice(2).split("=")[0];
@@ -11288,12 +11447,29 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
         `to the request that starts it (${entrySkillInvocation()} --project-type ${declared.toLowerCase()} "<what to build>").`,
     );
   }
+  // The words the person said it in, given inline or left in the work's answer
+  // text file: recorded beside the change, and read by the check below. A file
+  // that cannot be read leaves them out; the change is recorded either way.
+  readPersonWordsFile(projectDir, flags, true);
+  const typedWords = flags["person-words"];
+  const personWords = typedWords === undefined || typedWords === "true"
+    ? undefined
+    : typedWords.replace(/\s+/g, " ").trim() || undefined;
   // What the folder is, is the person's word: it is recorded as theirs only
   // once they have said something since the last decision (an answer to the
-  // question, or the command they typed), after the question when it was asked.
-  // At the person's own terminal no chat answer can arrive: the step that
-  // works there is named instead.
-  if (!humanPresenceGuardDisabled() && !personSaidProjectType(projectDir)) {
+  // question, or the command they typed), after the question when it was asked,
+  // or when the words are a whole message of theirs in this chat (the message
+  // that started the work leaves no turn). The chat is the one running this
+  // command, else the chat most recently active here. At the person's own
+  // terminal no chat answer can arrive: the step that works there is named
+  // instead.
+  if (!humanPresenceGuardDisabled() && !personSaidProjectType(projectDir, {
+    chat: selection.sessionId ?? readCurrentSessionId(projectDir),
+    type: declared === "Brownfield" ? "brownfield" : "greenfield",
+    words: personWords,
+    intent,
+    space,
+  })) {
     die(personAtOwnTerminal(projectDir)
       ? OWN_TERMINAL_PRESENCE_STEP
       : "The person has not said yet whether this folder is existing code. Ask them the question you were given, " +
@@ -11371,6 +11547,7 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
         fields: {
           "Old Project Type": `${previous} (${previousSource})`,
           "New Project Type": `${declared} (${PROJECT_TYPE_SOURCE_PERSON})`,
+          ...(personWords !== undefined ? { "Person Words": personWords } : {}),
           "Scanned As": scan.projectType,
           Languages: scan.languages,
           Frameworks: scan.frameworks,
@@ -11623,6 +11800,15 @@ function droppedUnitWorkLine(
   return `${list.charAt(0).toUpperCase()}${list.slice(1)} ${items.length === 1 ? "is" : "are"} no longer part of the plan.`;
 }
 
+// The stages still to run on a record, whatever its plan: from the cursor on,
+// neither finished nor skipped.
+function stagesStillToRun(content: string): StageEntry[] {
+  const boxes = new Map(parseCheckboxes(content).map((c) => [c.slug, c.state]));
+  return loadStageGraph().filter((stage) =>
+    !cursorPastStage(content, stage.slug) &&
+    boxes.get(stage.slug) !== "completed" && boxes.get(stage.slug) !== "skipped");
+}
+
 function handleScopeChange(projectDir: string, flags: Record<string, string>): void {
   const newScope = flags.scope;
   if (!newScope) die("--scope is required for scope-change");
@@ -11640,9 +11826,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     // The person's own request for the change, on this work's record, with no
     // unattended driver in the way. One reply that approves and asks for the
     // change does both: the approval recorded from it does not use it up.
-    const personAsked = (): boolean =>
-      process.env.AIDLC_UNATTENDED !== "1" &&
-      personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true, intent, space });
+    const personAsked = (): boolean => personAskedSinceGate(projectDir, { intent, space });
     // Under "Continue automatically" the person's own scope change goes
     // through like any other, and the remaining work keeps their autonomy
     // choice. Only a change nobody asked for (an unattended driver) is
@@ -11716,11 +11900,15 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       const projectType = getField(content, "Project Type") || "Greenfield";
       reopened = stageReopenedByScopeChange(contentBefore, newScope);
 
-      // Compute adjusted mapping (greenfield reverse-engineering adjustment).
-      const adjustedMapping = { ...newScopeDef.stages };
-      if (projectType.toLowerCase() === "greenfield" && adjustedMapping["reverse-engineering"] === "EXECUTE") {
-        adjustedMapping["reverse-engineering"] = "SKIP";
-      }
+      // A scope's own stages on this project: a new project skips Reverse Engineering.
+      const gridFor = (def: { stages: Record<string, string> }): Record<string, string> => {
+        const grid = { ...def.stages };
+        if (projectType.toLowerCase() === "greenfield" && grid["reverse-engineering"] === "EXECUTE") {
+          grid["reverse-engineering"] = "SKIP";
+        }
+        return grid;
+      };
+      const adjustedMapping = gridFor(newScopeDef);
 
       const executeStages: string[] = [];
       const skipStages: string[] = [];
@@ -11845,6 +12033,12 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       }
 
       const oldScopeDef = scopeMapping[oldScope];
+      // Switching back writes the old scope's own stages, so it is the way back
+      // only when the old plan ran those for every stage still to run: a plan
+      // tailored to the work, or recomposed, ran others.
+      const back = oldScopeDef ? gridFor(oldScopeDef) : null;
+      const switchBackRestores = back !== null && stagesStillToRun(contentBefore).every((stage) =>
+        (back[stage.slug] === "EXECUTE") === (effectivePlanAction(stage.slug, oldScope, contentBefore) === "EXECUTE"));
       const oldExecuteCount = oldScopeDef
         ? graph.filter(s => (oldScopeDef.stages[s.slug] || "SKIP") === "EXECUTE").length
         : 0;
@@ -11888,20 +12082,26 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         });
       }
       const droppedUnitWork = droppedUnitWorkLine(projectDir, contentBefore, content, intent, space);
-      // The stages after Initialization, the count the person reads everywhere
-      // during a run (the creation line, the progress line).
-      const shownDone = updatedCheckboxes.filter(
-        (c) => c.state === "completed" && executeSlugs.has(c.slug) &&
-          graph.find((s) => s.slug === c.slug)?.phase !== "initialization",
-      ).length;
+      // The stages the work runs on the new plan, from the one list the
+      // progress line and status count, less each stage the new plan adds
+      // behind the cursor: it never runs unless the person goes back to it.
+      // Reverse Engineering owed there stays, since `next` runs it.
+      const boxes = new Map(updatedCheckboxes.map((c) => [c.slug, c.state]));
+      const reOwed = reverseEngineeringOwedBehindCursor(content, recordDir(projectDir, intent, space));
+      const shown = plannedStages(content, newScope).filter((stage) =>
+        !(cursorPastStage(content, stage.slug) && (boxes.get(stage.slug) ?? "pending") === "pending") ||
+        (stage.slug === "reverse-engineering" && reOwed));
+      const shownDone = shown.filter((stage) => boxes.get(stage.slug) === "completed").length;
+      const shownGates = gridCostSummary(Object.fromEntries(shown.map((stage) => [stage.slug, "EXECUTE" as const]))).gates;
       // What happened and how to go back, then each stage it skipped, the Unit
-      // work it dropped, and each setting whose value changed. Nothing else
-      // runs until the person asks: on finished work the stage started above
-      // is what they asked for, and `next` carries on into it.
+      // work it dropped, and each setting whose value changed. Whether the
+      // work goes on in the same turn is `next`'s call (its scope-change
+      // print); on finished work the stage started above is what they asked
+      // for, and `next` carries on into it.
       outputLines = [
-        `Switched to ${newScope} (${SCOPE_GLOSS}): ${summary.shown} stages (${shownDone} done), ` +
-          `${gates} approval gates.` +
-          (isScopeName(oldScope) ? ` You can switch back to ${oldScope} any time.` : ""),
+        `Switched to ${newScope} (${SCOPE_GLOSS}): ${shown.length} stages (${shownDone} done), ` +
+          `${shownGates} approval gates.` +
+          (isScopeName(oldScope) && switchBackRestores ? ` You can switch back to ${oldScope} any time.` : ""),
         ...skippedNow.map(({ slug, was }) =>
           `Skipped ${findStageBySlug(slug)?.name ?? slug} (${was}): ${newScope} does not run it. ` +
             "You can still run it on its own any time."),
@@ -12109,16 +12309,12 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
   withAuditLock(projectDir, () => {
     let content = readStateFile(projectDir, flags.intent, flags.space);
     const before = content;
-    // AUTONOMY GUARD (mirrors the park guard's shape in aidlc-state.ts): an
-    // unattended autonomous Construction run has no human at the gate, so a
-    // conductor that drifts into "improving the plan" must not flip pending
-    // stages on its own. The SKILL.md prose says plan-reshape never runs under
-    // autonomous Construction on any harness; this is the deterministic anchor
-    // that enforcement was missing (the strict validator catches starvation and
-    // anchor moves, but not the absence of a human). Refuse outright; a
-    // legitimate unattended-recompose story, if one ever arrives, comes as an
-    // explicit flag, not the default.
-    if (getField(content, "Construction Autonomy Mode")?.trim() === "autonomous") {
+    // Under "Continue automatically" the person's own plan change goes through,
+    // as their scope change does (handleScopeChange), and the work keeps their
+    // autonomy choice. A change nobody asked for (an unattended driver, or a
+    // conductor that drifts into "improving the plan") is refused, naming the
+    // setter that lets it through.
+    if (isAutonomousMode(content) && !personAskedSinceGate(projectDir, { intent: flags.intent, space: flags.space })) {
       die(
         "Cannot change the plan while Construction runs unattended (Construction Autonomy Mode is " +
           "autonomous) with nobody here to approve it. Run " +
@@ -12398,7 +12594,11 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
       stages[stage.slug] =
         action === "EXECUTE" || (greenfieldOnly && stage.slug === "reverse-engineering") ? "EXECUTE" : "SKIP";
     }
-    const running = Object.values(stages).filter((a) => a === "EXECUTE").length;
+    // The saved plan's lines count the stages it runs after Initialization, the
+    // count its plan offer gives on existing code (the plan keeps Reverse
+    // Engineering for the next project); the audit row keeps every stage it runs.
+    const running = gridCostSummary(stages).shown;
+    const executing = Object.values(stages).filter((a) => a === "EXECUTE").length;
 
     const depth = getField(content, "Depth") || scopeDef.depth;
     const testStrategy = getField(content, "Test Strategy");
@@ -12444,7 +12644,7 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
         appendAuditEvent(projectDir, "SCOPE_SAVED", {
           Scope: scope,
           "Saved as": name,
-          "Stages in Scope": String(running),
+          "Stages in Scope": String(executing),
         }, flags.intent, flags.space));
     } catch (error) {
       die(`Cannot save the scope: ${errorMessage(error)}`);
@@ -12535,14 +12735,15 @@ function handleConfigList(projectDir: string, flags: Record<string, string>): vo
 }
 
 // Their words that hold a quote or a $ arrive in a file the agent wrote, as
-// an answer's do (--details-file), so no shell reads them on the way.
-function readPersonWordsFile(projectDir: string, flags: Record<string, string>): void {
+// an answer's do (--details-file), so no shell reads them on the way. With
+// `unreadableIsNone`, a file that cannot be read leaves the words out.
+function readPersonWordsFile(projectDir: string, flags: Record<string, string>, unreadableIsNone = false): void {
   if (flags["person-words-file"] === undefined) return;
   if (flags["person-words"] !== undefined) die("Pass either --person-words or --person-words-file, not both.");
   try {
     flags["person-words"] = readAnswerTextFile(projectDir, flags["person-words-file"]);
   } catch (err) {
-    die(errorMessage(err));
+    if (!unreadableIsNone) die(errorMessage(err));
   }
 }
 
@@ -13200,10 +13401,10 @@ export async function main(argv: string[]): Promise<void> {
       handlePluginList(flags);
       break;
     case "plugin-sync":
-      await handlePluginSync(projectDir);
+      await handlePluginSync(projectDir, flags["plugin-root"]);
       break;
     case "plugin-validate":
-      handlePluginValidate(positional, flags);
+      handlePluginValidate(positional, flags, missingValueFlags);
       break;
     case "plugin-build":
       handlePluginBuild(positional, flags, missingValueFlags);

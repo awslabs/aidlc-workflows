@@ -60,7 +60,7 @@ describe("t-skill-body-carriers: the /aidlc skill keeps what only it carries", (
     expect(unitStepNote("aidlc")).toContain("has no gate of its own");
     // The configuration print and the parked step say their own steps.
     expect(ORCHESTRATE).toContain("Never invent values, regions, or plugin names");
-    expect(ORCHESTRATE).toContain("Pausing here with everything saved.");
+    expect(ORCHESTRATE).toContain("with everything saved. Pick it back up any time here, or with ");
   });
 
   test.each(HARNESS_MATRIX.map((harness) => [harness.name, harness] as const))(

@@ -95,6 +95,7 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { CONFIG_SECTIONS } from "./aidlc-command.ts";
 import { fileURLToPath } from "node:url";
 import {
   deleteQuestion,
@@ -122,7 +123,7 @@ import {
   takeRestartRequest,
 } from "./aidlc-question-store.ts";
 import { latestMessage, noReplySince } from "./aidlc-message-store.ts";
-import { aidlcEntryWords } from "./aidlc-reply-reader.ts";
+import { aidlcEntryWords, APPROVAL_GATE_CHOICES, protectedChoices } from "./aidlc-reply-reader.ts";
 import {
   type AskDirective,
   type Directive,
@@ -143,8 +144,8 @@ import {
   type ScopeCommandRow,
   type StageValidityAdvisory,
   bodyRuns,
-  numberedOptionLine,
   numberedProseQuestion,
+  REPO_PLACEHOLDER,
   showsGateAgain,
   validateDirective,
   withAgentNotes,
@@ -159,6 +160,7 @@ import {
   SPACE_NAME_REGEX,
   workflowParticipation,
   ActiveDirectiveLockContendedError,
+  ActiveDirectiveLockFolderHeldError,
   advanceContinuationCursor,
   clearSessionIntentSwitch,
   type UnitCheckpoint,
@@ -172,6 +174,9 @@ import {
   attemptEventIsCrossShardTied,
   artifactFilename,
   auditBlockField,
+  CONSTRUCTION_POLICY_CHECKPOINT,
+  VERIFICATION_COMMAND_CHECKPOINT,
+  validConstructionPolicyChange,
   auditFilePath,
   REDO_REUSE_SOURCE,
   boltSlugForUnit,
@@ -190,6 +195,8 @@ import {
   type SwitchableGuardFence,
   type CeremonyPolicy,
   ceremonyPolicyValues,
+  learningsRitualRuns,
+  summaryConfirmationOwed,
   effectiveSupportAgents,
   effectiveSupportAgentsForProject,
   supportAgentsAtOpenGate,
@@ -202,6 +209,7 @@ import {
   constructionCheckpointGaps,
   effectivePlanAction,
   errorMessage,
+  agentFileText,
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
@@ -218,6 +226,10 @@ import {
   PLAN_APPROVAL_ASK_TYPE,
   type GuardRefusal,
   guardAttemptState,
+  nextReviewStepFor,
+  openReviewRequests,
+  personMayApproveOverUnfinishedReview,
+  personSpokeSinceReviewRequest,
   type GuardAttemptState,
   withWorkspaceSourceStateCache,
   guardRecoveryAnswerAdmits,
@@ -229,6 +241,7 @@ import {
   type GuardRemedy,
   type GuardRecoveryAskData,
   humanAuthorityState,
+  humanRepliedSinceGate,
   latestMainWorkflowStageRunFloorForProject,
   unitLifecycleRunFloorForProject,
   unitScopedLifecycleFloors,
@@ -238,6 +251,7 @@ import {
   installedHarnessName,
   recordGuardRefusal,
   currentGuardRecoveryAskMarker,
+  type ActiveDirectiveGuardRemedy,
   type SummaryConfirmationEvidence,
   gridCostSummary,
   type PlanChanges,
@@ -255,6 +269,9 @@ import {
   noteProjectTypeAsked,
   constructionStaffingPassedOver,
   noteConstructionStaffingAsked,
+  noteRepoScopeAsked,
+  repoScopePassedOver,
+  intentReposNamed,
   teamsAcrossReposLine,
   isRefusedModifierNextArgv,
   isRetiredOnlyNextArgv,
@@ -277,6 +294,7 @@ import {
   workToPickUp,
   readProjectDescriptionAuthority,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
+  MESSAGE_SPENDING_EVENTS,
   loadScopeMetadata,
   maximalAttemptEvents,
   resolveReviewClass,
@@ -299,6 +317,7 @@ import {
   commandAtPersonsTerminal,
   unattendedHumanPresenceHint,
   personSpokeSinceGate,
+  personsGateReply,
   planApprovalAskIsOpen,
   planApprovalRuntimeFile,
   readPlanApprovalRuntimeRecord,
@@ -310,12 +329,16 @@ import {
   isPlainObject,
   parseCeremonySetting,
   pipelineLinkEvidence,
+  pipelineLinkRecord,
   pipelineLinkWayOn,
+  owedPipelineLinks,
+  completedPipelineLinks,
   parseBoltDag,
   type KnowledgeCommand,
   parseKnowledgeCommand,
   openDecisionBlock,
   hasPendingDecision,
+  decisionWaitsOnPerson,
   type PluginCommand,
   parsePluginCommand,
   PHASE_NUMBERS,
@@ -333,6 +356,8 @@ import {
   readAllAuditShards,
   QUESTION_TURN_REPLY,
   readAuditShardEvents,
+  ACCEPT_AS_IS_REVISION_CYCLES,
+  stageRevisionCycles,
   reviewCheckOffer,
   readApplicableTeamUnitScopeStamp,
   readStateFile,
@@ -342,7 +367,10 @@ import {
   markEngineTouch,
   markTurnEnd,
   kiroIdeLegacyPlanApprovalSessionId,
+  kiroContextPressure,
   relativeCodekbDir,
+  intentsRegistryPath,
+  MANY_REPOS,
   relativeRecordDirForSelection,
   relativeSpaceRecordPrefix,
   reviewArtifactEntries,
@@ -362,6 +390,7 @@ import {
   resolveWorkflowSelection,
   delegatedWorktreeIntent,
   scopeCostSummary,
+  singleStageAttemptField,
   singleStageAttemptIsOpen,
   singleStageAttemptScope,
   defaultScope,
@@ -417,6 +446,8 @@ import {
   withdrawProtectedReplyWords,
   writeActiveDirectiveMarker,
   writeEngineFileNoFollow,
+  ANSWER_TEXT_DIR,
+  writeRecordFileNoFollow,
   type PlanApprovalLegacyOfferCandidate,
   workspaceCommandUtilityArgv,
   workspaceRecordExists,
@@ -449,6 +480,7 @@ import {
   readUnitSourceManifest,
   unitPlainName,
   unitSkippedItsCode,
+  waveEligible,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -466,10 +498,12 @@ import {
   type UnitClaimOverview,
 } from "./aidlc-unit.ts";
 import {
+  approvedComposerPlan,
   type Consume,
   type GraphStage,
   loadGraph,
   memoryDirFor,
+  openComposerScores,
   producersOf,
   subgraphForScope,
 } from "./aidlc-graph.ts";
@@ -528,7 +562,6 @@ import {
   publishPlanApprovalAsk,
   publishPlanApprovalSkip,
   routeCodeGenerationPlanApproval,
-  saidDone,
   settleBuiltPlanReviews,
   withBuiltPlanReviews,
 } from "./aidlc-plan-approval-ask.ts";
@@ -542,6 +575,7 @@ import {
   codeGenerationStartNarration,
   notePlanApprovalOverrideOffered,
   promotableTestingPosture,
+  setTestingPostureRoute,
 } from "./aidlc-testing-posture.ts";
 import {
   checksAre,
@@ -550,6 +584,7 @@ import {
   planApprovalMemoryLockRefusal,
   settingsKeptSince,
   settingTheirs,
+  settleGuardPolicyConflict,
   switchKeptForNextWork,
   resolvePlanApprovalSetting,
 } from "./aidlc-guard-switch.ts";
@@ -587,7 +622,7 @@ function commonFolder(paths: readonly string[]): string {
   const shared: string[] = [];
   for (let index = 0; index < split[0].length; index++) {
     const segment = split[0][index];
-    if (split.some((parts) => parts[index] !== segment) || segment.includes("<")) break;
+    if (split.some((parts) => parts[index] !== segment) || segment.includes("<") || segment === REPO_PLACEHOLDER) break;
     shared.push(segment);
   }
   return shared.join("/");
@@ -598,14 +633,27 @@ function commonFolder(paths: readonly string[]): string {
 // named by its path from the folder they share (a questions file with how many
 // questions it holds and how many are answered), and that folder. A stage that
 // writes once per repo (Reverse Engineering in a workspace of sibling repos)
-// names each file by its repo, "orders-svc/architecture.md"; a single-folder
-// stage names the bare file. "" when the folder cannot be named (a stage that
-// repeats per Unit, with no Unit named).
+// names the repos whose files are all there, or how many from MANY_REPOS, in
+// one line whatever their number; a single-folder stage names the bare file.
+// "" when the folder cannot be named (a stage that repeats per Unit, with no
+// Unit named).
 function producedLine(node: GraphStage, unit: string | null, unitFolders: boolean, projectDir: string): string {
   if (unitFolders && !unit) return "";
-  const paths = resolveProduces(node, unitFolders ? unit : null, engineRelativeRecordDir(projectDir), codekbCtxFor(projectDir));
+  const ctx = codekbCtxFor(projectDir);
+  const paths = resolveProduces(node, unitFolders ? unit : null, engineRelativeRecordDir(projectDir), ctx);
   const folder = commonFolder(paths);
   if (!folder) return "";
+  if (paths.some((path) => path.includes(REPO_PLACEHOLDER))) {
+    const done = ctx.repos.filter((repo) =>
+      paths.every((path) => existsSync(join(projectDir, ...path.replace(REPO_PLACEHOLDER, repo).split("/"))))
+    );
+    if (done.length === 0) return `${node.name} is ready for your review. Its output goes in ${folder}/, one folder per repository.`;
+    const whose = done.length >= MANY_REPOS
+      ? `${done.length} repositories`
+      : done.length === 1 ? done[0] : `${done.slice(0, -1).join(", ")} and ${done[done.length - 1]}`;
+    return `${node.name} is ready for your review. It produced the code knowledge base of ${whose}, ` +
+      `${paths.length} files each, in ${folder}/, one folder per repository.`;
+  }
   const names = paths
     .filter((path) => existsSync(join(projectDir, path)))
     .map((path) => {
@@ -681,6 +729,7 @@ interface PreparedEmission {
     steering_payload_receipt?: string;
     ask_type?: string;
     remedies?: Array<Pick<GuardRemedy, "op" | "label" | "action" | "operation" | "interaction">>;
+    single?: true;
   };
 }
 
@@ -1238,10 +1287,14 @@ function speaksToPerson(directive: Directive): boolean {
 // what else it can ask for, once, with the first step it speaks from. The line
 // rides the engine's own narration: left to the protocol, it went unsaid.
 let pickingUp = false;
+// The stage a step with none of its own picks up at (an open question shown
+// again on a bare re-entry).
+let pickUpStage: string | null = null;
 const PICK_UP_LEAD = "Picking up where we left off, at ";
 function pickUpLine(directive: Directive): string | null {
   const step = directive as { stage?: unknown; unit?: unknown };
-  const node = typeof step.stage === "string" ? nodeForSlug(step.stage) : undefined;
+  const slug = typeof step.stage === "string" ? step.stage : pickUpStage;
+  const node = slug !== null ? nodeForSlug(slug) : undefined;
   if (!node) return null;
   const unit = typeof step.unit === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(step.unit) ? ` for ${step.unit}` : "";
   return `${PICK_UP_LEAD}${stageLabel(node, node.slug) ?? node.slug}${unit}. ` +
@@ -1451,7 +1504,8 @@ function prepareEmission(directive: Directive): PreparedEmission {
   // the plan, so the two lines never disagree.
   // The line is about the run-stage being issued, not the directive on disk,
   // so a repeated `next` or a `continue` of its rules says the same line.
-  if (directive.kind === "run-stage" && directive.plan_approval?.status === "approved") {
+  if (directive.kind === "run-stage" && directive.plan_approval?.status === "approved" &&
+    directive.unit_record_step === undefined) {
     const projectDir = emissionProjectDir(directive);
     const unit = directive.unit ?? null;
     const issued = { kind: "run-stage" as const, ...(unit !== null ? { unit } : {}) };
@@ -1575,7 +1629,11 @@ function prepareEmission(directive: Directive): PreparedEmission {
   }
   const serialized = JSON.stringify(result.data);
   const serializedBytes = Buffer.byteLength(serialized, "utf-8");
-  if (serializedBytes > directiveMaxBytes()) {
+  // The limit is what a host shows of one command result. A route check's
+  // print goes only to `unit start`'s pipe, and it skips the transport that
+  // fits the agent's own step, so the limit would turn a step the agent was
+  // handed into an error and refuse the Unit's start.
+  if (serializedBytes > directiveMaxBytes() && !isRouteCheckProbe()) {
     const message = oversizeDirectiveMessage(result.data, serializedBytes, directiveLimit());
     // A step that cannot be sent is answered with an error the person can act
     // on, which the host shows and the conductor stops on, rather than a failed
@@ -1734,6 +1792,11 @@ function prepareEmission(directive: Directive): PreparedEmission {
       units: transported.units,
       state_sha256: publication.stateHash,
     };
+  }
+  // A step of an isolated run says so on its marker, the question asked over
+  // it included, so what reads the step can tell it from the workflow's.
+  if (marker && ((directive.kind === "run-stage" && directive.single === true) || isolatedRunQuestions.has(requested))) {
+    marker.single = true;
   }
   return {
     transported,
@@ -1911,9 +1974,83 @@ function legacyPlanApprovalRecoveryDirective(): AskDirective {
     ask_type: "legacy-plan-approval-recovery",
     response_route: "next",
     recovery_choice: LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
-    question:
-      "This legacy Kiro window must recover the current Code Generation Plan Approval capability before it can be reissued. Choose exactly: Recover Plan Approval",
+    question: "Before I build, I need you to confirm the code plan again in this window. Shall I bring it back?",
   };
+}
+
+// v2.11 persisted the unattended label and action beside its retired op. The
+// parser updates the routing identity; this exact historical shape keeps the
+// answered ask current until its rejected report spends it.
+function sameGuardRecoveryRemedy(
+  current: ActiveDirectiveGuardRemedy,
+  issued: ActiveDirectiveGuardRemedy,
+): boolean {
+  if (
+    current.op === issued.op &&
+    current.label === issued.label &&
+    current.action === issued.action &&
+    current.interaction === issued.interaction &&
+    sameGuardOperation(current.operation, issued.operation)
+  ) {
+    return true;
+  }
+  if (
+    current.op !== "request-changes" ||
+    issued.op !== "request-changes" ||
+    current.label !== "Request Changes" ||
+    issued.label !== "Stop working unattended" ||
+    current.interaction !== "human-input" ||
+    issued.interaction !== current.interaction ||
+    current.operation !== undefined ||
+    issued.operation !== undefined
+  ) {
+    return false;
+  }
+  const unattendedStart =
+    "Halt unattended execution and ask a human what should change. " +
+    'Unset AIDLC_UNATTENDED, ask "What should change?" for stage ';
+  const attendedStart =
+    "When the person already said what should change for stage ";
+  const targetStart = current.action.startsWith(unattendedStart)
+    ? unattendedStart
+    : current.action.startsWith(attendedStart)
+      ? attendedStart
+      : null;
+  if (targetStart === null) return false;
+  const targetEnd = current.action.indexOf(
+    targetStart === unattendedStart
+      ? ", and end the turn."
+      : ", submit Request Changes",
+    targetStart.length,
+  );
+  if (targetEnd === -1) return false;
+  const target = current.action.slice(targetStart.length, targetEnd);
+  if (!/^"[a-z][a-z0-9-]*"(?: for Unit "[A-Za-z0-9._-]+")?$/.test(target)) {
+    return false;
+  }
+  const costAt = current.action.indexOf(
+    " Construction runs one unit at a time here, so ",
+    targetEnd,
+  );
+  const request = current.action.slice(0, costAt === -1 ? undefined : costAt);
+  if (
+    !request.includes("submit Request Changes") ||
+    !request.includes("`--reason`") ||
+    (
+      targetStart === unattendedStart
+        ? !request.endsWith("`.")
+        : !request.endsWith("Either way that unlocks revision and a fresh review.")
+    )
+  ) {
+    return false;
+  }
+  const cost = costAt === -1 ? "" : current.action.slice(costAt);
+  return issued.action ===
+    "Halt unattended execution and ask a human what should change. " +
+      `Unset AIDLC_UNATTENDED, ask "What should change?" for stage ${target}, ` +
+      "and end the turn. " +
+      "Only after the human answers may their exact text be submitted as the Request Changes reason." +
+      cost;
 }
 
 // Whether the issued marker already IS this guard-recovery ask for this state.
@@ -1934,13 +2071,10 @@ function guardRecoveryAskMarkerIsCurrent(
     current.remedies !== undefined &&
     marker.remedies !== undefined &&
     current.remedies.length === marker.remedies.length &&
-    current.remedies.every((remedy, index) =>
-      remedy.op === marker.remedies?.[index]?.op &&
-      remedy.label === marker.remedies[index]?.label &&
-      remedy.action === marker.remedies[index]?.action &&
-      remedy.interaction === marker.remedies[index]?.interaction &&
-      sameGuardOperation(remedy.operation, marker.remedies[index]?.operation)
-    );
+    current.remedies.every((remedy, index) => {
+      const issued = marker.remedies?.[index];
+      return issued !== undefined && sameGuardRecoveryRemedy(issued, remedy);
+    });
 }
 
 
@@ -2077,7 +2211,18 @@ function emissionProjectDir(directive: Directive): string | undefined {
 // A code-generation beat becomes "plan", "build", or the engine's Plan
 // Approval question. A route check only asks which Unit would route, and the
 // legacy Kiro IDE window keeps its own protected-choice flow.
+// The questions asked over an isolated run's step: their markers say so too.
+const isolatedRunQuestions = new WeakSet<Directive>();
+
 function withPlanApprovalRoute(directive: Directive): Directive {
+  const routed = routePlanApproval(directive);
+  if (routed !== directive && directive.kind === "run-stage" && directive.single === true) {
+    isolatedRunQuestions.add(routed);
+  }
+  return routed;
+}
+
+function routePlanApproval(directive: Directive): Directive {
   if (isRouteCheckProbe() || !isPlanApprovalBeat(directive)) return directive;
   const projectDir = emissionProjectDir(directive);
   if (!projectDir) return directive;
@@ -2172,6 +2317,12 @@ const KEPT_REPLIES_NOTE =
   "each answer they gave on its [Answer]: line and record it with `log answer`, then ask only what is still open. " +
   "Never ask them again what they already answered.";
 
+// Whether a questions file in `dir` still has a blank answer.
+function hasBlankAnswer(dir: string): boolean {
+  return existsSync(dir) && readdirSync(dir).some((name) =>
+    name.endsWith("-questions.md") && /\[Answer\]:[ \t]*_*[ \t]*$/m.test(readFileSync(join(dir, name), "utf-8")));
+}
+
 function withKeptReplies(directive: Directive): Directive {
   if (isRouteCheckProbe() || directive.kind !== "run-stage" || directive.gate_only || directive.build_settled) {
     return directive;
@@ -2182,9 +2333,7 @@ function withKeptReplies(directive: Directive): Directive {
     const dir = directive.phase === "construction" && directive.unit
       ? join(docsRoot(projectDir), "construction", directive.unit, directive.stage)
       : stageDir(projectDir, directive.phase, directive.stage);
-    const blank = existsSync(dir) && readdirSync(dir).some((name) =>
-      name.endsWith("-questions.md") && /\[Answer\]:[ \t]*_*[ \t]*$/m.test(readFileSync(join(dir, name), "utf-8")));
-    if (!blank) return directive;
+    if (!hasBlankAnswer(dir)) return directive;
     const kept = keptRepliesSinceStageStart(projectDir, {
       stage: directive.stage,
       ...(directive.phase === "construction" && directive.unit ? { unit: directive.unit } : {}),
@@ -2283,6 +2432,12 @@ function withParkedReply(directive: Directive): Directive {
 
 function emit(requested: Directive): void {
   const directive = withBuiltPlanReviewRoute(withPlanApprovalRoute(requested));
+  if (directive.kind === "run-stage" && directive.unit_record_step !== undefined &&
+    directive.plan_approval?.status !== "approved") {
+    delete directive.unit_record_step;
+  } else if (directive.kind === "run-stage" && directive.unit_record_step !== undefined) {
+    directive.mode = "inline";
+  }
   // A refusal that offers building the plan anyway keeps when it was first
   // shown, so a reply of the person's after it can be told from one before.
   if (planApprovalOverrideOffers.has(directive) && !isReadOnlyEngineProbe()) {
@@ -2443,6 +2598,14 @@ function emit(requested: Directive): void {
       if (e instanceof EngineModeViolationError) throw e;
       if (projectDir) {
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
+      }
+      // A program holding the lock folder is not freed by a retry or by doctor:
+      // the step is to stop it. That comes before showing an open question
+      // unpublished, whose reply would land on the question beneath it (#2047);
+      // once the program stops, the same command asks it with its marker.
+      if (e instanceof ActiveDirectiveLockFolderHeldError && e.personLine) {
+        writePrepared(prepareEmission(errorDirective(e.message)));
+        return;
       }
       if (prepared.marker !== undefined && openQuestionMarkers.has(prepared.marker)) {
         writePrepared(prepared);
@@ -2983,7 +3146,7 @@ function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boole
  * The plan question the person was asked and has not answered: the latest copy
  * this engine kept, when it is one of its own front questions and nothing was
  * started from it. A question whose answer created work is answered, and a
- * routing question is read back by its own options.
+ * routing question has its own step (openRoutingQuestion).
  */
 function openFrontQuestion(
   projectDir: string,
@@ -3190,20 +3353,14 @@ function selectCommands(
   }));
 }
 
-// `commands` replaces each record's select command with the one a chosen
-// route runs for it (a routing question's reshape), keyed the same way.
-function intentPickAskDirective(
-  question: string,
-  availableIntents: string[],
-  commands: Array<{ selector: string; command: string }> = selectCommands(availableIntents),
-): AskDirective {
+function intentPickAskDirective(question: string, availableIntents: string[]): AskDirective {
   return {
     kind: "ask",
     ask_type: "intent-pick",
     response_route: "next",
     question,
     available_intents: availableIntents,
-    select_commands: commands,
+    select_commands: selectCommands(availableIntents),
   };
 }
 
@@ -3238,8 +3395,8 @@ function unitPausedAskDirective(
 }
 
 // The new-work routing ask's own options about an active workflow, in its
-// numbered order. The numbered rendering and routingOptionReply share them, so
-// a reply that echoes the ask's own wording is always read as that answer.
+// numbered order. The numbered rendering and the step that hands a reply to the
+// agent (routingQuestionReplyDirective) share them.
 type NewWorkRoute = "continue" | "separate" | "reshape";
 type RoutingOption = { readonly route: NewWorkRoute; readonly label: string; readonly detail: (scope: string) => string };
 const NEW_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
@@ -3293,119 +3450,6 @@ const EXISTING_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
   },
 ];
 
-function newWorkRoutingOptionLine(
-  index: number,
-  scope: string,
-  options: readonly RoutingOption[] = NEW_WORK_ROUTING_OPTIONS,
-): string {
-  const option = options[index];
-  return numberedOptionLine(index, option.label, option.detail(scope));
-}
-
-// A reply that is only one of the routing ask's options: its number (`1`,
-// `1.`, `(1)`), its label, or its numbered line as rendered. Anything more is
-// the person's own words, never cut down to an option. `numeric` marks a bare
-// number, which could also answer some other numbered question.
-function routingOptionReply(
-  text: string,
-  scope: string,
-  options: readonly RoutingOption[] = NEW_WORK_ROUTING_OPTIONS,
-): { route: NewWorkRoute; numeric: boolean } | null {
-  const normalize = (value: string): string =>
-    value.replace(/\*/g, "").replace(/\s+/g, " ").trim().toLowerCase().replace(/[.!]$/, "");
-  const reply = normalize(text);
-  const numbered = reply.match(/^\(?([1-3])\)?[.):]?(?:\s+(.*))?$/);
-  if (numbered && numbered[2] === undefined) {
-    return { route: options[Number(numbered[1]) - 1].route, numeric: true };
-  }
-  const index = options.findIndex((option, i) => {
-    const label = normalize(option.label);
-    const line = normalize(newWorkRoutingOptionLine(i, scope, options));
-    return numbered ? Number(numbered[1]) - 1 === i && (normalize(numbered[2]) === label || reply === line) : reply === label;
-  });
-  return index === -1 ? null : { route: options[index].route, numeric: false };
-}
-
-// The routing question a reply that only names one of its options answers: the
-// question stored most recently. Separate new work acts on none of the work it
-// listed, so it answers whatever happened to that work. Asked about an active
-// workflow, continue and reshape run the question's own late answer, which acts
-// only while that workflow (same folder and uuid) is the one selected, however
-// far it has moved on, and asks again otherwise. Asked while none was selected,
-// they get the records it listed that are still there with the same identity,
-// none selected (`records`). A bare number also needs nothing asked after it:
-// no question logged since, and no turn of the person's besides this reply.
-// Anything else is the person's own words, asked about as usual.
-function routingQuestionAnswer(
-  projectDir: string,
-  text: string,
-): { question: StoredQuestion; route: NewWorkRoute; records: UnselectedRecords | null } | null {
-  try {
-    const question = latestQuestion(projectDir);
-    const askedAbout = question?.askedAbout;
-    // A digest marks a question asked with options to answer; the words an open
-    // stage question hands on are stored without one.
-    if (question?.origin !== "routing" || question.stateSha256 === undefined || !askedAbout) return null;
-    const pick = askedAbout.pick === true;
-    const option = routingOptionReply(
-      text,
-      question.proposedScope,
-      pick ? EXISTING_WORK_ROUTING_OPTIONS : routingAskedAboutScope(question) ? SCOPE_CHANGE_ROUTING_OPTIONS : NEW_WORK_ROUTING_OPTIONS,
-    );
-    if (!option) return null;
-    // Once the request it stopped has started work, the question is spent:
-    // the person's words are their own again. Asked with work selected or
-    // none, the same.
-    if (question.approvedRequest && intentStartedByQuestion(projectDir, question.approvedRequest)) return null;
-    let records: UnselectedRecords | null = null;
-    if (pick) {
-      const now = option.route === "separate" ? null : unselectedRecords(projectDir, ({ intent, selector }) =>
-        askedAbout.targets.some((target) => target.intent === selector && target.uuid === (intent.uuid ?? "")));
-      records = now !== null && now.space === askedAbout.space && now.selectable.length > 0 ? now : null;
-    }
-    if (option.numeric) {
-      const asked = Date.parse(question.createdAt);
-      const since = readAuditShardEvents(projectDir).filter((row) => Date.parse(row.timestamp) > asked);
-      if (
-        since.some((row) => row.event === "DECISION_RECORDED") ||
-        since.filter((row) => row.event === "HUMAN_TURN").length > 1
-      ) {
-        return null;
-      }
-    }
-    return { question, route: option.route, records };
-  } catch {
-    return null;
-  }
-}
-
-// "Part of existing work" or "Reshape existing work" said back while the
-// question listed more than one record: the person chose the option, not yet
-// which work. Ask only that, as the typed record picker: each listed record
-// still there a choice, and its command the one the question would have run
-// for it. Record names stay data in the
-// choices and in the question's list, never in an instruction.
-function pickedRouteRecordAsk(
-  question: StoredQuestion,
-  route: "continue" | "reshape",
-  records: UnselectedRecords,
-): AskDirective {
-  const existingWork = (question.settings?.existingWork ?? []).map((token) => ` ${token}`).join("");
-  const selectors = records.selectable.map(({ selector }) => selector);
-  if (route === "continue") {
-    return intentPickAskDirective(
-      `Which piece of work is this part of: ${records.list}?`,
-      selectors,
-      routingSelectCommands(question.id, selectors, existingWork),
-    );
-  }
-  return intentPickAskDirective(
-    `Which piece of work should I reshape: ${records.list}?`,
-    selectors,
-    selectors.map((selector) => ({ selector, command: routingReshapeCommand(question.id, selector, existingWork) })),
-  );
-}
-
 // The stage `next` directs for the solo unit-major walk's stop at Current
 // Stage: a Unit's work or summary at its own stage, a Unit's checkpoint at the
 // block's last stage. Null off such a walk.
@@ -3424,24 +3468,26 @@ function unitMajorStopStage(projectDir: string, stateContent: string, currentSlu
 // in hooks/aidlc-continue-workflow.ts), so the two agree about the same turn:
 // a unit-major walk, and a Unit's checkpoint (its learnings question and
 // approval), run ahead of Current Stage and log under the stage `next` directs,
-// and that stage's open question counts too. Null under autonomous
-// Construction (no person is answering), outside a [-] stage, or when the
-// state or audit cannot be read (never fail `next`).
+// and that stage's open question counts too. Which question waits on the
+// person is decisionWaitsOnPerson's, the Stop hook's reader too: under
+// autonomous Construction the person who is there answers it; an unattended
+// driver has nobody to answer a plain one. Null outside a [-] stage, or when
+// the state or audit cannot be read (never fail `next`).
 function openStageQuestion(projectDir: string, stateContent: string): { stage: string; block: string } | null {
   try {
-    if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") return null;
     // `**Current Stage**:` with or without the bold markers or backticks, as the hook reads it.
     const stage = (stateContent.match(/Current Stage\*{0,2}:?\s*`?([^\n`]*)`?/)?.[1] ?? "").trim();
     if (stage.length === 0) return null;
     if (parseCheckboxes(stateContent).find((row) => row.slug === stage)?.state !== "in-progress") return null;
+    const waits = (block: string | null): block is string => block !== null && decisionWaitsOnPerson(stateContent, block);
     const block = openDecisionBlock(projectDir, stage, "STAGE_STARTED");
-    if (block !== null) return { stage, block };
+    if (waits(block)) return { stage, block };
     const ahead = unitMajorStopStage(projectDir, stateContent, stage);
     if (ahead === null || ahead === stage || !hasPendingDecision(projectDir, ahead, undefined, undefined, true)) {
       return null;
     }
     const aheadBlock = openDecisionBlock(projectDir, ahead);
-    return aheadBlock === null ? null : { stage: ahead, block: aheadBlock };
+    return waits(aheadBlock) ? { stage: ahead, block: aheadBlock } : null;
   } catch {
     return null;
   }
@@ -3462,8 +3508,19 @@ function openApprovalGateStage(stateContent: string): string | null {
 
 // Words while a stage's approval gate is open: the conductor reads whether
 // they answer it, the same split as openQuestionReplyDirective.
-function openGateReplyDirective(stage: string, requestId: string, folder: string): PrintDirective {
+function openGateReplyDirective(
+  stage: string,
+  requestId: string,
+  folder: string,
+  replies: Array<{ id: string; at: string }>,
+): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
+  // The person's replies the decision would stand on, by id and time only:
+  // the agent has their words, and names the one its reading came from when it
+  // is not all of them.
+  const named = replies.length === 0 ? "" : " Their replies since the last decision, oldest first: " +
+    `${replies.map((reply) => `${reply.id} (${reply.at})`).join(", ")}; when their choice is in one of them ` +
+    "and not the others, add `--message <id>` to the report.";
   return printDirective(
     `Stage "${stage}" is waiting for the person's approval, and their reply may answer it. Read it. If it ` +
       `approves, run \`${orchestrate} report --stage ${shellArg(stage)} --result approved --user-input "Approve"\`; ` +
@@ -3474,20 +3531,19 @@ function openGateReplyDirective(stage: string, requestId: string, folder: string
       "follow what it returns. If it is about something else, such as new " +
       `work or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: ` +
       "the engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
-      "person in one short question and follow their answer.",
+      `person in one short question and follow their answer.${named}`,
   );
 }
 
-// Prose while the current stage has a question the person has not answered
-// yet (the audit pairing the Stop hook reads) may be its answer, or something
-// else. Reading which is the conductor's job, so it gets a command for each:
-// the question's own answer command, or `next --request` with the person's
-// words, kept as `requestId`, which asks where that work belongs. The
-// question's text stays in the audit, never in this directive.
-// A checkpoint's commands name its Unit or batch from the question's own row,
-// so a new chat, which never saw the question asked, has all it needs.
-function openQuestionReplyDirective(stage: string, block: string, requestId: string): PrintDirective {
-  const orchestrate = aidlcToolInvocation("orchestrate");
+// The choices a question's row says it offered, in order.
+function questionOptions(block: string): string[] {
+  return (auditBlockField(block, "Options") ?? "").split(",").map((option) => option.trim()).filter(Boolean);
+}
+
+// How the person's answer to the stage's open question is recorded, named
+// from the question's own row, so a new chat, which never saw it asked, has
+// all it needs.
+function openQuestionAnswer(stage: string, block: string): string {
   const checkpoint = auditBlockField(block, "Checkpoint");
   const unit = auditBlockField(block, "Unit");
   const batch = auditBlockField(block, "Batch number");
@@ -3499,12 +3555,50 @@ function openQuestionReplyDirective(stage: string, block: string, requestId: str
       ? [`${aidlcToolInvocation("bolt")} swarm-checkpoint`,
         batch && units ? ` --batch ${shellArg(batch)} --units ${shellArg(units)}` : ""]
       : [null, ""];
-  const answer = gate
-    ? `answer it through that checkpoint, never \`log answer\` (which would not approve it): run \`${gate} --action ` +
-      `approve${target}\` or \`${gate} --action reject${target}\`${target ? "" : " for that Unit or batch"}, passing ` +
-      "the person's reply unchanged as `--user-input` (and their feedback as `--reason` when they ask for changes)"
-    : `record it with \`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)} --details '<their exact reply>'\` ` +
-      "(with the checkpoint flags that question was logged with, when it has them)";
+  // A question that needs the person's own reply names the choices it
+  // offered, numbered as they were offered, so the agent in a chat that never
+  // saw it asked can read "/aidlc 2" against them. A row from before rows named
+  // their options offered both.
+  const options = questionOptions(block);
+  const offered = options.length === 0 ? APPROVAL_GATE_CHOICES : protectedChoices(options);
+  const numbered = offered === null ? ""
+    : `${offered.length === 1 ? "its one choice is" : "its choices are"} ` +
+      `${offered.map((choice, at) => `${at + 1}. ${choice}`).join(" and ")}; `;
+  // The verification command and a Construction policy question name their
+  // own flags and the setter an approval runs; the command itself stays in its
+  // file, never on a shell line.
+  const field = auditBlockField(block, "Field") ?? "";
+  const value = auditBlockField(block, "Value") ?? "";
+  const [flags, setter] = checkpoint === VERIFICATION_COMMAND_CHECKPOINT
+    ? [" --checkpoint verification-command --command-file verification-command.txt",
+      "set-construction-verification-command --command-file verification-command.txt"]
+    : checkpoint === CONSTRUCTION_POLICY_CHECKPOINT && validConstructionPolicyChange(field, value)
+      ? [` --checkpoint construction-policy --field ${shellArg(field)} --value ${shellArg(value)}`,
+        `set-${field.toLowerCase().replaceAll(" ", "-")} ${shellArg(value)}`]
+      : [null, null];
+  return gate
+    ? `${numbered}answer it through that checkpoint, never \`log answer\` (which would not approve it): ` +
+      `run \`${gate} --action approve${target}\` or \`${gate} --action reject${target}\`` +
+      `${target ? "" : " for that Unit or batch"}, passing the person's reply unchanged as \`--user-input\` ` +
+      "(and their feedback as `--reason` when they ask for changes)"
+    : flags !== null
+      ? `${numbered}record the choice they made with ` +
+        `\`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)}${flags} ` +
+        `--details '<Approve or Request Changes>'\`; after an Approve, run \`${aidlcToolInvocation("state")} ${setter}\` and ` +
+        "say its notice line"
+      : `record it with \`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)} --details '<their exact reply>'\` ` +
+        "(with the checkpoint flags that question was logged with, when it has them)";
+}
+
+// Prose while the current stage has a question the person has not answered
+// yet (the audit pairing the Stop hook reads) may be its answer, or something
+// else. Reading which is the conductor's job, so it gets a command for each:
+// the question's own answer command, or `next --request` with the person's
+// words, kept as `requestId`, which asks where that work belongs. The
+// question's text stays in the audit, never in this directive.
+function openQuestionReplyDirective(stage: string, block: string, requestId: string): PrintDirective {
+  const orchestrate = aidlcToolInvocation("orchestrate");
+  const answer = openQuestionAnswer(stage, block);
   return printDirective(
     `Stage "${stage}" has a question you asked that the person has not answered yet. Read their reply. ` +
       `If it answers that question, ${answer}, then carry on with "${stage}" from where you asked and run bare ` +
@@ -3513,6 +3607,42 @@ function openQuestionReplyDirective(stage: string, block: string, requestId: str
       `or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the ` +
       "engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
       "person in one short question and follow their answer.",
+  );
+}
+
+// A bare re-entry (`/aidlc` alone, or `--resume`) while the current stage has
+// a question the agent asked in chat that no step of its own asks again (one
+// logged with no checkpoint, or a Construction policy question a record
+// carries): the agent shows it again from its row and waits, so the person
+// keeps their place. The text goes out verbatim: a question box pairs the
+// reply with a protected question by that text or its two choices. Null for
+// any other question; its own step asks it again with what it asks about. So
+// is a question the stage's questions file still holds (a guided batch logs
+// only its question numbers): the stage's step asks it from the file, with any
+// reply kept for it (withKeptReplies). Unreadable is left to that step too.
+function openQuestionAgainDirective(projectDir: string, stage: string, block: string): PrintDirective | null {
+  const checkpoint = auditBlockField(block, "Checkpoint");
+  if (checkpoint !== null && checkpoint !== CONSTRUCTION_POLICY_CHECKPOINT) return null;
+  try {
+    const phase = nodeForSlug(stage)?.phase ?? "";
+    const construction = join(docsRoot(projectDir), "construction");
+    const unitDirs = phase === "construction" && existsSync(construction)
+      ? readdirSync(construction).map((unit) => join(construction, unit, stage))
+      : [];
+    if ([stageDir(projectDir, phase, stage), ...unitDirs].some(hasBlankAnswer)) return null;
+  } catch {
+    return null;
+  }
+  const decision = auditBlockField(block, "Decision");
+  if (!decision) return null;
+  const choices = questionOptions(block);
+  return printDirective(
+    `Stage "${stage}" has a question you asked that the person has not answered yet. Show it to them again, word ` +
+      `for word as it was asked, with its choices, and end your turn: ${JSON.stringify(decision)}` +
+      `${choices.length > 0 ? `, with the choices ${choices.map((choice) => JSON.stringify(choice)).join(", ")}` : ""}. ` +
+      `When they answer it, ${openQuestionAnswer(stage, block)}, then carry on with "${stage}" from where you asked ` +
+      `and run bare \`${aidlcToolInvocation("orchestrate")} next\` the next time you need the engine. If they say ` +
+      "something else, pass their words to `next` and follow what it returns.",
   );
 }
 
@@ -3526,6 +3656,8 @@ function openPlanQuestionReplyDirective(
   settings: string[] = [],
   // A setting read from their words: the setter names those words.
   needsWords = false,
+  // Every plan has its answer and nothing is built yet: their words may change it.
+  answered = false,
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   // Settings typed on the same line ("/aidlc --guard-policy off approve the
@@ -3538,11 +3670,18 @@ function openPlanQuestionReplyDirective(
       `${needsWords ? `${PERSON_WORDS_FILL},` : ""} first and print its output ` +
       "verbatim; if the words are new work, the settings ride with them."
     : "";
+  const record = `\`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval ` +
+    '--details "<their choice>"`';
   const answer = editing
     ? `The person is editing the code plan files themselves. If their reply says they are done, run bare \`${orchestrate} next\`.${typed}`
-    : "The code plan question is open, and the person's reply may answer it. Read it. If it does, record the choice " +
-      `they made with \`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval ` +
-      `--details "<their choice>"\`, then run bare \`${orchestrate} next\`.${typed}`;
+    : answered
+    ? "The person answered the code plan question earlier, and nothing is built yet. Read their reply. If it " +
+      `changes that answer, record the choice they make now with ${record} ("Review the plan" brings the question ` +
+      `back before anything is built), then run bare \`${orchestrate} next\`; if it only confirms it, run bare ` +
+      `\`${orchestrate} next\`.${typed}`
+    : "The code plan question is open, and the person's reply may answer it. Read it, with the `[Answer]:` line of " +
+      `the plan's questions file when they say they answered there. If it does, record the choice they made with ` +
+      `${record}, then run bare \`${orchestrate} next\`.${typed}`;
   return printDirective(
     `${undo}${answer} If it asks to skip Code Generation, run \`${orchestrate} next --skip code-generation\` and ` +
       "follow what it returns. If it is about something else, such as new work or a change to the plan, run " +
@@ -3759,10 +3898,124 @@ function routingSelectCommands(
   }));
 }
 
+// The routing question's answers, each with its command: what the ask carries
+// when it opens, and what the step that hands a reply to the agent names
+// (routingQuestionReplyDirective), built from the question's stored copy.
+function routingAnswerCommands(
+  questionId: string,
+  proposedScope: string,
+  carried: RoutingCarried,
+  availableIntents?: string[],
+): {
+  route: Record<NewWorkRoute, string | undefined>;
+  newIntent: string;
+  compose: string;
+  continue: string;
+  select: Array<{ selector: string; command: string }>;
+  reshape: Array<{ selector: string; command: string }>;
+} {
+  const tool = aidlcToolInvocation("orchestrate");
+  // With no plan proposed, the separate-work answer reaches the plan proposal
+  // step, which asks the plan next.
+  const newIntentCommand =
+    `${tool} next --new-intent${proposedScope ? ` --scope ${scopeArg(proposedScope)}` : ""} --request ${questionId}${carried.newWork}${carried.planChanges}`;
+  // Beside active work this reshapes it; with records to pick it composes
+  // the new work, like a plan offer's compose answer.
+  const composeCommand =
+    `${tool} next compose --request ${questionId}${availableIntents ? carried.creation : carried.existingWork}`;
+  const continueCommand = `${tool} next --continue --request ${questionId}${carried.existingWork}` +
+    (carried.continueScope ? ` --scope ${scopeArg(carried.continueScope)}` : "");
+  // With records to pick, the continue and reshape answers act on the piece the
+  // person names, so with several listed those two carry none (the agent asks
+  // which); with one listed that piece is meant, and its own command rides the
+  // answer (the person is never asked which of one).
+  const select = availableIntents ? routingSelectCommands(questionId, availableIntents, carried.existingWork) : [];
+  const reshape = (availableIntents ?? []).map((selector) => ({
+    selector,
+    command: routingReshapeCommand(questionId, selector, carried.existingWork),
+  }));
+  const sole = availableIntents?.length === 1;
+  return {
+    route: {
+      continue: availableIntents ? (sole ? select[0]?.command : undefined) : continueCommand,
+      separate: newIntentCommand,
+      reshape: availableIntents ? (sole ? reshape[0]?.command : undefined) : composeCommand,
+    },
+    newIntent: newIntentCommand,
+    compose: composeCommand,
+    continue: continueCommand,
+    select,
+    reshape,
+  };
+}
+
+// The options a stored routing question was asked with, in its numbered order.
+function routingQuestionOptions(question: StoredQuestion): readonly RoutingOption[] {
+  if (question.askedAbout?.pick === true) return EXISTING_WORK_ROUTING_OPTIONS;
+  return routingAskedAboutScope(question) ? SCOPE_CHANGE_ROUTING_OPTIONS : NEW_WORK_ROUTING_OPTIONS;
+}
+
+// The routing question the person was asked and has not answered: the latest
+// question this engine kept, asked with options (its digest marks that), with
+// nothing started from it, and no other question put to them or decision
+// recorded since. It answers however far the work it named has moved on (its
+// commands act on that work or ask again). Words handed to `next` while it is
+// open may be its answer, which only the agent can tell.
+function openRoutingQuestion(projectDir: string): StoredQuestion | null {
+  try {
+    const question = latestQuestion(projectDir);
+    if (question?.origin !== "routing" || question.stateSha256 === undefined || !question.askedAbout) return null;
+    if (intentStartedByQuestion(projectDir, question.id) !== null) return null;
+    if (question.approvedRequest && intentStartedByQuestion(projectDir, question.approvedRequest)) return null;
+    const asked = Date.parse(question.createdAt);
+    const movedOn = readAuditShardEvents(projectDir).some((row) =>
+      (row.event === "DECISION_RECORDED" || row.event === "STAGE_AWAITING_APPROVAL" ||
+        MESSAGE_SPENDING_EVENTS.has(row.event)) && Date.parse(row.timestamp) > asked);
+    return movedOn ? null : question;
+  } catch {
+    return null;
+  }
+}
+
+// Words handed to `next` while the routing question is open: the agent has the
+// person's chat and reads whether they answer it. The step names each of the
+// question's answers with its own command, as the question gave them, so the
+// agent runs the one the person chose; nothing runs from the words themselves.
+// Null when the settings the question kept no longer parse: the words are then
+// asked about as usual.
+function routingQuestionReplyDirective(question: StoredQuestion, words: string): PrintDirective | null {
+  let carried = carriedFromQuestion(question, parseNextFlags([]));
+  if (carried !== null && routingAskedAboutScope(question)) {
+    const existing = parseNextFlags(question.settings?.existingWork ?? []);
+    carried = existing.parseError ? null : { ...carried, continueScope: existing.scope };
+  }
+  if (carried === null) return null;
+  const tool = `${aidlcToolInvocation("orchestrate")} next`;
+  const pick = question.askedAbout?.pick === true;
+  const commands = routingAnswerCommands(
+    question.id,
+    question.proposedScope,
+    carried,
+    pick ? question.askedAbout?.targets.map(({ intent }) => intent) : undefined,
+  );
+  const answers = routingQuestionOptions(question).map((option) => {
+    const command = commands.route[option.route];
+    if (command !== undefined) return `"${option.label}": \`${command}\``;
+    const each = option.route === "continue" ? commands.select : commands.reshape;
+    return `"${option.label}": the command for the work they named, one of ${each.map(({ command: c }) => `\`${c}\``).join(", ")}`;
+  });
+  return printDirective(
+    "The person has not answered the question about where their words belong, so `next` cannot tell their reply " +
+    "from a new request and took nothing from the line. If their words answer that question, run the command for " +
+    `their choice: ${answers.join("; ")}. If they are asking for something else, run ` +
+    `\`${tool} -- ${quoteCommandArgument(words)}\`, which keeps every word of theirs. ` +
+    "If you cannot tell, ask them once in plain words.",
+  );
+}
+
 function newWorkRoutingAskDirective(
   question: string,
-  // The prose rendering: its prompt, and the options in the order a numbered
-  // reply is read against (routingOptionReply reads the same list).
+  // The prose rendering: its prompt, and the options in their numbered order.
   routing: { prompt: string; options: readonly RoutingOption[] },
   description: string,
   proposedScope: string,
@@ -3788,30 +4041,7 @@ function newWorkRoutingAskDirective(
     routingSettings(carried), approvedRequest,
   );
   const tool = aidlcToolInvocation("orchestrate");
-  // With no plan proposed, the separate-work answer reaches the plan proposal
-  // step, which asks the plan next.
-  const newIntentCommand =
-    `${tool} next --new-intent${proposedScope ? ` --scope ${scopeArg(proposedScope)}` : ""} --request ${stored.id}${carried.newWork}${carried.planChanges}`;
-  // Beside active work this reshapes it; with records to pick it composes
-  // the new work, like a plan offer's compose answer.
-  const composeCommand =
-    `${tool} next compose --request ${stored.id}${availableIntents ? carried.creation : carried.existingWork}`;
-  const continueCommand = `${tool} next --continue --request ${stored.id}${carried.existingWork}` +
-    (carried.continueScope ? ` --scope ${scopeArg(carried.continueScope)}` : "");
-  // Each choice's command, in the rendering's order. With records to pick, the
-  // continue and reshape answers act on the piece the person names, so with
-  // several listed those two carry none (the agent asks which); with one listed
-  // that piece is meant, and its own command rides the choice (the person is
-  // never asked which of one).
-  const selectCommands = availableIntents ? routingSelectCommands(stored.id, availableIntents, carried.existingWork) : [];
-  const sole = availableIntents?.length === 1 ? availableIntents[0] : null;
-  const routeCommand: Record<NewWorkRoute, string | undefined> = {
-    continue: availableIntents ? (sole === null ? undefined : selectCommands[0]?.command) : continueCommand,
-    separate: newIntentCommand,
-    reshape: availableIntents
-      ? (sole === null ? undefined : routingReshapeCommand(stored.id, sole, carried.existingWork))
-      : composeCommand,
-  };
+  const commands = routingAnswerCommands(stored.id, proposedScope, carried, availableIntents);
   const options = routing.options.map((option) => ({ label: option.label, detail: option.detail(proposedScope) }));
   return {
     kind: "ask",
@@ -3819,29 +4049,23 @@ function newWorkRoutingAskDirective(
     response_route: "next",
     question,
     numbered_prose_question: numberedProseQuestion(routing.prompt, options),
+    // Each choice's command, in the rendering's order.
     choices: options.map((option, index) => {
-      const command = routeCommand[routing.options[index].route];
+      const command = commands.route[routing.options[index].route];
       return command === undefined ? option : { ...option, command };
     }),
     new_work_description: authoritativeRequest(description),
     proposed_scope: proposedScope,
-    new_intent_command: newIntentCommand,
+    new_intent_command: commands.newIntent,
     scope_commands: scopeCommands(`${tool} next --new-intent`, stored.id, carried.newWork, projectDir).map((entry) =>
       entry.scope === proposedScope ? { ...entry, command: `${entry.command}${carried.planChanges}` } : entry),
-    compose_command: composeCommand,
+    compose_command: commands.compose,
     // With a record to pick, the human continues it through its select command
     // and reshapes it through its reshape command; otherwise the question named
     // the active workflow.
     ...(availableIntents
-      ? {
-        available_intents: availableIntents,
-        select_commands: selectCommands,
-        reshape_commands: availableIntents.map((selector) => ({
-          selector,
-          command: routingReshapeCommand(stored.id, selector, carried.existingWork),
-        })),
-      }
-      : { continue_command: continueCommand }),
+      ? { available_intents: availableIntents, select_commands: commands.select, reshape_commands: commands.reshape }
+      : { continue_command: commands.continue }),
   };
 }
 
@@ -3930,8 +4154,8 @@ function constructionStaffingAsk(
     ) {
       sayWithStepOnce(
         projectDir,
-        "Each team builds its Unit start to finish and approves it after every stage. To approve once at the " +
-          "end of each Unit instead, say so before the first Unit is built.",
+        "Each team will approve its Unit after every stage. Do you want them to approve once at the end of each " +
+          "Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.",
       );
     }
     return null;
@@ -3974,6 +4198,54 @@ function constructionStaffingAsk(
   };
 }
 
+// What reading a large repo set costs, said once with the step that starts
+// Reverse Engineering when no question is put about it.
+function repoScopeCostLine(count: number): string {
+  return `Analysing all ${count} may take significant time and consume many tokens: say which repositories matter to ` +
+    "narrow the scope.";
+}
+
+// Before Reverse Engineering reads MANY_REPOS or more repos the person never
+// named, once per work: all of them, or only some (#2874). A set they named, an
+// unattended run and a question they passed over read every recorded repo,
+// with the cost said once; a scan already under way is never asked about.
+function reverseEngineeringScopeAsk(
+  projectDir: string,
+  stateContent: string | null,
+  slug: string,
+): AskDirective | null {
+  if (slug !== "reverse-engineering" || stateContent === null || projectTypeFrom(stateContent) !== "brownfield") return null;
+  const box = checkboxForSlug(stateContent, slug);
+  if (!box || (box.state !== "pending" && box.state !== "in-progress") || !box.suffix.startsWith("EXECUTE")) return null;
+  const repos = intentRepos(projectDir);
+  const node = nodeForSlug(slug);
+  if (repos.length < MANY_REPOS || !node || pipelineLinkEvidence(projectDir, node).receipts.length > 0) return null;
+  if (intentReposNamed(projectDir) || process.env.AIDLC_UNATTENDED === "1" || repoScopePassedOver(projectDir)) {
+    sayWithStepOnce(projectDir, repoScopeCostLine(repos.length));
+    return null;
+  }
+  if (!isReadOnlyEngineProbe()) noteRepoScopeAsked(projectDir);
+  const count = repos.length;
+  return {
+    kind: "ask",
+    ask_type: "repo-scope",
+    response_route: "command",
+    question: `Reverse Engineering will read the ${count} repositories this work covers. Analysing all ${count} may ` +
+      `take significant time and consume many tokens. Read all ${count}, or only the ones this work needs?`,
+    choices: [
+      {
+        label: `Read all ${count}`,
+        detail: "Reverse Engineering reads every repository this work covers.",
+        command: aidlcDispatcherInvocation("intent set-repos --all"),
+      },
+      {
+        label: "Only some",
+        detail: "Say which ones: Reverse Engineering reads only those, and you can add others back later.",
+      },
+    ],
+  };
+}
+
 // A line for the person said with the step this `next` emits, once per chat.
 function sayWithStepOnce(projectDir: string, line: string): void {
   if (engineSessionId && personLineHeard(projectDir, engineSessionId, line)) return;
@@ -3990,6 +4262,25 @@ function reclassifyCommand(projectDir: string, type: "greenfield" | "brownfield"
     ? ` --intent ${shellArg(selection.intent)} --space ${shellArg(selection.space)}`
     : "";
   return `${aidlcDispatcherInvocation("workspace reclassify")} --project-type ${type}${target}`;
+}
+
+// The answer text file the words a project-type change was said in go to.
+const PROJECT_TYPE_WORDS_FILE = `${ANSWER_TEXT_DIR}/project-type-words.txt`;
+
+// The words a project-type change was said in, on the reclassify step: the
+// words `next` was given, in the work's answer text file so no shell reads them
+// on the way; otherwise the slot the agent fills with the person's words, and
+// the sentence that says so.
+function projectTypeWordsArg(projectDir: string, words: string | undefined): { arg: string; fill: string } {
+  const slot = { arg: ` --person-words '${PERSON_WORDS_SLOT}'`, fill: `${PERSON_WORDS_FILL},` };
+  const root = recordDir(projectDir);
+  if (!words?.trim() || root === null || isReadOnlyEngineProbe()) return slot;
+  try {
+    writeRecordFileNoFollow(root, PROJECT_TYPE_WORDS_FILE, words);
+  } catch {
+    return slot;
+  }
+  return { arg: ` --person-words-file ${PROJECT_TYPE_WORDS_FILE}`, fill: "" };
 }
 
 // True when `--project-type` is the whole request: nothing else for routing
@@ -4392,7 +4683,7 @@ function staleStateVersionError(stateContent: string): string | null {
 function parkedDirective(
   reason: string,
   stage: string,
-  narration = `Pausing here with everything saved. Run \`${entrySkillInvocation()} --resume\` when you want to pick it back up.`,
+  narration = pausedLine(stagePlace(stage)),
 ): ParkedDirective {
   return {
     kind: "parked",
@@ -4404,24 +4695,57 @@ function parkedDirective(
   };
 }
 
+// What the person hears when the work stops: where it stands (no place when
+// none is known), that it is saved, and the way back. In this chat their own
+// words pick it up; a new chat may not have AI-DLC loaded yet, so there the
+// entry word with --resume does.
+function pausedLine(place: string, lead = "Paused"): string {
+  return `${lead}${place ? ` at ${place}` : ""} with everything saved. Pick it back up any time here, or with ${entrySkillInvocation()} --resume in a new chat.`;
+}
+
+// A stage, and the Unit it is for, as the person knows them.
+function stagePlace(stage: string, unit?: string): string {
+  const name = stageLabel(nodeForSlug(stage), stage);
+  return name === null ? "" : `${name}${unit && validateUnitName(unit) === null ? ` for ${unit}` : ""}`;
+}
+
+// Where a Unit-by-Unit walk stands: the Unit's stage, the summary confirmation
+// after one, or the Unit's checkpoint. A paused walk and a block whose Units
+// are all covered name no place.
+function walkStepPlace(step: UnitMajorWalkStep): string {
+  return step.kind === "work"
+    ? `${step.stage.name} for ${step.unit}`
+    : step.kind === "summary"
+      ? `the summary confirmation of ${step.stage.name} for ${step.unit}`
+      : step.kind === "checkpoint"
+        ? `the Unit checkpoint for ${step.unit}`
+        : "";
+}
+
 // The `parked` a workflow answers with, naming where it resumes. Under the
 // unit-major walk Current Stage stays on the block's first stage, so name the
-// live (stage, Unit) beat instead (#1411).
+// live (stage, Unit) beat instead (#1411), and say the walk's own step: a
+// Unit's summary or checkpoint is no work beat.
 function workflowParkedDirective(
   pd: string,
   stateContent: string,
   parkedAt: string,
+  lead?: string,
 ): ParkedDirective {
   const scope = getField(stateContent, "Scope")?.trim() ?? "";
-  const beat = scope ? unitMajorWorkBeat(pd, scope, stateContent, parkedAt) : null;
+  const walk = scope ? unitMajorWalkBeat(pd, scope, stateContent, parkedAt) : null;
+  const narration = pausedLine(walk === null ? stagePlace(parkedAt) : walkStepPlace(walk.step), lead);
+  const beat = walk?.step.kind === "work" ? walk.step : null;
   return beat
     ? parkedDirective(
         `Workflow parked at "${beat.stage.slug}" for unit "${beat.unit}". Resume with ${entrySkillInvocation()} --resume.`,
         beat.stage.slug,
+        narration,
       )
     : parkedDirective(
         `Workflow parked at "${parkedAt}". Resume with ${entrySkillInvocation()} --resume.`,
         parkedAt,
+        narration,
       );
 }
 
@@ -4456,17 +4780,26 @@ function withWorkPicksUpLine<T extends Directive>(
   const current = (getField(stateContent, "Current Stage") ?? "").trim();
   const walk = scope ? unitMajorWalkBeat(pd, scope, stateContent, current) : null;
   if (onlyOnWalk && walk === null) return directive;
-  const at = walk === null
-    ? nodeForSlug(current)?.name ?? ""
-    : walk.step.kind === "work"
-      ? `${walk.step.stage.name} for ${walk.step.unit}`
-      : walk.step.kind === "summary"
-        ? `the summary confirmation of ${walk.step.stage.name} for ${walk.step.unit}`
-        : walk.step.kind === "checkpoint"
-          ? `the Unit checkpoint for ${walk.step.unit}`
-          : "";
+  const at = walk === null ? nodeForSlug(current)?.name ?? "" : walkStepPlace(walk.step);
   if (at) (directive as { narration?: string }).narration = `The work picks up at ${at}.`;
   return directive;
+}
+
+// Whether the place withWorkPicksUpLine names is still where the work picks up
+// after a switch to `newScope`: the Current Stage is still to do, the work's
+// own recorded plan runs it (that record already holds the project-type
+// adjustment: a new project's Reverse Engineering reads SKIP there), and the
+// new scope's grid runs it (the switch rebuilds the plan from that grid, and
+// skips a waiting stage it does not run); off a Unit-by-Unit walk, whose own
+// steps a switch can change (a stage it adds or drops moves a Unit's next step,
+// and the summary confirmation follows the scope).
+function scopeSwitchKeepsPlace(pd: string, scope: string, stateContent: string, newScope: string): boolean {
+  const current = (getField(stateContent, "Current Stage") ?? "").trim();
+  const box = parseCheckboxes(stateContent).find((c) => c.slug === current)?.state;
+  if (box === undefined || box === "completed" || box === "skipped") return false;
+  if (effectivePlanAction(current, scope, stateContent) !== "EXECUTE") return false;
+  if (effectivePlanAction(current, newScope, null) !== "EXECUTE") return false;
+  return !scope || unitMajorWalkBeat(pd, scope, stateContent, current) === null;
 }
 
 // Whether a setting typed in chat ends the turn. It does when the person must
@@ -4511,7 +4844,7 @@ function resumeOnYes(): string {
 
 // The `parked` a successful park answers with. A team Unit checkout parks
 // only its Unit, locally, so it names the Unit.
-function parkedAfterPark(pd: string, parkStdout: string): ParkedDirective {
+function parkedAfterPark(pd: string, parkStdout: string, lead?: string): ParkedDirective {
   const stateContent = loadStateFileIfPresent(pd);
   let parkedUnit: string | undefined;
   try {
@@ -4519,15 +4852,17 @@ function parkedAfterPark(pd: string, parkStdout: string): ParkedDirective {
     if (result.checkout_local === true && typeof result.unit === "string") parkedUnit = result.unit;
   } catch { /* the workflow park result carries no Unit */ }
   if (parkedUnit !== undefined) {
+    const stage = (stateContent ? getField(stateContent, "Current Stage") : null) ?? "functional-design";
     return parkedDirective(
       `Unit "${parkedUnit}" is parked in this checkout. Resume with ${entrySkillInvocation()} --resume.`,
-      (stateContent ? getField(stateContent, "Current Stage") : null) ?? "functional-design",
+      stage,
+      pausedLine(stagePlace(stage, parkedUnit), lead),
     );
   }
   const parkedAt = stateContent ? (getField(stateContent, "Parked At Stage") ?? "").trim() : "";
   return stateContent
-    ? workflowParkedDirective(pd, stateContent, parkedAt)
-    : parkedDirective(`Workflow parked at "${parkedAt}". Resume with ${entrySkillInvocation()} --resume.`, parkedAt);
+    ? workflowParkedDirective(pd, stateContent, parkedAt, lead)
+    : parkedDirective(`Workflow parked at "${parkedAt}". Resume with ${entrySkillInvocation()} --resume.`, parkedAt, pausedLine(stagePlace(parkedAt), lead));
 }
 
 // "Approve, but let's stop there for today": the approval is recorded, then
@@ -4544,11 +4879,11 @@ function parkAfterApproval(pd: string, slug: string, attended: boolean, unit?: s
   } catch {
     return null;
   }
-  const parked = parkedAfterPark(pd, result);
+  const parked = parkedAfterPark(pd, result, "Approved, and paused");
   return parkedDirective(
     `Approved "${slug}"${unit ? ` for unit "${unit}"` : ""}. ${parked.reason}`,
     parked.stage,
-    `Approved, and paused here with everything saved. Run \`${entrySkillInvocation()} --resume\` when you want to pick it back up.`,
+    parked.narration,
   );
 }
 
@@ -4656,6 +4991,7 @@ export interface ParsedFlags {
   record?: string; // --record <selector>: the listed record a routing question's reshape answer chose
   workspaceCommand?: WorkspaceCommand; // leading workspace command (space/space-create/intent)
   carryOn?: boolean; // the pick question's answer: select the record, then carry on in the same turn
+  pickedUp?: string; // --resume picking up the only work here: the person's one line for it
   pluginCommand?: Exclude<PluginCommand, { kind: "not-plugin" }>; // leading plugin noun: terminal list/sync/select/help/error
   knowledgeCommand?: Exclude<KnowledgeCommand, { kind: "not-knowledge" }>; // leading knowledge noun: terminal DocumentKB verbs/help/error
   compose?: boolean; // leading `compose` verb: force the composer (front or in-flight)
@@ -4707,14 +5043,6 @@ export interface ParsedFlags {
   retiredOnly?: boolean;
 }
 
-const CONFIG_SECTIONS = [
-  "models",
-  "runtime",
-  "providers",
-  "trust",
-  "flags",
-  "project",
-] as const;
 type ConfigSection = (typeof CONFIG_SECTIONS)[number];
 
 // Extract the flags the `next` decision rule consumes. --project-dir is pulled
@@ -4853,6 +5181,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   // only the tokens in front of the `--` mark, so neither the mark nor a word
   // behind it is ever a flag's value.
   const read = readNextTokens(args);
+  let emptyList: string | undefined;
   for (const { role, token: a, value } of read.tokens) {
     if (role === "word") {
       // Among the person's own words a flag-shaped token is one of their words,
@@ -4991,17 +5320,19 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       }
     } else if (a === "--skip" || a === "--add") {
       // Stage slugs echoed into the creation command: each must name a stage.
-      if (value === undefined) {
-        flags.parseError = `${a} requires <stage,...>.`;
+      // An empty list (`--skip ''`, or no value) changes nothing beside a list
+      // that names a stage, and is refused alone (after this loop).
+      const slugs = splitSlugList(value);
+      const unknown = slugs.find((slug) => nodeForSlug(slug) === undefined);
+      if (unknown !== undefined) {
+        flags.parseError = `${a} requires stage slugs; "${unknown}" is not a stage.`;
+      } else if (slugs.length > 0) {
+        flags.planChanges ??= { skip: [], add: [] };
+        flags.planChanges[a === "--skip" ? "skip" : "add"].push(...slugs);
       } else {
-        const slugs = splitSlugList(value);
-        const unknown = slugs.find((slug) => nodeForSlug(slug) === undefined);
-        if (slugs.length === 0 || unknown !== undefined) {
-          flags.parseError = `${a} requires stage slugs; "${unknown ?? value}" is not a stage.`;
-        } else {
-          flags.planChanges ??= { skip: [], add: [] };
-          flags.planChanges[a === "--skip" ? "skip" : "add"].push(...slugs);
-        }
+        emptyList ??= value === undefined
+          ? `${a} requires <stage,...>.`
+          : `${a} requires stage slugs; "${value}" is not a stage.`;
       }
     } else if (a === "--plan-name") {
       // Echoed into the creation command, so only a plain kebab name passes.
@@ -5106,6 +5437,9 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       wordTokens.push(a);
     }
   }
+  // With no list naming a stage, the line would run as bare `next` and start
+  // the stage they may have asked to skip.
+  if (emptyList !== undefined && flags.planChanges === undefined) flags.parseError ??= emptyList;
   const literalIntent = read.literal !== null;
   if (read.literal !== null) {
     intentWords.push(...read.literal);
@@ -5471,6 +5805,15 @@ function createPrintDirective(
   }
   for (const key of CEREMONY_KEYS) {
     if (flags.ceremony?.[key]) cmd.push(`${CEREMONY_FLAGS[key]} ${flags.ceremony[key]}`);
+  }
+  // The stage changes of a plan composed for this request are the ones the
+  // composer validated and the gate showed, so a list retyped by hand on
+  // Approve never drops or adds a stage. A creation with no list is the
+  // person's own pick of the plain scope (after a Reject), and keeps it.
+  if (flags.planChanges && flags.request) {
+    const composedFrom = readQuestion(projectDir, flags.request)?.composedFrom;
+    const approved = approvedComposerPlan(projectDir, [flags.request, ...(composedFrom ? [composedFrom] : [])], scope);
+    if (approved) flags.planChanges = approved.skip.length > 0 || approved.add.length > 0 ? approved : undefined;
   }
   if (flags.planChanges?.skip.length) cmd.push(`--skip ${flags.planChanges.skip.join(",")}`);
   if (flags.planChanges?.add.length) cmd.push(`--add ${flags.planChanges.add.join(",")}`);
@@ -6663,10 +7006,6 @@ function codekbCtxFor(pd: string): CodekbCtx {
   };
 }
 
-function codekbArtifactRepos(ctx: CodekbCtx): string[] {
-  return ctx.repos.length > 1 ? ctx.repos : [ctx.codekbRepo];
-}
-
 // Resolve a single artifact vocabulary name to its canonical aidlc-docs/... path
 // UNDER THE STAGE THAT OWNS THE FILE. Non-per-unit stages map to
 // `aidlc-docs/<phase>/<stage-slug>/<name>.md`; per-unit Construction stages
@@ -6711,6 +7050,10 @@ function resolveArtifactPath(
   return `${prefix}/${owner.phase}/${owner.slug}/${filename}`;
 }
 
+// A work that records several repos names each codekb artifact once, with
+// REPO_PLACEHOLDER for the repo (repos_note says which): one path per repo
+// grew the step past what a host shows of one result from about 45 repos
+// (#2874). The completion check and the sensors resolve every repo themselves.
 function resolveArtifactPaths(
   name: string,
   owner: GraphStage,
@@ -6719,20 +7062,33 @@ function resolveArtifactPaths(
   codekbCtx?: CodekbCtx,
 ): string[] {
   if (isCodekb(owner) && codekbCtx && codekbCtx.repos.length > 1) {
-    const filename = artifactFilename(name);
-    return codekbArtifactRepos(codekbCtx).map(
-      (repo) =>
-        `${relativeCodekbDir(codekbCtx.projectDir, repo, codekbCtx.space)}/${filename}`,
-    );
+    return [`${relativeCodekbDir(codekbCtx.projectDir, REPO_PLACEHOLDER, codekbCtx.space)}/${artifactFilename(name)}`];
   }
   return [resolveArtifactPath(name, owner, unit, recordPrefix, codekbCtx)];
 }
 
+// Which repos a REPO_PLACEHOLDER path stands for, for the agent: their names
+// while there are few, else how many and where the list is.
+function reposNote(ctx: CodekbCtx): string {
+  const lead = `Each path with ${REPO_PLACEHOLDER} is one file per repository this work covers`;
+  const repos = ctx.repos;
+  if (repos.length < MANY_REPOS) {
+    return `${lead}: ${repos.slice(0, -1).join(", ")} and ${repos[repos.length - 1]}.`;
+  }
+  const registry = toPosix(relative(ctx.projectDir, intentsRegistryPath(ctx.projectDir, ctx.space)));
+  return `${lead}, ${repos.length} of them, named in the repos list of this work's row in ${registry}.`;
+}
+
+// The repos whose copy of a REPO_PLACEHOLDER path exists on disk.
+function reposWithFile(ctx: CodekbCtx, path: string): string[] {
+  return ctx.repos.filter((repo) => existsSync(join(ctx.projectDir, ...path.replace(REPO_PLACEHOLDER, repo).split("/"))));
+}
+
 // Resolve a consumed artifact under its producer. Compile enforces exactly one
 // producer for every consumed name; unconsumed shared names never reach here.
-// Multi-repo codekb producers expand to one path per registered repo; an orphan
-// consume defensively falls back to the consuming node so the directive remains
-// well formed.
+// Multi-repo codekb producers resolve to their one REPO_PLACEHOLDER path; an
+// orphan consume defensively falls back to the consuming node so the directive
+// remains well formed.
 function resolveConsumePaths(
   name: string,
   node: GraphStage,
@@ -6917,8 +7273,11 @@ function splitConsumesByPresence(
       present.push(c.path);
       continue;
     }
-    const abs = join(codekbCtx.projectDir, ...c.path.split("/"));
-    if (existsSync(abs)) {
+    // A path written once for several repos is an input while any of them has it.
+    const exists = c.path.includes(REPO_PLACEHOLDER)
+      ? reposWithFile(codekbCtx, c.path).length > 0
+      : existsSync(join(codekbCtx.projectDir, ...c.path.split("/")));
+    if (exists) {
       present.push(c.path);
       continue;
     }
@@ -7180,6 +7539,9 @@ function buildRunStageDirective(
   unitKind: string | null = null,
   forcePersona = false,
   singleRun = false,
+  // An isolated run's own depth: it picks the knowledge roster as the
+  // workflow's depth would.
+  depthOverride: string | null = null,
 ): RunStageDirective {
   const artifactUnit =
     unit === UNIT_NAME_PLACEHOLDER &&
@@ -7201,9 +7563,9 @@ function buildRunStageDirective(
     codekbCtx,
     stateContent,
   );
-  const depth = stateContent
+  const depth = depthOverride ?? (stateContent
     ? getField(stateContent, "Depth")
-    : loadScopeMetadata()[scope]?.depth ?? null;
+    : loadScopeMetadata()[scope]?.depth ?? null);
   // The collaborators the stage ACTUALLY gets this run: the one switch owner.
   // Empty when the `collaborators` ceremony is off for this scope, which makes
   // the stage run lead-only on every topology (dispatch, gate, and promotion
@@ -7215,6 +7577,9 @@ function buildRunStageDirective(
     ? rulesContentEntries(node, codekbCtx.projectDir, codekbCtx.space)
     : null;
   const ceremony = ceremonyPolicyValues(scope, stateContent);
+  // The stage owes the same confirmation its gate and logger enforce. A scope
+  // setting alone must not tell Code Generation to ask before Plan Approval.
+  ceremony.summary_confirmation = summaryConfirmationOwed(node, { scope, stateContent, ignoreGuardSwitch: true }) ? "on" : "off";
   // Plan approval also answers to a memory-held strict Guard Policy.
   if (codekbCtx && stateContent) {
     ceremony.plan_approval = resolvePlanApprovalSetting(codekbCtx.projectDir, stateContent).value;
@@ -7288,7 +7653,8 @@ function buildRunStageDirective(
     });
     directive.pipeline = {
       links: evidence.links,
-      completed: evidence.completed,
+      ...completedPipelineLinks(evidence.completed),
+      record: pipelineLinkRecord(codekbCtx.projectDir, node, evidence, singleRun),
     };
   }
   if (!singleRun && stateContent && codekbCtx) {
@@ -7310,6 +7676,13 @@ function buildRunStageDirective(
     }
   }
   if (absent.length > 0) directive.consumes_absent = absent;
+  if (
+    codekbCtx &&
+    [...directive.produces, ...directive.consumes, ...absent.map(({ path }) => path)]
+      .some((path) => path.includes(REPO_PLACEHOLDER))
+  ) {
+    directive.repos_note = reposNote(codekbCtx);
+  }
   // next_stage: the display name of the in-scope stage that follows this one, so
   // the approval gate's Approve option reads "Continue to <next_stage>" verbatim
   // instead of a guessed constant. Computed here at emit time: the gate is
@@ -7375,10 +7748,7 @@ function buildRunStageDirective(
   if (node.slug === "code-generation" || node.slug === "build-and-test") {
     protocolModules.push("loopback");
   }
-  // The learnings ritual runs at a gate's first showing, never again for a
-  // revision of it (stage-protocol.md, Request Changes).
-  const revising = stateContent !== null && checkboxStateOf(parseCheckboxes(stateContent), node.slug) === "revising";
-  if (ceremony.learnings === "on" && !revising) protocolModules.push("learnings");
+  if (learningsRitualRuns(ceremony.learnings, stateContent, node.slug)) protocolModules.push("learnings");
   if (protocolModules.length > 0) {
     directive.protocol_modules = protocolModules;
   }
@@ -7414,6 +7784,10 @@ function buildRunStageDirective(
     node.mode === "subagent" || node.mode === "pipeline"
       ? narrateSpecialistStage(node, scope, stateContent)
       : narrateStageEntry(node, scope, firstOfWorkflow, directive.gate, stateContent);
+  // A stage that writes once per repo says how many it covers.
+  if (isCodekb(node) && codekbCtx && codekbCtx.repos.length > 1) {
+    directive.narration = directive.narration.replace(/\.$/, `, across the ${codekbCtx.repos.length} repositories this work covers.`);
+  }
   if (codekbCtx) {
     runStageRoutes.set(directive, {
       node,
@@ -7745,6 +8119,34 @@ function personaSentAhead(directive: RunStageDirective): string | null {
     : null;
 }
 
+// A pipeline step names each owed link's exact command for every registered
+// repo, so a workspace of many repos can outgrow what the host shows of one
+// result. The step then keeps the commands of as many whole repos as fit, in
+// order, possibly none (the step as it was before it carried them): a link left
+// out gets its exact command from the next step or from its refusal. Decided
+// from the step alone, as the lead's persona is below.
+function fitPipelineRecord(directive: RunStageDirective): void {
+  const pipeline = directive.pipeline;
+  if (pipeline === undefined || pipeline.record.length === 0) return;
+  const record = pipeline.record;
+  const limit = directiveMaxBytes() - INLINE_RULES_MARGIN_BYTES;
+  const size = (): number => {
+    const { conductor_persona: _sentAhead, ...alone } = directive;
+    return Buffer.byteLength(JSON.stringify(alone), "utf-8");
+  };
+  if (size() <= limit) return;
+  const chains: Array<typeof record> = [];
+  for (const row of record) {
+    const last = chains.at(-1);
+    if (last !== undefined && last[0].repo === row.repo) last.push(row);
+    else chains.push([row]);
+  }
+  while (chains.length > 0 && size() > limit) {
+    chains.pop();
+    pipeline.record = chains.flat();
+  }
+}
+
 // The lead's persona rides in the run-stage itself, never on a rules part. When
 // the step would not fit with it even after its rules and the conductor persona
 // go ahead, the step lists the persona file to read instead, as it did before
@@ -8048,6 +8450,7 @@ function transportRunStage(
     held,
     persona: directive.conductor_persona === undefined ? null : sha256(directive.conductor_persona),
   };
+  fitPipelineRecord(directive);
   listLeadPersonaUnlessItFits(directive);
   const directiveHash = sha256(JSON.stringify(directive));
   const persona = personaSentAhead(directive);
@@ -8478,7 +8881,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   }
 
   if (flags.untakenFlag !== undefined) {
-    const open = openPlanApprovalQuestion(resolveProjectDir(projectDir), "");
+    const open = openPlanApprovalQuestion(resolveProjectDir(projectDir));
     const next = `${aidlcToolInvocation("orchestrate")} next`;
     const named = flags.untakenFlagValue === undefined
       ? `\`${flags.untakenFlag}\``
@@ -8523,27 +8926,27 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     if (engagesWorkflow && !isReadOnlyEngineProbe()) pruneExpiredQuestions(questionDir);
   };
 
-  // A reply given back as prose that only names one of the open routing
-  // question's options is that option's own command, run exactly as the ask
-  // supplied it: the person already answered, so asking again would only
-  // repeat the question. Its continue and reshape still act only on the work
-  // the question named, and ask again otherwise.
-  const onlyProse = flags.intent !== undefined &&
-    Object.entries(flags).every(([key, value]) =>
-      key === "intent" || key === "markedWords" || value === undefined || value === false);
-  const routingAnswer = onlyProse ? routingQuestionAnswer(questionDir, flags.intent!) : null;
   // A reply typed while one of this engine's own questions is still open is
   // that question's reply, never a new request: before this, "yes" after the
   // plan offer became work named "yes" and the same offer came back, a loop the
   // person could sit in, and their word was spent as a name. Only the agent has
   // their chat and can tell a reply from a new request, so both readings go to
-  // it and nothing is created first. A question whose answer already started
-  // work is not open, and a routing question answers itself above.
-  // Words behind the delimiter are already marked as the person's own request,
-  // which is the agent's answer to this very print: it must not come back.
-  const openFront = routingAnswer === null && onlyProse && flags.markedWords !== true
-    ? openFrontQuestion(questionDir)
-    : null;
+  // it and nothing is created or run first: a "2" at the routing question is
+  // the agent's to read against what it showed, never an option `next` picks.
+  // A question whose answer already started work is not open. Words behind the
+  // delimiter are already marked as the person's own request, which is the
+  // agent's answer to this very print: it must not come back.
+  const onlyProse = flags.intent !== undefined &&
+    Object.entries(flags).every(([key, value]) =>
+      key === "intent" || key === "markedWords" || value === undefined || value === false);
+  const unmarkedProse = onlyProse && flags.markedWords !== true;
+  const openRouting = unmarkedProse ? openRoutingQuestion(questionDir) : null;
+  const routingStep = openRouting === null ? null : routingQuestionReplyDirective(openRouting, flags.intent ?? "");
+  if (routingStep !== null) {
+    emit(routingStep);
+    return;
+  }
+  const openFront = unmarkedProse ? openFrontQuestion(questionDir) : null;
   if (openFront !== null) {
     const tool = `${aidlcToolInvocation("orchestrate")} next`;
     const open = openFront.question;
@@ -8567,44 +8970,23 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     ));
     return;
   }
-  // Asked while no work was selected, continue and reshape act on a record the
-  // person picks from the ones the question listed that are still there: with
-  // one listed, that is the one; with more, only which one is left to ask.
-  // With none of them left, or work selected since, they run the question's
-  // own late answer below (`--continue` / `compose --request`), which acts on
-  // the listed work selected now or asks again, keeping the request.
-  const pickedRecords = routingAnswer?.route === "separate" ? null : routingAnswer?.records ?? null;
-  if (
-    routingAnswer && pickedRecords &&
-    (routingAnswer.question.askedAbout?.targets.length ?? 0) > 1
-  ) {
-    emit(pickedRouteRecordAsk(routingAnswer.question, routingAnswer.route as "continue" | "reshape", pickedRecords));
-    return;
-  }
-  // Settings typed with the request ride a continue answer to the record it
-  // picks; with none, it is that record's plain select command.
-  const typedForExistingWork = (routingAnswer?.question.settings?.existingWork.length ?? 0) > 0;
-  if (routingAnswer && pickedRecords && routingAnswer.route === "continue" && !typedForExistingWork) {
-    // Its select command, exactly as the question supplied it.
-    flags.intent = undefined;
-    const picked = parseNextFlags(["--pick", pickedRecords.selectable[0].selector]);
-    flags.workspaceCommand = picked.workspaceCommand;
-    flags.carryOn = picked.carryOn;
-  } else if (routingAnswer) {
-    flags.intent = undefined;
-    flags.request = routingAnswer.question.id;
-    if (routingAnswer.route === "continue") {
-      flags.continue = true;
-      if (pickedRecords) flags.record = pickedRecords.selectable[0].selector;
-    } else if (routingAnswer.route === "reshape") {
-      flags.compose = true;
-      if (pickedRecords) flags.record = pickedRecords.selectable[0].selector;
-    } else {
-      flags.newIntent = true;
-      flags.scope = routingAnswer.question.proposedScope;
+  // A bare --resume with one piece of work here and none selected (a
+  // teammate's clone): that piece is what they asked to pick up, so it is
+  // picked up the way the pick question's answer picks it, not asked about.
+  // Anything typed with it (a stage to jump to, a setting) keeps its own
+  // route; two pieces, words on the line, or a record that cannot be selected
+  // here keep the question.
+  if (args.length === 1 && args[0] === "--resume" && !flags.workspaceCommand && !flags.intent?.trim()) {
+    const records = unselectedRecords(resolveProjectDir(projectDir));
+    const only = records !== null && records.presentCount === 1 && records.selectable.length === 1 ? records.selectable[0] : null;
+    if (only !== null) {
+      const picked = parseNextFlags(["--pick", only.selector]);
+      flags.workspaceCommand = picked.workspaceCommand;
+      flags.carryOn = picked.carryOn;
+      const standing = workStanding(only.state);
+      flags.pickedUp = `Picked up \`${intentDisplayLabel(only.intent)}\`, the only open work${standing ? `; it is ${standing}` : ""}. ` +
+        "You can start something new any time.";
     }
-    // The settings typed with the request ride this answer as they ride the
-    // option's command: the question it names fills them in below.
   }
 
   // The agent's answer to a plan proposal step needs its shape: a plan (or
@@ -8681,11 +9063,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(started);
       return;
     }
-    // An answer that arrived without its option's command (a reply naming the
-    // option, or the plain `next --request` an open stage question hands on)
-    // gets the stored settings; the ask's own commands already carry theirs.
-    const bare = routingAnswer !== null ||
-      (!flags.newIntent && !flags.continue && !flags.compose && flags.record === undefined);
+    // An answer that arrived without its option's command (the plain `next
+    // --request` an open stage question hands on) gets the stored settings; the
+    // ask's own commands already carry theirs.
+    const bare = !flags.newIntent && !flags.continue && !flags.compose && flags.record === undefined;
     if (bare && !fillStoredSettings(flags, found)) {
       emit(errorDirective(QUESTION_UNAVAILABLE));
       return;
@@ -8996,10 +9377,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     if (flags.carryOn && command.kind === "switch") {
       const statePath = stateFilePath(resolveProjectDir(projectDir), command.name);
       const parked = existsSync(statePath) && parkedWhereItStands(readFileSync(statePath, "utf-8"));
-      emit(printDirective(
-        `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, print its output verbatim, then run ` +
-          `\`${aidlcToolInvocation("orchestrate")} next${parked ? " --resume" : ""}\` and follow what it returns.`,
-      ));
+      // Picked up by --resume: the person's one line, and the --resume they typed.
+      const print = printDirective(
+        `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, ${flags.pickedUp ? "" : "print its output verbatim, "}then run ` +
+          `\`${aidlcToolInvocation("orchestrate")} next${parked || flags.pickedUp ? " --resume" : ""}\` and follow what it returns.`,
+      );
+      if (flags.pickedUp) print.narration = flags.pickedUp;
+      emit(print);
       return;
     }
     // Navigation ends the turn even when the destination has unfinished work:
@@ -9123,6 +9507,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   }
 
   const pd = resolveProjectDir(projectDir);
+  // Two policy lines that disagree are settled before the state is read, so
+  // this step and every check after it read the one kept. Its line, when there
+  // is one, rides with the step as a settled gate's does (a step in parts too).
+  const settledPolicy = isReadOnlyEngineProbe() ? null : settleGuardPolicyConflict(pd, {
+    intent: engineSelection(pd).intent ?? undefined, space: engineSelection(pd).space,
+  });
+  if (settledPolicy?.line) settledNotices.push(settledPolicy.line);
   const stateContent = loadStateFileIfPresent(pd);
   activeRetiredGuardPolicyNotice = stateContent === null ? null : retiredGuardPolicyNotice(pd, stateContent);
   // Runtime state-version guard (see staleStateVersionError): refuse to advance
@@ -9290,9 +9681,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const alone = projectTypeIsWholeRequest(flags);
     if (alone || !projectTypeRecordedAsPersons(stateContent, flags.projectType)) {
       // Said with more of a request, the reclassify directive says to run
-      // the same `next` again so the rest of the request is carried on.
+      // the same `next` again so the rest of the request is carried on. The
+      // words it was said in are recorded beside the change.
+      const words = projectTypeWordsArg(pd, flags.intent);
       emit(printDirective(
-        `Run \`${reclassifyCommand(pd, flags.projectType)}${alone ? "" : " --then-rerun"}\` ` +
+        `Run \`${reclassifyCommand(pd, flags.projectType)}${words.arg}${alone ? "" : " --then-rerun"}\`${words.fill} ` +
           "and act on the directive it returns.",
       ));
       return;
@@ -9330,9 +9723,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     !flags.phase &&
     existsSync(unitParkedPath(pd))
   ) {
+    const stage = getField(stateContent!, "Current Stage") ?? "functional-design";
     emit(parkedDirective(
       `Unit "${unitScope.unit}" is parked in this checkout. Resume with ${entrySkillInvocation()} --resume.`,
-      getField(stateContent!, "Current Stage") ?? "functional-design",
+      stage,
+      pausedLine(stagePlace(stage, unitScope.unit)),
     ));
     return;
   }
@@ -9584,6 +9979,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       // approval off) reach the work it creates and no other.
       flags.request = saveQuestion(pd, "", flags.scope ?? "", "compose").id;
     }
+    // The plan's creation for this request records the composer's scores.
+    if (!inFlight && flags.request) openComposerScores(pd, flags.request);
     const dispatch = composeDispatchDirective(flags, inFlight);
     if (splitSaid) dispatch.narration = `${dispatch.narration ?? ""}${splitSaid}`.trim();
     emit(dispatch);
@@ -9690,6 +10087,22 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       ));
       return;
     }
+    // A depth or test strategy typed here is this run's alone: it rides on the
+    // isolated start and its run-stage (#2654). A Guard Policy or a check is
+    // read by hooks from the workflow, so an isolated run cannot take its own;
+    // naming config set would change the whole workflow instead. Review and
+    // ceremony flags meet their own refusals above.
+    const unsupported = typedSettingModifiers(flags)
+      .map((modifier) => modifier.split(" ")[0])
+      .filter((key) => key !== "depth" && key !== "test-strategy");
+    if (unsupported.length > 0) {
+      emit(errorDirective(
+        `Cannot use --single with ${unsupported.map((key) => `--${key}`).join(", ")}. ` +
+          "A single-stage run cannot take its own Guard Policy or checks. " +
+          "Run the stage again with --single and without them.",
+      ));
+      return;
+    }
     emitSingleRunStage(
       flags.stage,
       scope,
@@ -9697,6 +10110,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       recordPrefix,
       codekbCtx,
       codekbCtx.projectDir,
+      {
+        Depth: flags.depth ? VALID_DEPTHS[flags.depth] : undefined,
+        "Test Strategy": flags.testStrategy ? VALID_TEST_STRATEGIES[flags.testStrategy] : undefined,
+      },
     );
     return;
   }
@@ -9774,13 +10191,19 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       withdrawSettingWords(pd);
       // On finished work the change starts the first stage the new scope adds
       // after the last one (the tool reads the same predicate), so nothing
-      // waits on the person: the agent carries on into it instead of ending
-      // the turn, as a setting over running work does (#2261).
-      const reopensFinishedWork = stageReopenedByScopeChange(stateContent, flags.scope) !== null;
+      // waits on the person and the agent carries on into it (#2261). Over
+      // running work a setting's rule decides (see settingEndsTurn): a live
+      // run ended the turn after a switch made while the stage ran, and the
+      // agent asked the person to say go on.
+      const carriesOn = stageReopenedByScopeChange(stateContent, flags.scope) !== null ||
+        (stillParked === null && !settingEndsTurn(pd, currentStateScope, stateContent));
+      const switched = carriesOn
+        ? printDirective(`Run \`${command}\` to change scope${fill}, then print its output verbatim and re-run next to carry on with the work.`)
+        : turnEndingPrint(`Run \`${command}\` to change scope${fill}, then ${verbatimThenStop}`);
       emit(planChanges ? planChangeDirective(planChanges, command, null, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
-        reopensFinishedWork
-          ? printDirective(`Run \`${command}\` to change scope${fill}, then print its output verbatim and re-run next to carry on with the work.`)
-          : turnEndingPrint(`Run \`${command}\` to change scope${fill}, then ${verbatimThenStop}`),
+        !carriesOn && scopeSwitchKeepsPlace(pd, currentStateScope, stateContent, flags.scope)
+          ? withWorkPicksUpLine(switched, pd, currentStateScope, stateContent)
+          : switched,
         planApprovalAskIsOpen(pd),
       ));
       return;
@@ -10120,9 +10543,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // Prose while the current stage has a question the person has not answered
   // may be its answer, so the conductor reads which it is (see
   // openQuestionReplyDirective). Raw prose only: a stored request asked about
-  // again keeps its route here, and a reply that only names one of the routing
-  // question's options already became that option's command (see
-  // routingQuestionAnswer).
+  // again keeps its route here, and words at an open routing question went to
+  // the agent's step above (routingQuestionReplyDirective).
   const routingTargets = () => [{ intent: selection.intent ?? "", uuid: intentUuidForSelection(pd, selection) ?? "" }];
   if (
     flags.intent && !flags.scope && !flags.positionalScope && !flags.resume && question === undefined &&
@@ -10134,45 +10556,19 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const undo = approvedPlanUndoReading(pd, stateContent);
     // The engine's own code plan question takes the reply from any chat, so
     // words beside it ("approve the code plan", typed in a new chat) are read
-    // as its answer first, never asked about as new work.
-    const planQuestion = openPlanApprovalQuestion(pd, flags.intent);
+    // as its answer first, never asked about as new work. Once it is answered
+    // and nothing is built yet, their words may change that answer.
+    const planQuestion = openPlanApprovalQuestion(pd);
     if (planQuestion !== null) {
-      // A later pick against the one on record: their latest word stands.
-      if (planQuestion.answered && planQuestion.isChoice && planQuestion.overrules !== null) {
-        const log = aidlcToolInvocation("log");
-        emit(printDirective(planQuestion.picked === "edit"
-          ? "The person answered the code plan question earlier and now says they will edit the files, and nothing " +
-            `is built yet. Run \`${log} answer --stage code-generation --checkpoint plan-approval --details ` +
-            `"I'll edit the files"\`, tell them where the files are, and wait for them to say done.`
-          : planQuestion.overrules === "request-changes"
-          ? "The person asked for changes to the code plan earlier and now approves it. Run " +
-            `\`${log} answer --stage code-generation --checkpoint plan-approval --details 'Approve Plan'\`, then bare ` +
-            `\`${aidlcToolInvocation("orchestrate")} next\`: it builds the plan.`
-          : "The person approved the code plan earlier and now picks another choice, and nothing is built yet. Run " +
-            `\`${log} answer --stage code-generation --checkpoint plan-approval --details 'Review the plan'\`, then bare ` +
-            `\`${aidlcToolInvocation("orchestrate")} next\`: the plan question comes back before anything is built. ` +
-            "Ask what they want changed when they did not say."));
-        return;
-      }
-      // Exactly one of its choices, already recorded from their reply; or they
-      // answered on the questions file's own `[Answer]:` line and said done,
-      // which is recorded the same way.
-      if (planQuestion.answered && (planQuestion.isChoice || saidDone(args.join(" ")))) {
-        emit(printDirective(
-          "The person's reply answered the code plan question, and it is recorded. Run bare " +
-            `\`${aidlcToolInvocation("orchestrate")} next\`: it carries out their choice.`,
-        ));
-        return;
-      }
-      if (!planQuestion.answered) {
-        const words = saveQuestion(
-          pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
-          undefined, routingSettings(carriedRoutingFlags(flags)),
-        );
-        const settings = typedSettingModifiers(flags);
-        emit(openPlanQuestionReplyDirective(planQuestion.editing, words.id, undo, settings, settingNeedsTheirWords(pd, settings)));
-        return;
-      }
+      const words = saveQuestion(
+        pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
+        undefined, routingSettings(carriedRoutingFlags(flags)),
+      );
+      const settings = typedSettingModifiers(flags);
+      emit(openPlanQuestionReplyDirective(
+        planQuestion.editing, words.id, undo, settings, settingNeedsTheirWords(pd, settings), planQuestion.answered,
+      ));
+      return;
     }
     const open = openStageQuestion(pd, stateContent);
     if (open !== null) {
@@ -10199,7 +10595,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const gateFolder = gateNode && !(isPerUnit(gateNode) && !usesStageLevelPerUnitArtifacts(gateScope, stateContent))
         ? commonFolder(resolveProduces(gateNode, null, engineRelativeRecordDir(pd), codekbCtxFor(pd)))
         : "";
-      emit(openGateReplyDirective(gateStage, words.id, gateFolder));
+      emit(openGateReplyDirective(gateStage, words.id, gateFolder, personsGateReply(pd, resolveInvokingSessionId(pd), gateStage).replies));
       return;
     }
     // Words alone (nothing `next` reads as a flag, scope, verb or noun) may
@@ -10212,6 +10608,22 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
       emit(reentryReplyDirective(words.id, undo, workNamesHere(pd, selection), activeWorkLabel(stateContent)));
+      return;
+    }
+  }
+  // A bare re-entry while a question with no step of its own is open: it is
+  // shown again, and the turn ends at it (openQuestionAgainDirective).
+  if (
+    flags.resume && !flags.intent && !flags.stage && !flags.phase && !flags.single && question === undefined &&
+    !isTeamUnitOwnership(stateContent)
+  ) {
+    const open = openStageQuestion(pd, stateContent);
+    const again = open === null ? null : openQuestionAgainDirective(pd, open.stage, open.block);
+    if (open !== null && again !== null) {
+      pickUpStage = open.stage;
+      leadsToSpeech.add(again);
+      turnEndingPrints.add(again);
+      emit(again);
       return;
     }
   }
@@ -10510,7 +10922,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // (one unit per `next`, gate suppressed on every uncovered unit with the real
     // gate only on the all-covered re-entry; issue #368) and emits a single
     // directive for every other stage.
-    const staffing = constructionStaffingAsk(pd, stateContent, currentSlug, scope);
+    const staffing = constructionStaffingAsk(pd, stateContent, currentSlug, scope) ??
+      reverseEngineeringScopeAsk(pd, stateContent, currentSlug);
     if (staffing) {
       emit(staffing);
       return;
@@ -10545,7 +10958,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // swarm path, emitForSlug drives the engine's per-unit for_each loop for a
   // per-unit Construction stage (issue #368) and emits a single directive
   // otherwise.
-  const staffing = constructionStaffingAsk(pd, stateContent, next.slug, scope);
+  const staffing = constructionStaffingAsk(pd, stateContent, next.slug, scope) ??
+    reverseEngineeringScopeAsk(pd, stateContent, next.slug);
   if (staffing) {
     emit(staffing);
     return;
@@ -10693,6 +11107,9 @@ function applyGateOnlyShape(
     ].filter(Boolean).join("\n");
     if (narration) directive.narration = narration;
     addReviewCheckOffer(directive, projectDir, gateNode, unit);
+    addContextParkOffer(directive, projectDir);
+    // Counted as the gate is reported: a Unit's own only at a team Unit gate.
+    addRevisionCycle(directive, projectDir, directive.stage, directive.unit_gate ? unit : null);
   }
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(
     (module) =>
@@ -10829,6 +11246,8 @@ function applyConstructionCheckpointShape(
     directive.stage_file = rechecked.stage_file;
     directive.consumes = rechecked.consumes;
     directive.produces = rechecked.produces;
+    if (rechecked.repos_note !== undefined) directive.repos_note = rechecked.repos_note;
+    else delete directive.repos_note;
   }
   directive.protocol_modules = checkpoint.rereview
     ? ["reviewer", "reviewer-repair", "construction", "checkpoint"]
@@ -11379,6 +11798,10 @@ function nextUncoveredUnit(
   return { unit: uncovered[0], uncovered };
 }
 
+// A Unit's owed step, and whether it is the completion receipt: for Code
+// Generation that is the one record the Plan Approval hook checks.
+interface UnitRecordStep { text: string; receipt: boolean }
+
 // The step a Unit still owes when its work for this stage is on disk: every
 // required file is there, but one of the records that settles the Unit is not.
 // Either the review (never asked for, waiting for its verdict, or asking for
@@ -11403,7 +11826,7 @@ function unitReceiptOnlyStep(
   ledger: UnitLedger,
   stateContent: string | null,
   scope: string,
-): string | null {
+): UnitRecordStep | null {
   if (stateContent === null) return null;
   if (!ledger.inUse || ledger.receipts.has(unit) || ledger.skipped.has(unit)) return null;
   if (kindVacuous(node, unitKind) || ledger.mode === "wave" || ledger.mode === "mixed") return null;
@@ -11431,50 +11854,150 @@ function unitReceiptOnlyStep(
       // with reviews off.
       if (review.unitStale.has(unit) || review.unitStaleProgress.has(unit)) return null;
       if (!unitWorkIsThisAttempts(projectDir, node.slug, unit, stateContent)) return null;
-      return unitReviewStep(projectDir, node, unit, review);
+      const text = unitReviewStep(projectDir, node, unit, review, stateContent);
+      return text === null ? null : { text, receipt: false };
     }
   }
   const command = (action: string): string =>
     `\`${renderEngineInvocation({ route: "state", args: ["unit", action, "--stage", node.slug, "--unit", unit] })}\``;
   const steps = own ? command("complete") : `${command("start")}, then ${command("complete")}`;
   const done = reviewClass === "none" ? "written" : "written and reviewed";
-  return `Unit "${unit}"'s ${node.name} work is ${done}, but its completion is not recorded: run ${steps}.`;
+  return { text: `Unit "${unit}"'s ${node.name} work is ${done}, but its completion is not recorded: run ${steps}.`, receipt: true };
+}
+
+// The review file the open request for this stage (or Unit) names, as the log
+// handed it out: relative to the project. A chat that resumes never saw the
+// request, so the step has to carry it. Undefined when nothing is open or the
+// record cannot be read.
+function openReviewFileFor(
+  projectDir: string,
+  stage: string,
+  reviewer: string,
+  unit: string | undefined,
+): string | undefined {
+  const record = engineRelativeRecordDir(projectDir);
+  if (record === null) return undefined;
+  try {
+    const open = openReviewRequests(readAuditShardEvents(projectDir)).filter((request) =>
+      request.stage === stage && request.reviewer === reviewer && (request.unit ?? undefined) === unit &&
+      // An isolated stage run (`--single`) reviews on its own; the Stop hook leaves those rows out too.
+      auditBlockField(request.row.block, "Workflow")?.startsWith("single-stage:") !== true);
+    const latest = open.at(-1);
+    return latest === undefined ? undefined : toPosix(join(record, latest.reviewFile));
+  } catch {
+    return undefined;
+  }
+}
+
+// The retry of the waiting review request, while its one retry is unspent.
+function retryRequestFor(
+  projectDir: string,
+  node: GraphStage,
+  unit: string | undefined,
+  attempt: GuardAttemptState,
+): string | undefined {
+  const pending = attempt.pendingReview;
+  if (pending === undefined || !pending.retryable) return undefined;
+  return renderReviewRequestCommand({
+    projectDir, stage: node.slug, reviewer: node.reviewer as string, ...(unit ? { unit } : {}),
+    iteration: pending.iteration, retryPending: true,
+  });
 }
 
 // The review a Unit's stage is still waiting for, as the step that gets it:
-// the first request when none was asked for in this attempt, the verdict when
-// one is waiting, and the next pass when the reviewer asked for repairs. The
-// same step the Construction checkpoint names when it is the checkpoint that
-// is not ready, said here for a stage whose Unit is otherwise done.
+// the first request when none was asked for in this attempt, otherwise the
+// step `nextReviewStepFor` names from the attempt state (the verdict, the one
+// retry while it is unspent, the next pass after repairs). The same step the
+// Construction checkpoint names when it is the checkpoint that is not ready,
+// said here for a stage whose Unit is otherwise done.
 function unitReviewStep(
   projectDir: string,
   node: GraphStage,
   unit: string,
   review: FreshReviewReceipts,
-): string {
-  const reviewer = node.reviewer as string;
-  const request = (iteration: number, retryPending = false): string =>
-    `\`${renderReviewRequestCommand({
-      projectDir,
-      stage: node.slug,
-      reviewer,
-      unit,
-      iteration,
-      ...(retryPending ? { retryPending: true } : {}),
-    })}\``;
+  stateContent: string,
+): string | null {
   const work = `Unit "${unit}"'s ${node.name} work is written`;
   const pending = review.unitPending.get(unit);
+  const { attempt } = guardAttemptState(projectDir, stateContent, node, { unit, receipts: review });
   if (pending === undefined) {
     const iteration = (review.unitIterations.get(unit) ?? 0) + 1;
-    return `${work}, but its review was never asked for: request it with ${request(iteration)}, ` +
-      "then record the verdict.";
+    const request = `\`${renderReviewRequestCommand({
+      projectDir, stage: node.slug, reviewer: node.reviewer as string, unit, iteration,
+    })}\``;
+    return `${work}, but its review was never asked for: request it with ${request}, then record the verdict.`;
   }
-  if (pending.state === "repair-required" && pending.didNotFinish !== true) {
-    return `${work} and its review asked for repairs: make them, then request pass ` +
-      `${pending.iteration + 1} with ${request(pending.iteration + 1)} and record the verdict.`;
+  const step = nextReviewStepFor({
+    attempt, didNotFinish: pending.didNotFinish === true, verificationFailed: pending.verificationFailed === true,
+    retryRequest: retryRequestFor(projectDir, node, unit, attempt),
+    reviewFile: openReviewFileFor(projectDir, node.slug, node.reviewer as string, unit),
+    // The Unit routes put the step before `next`, and `report` replays it, so
+    // the person's words are not folded in here; the NOT-READY fallback is left
+    // out once they have written, as the reviewer protocol says.
+    fallback: !personSpokeSinceReviewRequest(projectDir, node.slug, node.reviewer as string, unit),
+    subject: work,
+  });
+  return step?.text ?? null;
+}
+
+// Whether the person's approval may go over an unfinished review, and where a
+// team lock on strict sits when it may not.
+function approvalOverReview(
+  projectDir: string,
+  stateContent: string,
+): { allowed: true } | { allowed: false; lockedIn: string | null } {
+  if (personMayApproveOverUnfinishedReview(projectDir, stateContent)) return { allowed: true };
+  try {
+    const memoryStrict = resolveGuardPolicy(projectDir, stateContent).memoryStrict;
+    return { allowed: false, lockedIn: memoryStrict?.path ?? null };
+  } catch {
+    // The policy file is unreadable, so the lock cannot be confirmed or named.
+    // Approval stays blocked (personMayApproveOverUnfinishedReview already said no),
+    // but the text says the review needs its verdict without claiming a team lock.
+    return { allowed: false, lockedIn: undefined as unknown as string | null };
   }
-  return `${work} and its review is waiting for a verdict: record the verdict for pass ` +
-    `${pending.iteration}, or ask the reviewer again with ${request(pending.iteration, true)}.`;
+}
+
+// A stage that works on the whole project (not once per Unit) and whose review
+// is open: the step that gets it finished, in place of the stage body. Its
+// documents are written, since a request was made on them, so the body has
+// nothing left for the lead to write. Repairs the reviewer asked for are the
+// lead's own work, so that state, and a stage whose review was never asked
+// for, keep the body. Null leaves the route as it was.
+function stageReviewStep(
+  projectDir: string,
+  node: GraphStage,
+  scope: string,
+  stateContent: string | null,
+): { text: string; personFirst: boolean } | null {
+  if (stateContent === null || !node.reviewer || isReadOnlyEngineProbe()) return null;
+  if (isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, stateContent)) {
+    // Per Unit with a Unit DAG, the Unit routes own the review. Team ownership
+    // without a DAG is an error the route states, which a review step must not hide.
+    if (resolveBoltDag(projectDir).state !== "none" || isTeamUnitOwnership(stateContent)) return null;
+  }
+  const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent);
+  if (reviewClass === "none") return null;
+  const review = freshReviewReceipts(projectDir, stateContent, node, { reviewClass });
+  const pending = review.stagePending;
+  if (pending === null || pending === undefined) return null;
+  const { attempt } = guardAttemptState(projectDir, stateContent, node, { receipts: review });
+  const step = nextReviewStepFor({
+    attempt,
+    didNotFinish: pending.didNotFinish === true,
+    verificationFailed: pending.verificationFailed === true,
+    retryRequest: retryRequestFor(projectDir, node, undefined, attempt),
+    reviewFile: openReviewFileFor(projectDir, node.slug, node.reviewer, undefined),
+    personSpoke: personSpokeSinceReviewRequest(projectDir, node.slug, node.reviewer, undefined),
+    approval: approvalOverReview(projectDir, stateContent),
+    nextCommand: `${aidlcToolInvocation("orchestrate")} next`,
+    subject: `${node.name}'s documents are written`,
+  });
+  if (step === null || step.kind === "repairs") return null;
+  // A step that puts the person's words first ends the turn once they are done.
+  return step.personFirst === true
+    ? { text: step.text, personFirst: true }
+    : { text: `${step.text} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`, personFirst: false };
 }
 
 // True when the Unit's receipts for this stage are read against the first
@@ -11509,12 +12032,22 @@ function unitWorkIsThisAttempts(projectDir: string, slug: string, unit: string, 
 // `next` for a Unit that owes only its completion receipt: that step, then
 // `next` again. A read-only route check (the one `unit start` runs) still sees
 // the Unit's stage, so the named start command matches the engine's route.
-function emitUnitStepOrStage(step: string | null, directive: Directive): void {
+function emitUnitStepOrStage(step: UnitRecordStep | null, directive: Directive): void {
   if (step === null || isReadOnlyEngineProbe()) {
     emit(directive);
     return;
   }
-  emit(printDirective(`${step} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`));
+  if (step.receipt && directive.kind === "run-stage" && directive.stage === "code-generation") {
+    // Keep the routed Unit and its authority on the normal publication path.
+    // A print alone leaves a stale marker in place, so the hook refuses the
+    // very completion next names. Plan Approval routing still runs before this
+    // recovery is delivered; an unapproved plan gets its own applicable step.
+    // A review step is printed: the hook does not check a review request.
+    directive.unit_record_step = `${step.text} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`;
+    emit(directive);
+    return;
+  }
+  emit(printDirective(`${step.text} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`));
 }
 
 // The receipt step for one named Unit of a solo per-unit stage, or null.
@@ -11531,24 +12064,7 @@ function soloUnitReceiptStep(
   return unitReceiptOnlyStep(
     projectDir, node, unit, engineRelativeRecordDir(projectDir), codekbCtxFor(projectDir),
     resolution.unitKinds?.get(unit) ?? null, unitLedgerFor(projectDir, node.slug), stateContent, scope,
-  );
-}
-
-const WAVE_ELIGIBLE_STAGES: ReadonlySet<string> = new Set([
-  "functional-design",
-  "nfr-requirements",
-  "nfr-design",
-  "infrastructure-design",
-]);
-
-function waveEligible(node: GraphStage): boolean {
-  return (
-    WAVE_ELIGIBLE_STAGES.has(node.slug) &&
-    node.phase === "construction" &&
-    node.for_each === "unit-of-work" &&
-    node.mode === "inline" &&
-    node.workspace_requires !== true
-  );
+  )?.text ?? null;
 }
 
 type ActiveWave =
@@ -12765,7 +13281,12 @@ function emitTeamUnitMajorRunStage(
         );
         directive.gate = false;
         directive.unit = unit;
-        emit(directive);
+        // A Unit whose work is done is named the step it still owes, as on the
+        // solo routes, never its stage body again.
+        emitUnitStepOrStage(
+          unitReceiptOnlyStep(projectDir, stage, unit, recordPrefix, codekbCtx, unitKind, ledger, refreshedState, scope),
+          directive,
+        );
         return;
       }
       const confirmation = checkSummaryConfirmationEvidence(projectDir, stage, {
@@ -13100,29 +13621,43 @@ function unitMajorFinishedWalk(
 // that Unit, the step it is on and how (working on it, or stopped at its
 // summary, paused on it, or at its checkpoint), the walk's steps in order, and
 // whether another Unit still owes the step (so "this Unit" and "every Unit
-// from here" differ). Null when the walk is not on a Unit.
+// from here" differ), whether another Unit already did the step, and whether
+// the walk has no other Unit at all. Null when the walk is not on a Unit.
 type PlanChangeWalk = {
   stage: string;
   unit: string;
   at: "work" | "summary" | "paused" | "checkpoint";
   steps: string[];
   others: boolean;
+  worked: boolean;
+  alone: boolean;
 };
 function planChangeWalk(projectDir: string, scope: string, stateContent: string): PlanChangeWalk | null {
   const current = (getField(stateContent, "Current Stage") ?? "").trim();
   const walk = current === "" ? null : unitMajorWalkBeat(projectDir, scope, stateContent, current);
   if (walk === null || walk.step.kind === "covered") return null;
   const steps = walk.block.map((step) => step.slug);
-  if (walk.step.kind === "checkpoint") return { stage: "", unit: walk.step.unit, at: "checkpoint", steps, others: true };
+  const alone = walk.context.units.length === 1;
+  if (walk.step.kind === "checkpoint") {
+    return { stage: "", unit: walk.step.unit, at: "checkpoint", steps, others: true, worked: false, alone };
+  }
   if (walk.step.kind === "paused") {
-    return { stage: walk.step.stage, unit: walk.step.checkpoint.unit, at: "paused", steps, others: true };
+    return { stage: walk.step.stage, unit: walk.step.checkpoint.unit, at: "paused", steps, others: true, worked: false, alone };
   }
   const { stage, unit } = walk.step;
-  const done = new Set(unitsWithStageWork(projectDir, stage, walk.context));
+  const others = unitsOwingStage(projectDir, stage, walk.context, stateContent).some((u) => u !== unit);
+  const worked = unitsWithStageWork(projectDir, stage, walk.context).some((u) => u !== unit);
+  return { stage: stage.slug, unit, at: walk.step.kind, steps, others, worked, alone };
+}
+
+// The Units that still owe a step of the walk: not done with it, not skipped
+// for it, and not exempt from it by their kind. A plan change reads it for
+// whether another Unit still owes the step, and the person's skip for every
+// Unit from here skips it for each of them.
+function unitsOwingStage(projectDir: string, stage: GraphStage, context: UnitWorkContext, stateContent: string): string[] {
+  const done = new Set(unitsWithStageWork(projectDir, stage, context));
   const skipped = unitSkippedUnits(projectDir, stage.slug, undefined, stateContent);
-  const others = walk.context.units.some((u) => u !== unit && !done.has(u) && !skipped.has(u) &&
-    !kindVacuous(stage, walk.context.kinds?.get(u) ?? null));
-  return { stage: stage.slug, unit, at: walk.step.kind, steps, others };
+  return context.units.filter((u) => !done.has(u) && !skipped.has(u) && !kindVacuous(stage, context.kinds?.get(u) ?? null));
 }
 
 // A Code Generation completion (the gate opening or shown again, the stage
@@ -13236,11 +13771,14 @@ const OTHER_UNITS_KEPT =
 // and Plan Approval do not carry over). The step is the one the Unit is on or
 // paused at, the summary's step, or at a checkpoint the last step the Unit did.
 // A step the Unit has not started has nothing to reset, so next routes it.
+// `named` is a Redo that names a Unit and step: only that Unit on that step is
+// redone here, null otherwise.
 function unitMajorRedo(
   projectDir: string,
   scope: string,
   stateContent: string,
   currentSlug: string,
+  named?: { unit: string; stage: string },
 ): string | null {
   const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
   if (!walk || walk.step.kind === "covered") return null;
@@ -13263,6 +13801,7 @@ function unitMajorRedo(
         .find((stage) => unitsWithStageWork(projectDir, stage, walk.context).includes(unit))?.slug ??
         blockSlugs[blockSlugs.length - 1]
       : step.stage.slug;
+  if (named && (named.unit !== unit || named.stage !== redone)) return null;
   if (step.kind === "work" && !unitOpenCheckpoints(projectDir, redone).some((open) => open.unit === unit)) {
     return `Redo accepted at "${redone}" for unit "${unit}". ${only} step is redone: ` +
       `${unpark ? `run ${unpark}` : ""}re-run \`next\` and do "${redone}" for unit "${unit}" from the start. ` +
@@ -13836,6 +14375,8 @@ function emitUnitMajorRunStage(
         codekbCtx, kinds?.get(step.unit) ?? null,
       ) : null;
     });
+    // A checkpoint that approves on its own asks nothing, so it carries no offer.
+    if (step.checkpoint.human_required) addContextParkOffer(directive, projectDir);
     emit(directive);
     return;
   }
@@ -13872,6 +14413,11 @@ function emitForSlug(
   projectDir: string,
 ): void {
   const node = nodeForSlug(slug);
+  const reviewStep = node ? stageReviewStep(projectDir, node, scope, stateContent) : null;
+  if (reviewStep !== null) {
+    emit(reviewStep.personFirst ? turnEndingPrint(reviewStep.text) : printDirective(reviewStep.text));
+    return;
+  }
   if (node && isPerUnit(node)) {
     if (
       stateContent && checkpointPolicyEnabled(stateContent) &&
@@ -13927,25 +14473,61 @@ function emitForSlug(
 const SINGLE_INIT_ERROR =
   `Cannot run an initialization stage with --single. Initialization is bootstrap (it creates the intent + state); it runs automatically when you start a workflow (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service").`;
 
+// The settings an isolated run takes for itself, in the state file's words,
+// keyed by the audit field its start records them under.
+type SingleRunSettings = Partial<Record<"Depth" | "Test Strategy", string>>;
+const SINGLE_RUN_SETTING_FIELDS = ["Depth", "Test Strategy"] as const;
+
+// What the latest isolated start of <slug> recorded. A steering continuation
+// rebuilds the run-stage from this, so the first part and the last agree.
+function recordedSingleRunSettings(projectDir: string, slug: string): SingleRunSettings {
+  const settings: SingleRunSettings = {};
+  for (const field of SINGLE_RUN_SETTING_FIELDS) {
+    const recorded = singleStageAttemptField(projectDir, slug, field);
+    if (recorded !== null) settings[field] = recorded;
+  }
+  return settings;
+}
+
+function applySingleRunSettings(directive: RunStageDirective, settings: SingleRunSettings): void {
+  if (settings.Depth) directive.depth = settings.Depth;
+  if (settings["Test Strategy"]) directive.test_strategy = settings["Test Strategy"];
+}
+
+// The start's refusal, or the settings the attempt runs with. An open attempt
+// keeps the ones it started with; a setting typed differently starts a new
+// attempt with it (restarted), since that is what the person asked for.
 function ensureSingleStageStarted(
   projectDir: string,
   node: GraphStage,
   scope: string,
-): string | null {
+  typed: SingleRunSettings = {},
+): { error: string } | { settings: SingleRunSettings; restarted: boolean } {
+  let settings = typed;
+  let restarted = false;
   if (singleStageAttemptIsOpen(projectDir, node.slug)) {
     const recordedScope = singleStageAttemptScope(projectDir, node.slug);
     if (recordedScope !== null && recordedScope !== scope) {
       // A saved scope that is not a scope name is not repeated or put in a command.
       const named = isScopeName(recordedScope);
-      return `The open isolated attempt uses ${named ? `scope "${recordedScope}"` : "another scope"}, not requested scope "${scope}". ` +
-        `Complete it with \`report --single --stage ${node.slug} --result approved\`` +
-        (named ? `, or re-run with \`--scope ${scopeArg(recordedScope)}\`.` : ".");
+      return {
+        error: `The open isolated attempt uses ${named ? `scope "${recordedScope}"` : "another scope"}, not requested scope "${scope}". ` +
+          `Complete it with \`report --single --stage ${node.slug} --result approved\`` +
+          (named ? `, or re-run with \`--scope ${scopeArg(recordedScope)}\`.` : "."),
+      };
     }
-    return null;
+    const kept = recordedSingleRunSettings(projectDir, node.slug);
+    const changed = SINGLE_RUN_SETTING_FIELDS
+      .some((field) => typed[field] !== undefined && typed[field] !== kept[field]);
+    if (!changed) return { settings: kept, restarted: false };
+    // A new STAGE_STARTED is the new attempt's floor: the unfinished one's
+    // receipts stop counting, and nothing records it as completed.
+    settings = { ...kept, ...Object.fromEntries(Object.entries(typed).filter(([, value]) => value !== undefined)) };
+    restarted = true;
   }
   // A query never appends a lifecycle event: an observer that opened a
   // single-stage attempt would move the run floor it came to read.
-  if (isReadOnlyEngineProbe()) return null;
+  if (isReadOnlyEngineProbe()) return { settings, restarted };
   const error = appendSingleStageAuditEvents(projectDir, [{
     eventType: "STAGE_STARTED",
     fields: {
@@ -13953,10 +14535,11 @@ function ensureSingleStageStarted(
       Agent: node.lead_agent,
       Workflow: syntheticWorkflowId(node.slug),
       Scope: scope,
+      ...Object.fromEntries(Object.entries(settings).filter(([, value]) => value !== undefined)),
     },
   }]);
   routingEvidence = null;
-  return error;
+  return error === null ? { settings, restarted } : { error };
 }
 
 function emitSingleRunStage(
@@ -13966,6 +14549,7 @@ function emitSingleRunStage(
   recordPrefix: string | null = null,
   codekbCtx: CodekbCtx,
   projectDir: string,
+  settings: SingleRunSettings = {},
 ): void {
   const node = nodeForSlug(slug);
   if (!node) {
@@ -13981,13 +14565,14 @@ function emitSingleRunStage(
   // An isolated run never touches the plan or the cursor, so a stage the
   // scope skips runs too when the person asks for it, with one line saying so.
   const notInPlan = !new Set(subgraphForScope(scope).map((s) => s.slug)).has(node.slug);
-  const startError = ensureSingleStageStarted(projectDir, node, scope);
-  if (startError) {
+  const started = ensureSingleStageStarted(projectDir, node, scope, settings);
+  if ("error" in started) {
     emit(errorDirective(
-      `Cannot start isolated stage "${node.slug}": ${startError}`,
+      `Cannot start isolated stage "${node.slug}": ${started.error}`,
     ));
     return;
   }
+  if (node.slug === "code-generation") setTestingPostureRoute(started.settings["Test Strategy"] ?? null);
   // Build the directive only after the synthetic start is durable. Steering
   // continuation tokens bind the current audit/state route; writing the start
   // after token construction would make the engine invalidate its own first
@@ -14003,16 +14588,23 @@ function emitSingleRunStage(
     null,
     true, // forcePersona: the single run's first (and only) directive
     true, // singleRun: resume only from isolated pipeline receipts
+    started.settings.Depth ?? null,
   );
   directive.single = true;
   directive.gate = false;
   directive.next_stage = null;
-  emit(notInPlan
-    ? withChangeNotices(directive, [
-      ...((directive as Directive).change_notices ?? []),
-      `"${node.slug}" is not part of the ${scope} plan. It runs on its own because you asked for it; ` +
-        "the plan and your workflow stay as they are.",
-    ])
+  applySingleRunSettings(directive, started.settings);
+  const notices = [
+    ...(notInPlan
+      ? [`"${node.slug}" is not part of the ${scope} plan. It runs on its own because you asked for it; ` +
+        "the plan and your workflow stay as they are."]
+      : []),
+    ...(started.restarted
+      ? [`"${node.slug}" starts over with the settings you gave; its unfinished run is set aside, not completed.`]
+      : []),
+  ];
+  emit(notices.length > 0
+    ? withChangeNotices(directive, [...((directive as Directive).change_notices ?? []), ...notices])
     : directive);
 }
 
@@ -14088,18 +14680,21 @@ function planChangeDirective(
   // Where the work stands: the current stage, started or waiting at its gate.
   const current = plan === null ? "" : (getField(plan.stateContent, "Current Stage") ?? "").trim();
   const currentState = current === "" ? undefined : parseCheckboxes(plan!.stateContent).find((c) => c.slug === current)?.state;
-  const started = (currentState === "in-progress" || currentState === "revising" ||
-      currentState === "awaiting-approval") && skip.includes(current)
-    ? current
-    : null;
-  const gateOpen = currentState === "awaiting-approval" && !skip.includes(current) ? current : null;
   // On the Unit walk Current Stage stays on the walk's first step while a
   // Unit is on a later one: the step the Unit is working on is skipped for
   // that Unit where it stands, or, when the person means every Unit from
   // here, taken off the plan; another step of the walk named here, or any step
   // while the Unit is stopped (at a summary, paused, at its checkpoint), is a
-  // plan change, which covers every Unit.
+  // plan change, which covers every Unit. On the walk's first step itself
+  // every Unit from here is that stage's own skip, since a plan change only
+  // reaches stages ahead.
   const walk = plan?.walk ?? null;
+  const firstStep = walk?.at === "work" && walk.stage === current && skip.includes(current) ? current : null;
+  const started = firstStep === null && (currentState === "in-progress" || currentState === "revising" ||
+      currentState === "awaiting-approval") && skip.includes(current)
+    ? current
+    : null;
+  const gateOpen = currentState === "awaiting-approval" && !skip.includes(current) ? current : null;
   const unitStep = walk?.at === "work" && skip.includes(walk.stage) && walk.stage !== started ? walk : null;
   const everyUnit = walk === null ? [] : skip.filter((slug) =>
     slug !== started && walk.steps.includes(slug) && (slug !== unitStep?.stage || unitStep.others));
@@ -14113,7 +14708,12 @@ function planChangeDirective(
     : walk.at === "paused" ? `paused on ${name(walk.stage)}`
     : walk.at === "checkpoint" ? "at its checkpoint"
     : `on ${name(walk.stage)}`;
-  const planSkip = skip.filter((slug) => slug !== started && (unitStep === null || slug !== unitStep.stage || unitStep.others));
+  const planSkip = skip.filter((slug) =>
+    slug !== started && slug !== firstStep && (unitStep === null || slug !== unitStep.stage || unitStep.others));
+  // The walk's first step for every Unit from here, when another Unit still owes it.
+  const firstSkip = firstStep === null || !unitStep?.others ? null
+    : `${aidlcToolInvocation("orchestrate")} report --stage ${firstStep} --result skipped ` +
+      `--reason ${shellArg(PERSON_ASKED_SKIP_REASON)}`;
   const flips = (skipped: string[], added: string[]): string => [
     ...(skipped.length > 0 ? [`--skip ${skipped.join(",")}`] : []),
     ...(added.length > 0 ? [`--add ${added.join(",")}`] : []),
@@ -14129,6 +14729,10 @@ function planChangeDirective(
       : everyUnit.includes(slug) ? `${name(slug)} for every Unit from here` : name(slug);
   const listed = (names: string[]): string =>
     names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  // Walk steps a skip for one Unit waits on: that Unit's own turn at them.
+  const oneUnitOnly = (slugs: string[]): string =>
+    `${listed(slugs.map(name))} can be skipped for one Unit while that Unit is working on it`;
+  const notNow = (slugs: string[]): string => `${oneUnitOnly(slugs)}; the ${unitName} Unit is ${unitIsAt} now.`;
   const summary = [
     ...(skip.length > 0 ? [`skipped ${listed(skip.map(skipName))}`] : []),
     ...(add.length > 0 ? [`added ${named(add)}`] : []),
@@ -14143,8 +14747,8 @@ function planChangeDirective(
     : `It can still be run for that Unit with \`${entrySkillInvocation()} --stage ${unitStep.stage} --unit ${unitStep.unit}\`.`;
   // The Unit's own step named while another Unit still owes it, or with
   // another walk step: the agent reads from the person's words whether they
-  // mean that Unit only or every Unit from here, and asks once only when their
-  // words do not say.
+  // mean that Unit only or every Unit from here; words that name no Unit mean
+  // every Unit from here, and another Unit's step waits for that Unit.
   if (unitStep !== null && (unitStep.others || notHere.length > 0)) {
     const runs = (list: (string | null)[]): string =>
       list.filter((c): c is string => c !== null).map((c) => `\`${c}\``).join(", then ");
@@ -14157,7 +14761,8 @@ function planChangeDirective(
     // With no other Unit left to take it, the Unit's own step is skipped for
     // it either way.
     const onlyUnit = runs([unitSkip, restOther.length > 0 || add.length > 0 ? replan(restOther) : null, startedSkip]);
-    const fromHere = runs([unitStep.others ? null : unitSkip, replan(planSkip), startedSkip]);
+    const replanned = planSkip.length > 0 || add.length > 0;
+    const fromHere = runs([unitStep.others ? null : unitSkip, replanned ? replan(planSkip) : null, firstSkip, startedSkip]);
     const step = name(unitStep.stage);
     const added = add.length > 0 ? `; added ${named(add)}` : "";
     const stillGet = unitStep.others
@@ -14166,28 +14771,41 @@ function planChangeDirective(
     const onlyLine = `Skipped ${listed([`${step} for the ${unitName} Unit`, ...restOther.map(name)])}${added}${stillGet}. ` +
       `${forTheUnit}${restOther.length > 0 || add.length > 0 ? " You can undo the rest any time." : ""}` +
       (restWalk.length > 0
-        ? ` ${listed(restWalk.map(name))} can be skipped for one Unit while that Unit is working on it.`
+        ? ` ${oneUnitOnly(restWalk)}.`
         : "");
-    const walkNamed = planSkip.filter((slug) => walk!.steps.includes(slug));
+    const walkNamed = [...(firstSkip === null ? [] : [firstStep!]), ...planSkip.filter((slug) => walk!.steps.includes(slug))];
     const otherNamed = planSkip.filter((slug) => !walk!.steps.includes(slug));
+    // With no Unit's work for it the stage is skipped where it stands and is
+    // run on its own, as below; otherwise it stays for that work's approval,
+    // and each Unit skipped from here is reopened for that Unit.
+    const firstBack = firstSkip === null ? ""
+      : unitStep.worked
+        ? `It can still be run for the ${unitName} Unit with \`${entrySkillInvocation()} --stage ${firstStep} --unit ` +
+          `${unitStep.unit}\`, and for each Unit after it the same way.`
+        : `It can still be run on its own with \`${entrySkillInvocation()} --stage ${firstStep} --single\`.`;
     const everyLine = `Skipped ${unitStep.others ? "" : `${step} for the ${unitName} Unit, and `}` +
       `${listed(walkNamed.map(name))} for every Unit from here` +
       `${otherNamed.length > 0 ? `, and ${listed(otherNamed.map(name))}` : ""}${added}. ` +
-      (unitStep.others ? "You can undo that any time." : `${forTheUnit} You can undo the rest any time.`);
-    // What their words must say: for which Units the step that waits on them.
-    const asked = unitStep.others ? step : listed(restWalk.map(name));
+      (unitStep.others
+        ? [firstBack, replanned ? `You can undo ${firstSkip === null ? "that" : "the rest"} any time.` : ""].filter(Boolean).join(" ")
+        : `${forTheUnit} You can undo the rest any time.`);
     return kept(turnEndingPrint(
       `${before === null ? "" : `Run \`${before}\`${filled} and print its output verbatim. `}` +
         `The person asked to skip ${listed(skip.map(name))}, and the ${unitName} Unit is on ${step} now. ` +
         `If their words mean the ${unitName} Unit only, run ${onlyUnit}, then tell the person in one line: ` +
         `"${onlyLine}${parkedTail}" ` +
         "and re-run `next` to carry on with the work. " +
-        `If they mean every Unit from here, the ${unitName} Unit included, run ${fromHere}, then tell the person ` +
-        `in one line: "${everyLine}${parkedTail}" and stop. ` +
-        `If their words do not say which, ask them once: "Skip ${asked} for the ${unitName} Unit only, or for every ` +
-        "Unit from here?\" and stop. Do not show a command's output. If a command refuses, tell the person in plain " +
-        "words why it could not, and the way it names to do it instead, then stop. If they later ask to undo " +
-        `skipping it for every Unit, run \`${aidlcDispatcherInvocation("recompose")} ${flips(add, planSkip)}\`.${resume}`,
+        (unitStep.alone ? "" : "If they name another Unit, run nothing and tell them in one line: " +
+          `"${notNow([unitStep.stage])}" ` +
+          "and stop. ") +
+        `If they name no Unit, they mean every Unit from here, the ${unitName} Unit included: run ${fromHere}, then ` +
+        `tell the person in one line: "${everyLine}${parkedTail}" and stop. ` +
+        "Do not show a command's output. If a command refuses, tell the person in plain " +
+        "words why it could not, and the way it names to do it instead, then stop." +
+        (replanned
+          ? ` If they later ask to undo skipping it for every Unit, run \`${aidlcDispatcherInvocation("recompose")} ${flips(add, planSkip)}\`.`
+          : "") +
+        resume,
     ));
   }
   const commands: { command: string; why: string }[] = [];
@@ -14211,8 +14829,7 @@ function planChangeDirective(
   const aheadNote = notHere.length === 0 ? ""
     : `${listed(notHere.map(name))} ${notHere.length === 1 ? "is a step" : "are steps"} each Unit takes, so this ` +
       "change covers every Unit. If the person's words mean one Unit only, run nothing and tell them in one line: " +
-      `"${listed(notHere.map(name))} can be skipped for one Unit while that Unit is working on it; the ${unitName} Unit is ` +
-      `${unitIsAt} now." and stop. Otherwise: `;
+      `"${notNow(notHere)}" and stop. Otherwise: `;
   const lead = `${aheadNote}${before === null ? run : `Run \`${before}\`${filled} and print its output verbatim, ${run}`}`;
   // The way back: a plan flip is undone by the opposite flip while the work
   // runs; a stage skipped where it stood is run on its own, the route
@@ -14610,6 +15227,29 @@ function canonicalisePhase(input: string): string | null {
 const FORWARD_RESULTS = new Set(["approved", "completed", "complete", "done"]);
 // The forward results that claim completion rather than name an approval.
 const COMPLETION_RESULTS = new Set(["completed", "complete", "done"]);
+// What the agent does after Request Changes on a pipeline stage, read from the
+// rule that decides it (guardPolicyAcceptsChanges, which pipelineAttemptFloor
+// reads too): under strict the rejection starts a fresh chain; under relaxed or
+// off the links already recorded still hold. Either way the links the attempt
+// still owes are named with their exact commands.
+function pipelineRejectedMessage(pd: string, node: GraphStage, slug: string): string {
+  const record = pipelineLinkRecord(pd, node, pipelineLinkEvidence(pd, node), false);
+  const owed = owedPipelineLinks(record);
+  const commands = record.length === 0
+    ? ""
+    : ` Record each link with its command once its agent returns: ${owed.commands}` +
+      `${owed.others ? `; then re-run \`${aidlcToolInvocation("orchestrate")} next\`${owed.others}` : ""}.`;
+  if (guardPolicyAcceptsChanges(pd)) {
+    return `Recorded rejected for "${slug}". The links already recorded still hold, so only the work the person's words ask ` +
+      `to redo runs again; record a link again only after its agent has run again.${commands} Report revised when that work is done.`;
+  }
+  return `Recorded rejected for "${slug}". The rejection starts a new pipeline attempt; prior receipts no longer apply. ` +
+    `Re-run \`${aidlcToolInvocation("orchestrate")} next\`, then dispatch every missing link in ` +
+    `directive.pipeline order with the exact human feedback. Each link must perform fresh work and return before its ` +
+    `new receipt is recorded.${commands} Preserve the configured topology and reviewer policy; a targeted artifact edit does not ` +
+    `permit the conductor to replace the pipeline or reuse its previous handoffs. Report revised only after the fresh chain completes.`;
+}
+
 // What the conductor does when it reported a gate complete before asking it.
 function completionOpensGateMessage(target: string): string {
   return `${target} has not asked for approval yet, so it now waits for the person's answer. ` +
@@ -14714,6 +15354,7 @@ interface ReportFlags {
   overrideBlockingSensors?: boolean;
   unit?: string; // --unit <name>: required for team-owned per-unit gates
   park?: boolean; // --park: the person also asked to stop here for now
+  message?: string; // --message <id>: the one message of the person's the agent read the decision from
   // A re-entry request (--result resumed): the choice the conductor read from
   // the person's words, the stage they named for a jump, and the Units it is
   // for when they named one (--unit) or said every Unit (--every-unit).
@@ -14737,6 +15378,7 @@ const REPORT_FLAGS = [
   "--single",
   "--override-blocking-sensors",
   "--park",
+  "--message",
   "--choice",
   "--target",
   "--every-unit",
@@ -14745,7 +15387,8 @@ const REPORT_FLAGS = [
 // Extract report's flags. --result is the verdict; --user-input carries the
 // choice the conductor read from the person's reply, while --reason carries
 // rejection feedback or an early completion reason. --park records that the
-// person also asked to stop for now.
+// person also asked to stop for now. --message names the one message of theirs
+// the decision was read from, when it is not every reply since the last one.
 // --skeleton-stance carries the conductor's classified walking-skeleton stance
 // (the classify round-trip): it does NOT commit a transition — it records the
 // stance so the next `next` resolves the deferred gate.
@@ -14797,6 +15440,9 @@ function parseReportFlags(args: string[]): ReportFlags {
     } else if (a === "--choice" && i + 1 < args.length) {
       flags.choice = args[i + 1];
       i++;
+    } else if (a === "--message" && i + 1 < args.length) {
+      flags.message = args[i + 1];
+      i++;
     } else if (a === "--target" && i + 1 < args.length) {
       flags.target = args[i + 1];
       i++;
@@ -14826,6 +15472,8 @@ function parseReportFlags(args: string[]): ReportFlags {
       missingValue(a, "a unit name");
     } else if (a === "--choice") {
       missingValue(a, "<resume|redo|jump|fresh>");
+    } else if (a === "--message") {
+      missingValue(a, "the id of the person's message");
     } else if (a === "--target") {
       missingValue(a, "a stage name");
 
@@ -14895,9 +15543,9 @@ function changeNoticesFromToolOutput(stdout: string): string[] {
   return notices;
 }
 
-// `state reject` names the feedback in its JSON only when it recorded the
-// person's own typed words (feedback_source "person"); null otherwise.
-function personsFeedbackFromToolOutput(stdout: string): string | null {
+// Whether `state reject` recorded the person's own words as the feedback
+// (feedback_source "person" in its JSON).
+function personsFeedbackFromToolOutput(stdout: string): boolean {
   for (const line of stdout.split("\n")) {
     if (!line.startsWith("{")) continue;
     let parsed: unknown;
@@ -14907,17 +15555,15 @@ function personsFeedbackFromToolOutput(stdout: string): string | null {
       continue;
     }
     if (parsed === null || typeof parsed !== "object") continue;
-    const record = parsed as Record<string, unknown>;
-    if (record.feedback_source === "person" && typeof record.feedback === "string") return record.feedback;
+    if ((parsed as Record<string, unknown>).feedback_source === "person") return true;
   }
-  return null;
+  return false;
 }
 
-// The revision works from what the person said, not from a rewording of it.
-function personsFeedbackSentence(words: string | null): string {
-  return words === null
-    ? ""
-    : ` The feedback was recorded in the person's own words; revise from exactly what they said: ${JSON.stringify(words)}`;
+// The revision works from what the person said, not from a rewording of it:
+// their words are on the record, and in the chat for the agent to read.
+function personsFeedbackSentence(theirs: boolean): string {
+  return theirs ? " The feedback is on the record in the person's own words; revise from what they asked for." : "";
 }
 
 /** A directive with the notices attached, or unchanged when there are none. */
@@ -14941,11 +15587,77 @@ function addReviewCheckOffer(
   else reply.narration = reply.narration ? `${reply.narration}\n${found.offer}` : found.offer;
 }
 
+// The offer to carry on in a new chat when Kiro's own record shows this chat
+// nearly full (#2574), said once per chat beside a question the person is
+// asked anyway: a stage's approval, or a Unit's checkpoint. The person's answer
+// decides; nothing parks here. The figure changes, so one key marks it heard.
+const KIRO_CONTEXT_OFFER_HEARD = "kiro-context-offer";
+function addContextParkOffer(
+  reply: { kind: string; narration?: string; change_notices?: string[] },
+  projectDir: string,
+): void {
+  const chat = engineSessionId;
+  if (!chat || isReadOnlyEngineProbe() || !humanTurnMintAllowed()) return;
+  if (!["kiro", "kiro-ide"].includes(runtimeHarnessName(projectDir))) return;
+  if (personLineHeard(projectDir, chat, KIRO_CONTEXT_OFFER_HEARD)) return;
+  let since: number | null = null;
+  try {
+    for (const row of readAuditShardEvents(projectDir)) {
+      if (auditBlockField(row.block, "Session") !== chat) continue;
+      const when = Date.parse(row.timestamp);
+      if (Number.isFinite(when) && (since === null || when < since)) since = when;
+    }
+  } catch {
+    // No first turn known: no summary counts.
+  }
+  const pressure = kiroContextPressure(chat, since);
+  const line = pressure?.kind === "summarized"
+    ? "Kiro has summarized this chat to make room, so the agent now works from a summary of what came before. " +
+      "Do you want to pause here and carry on in a new chat? I recommend it: your work is saved, and a new chat " +
+      "picks it up from the saved files."
+    : pressure?.kind === "usage" && pressure.percent >= 80
+    ? `This chat is about ${Math.round(pressure.percent)}% full by Kiro's count, and once it fills the agent ` +
+      "carries on from a summary. Do you want to pause here and carry on in a new chat? I recommend it: the work " +
+      "is saved, and a new chat picks it up from the saved files."
+    : null;
+  if (line === null) return;
+  // A step `next` builds may be sent in parts and rebuilt by `continue`, and a
+  // Unit's step has its narration rewritten on the way out: the settled lines
+  // ride both, as sayWithStepOnce's do.
+  if (reply.kind === "run-stage") settledNotices.push(line);
+  else reply.narration = reply.narration ? `${reply.narration}\n${line}` : line;
+  markPersonLinesHeard(projectDir, chat, [KIRO_CONTEXT_OFFER_HEARD]);
+}
+
+// How many times the person asked for changes at this gate, and whether that
+// opens Accept as-is, said on the reply that shows the gate. The count comes
+// from the audit trail, so a parked run offers it where the chat no longer
+// remembers; an unreadable trail says nothing, and the gate stays two options.
+function addRevisionCycle(
+  reply: { revision_cycle?: number; accept_as_is?: "offered" | "next-revision" },
+  projectDir: string,
+  slug: string,
+  unit: string | null,
+): void {
+  let cycles = 0;
+  try {
+    cycles = stageRevisionCycles(readAuditShardEvents(projectDir), slug, unit ?? undefined);
+  } catch {
+    return;
+  }
+  if (cycles === 0) return;
+  reply.revision_cycle = cycles;
+  if (cycles >= ACCEPT_AS_IS_REVISION_CYCLES) reply.accept_as_is = "offered";
+  else if (cycles === ACCEPT_AS_IS_REVISION_CYCLES - 1) reply.accept_as_is = "next-revision";
+}
+
 // A retired relaxed or off line needs confirmation before its notice stops. The
 // notice speaks about the EFFECTIVE policy: a memory layer holding strict wins
 // over the retired line, lowers nothing, and would refuse the relaxed setting
 // the notice recommends, so in that case there is nothing to announce. An
-// unreadable policy is the strictest policy and announces nothing either.
+// unreadable policy is the strictest policy and announces nothing either. Two
+// lines that disagree reach here only when settleGuardPolicyConflict could not
+// record its settling: said as what is in force, with nothing asked.
 function retiredGuardPolicyNotice(projectDir: string, stateContent: string): string | null {
   let value: GuardPolicy;
   try {
@@ -14953,8 +15665,7 @@ function retiredGuardPolicyNotice(projectDir: string, stateContent: string): str
     if (resolution.memoryStrict !== null) return null;
     if (resolution.conflict !== undefined) {
       return "This work has two settings for how closely AI-DLC checks changes, and they disagree, so AI-DLC " +
-        "checks everything for now. Do you want it to keep checking everything, carry on with a note when " +
-        "something you approved changes, or also skip some of its own checks? I'll ask again until you choose.";
+        "checks everything for now.";
     }
     if (guardPolicyStateField(stateContent) !== CHANGE_CONTROL_FIELD) return null;
     value = resolution.value;
@@ -15439,9 +16150,7 @@ function checkPipelineLinkEvidence(
   const singleRun = options.singleRun === true;
   const evidence = pipelineLinkEvidence(pd, node, { singleRun });
   if (evidence.missing.length === 0) return { ok: true };
-  const missing = evidence.missing.map(({ link, repo }) =>
-    repo ? `${repo}:${link}` : link
-  );
+  const owed = owedPipelineLinks(pipelineLinkRecord(pd, node, evidence, singleRun));
   const refusal = singleRun
     ? `Cannot complete an isolated run of "${slug}" because these pipeline handoffs have not been recorded for this isolated run`
     : `Cannot present "${slug}" for approval because these pipeline handoffs have not been recorded for the current run`;
@@ -15451,9 +16160,9 @@ function checkPipelineLinkEvidence(
     // (dispatch, record, the same report again), so the turn goes on.
     ...(options.approval !== undefined ? { step: true as const } : {}),
     message:
-      `${refusal}: ${missing.join(", ")}. ` +
+      `${refusal}: ${owed.missing}. ` +
       pipelineLinkWayOn(pd, slug, {
-        repos: evidence.repos.length > 0,
+        owed,
         singleRun,
         ...(options.approval !== undefined ? { approval: options.approval } : {}),
       }),
@@ -15582,7 +16291,7 @@ function checkStageCompletionEvidence(
         const step = unitReceiptOnlyStep(
           pd, node, pick.unit, recordPrefix, codekbCtxFor(pd), unitKinds?.get(pick.unit) ?? null,
           ledger, stateContent, scope,
-        );
+        )?.text ?? null;
         if (step !== null) {
           const left = pick.uncovered.filter((unit) => unit !== pick.unit);
           const nextCommand = `\`${aidlcToolInvocation("orchestrate")} next\``;
@@ -15898,6 +16607,7 @@ function approvesTogetherFromToolOutput(stdout: string): string[] {
 function approveArgs(slug: string, flags: ReportFlags): string[] {
   const args = ["approve", slug];
   if (flags.userInput) args.push("--user-input", flags.userInput);
+  if (flags.message) args.push("--message", flags.message);
   if (flags.unit) args.push("--unit", flags.unit);
   return args;
 }
@@ -15922,7 +16632,7 @@ function unknownWorkspaceWordStep(
 ): string {
   const { noun, name } = command;
   const verbs = noun === "intent"
-    ? "list, switch <name>, create, archive <name>, unarchive <name>, add-repo <name>, remove-repo <name>"
+    ? "list, switch <name>, create, archive <name>, unarchive <name>, add-repo <name>, remove-repo <name>, set-repos <name,...>, add-checkout <path>, remove-checkout <path>"
     : "list, switch <name>, create <name>";
   const recent = recentWorkspaceRecordNames(pd, noun);
   const records = recent.names.length === 0
@@ -16144,6 +16854,16 @@ function emitTypedResumeChoice(
       emit(errorDirective(
         `This workflow's current stage is not one AI-DLC knows, so it cannot be redone from here. Run \`${entrySkillInvocation()} --status\` to see where it stands.`,
       ));
+      return;
+    }
+    // Naming the Unit the walk is on, at the step it is on, is that Unit's
+    // Redo (#2772): `next --stage <step> --unit <it>` would only route back to
+    // where it stopped, picking its old work up again instead of redoing it.
+    const own = flags.unit !== undefined && validScopes().has(scope)
+      ? unitMajorRedo(pd, scope, stateContent, slug, { unit: flags.unit, stage: step })
+      : null;
+    if (own !== null) {
+      emit(move(printDirective(own)));
       return;
     }
     emit(move(printDirective(
@@ -16458,6 +17178,30 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // the stage, and the stage itself is skipped only once none does.
     const beat = unitMajorWorkBeat(pd, scope, stateContent, currentSlug);
     const unit = flags.unit?.trim();
+    // The person's own skip of the walk's first stage naming no unit is for
+    // every unit from here: the beat's unit and each unit that still owes the
+    // stage, one by one. A unit that already did the stage keeps that work for
+    // the stage's approval.
+    if (beat && personAsked && !unit && slug === beat.stage.slug && slug === currentSlug) {
+      const fromHere = [beat.unit, ...unitsOwingStage(pd, beat.stage, beat.context, stateContent).filter((u) => u !== beat.unit)];
+      for (const each of fromHere) {
+        const res = spawnState(pd, ["skip", slug, "--reason", reason, "--unit", each]);
+        if (res.exitCode !== 0) {
+          emit(stateRefusalDirective(
+            `Could not skip "${slug}" for unit "${each}"`,
+            `unit "${each}" of "${slug}"`,
+            (res.stderr || res.stdout).trim(),
+          ));
+          return;
+        }
+      }
+      emit({
+        kind: "done",
+        reason: `Skipped "${slug}" for ${unitNames(fromHere)}. Run next to continue.`,
+        ...workflowContinues(pd),
+      });
+      return;
+    }
     if (beat) {
       if (beat.stage.slug !== slug || unit !== beat.unit) {
         emit(errorDirective(
@@ -16688,6 +17432,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         if (flags.userInput) {
           rejectArgs.push("--user-input", flags.userInput);
         }
+        if (flags.message) rejectArgs.push("--message", flags.message);
         for (const finding of flags.rejectFindings ?? []) {
           rejectArgs.push("--reject-finding", finding);
         }
@@ -16741,7 +17486,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
       const committed: string[] = [];
       const changeNotices: string[] = [];
-      let personsFeedback: string | null = null;
+      let personsFeedback = false;
       for (const subArgs of sequence) {
         const res = spawnState(pd, subArgs);
         if (res.exitCode !== 0) {
@@ -16760,7 +17505,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         committed.push(subArgs[0]);
         changeNotices.push(...changeNoticesFromToolOutput(res.stdout));
-        personsFeedback ??= personsFeedbackFromToolOutput(res.stdout);
+        personsFeedback ||= personsFeedbackFromToolOutput(res.stdout);
       }
       // A Unit approval where the person also asked to stop for now parks.
       const parked = flags.result === "approved" && flags.park === true &&
@@ -16795,6 +17540,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       const unitGate = withChangeNotices(unitReply, changeNotices);
       if (unitGate.kind === "print" && (flags.result === "awaiting-approval" || flags.result === "revised")) {
         addReviewCheckOffer(unitGate, pd, node, unit);
+        addContextParkOffer(unitGate, pd);
+        addRevisionCycle(unitGate, pd, slug, unit);
       }
       emit(unitGate);
       return;
@@ -16853,10 +17600,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   }
 
   // The conductor read the person's reply and reports the choice they made;
-  // state approve checks that a person replied since the gate was shown and
-  // records their own words. A report at a held human gate that names no
-  // choice, or passes host cancellation text, records nothing and changes no
-  // state. "Approve, but let's stop there for today" is the approval plus
+  // state approve checks that a person replied since the last decision and
+  // since the stage started, and records their own words. A report at a held
+  // human gate that names no choice, or passes host cancellation text, records
+  // nothing and changes no state. "Approve, but let's stop there for today" is the approval plus
   // --park, which parks once the approval is recorded. With their reply on
   // record, the agent reports the choice it read from it; only with none does
   // the gate wait for one.
@@ -16870,15 +17617,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // While the engine's Plan Approval question is the open one, the gate is
     // not what the person is answering: the way on is that question's answer
     // command, whether or not they have replied to it yet.
-    const plan = openPlanApprovalQuestion(pd, "");
+    const plan = openPlanApprovalQuestion(pd);
     emit(plan !== null && !plan.editing
       ? printDirective(
         `${refused}, and the open question is the Plan Approval question, not the gate for "${slug}". ${planApprovalAnswerStep()}`,
       )
-      : personSpokeSinceGate(pd, { replies: true })
+      : humanRepliedSinceGate(pd)
       ? printDirective(
-        `${refused}. The person has replied since the gate was shown: report the choice they made with --user-input ` +
-          '("Approve", say), without asking them again.',
+        `${refused}. The person has replied since the last decision: report the choice their reply makes with ` +
+          '--user-input ("Approve", say), without asking them again.',
       )
       : turnEndingPrint(
         `The question for "${slug}" is still open. ${refused}. No reply from the person is on record since the gate ` +
@@ -16974,6 +17721,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       subArgs = ["reject", slug];
       if (feedback) subArgs.push(`--feedback=${feedback}`);
       if (flags.userInput) subArgs.push("--user-input", flags.userInput);
+      if (flags.message) subArgs.push("--message", flags.message);
       for (const finding of flags.rejectFindings ?? []) {
         subArgs.push("--reject-finding", finding);
       }
@@ -17026,11 +17774,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           : completionOpensGate
           ? completionOpensGateMessage(`"${slug}"`)
           : flags.result === "rejected" && node.mode === "pipeline"
-          ? `Recorded rejected for "${slug}". The rejection starts a new pipeline attempt; prior receipts no longer apply. ` +
-            `Re-run \`${aidlcToolInvocation("orchestrate")} next\`, then dispatch every missing link in ` +
-            `directive.pipeline order with the exact human feedback. Each link must perform fresh work and return before its ` +
-            `new receipt is recorded. Preserve the configured topology and reviewer policy; a targeted artifact edit does not ` +
-            `permit the conductor to replace the pipeline or reuse its previous handoffs. Report revised only after the fresh chain completes.` +
+          ? pipelineRejectedMessage(pd, node, slug) +
             personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout))
           : `Recorded ${flags.result} for "${slug}".` +
             personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout)),
@@ -17067,6 +17811,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           .filter(Boolean).join("\n");
         if (narration) gateReply.narration = narration;
         addReviewCheckOffer(gateReply, pd, node, unit);
+        addContextParkOffer(gateReply, pd);
+        addRevisionCycle(gateReply, pd, slug, unit);
       }
     }
     emit(gateReply);
@@ -17583,6 +18329,10 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   // the parts were cut for and the person hears them on the final run-stage.
   settledNotices = payload.N ? [...payload.N] : [];
   const cursor = inspectContinuationCursor(pd, liveState);
+  const singleSettings = payload.x && singleStageAttemptIsOpen(pd, node.slug)
+    ? recordedSingleRunSettings(pd, node.slug)
+    : {};
+  if (payload.x && node.slug === "code-generation") setTestingPostureRoute(singleSettings["Test Strategy"] ?? null);
 
   const directive = buildRunStageDirective(
     node,
@@ -17595,6 +18345,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     payload.k,
     payload.f,
     payload.x,
+    singleSettings.Depth ?? null,
   );
   directive.gate = payload.g;
   if (payload.p && payload.u !== null) directive.unit = payload.u;
@@ -17603,7 +18354,10 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   } else {
     directive.next_stage = payload.n;
   }
-  if (payload.x) directive.single = true;
+  if (payload.x) {
+    directive.single = true;
+    applySingleRunSettings(directive, singleSettings);
+  }
   if (payload.z === true) applySettledSwarmShape(directive);
   if (payload.q !== undefined) directive.unit_gate = payload.q;
   if (payload.o === true) applyGateOnlyShape(directive, pd, liveState ?? "");
@@ -17695,7 +18449,12 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
         );
         break;
       } catch (error) {
-        if (!(error instanceof ActiveDirectiveLockContendedError) || attempt === 3) throw error;
+        // Waiting does not move a folder a program holds.
+        if (
+          !(error instanceof ActiveDirectiveLockContendedError) ||
+          error instanceof ActiveDirectiveLockFolderHeldError ||
+          attempt === 3
+        ) throw error;
         Bun.sleepSync(500);
       }
     }
@@ -17745,7 +18504,9 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   } catch (error) {
     if (!(error instanceof ActiveDirectiveLockContendedError)) throw error;
     writePrepared(prepareEmission(errorDirective(
-      "The workflow is busy for a moment. Run the same command again.",
+      error instanceof ActiveDirectiveLockFolderHeldError && error.personLine
+        ? error.message
+        : "The workflow is busy for a moment. Run the same command again.",
     )));
   }
 }
@@ -17949,11 +18710,11 @@ function nextArgsWithRequestFile(
   const unread = `AI-DLC could not read the request in ${relativePath}. Send your request again.`;
   let text: string;
   try {
-    text = readRegularFileNoFollowOrThrow(
+    text = agentFileText(readRegularFileNoFollowOrThrow(
       recordFileTargetOrThrow(projectDir, relativePath),
       "The request file",
       REQUEST_TEXT_MAX_BYTES,
-    ).toString("utf-8").replace(/\r?\n$/, "");
+    )).replace(/\r?\n$/, "");
   } catch {
     return unread;
   }
@@ -17975,6 +18736,9 @@ function nextArgsWithRequestFile(
 
 export function main(argv: string[]): void {
   const rawArgs = argv;
+  // Every route answers for the workflow unless it is an isolated Code
+  // Generation run (emitSingleRunStage, handleContinue say so).
+  setTestingPostureRoute(null);
 
   // Extract --project-dir and the attempt id (mirrors aidlc-jump.ts /
   // aidlc-state.ts), the one way a Copilot claim reads them too.

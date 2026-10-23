@@ -46,7 +46,13 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, resolve as pathResolve } from "node:path";
+import {
+	dirname,
+	isAbsolute,
+	join,
+	type posix,
+	resolve as pathResolve,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
@@ -84,6 +90,7 @@ import {
 	aidlcDispatcherInvocation,
 	compiledExecutable,
 	resolveHarnessPath,
+	sensorFireUsage,
 } from "./aidlc-runtime-paths.ts";
 import { parseSensorManifest, type SensorManifest } from "./aidlc-sensor-schema.ts";
 import {
@@ -301,24 +308,41 @@ function dispatchError(msg: string): never {
 // generated artifact on a crashed run and makes concurrent test
 // files race on a shared directory). Unset in production → sibling resolution
 // against the compiled harness tools directory or __FILE_DIR.
-function resolveScriptPath(command: string): string {
+// Strip both separators before applying the host's path rules; otherwise
+// Windows treats a backslash traversal preserved on POSIX as directories.
+export function sensorScriptPathIn(
+	command: string,
+	scriptDir: string,
+	path: Pick<typeof posix, "join" | "dirname" | "resolve"> = { join, dirname, resolve: pathResolve },
+): string {
 	const tokens = command.trim().split(/\s+/);
 	const tsToken = tokens.find((t) => t.endsWith(".ts"));
 	const engineIndex = tokens.indexOf("engine");
 	const nativeDelegate = engineIndex >= 0 ? tokens[engineIndex + 1] : undefined;
 	if (!tsToken && !nativeDelegate?.startsWith("sensor-")) {
-		dispatchError(`manifest command lacks a .ts script: "${command}"`);
+		throw new Error(`manifest command lacks a .ts script: "${command}"`);
 	}
-	// String.split always returns a non-empty array, so the last element
-	// is always defined — indexed access keeps the basename typed as
-	// string without a non-null assertion.
-	const parts = tsToken?.split("/") ?? [];
 	const basename = nativeDelegate?.startsWith("sensor-")
 		? `aidlc-${nativeDelegate}.ts`
-		: parts[parts.length - 1];
+		: (tsToken ?? "").split(/[\\/]/).pop() ?? "";
+	if (basename === ".ts" || !basename.endsWith(".ts")) {
+		throw new Error(`manifest command names no script file: "${command}"`);
+	}
+	const resolved = path.join(scriptDir, basename);
+	if (path.resolve(path.dirname(resolved)) !== path.resolve(scriptDir)) {
+		throw new Error(`sensor script must be in ${scriptDir}: "${command}"`);
+	}
+	return resolved;
+}
+
+function resolveScriptPath(command: string): string {
 	const scriptDir = process.env.AIDLC_SENSOR_SCRIPT_DIR
 		?? (compiledExecutable() ? resolveHarnessPath(["tools"]) : __FILE_DIR);
-	return join(scriptDir, basename);
+	try {
+		return sensorScriptPathIn(command, scriptDir);
+	} catch (error) {
+		dispatchError(errorMessage(error));
+	}
 }
 
 // Which flag carries the path a sensor analyses. A manifest's `input_schema`
@@ -420,7 +444,8 @@ function handleDescribe(args: string[]): void {
 //   - codekb producers (reverse-engineering): glob every repo dir under the
 //     space-level codekb root.
 //   - per-unit Construction producers (for_each: unit-of-work): use the
-//     stage-level directory when the effective plan skips Units Generation;
+//     stage-level directory when the work has no Units (the plan skips Units
+//     Generation, or the work passed it without running it);
 //     otherwise glob every <record>/construction/<unit>/<slug>/.
 //   - everything else: <record>/<phase>/<slug>/<name>.md.
 //
@@ -594,7 +619,7 @@ function handleFire(args: string[]): void {
 	// guaranteed false SENSOR_FAILED on every run of that stage in that scope.
 	// An optional consume (`required: false`) may not have informed the
 	// output, and citing one that did not would be false provenance, unless the
-	// stage lists it under `cites:` (its deliverables cite it when it exists).
+	// stage marks it `cited: true` (its deliverables cite it when it exists).
 	const isCodeSensor = sensorTakesFilePath(sensor.manifest, id);
 	const scriptArgs: string[] = ["--stage", stageSlug];
 	if (isCodeSensor) {
@@ -639,7 +664,8 @@ function handleFire(args: string[]): void {
 	// stageNode — exactly as --consumes is threaded for upstream-coverage above.
 	// Eligibility = the `produces` artifact names that are NOT questions/timestamp
 	// markers (the stem==artifact key is unsound for those non-prose files). The
-	// script applies a resolved template only when the output stem ∈ this set.
+	// script applies a resolved template only when the output file is one of
+	// these artifacts' files (artifactFilename).
 	// AIDLC_TEMPLATES_DIR is a test/relocation seam mirroring AIDLC_RULES_DIR;
 	// the default lookup is the workspace method tree's templates/ dir —
 	// <projectDir>/aidlc/spaces/<space>/memory/templates — derived via
@@ -1027,8 +1053,8 @@ function decideOutcome(
 //
 // Rationale: control-plane / data-plane separation puts per-sensor
 // findings derivation in the script (the script knows its own pass
-// threshold; e.g., required-sections script knows 2 H2 sections is the
-// minimum). The dispatcher stays generic and adds new framework sensors
+// threshold; e.g., the required-sections script counts the template headings
+// an output lacks). The dispatcher stays generic and adds new framework sensors
 // without an arm in this function.
 function readFindingsCount(out: Record<string, unknown>): number {
 	const v = out.findings_count;
@@ -1208,7 +1234,7 @@ function sensorUsage(subcommand: string | undefined): string {
 			"  Prints one sensor's manifest fields. Required: <id>.",
 		],
 		fire: [
-			`${invoke("fire")} <id> --stage <slug> --output-path <path>`,
+			sensorFireUsage(),
 			"  Fires a sensor against a stage output; emits SENSOR_FIRED and its paired result row.",
 			"  Required: <id>, --stage, --output-path. Options: --unit <name> (named on both rows)",
 		],

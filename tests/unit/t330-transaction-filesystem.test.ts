@@ -125,7 +125,8 @@ function childSource(root: string, options: Options): string {
         if (!onMount(p) && /^\\.aidlc-.*\\.lock$/.test(basename(p)))
           out.gates.push(p);
         if (armed && onMount(p) && cfg.fault === "lock-mkdir" && basename(p) === ${JSON.stringify(LOCK)}) fail();
-        if (armed && inProbe(p) && cfg.fault === "workflow" && basename(p) === "workflow-lock") fail();
+        // The workflow lock is built under a private candidate name and renamed into place.
+        if (armed && inProbe(p) && cfg.fault === "workflow" && basename(p).startsWith("workflow-lock.candidate.")) fail();
         return fs.mkdirSync(p, ...args);
       },
       openSync(p, flags, ...args) {
@@ -171,6 +172,9 @@ function childSource(root: string, options: Options): string {
         return fs.readFileSync(p, ...args);
       },
       renameSync(source, destination) {
+        // A local gate lock is published by renaming its stamped candidate into place.
+        if (!onMount(destination) && /^\\.aidlc-.*\\.lock$/.test(basename(destination)))
+          out.gates.push(destination);
         if (armed && inProbe(source) && fs.existsSync(source)) {
           if (cfg.fault === "directory-rename" && fs.lstatSync(source).isDirectory()) fail();
           if (cfg.fault === "file-rename" && !fs.lstatSync(source).isDirectory()) fail();

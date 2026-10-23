@@ -65,9 +65,10 @@ options:
     description: Propose a different project check before running verification.
 ```
 
-Read the person's reply in that session and record the choice they made. The
+Read the person's reply and record the choice they made. The
 human-turn hook keeps that they replied to this question and their exact words;
-a reply from another session, or to another question, does not count. When they
+a reply typed in a new chat is kept for it while it is the newest question
+asked, and a reply to another question does not count. When they
 approve, record their answer, and set the command:
 
 ```bash
@@ -209,7 +210,8 @@ first, as the reviewer module asks after a recovery verdict:
 The human's reply to this checkpoint question, in this chat or a new one,
 authorizes the action you read from it: approve, or reject with what they asked
 to change (their words are kept with the record; add `--reason` when you want to
-say more). A reply typed in a new chat is kept for the question while it is the
+say more). When their reply only picked Request Changes, ask what should change
+before you record it. A reply typed in a new chat is kept for the question while it is the
 newest question asked; run the approve or reject command there, with no session,
 and never ask it again. A reply to a different question does not count. When they approved and asked for a change,
 approve, then make the change and say in one line what you changed. The response is

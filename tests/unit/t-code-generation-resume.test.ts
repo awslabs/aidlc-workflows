@@ -704,8 +704,10 @@ describe("a swarm batch keeps its own continuation rule", () => {
     expect(ask.kind).toBe("ask");
     writeActiveDirectiveMarker(pd, { kind: "ask", stage: "code-generation", ask_type: "plan-approval", units: group, state_sha256: state() });
     publishPlanApprovalAsk(pd, ask as Parameters<typeof publishPlanApprovalAsk>[1]);
-    // "Approve all" is the question's own choice: the hook records it as typed.
+    // The person approves every Unit's plan; the agent records the choice it read.
     reply(pd, "approve all");
+    const recorded = answer(pd, "Approve all");
+    expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
     for (const unit of group) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
     writeActiveDirectiveMarker(pd, { ...swarm, state_sha256: state() });
     const first = brief(pd, "alpha");

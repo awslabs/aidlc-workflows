@@ -733,8 +733,9 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 
-  // The person may answer the question by its number in chat; that reply is
-  // the option's own command, settings included.
+  // The person may answer the question by its number in chat; the agent reads
+  // it and runs the option's own command, which keeps the settings typed with
+  // the request.
   test("a reply that only names an option keeps the settings typed with the request", () => {
     proj = createTestProject();
     seedAidlcMemory(proj);
@@ -743,13 +744,15 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
       "--depth", "minimal", "--guard-policy", "relaxed", "Fix the login crash when the session expires",
     ]).out);
     expect(ask.ask_type).toBe("new-work-routing");
-    const kept = directiveOf(runNext(proj, ["1"]).out);
+    const named = String(directiveOf(runNext(proj, ["1"]).out).message);
+    const command = (label: string): string[] =>
+      (new RegExp(`"${label}": \`[^\`]*? next ([^\`]+)\``).exec(named)?.[1] ?? "").split(" ");
+    const kept = directiveOf(runNext(proj, command("Part of the active work")).out);
     expect(String(kept.message)).toContain(
       "config set depth minimal --guard-policy relaxed --person-words '<their words>'` to update the configuration",
     );
-    // The separate-work reply reaches the plan question, then the creation; once
-    // that question is in front of them, a bare number answers it, not this one.
-    const separate = createdThrough(directiveOf(runNext(proj, ["2"]).out));
+    // The separate-work choice reaches the plan question, then the creation.
+    const separate = createdThrough(directiveOf(runNext(proj, command("Separate new piece of work")).out));
     const create = /Run `([^`]+)` to start the new intent/.exec(String(separate.message))?.[1] ?? "";
     expect(create).toContain("intent create --scope bugfix");
     expect(create).toContain("--depth minimal");

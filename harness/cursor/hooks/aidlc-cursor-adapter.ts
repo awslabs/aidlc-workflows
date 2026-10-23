@@ -17,7 +17,9 @@
 //      sessionStart context is {"additional_context"} (snake_case), and stop
 //      cannot block at all — only {"followup_message"} (advisory nudge).
 //   2. The shell tool is named "Shell" (tool_input.command, like Bash).
-//      Read/Write/Edit/Task already match Claude's names and input shapes.
+//      Read/Write/Edit/Task already match Claude's names and input shapes;
+//      an edit reported as "StrReplace" (tool_input.path, never captured
+//      live) is handed on as Edit.
 //   3. No duplicate delivery (unlike Codex) and a REAL sessionEnd event
 //      (unlike Codex/Copilot) — no replay cache, no heartbeat reconcile.
 //   4. subagentStart/subagentStop are documented but NEVER fire on the CLI
@@ -64,6 +66,7 @@ import {
   takeSessionSelectionNotice,
 } from "../tools/aidlc-lib.ts";
 import { aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
+import { TRUSTED_ROUTE_NAMESPACE } from "../tools/aidlc-command.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -109,6 +112,18 @@ export async function run(
       }
       return 0;
     }
+  }
+  // A Cursor IDE report has the edit tool arriving as "StrReplace" with the
+  // file in tool_input.path (never captured live). The core hooks know that
+  // call as "Edit" with tool_input.file_path, so it is handed on as one here,
+  // before any check or the audit reads it.
+  if (cursor.tool_name === "StrReplace") {
+    const toolInput = cursor.tool_input ?? {};
+    cursor = {
+      ...cursor,
+      tool_name: "Edit",
+      tool_input: { ...toolInput, file_path: toolInput.file_path ?? toolInput.path },
+    };
   }
 
   const projectDirRaw =
@@ -553,7 +568,8 @@ export async function run(
   }
 
   // Cursor's shell tool is "Shell"; the core hooks key on Claude's "Bash".
-  // Everything else (Read/Write/Edit/Grep/Glob/Task/...) already matches.
+  // Everything else (Read/Write/Edit/Grep/Glob/Task/...) already matches, and
+  // a "StrReplace" edit was handed on as Edit when the payload was read.
   const toolName = cursor.tool_name === "Shell" ? "Bash" : (cursor.tool_name ?? "");
 
   // Cursor is the first harness with a FIRST-CLASS file-deletion tool
@@ -2501,6 +2517,63 @@ export async function run(
     }
   }
 
+  // AI-DLC's own command, as its prose spells it (`aidlc engine ...`, or one of
+  // this project's tool scripts under bun), naming a command the core admits
+  // this delegate (delegateAdmittedVerbs), such as Reverse Engineering's scope
+  // fingerprint mint and check and its publish. It is fixed code that leaves
+  // the attribution records alone, so the interpreter and attribution-path
+  // denies stand aside for it; the core guards still run. One plain call only:
+  // nothing chained, redirected, expanded, globbed or set before it.
+  async function runsAdmittedAidlcCommand(command: string, agent: string): Promise<boolean> {
+    // A POSIX shell reads a line that ends in a backslash as going on (the
+    // stage writes its publish that way); PowerShell ends the command there.
+    const joined = process.platform === "win32" ? command : command.replace(/\\\r?\n/g, " ");
+    if (agent === AMBIGUOUS_REVIEWER || /[;&|<>(){}[\]`$%*?\r\n]/.test(joined)) return false;
+    // A call this cannot read keeps the denies.
+    try {
+      const parsed = shellWords(joined);
+      if (parsed.ambiguous) return false;
+      // The host's own shell reads the words: PowerShell keeps a backslash, a
+      // POSIX shell reads it as an escape.
+      const flavor: PathFlavor = process.platform === "win32" ? "win32" : "posix";
+      const words = parsed.words.map(({ variants }) =>
+        variants.find((variant) => variant.flavor === flavor)?.value ?? ""
+      );
+      const program = (words[0] ?? "").replace(/\.(?:exe|com|cmd|bat)$/i, "").toLowerCase();
+      let script = "aidlc.ts";
+      let rest = words.slice(1);
+      if (program === "bun") {
+        script = (flavor === "win32" ? win32 : posix).basename(words[1] ?? "");
+        if (!/^aidlc(?:-[a-z0-9-]+)?\.ts$/.test(script)) return false;
+        const own = canonicalPathVariants(join(HOOKS_DIR, "..", "tools", script), projectDir, flavor);
+        const named = canonicalPathVariants(words[1], effectiveCwd(), flavor);
+        if (
+          own.ambiguous || named.ambiguous ||
+          !named.paths.some((path) => own.paths.some((ownPath) => ownPath.value === path.value))
+        ) {
+          return false;
+        }
+        rest = words.slice(2);
+      } else if (program !== "aidlc") {
+        return false;
+      }
+      if (script === "aidlc.ts" && rest[0] !== TRUSTED_ROUTE_NAMESPACE) return false;
+      // Loaded only here: the guard is its own member, and one that cannot load
+      // leaves this call refused as before instead of breaking every call.
+      const guard: typeof import("./aidlc-state-transition-guard.ts") = await import(
+        join(HOOKS_DIR, "aidlc-state-transition-guard.ts")
+      );
+      const admitted = guard.delegateAdmittedVerbs(agent);
+      if (script !== "aidlc.ts") return (admitted[script] ?? []).includes(rest[0] ?? "");
+      const dispatcher: typeof import("../tools/aidlc.ts") = await import(
+        join(HOOKS_DIR, "..", "tools", "aidlc.ts")
+      );
+      return dispatcher.admittedEngineRoute(admitted, rest.slice(1));
+    } catch {
+      return false;
+    }
+  }
+
   async function touchesProtectedReviewerState(): Promise<boolean> {
     const toolInput = cursor.tool_input ?? {};
     const serialized = JSON.stringify(toolInput).replaceAll("\\", "/");
@@ -2891,8 +2964,12 @@ export async function run(
       }
       const agent = attributed();
       const command = cursor.tool_input?.command;
+      const ownCommand =
+        agent !== "" && toolName === "Bash" && typeof command === "string" &&
+        await runsAdmittedAidlcCommand(command, agent);
       if (
         agent &&
+        !ownCommand &&
         toolName === "Bash" &&
         typeof command === "string" &&
         await shellInvokesDynamicEvaluation(command, effectiveCwd()) &&
@@ -2908,7 +2985,7 @@ export async function run(
         })}\n`);
         return 0;
       }
-      if (agent && await touchesProtectedReviewerState() && !delegateChecksStandAside()) {
+      if (agent && !ownCommand && await touchesProtectedReviewerState() && !delegateChecksStandAside()) {
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:

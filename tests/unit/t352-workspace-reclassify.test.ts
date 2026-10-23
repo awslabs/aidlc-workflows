@@ -2,7 +2,7 @@
 // function:declaredProjectType, function:constructionHasStarted, function:projectTypeRecordedAsPersons,
 // function:reverseEngineeringOwedBehindCursor, function:greenfieldWorkspaceGainedCode,
 // function:scanSummary, function:rebuildEffectivePlanFields, function:markPersonLinesHeard,
-// function:personLineHeard, function:staleStageLine, function:personSaidProjectType,
+// function:personLineHeard, function:staleStageLine, function:personSaidProjectType, function:saidInChat,
 // function:noteProjectTypeAsked, function:clearProjectTypeAsked, audit:WORKSPACE_RECLASSIFIED
 //
 // t352 - the person decides whether a piece of work is a new project or existing
@@ -43,18 +43,20 @@ import {
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createOrchestrationTestProject,
   followProposal,
   proposalFollowUp,
+  removeWorkspaceRecord,
   runOrchestrateNext,
 } from "../harness/fixtures.ts";
 import {
   acquireAuditLock,
   DOCUMENT_INPUT_REQUEST_FILE,
+  hooksHealthDir,
   nextInScopeStage,
   releaseAuditLock,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -352,12 +354,14 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     const dir = recordDir(proj).split(/[\\/]/).at(-1) ?? "";
     const d = next(proj, ["--project-type", "brownfield"]);
     expect(d.kind).toBe("print");
-    expect(String(d.message)).toContain(`engine workspace reclassify --project-type brownfield --intent ${dir} --space default\``);
-    expect(String(d.message)).toEndWith("` and act on the directive it returns.");
+    expect(String(d.message)).toContain(
+      `engine workspace reclassify --project-type brownfield --intent ${dir} --space default --person-words '<their words>'\``,
+    );
+    expect(String(d.message)).toEndWith("word for word, and act on the directive it returns.");
     // Typed with a jump, nothing is dropped: the type first, then the jump.
     const jump = ["--project-type", "brownfield", "--stage", "reverse-engineering"];
     const withJump = String(next(proj, jump).message);
-    expect(withJump).toContain(`--space default --then-rerun\` and act on the directive it returns.`);
+    expect(withJump).toContain(`--space default --person-words '<their words>' --then-rerun\`, with <their words>`);
     // That reply is a print naming the same `next` again, with the person's lines.
     const rerun = run(UTIL, proj, ["reclassify", "--project-type", "brownfield", "--then-rerun"]);
     expect(rerun.status).toBe(0);
@@ -380,6 +384,48 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     expect(routed.new_work_description).toBe("add the export button");
     // Said again on its own, it rescans and replies again rather than being skipped.
     expect(String(next(proj, ["--project-type", "brownfield"]).message)).toContain("engine workspace reclassify --project-type brownfield");
+  });
+
+  test("said with the words of a request, the change records those words, which reach it in a file no shell reads", () => {
+    const proj = project();
+    expect(create(proj, "classic").status).toBe(0);
+    const words = "it's our existing service: \"harden\" the $DEPLOY pipeline";
+    const file = ".aidlc-engine/answer-text/project-type-words.txt";
+    const step = String(next(proj, ["--project-type", "brownfield", words]).message);
+    expect(step).toContain(`--space default --person-words-file ${file} --then-rerun\` and act on the directive it returns.`);
+    expect(readFileSync(join(recordDir(proj), file), "utf-8")).toBe(words);
+    const rerun = run(UTIL, proj, ["reclassify", "--project-type", "brownfield", "--person-words-file", file, "--then-rerun"]);
+    expect(rerun.status, said(rerun)).toBe(0);
+    expect(auditText(proj)).toContain(`**Person Words**: ${words}`);
+    expect(existsSync(join(recordDir(proj), file))).toBe(false);
+    // Said on its own the step names no file, and a file that is gone records none.
+    expect(String(next(proj, ["--project-type", "greenfield"]).message)).not.toContain("--person-words-file");
+    expect(run(UTIL, proj, ["reclassify", "--project-type", "greenfield", "--person-words-file", file]).status).toBe(0);
+    expect(auditText(proj).split("**Person Words**").length).toBe(2);
+  });
+
+  test("said on its own, the step names the person's words for the agent to fill, and the change records them", () => {
+    // The live Codex run on Windows: the agent read "our existing service" in
+    // the request the work was started with and ran the flag on its own.
+    const proj = project();
+    expect(create(proj, "classic").status).toBe(0);
+    const step = String(next(proj, ["--project-type", "brownfield"]).message);
+    expect(step).toEndWith(
+      "--space default --person-words '<their words>'`, with <their words> the person's reply that asked for it, " +
+        "word for word, and act on the directive it returns.",
+    );
+    const words = "it's  our existing service: \"harden\" the $DEPLOY pipeline";
+    const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield", "--person-words", words]);
+    expect(r.status, said(r)).toBe(0);
+    expect(auditText(proj)).toContain(`**Person Words**: ${words.replace(/\s+/g, " ")}`);
+    // Words inline and in a file at once get the setters' one answer, and the file stays.
+    const file = ".aidlc-engine/answer-text/project-type-words.txt";
+    mkdirSync(join(recordDir(proj), ".aidlc-engine", "answer-text"), { recursive: true });
+    writeFileSync(join(recordDir(proj), file), words);
+    const both = run(UTIL, proj, ["reclassify", "--project-type", "greenfield", "--person-words", words, "--person-words-file", file]);
+    expect(both.status).not.toBe(0);
+    expect(said(both)).toBe("Pass either --person-words or --person-words-file, not both.");
+    expect(existsSync(join(recordDir(proj), file))).toBe(true);
   });
 });
 
@@ -547,6 +593,167 @@ describe("t352 the folder question needs the person's word after it", () => {
     appendAuditEntry("HUMAN_TURN", { Reply: "command" }, proj);
     expect(next(proj).ask_type).toBe("project-type");
     expect(reclassifyUnsaid(proj, "brownfield").status).toBe(0);
+  });
+});
+
+// The live Codex run on Windows: the request that started the work said "our
+// existing service", the empty folder scanned as a new project, and the agent's
+// reclassify was refused, so it asked a person who had already said it. That
+// turn leaves no turn on record (the hook writes one only once the work
+// exists), but the hook keeps the message itself, so the agent's words count
+// when they are a whole message of theirs in this chat, as a setter's do. Every
+// reclassify here is spawned directly: `run` adds a turn that would hide a red.
+describe("t352 said in the message that started the work", () => {
+  const CHAT = "01995000-7a11-7000-8000-0000000003a1";
+  const OTHER_CHAT = "01995000-7a11-7000-8000-0000000003a2";
+  const AIDLC = join(AIDLC_SRC, "tools", "aidlc.ts");
+  const REQUEST = "harden the deployment pipeline and add observability for our existing service - no new features";
+  const REFUSAL =
+    "The person has not said yet whether this folder is existing code. Ask them the question you were given, " +
+    "end the turn, and run this command after they answer.";
+
+  // Production guards in a chat, and no chat the box's own shell names.
+  function inChat(proj: string, chat: string | null, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (!/^(CLAUDE|CODEX_|KIRO_|AIDLC_SESSION_OVERRIDE)/.test(key)) env[key] = value;
+    }
+    return {
+      ...env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0", CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj,
+      ...(chat === null ? {} : { AIDLC_SESSION_OVERRIDE: chat }), ...extra,
+    };
+  }
+
+  function noWorkYet(): string {
+    const proj = project();
+    removeWorkspaceRecord(proj);
+    mkdirSync(hooksHealthDir(proj), { recursive: true });
+    writeFileSync(join(hooksHealthDir(proj), "record-human-turn.last"), new Date().toISOString());
+    return proj;
+  }
+
+  function typed(proj: string, prompt: string, chat = CHAT): void {
+    const r = spawnSync(BUN, [AIDLC, "engine", "hook", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: chat, prompt }),
+      env: inChat(proj, chat),
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(r.status, r.stderr).toBe(0);
+  }
+
+  // The agent starts the work their message asked for, in the same turn.
+  function startWork(proj: string): void {
+    const made = spawnTool(UTIL, proj, ["intent-create", "--scope", "feature", "--arguments", REQUEST], inChat(proj, CHAT));
+    expect(made.status, said(made)).toBe(0);
+    expect(field(state(proj), "Project Type")).toBe("Greenfield");
+    expect(auditText(proj)).not.toContain("HUMAN_TURN");
+  }
+
+  // Bound to the work by name, as the step `next` prints names it.
+  function reclassify(proj: string, args: string[], chat: string | null = CHAT, extra: Record<string, string> = {}): RunResult {
+    const work = ["--intent", basename(recordDir(proj)), "--space", "default"];
+    return spawnTool(UTIL, proj, ["reclassify", "--project-type", "brownfield", ...work, ...args], inChat(proj, chat, extra));
+  }
+
+  function recordedAsTheirs(proj: string, r: RunResult): void {
+    expect(r.status, said(r)).toBe(0);
+    expect(field(state(proj), "Project Type")).toBe("Brownfield");
+    expect(field(state(proj), "Project Type Source")).toBe("you");
+  }
+
+  test("their whole request goes through, as words or as the line they typed, and the row keeps it", () => {
+    const proj = noWorkYet();
+    typed(proj, `/aidlc ${REQUEST}`);
+    startWork(proj);
+    recordedAsTheirs(proj, reclassify(proj, ["--person-words", REQUEST]));
+    expect(auditText(proj)).toContain(`**Person Words**: ${REQUEST}`);
+    expect(reclassify(proj, ["--person-words", `/aidlc  ${REQUEST.toUpperCase()}`]).status).toBe(0);
+  });
+
+  test("a request composed, then Approve: the request's words go through", () => {
+    const proj = noWorkYet();
+    typed(proj, `/aidlc compose "${REQUEST}"`);
+    typed(proj, "Approve");
+    startWork(proj);
+    recordedAsTheirs(proj, reclassify(proj, ["--person-words", REQUEST]));
+  });
+
+  test("their words given to next reach the change in a file, and go through", () => {
+    const proj = noWorkYet();
+    typed(proj, `/aidlc ${REQUEST}`);
+    startWork(proj);
+    const step = runOrchestrateNext(ORCH, proj, ["--project-type", "brownfield", REQUEST], { env: inChat(proj, CHAT) });
+    const command = /Run `[^`]* reclassify ([^`]+)`/.exec(String(step.directive?.message))?.[1];
+    expect(command, step.out).toContain("--person-words-file");
+    recordedAsTheirs(proj, spawnTool(UTIL, proj, ["reclassify", ...command!.split(" ")], inChat(proj, CHAT)));
+    expect(auditText(proj)).toContain(`**Person Words**: ${REQUEST}`);
+  });
+
+  test("a typed /aidlc --project-type before the request says it, with no words passed", () => {
+    const proj = noWorkYet();
+    typed(proj, "/aidlc --project-type brownfield");
+    typed(proj, REQUEST);
+    startWork(proj);
+    recordedAsTheirs(proj, reclassify(proj, []));
+  });
+
+  test("with no chat in the shell, the chat most recently active here is theirs (Cursor and Copilot)", () => {
+    const proj = noWorkYet();
+    typed(proj, `/aidlc ${REQUEST}`);
+    startWork(proj);
+    writeFileSync(join(proj, "aidlc", ".aidlc-sessions", ".current-session"), `${CHAT}\n`);
+    recordedAsTheirs(proj, reclassify(proj, ["--person-words", REQUEST], null));
+  });
+
+  test("words that are not a whole message of theirs in this chat are refused as before", () => {
+    const proj = noWorkYet();
+    typed(proj, `/aidlc ${REQUEST}`);
+    // With no chat named, the chat of the newest message stands in, as for a
+    // setter: the other chat speaks in a later second (the record keeps whole
+    // seconds), so the request from the older chat is not theirs there.
+    Bun.sleepSync(1_100);
+    typed(proj, "make it a new mobile app", OTHER_CHAT);
+    startWork(proj);
+    const before = state(proj);
+    const notTheirs: Array<[string[], string | null]> = [
+      [["--person-words", "our existing service"], CHAT],
+      [["--person-words", "it is existing code"], CHAT],
+      [["--person-words", "The person said the folder is their existing code."], CHAT],
+      [["--person-words", ""], CHAT],
+      [[], CHAT],
+      [["--person-words", "make it a new mobile app"], CHAT],
+      [["--person-words", REQUEST], OTHER_CHAT],
+      [["--person-words", REQUEST], null],
+    ];
+    for (const [args, chat] of notTheirs) {
+      const r = reclassify(proj, args, chat);
+      expect(r.status, `${args.join(" ")} from ${chat}`).not.toBe(0);
+      expect(said(r)).toBe(REFUSAL);
+    }
+    expect(state(proj)).toBe(before);
+    expect(auditText(proj)).not.toContain("WORKSPACE_RECLASSIFIED");
+  });
+
+  test("after a decision, the words that started the work no longer say it", () => {
+    const proj = noWorkYet();
+    typed(proj, `/aidlc ${REQUEST}`);
+    startWork(proj);
+    // Their "approve" is used by the gate it answered, in a later second than
+    // the request (the record keeps whole seconds).
+    Bun.sleepSync(1_100);
+    typed(proj, "approve");
+    appendAuditEntry("GATE_APPROVED", { Stage: "requirements-analysis" }, proj);
+    const r = reclassify(proj, ["--person-words", REQUEST]);
+    expect(r.status).not.toBe(0);
+    expect(said(r)).toBe(REFUSAL);
+  });
+
+  test("with the presence guard off the change goes through with nothing said, as before", () => {
+    const proj = noWorkYet();
+    startWork(proj);
+    recordedAsTheirs(proj, reclassify(proj, [], CHAT, { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" }));
   });
 });
 

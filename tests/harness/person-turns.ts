@@ -48,15 +48,18 @@ function audit(): AuditReader {
 }
 const auditBlockField = (block: string, field: string) => audit().auditBlockField(block, field);
 
-// The engine's own check that a quote is the person's words (log answer
-// --on-instruction makes it too), loaded on first use like the reader above.
-let quoteCheck: ((said: string, quoted: string) => boolean) | undefined;
-function holdsQuote(said: string, quoted: string): boolean {
-  quoteCheck ??= (require("../../dist/claude/.claude/tools/aidlc-message-store.ts") as {
-    holdsQuote: (said: string, quoted: string) => boolean;
-  }).holdsQuote;
-  return quoteCheck(said, quoted);
+type MessageStore = Pick<
+  typeof import("../../dist/claude/.claude/tools/aidlc-message-store.ts"),
+  "holdsQuote" | "readMessage" | "messageIsReply" | "latestSpendingTimestamp"
+>;
+let messages: MessageStore | undefined;
+// The engine's own message store and checks, loaded on first use like the reader above.
+function messageStore(): MessageStore {
+  messages ??= require("../../dist/claude/.claude/tools/aidlc-message-store.ts") as MessageStore;
+  return messages;
 }
+// The engine's own check that a quote is the person's words (log answer --on-instruction makes it too).
+const holdsQuote = (said: string, quoted: string) => messageStore().holdsQuote(said, quoted);
 
 /** Events in one audit shard, keyed by space, intent and shard name. */
 type AuditTrail = Map<string, AuditShardEvent[]>;
@@ -142,8 +145,10 @@ const gateItem = (row: AuditShardEvent) =>
  * one exception: it answers the question the menu showed, so when the agent
  * logs that question only after the submission, the submission still backs
  * its answer if nothing was decided between them (the engine's own rule, a
- * reply since the last decision). Approvals and
- * answers need a reply: a turn that was only a command (as the human-turn hook
+ * reply since the last decision). An answer that names the person's message
+ * (log answer --message, or the Message Id of the question it answers) is
+ * backed by that message as the engine binds it: see namedMessageTurn.
+ * Approvals and answers need a reply: a turn that was only a command (as the human-turn hook
  * reads it) does not count. A command still backs what it
  * can ask for: a stage reopened by a jump, a changed project type.
  *
@@ -151,6 +156,12 @@ const gateItem = (row: AuditShardEvent) =>
  * by the agent as the person asked") is backed by a turn anywhere in the drive
  * that holds the words its Instruction quotes; the words, not the field, are
  * what back it.
+ *
+ * A project-type change that quotes the words the person said it in (Person
+ * Words, which the engine takes from the request `next` was given) is backed
+ * by any turn of this work that holds them: the drive's, or one the driver
+ * sent earlier in this work (`earlier`), such as the opening request a later
+ * chat's change stands on.
  *
  * Which rows are the engine's own comes from the trail and the stage graph,
  * never from a field a row carries. An approval is the engine's when the
@@ -172,7 +183,9 @@ const gateItem = (row: AuditShardEvent) =>
  * the shard began or a later one: every reply leaves its own row in the shard
  * its chat writes, so no older turn can back a row there.
  */
-export function unbackedDecisions(projectDir: string, start: AuditCursor, turns: readonly PersonTurn[]): string[] {
+export function unbackedDecisions(
+  projectDir: string, start: AuditCursor, turns: readonly PersonTurn[], earlier: readonly string[] = [],
+): string[] {
   const { decisionAnsweredBy, nextOpenDecision, DECISION_CLOSING_EVENTS } = audit();
   const problems: string[] = [];
   // How many answers each turn has backed so far.
@@ -227,6 +240,8 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
       let reply = true;
       let answer = false;
       let instruction: string | undefined;
+      // The words a project-type change quotes as the person's.
+      let said: string | undefined;
       // Where a menu submission sent before a late-logged question may start.
       let menuSince: number | undefined;
       if (closes) {
@@ -260,6 +275,7 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
       } else if (row.event === "WORKSPACE_RECLASSIFIED") {
         since = workspace;
         reply = false;
+        said = auditBlockField(row.block, "Person Words") ?? undefined;
       } else if (row.event === "AUTONOMY_MODE_SET" && auditBlockField(row.block, "Mode") === "autonomous") {
         since = resolved;
         reply = false;
@@ -277,8 +293,11 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
         });
         let backing = quoted === "" ? -1 : backs(after, false);
         if (backing === -1 && menuSince !== undefined) backing = backs(Math.max(menuSince + 1, first), true);
-        if (backing === -1) problems.push(describe(row, key, turns));
-        else if (answer) used[backing]++;
+        if (backing === -1 && closes && quoted === undefined) backing = namedMessageTurn(projectDir, events, index, turns, born, key);
+        const quote = said;
+        const quotedBy = quote !== undefined && [...turns.map((turn) => turn.words), ...earlier].some((words) => holdsQuote(words, quote));
+        if (backing === -1 && !quotedBy) problems.push(describe(row, key, turns));
+        else if (backing !== -1 && answer) used[backing]++;
       }
       if (row.event === "DECISION_RECORDED" || closes || gate) {
         const next = nextOpenDecision(pending?.block ?? null, row.event, row.block);
@@ -307,6 +326,33 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
     }
   }
   return problems;
+}
+
+// An answer to a question the agent logged after the reply arrived names the
+// message that answered (log answer --message, or the question's own Message
+// Id). The engine binds it when the record carries the person's words, came
+// through the chat that answers and no approval or other spending row came
+// after it (proveMessage in aidlc-log.ts). The answer is then backed by the
+// driver's turn that sent those words before the row. The chat that answers
+// is the one that spoke last in this shard: a driver types into one chat at a
+// time.
+function namedMessageTurn(
+  projectDir: string, events: readonly AuditShardEvent[], index: number, turns: readonly PersonTurn[], born: number, key: string,
+): number {
+  const row = events[index];
+  const id = auditBlockField(row.block, "Message Id");
+  if (row.event !== "QUESTION_ANSWERED" || id === null) return -1;
+  const store = messageStore();
+  const message = store.readMessage(projectDir, id);
+  if (message === null || !store.messageIsReply(events, message)) return -1;
+  const before = events.slice(0, index);
+  const spentAt = store.latestSpendingTimestamp(before);
+  if (spentAt !== null && message.at < spentAt) return -1;
+  const speaking = before.findLast((earlier) => earlier.event === "HUMAN_TURN");
+  const chat = speaking === undefined ? null : auditBlockField(speaking.block, "Session");
+  if (chat !== null && message.session !== chat) return -1;
+  return turns.findLastIndex((turn, which) => which >= born && (turn.cursor.get(key) ?? 0) <= index &&
+    turn.words.trim() === message.text.trim() && !isCommand(turn.words));
 }
 
 // The questions open when a turn arrived `at` this point of a shard: each one
@@ -377,7 +423,8 @@ export class PersonTurnLedger {
   readonly turns: PersonTurn[] = [];
   readonly start: AuditCursor;
 
-  constructor(readonly projectDir: string) {
+  /** `earlier`: what the driver sent in this work before this ledger began, read only for a quote of the person's words. */
+  constructor(readonly projectDir: string, readonly earlier: readonly string[] = []) {
     this.start = auditCursor(projectDir);
   }
 
@@ -387,7 +434,7 @@ export class PersonTurnLedger {
   }
 
   unbacked(): string[] {
-    return unbackedDecisions(this.projectDir, this.start, this.turns);
+    return unbackedDecisions(this.projectDir, this.start, this.turns, this.earlier);
   }
 }
 

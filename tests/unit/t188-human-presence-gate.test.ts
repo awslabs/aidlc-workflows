@@ -301,6 +301,10 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   // about how AI-DLC works.
   test("A2: Claude's refusal gives its own step, the Kiro IDE tree's gives the person's own tool's step, and neither asks again", () => {
     const slug = field(proj, "Current Stage"); // feasibility
+    // Claude Code's own step needs the settings file an install has; without
+    // one the step is its repair (t-hooks-off-step).
+    mkdirSync(join(proj, ".claude"), { recursive: true });
+    writeFileSync(join(proj, ".claude", "settings.json"), "{}\n");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     guarded(proj, ["gate-start", slug]);
     const claude = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
@@ -493,8 +497,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(field(proj, "Current Stage")).not.toBe(slug);
   });
 
-  // The picker returns the "(Recommended)" decorator added to the choice label.
-  // Matching may remove it, but the approval receipt must retain the human's reply.
+  // The picker returns the "(Recommended)" decorator added to the choice label;
+  // the receipt keeps the agent's report as it passed it.
   test("B2: approve COMMITS when the reply carries the (Recommended) decorator", () => {
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
@@ -510,17 +514,20 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     expect(
       readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-    ).toContain("**User Input**: Approve\n");
+    ).toContain("**User Input**: Approve (Recommended)\n");
     expect(field(proj, "Current Stage")).not.toBe(slug);
   });
 
   // The agent reports the approval it read from the person's reply; the
-  // receipt names Accept as-is only once the gate offers it.
+  // receipt records it as passed, whatever the revision count.
   test.each([2, 3])(
-    "decorated Accept as-is respects the revision limit at count %i",
+    "decorated Accept as-is is recorded as the agent passed it at count %i",
     (revisionCount) => {
       const slug = field(proj, "Current Stage");
-      expect(guarded(proj, ["set", `Revision Count=${revisionCount}`]).rc).toBe(0);
+      // This stage's earlier change requests, as the reject path records them.
+      for (let i = 0; i < revisionCount; i++) {
+        appendAuditEntry("GATE_REJECTED", { Stage: slug, Feedback: `change ${i + 1}` }, proj);
+      }
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
       recordHumanTurn(proj);
@@ -529,13 +536,13 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(report.out).toContain('"kind":"done"');
       expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
       expect(readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block)
-        .toContain(revisionCount >= 3 ? "**User Input**: Accept as-is\n" : "**User Input**: Approve\n");
+        .toContain("**User Input**: Accept as-is (Recommended)\n");
       expect(field(proj, "Current Stage")).not.toBe(slug);
     },
   );
 
   test.each(["(Recommended)", "Approve (Recommended) extra"])(
-    "the agent's reported approval records as Approve, whatever it passes: %s",
+    "the agent's reported approval records as it passes it: %s",
     (reply) => {
       const slug = field(proj, "Current Stage");
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
@@ -545,7 +552,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(direct.rc, direct.out).toBe(0);
       expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
       expect(readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block)
-        .toContain("**User Input**: Approve\n");
+        .toContain(`**User Input**: ${reply}\n`);
     },
   );
 
@@ -1219,7 +1226,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(0);
     });
 
-    test("summary confirmation needs a fresh turn after another answer", () => {
+    // An answer spends no reply: the one the follow-up stood on backs the summary too.
+    test("summary confirmation stands on the reply another answer used", () => {
       const slug = field(proj, "Current Stage");
       const questions = summaryQuestions(proj);
       expect(
@@ -1258,9 +1266,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "--details",
         "Looks correct",
       ]);
-      expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("no human reply has arrived since their last answer");
-      expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(0);
+      expect(result.rc, result.out).toBe(0);
+      expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(1);
     });
 
     test("per-unit evidence requires a unit-scoped receipt", () => {
@@ -1402,7 +1409,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Deploy anywhere?", "--options", "A,B"]).rc).toBe(0);
       const late = guardedLog(proj, ["answer", "--stage", slug, "--details", "A"]);
       expect(late.rc).not.toBe(0);
-      expect(late.out).toContain("no new human reply has arrived for the question");
+      expect(late.out).toContain("came before this question was logged");
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
     });
 
@@ -1561,7 +1568,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Next question", "--options", "A,B"]).rc).toBe(0);
       const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"]);
       expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("no new human reply has arrived for the question");
+      expect(r.out).toContain("came before this question was logged");
       expect(r.out).not.toContain("already recorded as an answer");
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
     });
@@ -1640,10 +1647,11 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
     });
 
-    test("an unattended second answer keeps the AIDLC_UNATTENDED explanation", () => {
+    test("an unattended answer after a decision used the reply keeps the AIDLC_UNATTENDED explanation", () => {
       const slug = field(proj, "Current Stage");
       recordHumanTurn(proj);
       expect(guardedLog(proj, ["answer", "--stage", slug, "--details", "my answer"]).rc).toBe(0);
+      appendAuditEntry("GATE_REJECTED", { Stage: slug }, proj);
       const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"], true);
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("Unset AIDLC_UNATTENDED");
@@ -1683,7 +1691,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
       expect(
         readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-      ).toContain("**User Input**: Approve\n");
+      ).toContain("**User Input**: Approve (Recommended)\n");
       expect(field(proj, "Current Stage")).not.toBe(slug);
     });
 
@@ -2193,6 +2201,91 @@ describe("t188: a late-logged question takes the message that answered it", () =
       const third = log(["answer", "--stage", slug, "--details", "A"]);
       expect(third.rc).not.toBe(0);
       expect(rows("QUESTION_ANSWERED")).toHaveLength(2);
+    });
+  });
+
+  // A live Copilot CLI run: the person saw Q1 only and replied in their own
+  // words; the agent logged Q2 after that reply and recorded "Q1: A; Q2: A" on
+  // their message, and nothing told them a choice was taken for a question they
+  // never saw. The answer's output now carries the line for them, built from the
+  // record, and leaves to the agent only whether it showed them the question.
+  describe("an answer taken from a reply older than its question is said back once", () => {
+    function output(r: { out: string }): { say?: string; agent_note?: string } {
+      const line = r.out.split("\n").find((text) => text.startsWith('{"emitted"'));
+      expect(line, r.out).toBeDefined();
+      return JSON.parse(line!);
+    }
+
+    test("a reply to Q1 that also answered a Q2 logged after it names Q2 and what was recorded, not Q1", () => {
+      const slug = field(proj, "Current Stage");
+      expect(log(["decision", "--stage", slug, "--decision", "Q1: Behavior when no name is supplied", "--options", "A,B,C,D,X"], inChat).rc).toBe(0);
+      const id = reply("Keep it small: the greeting uses the name given on the command line, and nothing else changes");
+      expect(log(["decision", "--stage", slug, "--decision", "Q2: Name handling scope", "--options", "A,B,C,D,X"], inChat).rc).toBe(0);
+      const r = log(["answer", "--stage", slug, "--details", "Q1: A; Q2: A", "--message", id], inChat);
+      expect(r.rc, r.out).toBe(0);
+      const out = output(r);
+      expect(out.say).toBe(
+        'From your reply I took "Q1: A; Q2: A" for "Q2: Name handling scope", which I had not asked you yet. ' +
+          "Tell me if you meant something else.",
+      );
+      expect(out.agent_note).toContain("Unless you showed the person that question before they replied, tell them the say line once");
+      // Said once: a second answer naming the same message finds the question answered.
+      const again = log(["answer", "--stage", slug, "--details", "Q2: A", "--message", id], inChat);
+      expect(again.rc, again.out).toBe(0);
+      expect(output(again).say).toBeUndefined();
+    });
+
+    test("questions logged naming the message hand the line to the plain answer that inherits it", () => {
+      const slug = field(proj, "Current Stage");
+      const id = reply("keep the error text as it is, and no new flags");
+      for (const question of ["Q3: Error output", "Q4: New flags"]) {
+        expect(log(["decision", "--stage", slug, "--decision", question, "--options", "A,B", "--message", id], inChat).rc).toBe(0);
+      }
+      const r = log(["answer", "--stage", slug, "--details", "Q3: A, unchanged; Q4: A, none"], inChat);
+      expect(r.rc, r.out).toBe(0);
+      const out = output(r);
+      expect(out.say).toBe(
+        'From your reply I took "Q3: A, unchanged; Q4: A, none" for "Q3: Error output" and "Q4: New flags", which I ' +
+          "had not asked you yet. Tell me if you meant something else.",
+      );
+      expect(out.agent_note).toContain("Unless you showed the person those questions before they replied");
+    });
+
+    test("no line when the reply came after its question, a question box picked it, or the choice was left to the agent", () => {
+      const slug = field(proj, "Current Stage");
+      expect(log(["decision", "--stage", slug, "--decision", "Q1: shown first", "--options", "A,B"], inChat).rc).toBe(0);
+      reply("A please");
+      const plain = log(["answer", "--stage", slug, "--details", "Q1: A"], inChat);
+      expect(plain.rc, plain.out).toBe(0);
+      expect(output(plain).say).toBeUndefined();
+      expect(log(["decision", "--stage", slug, "--decision", "Q2: shown first", "--options", "A,B"], inChat).rc).toBe(0);
+      const after = reply("B for that one");
+      const named = log(["answer", "--stage", slug, "--details", "Q2: B", "--message", after], inChat);
+      expect(named.rc, named.out).toBe(0);
+      expect(output(named).say).toBeUndefined();
+      // A box shows its question, though the agent logs it after the pick.
+      reply("In the API handler");
+      appendAuditEntry("QUESTION_REPLIED", { Question: "Q3?", Reply: "In the API handler" }, proj);
+      expect(log(["decision", "--stage", slug, "--decision", "Q3: where", "--options", "A,B"], inChat).rc).toBe(0);
+      const picked = log(["answer", "--stage", slug, "--details", "Q3: In the API handler"], inChat);
+      expect(picked.rc, picked.out).toBe(0);
+      expect(output(picked).say).toBeUndefined();
+      reply("use the recommended answers for the rest");
+      expect(log(["decision", "--stage", slug, "--decision", "Q4: logged after", "--options", "A,B"], inChat).rc).toBe(0);
+      const left = log(["answer", "--stage", slug, "--details", "Q4: A", "--on-instruction", "use the recommended answers for the rest"], inChat);
+      expect(left.rc, left.out).toBe(0);
+      expect(output(left).say).toBeUndefined();
+    });
+
+    test("an answer with no words records nothing, so no line says it", () => {
+      const slug = field(proj, "Current Stage");
+      const id = reply("whatever you think");
+      expect(log(["decision", "--stage", slug, "--decision", "Q5: logged after", "--options", "A,B"], inChat).rc).toBe(0);
+      const blank = log(["answer", "--stage", slug, "--details", "   ", "--message", id], inChat);
+      expect(blank.rc).not.toBe(0);
+      expect(blank.out).toContain("no words in it");
+      expect(blank.out).not.toContain('"say"');
+      expect(rows("QUESTION_ANSWERED")).toHaveLength(0);
     });
   });
 });

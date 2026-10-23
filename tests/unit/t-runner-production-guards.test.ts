@@ -58,9 +58,13 @@ function withProcessEnv(env: NodeJS.ProcessEnv, fn: () => void): void {
 
 describe("runner guard profile options", () => {
   test("production guard CI checkout does not persist credentials before uploading logs", () => {
-    const ci = readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf8");
-    const guardJob = ci.slice(ci.indexOf("  test_guards:"), ci.indexOf("  test:", ci.indexOf("  test_guards:")));
-    expect(guardJob).toMatch(/uses: actions\/checkout@[^\n]+\n\s+with:\n\s+persist-credentials: false/);
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf8")) as {
+      jobs: Record<string, { steps?: Array<{ run?: string; uses?: string; with?: Record<string, unknown> }> }>;
+    };
+    const guardJob = Object.values(ci.jobs).find((job) =>
+      job.steps?.some((step) => step.run?.includes("--production-guards")));
+    const checkout = guardJob?.steps?.find((step) => step.uses?.startsWith("actions/checkout@"));
+    expect(checkout?.with?.["persist-credentials"]).toBe(false);
   });
 
   test("fixture remains the default regardless of an inherited profile marker", () => {
@@ -417,6 +421,38 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(run.summary).toContain("Skipped files: 1");
     expect(run.failures.trim()).toBe("");
     expect(existsSync(join(fixture.root, "executed.txt"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("filtered integration shards execute every selected file once and preserve failures", () => {
+    const fixture = runnerFixture({
+      "integration/t-guard-matrix-a.test.ts": PASSING_CASE,
+      "integration/t-guard-matrix-b.test.ts": PASSING_CASE,
+      "integration/t-guard-matrix-c.test.ts": 'import { test, expect } from "bun:test"; test("failure remains blocking", () => expect(1).toBe(2));',
+      "integration/t-guard-matrix-d.test.ts": PASSING_CASE,
+      "integration/t-unrelated.test.ts": 'throw new Error("unrelated file must not run");',
+      "integration-weights.json": JSON.stringify({
+        defaultSeconds: 1, weights: {
+          "t-guard-matrix-a": 8, "t-guard-matrix-b": 7,
+          "t-guard-matrix-c": 2, "t-guard-matrix-d": 1, "t-unrelated": 100,
+        },
+      }),
+    });
+    const runs = ["1/2", "2/2"].map((shard) => fixture.run([
+      "--integration", "--no-llm", "--shard", shard, "--filter", "^t-guard-matrix-",
+    ]));
+    expect(runs.map((run) => run.status)).toEqual([0, 1]);
+    expect(runs[0].summary).toContain("Executed test cases: 2");
+    expect(runs[1].summary).toContain("Executed test cases: 2");
+    for (const name of ["a", "b", "c", "d"]) {
+      expect(runs.filter((run) => run.out.includes(`=== DONE t-guard-matrix-${name}.test.ts`))).toHaveLength(1);
+    }
+    for (const run of runs) expect(run.out).not.toContain("t-unrelated");
+    const excluded = fixture.run([
+      "--integration", "--no-llm", "--shard", "2/2", "--filter", "^t-guard-matrix-", "--exclude", "^t-guard-matrix-c",
+    ]);
+    expect(excluded.status).toBe(0);
+    expect(excluded.summary).toContain("Executed test cases: 1");
+    expect(excluded.out).toContain("=== DONE t-guard-matrix-b.test.ts (PASS)");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("--exclude leaves a weighted file out of its unit shard and the rest of the shard runs", () => {

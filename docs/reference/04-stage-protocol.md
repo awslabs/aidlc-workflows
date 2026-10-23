@@ -163,22 +163,27 @@ plan change made during the stage is in it), else the run-stage directive's
 (computed at emit time), or `Complete workflow` when `next_stage` is null. The
 conductor never guesses the next stage.
 
-The conductor reads the person's reply and records the choice they made by its
-label: `--user-input "Approve"`, `"Request Changes"`, or `"Accept as-is"` when that
-choice is available. The engine never reads meaning into the reply
-(`core/tools/aidlc-reply-reader.ts` keeps only the exact parts: a reply with no
-words in it, the `(Recommended)` decoration, and the offered labels; a word such as
-"Cancelled" is the person's reply like any other). It requires a
-human turn since the gate was shown and records the person's exact words, kept by
-the human-turn hook for that chat, on `GATE_APPROVED` as `Person Reply` and on
-`GATE_REJECTED` as the feedback. Those words are kept per chat. When the engine
+The conductor reads the person's reply, in any words, against what it showed
+them, and reports the choice it read: `--user-input "Approve"`,
+`"Request Changes"`, `"Accept as-is"` when that choice is available, or the
+option it offered ("Approve, and add User Stories next"). The engine records
+that choice on `GATE_APPROVED` as it was passed and never reads meaning into it
+or into the person's reply; a word such as "Cancelled" is the person's reply like
+any other. It requires a reply turn of the person's since the last decision and
+since the stage started (the request that started the work answers nothing the
+stage made), after the gate was first shown unless the conductor names the
+message it read the choice from (`report --message <id>`: an approval given at
+the learnings question just before the gate; the refusal and the step for
+their reply at an open gate list the ids). It records the person's words: every
+reply of theirs in that chat since then, as the message record keeps them, on
+`GATE_APPROVED` as `Person Reply` and on `GATE_REJECTED` as the feedback, with
+`Message Id` naming the latest, or the named message alone. A message too long to
+keep whole leaves the words off and keeps the `Message Id`. When the engine
 cannot tell which chat ran the command (an agent shell no host names it in), the
-row instead carries `Message Id`, naming the message the hook kept for their
-latest reply after the gate was shown, so the record says where their words are
-rather than nothing about the person. It is never a copy the agent typed, and it
-is left out when more than one chat has replied since the gate was shown. An
-approval with an instruction ("looks fine but rename the handler") is recorded as
-**Approve**, and the conductor then does what they asked. An approval that also asks to stop for now is reported with `--park`,
+row carries only the `Message Id` of the one chat that replied, never a copy of
+their words, and nothing when more than one chat has replied. An approval with an
+instruction ("looks fine but rename the handler") is recorded as the approval
+the conductor reported, and the conductor then does what they asked. An approval that also asks to stop for now is reported with `--park`,
 and the engine parks the workflow, so `report` answers `parked`.
 
 When a report names no choice, the refusal says what to do: with the person's
@@ -188,15 +193,10 @@ is the open one, it names that question's answer command instead of the gate. It
 does not report a lifecycle transition, record a decision, or consume the gate
 turn for that reply.
 
-**No Emergent Behavior Rule:** Construction and Operation stages (phases 3-4)
-must always use this 2-option format. They must never introduce additional
-navigation options. Two sanctioned carve-outs exist: the revision escape
-hatch (below) and the Build-and-Test failure loop-back in the loop-back
-protocol module (`aidlc-common/protocols/stage-protocol-loopback.md`,
-"Build-and-Test failure loop-back" -- the bounded 3.6 to 3.5 repair loop with
-its impact-estimated halt-and-ask question).
-
-The loop-back reopens Code Generation for the Unit(s) the diagnosis names;
+**Build-and-Test failure loop-back:** the loop-back protocol module
+(`aidlc-common/protocols/stage-protocol-loopback.md`, "Build-and-Test failure
+loop-back") holds the bounded 3.6 to 3.5 repair loop with its
+impact-estimated halt-and-ask question. The loop-back reopens Code Generation for the Unit(s) the diagnosis names;
 every other Unit keeps its finished work, reviews and approvals, and only a
 cause that spans every Unit reopens it for all of them. It has two
 deterministic re-entry routes. If Construction checkpoints are off and Code
@@ -216,38 +216,45 @@ generation. The Loop-Back Log
 records the plan delta. The gated "Retry with fix" answer authorizes the jump, not
 the plan content.
 
-### Conditional 3rd Option
+### Conditional Approve-and-Add Option
 
-Ideation and Inception stages (phases 1-2) may conditionally include a third
-option when a previously skipped stage could be added back:
+Ideation and Inception stages (phases 1-2) may offer to add a previously
+skipped stage together with the approval, as one answer:
 
 ```
-{ label: "Add [Skipped Stage]", description: "Include [stage] which was skipped" }
+{ label: "Approve, and add [Skipped Stage] next", description: "Include [stage], which was skipped, and start it now" }
 ```
 
-This is the only circumstance for a 3rd option in phases 1-2. The label must
-reference the specific skipped stage.
+The label names the specific skipped stage. On that pick the conductor runs
+`next --add <slug>` and follows its step, which names the report that records
+the approval; a request to add the stage with no approval in it is the same
+`next --add`, said in one line, with the gate kept open and asked once more.
 
 ### Revision Escape Hatch
 
-After 3 "Request Changes" cycles on the same stage, the 4th and subsequent
-approval gates add a third option:
+The engine counts the person's "Request Changes" at a stage's gate (one
+Unit's, at a Unit gate) from the audit trail and puts the count on the reply
+that shows the gate (`report --result awaiting-approval` or `revised`):
+`revision_cycle`, with `accept_as_is: "offered"` from the third request on and
+`accept_as_is: "next-revision"` at the second. The conductor reads both from
+that reply and never counts in the chat, so the count holds across a park.
+With `accept_as_is: "offered"`, the gate adds a third option:
 
 ```
 { label: "Accept as-is", description: "Archive current version and move on" }
 ```
 
-The question text changes to include the cycle count:
+The question text changes to include the cycle count, `[N]` from
+`revision_cycle`:
 `"[Stage Name] -- this is revision cycle [N]. How would you like to proceed?"`
 
 **When "Accept as-is" is selected:** report it as the gate's approval
 (`report --stage <slug> --result approved --user-input "Accept as-is"`); the
-engine records the choice and completes the stage. This overrides the
-No Emergent Behavior Rule for Construction stages only when the threshold is
-reached.
+engine records the choice and completes the stage.
 
-**Pre-activation notice:** After the 2nd cycle, include: "After one more
-revision, an 'Accept as-is' option will become available."
+**Pre-activation notice:** When the reply carries
+`accept_as_is: "next-revision"`, include: "After one more revision, an
+'Accept as-is' option will become available."
 
 ### Approval Gate Flow
 
@@ -405,7 +412,9 @@ heading names the trade whose decision it is after its number
 (`## Q3. [Developer] ...`), and each trade's questions sit together unless a
 question depends on another's answer. The trade alone never skips or
 delegates a question. An existing file is never reordered or renumbered; a
-follow-up takes the next unused number.
+follow-up takes the next unused number. When the agent asks one of these
+questions, its trade goes in front of the question text, so the person sees it
+in the chat or the picker too.
 
 When the stage's `<slug>-questions.md` already exists with its questions (an
 `[Answer]:` tag, filled in or still blank), the run-stage directive carries
@@ -417,14 +426,16 @@ the stage's next step), never creating it again, writing new questions over it,
 or asking an answered question again (#1873). A redo the person asked for
 (`artifact_reuse`, which drops the field, or Redo from scratch) starts afresh.
 
-**Step 2: How the person answers.** The run-stage directive carries
-`answer_mode` (`mode`, `ask`, `reused_from`, `notice`) and, beside it, the
-instruction the conductor follows, `answer_mode_note` (`answerModeNote` in
-`aidlc-directive.ts`). The first stage with questions in a piece of work asks;
+**Step 2: How the person answers.** The engine resolves the stage's answer
+mode (`resolveStageAnswerMode`: `mode`, `ask`, `reused_from`, `notice`), and the
+run-stage directive carries only the instruction the conductor follows, made
+from it: `answer_mode_note` (`answerModeNote` in `aidlc-directive.ts`).
+`withAgentNotes` leaves the mode itself out of the step, because an agent handed
+it read its fields aloud ("answer_mode.ask: true"). The first stage with questions in a piece of work asks;
 the engine then reuses the latest recorded answer to the mode question
 (`latestRecordedAnswerMode`, the same DECISION_RECORDED / QUESTION_ANSWERED
 pairing the Stop hook reads). The note makes the branch the protocol used to
-make on the field: with `ask: true` it carries the question ("I've created [N]
+make on the mode: with `ask: true` it carries the question ("I've created [N]
 questions at [the questions file]. How would you like to answer them?"), the
 three choices with their descriptions (Guide me, I'll edit the file, Chat), the
 exact `log decision` and `log answer` commands for this stage, and the notice to
@@ -480,7 +491,7 @@ and an unclear reply gets one short follow-up.
   `aidlc-review-brief.ts summary --stage <slug> --questions-file <path>` before
   the structured **Looks correct** / **Request changes** confirmation. The
   deterministic brief names the stage, questions file, generated artifacts,
-  why the decision is required now, and the exact effect of both choices. Do
+  and the exact effect of both choices. Do
   not ask for confirmation as bare prose. Before presenting it, append or reset a dedicated
   **Consolidated Summary Confirmation** entry in the stage questions file with
   both options and a blank `[Answer]:`. Record the prompt with
@@ -866,9 +877,8 @@ If a stage needs re-run (changes requested after approval):
 ### Compaction Recovery
 
 `PreCompact` hook validates `aidlc-state.md` structure before compaction
-(informational-only, cannot block). Writes `.aidlc-engine/recovery.md` breadcrumb
-with last validated state (stage, timestamp). On resume, the conductor compares
-breadcrumb with state file to detect compaction-related corruption.
+(informational-only, cannot block) and records `SESSION_COMPACTED` (stage, state
+validity) in the audit trail.
 
 ### Corrupted State File Recovery
 
@@ -1352,7 +1362,13 @@ severity increase into a new finding, and keeps unmentioned open rows marked
 not re-checked. A fixed finding reported as still applying is open again, or
 back to the decision made before it was fixed. A Redo row resets the list of
 each Unit whose artifacts it names, or every Unit when it names none. `GATE_APPROVED` atomically records `Accepted risk` for each
-current open finding. A Request Changes report records `Rejected: <reason>`
+current open finding the person approved, `Approved autonomously` for one
+Construction approved on its own, or `Changed after review` for one whose
+reviewed work changed after that review with no finished review since; the
+last two are no decision, so the finding stays open and the next review
+re-checks it. A Unit's checkpoint and a swarm batch's approval record their
+Units' findings, and a stage's approval nobody gave records none that a Unit's
+own approval recorded. A Request Changes report records `Rejected: <reason>`
 only for explicit
 `--reject-finding <review-artifact>#R-NN=<exact human reason>` values. It uses
 `--reopen-finding <review-artifact>#R-NN=<exact human reason>` when the person
@@ -1430,7 +1446,12 @@ When `directive.protocol_modules` lists `learnings`, the ritual runs between the
    keep and, for free-text additions, picks the heading that derives the
    destination. The always-present "Anything to add?" channel renders at least
    `Nothing to add` and `Add a note`; one-option structured questions are
-   invalid on Claude Code and Codex.
+   invalid on Claude Code and Codex. Its `log decision` carries
+   `--question-kind learnings-note`, so an answer of `Add a note` is known by
+   that field, never by the question's wording (a question recorded before
+   the field existed is known by exactly those two options): it ends the turn
+   at the follow-up, and its `agent_note` tells the agent to take the note
+   from the person's reply when they already gave it, and ask only otherwise.
 4. **Admission check**: each kept learning is checked against `org.md`'s
    matching section; a contradiction is surfaced to revise / skip / escalate.
 5. **Persist**: `aidlc-learnings.ts persist` writes each confirmed learning as a practice to

@@ -35,14 +35,6 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 /** Authored conductor SKILLs for every manifest-discovered distribution. */
-// The tools that hide the Stop note from the person, by the name the skill
-// gives them; their agent says the carrying-on line itself.
-const SAYS_THE_LINE: Record<string, string> = {
-  "harness/kiro/skills/aidlc/SKILL.md": "Kiro CLI",
-  "harness/kiro-ide/skills/aidlc/SKILL.md": "Kiro IDE",
-  "harness/opencode/skills/aidlc/SKILL.md": "opencode",
-};
-
 function harnessSkills(): string[] {
   return HARNESS_MATRIX
     .map((harness) => `harness/${harness.name}/skills/aidlc/SKILL.md`)
@@ -234,7 +226,7 @@ describe("an approved code plan is built as it is", () => {
       "When the person says they answered in the file, in whatever words they use " +
         "(\"done\", \"I put my answer in the file\", \"my answer is in the questions file\"), " +
         "their answer is on the `[Answer]:` line of `questions_path`: read it and record the choice they made, " +
-        "exactly as you would a reply typed in chat.",
+        "exactly as you would a reply typed in chat; never ask them to type it again in chat.",
     );
   });
 });
@@ -370,8 +362,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // "Stop hook error" before 2.1.163), so it
   // is one plain line with no command; what the agent does with it lives here.
   test("every shipped conductor SKILL says what to do when a stop note ends its turn", () => {
-    const clause = "**When AI-DLC carries on by itself.** If you end your turn while this work still needs you, AI-DLC stops it with one line: " +
-      "\"AI-DLC is carrying on with <stage>.\" (or \"AI-DLC is carrying on.\"), or \"The last AI-DLC step stopped on a problem: ...\" when its last step hit one.";
+    const clause = "**When AI-DLC carries on by itself.** Under autonomous Construction, or in a run nobody attends, if you end your turn while this work " +
+      "still needs you, AI-DLC stops it with one line: \"AI-DLC is carrying on with <stage>.\" (or \"AI-DLC is carrying on.\"); in any run, it stops it " +
+      "with \"The last AI-DLC step stopped on a problem: ...\" when its last step hit one.";
     const forYou = "it is for you, not for the person (some tools show it to them too), so say nothing about it.";
     const waiting = "If you had just asked the person a question in your own words and are waiting for their answer, record it with " +
       "`{{INVOKE}} engine log decision --stage <stage> --decision \"<the question>\" --options \"<the choices>\"`";
@@ -379,8 +372,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       return [
         ...(body.includes(clause) ? [] : [`${rel}: clause`]),
-        // The tools that hide the note have the agent say the line instead.
-        ...(SAYS_THE_LINE[rel] !== undefined || body.includes(forYou) ? [] : [`${rel}: for you`]),
+        ...(body.includes(forYou) ? [] : [`${rel}: for you`]),
         ...(body.includes("For a problem, follow the `error` row.") ? [] : [`${rel}: problem`]),
         ...(body.includes(waiting) ? [] : [`${rel}: waiting`]),
         ...(body.includes("adding `--unit \"<directive.unit>\"` in team-owned Unit work") ? [] : [`${rel}: unit`]),
@@ -391,39 +383,18 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  // The person on every tool gets the same one line. Claude Code, Codex and
-  // Copilot show the note itself (as does Cursor's follow-up message), so
-  // their agent says nothing about it; opencode, Kiro IDE and Kiro CLI hide it,
-  // so their agent says the line once, word for word, but only when it carries
-  // on with the work. Recording a question it just asked says nothing at all.
-  test("only the skills of tools that hide the stop note have the agent say its line", () => {
-    const sayOnce = " does not show the note to the person, so if you carry on with the work (the rules parts, the stage, or a fresh `next`), first say the carrying-on line to them once, word for word and as a sentence of its own (the stage it names, with \" for <unit>\" when it names a Unit, or just \"AI-DLC is carrying on.\" when it names none), and nothing else about the note.";
-    const forYou = "it is for you, not for the person (some tools show it to them too), so say nothing about it.";
-    const problems = skills.flatMap((rel) => {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      const tool = SAYS_THE_LINE[rel];
-      if (tool === undefined) {
-        return [
-          ...(body.includes(forYou) ? [] : [`${rel}: says nothing about the note`]),
-          ...(body.includes("first say the carrying-on line to them once") ? [`${rel}: must not say the line`] : []),
-        ];
-      }
-      return [
-        ...(body.includes(`${tool}${sayOnce}`) ? [] : [`${rel}: says the line once`]),
-        ...(body.includes(forYou) ? [`${rel}: must not say nothing`] : []),
-      ];
-    });
-    // The question step ends the turn in silence on every tool.
+  // The line comes only where the work carries on by itself or nobody attends,
+  // so no tool has a person waiting to be told it: no skill has the agent say
+  // it, and the question step ends the turn in silence on every tool.
+  test("no skill has the agent say the stop note's line", () => {
+    const problems: string[] = [];
     const silent = "and end your turn without asking it again or saying anything else.";
     for (const rel of skills) {
-      if (!readFileSync(join(REPO_ROOT, rel), "utf-8").includes(silent)) problems.push(`${rel}: question step says nothing`);
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (body.includes("first say the carrying-on line to them once")) problems.push(`${rel}: must not say the line`);
+      if (!body.includes(silent)) problems.push(`${rel}: question step says nothing`);
     }
     expect(problems).toEqual([]);
-    expect(Object.keys(SAYS_THE_LINE).sort()).toEqual([
-      "harness/kiro-ide/skills/aidlc/SKILL.md",
-      "harness/kiro/skills/aidlc/SKILL.md",
-      "harness/opencode/skills/aidlc/SKILL.md",
-    ]);
   });
 
   test("every shipped conductor SKILL names its utilities as arguments to next, never commands of their own", () => {
@@ -624,6 +595,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       for (const token of [
         "Only the person parks: never park on your own to hand them a decision",
         "Carry on with the next stage, or ask your question and wait for their answer in this conversation.",
+        // An agent that has driven many stages in one turn must not invent a
+        // check-in about carrying on; its own real questions stay allowed.
+        "Never ask the person whether to continue, pause or take a break, however long the run has been; they can say stop at any time.",
       ]) {
         if (!body.includes(token)) failures.push(`${rel}  missing: ${token}`);
       }
@@ -716,7 +690,6 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "## The Person Drives",
         "Never make them repeat themselves, retype an option, or confirm what they already said.",
         "fix it in one step",
-        "A rule the team recorded in memory",
         APPROVAL_REPORT_TOKEN,
       ]) {
         if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
@@ -729,6 +702,18 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  // From a live enterprise run: a Request Changes on the code plan that touched a Testing Posture the run's own
+  // Practices Discovery had recorded was not recorded, the agent citing this rule. A team's locked setting is refused
+  // by the tool that owns it, with the one line naming the file; the prose is not a second owner.
+  test("no shipped conductor SKILL or the stage protocol tells the agent a rule in team memory wins over the person", () => {
+    const found: string[] = [];
+    for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      if (body.includes("A rule the team recorded in memory")) found.push(rel);
+    }
+    expect(found).toEqual([]);
   });
 
   // From live runs: on "please review Unit 1 again" the agent reviewed in chat,
@@ -1702,6 +1687,20 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "anyone may answer any question, and it never skips one or leaves it to you",
       "never reorder or renumber an existing questions file (a redo the person asked for starts a fresh one)",
       "give a follow-up question the next unused number and its trade, at the end",
+    ].filter((rule) => !protocol.includes(rule));
+    expect(missing).toEqual([]);
+  });
+
+  test("a question put to the person shows the trade its heading names", () => {
+    // Claude Code's picker and Kiro CLI's numbered batch both showed `Q1 — <question>`
+    // while the file said `## Q1. [Product owner] ...`: the trade reached the file
+    // only, because no rule said to show it when the question is asked.
+    const protocol = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"), "utf-8")
+      .replace(/\s+/g, " ");
+    const missing = [
+      "Each ordinary question you ask the person, whether or not it is in the file yet, shows the trade its heading names or will name in front of the question text",
+      "a heading without a trade shows none",
+      "Present questions as structured questions in batches, each with the trade its heading names in front of its text (Step 1; none when the heading has none;",
     ].filter((rule) => !protocol.includes(rule));
     expect(missing).toEqual([]);
   });

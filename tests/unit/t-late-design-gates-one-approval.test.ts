@@ -15,6 +15,7 @@
 //   1. the first late gate carries the engine-computed list and its question;
 //   2. opening that gate names the stage after the last listed one;
 //   3. one person turn and one approval approve every listed stage;
+//  3b. each stage approved with it carries that approval's words, whatever shard an older one sits in;
 //   4. a change request approves nothing;
 //   5. a stage that cannot be approved yet stops there; fixed, it needs no new ask;
 //  5b. on Kiro IDE that stage opens its gate as the step says, its approval report runs, and the approval covers it;
@@ -432,6 +433,37 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
     }
     expect(rows(proj, "GATE_REJECTED").length).toBe(0);
     expect(currentStage(proj)).toBe("build-and-test");
+  });
+
+  // A team clone keeps a teammate's shard beside this one, read in name order,
+  // not time order: an older approval of the first stage there is not this one.
+  test("3b: the stages approved together carry this approval's words, whatever shard an older approval sits in", () => {
+    const proj = seedBuiltProject({ checkpoints: "disabled" });
+    openFirstGate(proj);
+    const audit = join(seededRecordDir(proj), "audit");
+    writeFileSync(join(audit, "zzzz-teammate.md"), [
+      "# AI-DLC Audit Log", "",
+      "## Gate Approved",
+      "**Timestamp**: 2020-01-01T00:00:00Z",
+      "**Event**: GATE_APPROVED",
+      "**Stage**: functional-design",
+      "**User Input**: Approve",
+      "**Person Reply**: an approval from before the reopen",
+      "**Message Id**: 0ldc0de0",
+      "", "---", "",
+    ].join("\n"));
+    says(proj, "approve them all");
+    const done = runNamed(proj, "bun .claude/tools/aidlc-orchestrate.ts report --stage functional-design --result approved --user-input Approve");
+    expect(done.kind, JSON.stringify(done).slice(0, 300)).toBe("done");
+    const approved = rows(proj, "GATE_APPROVED").filter((r) => auditBlockField(r.block, "Timestamp") !== "2020-01-01T00:00:00Z");
+    expect(approved.map((r) => r.stage)).toEqual(BLOCK);
+    const words = auditBlockField(approved[0].block, "Person Reply");
+    const id = auditBlockField(approved[0].block, "Message Id");
+    expect(words).toBe("approve them all");
+    for (const row of approved.slice(1)) {
+      expect(auditBlockField(row.block, "Person Reply"), row.stage ?? "").toBe(words);
+      expect(auditBlockField(row.block, "Message Id"), row.stage ?? "").toBe(id);
+    }
   });
 
   test("4: a change request approves nothing", () => {

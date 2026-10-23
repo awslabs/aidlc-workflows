@@ -152,9 +152,14 @@ function reply(proj: string, prompt: string): string {
 }
 
 function askToReview(proj: string): string {
+  return agentRecords(proj, "Review the plan");
+}
+
+// The agent's record of the choice it read from the person's reply.
+function agentRecords(proj: string, choice: string): string {
   const result = spawnSync(BUN, [
     join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
-    "--details", "Review the plan", "--project-dir", proj,
+    "--details", choice, "--project-dir", proj,
   ], {
     cwd: proj,
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
@@ -438,6 +443,7 @@ describe("plan approval off builds the plan as written", () => {
     expect(ask.kind).toBe("ask");
     expect(ask.ask_type).toBe("plan-approval");
     reply(proj, "1");
+    agentRecords(proj, "Approve Plan");
     const build = next(proj);
     expect(build.kind).toBe("run-stage");
     expect(build.plan_approval).toEqual({ status: "approved" });
@@ -537,6 +543,7 @@ describe("only the person turns plan approval off", () => {
     writePlan(proj);
     expect(next(proj).kind).toBe("ask");
     reply(proj, "1");
+    agentRecords(proj, "Approve Plan");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
     const plan = join(stageDir(proj), "code-generation-plan.md");
     writeFileSync(plan, readFileSync(plan, "utf-8").replace("write slugify", "write slugify and kebab"), "utf-8");

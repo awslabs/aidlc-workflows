@@ -4,12 +4,21 @@ import { join, relative } from "node:path";
 import {
   auditBlockField,
   type AuditShardEvent,
+  HOOK_HEARTBEAT_STALE_SLACK_MS,
+  hookLiveness,
+  humanTurnMintAllowed,
+  MESSAGE_SPENDING_EVENTS,
+  promptHookRanRecently,
+  readAuditShardEvents,
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
+  resolveInvokingSessionId,
   sessionsDir,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.ts";
+
+export { MESSAGE_SPENDING_EVENTS };
 
 // One record per message the person sends, written once by the human-turn hook
 // as the message arrives. It records two things and reads no meaning into either:
@@ -226,36 +235,62 @@ export function latestMessage(
  * that fast, and the request the question was asked about came at least two of
  * the agent's steps before it. A typed line that only sets something (settings,
  * no words, no route) is a command to AIDLC and no reply, as at a gate; a
- * prompt whose words the host did not pass on may be one. Nothing on
- * record at all is false: a tool that runs no prompt hook has nothing to tell by.
+ * prompt whose words the host did not pass on may be one. Nothing on record at
+ * all is no reply only when the host skipped the prompt hook for the person's
+ * message (promptMissedWhileHooksRun); otherwise there is nothing to tell by.
  */
 export function noReplySince(projectDir: string, session: string | null, since: string): boolean {
   const all = listMessages(projectDir);
+  if (all.length === 0) return promptMissedWhileHooksRun(projectDir);
   const chat = all.filter((message) => message.session === session);
   const from = Math.floor(Date.parse(since) / 1000) * 1000;
   const command = (message: StoredMessage): boolean =>
     message.source === "prompt" && message.words === null && message.settings.length > 0 &&
     message.route.scope === null && !message.route.newIntent && message.route.projectType === null &&
     message.route.skip.length === 0 && message.route.add.length === 0;
-  return all.length > 0 &&
-    !(chat.length > 0 ? chat : all).some((message) => Date.parse(message.at) >= from && !command(message));
+  return !(chat.length > 0 ? chat : all).some((message) => Date.parse(message.at) >= from && !command(message));
+}
+
+// Nothing on record: no prompt hook kept the person's message. While AI-DLC's
+// hooks beat just now and the prompt hook did not, the host skipped that hook
+// for their message (one that failed to start, as Copilot CLI's PowerShell
+// check can), and their next message is seen. Otherwise there is nothing to
+// tell by: the prompt hook ran and its store failed, the hooks are not running
+// (the hooks-off step's), or an unattended driver, whose prompts are never kept.
+// A chat outside the selected workflow returns before the prompt beat but keeps
+// its message (hookStandsOutside in aidlc-record-human-turn.ts), so it never
+// reaches this branch. The tool guards beat through hooksHealthDir and both
+// readers here through hooksHealthReadDir, each for this project's selection.
+function promptMissedWhileHooksRun(projectDir: string): boolean {
+  if (!humanTurnMintAllowed() || promptHookRanRecently(projectDir)) return false;
+  const newest = hookLiveness(projectDir, []).newestHeartbeat;
+  const age = newest === null ? Number.NaN : Date.now() - newest.timestampMs;
+  return age >= 0 && age <= HOOK_HEARTBEAT_STALE_SLACK_MS;
 }
 
 /**
  * Remove records older than a day, then the oldest beyond MESSAGE_MAX_RECORDS.
- * A file this process may not remove is left for the operating system's
- * permissions to decide.
+ * A message a turn of the work's record names since its last decision is no
+ * older than the decision it may still back, so age does not remove it: a
+ * stage answered one day and approved the next keeps the person's words for
+ * the approval. A file this process may not remove is left for the operating
+ * system's permissions to decide.
  */
 export function pruneExpiredMessages(projectDir: string): void {
   const cutoff = Date.now() - MESSAGE_RETENTION_MS;
   const kept: Array<{ id: string; at: number }> = [];
+  let unspent: Set<string> | null = null;
+  const stillUnspent = (id: string): boolean => {
+    unspent ??= unspentTurnMessages(projectDir);
+    return unspent.has(id);
+  };
   for (const id of recordIds(projectDir)) {
     try {
       const path = recordFileTargetOrThrow(projectDir, messageRel(projectDir, id));
       if (!lstatSync(path).isFile()) continue;
       const at = Date.parse(readStoredMessage(projectDir, id)?.at ?? "");
       const when = Number.isNaN(at) ? lstatSync(path).mtimeMs : at;
-      if (when < cutoff) removeRecordFileNoFollow(projectDir, messageRel(projectDir, id));
+      if (when < cutoff && !stillUnspent(id)) removeRecordFileNoFollow(projectDir, messageRel(projectDir, id));
       else kept.push({ id, at: when });
     } catch {
       // Not ours to remove, or already gone: keep going.
@@ -271,20 +306,23 @@ export function pruneExpiredMessages(projectDir: string): void {
   }
 }
 
-// Rows that spend the person's messages: a decision of another kind than an
-// answer. One message backs at most one approval plus any answers, so answers
-// never spend it.
-export const MESSAGE_SPENDING_EVENTS: ReadonlySet<string> = new Set([
-  "GATE_APPROVED",
-  "GATE_REJECTED",
-  "PLAN_APPROVAL_RECORDED",
-  "SUMMARY_CONFIRMATION_RECORDED",
-  "VERIFICATION_COMMAND_RECORDED",
-  "CONSTRUCTION_POLICY_RECORDED",
-  "QUESTION_UNANSWERED",
-  // A routing answer sends the words before it to the work they named.
-  "REQUEST_ROUTED",
-]);
+// The messages the work's turns name since its last decision. A record that
+// cannot be read names none, so pruning goes by age as before.
+function unspentTurnMessages(projectDir: string): Set<string> {
+  try {
+    const rows = readAuditShardEvents(projectDir);
+    const spentAt = latestSpendingTimestamp(rows);
+    const ids = new Set<string>();
+    for (const row of rows) {
+      if (row.event !== "HUMAN_TURN" || (spentAt !== null && row.timestamp < spentAt)) continue;
+      const id = auditBlockField(row.block, "Message Id");
+      if (id !== null) ids.add(id);
+    }
+    return ids;
+  } catch {
+    return new Set();
+  }
+}
 
 export function latestSpendingTimestamp(rows: readonly AuditShardEvent[]): string | null {
   let latest: string | null = null;
@@ -450,4 +488,73 @@ export function replyOfTheirs(
     if (plain(message.words) === wanted || plain(message.text) === wanted) found = message;
   }
   return found;
+}
+
+// The chat a command serves, when the engine can tell (the hook's override,
+// Codex's thread id, the process ancestry); null when it cannot.
+function invokingChat(pd: string): string | null {
+  try {
+    return resolveInvokingSessionId(pd);
+  } catch {
+    return null;
+  }
+}
+
+// LLM maps, tool proves: the agent names the message its decision reads, an
+// answer or a gate's choice; the engine proves the record exists, came
+// through this chat and is not spent by a later decision, and reads no words.
+// A same-second tie with a spending row favours the message: one message can
+// give an approval and the answers beside it.
+export function proveMessage(
+  pd: string,
+  id: string,
+  what: "answer" | "decision" | "approval" | "change request",
+): { message: StoredMessage } | { refusal: string } {
+  const message = isMessageId(id) ? readMessage(pd, id) : null;
+  if (message === null) {
+    return {
+      refusal: `Cannot record this ${what}: no message record ${id} exists in this project. Name the id of a ` +
+        "message the person sent (the step for their reply names them), or wait for their reply.",
+    };
+  }
+  const rows = readAuditShardEvents(pd);
+  if (!messageIsReply(rows, message)) {
+    return {
+      refusal: `Cannot record this ${what}: message ${id} carried no words of the person's own (a command to AIDLC, ` +
+        "or a message with no words), so it answers nothing. Name a message that carries their reply.",
+    };
+  }
+  const spentAt = latestSpendingTimestamp(rows);
+  if (spentAt !== null && message.at < spentAt) {
+    return {
+      refusal: `Cannot record this ${what}: message ${id} arrived before the last approval or decision (${spentAt}), ` +
+        "so it is spent. Only a message the person sent after it can answer this question.",
+    };
+  }
+  const chat = invokingChat(pd);
+  const chatOf = (m: StoredMessage): string => m.session ?? "terminal";
+  if (chat !== null) {
+    if (message.session !== chat) {
+      return {
+        refusal: `Cannot record this ${what}: message ${id} came through another chat, not this one. ` +
+          "Name a message the person sent in this chat.",
+      };
+    }
+    return { message };
+  }
+  const chats = chatsSince(rows, pd, spentAt);
+  if (chats.size > 1) {
+    return {
+      refusal: `Cannot record this ${what}: the engine cannot tell which chat this command serves, and more than ` +
+        "one chat has sent messages since the last decision. Run it from the chat that asked, or wait for the " +
+        "person's reply there.",
+    };
+  }
+  if (chats.size === 1 && !chats.has(chatOf(message))) {
+    return {
+      refusal: `Cannot record this ${what}: message ${id} came through another chat, not the one that has spoken ` +
+        "since the last decision.",
+    };
+  }
+  return { message };
 }

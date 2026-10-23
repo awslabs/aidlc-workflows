@@ -40,7 +40,9 @@ describe("the person's own words", () => {
     const events = auditEvents(run.proj);
     const at = (event: string) =>
       events.filter((e) => e.event === event && field(e.block, "Stage") === "requirements-analysis");
-    expect(at("GATE_APPROVED").map((e) => field(e.block, "Person Reply"))).toEqual(["ok that makes sense, approve"]);
+    // Every reply the approval stands on, in order: the learnings answer just before it rides along.
+    expect(at("GATE_APPROVED").map((e) => field(e.block, "Person Reply")))
+      .toEqual(["Nothing to add\\nok that makes sense, approve"]);
     expect(at("STAGE_AWAITING_APPROVAL")).toHaveLength(1);
     const answers = at("QUESTION_ANSWERED").map((e) => field(e.block, "Details"));
     expect(answers).toContain("A");

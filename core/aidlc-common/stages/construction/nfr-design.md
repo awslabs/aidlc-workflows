@@ -134,10 +134,11 @@ Generate the following in `<record>/construction/{unit-name}/nfr-design/`:
 - **observability-design.md**: Metrics collection architecture, structured logging design, distributed tracing strategy, alerting rules and escalation, dashboard specifications, SLI/SLO definitions, correlation ID propagation
 - **logical-components.md**: Logical infrastructure component inventory — service boundaries, failure domains, blast radius mapping, component isolation strategy, shared resource identification. Bridges NFR design decisions with Infrastructure Design by providing a component-level view of where NFR patterns apply.
 
-Create `<record>/construction/{unit-name}/nfr-design/traceability.json`.
-Enumerate every `NFRx.y` from this Unit's NFR requirements and map it to the
-concrete design solution (if NFR Requirements did not run, enumerate every
-`NFRn` in `requirements.md` instead):
+Create `<record>/construction/{unit-name}/nfr-design/traceability.json` by running
+`{{INVOKE}} engine sensor-traceability --stage nfr-design --output-path <that path> --write-upstream`:
+it lists every `NFRx.y` from this Unit's NFR requirements (if NFR Requirements did not run, every
+`NFRn` Requirements Analysis recorded), each with a `GAP` row. Map each to the
+concrete design solution:
 
 ```json
 {

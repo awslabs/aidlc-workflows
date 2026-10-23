@@ -2817,6 +2817,7 @@ describe("t314 multi-unit source attribution", () => {
     seedStateFile(proj, "state-mid-ideation.md");
     seedGitRepo(proj);
     seedTwoUnitDag(proj);
+    guarded(proj, ["checkbox", "units-generation=completed"]);
     guarded(proj, ["checkbox", "code-generation=in-progress"]);
     appendAuditEntry(
       "WORKFLOW_STARTED",

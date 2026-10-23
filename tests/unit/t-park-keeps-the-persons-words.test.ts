@@ -243,7 +243,8 @@ describe("the park row keeps the words that stopped the work", () => {
   test("an older reply the summary checkpoint used, then a park: the row carries no words", () => {
     state(proj, ["gate-start", STAGE]);
     says(proj, "looks correct, and rename the handler");
-    appendAuditEntry("QUESTION_ANSWERED", {
+    // The row the summary confirmation writes: a decision, so it spends the reply.
+    appendAuditEntry("SUMMARY_CONFIRMATION_RECORDED", {
       Stage: STAGE, Checkpoint: SUMMARY_CONFIRMATION_CHECKPOINT, Details: "Looks correct",
     }, proj);
     const r = state(proj, ["park", "--person-asked"]);

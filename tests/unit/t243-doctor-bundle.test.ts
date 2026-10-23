@@ -369,6 +369,71 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(typeof currentNormalized.hooks.heartbeats[0].ageMs).toBe("number");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // The seeded audit ends months ago and every hook beat with it, so the only
+  // newer rows are the ones doctor itself records on this run.
+  function seedIdleIntentBeats(proj: string): string {
+    seedCanaryIntent(proj);
+    const record = join(proj, "aidlc", "spaces", "default", "intents", INTENT_SLUG);
+    const health = join(record, ".aidlc-engine", "hooks-health");
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "write-audit-log.last"), "2026-05-19T11:00:00Z\n", "utf-8");
+    writeFileSync(join(health, "session-start.last"), "2026-05-19T10:30:00Z\n", "utf-8");
+    return record;
+  }
+
+  function frozenFindings(bundleDir: string): Array<{ id: string; summary: string; remedy: string; evidence: { hook: string } }> {
+    const report = JSON.parse(readFileSync(join(bundleDir, "report.json"), "utf-8"));
+    return report.findings.filter((f: { id: string }) => f.id === "hook-heartbeat-frozen");
+  }
+
+  test("2e: doctor's own audit rows do not make an idle intent's hooks read frozen", () => {
+    const proj = freshProject();
+    const record = seedIdleIntentBeats(proj);
+    const { bundleDir, out } = runExport(proj);
+    expect(bundleDir, out).not.toBeNull();
+    const audit = readdirSync(join(record, "audit"))
+      .map((f) => readFileSync(join(record, "audit", f), "utf-8"))
+      .join("\n");
+    expect(audit).toContain("**Event**: HEALTH_CHECKED");
+    expect(frozenFindings(bundleDir!)).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("2f: a hook still reads frozen when work was recorded more than a day after it last fired", () => {
+    const proj = freshProject();
+    const record = seedIdleIntentBeats(proj);
+    writeFileSync(
+      join(record, "audit", "later.md"),
+      "## Stage Started\n**Timestamp**: 2026-05-21T11:00:00Z\n" +
+        "**Event**: STAGE_STARTED\n**Stage**: requirements-analysis\n",
+      "utf-8",
+    );
+    const { bundleDir, out } = runExport(proj);
+    expect(bundleDir, out).not.toBeNull();
+    const frozen = frozenFindings(bundleDir!);
+    expect(frozen.map((f) => f.evidence.hook).sort()).toEqual(["session-start", "write-audit-log"]);
+    const auditHook = frozen.find((f) => f.evidence.hook === "write-audit-log")!;
+    expect(auditHook.summary).toBe('Hook "write-audit-log" has not fired in over 48h.');
+    expect(auditHook.remedy).toContain("expected on an intent nobody is working on");
+    expect(auditHook.remedy).toContain("recorded more than a day after this hook last fired");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("2g: opening a chat to run doctor does not make an idle intent's hooks read frozen", () => {
+    const proj = freshProject();
+    const record = seedIdleIntentBeats(proj);
+    // What a fresh chat records before doctor runs: its session start and the
+    // person's prompt, both dated now.
+    const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    writeFileSync(
+      join(record, "audit", "chat.md"),
+      `## Session Start\n**Timestamp**: ${now}\n**Event**: SESSION_STARTED\n**Source**: startup\n\n` +
+        `## Human Turn\n**Timestamp**: ${now}\n**Event**: HUMAN_TURN\n`,
+      "utf-8",
+    );
+    const { bundleDir, out } = runExport(proj);
+    expect(bundleDir, out).not.toBeNull();
+    expect(frozenFindings(bundleDir!)).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("3: report.json exposes findings + timeline.stages and the gate-unresolved error", () => {
     const proj = freshProject();
     seedCanaryIntent(proj);
@@ -507,7 +572,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       runtimeGraphExists: true,
       runtimeGraphMtimeMs: 1,
       authoredInputsNewestMtimeMs: 0,
-      markers: { planExists: false, planParseable: null, recoveryExists: false, stopHookDirExists: false },
+      markers: { planExists: false, planParseable: null, stopHookDirExists: false },
       ...over,
     };
   }
@@ -884,6 +949,38 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(alpha?.gate).toBe("none");
     const open = reconstructTimeline(audit.split("## skipped")[0], "").stages.find((s) => s.slug === "alpha");
     expect(open?.gate).toBe("unresolved");
+  });
+
+  test("16c: a skipped stage reads skipped with its skip time, beside the current stage that reads incomplete", () => {
+    // The conditional-skip path records STAGE_STARTED then STAGE_SKIPPED; a jump
+    // past a pending stage records STAGE_SKIPPED alone. Neither is unfinished.
+    const audit = [
+      "## a1\n**Timestamp**: 2026-01-01T00:00:00Z\n**Event**: STAGE_STARTED\n**Stage**: alpha",
+      "## a1c\n**Timestamp**: 2026-01-01T01:00:00Z\n**Event**: STAGE_COMPLETED\n**Stage**: alpha",
+      "## b1\n**Timestamp**: 2026-01-01T02:00:00Z\n**Event**: STAGE_STARTED\n**Stage**: beta",
+      "## b1s\n**Timestamp**: 2026-01-01T02:05:00Z\n**Event**: STAGE_SKIPPED\n**Stage**: beta",
+      "## g1s\n**Timestamp**: 2026-01-01T02:06:00Z\n**Event**: STAGE_SKIPPED\n**Stage**: gamma",
+      "## d1\n**Timestamp**: 2026-01-01T02:10:00Z\n**Event**: STAGE_STARTED\n**Stage**: delta",
+    ].join("\n\n");
+    const tl = reconstructTimeline(audit, "");
+    const row = (slug: string) => tl.stages.find((s) => s.slug === slug)!;
+
+    expect(row("beta").abnormal).toEqual(["skipped"]);
+    expect(row("beta").completedRaw).toBe("2026-01-01T02:05:00Z");
+    expect(row("beta").durationMs).toBe(5 * 60 * 1000);
+    expect(row("gamma").abnormal).toEqual(["skipped"]);
+    expect(row("gamma").completedRaw).toBe("2026-01-01T02:06:00Z");
+    expect(row("gamma").startedRaw).toBe(UNKNOWN);
+    // The gap to the next stage runs from the skip, not from the last completion.
+    expect(row("delta").gapFromPrevMs).toBe(5 * 60 * 1000);
+    expect(row("delta").abnormal).toEqual(["incomplete"]);
+    expect(row("alpha").abnormal).toEqual([]);
+
+    // A skipped stage started again (a jump back to it) is unfinished again.
+    const reopened = `${audit}\n\n## b2\n**Timestamp**: 2026-01-01T03:00:00Z\n**Event**: STAGE_STARTED\n**Stage**: beta`;
+    const beta = reconstructTimeline(reopened, "").stages.find((s) => s.slug === "beta")!;
+    expect(beta.abnormal).toEqual(["incomplete"]);
+    expect(beta.completedRaw).toBe(UNKNOWN);
   });
 
   test("17: a truncated report.json stays valid JSON (Arden r2 #10)", () => {

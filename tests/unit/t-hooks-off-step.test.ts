@@ -1,4 +1,4 @@
-// covers: function:hooksOffAgentStep, function:fillHookActivationText, function:hookStatusPathLinked, function:hookLiveness, function:unattendedHumanPresenceHint, function:recordPreWorkflowHeartbeat, function:personAtOwnTerminal, subcommand:aidlc-orchestrate:next
+// covers: function:hooksOffAgentStep, function:projectSettingsRepair, function:fillHookActivationText, function:hookStatusPathLinked, function:hookLiveness, function:unattendedHumanPresenceHint, function:recordPreWorkflowHeartbeat, function:personAtOwnTerminal, subcommand:aidlc-orchestrate:next
 //
 // When the engine KNOWS a harness's hooks have never run in the joined
 // workflow, `next` does no work. It tells the agent what to do itself and the
@@ -1113,6 +1113,77 @@ describe("a refusal for a reply that was not recorded carries the same step when
       expect(running).not.toContain(RULES);
       expect(running).not.toContain(h.lines("")[0]);
       expect(running).toContain("If the person already replied, that reply was not recorded for this question.");
+    } finally {
+      if (saved.unattended !== undefined) process.env.AIDLC_UNATTENDED = saved.unattended;
+      if (saved.project !== undefined) process.env.AIDLC_PROJECT_DIR = saved.project;
+      else delete process.env.AIDLC_PROJECT_DIR;
+    }
+  });
+});
+
+// Claude Code runs AI-DLC's hooks from the project's .claude/settings.json and
+// reads it as strict JSON. With the file missing or not valid JSON no setting
+// brings them back, so the person is given the file's own repair: doctor's
+// config command for a missing file, the file itself for one config cannot
+// parse either. A file that cannot be opened for another reason keeps the step.
+describe("claude: a .claude/settings.json that is missing or not valid JSON gets its repair, not a setting", () => {
+  const h = HARNESSES[0];
+  const restart = "then exit Claude Code and start it again in this folder, and type /aidlc";
+  const MISSING =
+    ".claude/settings.json is missing from this project, so Claude Code runs none of AI-DLC's hooks here. In a " +
+    "terminal in this folder, run `bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude " +
+    `root you copied from>\` to put back AI-DLC's hooks (your own hooks are kept), ${restart}`;
+  const INVALID =
+    "Claude Code cannot read this project's .claude/settings.json because it is not valid JSON, so it runs none " +
+    `of AI-DLC's hooks here. Correct the file, ${restart}`;
+  const settings = (proj: string) => join(proj, ".claude", "settings.json");
+  const show = (line: string) => `${RULES} Show the person this line and end your turn: "${line}`;
+
+  test("missing: the line names the config command that puts it back, and keeps the stopped command", () => {
+    const proj = installed(h);
+    intentCreate(proj, h);
+    const shipped = readFileSync(settings(proj), "utf-8");
+    unlinkSync(settings(proj));
+    expect(next(proj, h).message).toBe(`${show(MISSING)}."`);
+    const jump = ["--stage", "requirements-analysis"];
+    const message = next(proj, h, {}, jump).message ?? "";
+    const id = message.match(/ --request ([0-9a-f]{8})\./)?.[1] ?? "";
+    expect(message).toBe(`${show(MISSING)} --request ${id}."`);
+    // Once the file is back and a hook has run, the new chat runs the kept command.
+    writeFileSync(settings(proj), shipped, "utf-8");
+    beat(proj, "reviewer-scope");
+    expect(next(proj, h, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+  });
+
+  test("not valid JSON: the line names the file to correct, not config, which stops on it too", () => {
+    const proj = installed(h);
+    intentCreate(proj, h);
+    const shipped = readFileSync(settings(proj), "utf-8");
+    writeFileSync(settings(proj), `<<<<<<< HEAD\n${shipped}=======\n${shipped}>>>>>>> theirs\n`, "utf-8");
+    expect(next(proj, h).message).toBe(`${show(INVALID)}."`);
+  });
+
+  test("a settings.json that cannot be opened as a file keeps the tool's step", () => {
+    const proj = installed(h);
+    intentCreate(proj, h);
+    unlinkSync(settings(proj));
+    mkdirSync(settings(proj));
+    const message = next(proj, h).message ?? "";
+    for (const line of h.lines(proj)) expect(message).toContain(`"${line}"`);
+  });
+
+  test("the refusal for a reply that was not recorded carries the same line, with the bare entry", () => {
+    const proj = installed(h);
+    intentCreate(proj, h);
+    unlinkSync(settings(proj));
+    const saved = { unattended: process.env.AIDLC_UNATTENDED, project: process.env.AIDLC_PROJECT_DIR };
+    delete process.env.AIDLC_UNATTENDED;
+    process.env.AIDLC_PROJECT_DIR = proj;
+    try {
+      const hint = unattendedHumanPresenceHint();
+      expect(hint).toContain("do not ask them to answer again");
+      expect(hint).toContain(`${show(MISSING)}."`);
+      expect(hint).not.toContain("disableAllHooks");
     } finally {
       if (saved.unattended !== undefined) process.env.AIDLC_UNATTENDED = saved.unattended;
       if (saved.project !== undefined) process.env.AIDLC_PROJECT_DIR = saved.project;

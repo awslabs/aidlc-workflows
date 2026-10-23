@@ -13,7 +13,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   clearPlanApprovalLegacyOffer,
   kiroIdeLegacyPlanApprovalSessionId,
@@ -257,7 +257,24 @@ function recoverLegacyCapability(
     recovery_choice: "Recover Plan Approval",
   });
   expect(recovery.legacy_plan_approval_choices).toBeUndefined();
-  submitLegacyPrompt(installed, env, "Recover Plan Approval");
+  // The person's yes, in their own words, and the agent's record of it: the
+  // recovery question's one choice command.
+  submitLegacyPrompt(installed, env, "Yes, bring it back.");
+  const yes = Bun.spawnSync(
+    [
+      BUN, join(dirname(installed.tool), "aidlc-log.ts"), "answer", "--stage", "code-generation",
+      "--checkpoint", "plan-approval", "--details", "Recover Plan Approval", "--project-dir", installed.dir,
+    ],
+    {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: installed.dir,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, ...env, CLAUDE_PROJECT_DIR: installed.dir },
+    },
+  );
+  expect(yes.exitCode, `${yes.stdout.toString()}${yes.stderr.toString()}`).toBe(0);
   // Under legacy ownership every publication is preserved, so the marker
   // revision must not move while the receipt-continued parts advance from
   // part 1 to the run-stage. This walk once looped on part 1 forever because

@@ -439,12 +439,6 @@ export const GUARD_REMEDY_WORDING = {
       `I'll show you the current summary of your answers for ${c.target} to confirm, then save ` +
       "its documents again from it.",
   }),
-  "unset-unattended": (c) => ({
-    label: "Stop working unattended",
-    description:
-      `I'll stop working on my own and ask you what should change in ${c.target}.` +
-      guardResetCost(c, "reject"),
-  }),
   // The person decides; the agent runs the setter (the remedy's command), which
   // records it as set by them. So the option says what will happen.
   "lower-fence": (c) => ({
