@@ -13766,9 +13766,11 @@ function unitsOwingStage(projectDir: string, stage: GraphStage, context: UnitWor
 }
 
 // A Code Generation completion (the gate opening or shown again, the stage
-// completed, an approval with no gate open) waits while its plan does, after the
-// stage's own completion checks; the plan's question is `next`'s. The remedy the
-// person picked at the recovery question is theirs. Null when it may go on.
+// completed, an approval with no gate open, an isolated run closing) waits while
+// its plan does, after the stage's own completion checks; the plan's question is
+// `next`'s. The remedy the person picked at the recovery question is theirs.
+// `targets` names an isolated run's own target, which is outside the main
+// workflow's Units. Null when it may go on.
 function codeGenerationCompletionWaits(
   projectDir: string,
   node: GraphStage,
@@ -13776,12 +13778,14 @@ function codeGenerationCompletionWaits(
   stateContent: string,
   args: string[],
   unit: string | undefined,
+  targets?: ReadonlyArray<string | null>,
 ): Directive | null {
   if (node.slug !== "code-generation") return null;
   const marker = readActiveDirectiveMarker(projectDir, stateContent);
   if (guardRecoveryAnswerAdmits(marker, ["engine", "orchestrate", "report", ...args], projectDir)) return null;
-  const targets = codeGenerationReportTargets(projectDir, node, scope, stateContent, unit);
-  return codeGenerationCompletionPlanWaits(projectDir, stateContent, targets)
+  return codeGenerationCompletionPlanWaits(
+    projectDir, stateContent, targets ?? codeGenerationReportTargets(projectDir, node, scope, stateContent, unit),
+  )
     ? printDirective(codeGenerationPlanWaitsStep())
     : null;
 }
@@ -16483,6 +16487,7 @@ function checkStageCompletionEvidence(
 function handleSingleReport(
   flags: ReportFlags,
   projectDir: string | undefined,
+  args: string[],
 ): void {
   if (!flags.result) {
     emit(errorDirective(
@@ -16571,6 +16576,15 @@ function handleSingleReport(
   );
   if (!evidence.ok) {
     emit(errorDirective(evidence.message));
+    return;
+  }
+  // An isolated run builds the zero-Unit target: it closes once that plan lets
+  // it build, as the main workflow's completion does.
+  const planWaits = codeGenerationCompletionWaits(
+    pd, node, singleScope ?? "", loadStateFileIfPresent(pd) ?? "", args, undefined, [null],
+  );
+  if (planWaits !== null) {
+    emit(planWaits);
     return;
   }
   const completionError = appendSingleStageAuditEvents(pd, [{
@@ -17133,7 +17147,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // main-workflow branches, so a single-stage commit can never fall through to a
   // state-mutating subcommand.
   if (flags.single) {
-    handleSingleReport(flags, projectDir);
+    handleSingleReport(flags, projectDir, args);
     return;
   }
 

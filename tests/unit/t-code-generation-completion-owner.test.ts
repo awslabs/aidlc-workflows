@@ -549,3 +549,61 @@ describe("one owner: the engine's own completion holds while the plan waits, and
     expect((JSON.parse(unnamed.stdout || "{}") as Step).message, unnamed.stdout).toBe(WAITS);
   });
 });
+
+// An isolated run (`next --stage code-generation --single`) asks the same plan
+// question; its `report --single` waits for the same plan, and the guard leaves
+// that to it as well. The run closes outside the main workflow, so its record
+// is its STAGE_COMPLETED row.
+describe("one owner: an isolated Code Generation run completes only once its plan lets it build", () => {
+  const SINGLE = ["--stage", "code-generation", "--single"];
+  const SINGLE_REPORT = "bun .claude/tools/aidlc.ts engine orchestrate report --single --stage code-generation --result completed";
+  const completions = (proj: string) => auditEvents(proj).filter((row) => row.event === "STAGE_COMPLETED").length;
+  const ISOLATED: Array<{ name: string; waits: boolean; build: () => string }> = [
+    { name: "no plan yet", waits: true, build: () => {
+      const proj = createCodeGenerationProject();
+      expect(next(proj, SINGLE).plan_approval?.status).toBe("plan");
+      return proj;
+    } },
+    { name: "the plan question open", waits: true, build: () => {
+      const proj = createCodeGenerationProject();
+      next(proj, SINGLE);
+      writePlan(proj);
+      expect(next(proj, SINGLE).ask_type).toBe("plan-approval");
+      return proj;
+    } },
+    { name: "the plan approved", waits: false, build: () => {
+      const proj = createCodeGenerationProject();
+      next(proj, SINGLE);
+      writePlan(proj);
+      expect(next(proj, SINGLE).ask_type).toBe("plan-approval");
+      approvePlan(proj);
+      expect(next(proj, SINGLE).plan_approval?.status).toBe("approved");
+      return proj;
+    } },
+    { name: "plan approval off", waits: false, build: () => {
+      const proj = createCodeGenerationProject("relaxed", "off");
+      next(proj, SINGLE);
+      writePlan(proj);
+      expect(next(proj, SINGLE).plan_approval?.status).toBe("approved");
+      return proj;
+    } },
+  ];
+  for (const state of ISOLATED) {
+    test(`${state.name}: ${state.waits ? "the plan step, nothing recorded" : "the run closes"}`, () => {
+      const proj = state.build();
+      created.push(proj);
+      expect(guardOn(proj, SINGLE_REPORT)).toBe(ADMITTED);
+      const before = completions(proj);
+      const ran = runNamed(proj, SINGLE_REPORT);
+      const step = JSON.parse(ran.stdout || "{}") as Step;
+      if (state.waits) {
+        expect(step.message, ran.stdout).toBe(WAITS);
+        expect(completions(proj)).toBe(before);
+      } else {
+        expect(step.kind, ran.stdout).toBe("done");
+        expect(completions(proj)).toBe(before + 1);
+      }
+    });
+  }
+});
+
