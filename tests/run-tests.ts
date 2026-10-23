@@ -1511,7 +1511,8 @@ function integrationOrderWeights(): OrderWeights | undefined {
 }
 
 async function runTier(level: Level, label: string): Promise<void> {
-  // Unit files run one at a time unless a shard runs on a platform the weights file caps.
+  // Unit files run one at a time unless a shard has a cap: the weights file's entry
+  // for this platform, or AIDLC_TEST_UNIT_PARALLEL.
   const effectiveParallel = level === "unit" && args.shard
     ? unitFileWorkers(unitShardConfig(), process.platform, args.parallel, process.env.AIDLC_TEST_UNIT_PARALLEL)
     : level === "smoke" || level === "unit" ? 1 : args.parallel;

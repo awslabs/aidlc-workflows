@@ -216,9 +216,9 @@ installs frozen dependencies with Bun 1.4.2, packages the projections, and runs
 the Bash wrapper with `--debug -P 8 --no-llm`. Smoke stays serial inside each
 checkout, and so does unit except a macOS shard, which starts up to the cap in
 `tests/unit-shard-weights.json` at once; the independent unit jobs and eight
-workers in each integration or E2E job provide parallelism. Deterministic jobs, including smoke, plus native
-checks and production guards use two-hour file and four-hour run backstops
-inside a 270-minute step and five-hour job. Live credentialed jobs retain
+workers in each integration or E2E job provide parallelism. Deterministic jobs,
+including smoke, plus native checks and production guards use two-hour file and
+four-hour run backstops inside a 270-minute step and five-hour job. Live credentialed jobs retain
 their separate lease-bound ceilings. Nested operations share actual remaining
 file time; deliberately short timeout calibrations keep their explicit bounds.
 Sanitized `tests/logs/` and root `tmp/ci-deterministic/` captures

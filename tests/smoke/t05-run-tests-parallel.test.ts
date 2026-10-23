@@ -324,6 +324,18 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     }
   }, PER_TEST_TIMEOUT);
 
+  test("side-by-side unit files start longest first by the unit weights", () => {
+    const pair = ["t-agent-conduct.test.ts", "t-answer-text-file.test.ts"];
+    const expected = weightedGroups(pair, UNIT_SHARD_CONFIG).flatMap((job) => job.files);
+    // The pair proves the order only while its weights reverse name order.
+    expect(expected, "pick two unit files whose weights reverse name order").toEqual([...pair].reverse());
+    const r = run(["--unit", "--shard", "1/1", "-P", "2", "--no-llm", "--filter", "^(t-agent-conduct|t-answer-text-file)$"], {
+      AIDLC_TEST_PACKAGE_READY: "1", AIDLC_TEST_UNIT_PARALLEL: "2",
+    });
+    // The order is the subject; the pair's own results are their files' business.
+    expect([...r.out.matchAll(/^=== START (\S+) ===$/gm)].map((match) => match[1])).toEqual(expected);
+  }, PER_TEST_TIMEOUT);
+
   test("shared CI flags run only the selected deterministic unit shard", () => {
     const file = "t68-version-changelog-sync.test.ts";
     const files = readdirSync(join(TESTS_ROOT, "unit"))
