@@ -8,9 +8,11 @@
 // to filter on `**/{aidlc-docs,intents}/**`, so gate-start found the nine
 // deliverables and then skipped every one: zero SENSOR_* rows, and nothing
 // reported it. This drives the shipped graph, manifests and sensor scripts end
-// to end: gate-start on a seeded CodeKB store must fire required-sections on
-// all nine files and upstream-coverage, which reads the whole store, once on
-// its first document, and every fire must pass. architecture.md and the timestamp file,
+// to end: gate-start on a seeded CodeKB store must fire required-sections and
+// upstream-coverage once each over the whole store (every repository's files
+// handed on stdin), named for its first document, and every fire must pass; a
+// team template one of the nine misses shows that the one fire read all nine.
+// architecture.md and the timestamp file,
 // the two artifacts re-artifacts.md gives templates for, are built from those
 // templates. The other seven get no shape there, so they are written the way a
 // model may write them, an H1 with `###` subsections and a table: with no team
@@ -117,26 +119,30 @@ function field(block: string, name: string): string {
   return block.match(new RegExp(`^\\*\\*${name}\\*\\*: (.*)$`, "m"))?.[1] ?? "";
 }
 
-describe("t350 reverse-engineering gate sensors reach the CodeKB", () => {
-  test("gate-start fires required-sections on all nine CodeKB artifacts and upstream-coverage once, and all pass", () => {
-    const project = codekbStoreProject();
-    const result = spawnSync(
-      BUN,
-      [STATE, "gate-start", "reverse-engineering", "--project-dir", project],
-      {
-        cwd: project,
-        encoding: "utf-8",
-        env: {
-          ...process.env,
-          AIDLC_DISABLE_SENSORS: "0",
-          AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
-          AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
-          // reverse-engineering is a pipeline stage; its per-agent handoff
-          // receipts are not what this test is about.
-          AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1",
-        },
+function gateStart(project: string): ReturnType<typeof spawnSync> {
+  return spawnSync(
+    BUN,
+    [STATE, "gate-start", "reverse-engineering", "--project-dir", project],
+    {
+      cwd: project,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_DISABLE_SENSORS: "0",
+        AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+        // reverse-engineering is a pipeline stage; its per-agent handoff
+        // receipts are not what this test is about.
+        AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1",
       },
-    );
+    },
+  );
+}
+
+describe("t350 reverse-engineering gate sensors reach the CodeKB", () => {
+  test("gate-start fires required-sections and upstream-coverage once each over the nine CodeKB artifacts, and both pass", () => {
+    const project = codekbStoreProject();
+    const result = gateStart(project);
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
 
     const fired = auditBlocks(project, "SENSOR_FIRED").map((block) => ({
@@ -145,7 +151,7 @@ describe("t350 reverse-engineering gate sensors reach the CodeKB", () => {
     }));
     expect(new Set(fired.map(({ stage }) => stage))).toEqual(new Set(["reverse-engineering"]));
     expect(fired.map(({ pair }) => pair).sort()).toEqual(
-      [...CODEKB_FILES.map((file) => `required-sections:${file}`), "upstream-coverage:business-overview.md"].sort(),
+      ["required-sections:business-overview.md", "upstream-coverage:business-overview.md"],
     );
     // A script error or missing tool also lands as SENSOR_PASSED, carrying a
     // Note; only a Note-free pass means the sensor actually evaluated the file.
@@ -153,5 +159,20 @@ describe("t350 reverse-engineering gate sensors reach the CodeKB", () => {
     expect(passed).toHaveLength(fired.length);
     expect(passed.map((block) => field(block, "Note")).filter(Boolean)).toEqual([]);
     expect(auditBlocks(project, "SENSOR_FAILED")).toEqual([]);
+  });
+
+  test("the one required-sections fire reads all nine: a team template one of them misses fails it and names that file", () => {
+    const project = codekbStoreProject();
+    const templates = join(project, "aidlc", "spaces", "default", "memory", "templates");
+    mkdirSync(templates, { recursive: true });
+    writeFileSync(join(templates, "dependencies.md"), "# Dependencies\n\n## Direct\n", "utf-8");
+    const result = gateStart(project);
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(auditBlocks(project, "SENSOR_FIRED")).toHaveLength(2);
+    const failed = auditBlocks(project, "SENSOR_FAILED");
+    expect(failed.map((block) => field(block, "Sensor ID"))).toEqual(["required-sections"]);
+    expect(field(failed[0] ?? "", "Failed outputs")).toBe(
+      `aidlc/spaces/default/codekb/${codekbRepoName(project)}/dependencies.md`,
+    );
   });
 });
