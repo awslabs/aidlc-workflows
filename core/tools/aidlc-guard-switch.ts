@@ -418,7 +418,7 @@ export function saidInChat(
     rows = [];
   }
   // A command whose chat the engine cannot name is this work's one chat: the
-  // only one that has spoken since the last decision (as proveMessage reads it).
+  // only one that has spoken since the last decision (as the window reads it).
   // A decision their newest message led to itself (the plan answer typed
   // beside the setting) leaves none spoken since; that message's chat is it.
   let chat = sessionId;

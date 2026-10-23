@@ -425,11 +425,14 @@ export function approveSwarmCheckpoint(
     if (!current.result.ready) throw new Error(`Swarm checkpoint is not ready: ${current.result.errors.join(" ")}`);
     const humanRequired = current.result.human_required || reply !== undefined;
     let words: string | undefined;
+    let messageId: string | undefined;
     if (humanRequired) {
       requireProtectedResponse(pd, session, {
         kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current.result, current.commandSha256s)), choice: "Approve",
       }, namedReply(pd, units, message));
-      words = readProtectedResponse(pd, session)?.words;
+      const response = readProtectedResponse(pd, session);
+      words = response?.words;
+      messageId = response?.replies?.at(-1)?.messageId;
     } else if (current.result.approved) {
       return current.result;
     }
@@ -440,6 +443,7 @@ export function approveSwarmCheckpoint(
       ...(humanRequired ? { Session: session } : {}),
       ...(humanRequired ? { "User Input": "Approve" } : { Autonomous: "true" }),
       ...(words ? { "Person Reply": words } : {}),
+      ...(messageId ? { "Message Id": messageId } : {}),
       ...findingDispositions?.([STAGE], after.result.units, humanRequired ? "person" : "nobody"),
     }, pd, selection.intent, selection.space);
     if (humanRequired) consumeProtectedQuestion(pd, session);
@@ -460,7 +464,9 @@ export function rejectSwarmCheckpoint(
     requireProtectedResponse(pd, session, {
       kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current.result, current.commandSha256s)), choice: "Request Changes",
     }, namedReply(pd, units, message));
-    const words = readProtectedResponse(pd, session)?.words;
+    const response = readProtectedResponse(pd, session);
+    const words = response?.words;
+    const messageId = response?.replies?.at(-1)?.messageId;
     const reason = givenReason.trim() || changeRequestWords(words);
     const userInput = "Request Changes";
     if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason)) {
@@ -474,6 +480,7 @@ export function rejectSwarmCheckpoint(
         Session: session,
         "User Input": userInput, Reason: reason, Feedback: reason,
         ...(words ? { "Person Reply": words } : {}),
+        ...(messageId ? { "Message Id": messageId } : {}),
       },
     })), pd, selection.intent, selection.space);
     consumeProtectedQuestion(pd, session);

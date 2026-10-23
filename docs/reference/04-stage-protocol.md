@@ -177,7 +177,8 @@ the learnings question just before the gate; the refusal and the step for
 their reply at an open gate list the ids). It records the person's words: every
 reply of theirs in that chat since then, as the message record keeps them, on
 `GATE_APPROVED` as `Person Reply` and on `GATE_REJECTED` as the feedback, with
-`Message Id` naming the latest, or the named message alone. A message too long to
+`Message Id` naming the latest and `Message Ids` every one of them, oldest
+first, when there are several, or the named message alone. A message too long to
 keep whole leaves the words off and keeps the `Message Id`. When the engine
 cannot tell which chat ran the command (an agent shell no host names it in), the
 row carries only the `Message Id` of the one chat that replied, never a copy of

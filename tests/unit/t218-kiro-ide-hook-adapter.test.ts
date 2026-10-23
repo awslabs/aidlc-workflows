@@ -1693,6 +1693,31 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
+  // The core hook names the kept message to the agent while a decision is
+  // open; Kiro IDE draws a chat card for every command hook, and what it shows
+  // of the output is unmeasured, so this adapter keeps that line off.
+  test("8d12b: at an open question the message-id line stays off the IDE's context", () => {
+    const dir = scratchProject(true);
+    try {
+      appendStageStarted(dir, "requirements-analysis", "2026-10-23T01:00:00Z");
+      const shard = join(seededAuditDir(dir), pinnedShardName());
+      writeFileSync(shard, readFileSync(shard, "utf-8") + "\n## Decision\n**Timestamp**: 2026-10-23T01:00:01Z\n" +
+        "**Event**: DECISION_RECORDED\n**Stage**: requirements-analysis\n**Decision**: Which database?\n" +
+        "**Options**: PostgreSQL,SQLite\n\n---\n", "utf-8");
+      const result = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+        session_id: "sess_open_question_ids",
+        hook_event_name: "UserPromptSubmit",
+        cwd: dir,
+        prompt: "postgres please",
+      }), GUARD_SWITCH_ENV);
+      expect(result.code, result.stderr).toBe(0);
+      expect(readAudit(dir)).toContain("**Message Id**:");
+      expect(result.stdout).not.toContain("on record as");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("8d13: record-human-turn with an empty prompt leaves the fence unchanged", () => {
     const dir = scratchProject(true);
     try {

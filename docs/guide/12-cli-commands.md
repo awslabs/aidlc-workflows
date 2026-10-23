@@ -1966,12 +1966,14 @@ up to 64 KiB, and removes the file once read.
 A plain `log answer` needs a reply of the person's in this chat that no
 decision has used yet, sent before or after the question was logged: which
 question it answers is the agent's reading. The answer's row keeps every such
-reply's words (Person Reply) and names the latest (Message Id); when the engine
+reply's words (Person Reply) and names the latest (Message Id), and every one of
+them, oldest first, when there are several (Message Ids); when the engine
 cannot name the chat, it keeps only the id where one chat replied and neither
 where more did, and records the answer either way. `log decision --message <id>` and `log answer --message <id>` name
 one message instead, such as one sent while another engine question was open.
-The engine proves the record exists, came through this chat, and is not spent
-by a later approval or decision, and reads none of its words. The id is
+The engine proves the record exists, came through this chat or was sent on this
+work in another, and is not spent by a later approval or decision, and reads
+none of its words. The id is
 engine-to-agent text and is never shown to the person.
 See [Hooks and Tools](../reference/06-hooks-and-tools.md#read-only-audit-commands) for pairing rules, ordering, and filters.
 

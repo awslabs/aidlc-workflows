@@ -110,6 +110,7 @@ import {
   messageRetryStep,
   personRepliedSinceGateShown,
   personsGateReply,
+  windowMessageIds,
   repliedSinceStageStart,
   stageStartFloorRefusal,
   resolveInvokingSessionId,
@@ -376,6 +377,8 @@ const CONDUCTOR_SUMMARY_FIELD = "Conductor Summary";
 const PERSONS_WORDS_FIELD = "Person Reply";
 // The same field the log tool pairs with their words on a decision row.
 const PERSONS_MESSAGE_FIELD = "Message Id";
+// Every message the window's words come from, oldest first, when there are several (windowMessageIds).
+const PERSONS_MESSAGES_FIELD = "Message Ids";
 function personsWordsFields(pd: string, slug: string, message?: string): Record<string, string> {
   try {
     if (message !== undefined) {
@@ -389,6 +392,7 @@ function personsWordsFields(pd: string, slug: string, message?: string): Record<
     return {
       ...(reply.words ? { [PERSONS_WORDS_FIELD]: reply.words } : {}),
       ...(reply.messageId ? { [PERSONS_MESSAGE_FIELD]: reply.messageId } : {}),
+      ...windowMessageIds(reply),
     };
   } catch {
     return {};
@@ -400,7 +404,11 @@ function personsWordsFields(pd: string, slug: string, message?: string): Record<
 function approvedTogetherWordsFields(row: AuditShardEvent): Record<string, string> {
   const words = auditBlockField(row.block, PERSONS_WORDS_FIELD);
   const id = auditBlockField(row.block, PERSONS_MESSAGE_FIELD);
-  return { ...(words ? { [PERSONS_WORDS_FIELD]: words } : {}), ...(id ? { [PERSONS_MESSAGE_FIELD]: id } : {}) };
+  const ids = auditBlockField(row.block, PERSONS_MESSAGES_FIELD);
+  return {
+    ...(words ? { [PERSONS_WORDS_FIELD]: words } : {}), ...(id ? { [PERSONS_MESSAGE_FIELD]: id } : {}),
+    ...(ids ? { [PERSONS_MESSAGES_FIELD]: ids } : {}),
+  };
 }
 
 // Per-stage token/cost rollup fields for STAGE_COMPLETED / WORKFLOW_COMPLETED.
@@ -2405,7 +2413,7 @@ function parkedWords(pd: string, stage: string): Record<string, string> {
   try {
     if (!personSpokeSinceGate(pd, { replies: true, outlivesApproval: true })) return {};
     const reply = personsGateReply(pd, resolveInvokingSessionId(pd), stage);
-    if (reply.words && !isNonAnswer(reply.words)) return fields(reply.words, reply.messageId);
+    if (reply.words && !isNonAnswer(reply.words)) return { ...fields(reply.words, reply.messageId), ...windowMessageIds(reply) };
     const rows = sortAttemptEvents(readAuditShardEvents(pd));
     let turnAt = -1;
     for (let i = 0; i < rows.length; i++) if (rows[i].event === "HUMAN_TURN") turnAt = i;
@@ -7851,6 +7859,7 @@ function handleReject(args: string[]): void {
   const conductorFeedback = feedback;
   let personsWords: string | null = null;
   let personsMessage: string | null = null;
+  let personsMessages: Record<string, string> = {};
   if (!autonomousDecision && feedbackStatus === "not-applicable") {
     if (message !== undefined && !humanPresenceGuardDisabled()) {
       const proof = proveMessage(pd, message, "change request");
@@ -7865,6 +7874,7 @@ function handleReject(args: string[]): void {
         const reply = personsGateReply(pd, resolveInvokingSessionId(pd), slug);
         personsWords = reply.words;
         personsMessage = reply.messageId;
+        personsMessages = windowMessageIds(reply);
       }
     } catch {
       personsWords = null;
@@ -7986,6 +7996,7 @@ function handleReject(args: string[]): void {
         Feedback: feedback,
         ...(conductorSummary ? { [CONDUCTOR_SUMMARY_FIELD]: conductorSummary } : {}),
         ...(personsMessage ? { [PERSONS_MESSAGE_FIELD]: personsMessage } : {}),
+        ...personsMessages,
         ...(reviewFindingDispositions
           ? {
               [REVIEW_FINDING_DISPOSITIONS_FIELD]:
@@ -8031,6 +8042,7 @@ function handleReject(args: string[]): void {
       Feedback: feedback,
       ...(conductorSummary ? { [CONDUCTOR_SUMMARY_FIELD]: conductorSummary } : {}),
       ...(personsMessage ? { [PERSONS_MESSAGE_FIELD]: personsMessage } : {}),
+      ...personsMessages,
       ...priorAcceptedSourceFields(pd, stage),
     };
     if (reviewFindingDispositions) {

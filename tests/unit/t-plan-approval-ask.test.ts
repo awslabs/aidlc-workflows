@@ -665,7 +665,10 @@ describe("the engine asks for Plan Approval", () => {
   test("the agent records the approval it read from their words, and the next `next` builds", () => {
     const proj = project();
     askFor(proj);
-    expect(reply(proj, "yes")).toBe("");
+    // The hook names the kept message for the agent and reads nothing into it.
+    const said = reply(proj, "yes");
+    expect(said).toContain("--message");
+    expect(said).not.toMatch(/Approve|yes/);
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
     const recorded = answer(proj, "Approve Plan");
     expect(recorded.code, recorded.message).toBe(0);
@@ -1225,7 +1228,7 @@ describe("the engine asks for Plan Approval", () => {
   test("a question records nothing; the agent answers it, and their next reply decides", () => {
     const proj = project();
     askFor(proj);
-    expect(reply(proj, "what does step 1 do?")).toBe("");
+    expect(reply(proj, "what does step 1 do?")).not.toContain("step 1");
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
     expect(next(proj).ask_type).toBe("plan-approval");
     reply(proj, "ok, go ahead");

@@ -345,21 +345,27 @@ export function messageIsReply(rows: readonly AuditShardEvent[], message: Stored
   return true;
 }
 
-// The chats that have spoken on this work since the last spending row. A message
-// counts when a HUMAN_TURN row of this record names it: the hook wrote that row
-// only while the chat was on the work, so a chat that joined through its turn
-// alone counts from that turn, and words a chat typed while it was on nothing
-// (before the work was chosen here, or a cold workspace) never count, however
-// the chat stands now. A message with no chat on it (one typed at the
-// terminal) counts without that check.
-export function chatsSince(rows: readonly AuditShardEvent[], pd: string, spentAt: string | null): Set<string> {
+// Whether a message was sent on this work: a HUMAN_TURN row of this record
+// names it. The hook wrote that row only while the chat was on the work, so a
+// chat that joined through its turn alone counts from that turn, and words a
+// chat typed while it was on nothing (before the work was chosen here, or a
+// cold workspace) or on other work never count, however the chat stands now.
+// A message with no chat on it (one typed at the terminal) counts without that
+// check.
+function sentOnThisWork(rows: readonly AuditShardEvent[]): (message: StoredMessage) => boolean {
   const named = new Set<string>();
   for (const row of rows) {
     const id = row.event === "HUMAN_TURN" ? auditBlockField(row.block, "Message Id") : null;
     if (id !== null) named.add(id);
   }
+  return (message) => message.session === null || named.has(message.id);
+}
+
+// The chats that have spoken on this work since the last spending row.
+export function chatsSince(rows: readonly AuditShardEvent[], pd: string, spentAt: string | null): Set<string> {
+  const onThisWork = sentOnThisWork(rows);
   return new Set(listMessages(pd)
-    .filter((m) => (spentAt === null || m.at >= spentAt) && (m.session === null || named.has(m.id)))
+    .filter((m) => (spentAt === null || m.at >= spentAt) && onThisWork(m))
     .map((m) => m.session ?? "terminal"));
 }
 
@@ -471,8 +477,8 @@ export function replyOfTheirs(
   const wanted = plain(quoted ?? "");
   if (wanted === "") return null;
   const spentAt = latestSpendingTimestamp(rows);
-  // A command whose chat the engine cannot name is this work's one chat, as
-  // proveMessage reads it: the only chat that has spoken since the last decision.
+  // A command whose chat the engine cannot name is this work's one chat, as the
+  // window reads it: the only chat that has spoken since the last decision.
   if (session === null) {
     const chats = chatsSince(rows, projectDir, spentAt);
     if (chats.size !== 1 || chats.has("terminal")) return null;
@@ -501,10 +507,12 @@ function invokingChat(pd: string): string | null {
 }
 
 // LLM maps, tool proves: the agent names the message its decision reads, an
-// answer or a gate's choice; the engine proves the record exists, came
-// through this chat and is not spent by a later decision, and reads no words.
-// A same-second tie with a spending row favours the message: one message can
-// give an approval and the answers beside it.
+// answer or a gate's choice; the engine proves the record exists, came through
+// this chat or was sent on this work in another, carries the person's words
+// and is not spent by a later decision, and reads no words. A message from any
+// chat of this work proves: the agent reads one record, and the spending row
+// settles a race between chats. A same-second tie with a spending row favours
+// the message: one message can give an approval and the answers beside it.
 export function proveMessage(
   pd: string,
   id: string,
@@ -518,42 +526,41 @@ export function proveMessage(
     };
   }
   const rows = readAuditShardEvents(pd);
+  const spentAt = latestSpendingTimestamp(rows);
+  const onThisWork = sentOnThisWork(rows);
+  // This chat, as the window reads it: the one the command serves, or with
+  // none named the one chat that has spoken since the last decision. Its own
+  // messages prove as they are (the one a piece of work starts with is kept
+  // before any row of the work can name it); another chat's must be this
+  // work's.
+  const named = invokingChat(pd);
+  const spoke = named === null ? chatsSince(rows, pd, spentAt) : null;
+  const chat = named ?? (spoke?.size === 1 && !spoke.has("terminal") ? [...spoke][0] : null);
+  if (message.session !== chat && !onThisWork(message)) {
+    // The retry names this chat's replies on this work that no decision has
+    // used, oldest first: the ids and times, never their words.
+    const unspent = chat === null ? [] : listMessages(pd)
+      .filter((m) => m.session === chat && (spentAt === null || m.at >= spentAt) && onThisWork(m) &&
+        messageIsReply(rows, m))
+      .map((m) => `${m.id} (sent ${m.at})`);
+    return {
+      refusal: unspent.length > 0
+        ? `If the person's message ${unspent.join(" or ")} is the one you read, run the same command with ` +
+          `--message <id>. Cannot record this ${what}: message ${id} was not sent on this piece of work.`
+        : `Cannot record this ${what}: message ${id} was not sent on this piece of work. Show the person the ` +
+          "question if you have not, end the turn, and record the choice they make.",
+    };
+  }
   if (!messageIsReply(rows, message)) {
     return {
       refusal: `Cannot record this ${what}: message ${id} carried no words of the person's own (a command to AIDLC, ` +
         "or a message with no words), so it answers nothing. Name a message that carries their reply.",
     };
   }
-  const spentAt = latestSpendingTimestamp(rows);
   if (spentAt !== null && message.at < spentAt) {
     return {
       refusal: `Cannot record this ${what}: message ${id} arrived before the last approval or decision (${spentAt}), ` +
         "so it is spent. Only a message the person sent after it can answer this question.",
-    };
-  }
-  const chat = invokingChat(pd);
-  const chatOf = (m: StoredMessage): string => m.session ?? "terminal";
-  if (chat !== null) {
-    if (message.session !== chat) {
-      return {
-        refusal: `Cannot record this ${what}: message ${id} came through another chat, not this one. ` +
-          "Name a message the person sent in this chat.",
-      };
-    }
-    return { message };
-  }
-  const chats = chatsSince(rows, pd, spentAt);
-  if (chats.size > 1) {
-    return {
-      refusal: `Cannot record this ${what}: the engine cannot tell which chat this command serves, and more than ` +
-        "one chat has sent messages since the last decision. Run it from the chat that asked, or wait for the " +
-        "person's reply there.",
-    };
-  }
-  if (chats.size === 1 && !chats.has(chatOf(message))) {
-    return {
-      refusal: `Cannot record this ${what}: message ${id} came through another chat, not the one that has spoken ` +
-        "since the last decision.",
     };
   }
   return { message };

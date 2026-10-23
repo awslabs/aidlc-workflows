@@ -42,7 +42,7 @@ export function gatePickNumber(projectDir: string, stage: string): number {
 
 /** The gate-words record, through the reader that hands its words out. */
 export function reviewWordsApprove(projectDir: string, session: string, unit: string): boolean {
-  return gateWordsSinceUnitReview(projectDir, session, unit, ["code-generation"])?.some((words) => words === "Approve") === true;
+  return gateWordsSinceUnitReview(projectDir, session, unit, ["code-generation"])?.some((reply) => reply.words === "Approve") === true;
 }
 
 /** latestPersonTurn's words, in a switch. */

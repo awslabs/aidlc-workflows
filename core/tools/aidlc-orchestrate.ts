@@ -102,12 +102,12 @@ import {
   firstFrontQuestionSince,
   isQuestionId,
   latestFrontQuestionId,
-  wordsAlreadyRead,
   latestQuestion,
   pruneExpiredQuestions,
   QUESTION_UNAVAILABLE,
   startedRequestFor,
   type QuestionAskedAbout,
+  type QuestionOrigin,
   type QuestionSettings,
   questionTargetSelected,
   readComposeEntry,
@@ -122,7 +122,7 @@ import {
   saveRestartRequest,
   takeRestartRequest,
 } from "./aidlc-question-store.ts";
-import { latestMessage, noReplySince } from "./aidlc-message-store.ts";
+import { latestMessage, listMessages, noReplySince, readMessage } from "./aidlc-message-store.ts";
 import { aidlcEntryWords, APPROVAL_GATE_CHOICES, protectedChoices } from "./aidlc-reply-reader.ts";
 import {
   type AskDirective,
@@ -251,6 +251,8 @@ import {
   installedHarnessName,
   recordGuardRefusal,
   currentGuardRecoveryAskMarker,
+  consumeSharedDirectiveAsk,
+  guardRecoveryReplyWaits,
   type ActiveDirectiveGuardRemedy,
   type SummaryConfirmationEvidence,
   gridCostSummary,
@@ -265,7 +267,6 @@ import {
   inspectContinuationCursor,
   isPerUnitStage,
   isReadOnlyEngineProbe,
-  latestPersonTurn,
   noteProjectTypeAsked,
   constructionStaffingPassedOver,
   noteConstructionStaffingAsked,
@@ -995,8 +996,9 @@ const openQuestionMarkers = new WeakSet<object>();
 // question that work is waiting on, with their words already kept as its
 // reply, is answered by those words (see emit).
 let routingAnsweredAsActiveWork = false;
-// The words that answer was about, for the question the work in progress has open.
-let routingAnsweredWords: string | null = null;
+// The words that answer was about, and the message they came in, for the
+// question the work in progress has open.
+let routingAnswered: { text: string; messageId?: string } | null = null;
 
 function isKeptRequest(args: readonly string[]): boolean {
   const flags = parseNextFlags([...args]);
@@ -2594,12 +2596,36 @@ function emit(requested: Directive): void {
           prepared.transported.ask_type === PLAN_APPROVAL_ASK_TYPE &&
           !prepared.transported.plan_approval.editing
         ) {
-          if (routingAnsweredWords !== null && !isReadOnlyEngineProbe()) {
-            withdrawPlanApprovalReplies(projectDir, routingAnsweredWords);
-            notePlanApprovalAskReply(projectDir, engineSessionId ?? "", routingAnsweredWords);
+          if (routingAnswered !== null && !isReadOnlyEngineProbe()) {
+            const { text, messageId } = routingAnswered;
+            if (messageId !== undefined) withdrawPlanApprovalReplies(projectDir, { messageId });
+            notePlanApprovalAskReply(projectDir, engineSessionId ?? "", text, undefined, messageId);
           }
           if (planApprovalKeptReplyWaits(projectDir)) {
             writePrepared(prepareEmission(planQuestionAnsweredByWordsDirective()));
+            return;
+          }
+        }
+        // The same answer when that work waits on the recovery question: the
+        // routing question it was asked through took the place of the
+        // recovery question's marker, and with it the reply the hook had kept
+        // there, so the message the words came in is kept as that reply again,
+        // as the hook kept it.
+        const routedMessage = routingAnswered?.messageId === undefined
+          ? null
+          : readMessage(projectDir, routingAnswered.messageId);
+        if (
+          routingAnsweredAsActiveWork &&
+          routedMessage?.words &&
+          prepared.transported.kind === "ask" &&
+          prepared.transported.ask_type === GUARD_RECOVERY_ASK_TYPE &&
+          !isReadOnlyEngineProbe()
+        ) {
+          consumeSharedDirectiveAsk(projectDir, routedMessage.words);
+          const state = loadStateFileIfPresent(projectDir);
+          const recovery = state === null ? null : guardRecoveryReplyWaits(projectDir, state);
+          if (recovery !== null) {
+            writePrepared(prepareEmission(recoveryQuestionAnsweredByWordsDirective(recovery)));
             return;
           }
         }
@@ -3522,6 +3548,23 @@ function openApprovalGateStage(stateContent: string): string | null {
   }
 }
 
+// The person's replies in this chat a decision would stand on (personsGateReply),
+// by id and time only: the agent has their words, and names the one its reading
+// came from when it is not all of them. None when the record cannot say.
+function replyIds(projectDir: string, stage: string): Array<{ id: string; at: string }> {
+  try {
+    return personsGateReply(projectDir, resolveInvokingSessionId(projectDir), stage).replies;
+  } catch {
+    return [];
+  }
+}
+
+function replyIdsNote(replies: Array<{ id: string; at: string }>, command: string): string {
+  return replies.length === 0 ? "" : " Their replies since the last decision, oldest first: " +
+    `${replies.map((reply) => `${reply.id} (${reply.at})`).join(", ")}; when their choice is in one of them ` +
+    `and not the others, add \`--message <id>\` to the ${command}.`;
+}
+
 // Words while a stage's approval gate is open: the conductor reads whether
 // they answer it, the same split as openQuestionReplyDirective.
 function openGateReplyDirective(
@@ -3531,12 +3574,7 @@ function openGateReplyDirective(
   replies: Array<{ id: string; at: string }>,
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
-  // The person's replies the decision would stand on, by id and time only:
-  // the agent has their words, and names the one its reading came from when it
-  // is not all of them.
-  const named = replies.length === 0 ? "" : " Their replies since the last decision, oldest first: " +
-    `${replies.map((reply) => `${reply.id} (${reply.at})`).join(", ")}; when their choice is in one of them ` +
-    "and not the others, add `--message <id>` to the report.";
+  const named = replyIdsNote(replies, "report");
   return printDirective(
     `Stage "${stage}" is waiting for the person's approval, and their reply may answer it. Read it. If it ` +
       `approves, run \`${orchestrate} report --stage ${shellArg(stage)} --result approved --user-input "Approve"\`; ` +
@@ -3608,21 +3646,72 @@ function openQuestionAnswer(stage: string, block: string): string {
 
 // Prose while the current stage has a question the person has not answered
 // yet (the audit pairing the Stop hook reads) may be its answer, or something
-// else. Reading which is the conductor's job, so it gets a command for each:
-// the question's own answer command, or `next --request` with the person's
-// words, kept as `requestId`, which asks where that work belongs. The
-// question's text stays in the audit, never in this directive.
-function openQuestionReplyDirective(stage: string, block: string, requestId: string): PrintDirective {
+// else. Reading which is the conductor's job, so it gets the question as it
+// was asked, with its choices, which a chat that never saw it asked needs, and
+// a command for each: the question's own answer command, or `next --request`
+// with the person's words, kept as `requestId`, which asks where that work
+// belongs.
+function openQuestionReplyDirective(
+  stage: string,
+  block: string,
+  requestId: string,
+  replies: Array<{ id: string; at: string }>,
+): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   const answer = openQuestionAnswer(stage, block);
+  const decision = auditBlockField(block, "Decision");
+  const choices = questionOptions(block);
+  const asked = decision
+    ? `: ${JSON.stringify(decision)}` +
+      `${choices.length > 0 ? `, with the choices ${choices.map((choice) => JSON.stringify(choice)).join(", ")}` : ""}`
+    : "";
   return printDirective(
-    `Stage "${stage}" has a question you asked that the person has not answered yet. Read their reply. ` +
+    `Stage "${stage}" has a question you asked that the person has not answered yet${asked}. Read their reply. ` +
       `If it answers that question, ${answer}, then carry on with "${stage}" from where you asked and run bare ` +
       `\`${orchestrate} next\` the next time you need the engine. If it asks to skip this stage, run ` +
       `\`${orchestrate} next --skip ${shellArg(stage)}\` and follow what it returns. If it is about something else, such as new work ` +
       `or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the ` +
       "engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
-      "person in one short question and follow their answer.",
+      `person in one short question and follow their answer.${replyIdsNote(replies, "`log answer`")}`,
+  );
+}
+
+// The choices of the engine's recovery question (a guard refused and asked
+// which way to go on), numbered as it showed them, each with the command that
+// records it, so a chat that never saw it asked has all it needs.
+function recoveryQuestionChoices(marker: ActiveDirectiveMarker): string {
+  const choices = (marker.remedies ?? []).map((remedy, at) =>
+    `${at + 1}. ${remedy.label ?? remedy.action} (\`${aidlcToolInvocation("log")} answer --stage ` +
+    `${shellArg(marker.stage)} --checkpoint guard-recovery --details ${shellArg(remedy.op)}\`)`);
+  return `${choices.length === 1 ? "its one choice is" : "its choices are"} ${choices.join(" and ")}`;
+}
+
+// Words while the recovery question holds the person's reply may pick one of
+// its choices: the conductor reads which, the same split as
+// openQuestionReplyDirective.
+function openRecoveryReplyDirective(marker: ActiveDirectiveMarker, requestId: string): PrintDirective {
+  const orchestrate = aidlcToolInvocation("orchestrate");
+  return printDirective(
+    `The recovery question for "${marker.stage}" is open, and ${recoveryQuestionChoices(marker)}. The person's ` +
+      "reply may answer it. Read it. If it picks one of those choices, run that choice's command and follow what it " +
+      `returns. If it asks to skip this stage, run \`${orchestrate} next --skip ${shellArg(marker.stage)}\` and follow ` +
+      "what it returns. If it is about something else, such as new work or a change to the plan, run " +
+      `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words and asks ` +
+      "them where that work belongs. If you cannot tell which it is, ask the person once in plain words, with the " +
+      "question's choices, and follow their answer.",
+  );
+}
+
+// The person said their words are part of the work in progress, and that work
+// waits on the recovery question: the words, kept as their reply to it, are
+// their answer, read by the conductor like any reply to it.
+function recoveryQuestionAnsweredByWordsDirective(marker: ActiveDirectiveMarker): PrintDirective {
+  return printDirective(
+    "The person said their words are part of the work in progress, and that work is waiting on their answer to the " +
+      `recovery question for "${marker.stage}", so their words are that answer; ${recoveryQuestionChoices(marker)}. ` +
+      "Read them, run the command of the choice they pick, and follow what it returns. If you cannot tell which " +
+      "choice it is, ask them once in plain words, with those choices, and end the turn; bare " +
+      `\`${aidlcToolInvocation("orchestrate")} next\` shows the question again.`,
   );
 }
 
@@ -3674,6 +3763,7 @@ function openPlanQuestionReplyDirective(
   needsWords = false,
   // Every plan has its answer and nothing is built yet: their words may change it.
   answered = false,
+  replies: Array<{ id: string; at: string }> = [],
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   // Settings typed on the same line ("/aidlc --guard-policy off approve the
@@ -3703,7 +3793,7 @@ function openPlanQuestionReplyDirective(
       "follow what it returns. If it is about something else, such as new work or a change to the plan, run " +
       `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words and asks ` +
       "them where that work belongs. If you cannot tell which it is, ask the person in one short question and follow " +
-      "their answer.",
+      `their answer.${replyIdsNote(replies, "`log answer`")}`,
   );
 }
 
@@ -3726,41 +3816,33 @@ function planQuestionAnsweredByWordsDirective(): PrintDirective {
 // no reply to the question the work in progress has open (a checkpoint, a
 // gate, the stage's questions, the code plan question): they are taken back
 // from it once, and the row that says so keeps any decision on it from
-// standing on them.
+// standing on them. The row names the reply the route stands on: this chat's
+// latest since the last decision.
 function withdrawRoutedWords(projectDir: string, question: StoredQuestion): void {
   if (isReadOnlyEngineProbe()) return;
   try {
-    const routed = readAuditShardEvents(projectDir).some((row) =>
+    const rows = readAuditShardEvents(projectDir);
+    const routed = rows.some((row) =>
       row.event === "REQUEST_ROUTED" && auditBlockField(row.block, "Request") === question.id);
     if (routed) return;
-    withdrawProtectedReplyWords(projectDir, question.text);
-    withdrawPlanApprovalReplies(projectDir, question.text);
+    const spent = rows.findLastIndex((row) => MESSAGE_SPENDING_EVENTS.has(row.event));
+    const reply = rows.slice(spent + 1).findLast((row) => row.event === "HUMAN_TURN" &&
+      (!engineSessionId || auditBlockField(row.block, "Session") === engineSessionId) &&
+      auditBlockField(row.block, "Message Id") !== null);
+    const replyId = reply === undefined ? null : auditBlockField(reply.block, "Message Id");
+    // Taken back by the message they came in; a question kept before messages
+    // were named takes back nothing.
+    if (question.messageId !== undefined) {
+      withdrawProtectedReplyWords(projectDir, { messageId: question.messageId });
+      withdrawPlanApprovalReplies(projectDir, { messageId: question.messageId });
+    }
     appendAuditEntry("REQUEST_ROUTED", {
       Request: question.id,
       ...(engineSessionId ? { Session: engineSessionId } : {}),
+      ...(replyId !== null ? { "Message Id": replyId } : {}),
     }, projectDir);
   } catch (e) {
     recordHookDrop(projectDir, "routed-words", errorMessage(e));
-  }
-}
-
-// A setting, a scope change or a plan change the person typed while a
-// question of the work in progress is open is an instruction to the engine,
-// like words sent to new work: the question keeps none of it. The message the
-// engine is acting on is the person's latest, so its words are taken back from
-// the code plan question and the protected checkpoints, and the answer
-// recorded later holds the answer alone. A live run kept "turn the specialist
-// reviewers off for the rest of this work" as the first line of the plan
-// approval's Person Reply, above "looks good, go ahead".
-function withdrawSettingWords(projectDir: string): void {
-  if (isReadOnlyEngineProbe()) return;
-  try {
-    const words = latestPersonTurn(projectDir)?.words;
-    if (!words) return;
-    withdrawProtectedReplyWords(projectDir, words);
-    withdrawPlanApprovalReplies(projectDir, words);
-  } catch (e) {
-    recordHookDrop(projectDir, "setting-words", errorMessage(e));
   }
 }
 
@@ -4052,7 +4134,7 @@ function newWorkRoutingAskDirective(
   // The route commands travel as fields, never inside the human-facing text.
   // Its own question: this ask is about work that exists, so its continue and
   // reshape routes act only on the item(s) it names, and ask again otherwise.
-  const stored = saveQuestion(
+  const stored = saveReadingQuestion(
     projectDir, description, proposedScope, "routing", askedAbout, false, derivedFrom, stateSha256,
     routingSettings(carried), approvedRequest,
   );
@@ -5733,8 +5815,10 @@ function planProposalDirective(
   derivedFrom?: string,
   finished?: FinishedWorkHere,
 ): PrintDirective {
+  // The words came through `derivedFrom` (routeNext reads them from it), so a
+  // front question with no plan yet is this request asked again.
   const kept = derivedFrom === undefined ? null : readQuestion(pd, derivedFrom);
-  const question = kept !== null && kept.origin === "front" && kept.text === description && !kept.proposedScope
+  const question = kept !== null && kept.origin === "front" && !kept.proposedScope
     ? kept
     : saveQuestion(
       pd, description, "", "front", undefined, flags.newIntent === true, derivedFrom, undefined,
@@ -8814,10 +8898,10 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   if (typed === null || typed.length === 0) return null;
   const argv = splitKiroCommandArgs(typed);
   const own = parseNextFlags(argv);
-  // A line `next` already read for this chat (the reading step over work nobody
-  // has selected kept its words as a question) is not read again: the bare
-  // `next` the agent runs after that step asks which work to pick up.
-  if (own.intent !== undefined && wordsAlreadyRead(pd, own.intent, message.at)) return null;
+  // A line `next` already read for this chat (a reading step kept its words as
+  // a question and marked the message) is not read again: the bare `next` the
+  // agent runs after that step goes on from it.
+  if (own.intent !== undefined && lineHandedOut(pd, engineSessionId, message.id)) return null;
   for (const key of Object.keys(flags)) delete (flags as unknown as Record<string, unknown>)[key];
   Object.assign(flags, own);
   return argv;
@@ -8858,6 +8942,30 @@ function markLineHandedOut(pd: string, session: string, messageId: string): void
   } catch (e) {
     recordHookDrop(pd, "line-handed-out", errorMessage(e));
   }
+}
+
+// A reading step keeps the words it was handed as a routing question, with the
+// person's latest message in this chat as the one they came in (the latest of
+// any chat when the engine cannot tell which chat runs it), and marks that
+// message as read by it, by id, so the bare `next` the agent runs after the
+// step does not take that line again (takePersonsOwnLine) whichever way the
+// words reached `next`; words sent elsewhere later are taken back by it
+// (withdrawRoutedWords).
+function saveReadingQuestion(
+  pd: string, text: string, scope: string, origin?: QuestionOrigin, askedAbout?: QuestionAskedAbout, newWork?: boolean,
+  composedFrom?: string, stateSha256?: string, settings?: QuestionSettings, approvedRequest?: string,
+): StoredQuestion {
+  const latest = engineSessionId === undefined
+    ? listMessages(pd).findLast((message) => message.source === "prompt") ?? null
+    : latestMessage(pd, engineSessionId);
+  const message = latest !== null && latest.source === "prompt" ? latest : null;
+  const question = saveQuestion(
+    pd, text, scope, origin, askedAbout, newWork, composedFrom, stateSha256, settings, approvedRequest, message?.id,
+  );
+  if (engineSessionId !== undefined && message !== null && !isReadOnlyEngineProbe()) {
+    markLineHandedOut(pd, engineSessionId, message.id);
+  }
+  return question;
 }
 
 // The latest row of the chat's record is the person's turn that carries this
@@ -9688,7 +9796,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       flags.intent = undefined;
       flags.request = undefined;
       flags.scope = typedScope;
-      routingAnsweredWords = question.text;
+      routingAnswered = { text: question.text, messageId: question.messageId };
       question = undefined;
       routingAnsweredAsActiveWork = true;
     } else if (!named) {
@@ -10294,7 +10402,6 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       if (unnamed) parts.push(`--person-words '${PERSON_WORDS_SLOT}'`);
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
       const fill = unnamed ? PERSON_WORDS_FILL : "";
-      withdrawSettingWords(pd);
       // On finished work the change starts the first stage the new scope adds
       // after the last one (the tool reads the same predicate), so nothing
       // waits on the person and the agent carries on into it (#2261). Over
@@ -10333,7 +10440,6 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       withWorkPicksUpLine(print, pd, currentStateScope, stateContent, !turnEndingPrints.has(print));
     const teamKeeps = modifiers.length > 0 && !describedWork && !planChanges ? teamKeepsTyped(flags, pd) : null;
     if (teamKeeps !== null) {
-      withdrawSettingWords(pd);
       const said = `Run nothing. Tell the person in one line: "${teamKeeps}"`;
       emit(keptWhilePlanWaits(
         pickedUpIfTurnEnds(settingPrint(
@@ -10350,7 +10456,6 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const unnamed = settingNeedsTheirWords(pd, modifiers);
       const command = configSetCommand(modifiers, unnamed);
       const fill = unnamed ? PERSON_WORDS_FILL : "";
-      withdrawSettingWords(pd);
       emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
         pickedUpIfTurnEnds(
           settingPrint(
@@ -10363,7 +10468,6 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
     if (planChanges) {
-      withdrawSettingWords(pd);
       emit(planChangeDirective(planChanges, null, plan, planApprovalAskIsOpen(pd), stillParked));
       return;
     }
@@ -10473,11 +10577,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // `--request` brings the kept words back here as the request they may be.
   // Read off the parse, not the argv, so the person's own line taken in the
   // agent's place (takePersonsOwnLine) is read the same way; that bare `next`
-  // is not taken a second time (wordsAlreadyRead), so the chain ends.
+  // is not taken a second time (saveReadingQuestion marks the message), so the
+  // chain ends.
   if (!stateContent && onlyProse && flags.intent !== undefined && flags.markedWords !== true && flags.request === undefined) {
     const here = unselectedRecords(pd);
     if (here !== null && here.selectable.length > 0) {
-      const words = saveQuestion(pd, flags.intent, "", "routing", {
+      const words = saveReadingQuestion(pd, flags.intent, "", "routing", {
         space: here.space,
         targets: here.selectable.map(({ intent, selector }) => ({ intent: selector, uuid: intent.uuid ?? "" })),
         pick: true,
@@ -10666,31 +10771,44 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // and nothing is built yet, their words may change that answer.
     const planQuestion = openPlanApprovalQuestion(pd);
     if (planQuestion !== null) {
-      const words = saveQuestion(
+      const words = saveReadingQuestion(
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
       const settings = typedSettingModifiers(flags);
       emit(openPlanQuestionReplyDirective(
         planQuestion.editing, words.id, undo, settings, settingNeedsTheirWords(pd, settings), planQuestion.answered,
+        replyIds(pd, "code-generation"),
       ));
       return;
     }
     const open = openStageQuestion(pd, stateContent);
     if (open !== null) {
       // The settings typed with these words ride on with them.
-      const words = saveQuestion(
+      const words = saveReadingQuestion(
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
-      emit(openQuestionReplyDirective(open.stage, open.block, words.id));
+      emit(openQuestionReplyDirective(open.stage, open.block, words.id, replyIds(pd, open.stage)));
+      return;
+    }
+    // Words at the engine's recovery question, once it holds the person's
+    // reply, may pick one of its choices, read the same way. A refused gate
+    // action asks it, so it comes before the gate.
+    const recovery = guardRecoveryReplyWaits(pd, stateContent);
+    if (recovery !== null) {
+      const words = saveReadingQuestion(
+        pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
+        undefined, routingSettings(carriedRoutingFlags(flags)),
+      );
+      emit(openRecoveryReplyDirective(recovery, words.id));
       return;
     }
     // Words at an approval gate the person is looking at ("approve") may be
     // its answer, read the same way.
     const gateStage = openApprovalGateStage(stateContent);
     if (gateStage !== null) {
-      const words = saveQuestion(
+      const words = saveReadingQuestion(
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
@@ -10701,7 +10819,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const gateFolder = gateNode && !(isPerUnit(gateNode) && !usesStageLevelPerUnitArtifacts(gateScope, stateContent))
         ? commonFolder(resolveProduces(gateNode, null, engineRelativeRecordDir(pd), codekbCtxFor(pd)))
         : "";
-      emit(openGateReplyDirective(gateStage, words.id, gateFolder, personsGateReply(pd, resolveInvokingSessionId(pd), gateStage).replies));
+      emit(openGateReplyDirective(gateStage, words.id, gateFolder, replyIds(pd, gateStage)));
       return;
     }
     // Words alone (nothing `next` reads as a flag, scope, verb or noun) may
@@ -10709,7 +10827,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // fresh, read the same way; words with a setting typed beside them are
     // asked about with it, as below.
     if (nextArgsAreOnlyWords(args)) {
-      const words = saveQuestion(
+      const words = saveReadingQuestion(
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
@@ -10739,7 +10857,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     flags.intent && !flags.scope && !flags.positionalScope && !flags.resume && question === undefined &&
     isTeamUnitOwnership(stateContent) && nextArgsAreOnlyWords(args)
   ) {
-    const words = saveQuestion(
+    const words = saveReadingQuestion(
       pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
       undefined, routingSettings(carriedRoutingFlags(flags)),
     );
@@ -19038,7 +19156,7 @@ export function main(argv: string[]): void {
     activeRestartAsked = null;
     restartUnmarkedNotice = false;
     routingAnsweredAsActiveWork = false;
-    routingAnsweredWords = null;
+    routingAnswered = null;
     engineProjectDir = undefined;
     resolvedDirectiveLimit = null;
     engineSessionId = undefined;

@@ -75,6 +75,7 @@ import {
   getField,
   hookStandsOutside,
   hostEnvelopeTurnText,
+  personDecisionPending,
   planApprovalChallengeRelativePath,
   COMMAND_TURN_REPLY,
   OPEN_QUESTION_FIELD,
@@ -564,6 +565,9 @@ try {
   // An adapter whose own prompt hook runs a command the person typed and hands
   // the agent its output (Kiro's) says so; the help is then left to it.
   let relaysTerminalOutput = false;
+  // An adapter whose host may show the person this hook's context line says
+  // so; the message-id line is then left to the steps of `next`.
+  let contextMayReachPerson = false;
   try {
     const parsed = JSON.parse(input) as {
       hook_event_name?: unknown;
@@ -584,8 +588,10 @@ try {
       prompt_id?: unknown;
       transcript_path?: unknown;
       relays_terminal_output?: unknown;
+      context_may_reach_person?: unknown;
     };
     relaysTerminalOutput = parsed.relays_terminal_output === true;
+    contextMayReachPerson = parsed.context_may_reach_person === true;
     if (typeof parsed.session_id === "string") sessionId = validSessionId(parsed.session_id.trim()) ?? "";
     questionText = extractQuestionText(parsed.tool_input ?? parsed.toolInput);
     // A host that wraps the person's turn in its own context (Kiro Crew) hands
@@ -883,11 +889,12 @@ try {
           // of them or reads meaning into it: the conductor reads it and records
           // the choice on the question it answers.
           if (replyText !== "" && !notAReply) {
-            notePlanApprovalAskReply(projectDir, sessionId, replyText, pickerQuestion);
+            notePlanApprovalAskReply(projectDir, sessionId, replyText, pickerQuestion, messageId || undefined);
           }
           if (sessionId && replyText && !notAReply && openQuestion === null) {
             const plan = existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, sessionId)));
-            const kept = recordProtectedHumanResponse(projectDir, sessionId, replyText, questionText, pickerQuestion).recorded;
+            const kept = recordProtectedHumanResponse(projectDir, sessionId, replyText, questionText, pickerQuestion,
+              messageId || undefined).recorded;
             if (plan || !kept) recordPlanApprovalHumanResponse(projectDir, sessionId, replyText, pickerQuestion);
           }
           // What the question box carried back goes on the record, question
@@ -911,6 +918,15 @@ try {
         });
       } catch {
         // Authority bookkeeping remains fail-open for the human's turn.
+      }
+      // While a decision of theirs is open, the agent learns the id of the
+      // message it can name with --message, never its words.
+      if (
+        promptSubmitted && messageId && !notAReply && !contextMayReachPerson &&
+        personDecisionPending(projectDir, sessionId)
+      ) {
+        notes.push(`This message of the person's is on record as ${messageId}: a decision you record from it can ` +
+          `name it with --message ${messageId}.`);
       }
       try {
         // The engine's guard-recovery ask keeps that the person replied; a

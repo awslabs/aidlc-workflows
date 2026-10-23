@@ -1,6 +1,7 @@
 // covers: directive:guard-recovery, function:consumeSharedDirectiveAsk,
 // function:guardRecoveryFeedbackStatus, function:currentGuardRecoveryAskMarker,
-// function:recordGuardRefusal
+// function:recordGuardRefusal, function:recordGuardRecoveryChoice,
+// subcommand:aidlc-orchestrate:next, subcommand:aidlc-log:answer
 //
 // A GUARD-RECOVERY ASK IS A HUMAN WAIT, AND THE HUMAN'S SELECTION SURVIVES.
 //
@@ -18,6 +19,17 @@
 // returns the same ask without touching the marker, so the consumed selection
 // is still there when the human's feedback arrives and the Request Changes
 // report binds to it.
+//
+// A request typed at the open question keeps the person's pick too. The person
+// typed `/aidlc <their pick>`, and the agent handed their words to `next`, as
+// the skill's loop does with an `/aidlc` line. `next` read them as words over
+// work in progress and named the routing question, never the recovery
+// question; asking it replaced the recovery question, which then came back
+// with their reply gone. Here `next` names the recovery question's own
+// commands, the agent's record of the pick lands, and the pick is carried out,
+// under every Guard Policy; once a pick's own step has asked its question
+// (Confirm the summary again shows the summary), words are not read as a
+// recovery pick.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
@@ -30,7 +42,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { hookChildEnv } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { hookChildEnv, setGuardPolicyLine } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   resetAidlcEnv,
@@ -138,6 +150,8 @@ interface Project {
   markerPath: string;
   marker: () => Record<string, unknown> | null;
   next: () => Run;
+  // `next` with the person's words, as the skill hands them on.
+  nextWith: (args: string[]) => Run;
   continueWith: (token: string) => Run;
   probeNext: () => Run;
   report: (args: string[]) => Run;
@@ -147,6 +161,7 @@ interface Project {
   humanPrompt: (text: string) => Run;
   // The agent's record of the remedy it read from the person's reply.
   record: (details: string) => Run;
+  log: (args: string[]) => Run;
 }
 
 const RUNNER_GUARD_SKIPS = [
@@ -154,7 +169,7 @@ const RUNNER_GUARD_SKIPS = [
   "AIDLC_SKIP_HUMAN_PRESENCE_GUARD",
 ] as const;
 
-function project(): Project {
+function project(policy?: "off" | "relaxed" | "strict"): Project {
   const dir: string = setupIntegrationProject({
     withState: "state-brownfield-feature.md",
     withInceptionArtifacts: true,
@@ -181,7 +196,8 @@ function project(): Project {
       /^- \[ \] functional-design(\s+\S\s+)EXECUTE$/m,
       "- [-] functional-design$1EXECUTE",
     );
-  writeFileSync(statePath, state, "utf-8");
+  // The Guard Policy as the person sets it, when a case names one.
+  writeFileSync(statePath, policy ? setGuardPolicyLine(state, `${policy} (set by you)`) : state, "utf-8");
   // One Unit, every produced functional-design artifact present, and NO summary
   // confirmation: the routing-time refusal this scenario is about.
   const unitsDir = join(record, "inception", "units-generation");
@@ -235,6 +251,7 @@ function project(): Project {
         ? (JSON.parse(readFileSync(markerPath, "utf-8")) as Record<string, unknown>)
         : null,
     next: () => spawn([BUN, tool("orchestrate"), "next", "--project-dir", dir], env, dir),
+    nextWith: (args) => spawn([BUN, tool("orchestrate"), "next", ...args], env, dir),
     continueWith: (token) =>
       spawn([BUN, tool("orchestrate"), "continue", token, "--project-dir", dir], env, dir),
     probeNext: () => {
@@ -303,6 +320,7 @@ function project(): Project {
         env,
         dir,
       ),
+    log: (args) => spawn([BUN, tool("log"), ...args, "--project-dir", dir], env, dir),
   };
 }
 
@@ -644,4 +662,123 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
       picked_by: "person",
     });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
+// What `next` hands the agent for words typed at the recovery question: a
+// print naming each of its choices' own commands and, unless the person has
+// said the words are part of this work, the route for other work, with none of
+// the person's words in it.
+function expectRecoveryReading(run: Run, words?: string, otherWork = true): void {
+  const reading = directive(run);
+  expect(reading.kind, JSON.stringify(reading)).toBe("print");
+  const message = String(reading.message);
+  expect(message).toMatch(/--checkpoint guard-recovery --details '?reconfirm-summary'?/);
+  expect(message).toMatch(/--checkpoint guard-recovery --details '?request-changes'?/);
+  if (otherWork) expect(message).toMatch(/next --request [0-9a-f]{8}/);
+  expect(message).not.toContain("--result resumed");
+  if (words !== undefined) expect(message).not.toContain(words);
+}
+
+const revised = (p: Project): string => readFileSync(join(seededRecordDir(p.dir), "aidlc-state.md"), "utf-8");
+
+describe("t329 a request typed at the open recovery question keeps the person's pick", () => {
+  const feedback = "keep saved searches private until their owner shares them";
+  const pick = `request changes: ${feedback}`;
+  for (const policy of ["off", "relaxed", "strict"] as const) {
+    test(`${policy}: "/aidlc <their pick>" is read against the recovery question, and the pick is carried out`, () => {
+      const p = project(policy);
+      expect(routeToAsk(p, []).ask_type).toBe("guard-recovery");
+      expect(p.humanPrompt(`/aidlc ${pick}`).code).toBe(0);
+      expectRecoveryReading(p.nextWith(pick.split(" ")), pick);
+      // The print records nothing and asks nothing: the question still holds their reply.
+      expect(p.marker()?.ask_type).toBe("guard-recovery");
+      const recorded = p.record(`request-changes: ${feedback}`);
+      expect(recorded.code, recorded.stdout + recorded.stderr).toBe(0);
+      expect(JSON.parse(recorded.stdout).recorded).toBe("request-changes");
+      const accepted = rejectedReport(p, "Request Changes", pick);
+      expect(accepted.code, accepted.stdout + accepted.stderr).toBe(0);
+      expect(revised(p)).toMatch(/^- \[R\] functional-design/m);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`${policy}: "/aidlc 2" is read the same way, and Request Changes asks what should change`, () => {
+      const p = project(policy);
+      expect(routeToAsk(p, []).ask_type).toBe("guard-recovery");
+      expect(p.humanPrompt("/aidlc 2").code).toBe(0);
+      expectRecoveryReading(p.nextWith(["2"]));
+      const recorded = p.record("request-changes");
+      expect(recorded.code, recorded.stdout + recorded.stderr).toBe(0);
+      expect(JSON.parse(recorded.stdout).recorded).toBe("request-changes");
+      expect(JSON.parse(recorded.stdout).message).toContain("What should change?");
+      expect(p.humanPrompt(feedback).code).toBe(0);
+      expect(p.record(`Request Changes: ${feedback}`).code).toBe(0);
+      const accepted = rejectedReport(p, "Request Changes", feedback);
+      expect(accepted.code, accepted.stdout + accepted.stderr).toBe(0);
+      expect(revised(p)).toMatch(/^- \[R\] functional-design/m);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`${policy}: after Request Changes waits for what should change, their "/aidlc <words>" is read the same way`, () => {
+      const p = project(policy);
+      expect(routeToAsk(p, []).ask_type).toBe("guard-recovery");
+      expect(p.humanPrompt("2").code).toBe(0);
+      expect(p.record("request-changes").code).toBe(0);
+      expect(p.humanPrompt(`/aidlc ${feedback}`).code).toBe(0);
+      expectRecoveryReading(p.nextWith(feedback.split(" ")), feedback);
+      const recorded = p.record(`Request Changes: ${feedback}`);
+      expect(recorded.code, recorded.stdout + recorded.stderr).toBe(0);
+      expect(JSON.parse(recorded.stdout).recorded).toBe("request-changes");
+      const accepted = rejectedReport(p, "Request Changes", feedback);
+      expect(accepted.code, accepted.stdout + accepted.stderr).toBe(0);
+      expect(revised(p)).toMatch(/^- \[R\] functional-design/m);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`${policy}: words sent to the routing question and answered "part of that work" are the recovery reply`, () => {
+      const p = project(policy);
+      expect(routeToAsk(p, []).ask_type).toBe("guard-recovery");
+      expect(p.humanPrompt(`/aidlc ${pick}`).code).toBe(0);
+      const reading = String(directive(p.nextWith(pick.split(" "))).message);
+      const request = /next (--request [0-9a-f]{8})/.exec(reading)?.[1];
+      expect(request, reading).toBeDefined();
+      // The agent read their words as other work: the routing question.
+      const routing = directive(p.nextWith((request as string).split(" ")));
+      expect(routing.ask_type, JSON.stringify(routing)).toBe("new-work-routing");
+      const part = (routing.choices as Array<{ label: string; command: string }>)
+        .find((choice) => choice.label === "Part of the active work");
+      expect(part, JSON.stringify(routing.choices)).toBeDefined();
+      expect(p.humanPrompt("1").code).toBe(0);
+      const answer = (part as { command: string }).command.replace(/^.*aidlc-orchestrate\.ts\s+next\s+/, "");
+      // Their words are the answer, with the question's own commands; the
+      // question is not handed out afresh.
+      expectRecoveryReading(p.nextWith(answer.split(/\s+/)), pick, false);
+      const recorded = p.record(`request-changes: ${feedback}`);
+      expect(recorded.code, recorded.stdout + recorded.stderr).toBe(0);
+      expect(JSON.parse(recorded.stdout).recorded).toBe("request-changes");
+      const accepted = rejectedReport(p, "Request Changes", pick);
+      expect(accepted.code, accepted.stdout + accepted.stderr).toBe(0);
+      expect(revised(p)).toMatch(/^- \[R\] functional-design/m);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`${policy}: once Confirm the summary again has asked its own question, words are not read as a recovery pick`, () => {
+      const p = project(policy);
+      expect(routeToAsk(p, []).ask_type).toBe("guard-recovery");
+      expect(p.humanPrompt("1").code).toBe(0);
+      expect(p.record("reconfirm-summary").code).toBe(0);
+      // The remedy's own step: the summary, shown and logged as its question.
+      const questions = join(seededRecordDir(p.dir), "construction", UNIT, "functional-design",
+        "functional-design-questions.md");
+      writeFileSync(questions, [
+        "# Functional Design Questions", "", "## Q1", "Who can see a saved search?", "", "A) Its owner",
+        "B) Everyone", "X) Other (please specify)", "", "[Answer]: A", "", "## Consolidated Summary Confirmation", "",
+        "A saved search is private to its owner.", "", "- Looks correct", "- Request changes", "", "[Answer]:", "",
+      ].join("\n"));
+      const asked = p.log(["decision", "--checkpoint", "summary-confirmation", "--stage", "functional-design",
+        "--unit", UNIT, "--questions-file", questions, "--decision", "Does this all look correct?",
+        "--options", "Looks correct,Request changes"]);
+      expect(asked.code, asked.stdout + asked.stderr).toBe(0);
+      const words = "the summary looks right to me";
+      expect(p.humanPrompt(`/aidlc ${words}`).code).toBe(0);
+      const reading = directive(p.nextWith(words.split(" ")));
+      expect(reading.kind, JSON.stringify(reading)).toBe("print");
+      expect(String(reading.message)).not.toContain("--checkpoint guard-recovery");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 });

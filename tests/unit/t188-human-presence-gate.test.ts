@@ -2030,7 +2030,7 @@ describe("t188: a late-logged question takes the reply that answered it", () => 
     expect(pairs.answered.map((pair) => pair.messageId)).toEqual([id]);
   });
 
-  test("a message spent by an approval, an unknown id, or another chat's message is refused to the agent, naming the step", () => {
+  test("a message spent by an approval or an unknown id is refused to the agent, naming the step; another chat's is recorded", () => {
     const slug = field(proj, "Current Stage");
     // Typed a minute ago; the approval it gave is on record after it, so it is spent.
     const spent = reply("approve", CHAT, 60);
@@ -2043,14 +2043,15 @@ describe("t188: a late-logged question takes the reply that answered it", () => 
     const unknown = log(["answer", "--stage", slug, "--details", "A", "--message", "0badc0de"], inChat);
     expect(unknown.rc).not.toBe(0);
     expect(unknown.out).toContain("no message record");
-    const elsewhere = reply("A", OTHER_CHAT);
-    const foreign = log(["answer", "--stage", slug, "--details", "A", "--message", elsewhere], inChat);
-    expect(foreign.rc).not.toBe(0);
-    expect(foreign.out).toContain("another chat");
     expect(rows("QUESTION_ANSWERED")).toHaveLength(0);
+    // The person's reply in another chat of this work is theirs too.
+    const elsewhere = reply("A", OTHER_CHAT);
+    const other = log(["answer", "--stage", slug, "--details", "A", "--message", elsewhere], inChat);
+    expect(other.rc, other.out).toBe(0);
+    expect(rows("QUESTION_ANSWERED").map((row) => fieldOf(row, "Message Id"))).toEqual([elsewhere]);
   });
 
-  test("with no chat the engine can name, one chat's records since the last decision are enough; two chats are not", () => {
+  test("with no chat the engine can name, the message named is recorded, whichever chats have spoken", () => {
     const slug = field(proj, "Current Stage");
     const id = reply("A then B");
     expect(log(["decision", "--stage", slug, "--decision", "Q?", "--options", "A,B"]).rc).toBe(0);
@@ -2058,8 +2059,8 @@ describe("t188: a late-logged question takes the reply that answered it", () => 
     expect(one.rc, one.out).toBe(0);
     reply("something else", OTHER_CHAT);
     const two = log(["answer", "--stage", slug, "--details", "B", "--message", id]);
-    expect(two.rc).not.toBe(0);
-    expect(two.out).toContain("which chat");
+    expect(two.rc, two.out).toBe(0);
+    expect(rows("QUESTION_ANSWERED").map((row) => fieldOf(row, "Message Id"))).toEqual([id, id]);
   });
 
   test("the message that arrived before the question was logged answers it, and the person is not asked again", () => {

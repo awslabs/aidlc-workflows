@@ -201,6 +201,8 @@ describe("t-checkpoint-reply-before-ask: the person answers before the Unit's qu
       const p = fixture(policy);
       const file = requestReview(p);
       says(p, "approve it as it is");
+      const id = auditBlockField(events(p, "HUMAN_TURN").at(-1)!.block, "Message Id");
+      expect(id).not.toBeNull();
       const asked = verifyAndAsk(p, file);
       expect(asked.earlier_reply).toBe("approve it as it is");
       const approved = checkpoint(p, "approve", ["--user-input", "approve it as it is"]);
@@ -209,6 +211,8 @@ describe("t-checkpoint-reply-before-ask: the person answers before the Unit's qu
       const gates = unitGates(p, "GATE_APPROVED");
       expect(gates).toHaveLength(1);
       expect(auditBlockField(gates[0].block, "Person Reply")).toBe("approve it as it is");
+      // The row names the message it stands on.
+      expect(auditBlockField(gates[0].block, "Message Id")).toBe(id);
       expect(questionsAsked(p)).toHaveLength(1);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

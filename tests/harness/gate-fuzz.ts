@@ -1009,6 +1009,8 @@ export interface Run {
   /** Rows the copy held before the run. */
   start: number;
   messages: Array<{ id: string; session: string | null; source: string; text: string; words: string | null; cut: boolean }>;
+  /** The messages the copy held before the run (a walk's), which a row's window may reach back to. */
+  earlier: Run["messages"];
   files: Record<string, string>;
   finalState: string;
   /** One reply and `next` after the run: the step it gave, or why it gave none. */
@@ -1153,7 +1155,7 @@ export function play(state: State, seed: number, steps: Step[], opts: { twin?: b
   const messagesBefore = new Set(store().listMessages(proj).map((m) => m.id));
   const run: Run = {
     state, seed, dropped: opts.dropped ?? [], twin: opts.twin === true, steps: [], turns: [], rows: [], start, messages: [],
-    files: {}, finalState: "", liveness: { ok: false, out: "" }, chats, proj, error: null,
+    earlier: [], files: {}, finalState: "", liveness: { ok: false, out: "" }, chats, proj, error: null,
   };
   let choices: Array<{ label: string; command: string }> = [...state.choices];
   const heard = (out: string) => {
@@ -1386,8 +1388,10 @@ export function play(state: State, seed: number, steps: Step[], opts: { twin?: b
   if (host instanceof OpencodeScopeHost) host.dispose();
   run.rows = readRows(proj);
   run.finalState = stateText();
-  run.messages = store().listMessages(proj).filter((m) => !messagesBefore.has(m.id))
+  const kept = store().listMessages(proj)
     .map((m) => ({ id: m.id, session: m.session, source: m.source, text: m.text, words: m.words, cut: m.cut === true }));
+  run.messages = kept.filter((m) => !messagesBefore.has(m.id));
+  run.earlier = kept.filter((m) => messagesBefore.has(m.id));
   run.files = recordFiles(proj);
   if (host instanceof NativeScopeHost && host.hookFailures.length > 0 && run.error === null) {
     run.error = `hook failures: ${clip(host.hookFailures.join(" | "), 1500)}`;
@@ -1521,16 +1525,34 @@ export function checkRun(run: Run): Failure[] {
       const lastSpend = lastIndex(rows, (r) => SPENDING.has(r.event), s.from);
       const backing = present.filter((t) => t.index > lastSpend && t.index < row.index);
       const spoke = chatsPresent(lastSpend, row.index);
-      const backed = backing.some((t) => t.chat === s.chat) || (backing.length > 0 && spoke.size === 1);
+      // A message the agent names in the same second as the last spending row is unspent to the engine: the record
+      // keeps whole seconds, and the proof's tie favours the message (one message can give an approval and the answers
+      // beside it).
+      const namedId = s.ops.some((op) => / --message /.test(` ${op.what} `)) ? field(row, "Message Id") : null;
+      const namedTurn = namedId === null ? undefined : rows.find((r) => r.event === "HUMAN_TURN" && field(r, "Message Id") === namedId);
+      const spentRow = rows.find((r) => r.index === lastSpend);
+      const tie = namedTurn !== undefined && spentRow !== undefined && namedTurn.index < lastSpend &&
+        field(namedTurn, "Timestamp") === field(spentRow, "Timestamp");
+      const backed = backing.some((t) => t.chat === s.chat) || (backing.length > 0 && spoke.size === 1) || tie;
       if (state.unattended) failures.push({ invariant: "I1", what: `${row.event} under AIDLC_UNATTENDED`, source: "", step: s.i, detail: s.label });
       else if (!backed) failures.push({ invariant: "I1", what: `${row.event} with no unspent reply of the person's`, source: "", step: s.i, detail: `${s.label}; rows since the last spending row: ${rows.slice(lastSpend + 1, row.index).map((r) => r.event).join(", ")}` });
-      // I2: the row names the message, and the words on it are that message's.
+      // I2: the row names the message, and the words on it are that message's. A decision in a chat with no reply of
+      // its own since the last decision (one not sent while another engine question was open) names none unless the
+      // agent named one: the window is this chat's, so no words and no id, and no refusal.
       const id = field(row, "Message Id");
       const message = id === null ? null : run.messages.find((m) => m.id === id) ?? null;
+      // A message the copy held before the run is on record too: the agent may name one ("older"), and a message of
+      // this work proves from any chat.
+      const before = id === null || message !== null ? null : run.earlier.find((m) => m.id === id) ?? null;
       const sent = new Set(run.turns.map((t) => t.text));
-      if (id === null) failures.push({ invariant: "I2", what: `${row.event} names no message`, source: "", step: s.i, detail: s.label });
-      else if (message === null) failures.push({ invariant: "I2", what: `${row.event} names a message not of this run`, source: "", step: s.i, detail: id });
-      else if (!sent.has(message.text)) {
+      const ownReply = backing.some((t) => t.chat === s.chat &&
+        field(rows.find((r) => r.index === t.index) ?? row, "Open Question") === null);
+      const namedOne = s.ops.some((op) => / --message /.test(` ${op.what} `));
+      if (id === null) {
+        if (ownReply || namedOne) failures.push({ invariant: "I2", what: `${row.event} names no message`, source: "", step: s.i, detail: s.label });
+      } else if (message === null && before === null) {
+        failures.push({ invariant: "I2", what: `${row.event} names a message not of this run`, source: "", step: s.i, detail: id });
+      } else if (message !== null && !sent.has(message.text)) {
         const cut = message.cut && [...sent].some((t) => t.startsWith(message.text));
         // The store keeps a message to its documented bound and marks the cut (MESSAGE_TEXT_MAX_CHARS); a cut anywhere
         // else, or unmarked, loses words.
@@ -1538,6 +1560,15 @@ export function checkRun(run: Run): Failure[] {
           failures.push({ invariant: "I2", what: cut ? `the message record cut the words at ${message.text.length} characters` : "the message record is not what was typed", source: "", step: s.i, detail: `${JSON.stringify(clip(message.text, 120))}` });
         }
       }
+      // A row whose words come from several messages names them all, oldest first, ending with Message Id: its words
+      // are exactly theirs, joined (the blank ones carry none).
+      const ids = field(row, "Message Ids")?.split(",") ?? null;
+      const named = ids?.map((one) => [...run.earlier, ...run.messages].find((m) => m.id === one) ?? null) ?? null;
+      if (ids !== null && (ids.at(-1) !== id || named!.some((m) => m === null))) {
+        failures.push({ invariant: "I2", what: `${row.event} Message Ids is not its messages ending at Message Id`, source: "", step: s.i, detail: `${ids.join(",")} vs ${id}` });
+      }
+      const joined = named?.every((m) => m !== null)
+        ? named.map((m) => m!.words ?? "").filter((words) => !isBlank(words)).join("\n") : null;
       // Since S1 a decision's words are every unspent reply of theirs in this chat, in order, ending with the message
       // the row names: a remark and the answer are both kept. The order is the record's, the HUMAN_TURN row that names
       // each message, as the engine reads it: the store lists messages by the second they came in and then by their
@@ -1558,8 +1589,12 @@ export function checkRun(run: Run): Failure[] {
       // The summary receipt's Feedback is the agent's text after the choice ("Request changes: <what>"), like Reason.
       for (const name of row.event === "SUMMARY_CONFIRMATION_RECORDED" ? ["Person Reply"] : ["Person Reply", "Feedback"]) {
         const value = field(row, name);
-        if (value !== null && message !== null && value !== oneLine(message.words ?? message.text) && !windowOf(value)) {
-          failures.push({ invariant: "I2", what: `${row.event} ${name} is not the message's words`, source: "", step: s.i, detail: `${JSON.stringify(clip(value, 120))} vs ${JSON.stringify(clip(message.words ?? message.text, 120))}` });
+        if (value === null) continue;
+        const shown = message ?? before;
+        const theirs = joined !== null ? value === oneLine(joined)
+          : shown === null || value === oneLine(shown.words ?? shown.text) || windowOf(value);
+        if (!theirs) {
+          failures.push({ invariant: "I2", what: `${row.event} ${name} is not the message's words`, source: "", step: s.i, detail: `${JSON.stringify(clip(value, 120))} vs ${JSON.stringify(clip(joined ?? shown?.words ?? shown?.text ?? "", 120))}` });
         }
       }
     }

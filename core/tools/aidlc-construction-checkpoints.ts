@@ -47,6 +47,7 @@ import {
   isoTimestamp,
   markProtectedQuestionReplied,
   mintProtectedQuestion,
+  PROTECTED_RESPONSE_REPLIES_MAX,
   PROTECTED_RESPONSE_WORDS_MAX_CHARS,
   writeProtectedResponse,
   isAutonomousMode,
@@ -1662,13 +1663,14 @@ export function askConstructionCheckpoint(
       ...(offer === null ? {} : { check_offer: offer.offer }),
     };
     if (earlier === null) return result;
-    const words = earlier.join("\n").slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
+    const words = earlier.map((reply) => reply.words).join("\n").slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
     markProtectedQuestionReplied(projectDir, question);
     writeProtectedResponse(projectDir, {
       version: 1, session, challengeId: question.challengeId,
       responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
       words,
       at: isoTimestamp(),
+      replies: earlier.slice(-PROTECTED_RESPONSE_REPLIES_MAX),
     });
     return { ...result, earlier_reply: words };
   });
@@ -1706,6 +1708,7 @@ export function approveConstructionCheckpoint(
     // approval; nothing more is asked of them.
     const inWords = current.result.review_not_finished?.approved_in_words === true;
     let words: string | undefined;
+    let messageId: string | undefined;
     if (humanRequired && inWords) {
       // Already approved from their words: an approve run again records nothing more.
       if (current.result.approved) return current.result;
@@ -1714,7 +1717,9 @@ export function approveConstructionCheckpoint(
       requireProtectedResponse(projectDir, session, {
         kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: "Approve",
       }, namedReply(projectDir, current.result.stages, unit, message));
-      words = readProtectedResponse(projectDir, session)?.words;
+      const response = readProtectedResponse(projectDir, session);
+      words = response?.words;
+      messageId = response?.replies?.at(-1)?.messageId;
     } else if (current.result.approved) {
       return current.result;
     }
@@ -1742,6 +1747,7 @@ export function approveConstructionCheckpoint(
       ...(humanRequired ? { Session: session } : {}),
       ...(humanRequired ? { "User Input": "Approve" } : { Autonomous: "true" }),
       ...(words ? { "Person Reply": words } : {}),
+      ...(messageId ? { "Message Id": messageId } : {}),
       ...(notFinished ? { Review: "not finished" } : {}),
       ...findingDispositions?.(
         gate["Gate Stages"].split(", ").filter(Boolean), [unit], humanRequired ? "person" : "nobody",
@@ -1797,7 +1803,9 @@ export function rejectConstructionCheckpoint(
     requireProtectedResponse(projectDir, session, {
       kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: "Request Changes",
     }, namedReply(projectDir, current.result.stages, unit, message));
-    const words = readProtectedResponse(projectDir, session)?.words;
+    const response = readProtectedResponse(projectDir, session);
+    const words = response?.words;
+    const messageId = response?.replies?.at(-1)?.messageId;
     const reason = givenReason.trim() || changeRequestWords(words);
     const userInput = "Request Changes";
     if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason)) {
@@ -1812,6 +1820,7 @@ export function rejectConstructionCheckpoint(
       Session: session,
       "User Input": userInput, Feedback: reason, Reason: reason,
       ...(words ? { "Person Reply": words } : {}),
+      ...(messageId ? { "Message Id": messageId } : {}),
     }, projectDir);
     consumeProtectedQuestion(projectDir, session);
     return resolveConstructionCheckpoint(projectDir, unit, kind);
