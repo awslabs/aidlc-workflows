@@ -31,6 +31,7 @@ import {
   writeFileAtomic,
   asksForHelp,
   answeredBeforeShownStep,
+  auditRowWritesFile,
   personsWordsText,
   humanRepliedSinceGate,
   repliedSinceStageStart,
@@ -1433,8 +1434,9 @@ function pendingSummaryDecision(
   unit: string | undefined,
   workflow: string | undefined,
   questionsFile: string,
-): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string } {
-  const entries = readAuditShardEvents(pd).filter((entry) => {
+): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string; contentAt?: string } {
+  const rows = readAuditShardEvents(pd);
+  const entries = rows.filter((entry) => {
     // A turn that was only a command to AIDLC is no reply to the summary.
     if (entry.event === "HUMAN_TURN") return isReplyTurn(entry);
     if (entry.event === "STAGE_COMPLETED") {
@@ -1538,6 +1540,22 @@ function pendingSummaryDecision(
     return { pending: false, humanAfterDecision: false };
   }
 
+  // When the summary was last written before its question was recorded: a
+  // message sent by then did not see it. Filling in its `[Answer]:` comes after
+  // the record (`log decision` needs it blank), and a write the record does not
+  // hold (through the shell) gives no time. A write in another shard at the
+  // record's own second is left out: a guess never binds a decision.
+  const questionsAbs = resolve(pd, questionsFile);
+  const contentAt = rows
+    .filter((row) =>
+      auditRowWritesFile(pd, row, questionsAbs) &&
+      latestActions.every((decision) => follows(row, decision) === false)
+    )
+    .reduce<string | undefined>(
+      (latest, row) => latest === undefined || row.timestamp > latest ? row.timestamp : latest,
+      undefined,
+    );
+
   // Whether a reply turn of the person's came after the question's record: the
   // confirmation stands on one, unless the conductor names the message it read
   // it from (the caller proves that message). A turn in another shard at the
@@ -1551,7 +1569,7 @@ function pendingSummaryDecision(
       relations.every((relation) => relation === true)
     )
   ) {
-    return { pending: true, humanAfterDecision: true };
+    return { pending: true, humanAfterDecision: true, contentAt };
   }
   if (
     humanRelations.some((relations) =>
@@ -1565,7 +1583,7 @@ function pendingSummaryDecision(
       ambiguity: latestActionTimestamp,
     };
   }
-  return { pending: true, humanAfterDecision: false };
+  return { pending: true, humanAfterDecision: false, contentAt };
 }
 
 // Which chat's reply answers it is the protected question's (requireProtectedResponse):
@@ -2165,8 +2183,9 @@ function handleAnswer(args: string[]): void {
       // The confirmation stands on a reply after the summary's own question
       // record, as a stage gate's does on one after its showing, or on the
       // message the agent names: the one it read the confirmation from when it
-      // showed the summary before recording the question. The engine proves a
-      // named message and never reads its words.
+      // showed the summary before recording the question, sent after the
+      // summary was last written. The engine proves a named message and never
+      // reads its words.
       let named: StoredMessage | null = null;
       if (flags.message !== undefined) {
         const proof = proveMessage(pd, flags.message, "answer");
@@ -2177,14 +2196,18 @@ function handleAnswer(args: string[]): void {
         if (named !== null && !repliedSinceStageStart(pd, flags.stage, named.id)) {
           error(stageStartFloorRefusal("confirm the summary of", flags.stage, named.id, "the summary"));
         }
+        const step = (why: string) => answeredBeforeShownStep(pd, flags.stage, {
+          refused: "Cannot record the summary choice",
+          question: `the "${flags.stage}" summary`,
+          shown: "the summary",
+          command: "log answer",
+          why,
+        }, pending.contentAt).step;
+        if (named !== null && pending.contentAt !== undefined && named.at <= pending.contentAt) {
+          error(step(`their message ${named.id} came before the summary was last written, so it does not answer it.`));
+        }
         if (named === null && !pending.humanAfterDecision) {
-          error(answeredBeforeShownStep(pd, flags.stage, {
-            refused: "Cannot record the summary choice",
-            question: `the "${flags.stage}" summary`,
-            shown: "the summary",
-            command: "log answer",
-            why: "no reply of the person's has arrived since the summary question was recorded.",
-          }).step);
+          error(step("no reply of the person's has arrived since the summary question was recorded."));
         }
       }
       // Their words go on the receipt: the message named, or every reply of

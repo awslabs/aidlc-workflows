@@ -14987,24 +14987,7 @@ export function checkSummaryConfirmationEvidence(
 
     for (const artifact of summaryArtifactPaths(stage, question)) {
       const artifactAbs = resolvePath(artifact);
-      const artifactSuffix = "/" + toPosix(relative(projectDir, artifactAbs));
-      const writes = events.filter((entry) => {
-        if (
-          entry.event !== "ARTIFACT_CREATED" &&
-          entry.event !== "ARTIFACT_UPDATED"
-        ) {
-          return false;
-        }
-        const file = auditBlockField(entry.block, "File");
-        if (file === null) return false;
-        const norm = file.replace(/\\/g, "/");
-        return (
-          resolveAuditProjectPath(projectDir, file) === artifactAbs ||
-          // #863: preserve writes across workspace moves. The leading slash
-          // and full space/intent/phase/stage tail prevent partial matches.
-          norm.endsWith(artifactSuffix)
-        );
-      });
+      const writes = events.filter((entry) => auditRowWritesFile(projectDir, entry, artifactAbs));
       const strictlyAfter = (
         later: AuditShardEvent,
         earlier: AuditShardEvent,
@@ -16141,6 +16124,18 @@ export function resolveAuditWorktreePath(
   recordedPath: string,
 ): string {
   return resolveAuditProjectPath(projectDir, recordedPath);
+}
+
+// Whether a row is the write hook's record of a write to `abs` (an
+// ARTIFACT_CREATED or ARTIFACT_UPDATED row naming it). #863: a write from
+// before a workspace move still matches by its full space/intent/phase/stage
+// tail; the leading slash prevents a partial match.
+export function auditRowWritesFile(projectDir: string, row: { event: string; block: string }, abs: string): boolean {
+  if (row.event !== "ARTIFACT_CREATED" && row.event !== "ARTIFACT_UPDATED") return false;
+  const file = auditBlockField(row.block, "File");
+  if (file === null) return false;
+  return resolveAuditProjectPath(projectDir, file) === abs ||
+    file.replace(/\\/g, "/").endsWith("/" + toPosix(relative(projectDir, abs)));
 }
 
 // --- Fresh review receipts (the §12a completion precondition's scan) -----------
@@ -30021,16 +30016,20 @@ export function messageRetryStep(
 // was on screen (personsGateReply), oldest first. With a reply on record the
 // step is the agent's reading, never "show the question again": a re-ask is
 // what the person met when an agent relayed this refusal. `named` says whether
-// a reply was listed.
+// a reply was listed. With `writtenAt`, when what the question asks was last
+// written (the summary), a reply sent by then is not listed: it did not see it.
 export function answeredBeforeShownStep(
   projectDir: string,
   stage: string,
   decision: { refused: string; question: string; shown: string; command: string; why: string },
+  writtenAt?: string,
 ): { step: string; named: boolean } {
   let replies: GateReply["replies"] = [];
   try {
     const reply = personsGateReply(projectDir, resolveInvokingSessionId(projectDir), stage);
-    replies = [...reply.replies, ...reply.elsewhere].sort((a, b) => a.at.localeCompare(b.at));
+    replies = [...reply.replies, ...reply.elsewhere]
+      .filter((entry) => writtenAt === undefined || entry.at > writtenAt)
+      .sort((a, b) => a.at.localeCompare(b.at));
   } catch {
     replies = [];
   }
