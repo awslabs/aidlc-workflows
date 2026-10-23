@@ -3333,10 +3333,12 @@ describe("t265b hook lifecycle", () => {
   // The rest of #2456's case: a line that starts with a `cd` is read from the
   // folder the `cd` moves to, the way the shell runs it, so the build still
   // waits there. While the plan waits, a write into the project after a `cd` is
-  // refused, from a subfolder and from outside, under both readings, and so is
-  // the completion report; a write outside the project after a `cd` there is
-  // judged as that write is; a `cd` the reader cannot follow keeps the starting
-  // folder's reading. The refusal's way on runs as named and with the `cd` too.
+  // refused, from a subfolder and from outside, under both readings; the
+  // completion report after a `cd` is the engine's own command, as it is from
+  // the project root (`report` holds it while the plan waits); a write outside
+  // the project after a `cd` there is judged as that write is; a `cd` the reader
+  // cannot follow keeps the starting folder's reading. The refusal's way on runs
+  // as named and with the `cd` too.
   test("a line that starts with a cd is read from where the cd leads: a write into the project still waits for the plan", () => {
     const proj = scratchProject();
     const outside = mkdtempSync(join(realpathSync.native(tmpdir()), "aidlc-t265-cd-outside-"));
@@ -3369,7 +3371,6 @@ describe("t265b hook lifecycle", () => {
               `cd ${p}; echo x > src/app.ts`,
               `cd ${shellQuoted(join(proj, "src"))} && echo x > app.ts`,
               `cd ${shellQuoted(outside)} && echo x > ${shellQuoted(join(proj, "src", "app.ts"))}`,
-              `cd ${p} && aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"`,
               `(cd ${p} && echo x > src/app.ts)`,
               `cd "$P" && echo x > src/app.ts`,
             ]) {
@@ -3384,6 +3385,7 @@ describe("t265b hook lifecycle", () => {
               // Unquoted, a Windows path keeps its backslashes only in PowerShell.
               ...(marked || process.platform !== "win32" ? [`cd ${proj}; aidlc doctor`] : []),
               `cd ${p} && ${named}`,
+              `cd ${p} && aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"`,
             ]) {
               const passed = run(command);
               expect(passed.code, `${where}: ${command}\n${passed.stderr}`).toBe(0);
