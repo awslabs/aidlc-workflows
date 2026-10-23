@@ -1355,6 +1355,14 @@ function insertJsoncEntry(
   return next;
 }
 
+/** `value` after the last item of the root object's `key` array, in the layout around it; null when there is no such array. */
+export function appendJsoncArrayItem(text: string, key: string, value: unknown): string | null {
+  const root = jsoncTree(text);
+  const array = root?.kind === "object" ? root.members.findLast((member) => member.key === key)?.node : undefined;
+  if (!root || array?.kind !== "array") return null;
+  return insertJsoncEntry(text, jsonLayout(text, root), array, false, undefined, value, false);
+}
+
 function replaceJsoncNode(text: string, layout: JsonLayout, node: JsoncNode, value: unknown): string {
   return `${text.slice(0, node.start)}${jsonValueText(value, lineIndentOf(text, node.start), layout, singleLine(text, node) && !plainObject(value))}${text.slice(node.end)}`;
 }

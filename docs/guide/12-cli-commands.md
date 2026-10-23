@@ -36,8 +36,8 @@ diagnostic and lifecycle routes.
 | `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
 | `/aidlc intent [name]` | List intents in the active space (`--all` includes archived), or switch to an existing intent |
 | `/aidlc intent archive <name>` | Retire an in-flight or completed intent without deleting its record; `unarchive <name>` brings it back |
-| `/aidlc intent add-repo <name>` | Add a sibling repo to the active piece of work, until Units Generation is approved; `remove-repo <name>` takes one out (never the last) |
-| `/aidlc intent set-repos <name,...>` | Set exactly which sibling repos the active piece of work covers, until Units Generation is approved; `--all` keeps every recorded repo |
+| `/aidlc intent add-repo <name> [--url <address>]` | Add a sibling repo to the active piece of work at any stage, cloning it first when it is not here yet; `remove-repo <name>` takes one out (never the last) |
+| `/aidlc intent set-repos <name,...>` | Set exactly which sibling repos the active piece of work covers; `--all` keeps every recorded repo |
 | `/aidlc intent add-checkout <path>` | Have the review cover code kept in a worktree in the harness folder or outside the project; `remove-checkout <path>` takes it out |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
 | `/aidlc space-create <name>` | Create a new space that starts from the default space's org rules and empty team and project practices |
@@ -389,27 +389,60 @@ the revived intent with `/aidlc intent <name>` when you want to continue it.
 
 A piece of work records the sibling repos it touches when it is created (the
 `.git` children of the workspace at that moment, or an explicit `--repos`). When
-it turns out in Requirements Analysis or Domain Design that the work also
-touches another repo, say so and the agent runs `/aidlc intent add-repo <name>`
-for you: the repo is recorded, the change lands in the audit trail as
-`INTENT_REPOS_CHANGED`, and you read one line saying what happens next. If
-Reverse Engineering has already run, it and the stages that read the code
-knowledge show as behind for the new repo until you revisit them; if it has not
-run yet, it covers the new repo when it does. `/aidlc intent remove-repo <name>`
-is the mirror image. Neither asks a question: it is your own action, and the
-line says how to undo it.
+it turns out later that the work also changes another repo, the agent runs
+`intent add-repo <name>` with its reason and tells you in one line, or you say
+so and it runs it for you. A repo the work only reads is not added. The repo is
+recorded, the change lands in the audit trail as `INTENT_REPOS_CHANGED`, and
+you read one line saying what happens next. If Reverse Engineering has already
+run, it and the stages that read the code knowledge show as behind for the new
+repo until you revisit them; if it has not run yet, it covers the new repo when
+it does. A team that wants to be asked before a repo joins says so in one line
+under `## Mandated` in its space memory.
 
-The name must be a folder directly under the workspace that is a Git checkout
-(a real `.git` entry): a folder merely shaped like a repository is refused, as
-is a name with separators. The command serves work that already records repos;
-work that records none treats the workspace folder itself as its repo
-(`workspace reclassify` records its first repos). Removing the last recorded
-repo is refused for the same reason.
+When the repo is not in the workspace yet, it is cloned first, beside the other
+repos, with the same code `aidlc system workspace-sync` uses and your own git
+setup (your credential helpers and `insteadOf` rules apply as at your own shell). The
+address is the one you give with `--url`, else the repo's `repos.json` entry,
+else the `repos.json` `org`. The agent never passes `--url`
+on its own, so a name it found in a code search can only be cloned from your
+team's org. The clone runs in a staging folder and is moved into place under
+the workspace lock; then the `repos.json` entry is written (your comments and
+layout kept), the managed `.gitignore` block and `aidlc.code-workspace` are
+refreshed, and only then is the change recorded. The line names the address,
+with the user part of an address such as `https://user:token@host/...` shown
+as `***`; `repos.json`, which your team commits, gets the address without its
+credentials. With no `repos.json`, a
+hosted `--url` (a host, an owner and a name) creates one that names the owner as
+its `org`, and the line says so: commit it to share the list. A local path, or
+an address of another shape, adds the repo without creating the file. When the
+clone fails, nothing is recorded or changed, and the line gives git's reason
+and the `git clone` command to run by hand. With no `repos.json` org and no
+`--url`, the line asks for the address.
 
-Units Generation is the cut-off: once it is approved, each Unit names its repo,
-so the command changes nothing and asks instead whether to go back to Units
-Generation with the repo added (or without it). Say yes and the agent reopens
-Units Generation and runs the change again.
+The name must be a single folder name, and a folder already there must be a Git
+checkout (a real `.git` entry): a folder merely shaped like a repository is
+refused, as is a name with separators. The command serves work that already
+records repos; work that records none treats the workspace folder itself as its
+repo (`workspace reclassify` records its first repos). Removing the last
+recorded repo is refused for the same reason.
+
+There is no cut-off: after Units Generation is approved the repo is still added
+(or removed), and what that means for the approved Units follows the work's
+Guard Policy. Under `strict` the next step asks you once whether the Units still
+stand with the change, or whether to go back to Units Generation. Under
+`relaxed` or `off` the work carries on with the approved Units, recorded as
+`CHANGE_ACCEPTED`, and the line says "Units Generation was approved before this
+change: carrying on with its Units and <name> added. You can go back to Units
+Generation any time." A Unit that changes the new repo names it in its Code
+Generation plan, which you approve where plan approval is on. The new repo's
+files as they were at the add join any stage's source baseline taken before it,
+so its existing files are never reported as changes made during that stage.
+
+`/aidlc intent remove-repo <name>` is the undo. It takes the repo out of this
+piece of work and leaves its folder, and its `repos.json` line, where they are:
+`repos.json` is the workspace's list, not the work's, and the line says how to
+take it off by hand. Removing a repo you added after Units Generation was
+approved leaves nothing more to decide.
 
 ### `/aidlc intent set-repos <name,...>`: say exactly which repos the work covers
 
@@ -426,7 +459,9 @@ of them or only some, since reading many can take a long time and use many
 tokens. A set you named, and an unattended run, are not asked: the step says
 the cost once and reads every repo. When your request already said which
 repos (all of them, or named ones), the agent sets them for you instead of
-asking. The same cut-off as `add-repo` applies.
+asking. A name that is not cloned here is refused with the `intent add-repo`
+command that clones it; set-repos itself never clones. After Units Generation
+is approved the change lands and follows the Guard Policy, as for `add-repo`.
 
 ### `/aidlc intent add-checkout <path>`: have the review cover code kept in another checkout
 
@@ -2789,9 +2824,12 @@ same-filesystem renames. If `.gitignore` or `aidlc.code-workspace` changes durin
 staging, or if `repos.json` changes after the plan is read, sync aborts rather
 than applying stale state or overwriting the edit. Prior generated files that
 are replaced successfully remain under the ignored
-`.aidlc-workspace-sync-recovery-*` directory for inspection. The tool clones
+`.aidlc-workspace-sync-recovery-*` directory for inspection; a staging
+`.aidlc-workspace-sync-txn-*` folder left by a run that was cut off is ignored
+too and can be deleted. The tool clones
 repos declared in `repos.json` but missing on disk, rewrites the managed block
-in the workspace `.gitignore` to one `/{name}/` line per repo, and writes an
+in the workspace `.gitignore` to one `/{name}/` line per repo (plus its two
+own folder patterns), and writes an
 `aidlc.code-workspace` VSCode multi-root file listing the root plus each child
 repo. In a Copilot project that file also carries VS Code's agent request cap,
 `"settings": { "chat.agent.maxRequests": 200 }`, added once to a file with no

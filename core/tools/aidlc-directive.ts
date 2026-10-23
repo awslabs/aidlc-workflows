@@ -708,6 +708,15 @@ export interface RepoScopeAskDirective extends AskDirectiveBase {
   choices: AskChoice[];
 }
 
+// After Units Generation is approved, the work's repos changed: under Guard
+// Policy strict, do its Units still stand? "They stand" runs `next`, which
+// carries on and records it; the other choice goes back to Units Generation.
+export interface UnitsReposAskDirective extends AskDirectiveBase {
+  ask_type: "units-repos";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   ask_type: "new-work-routing";
   response_route: "next";
@@ -814,6 +823,7 @@ export type AskDirective =
   | ProjectTypeAskDirective
   | ConstructionStaffingAskDirective
   | RepoScopeAskDirective
+  | UnitsReposAskDirective
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
   | LegacyPlanApprovalRecoveryAskDirective
@@ -1865,7 +1875,13 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "proposed_scope", kind, errors);
       checkOptionalStringArray(o, "available_intents", kind, errors);
       checkOptionalString(o, "numbered_prose_question", kind, errors);
-      checkChoices(o, kind, errors, o.ask_type === "scope-confirm" || o.ask_type === "construction-staffing" || o.ask_type === "repo-scope");
+      checkChoices(
+        o,
+        kind,
+        errors,
+        o.ask_type === "scope-confirm" || o.ask_type === "construction-staffing" || o.ask_type === "repo-scope" ||
+          o.ask_type === "units-repos",
+      );
       checkOptionalString(o, "recovery_choice", kind, errors);
       checkOptionalString(o, "existing_code_command", kind, errors);
       checkOptionalString(o, "new_project_command", kind, errors);
@@ -1884,10 +1900,11 @@ export function validateDirective(obj: unknown): ValidationResult {
           "project-type",
           "construction-staffing",
           "repo-scope",
+          "units-repos",
         ].includes(o.ask_type)
       ) {
         errors.push(
-          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type | construction-staffing | repo-scope, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type | construction-staffing | repo-scope | units-repos, got ${String(o.ask_type)}`,
         );
       }
       if ("plan_approval" in o && o.ask_type !== "plan-approval") {
@@ -2001,6 +2018,11 @@ export function validateDirective(obj: unknown): ValidationResult {
           errors.push(`${kind}: repo-scope response_route must be "command"`);
         }
         rejectUnexpected("repo-scope", {});
+      } else if (o.ask_type === "units-repos") {
+        if (o.response_route !== "command") {
+          errors.push(`${kind}: units-repos response_route must be "command"`);
+        }
+        rejectUnexpected("units-repos", {});
       } else if (o.ask_type === "new-work-routing") {
         if (o.response_route !== "next") {
           errors.push(`${kind}: new-work-routing response_route must be "next"`);

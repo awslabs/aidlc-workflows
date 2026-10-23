@@ -641,6 +641,24 @@ named set, an unattended run (`AIDLC_UNATTENDED=1`) and a question passed over
 the step says the cost once. From two repos the stage's progress line carries
 the count.
 
+A change to the work's repos after Units Generation was approved is asked about
+the same way, under Guard Policy `strict` only (`unitsReposAsk`, after the two
+asks above in both of `routeNext`'s ask chains). `unitsRepoChange` (aidlc-lib)
+is its one owner: the repo set Units Generation was approved with is the current
+set with every `INTENT_REPOS_CHANGED` row after the latest units-generation
+`STAGE_COMPLETED` undone, so an undo leaves nothing pending, and a
+`CHANGE_ACCEPTED` row with checkpoint `units-generation` for that pair settles
+it. While a pair is pending, an attended strict `next` returns `ask_type:
+units-repos` (response route `command`): **They stand** runs `next`, and **Go
+back to Units Generation** runs `next --stage units-generation`. Once the ask
+mark has a human turn after it, whatever the reply, or under `relaxed` or
+`off`, or unattended, `next` writes the one `CHANGE_ACCEPTED` row through
+`recordAcceptedChanges`, says its line with the step ("carrying on with its
+Units ... You can go back to Units Generation any time"), and clears the mark,
+so a later change is asked about afresh. A ledger that cannot take the row
+refuses the step with that function's own repair step. Under `relaxed` or `off`
+the repo command itself writes the row at the change.
+
 When skeleton-on applies, the first DAG Unit must be planned as the smallest
 working integrated slice. It completes its applicable per-unit stages before
 later Units even under stage-major. The engine then emits a `run-stage` with

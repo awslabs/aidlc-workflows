@@ -136,6 +136,22 @@ import {
 } from "./aidlc-inline-context.ts";
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
+  hostedAddressOwner,
+  parseWorkspaceManifest,
+  type WorkspaceManifest,
+  workspaceManifestWith,
+  type WorkspaceRepoEntry,
+  withoutCredentials,
+} from "./aidlc-workspace-manifest.ts";
+import {
+  CloneFailure,
+  discardStagedWorkspaceRepo,
+  installWorkspaceRepo,
+  maskUserinfo,
+  type StagedWorkspaceRepo,
+  stageWorkspaceRepo,
+} from "./aidlc-workspace-sync.ts";
+import {
   composedPluginNames,
   copilotCliTrust,
   insideGitRepository,
@@ -352,6 +368,12 @@ import {
   resolveIntentRepoSet,
   MANY_REPOS,
   isGitRepoDir,
+  clearUnitsReposAsked,
+  governedGuardPolicy,
+  recordAcceptedChanges,
+  repoBaselineAdditionField,
+  unitsRepoChange,
+  unitsRepoChangeAcceptance,
   resolveProjectDir,
   setActiveIntentCursor,
   setActiveSpaceCursor,
@@ -776,9 +798,9 @@ Utilities:
   intent switch <name>  Switch the active intent (bare intent <name> still works)
   intent archive <name> [--reason <text>]  Retire an in-flight or completed intent; its record stays on disk and leaves the default list
   intent unarchive <name>  Bring an archived intent back as it was (in-flight or complete)
-  intent add-repo <name>  Add a sibling repo to the active piece of work (until Units Generation is approved)
-  intent remove-repo <name>  Take a sibling repo out of the active piece of work (never the last one)
-  intent set-repos <name,...> | --all  Set exactly which sibling repos the active piece of work covers, or keep them all (until Units Generation is approved)
+  intent add-repo <name> [--url <address>] [--reason <text>] [--person-words <their words>]  Add a sibling repo to the active piece of work, cloning it first when it is not here yet (from repos.json, or --url)
+  intent remove-repo <name>  Take a sibling repo out of the active piece of work (never the last one); its folder and its repos.json line stay
+  intent set-repos <name,...> | --all  Set exactly which sibling repos the active piece of work covers, or keep them all
   intent add-checkout <path>  Record a checkout outside the review's reach (a harness-folder worktree, or one outside the project) so the review covers the code there
   intent remove-checkout <path>  Take a recorded checkout out of the active piece of work's review
   space list        List spaces (read-only; --json for structured output)
@@ -9006,7 +9028,7 @@ function handleIntent(
     return;
   }
   if (verbOrTarget === "add-repo" || verbOrTarget === "remove-repo") {
-    handleIntentRepos(projectDir, verbOrTarget, positional[2]);
+    handleIntentRepos(projectDir, verbOrTarget, positional[2], flags, missingValueFlags);
     return;
   }
   if (verbOrTarget === "set-repos") {
@@ -9346,33 +9368,82 @@ function handleIntentLifecycle(
   );
 }
 
-// `/aidlc intent add-repo <name>` / `/aidlc intent remove-repo <name>`: the
-// person's own change to which sibling repos a piece of work touches, for work
-// that already records repos (work with none treats the workspace folder itself
-// as its repo; `workspace reclassify` records its first repos). The name must be
-// a repo name and the folder a real Git checkout under the workspace: a commit
-// can never carry a .git entry, so a committed folder merely shaped like a repo
-// is refused and its config never read. Allowed until Units Generation is
-// approved: after that each Unit names its repo, so the command changes nothing
-// and asks the go-back question instead. Same locks (workspace, then intent)
-// and audit-first order as the lifecycle verbs.
+// `/aidlc intent add-repo <name> [--url <address>] [--reason <text>]
+// [--person-words <their words>]` / `/aidlc intent remove-repo <name>`: which
+// sibling repos a piece of work touches, for work that already records repos
+// (work with none treats the workspace folder itself as its repo; `workspace
+// reclassify` records its first repos). The name must be a repo name and the
+// folder a real Git checkout under the workspace: a commit can never carry a
+// .git entry, so a committed folder merely shaped like a repo is refused and its
+// config never read. A repo not on disk yet is cloned first, by workspace-sync's
+// own code and the person's own git: into a staging folder with no lock held,
+// then installed under the workspace lock with repos.json, its .gitignore block
+// and aidlc.code-workspace, and only then the audit row and the registry (the
+// intent lock, inside it). A failed clone records nothing. After Units
+// Generation is approved the change lands too; unitsRepoChange says what it
+// means for the approved Units.
 function handleIntentRepos(
   projectDir: string,
   verb: "add-repo" | "remove-repo",
   name: string | undefined,
+  flags: Record<string, string>,
+  missingValueFlags: ReadonlySet<string>,
 ): void {
-  if (!name) die(`Usage: aidlc-utility intent ${verb} <name>`);
+  if (!name) {
+    die(`Usage: aidlc-utility intent ${verb} <name>${verb === "add-repo" ? " [--url <address>] [--reason <text>] [--person-words <their words>]" : ""}`);
+  }
   if (!isValidRepoName(name)) {
     die(`intent ${verb} refused: "${name}" is not a repo name (one folder name under the workspace, no separators).`);
   }
+  for (const flag of ["url", "reason", "person-words"]) {
+    if (missingValueFlags.has(flag)) die(`intent ${verb} refused: --${flag} needs a value.`);
+  }
+  if (verb === "remove-repo" && flags.url !== undefined) die("intent remove-repo takes no --url: the folder stays where it is.");
+  const reason = auditReason(flags.reason);
+  const personWords = flags["person-words"]?.replace(/\s+/g, " ").trim() || null;
   const selection = resolveWorkflowSelection(projectDir);
   const space = selection.space;
   const dirName = selection.intent;
   if (!dirName) {
     die(`No piece of work is active in space "${space}"; switch to one first (${entrySkillInvocation()} intent list).`);
   }
-  const outcome = withAuditLock(projectDir, () =>
-    withAuditLock(projectDir, () => {
+  const target = repoDir(projectDir, name);
+  // Checked before anything is cloned, and again under the locks.
+  const recorded = readIntentRegistry(projectDir, space).find((entry) => recordDirMatches(entry, dirName))?.repos ?? [];
+  const clone = verb === "add-repo" && recorded.length > 0 && !recorded.includes(name) && !pathEntryExists(target)
+    ? plannedRepoClone(projectDir, name, flags.url)
+    : null;
+  let staged: StagedWorkspaceRepo | null = null;
+  if (clone !== null) {
+    try {
+      staged = stageWorkspaceRepo(projectDir, clone.org, clone.repo);
+    } catch (err) {
+      const address = maskUserinfo(clone.repo.url ?? `git@github.com:${clone.org}/${name}.git`);
+      const why = err instanceof CloneFailure ? err.reason : maskUserinfo(errorMessage(err));
+      die(
+        `Could not clone ${name} from ${address}: ${why}. Nothing was changed. To clone it yourself, run ` +
+          `git clone -- ${address} ${target}, then add it again.`,
+      );
+    }
+  }
+  const outcome = withAuditLock(projectDir, () => {
+    if (staged !== null && isGitRepoDir(target)) {
+      // Cloned here meanwhile (another chat, workspace-sync): it is on disk.
+      discardStagedWorkspaceRepo(staged);
+      staged = null;
+    } else if (staged !== null && clone !== null) {
+      try {
+        installWorkspaceRepo(projectDir, staged, clone.manifest);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code ?? "";
+        die(
+          ["EACCES", "EBUSY", "EPERM"].includes(code)
+            ? `Could not move the new clone of ${name} into place: another program has a file in it open. Nothing was changed; add it again.`
+            : `Could not put the new clone of ${name} in place: ${maskUserinfo(errorMessage(err))}`,
+        );
+      }
+    }
+    return withAuditLock(projectDir, () => {
       const list = readIntentRegistry(projectDir, space);
       const row = list.find((entry) => recordDirMatches(entry, dirName));
       if (!row) {
@@ -9384,11 +9455,10 @@ function handleIntentRepos(
       }
       const state = readStateFile(projectDir, dirName, space);
       const boxes = new Map(parseCheckboxes(state).map((box) => [box.slug, box.state]));
-      if (boxes.get("units-generation") === "completed") return { kind: "cutoff" as const };
       if (verb === "add-repo") {
         if (current.includes(name)) return { kind: "already" as const };
-        if (!isGitRepoDir(repoDir(projectDir, name))) {
-          die(`intent add-repo refused: "${name}" is not a Git checkout under the workspace folder (no .git entry at ${repoDir(projectDir, name)}). Clone or create the repo there first.`);
+        if (!isGitRepoDir(target)) {
+          die(`intent add-repo refused: "${name}" is not a Git checkout under the workspace folder (no .git entry at ${target}). Clone or create the repo there first.`);
         }
       } else {
         if (!current.includes(name)) return { kind: "absent" as const, current };
@@ -9397,12 +9467,17 @@ function handleIntentRepos(
         }
       }
       const next = verb === "add-repo" ? [...current, name].sort() : current.filter((repo) => repo !== name);
+      const stage = (getField(state, "Current Stage") ?? "").trim() || "none";
       appendAuditEntryUnlocked(
         "INTENT_REPOS_CHANGED",
         {
-          Stage: (getField(state, "Current Stage") ?? "").trim() || "none",
+          Stage: stage,
           [verb === "add-repo" ? "Added" : "Removed"]: name,
           Repos: next.join(", "),
+          ...(staged !== null && clone !== null ? { "Cloned From": maskUserinfo(clone.repo.url ?? `git@github.com:${clone.org}/${name}.git`) } : {}),
+          ...(reason ? { Reason: reason } : {}),
+          ...(personWords ? { "Person Words": personWords } : {}),
+          ...(verb === "add-repo" ? repoBaselineAdditionField(projectDir, [name], dirName, space) : {}),
         },
         projectDir,
         dirName,
@@ -9412,19 +9487,17 @@ function handleIntentRepos(
       writeIntentRegistry(projectDir, list, space);
       const reAction = parseStateStageSuffixes(state).get("reverse-engineering") ??
         loadScopeMapping()[getField(state, "Scope") ?? ""]?.stages["reverse-engineering"];
-      return { kind: "changed" as const, reState: boxes.get("reverse-engineering"), reAction };
-    }, dirName, space),
-  );
+      return {
+        kind: "changed" as const,
+        reState: boxes.get("reverse-engineering"),
+        reAction,
+        units: unitsRepoChangeAtChange(projectDir, state, stage, dirName, space),
+      };
+    }, dirName, space);
+  });
   // What the person hears: what happened and the way back, in their words.
   const lines: string[] = [];
   switch (outcome.kind) {
-    case "cutoff":
-      lines.push(
-        verb === "add-repo"
-          ? `Units Generation is already approved, so its Units do not cover ${name}. Do you want me to go back to Units Generation with ${name} added?`
-          : `Units Generation is already approved, so its Units may be written for ${name}. Do you want me to go back to Units Generation without ${name}?`,
-      );
-      break;
     case "already":
       lines.push(`${name} is already one of this piece of work's repos; nothing changed.`);
       break;
@@ -9433,27 +9506,137 @@ function handleIntentRepos(
       break;
     case "changed":
       if (verb === "add-repo") {
-        lines.push(`Added ${name} to this piece of work's repos.`);
+        if (staged !== null && clone !== null) {
+          lines.push(`Cloned ${name} from ${maskUserinfo(clone.repo.url ?? `git@github.com:${clone.org}/${name}.git`)} and added it to this piece of work's repos.`);
+          if (clone.note !== null) lines.push(clone.note);
+        } else {
+          lines.push(`Added ${name} to this piece of work's repos.`);
+        }
         if (outcome.reState === "completed") {
           lines.push(`Reverse Engineering has not documented ${name} yet, so it and the stages that read the code knowledge may show as behind until you revisit them.`);
         } else if (outcome.reAction === "EXECUTE") {
           lines.push(`Reverse Engineering will cover ${name} when it runs.`);
         }
+        if (outcome.units !== null) lines.push(outcome.units);
         lines.push("You can remove it again any time.");
       } else {
-        lines.push(`Removed ${name} from this piece of work's repos. You can add it back any time.`);
+        const listed = workspaceManifestNames(projectDir).includes(name);
+        lines.push(
+          `Removed ${name} from this piece of work's repos. Its folder stays` +
+            (listed ? ", and so does its line in repos.json (delete that line to take it off the workspace's list)." : "."),
+        );
+        if (outcome.units !== null) lines.push(outcome.units);
+        lines.push("You can add it back any time.");
       }
       break;
   }
   process.stdout.write(`${lines.join(" ")}\n`);
 }
 
+// After a change to the repos lands: under relaxed or off, a change since Units
+// Generation was approved is recorded as accepted and its line returned; under
+// strict the next step asks once, so the question is cleared to be put afresh.
+function unitsRepoChangeAtChange(
+  projectDir: string,
+  state: string,
+  stage: string,
+  intent: string,
+  space: string,
+): string | null {
+  const change = unitsRepoChange(projectDir, state, intent, space);
+  if (change === null) return null;
+  clearUnitsReposAsked(projectDir);
+  if (governedGuardPolicy(projectDir, state, { intent, space }).value === "strict") return null;
+  return recordAcceptedChanges(projectDir, [unitsRepoChangeAcceptance(change, stage)], { intent, space })[0] ?? null;
+}
+
+// By lstat: a link that leads nowhere is still in the way of a clone.
+function pathEntryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The repo names repos.json lists, or none when it is absent or unreadable.
+function workspaceManifestNames(projectDir: string): string[] {
+  try {
+    return parseWorkspaceManifest(readFileSync(join(projectDir, "repos.json"), "utf-8")).repos.map((repo) => repo.name);
+  } catch {
+    return [];
+  }
+}
+
+// Where a repo not on disk is cloned from and what repos.json becomes: its own
+// entry, else the person's `--url`, else the repos.json `org`. The address goes
+// to git as given; repos.json, which the team commits, gets it without
+// credentials. With no repos.json, a hosted `--url` creates one naming its owner
+// as the org; a local path or another shape creates none, and the line says so.
+function plannedRepoClone(
+  projectDir: string,
+  name: string,
+  url: string | undefined,
+): { repo: WorkspaceRepoEntry; org: string; manifest: { raw: string | null; next: string | null }; note: string | null } {
+  const path = join(projectDir, "repos.json");
+  const raw = existsSync(path) ? readFileSync(path, "utf-8") : null;
+  let manifest: WorkspaceManifest | null = null;
+  if (raw !== null) {
+    try {
+      manifest = parseWorkspaceManifest(raw);
+    } catch (err) {
+      die(`${name} is not in this workspace yet, and repos.json cannot be read to clone it (${errorMessage(err)}). Nothing was changed.`);
+    }
+  }
+  const entry = manifest?.repos.find((repo) => repo.name === name);
+  if (manifest !== null && entry !== undefined) {
+    return {
+      repo: url === undefined ? entry : { ...entry, url },
+      org: manifest.org,
+      manifest: { raw, next: null },
+      note: null,
+    };
+  }
+  if (url === undefined && manifest === null) {
+    die(
+      `${name} is not in this workspace yet, and there is no repos.json with an org to clone it from. ` +
+        "Give its clone address with --url, or clone it beside the other repos, then add it again.",
+    );
+  }
+  const kept = url === undefined ? undefined : withoutCredentials(url);
+  const written: WorkspaceRepoEntry = { name, ...(kept === undefined ? {} : { url: kept }) };
+  const stripped = kept !== url ? " Its address there leaves out the credential." : "";
+  const repo: WorkspaceRepoEntry = { name, ...(url === undefined ? {} : { url }) };
+  if (manifest !== null) {
+    const next = workspaceManifestWith(raw, manifest.org, written);
+    if (next === null) die(`${name} could not be added to repos.json, which has no repos list. Nothing was changed.`);
+    return { repo, org: manifest.org, manifest: { raw, next }, note: `repos.json now lists it.${stripped}` };
+  }
+  const owner = hostedAddressOwner(url!);
+  if (owner === null) {
+    return {
+      repo,
+      org: "",
+      manifest: { raw: null, next: null },
+      note: "This workspace has no repos.json, so a teammate's workspace does not get it by itself.",
+    };
+  }
+  return {
+    repo,
+    org: owner,
+    manifest: { raw: null, next: workspaceManifestWith(null, owner, written) },
+    note: `repos.json is new: it lists ${name} under the org ${owner}; commit it to share the list with your team.${stripped}`,
+  };
+}
+
 // `/aidlc intent set-repos <name,...>`: the whole repo set at once, the exact
 // names the agent read from the person's words (Reverse Engineering's question,
 // or their own "only these"); `--all` keeps the set recorded. Either way the set
 // is then the person's (`repos_named`), so that question is not put again. Each
-// name passes add-repo's checks before anything changes; same locks,
-// audit-first order and Units Generation cut-off as add-repo.
+// name passes add-repo's checks before anything changes, and a name not cloned
+// here is add-repo's to clone; same locks, audit-first order and Units
+// Generation rule (unitsRepoChange) as add-repo.
 function handleIntentSetRepos(projectDir: string, list: string | undefined, all: boolean): void {
   const names = all ? null : [...new Set((list ?? "").split(",").map((name) => name.trim()).filter((name) => name.length > 0))].sort();
   if (names !== null && names.length === 0) die("Usage: aidlc-utility intent set-repos <name,...> | --all");
@@ -9483,23 +9666,24 @@ function handleIntentSetRepos(projectDir: string, list: string | undefined, all:
       const added = next.filter((repo) => !current.includes(repo));
       const removed = current.filter((repo) => !next.includes(repo));
       const state = readStateFile(projectDir, dirName, space);
-      const boxes = new Map(parseCheckboxes(state).map((box) => [box.slug, box.state]));
-      if ((added.length > 0 || removed.length > 0) && boxes.get("units-generation") === "completed") {
-        return { kind: "cutoff" as const, next };
-      }
       for (const name of added) {
         if (!isGitRepoDir(repoDir(projectDir, name))) {
-          die(`intent set-repos refused: "${name}" is not a Git checkout under the workspace folder (no .git entry at ${repoDir(projectDir, name)}). Nothing was changed.`);
+          die(
+            `intent set-repos refused: "${name}" is not a Git checkout under the workspace folder (no .git entry at ${repoDir(projectDir, name)}). ` +
+              `Nothing was changed. To clone it and add it to this work, run \`${aidlcDispatcherInvocation(`intent add-repo ${name}`)}\`.`,
+          );
         }
       }
+      const stage = (getField(state, "Current Stage") ?? "").trim() || "none";
       appendAuditEntryUnlocked(
         "INTENT_REPOS_CHANGED",
         {
-          Stage: (getField(state, "Current Stage") ?? "").trim() || "none",
+          Stage: stage,
           ...(added.length > 0 ? { Added: added.join(", ") } : {}),
           ...(removed.length > 0 ? { Removed: removed.join(", ") } : {}),
           Repos: next.join(", "),
           Named: "by the person",
+          ...(added.length > 0 ? repoBaselineAdditionField(projectDir, added, dirName, space) : {}),
         },
         projectDir,
         dirName,
@@ -9508,24 +9692,19 @@ function handleIntentSetRepos(projectDir: string, list: string | undefined, all:
       row.repos = next;
       row.repos_named = true;
       writeIntentRegistry(projectDir, rows, space);
-      return { kind: "changed" as const, next, removed };
+      return { next, removed, units: unitsRepoChangeAtChange(projectDir, state, stage, dirName, space) };
     }, dirName, space),
   );
   const named = (repos: string[]): string =>
     repos.length >= MANY_REPOS ? `${repos.length} repositories`
     : repos.length === 1 ? repos[0]
     : `${repos.slice(0, -1).join(", ")} and ${repos[repos.length - 1]}`;
-  if (outcome.kind === "cutoff") {
-    process.stdout.write(
-      `Units Generation is already approved, so its Units are written for the repos this work recorded. Do you want me to go back to Units Generation with ${named(outcome.next)}?\n`,
-    );
-    return;
-  }
   const covers = all ? `This work covers all ${outcome.next.length} of its repositories.` : `This work now covers ${named(outcome.next)}.`;
+  const units = outcome.units === null ? "" : ` ${outcome.units}`;
   const back = outcome.removed.length === 0 ? ""
     : outcome.removed.length === 1 ? ` ${outcome.removed[0]} can be added back any time.`
     : ` The ${outcome.removed.length} left out can be added back any time.`;
-  process.stdout.write(`${covers}${back}\n`);
+  process.stdout.write(`${covers}${units}${back}\n`);
 }
 
 // `/aidlc intent add-checkout <path>` / `/aidlc intent remove-checkout <path>`:
@@ -9533,9 +9712,8 @@ function handleIntentSetRepos(projectDir: string, list: string | undefined, all:
 // (a worktree in a harness folder such as .claude/worktrees/, or one outside
 // the project), so the review binds it and the source-work check finds it; or
 // take it out again. The agent runs it from its own knowledge of where it wrote
-// the code, or the person does; it never asks. Unlike add-repo it has no Units
-// Generation cut-off (it is needed in Code Generation), works for work that
-// records no repos, and takes a path. The folder needs a real .git entry; a
+// the code, or the person does; it never asks. Unlike add-repo it works for work
+// that records no repos, and takes a path. The folder needs a real .git entry; a
 // path the review already reaches, or inside AI-DLC's own folders, is refused
 // with the reason. Same locks and audit-first order as add-repo; the record is
 // the intent's per-clone .aidlc-engine/ file, never the audit row.

@@ -31,6 +31,7 @@ import {
   WORKSPACE_GITIGNORE_GATE_BEGIN as GATE_BEGIN,
   WORKSPACE_GITIGNORE_GATE_END as GATE_END,
   WORKSPACE_RECOVERY_GITIGNORE,
+  WORKSPACE_STAGING_GITIGNORE,
 } from "./aidlc-workspace-manifest.ts";
 
 /** One --doctor report row. Structurally matches collectDoctorReport's results[]. */
@@ -270,6 +271,7 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
       const e = gi.indexOf(GATE_END);
       const expected = [
         WORKSPACE_RECOVERY_GITIGNORE,
+        WORKSPACE_STAGING_GITIGNORE,
         ...[...manifestNames].sort().map((n) => `/${n}/`),
       ].sort();
       if (b === -1 || e === -1 || e < b) {
@@ -287,8 +289,13 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
           .map((l) => l.trim())
           .filter((l) => l.length > 0)
           .sort();
+        // A block written before the staging line existed still matches: the
+        // next sync or add-repo writes the line.
+        const current = actual.includes(WORKSPACE_STAGING_GITIGNORE)
+          ? expected
+          : expected.filter((line) => line !== WORKSPACE_STAGING_GITIGNORE);
         const inSync =
-          actual.length === expected.length && actual.every((v, i) => v === expected[i]);
+          actual.length === current.length && actual.every((v, i) => v === current[i]);
         results.push({
           pass: true,
           label: inSync

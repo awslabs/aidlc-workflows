@@ -1,7 +1,7 @@
 // t255-workspace-sync: aidlc-workspace-sync reconciles a workspace root against
 // an optional repos.json manifest, idempotently and without ever destroying work.
 //
-// covers: file:core/tools/aidlc-workspace-sync.ts
+// covers: file:core/tools/aidlc-workspace-sync.ts, function:renameRetryingOnWindows
 //
 // The orphan-safety coverage is the load-bearing part: a reconcile tool that
 // clones and removes sibling repos must never delete unrecoverable work.
@@ -26,7 +26,7 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   closeSync,
@@ -48,7 +48,7 @@ import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseWorkspaceManifest } from "../../core/tools/aidlc-workspace-manifest.ts";
-import { maskUserinfo } from "../../core/tools/aidlc-workspace-sync.ts";
+import { maskUserinfo, renameRetryingOnWindows } from "../../core/tools/aidlc-workspace-sync.ts";
 
 // Real git repos + bare remotes + a shimmed sleep 1 per case exceed bun's 5s default under load.
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -639,6 +639,8 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     const gi = readFileSync(join(ws, ".gitignore"), "utf-8");
     expect(gi).toContain("# >>> aidlc workspace-sync managed");
     expect(gi).toContain("\n/.aidlc-workspace-sync-recovery-*/\n");
+    // The staging folder a clone cut off by a host timeout leaves behind.
+    expect(gi).toContain("\n/.aidlc-workspace-sync-txn-*/\n");
     expect(gi).toContain("\n/checkout-api/\n");
     expect(gi).toContain("\n/checkout-web/\n");
     expect(gi).toContain("# <<< aidlc workspace-sync managed <<<");
@@ -1788,4 +1790,49 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     expect(r.out).toContain("url");
     expect(r.out).toContain("checkout-api");
   });
+});
+
+// Windows refuses to rename a folder while another program has a file in it
+// open; the move waits a few seconds for it to let go, and never over a target
+// that is already there.
+describe("t255 workspace-sync - a folder move on Windows", () => {
+  test.skipIf(process.platform !== "win32")(
+    "on Windows a move waits for a program holding a file inside to let go, and never retries over an existing target",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "aidlc-t255-move-"));
+      tmpRoots.push(root);
+      const held = join(root, "staged");
+      mkdirSync(join(held, "src"), { recursive: true });
+      const file = join(held, "src", "api.ts");
+      writeFileSync(file, "export const api = 1;\n", "utf-8");
+      const opened = join(root, "opened");
+      const holder = (path: string, ms: number) => {
+        const child = spawn("powershell", [
+          "-NoProfile",
+          "-Command",
+          `$f = [IO.File]::Open('${path}', 'Open', 'Read', 'Read'); New-Item -ItemType File '${opened}' | Out-Null; ` +
+            `Start-Sleep -Milliseconds ${ms}; $f.Close()`,
+        ]);
+        return new Promise<void>((done) => child.on("exit", () => done()));
+      };
+
+      const released = holder(file, 1_000);
+      await waitForPath(opened);
+      expect(() => renameSync(held, join(root, "plain"))).toThrow();
+      renameRetryingOnWindows(held, join(root, "installed"));
+      expect(existsSync(join(root, "installed", "src", "api.ts"))).toBe(true);
+      await released;
+
+      rmSync(opened, { force: true });
+      const target = join(root, "taken");
+      mkdirSync(join(target, "kept"), { recursive: true });
+      const releasedAgain = holder(join(root, "installed", "src", "api.ts"), 2_000);
+      await waitForPath(opened);
+      const started = Date.now();
+      expect(() => renameRetryingOnWindows(join(root, "installed"), target)).toThrow();
+      expect(Date.now() - started).toBeLessThan(1_000);
+      expect(existsSync(join(target, "kept"))).toBe(true);
+      await releasedAgain;
+    },
+  );
 });

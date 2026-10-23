@@ -1,6 +1,7 @@
 // covers: function:workspaceSourceFingerprint, function:unclaimableIgnoredSourceKeys
 // covers: function:gitCommitSourceListing
 // covers: function:unmergedRootSettingsNotices
+// covers: function:withRepoBaselineAdditions, function:repoBaselineAdditionField
 // covers: function:withWorkspaceSourceStateCache, subcommand:aidlc-state:gate-start, subcommand:aidlc-state:revise
 //
 // t314 - reviewer receipts bound to workspace source state (#629).
@@ -96,6 +97,7 @@ import {
   cleanupTestProject,
   cleanupWorktreeFixture,
   createTestProject,
+  intentsDirOf,
   resetAidlcEnv,
   seedBoltDag,
   seededAuditDir,
@@ -6476,5 +6478,94 @@ process.stdin.on("end", () => server.stop(true));
         expect(row?.change_notices).toEqual(["The listed Unit's list of files changed after it was reviewed. Kept the review."]);
       }
     }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+});
+
+// A repo that joins the work after the stage's baseline was taken (the
+// workflow's start here, as a unit-major Code Generation's is) joins that
+// baseline as it was at the add, so its existing files are nobody's change;
+// what a Unit writes there afterwards still needs a claim.
+describe("t314 a repo added during the work joins the stage-entry baseline", () => {
+  let proj: string;
+  const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
+
+  function sibling(name: string, files: Record<string, string>): void {
+    const dir = join(proj, name);
+    for (const [path, body] of Object.entries(files)) {
+      mkdirSync(join(dir, ...path.split("/").slice(0, -1)), { recursive: true });
+      writeFileSync(join(dir, ...path.split("/")), body, "utf-8");
+    }
+    git(dir, ["init", "-q"]);
+    git(dir, ["config", "user.email", "t@test"]);
+    git(dir, ["config", "user.name", "t"]);
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-qm", "seed"]);
+  }
+
+  function intent(...args: string[]): string {
+    const r = spawnSync(BUN, [UTILITY, "intent", ...args, "--project-dir", proj], { encoding: "utf-8" });
+    if ((r.status ?? -1) !== 0) throw new Error(`intent ${args.join(" ")} failed: ${r.stdout}${r.stderr}`);
+    return r.stdout;
+  }
+
+  function commitIn(repo: string, path: string, body: string): void {
+    writeFileSync(join(proj, repo, path), body, "utf-8");
+    git(join(proj, repo), ["add", "-A"]);
+    git(join(proj, repo), ["commit", "-qm", `edit ${path}`]);
+  }
+
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedStateFile(proj, "state-mid-ideation.md");
+    sibling("app-a", { "app.ts": "export const a = 1;\n" });
+    sibling("payments", { "src/api.ts": "export const api = 1;\n", "README.md": "# payments\n" });
+    const registry = join(intentsDirOf(proj), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = ["app-a"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    seedTwoUnitDag(proj);
+    guarded(proj, ["checkbox", "code-generation=in-progress"]);
+    restartBaseline(proj);
+  });
+
+  afterEach(() => cleanupTestProject(proj));
+
+  function reviewUnitsInAppA(): void {
+    commitIn("app-a", "alpha.ts", "export const alpha = 1;\n");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ repo: "app-a", path: "alpha.ts" }]);
+    commitIn("app-a", "beta.ts", "export const beta = 2;\n");
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ repo: "app-a", path: "beta.ts" }]);
+  }
+
+  test("the new repo's existing files are no Unit's change", () => {
+    intent("add-repo", "payments");
+    reviewUnitsInAppA();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("payments/src/api.ts");
+    expect(r.out).not.toContain("no Unit's review covers");
+    expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a file a Unit writes in the new repo after the add still needs a claim", () => {
+    intent("add-repo", "payments");
+    commitIn("payments", "src/consent.ts", "export const consent = true;\n");
+    reviewUnitsInAppA();
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    const r = gate.rc === 0 ? guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]) : gate;
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("payments/src/consent.ts");
+    expect(r.out).not.toContain("payments/src/api.ts");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("after a remove and a second add, the latest add's listing is the one that counts", () => {
+    intent("add-repo", "payments");
+    commitIn("payments", "README.md", "# payments, edited between the adds\n");
+    intent("remove-repo", "payments");
+    intent("add-repo", "payments");
+    reviewUnitsInAppA();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("payments/README.md");
+    expect(r.rc, r.out).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

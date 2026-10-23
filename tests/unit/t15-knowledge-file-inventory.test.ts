@@ -1,4 +1,4 @@
-// covers: file:knowledge/aidlc-architect-agent, file:knowledge/aidlc-aws-platform-agent, file:knowledge/aidlc-compliance-agent, file:knowledge/aidlc-delivery-agent, file:knowledge/aidlc-design-agent, file:knowledge/aidlc-developer-agent, file:knowledge/aidlc-devsecops-agent, file:knowledge/aidlc-operations-agent, file:knowledge/aidlc-pipeline-deploy-agent, file:knowledge/aidlc-product-agent, file:knowledge/aidlc-quality-agent, file:knowledge/aidlc-shared/ai-dlc-principles.md, file:knowledge/aidlc-shared/audit-format.md, file:knowledge/aidlc-shared/brownfield.md, file:knowledge/aidlc-shared/knowledge-readme-template.md, file:knowledge/aidlc-shared/rules-reading.md, file:knowledge/aidlc-shared/state-template.md, file:knowledge/aidlc-shared/verification.md
+// covers: file:knowledge/aidlc-architect-agent, file:knowledge/aidlc-aws-platform-agent, file:knowledge/aidlc-compliance-agent, file:knowledge/aidlc-delivery-agent, file:knowledge/aidlc-design-agent, file:knowledge/aidlc-developer-agent, file:knowledge/aidlc-devsecops-agent, file:knowledge/aidlc-operations-agent, file:knowledge/aidlc-pipeline-deploy-agent, file:knowledge/aidlc-product-agent, file:knowledge/aidlc-quality-agent, file:knowledge/aidlc-shared/adding-a-repo.md, file:knowledge/aidlc-shared/ai-dlc-principles.md, file:knowledge/aidlc-shared/audit-format.md, file:knowledge/aidlc-shared/brownfield.md, file:knowledge/aidlc-shared/knowledge-readme-template.md, file:knowledge/aidlc-shared/rules-reading.md, file:knowledge/aidlc-shared/state-template.md, file:knowledge/aidlc-shared/verification.md
 //
 // t15 — knowledge-file inventory + non-emptiness invariant. Migrated from
 // tests/unit/t15-knowledge-file-inventory.sh (the .sh declared no `# covers:`
@@ -38,6 +38,7 @@ const AGENT_COUNTS: ReadonlyArray<readonly [string, number]> = [
 ];
 
 const SHARED_FILES = [
+  "adding-a-repo.md",
   "ai-dlc-principles.md",
   "audit-format.md",
   "brownfield.md",
@@ -88,7 +89,7 @@ describe("t15 — knowledge-file inventory + non-emptiness (mechanism: none)", (
     expect(dirs).toEqual(expected);
   });
 
-  test("ships each of the 7 named aidlc-shared/ files [.sh L45-47]", () => {
+  test("ships each of the 8 named aidlc-shared/ files [.sh L45-47]", () => {
     for (const f of SHARED_FILES) {
       expect(existsSync(join(KNOWLEDGE_DIR, "aidlc-shared", f))).toBe(true);
     }
@@ -105,11 +106,11 @@ describe("t15 — knowledge-file inventory + non-emptiness (mechanism: none)", (
   });
 
   // Re-derive the arithmetic from the live tree so the suite cannot silently
-  // shrink the surface: pin the total .md count at 60 and the summed plan at 95.
-  test("TAP-plan parity: 14 + 14 + 7 + TOTAL == 95 with TOTAL == 60 [.sh L11-14]", () => {
+  // shrink the surface: pin the total .md count at 61 and the summed plan at 97.
+  test("TAP-plan parity: 14 + 14 + 8 + TOTAL == 97 with TOTAL == 61 [.sh L11-14]", () => {
     const total = findMd(KNOWLEDGE_DIR).length;
-    expect(total).toBe(60);
-    const plan = 14 + 14 + 7 + total;
-    expect(plan).toBe(95);
+    expect(total).toBe(61);
+    const plan = 14 + 14 + 8 + total;
+    expect(plan).toBe(97);
   });
 });

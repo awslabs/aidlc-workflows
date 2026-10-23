@@ -17,6 +17,7 @@ AI-DLC uses a two-tier knowledge system that separates framework methodology fro
 ```
 .claude/knowledge/
 +-- aidlc-shared/
+|   +-- adding-a-repo.md           # When a repo joins the work mid-way, and how
 |   +-- ai-dlc-principles.md       # Core methodology principles
 |   +-- verification.md            # Phase boundary verification rules
 |   +-- brownfield.md              # Brownfield safeguards

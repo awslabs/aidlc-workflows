@@ -291,8 +291,8 @@ function unitManifestRefusal(
   if (manifest.unrecordedRepo !== undefined) {
     const repo = manifest.unrecordedRepo;
     return `unit "${unit}"'s source manifest at ${manifestPath} names repo ${JSON.stringify(repo)}, which this piece of work does not record. ` +
-      `Ask the person whether this work also touches ${repo}; if it does, run \`${aidlcDispatcherInvocation(`intent add-repo ${repo}`)}\` ` +
-      "(it says what that means for the plan), then request the review again. Do not rewrite the manifest to drop a repo the code was written in.";
+      `Run \`${aidlcDispatcherInvocation(`intent add-repo ${repo} --reason "<why this work changes it>"`)}\` and say the line it prints once, ` +
+      "then request the review again. Do not rewrite the manifest to drop a repo the code was written in.";
   }
   return `unit "${unit}" has no valid source manifest at ${manifestPath} (${manifest.reason}). ${rewrite}`;
 }

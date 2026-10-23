@@ -21877,6 +21877,7 @@ export function freshReviewReceipts(
       }
     }
     let baselineField: string | null = null;
+    let baselineEvent: AuditShardEvent | null = null;
     for (let i = Math.max(boundary, 0); i < firstWork; i++) {
       const event = events[i];
       const field = sourceBaselineBoundaryValue(
@@ -21885,6 +21886,7 @@ export function freshReviewReceipts(
         unitMajor,
       );
       if (field === undefined) continue;
+      baselineEvent = event;
       if (
         field !== null &&
         auditEventIsCrossShardTied(
@@ -21905,12 +21907,13 @@ export function freshReviewReceipts(
     }
     if (baselineField === UNBINDABLE_FINGERPRINT) sourceBaseline = { state: "unbindable" };
     else if (baselineField !== null) {
-      const listing = readBaselineSourceSnapshot(projectDir, stage.slug, baselineField);
-      sourceBaseline = listing !== null
-        ? { state: "ready", listing }
-        : baselineSourceSnapshotMissing(projectDir, stage.slug, baselineField)
-          ? { state: "missing" }
-          : { state: "invalid" };
+      sourceBaseline = withRepoBaselineAdditions(
+        projectDir,
+        stage.slug,
+        readStageBaseline(projectDir, stage.slug, baselineField),
+        allEvents,
+        baselineEvent,
+      );
     } else if (modernSourceBindingEvidence) {
       sourceBaseline = { state: "invalid" };
     }
@@ -27971,6 +27974,7 @@ export function currentStageSourceBaseline(
     }
   }
   let field: string | null = null;
+  let fieldEvent: AuditShardEvent | null = null;
   for (let index = Math.max(boundary, 0); index < firstWork; index++) {
     const event = events[index];
     const candidate = sourceBaselineBoundaryValue(
@@ -27979,6 +27983,7 @@ export function currentStageSourceBaseline(
       unitMajor,
     );
     if (candidate === undefined) continue;
+    fieldEvent = event;
     if (
       candidate !== null &&
       auditEventIsCrossShardTied(
@@ -28003,17 +28008,98 @@ export function currentStageSourceBaseline(
       : { state: "legacy" };
   }
   if (field === UNBINDABLE_FINGERPRINT) return { state: "unbindable" };
-  const listing = readBaselineSourceSnapshot(
+  return withRepoBaselineAdditions(
     projectDir,
     stageSlug,
-    field,
+    readStageBaseline(projectDir, stageSlug, field, intent, space),
+    allEvents,
+    fieldEvent,
     intent,
     space,
   );
+}
+
+function readStageBaseline(
+  projectDir: string,
+  stageSlug: string,
+  field: string,
+  intent?: string,
+  space?: string,
+): SourceBaselineResult {
+  const listing = readBaselineSourceSnapshot(projectDir, stageSlug, field, intent, space);
   if (listing !== null) return { state: "ready", listing };
   return baselineSourceSnapshotMissing(projectDir, stageSlug, field, intent, space)
     ? { state: "missing" }
     : { state: "invalid" };
+}
+
+// A repo that joined the work after the stage's baseline was taken (intent
+// add-repo, a Source Baseline Addition on its INTENT_REPOS_CHANGED row) joins
+// the baseline as it was at the add, so its existing files are nobody's change.
+// A repo the baseline already lists is never touched; the latest addition for a
+// repo wins. An addition missing on this machine leaves the baseline missing,
+// as a missing baseline is.
+function withRepoBaselineAdditions(
+  projectDir: string,
+  stageSlug: string,
+  baseline: SourceBaselineResult,
+  rows: readonly AuditShardEvent[],
+  from: AuditShardEvent | null,
+  intent?: string,
+  space?: string,
+): SourceBaselineResult {
+  if (baseline.state !== "ready" || from === null) return baseline;
+  const additions = sortAttemptEvents(rows.filter((row) =>
+    row.event === "INTENT_REPOS_CHANGED" &&
+    auditBlockField(row.block, REPO_BASELINE_ADDITION_FIELD) !== null &&
+    !attemptEventDefinitelyBefore(row, from)));
+  if (additions.length === 0) return baseline;
+  const listed = new Set([...baseline.listing.keys()].map((key) => splitSourcePathKey(key)?.repo ?? ""));
+  const joined = new Map<string, WorkspaceSourceListing>();
+  for (const row of additions) {
+    const added = readStageBaseline(projectDir, stageSlug, auditBlockField(row.block, REPO_BASELINE_ADDITION_FIELD) ?? "", intent, space);
+    if (added.state !== "ready") return added;
+    const byRepo = new Map<string, WorkspaceSourceListing>();
+    for (const [key, entry] of added.listing) {
+      const repo = splitSourcePathKey(key)?.repo ?? "";
+      if (repo === "" || listed.has(repo)) continue;
+      if (!byRepo.has(repo)) byRepo.set(repo, new Map());
+      byRepo.get(repo)!.set(key, entry);
+    }
+    for (const [repo, entries] of byRepo) joined.set(repo, entries);
+  }
+  const listing: WorkspaceSourceListing = new Map(baseline.listing);
+  for (const entries of joined.values()) for (const [key, entry] of entries) listing.set(key, entry);
+  return { state: "ready", listing };
+}
+
+export const REPO_BASELINE_ADDITION_FIELD = "Source Baseline Addition";
+
+// The repos' listing as it is now, kept as a baseline snapshot under every stage
+// a baseline reaches, and the audit field naming it. No field when there is
+// nothing to list or it cannot be listed: the repo still joins, and its files
+// read as changes as they would have before.
+export function repoBaselineAdditionField(
+  projectDir: string,
+  repos: string[],
+  intent?: string,
+  space?: string,
+): Record<string, string> {
+  try {
+    const state = workspaceSourceState(projectDir, intent, space, repos);
+    if (state === null || state.listing.size === 0) return {};
+    return {
+      [REPO_BASELINE_ADDITION_FIELD]: writeBaselineSourceSnapshotUnderStages(
+        projectDir,
+        workspaceBaselineStageSlugs(),
+        state.listing,
+        intent,
+        space,
+      ),
+    };
+  } catch {
+    return {};
+  }
 }
 
 export interface UnitSourceSnapshot {
@@ -28159,6 +28245,104 @@ export function intentReposNamed(projectDir: string): boolean {
   if (!dirName) return false;
   return readIntentRegistry(projectDir, selection.space)
     .some((entry) => recordDirMatches(entry, dirName) && entry.repos_named === true);
+}
+
+// A change to the repos a piece of work covers since Units Generation was last
+// approved: the set it was approved with, and the set now. The approved set is
+// the current one with every INTENT_REPOS_CHANGED row after that approval undone,
+// so an undo leaves no change. Null when Units Generation is not approved, when
+// nothing changed, or when the change is already on record (CHANGE_ACCEPTED,
+// checkpoint units-generation). One owner: the repo verbs and `next` both ask it.
+export interface UnitsRepoChange {
+  /** When Units Generation was approved: a later approval is a new decision. */
+  approvedAt: string;
+  approved: string[];
+  current: string[];
+  added: string[];
+  removed: string[];
+}
+
+export function unitsRepoChange(
+  projectDir: string,
+  stateContent: string,
+  intent?: string,
+  space?: string,
+): UnitsRepoChange | null {
+  if (parseCheckboxes(stateContent).find((box) => box.slug === "units-generation")?.state !== "completed") return null;
+  const events = readAuditShardEvents(projectDir, intent, space);
+  const approval = sortAttemptEvents(events.filter((row) =>
+    row.event === "STAGE_COMPLETED" && auditBlockField(row.block, "Stage") === "units-generation")).at(-1);
+  if (approval === undefined) return null;
+  const current = intentRepos(projectDir, intent, space);
+  const approved = new Set(current);
+  // A row in the same second on another shard counts as after the approval.
+  for (const row of sortAttemptEvents(events.filter((candidate) =>
+    candidate.event === "INTENT_REPOS_CHANGED" && !attemptEventDefinitelyBefore(candidate, approval))).reverse()) {
+    for (const name of parseRefsList(auditBlockField(row.block, "Added") ?? "")) approved.delete(name);
+    for (const name of parseRefsList(auditBlockField(row.block, "Removed") ?? "")) approved.add(name);
+  }
+  const before = [...approved].sort();
+  const added = current.filter((name) => !approved.has(name));
+  const removed = before.filter((name) => !current.includes(name));
+  if (added.length === 0 && removed.length === 0) return null;
+  const change = { approvedAt: approval.timestamp, approved: before, current, added, removed };
+  const accepted = unitsRepoChangeAcceptance(change, "");
+  return events.some((row) =>
+      row.event === "CHANGE_ACCEPTED" && auditBlockField(row.block, "Checkpoint") === accepted.checkpoint &&
+      auditBlockField(row.block, "Recorded") === accepted.recorded && auditBlockField(row.block, "Current") === accepted.current)
+    ? null
+    : change;
+}
+
+function repoChangeWords(change: UnitsRepoChange): string {
+  const names = (repos: string[]): string => repos.length === 1 ? repos[0] : `${repos.slice(0, -1).join(", ")} and ${repos.at(-1)}`;
+  return [
+    ...(change.added.length > 0 ? [`${names(change.added)} added`] : []),
+    ...(change.removed.length > 0 ? [`${names(change.removed)} left out`] : []),
+  ].join(" and ");
+}
+
+// What the person hears when the work carries on with the approved Units: what
+// happened and the way back, never that they said the Units stand (a reply of
+// any kind after the question carries on the same way).
+export function unitsRepoChangeLine(change: UnitsRepoChange): string {
+  return `Units Generation was approved before this change: carrying on with its Units and ${repoChangeWords(change)}. ` +
+    "You can go back to Units Generation any time.";
+}
+
+// The question under Guard Policy strict, put once by `next`.
+export function unitsRepoChangeQuestion(change: UnitsRepoChange): string {
+  return `Units Generation was approved before this change to the work's repos (${repoChangeWords(change)}). ` +
+    "Do its Units still stand?";
+}
+
+export function unitsRepoChangeAcceptance(change: UnitsRepoChange, stage: string): AcceptedChange {
+  return {
+    checkpoint: "units-generation",
+    stage,
+    unit: null,
+    changed: [...change.added, ...change.removed],
+    recorded: `${change.approved.join(", ")} (Units Generation approved ${change.approvedAt})`,
+    current: change.current.join(", "),
+    notice: unitsRepoChangeLine(change),
+  };
+}
+
+const UNITS_REPOS_ASK = "units-repos-ask.json";
+
+export function noteUnitsReposAsked(projectDir: string): void {
+  noteEngineAskMark(projectDir, UNITS_REPOS_ASK);
+}
+
+// The question was shown in this clone and the person has spoken since: the
+// work carries on with the approved Units and the question is not put again.
+export function unitsReposAskPassedOver(projectDir: string): boolean {
+  return engineAskPassedOver(projectDir, UNITS_REPOS_ASK);
+}
+
+// Once the change is on record, so a later change is asked about afresh.
+export function clearUnitsReposAsked(projectDir: string): void {
+  clearEngineAskMark(projectDir, UNITS_REPOS_ASK);
 }
 
 // Teams each owning a Unit need the code in this project's own repo, so work
@@ -41762,7 +41946,8 @@ export type ChangeCheckpoint =
   | "review-receipt"
   | "summary-confirmation"
   | "swarm-batch"
-  | "construction-unit";
+  | "construction-unit"
+  | "units-generation";
 
 /** One accepted input change, ready to become a CHANGE_ACCEPTED row. */
 export interface AcceptedChange {

@@ -15076,7 +15076,7 @@
     "state": "work-open",
     "meaning": "the person means: the open work also touches the sibling repo auth",
     "source": "docs/guide/12-cli-commands.md:39 (+2 more) (+1 more sources)",
-    "documented": "\"Add a sibling repo to the active piece of work, until Units Generation is approved\"; at 371 the person says so \"and the agent runs `/aidlc intent add-repo <name>` for you\"",
+    "documented": "\"Add a sibling repo to the active piece of work at any stage, cloning it first when it is not here yet\"; the person says so \"and it runs it for you\"",
     "expected": {
       "engine": {
         "kinds": [

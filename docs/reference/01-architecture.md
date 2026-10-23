@@ -729,6 +729,7 @@ dist/claude/.claude/
 |   +-- aidlc-operations-agent.md
 +-- knowledge/
 |   +-- aidlc-shared/
+|   |   +-- adding-a-repo.md
 |   |   +-- ai-dlc-principles.md
 |   |   +-- verification.md
 |   |   +-- brownfield.md

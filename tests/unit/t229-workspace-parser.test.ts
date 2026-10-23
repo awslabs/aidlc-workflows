@@ -270,6 +270,23 @@ describe("parseWorkspaceCommand", () => {
     });
   });
 
+  test("intent add-repo carries its --url, --reason and --person-words to the utility whole", () => {
+    const tokens = [
+      "intent", "add-repo", "payments",
+      "--url", "git@github.com:acme/payments.git",
+      "--reason", "the consent API",
+      "--person-words", "add payments",
+    ];
+    const command = parseWorkspaceCommand(tokens);
+    expect(command).toEqual({
+      kind: "add-repo",
+      noun: "intent",
+      name: "payments",
+      rest: tokens.slice(3),
+    });
+    expect(workspaceCommandUtilityArgv(command)).toEqual(tokens);
+  });
+
   test("intent set-repos takes a list or --all and forwards verbatim", () => {
     expect(parseWorkspaceCommand(["intent", "set-repos", "app-a,app-b"])).toEqual({
       kind: "set-repos",

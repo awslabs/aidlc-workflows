@@ -272,6 +272,14 @@ import {
   noteRepoScopeAsked,
   repoScopePassedOver,
   intentReposNamed,
+  clearUnitsReposAsked,
+  governedGuardPolicy,
+  noteUnitsReposAsked,
+  recordAcceptedChanges,
+  unitsRepoChange,
+  unitsRepoChangeAcceptance,
+  unitsRepoChangeQuestion,
+  unitsReposAskPassedOver,
   teamsAcrossReposLine,
   isRefusedModifierNextArgv,
   isRetiredOnlyNextArgv,
@@ -4238,6 +4246,52 @@ function reverseEngineeringScopeAsk(
       {
         label: "Only some",
         detail: "Say which ones: Reverse Engineering reads only those, and you can add others back later.",
+      },
+    ],
+  };
+}
+
+// After Units Generation is approved, a change to this work's repos lands at
+// once. Under Guard Policy strict the next step asks once whether its
+// Units still stand. Asked and answered in any way, not strict, or unattended:
+// the work carries on with the approved Units, recorded once (CHANGE_ACCEPTED),
+// and the line says so with the way back. A ledger that cannot take the row
+// refuses this step with recordAcceptedChanges' own repair step.
+function unitsReposAsk(projectDir: string, stateContent: string | null): AskDirective | ErrorDirective | null {
+  if (stateContent === null) return null;
+  const change = unitsRepoChange(projectDir, stateContent);
+  if (change === null) return null;
+  const strict = governedGuardPolicy(projectDir, stateContent).value === "strict";
+  if (!strict || process.env.AIDLC_UNATTENDED === "1" || unitsReposAskPassedOver(projectDir)) {
+    if (isReadOnlyEngineProbe()) return null;
+    const stage = (getField(stateContent, "Current Stage") ?? "").trim() || "none";
+    try {
+      for (const line of recordAcceptedChanges(projectDir, [unitsRepoChangeAcceptance(change, stage)])) {
+        sayWithStepOnce(projectDir, line);
+      }
+    } catch (error) {
+      return errorDirective(errorMessage(error));
+    }
+    clearUnitsReposAsked(projectDir);
+    return null;
+  }
+  if (!isReadOnlyEngineProbe()) noteUnitsReposAsked(projectDir);
+  const orchestrate = aidlcToolInvocation("orchestrate");
+  return {
+    kind: "ask",
+    ask_type: "units-repos",
+    response_route: "command",
+    question: unitsRepoChangeQuestion(change),
+    choices: [
+      {
+        label: "They stand",
+        detail: "The work carries on with the Units as approved; a Unit that changes an added repo names it in its Code Generation plan.",
+        command: `${orchestrate} next`,
+      },
+      {
+        label: "Go back to Units Generation",
+        detail: "Units Generation runs again with the repos this work covers now, then the stages after it.",
+        command: `${orchestrate} next --stage units-generation`,
       },
     ],
   };
@@ -10920,7 +10974,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // gate only on the all-covered re-entry; issue #368) and emits a single
     // directive for every other stage.
     const staffing = constructionStaffingAsk(pd, stateContent, currentSlug, scope) ??
-      reverseEngineeringScopeAsk(pd, stateContent, currentSlug);
+      reverseEngineeringScopeAsk(pd, stateContent, currentSlug) ?? unitsReposAsk(pd, stateContent);
     if (staffing) {
       emit(staffing);
       return;
@@ -10956,7 +11010,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // per-unit Construction stage (issue #368) and emits a single directive
   // otherwise.
   const staffing = constructionStaffingAsk(pd, stateContent, next.slug, scope) ??
-    reverseEngineeringScopeAsk(pd, stateContent, next.slug);
+    reverseEngineeringScopeAsk(pd, stateContent, next.slug) ?? unitsReposAsk(pd, stateContent);
   if (staffing) {
     emit(staffing);
     return;

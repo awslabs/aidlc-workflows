@@ -406,6 +406,24 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     expect(gi?.label).toContain("2 repo dir(s)");
   });
 
+  test("W3: a block that also ignores the clone staging folder matches repos.json too", () => {
+    const ws = freshGitWorkspace();
+    writeManifest(ws, MANIFEST);
+    makeSibling(ws, "checkout-api");
+    makeSibling(ws, "checkout-web");
+    writeFileSync(
+      join(ws, ".gitignore"),
+      "# >>> aidlc workspace-sync managed (do not edit inside; regenerated from repos.json) >>>\n" +
+        "/.aidlc-workspace-sync-recovery-*/\n" +
+        "/.aidlc-workspace-sync-txn-*/\n" +
+        "/checkout-api/\n/checkout-web/\n" +
+        "# <<< aidlc workspace-sync managed <<<\n",
+      "utf-8",
+    );
+    const gi = workspaceManifestChecks(ws).find((r) => r.label.includes("Workspace .gitignore"));
+    expect(gi?.label).toContain("matches repos.json");
+  });
+
   test("W2 reports drift both ways: declared-but-not-cloned AND on-disk-but-undeclared", () => {
     const ws = freshGitWorkspace();
     writeManifest(ws, MANIFEST);

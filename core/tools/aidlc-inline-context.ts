@@ -137,6 +137,7 @@ const SHIPPED_INLINE_KNOWLEDGE: Readonly<
   Record<string, ReadonlySet<string>>
 > = {
   "aidlc-shared": new Set([
+    "adding-a-repo.md",
     "ai-dlc-principles.md",
     "brownfield.md",
     "rules-reading.md",

@@ -481,6 +481,13 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "intent add-repo maps through workspace parser with every flag kept",
+      routerArgs: ["engine", "intent", "add-repo", "payments", "--url", "/x/payments.git", "--reason", "a b"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "add-repo", "payments", "--url", "/x/payments.git", "--reason", "a b"],
+      fixture: true,
+    },
+    {
       name: "intent set-repos --all maps through workspace parser",
       routerArgs: ["engine", "intent", "set-repos", "--all"],
       tool: "aidlc-utility.ts",
@@ -779,6 +786,49 @@ describe("t230 dispatcher route parity", () => {
     expect(some.exitCode, `${some.stdout}${some.stderr}`).toBe(0);
     expect(some.stdout.toString().trim()).toBe("This work now covers repo-a and repo-c. repo-b can be added back any time.");
     expect(recorded().repos).toEqual(["repo-a", "repo-c"]);
+  });
+
+  // The person's own address and the agent's quoted reason, through the entry
+  // the agent runs: the clone lands and the words are recorded whole.
+  test("intent add-repo --url through the dispatcher clones the repo and records the quoted reason", () => {
+    const projectDir = makeProject();
+    seedStateFile(projectDir, "state-mid-inception.md");
+    const registry = join(projectDir, "aidlc", "spaces", "default", "intents", "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8")) as Array<Record<string, unknown>>;
+    rows[0].repos = ["repo-a"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    mkdirSync(join(projectDir, "repo-a", ".git"), { recursive: true });
+    const source = mkdtempSync(join(tmpdir(), "aidlc-t230-remote-"));
+    tempProjects.add(source);
+    const gitRun = (cwd: string, args: string[]): void => {
+      const r = spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...args], {
+        cwd,
+        encoding: "utf-8",
+      });
+      if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+    };
+    mkdirSync(join(source, "work"));
+    writeFileSync(join(source, "work", "api.ts"), "export const api = 1;\n");
+    gitRun(join(source, "work"), ["init", "-q"]);
+    gitRun(join(source, "work"), ["add", "-A"]);
+    gitRun(join(source, "work"), ["commit", "-qm", "seed"]);
+    gitRun(source, ["clone", "-q", "--bare", "work", "payments.git"]);
+    const bare = join(source, "payments.git");
+
+    // The packaged tree: recording the new repo's listing reads the stage graph.
+    const added = viaDispatcher(
+      ["engine", "intent", "add-repo", "payments", "--url", bare, "--reason", "the consent API lives there"],
+      projectDir,
+      { AIDLC_DISPATCH_TOOLS_DIR: DIST_TOOLS_DIR },
+    );
+    expect(added.exitCode, `${added.stdout}${added.stderr}`).toBe(0);
+    expect(added.stdout.toString()).toContain(`Cloned payments from ${bare} and added it to this piece of work's repos.`);
+    expect(existsSync(join(projectDir, "payments", "api.ts"))).toBe(true);
+    expect((JSON.parse(readFileSync(registry, "utf-8"))[0] as { repos: string[] }).repos).toEqual(["payments", "repo-a"]);
+    const audit = readdirSync(join(seededRecordDir(projectDir), "audit"))
+      .map((file) => readFileSync(join(seededRecordDir(projectDir), "audit", file), "utf-8"))
+      .join("\n");
+    expect(audit).toContain("**Reason**: the consent API lives there");
   });
 
   test("space create mutates the same observable tree as space-create", () => {
