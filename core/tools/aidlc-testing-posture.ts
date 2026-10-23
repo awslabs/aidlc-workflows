@@ -3227,9 +3227,14 @@ export function codeGenerationPlanWaits(projectDir: string, units: ReadonlyArray
   });
 }
 
-/** The step a completion gets while its plan waits: the plan's question is `next`'s. */
-export function codeGenerationPlanWaitsStep(): string {
-  return `The code plan is not approved yet: run \`${aidlcToolInvocation("orchestrate")} next\` and follow the step it prints.`;
+/**
+ * The step a completion gets while its plan waits: the plan's question is
+ * `next`'s, and an isolated run's is its own `next`, since a bare `next` routes
+ * the main workflow.
+ */
+export function codeGenerationPlanWaitsStep(isolated = false): string {
+  const next = isolated ? "next --stage code-generation --single" : "next";
+  return `The code plan is not approved yet: run \`${aidlcToolInvocation("orchestrate")} ${next}\` and follow the step it prints.`;
 }
 
 function recordCodeGenerationContinuation(

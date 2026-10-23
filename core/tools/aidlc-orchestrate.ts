@@ -13934,8 +13934,8 @@ function unitsOwingStage(projectDir: string, stage: GraphStage, context: UnitWor
 // completed, an approval with no gate open, an isolated run closing) waits while
 // its plan does, after the stage's own completion checks; the plan's question is
 // `next`'s. The remedy the person picked at the recovery question is theirs.
-// `targets` names an isolated run's own target, which is outside the main
-// workflow's Units. Null when it may go on.
+// An isolated run builds the zero-Unit target, outside the main workflow's
+// Units, and its step names its own `next`. Null when it may go on.
 function codeGenerationCompletionWaits(
   projectDir: string,
   node: GraphStage,
@@ -13943,15 +13943,15 @@ function codeGenerationCompletionWaits(
   stateContent: string,
   args: string[],
   unit: string | undefined,
-  targets?: ReadonlyArray<string | null>,
+  isolated = false,
 ): Directive | null {
   if (node.slug !== "code-generation") return null;
   const marker = readActiveDirectiveMarker(projectDir, stateContent);
   if (guardRecoveryAnswerAdmits(marker, ["engine", "orchestrate", "report", ...args], projectDir)) return null;
   return codeGenerationCompletionPlanWaits(
-    projectDir, stateContent, targets ?? codeGenerationReportTargets(projectDir, node, scope, stateContent, unit),
+    projectDir, stateContent, isolated ? [null] : codeGenerationReportTargets(projectDir, node, scope, stateContent, unit),
   )
-    ? printDirective(codeGenerationPlanWaitsStep())
+    ? printDirective(codeGenerationPlanWaitsStep(isolated))
     : null;
 }
 
@@ -16746,7 +16746,7 @@ function handleSingleReport(
   // An isolated run builds the zero-Unit target: it closes once that plan lets
   // it build, as the main workflow's completion does.
   const planWaits = codeGenerationCompletionWaits(
-    pd, node, singleScope ?? "", loadStateFileIfPresent(pd) ?? "", args, undefined, [null],
+    pd, node, singleScope ?? "", loadStateFileIfPresent(pd) ?? "", args, undefined, true,
   );
   if (planWaits !== null) {
     emit(planWaits);

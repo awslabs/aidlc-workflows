@@ -402,7 +402,9 @@ changed since its approval under strict), `report --stage code-generation` with
 answers with a step and changes nothing: "The code plan is not approved yet: run
 `next` and follow the step it prints." So does `unit complete --stage
 code-generation` for a Unit whose own plan waits, and `report --single --stage
-code-generation` closing an isolated run whose plan waits. The plan's approval is judged
+code-generation` closing an isolated run whose plan waits, whose step names that
+run's own `next --stage code-generation --single`, since a bare `next` routes the
+main workflow. The plan's approval is judged
 as the build judges it (`codeGenerationCompletionPlanWaits`, over
 `codeGenerationExecutionAllowed`): a current receipt, plan approval off (the
 scope, the person, or the machine switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`
