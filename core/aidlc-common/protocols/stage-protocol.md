@@ -318,7 +318,7 @@ recovery protocol's Session resume says, never as Request Changes.
 - **Their intent is genuinely unclear:** ask one short question, as a colleague
   would, and end the turn.
 - **Their words on a command line:** where the engine keeps their words (a
-  stage gate's Request Changes, Plan Approval), pass only the choice; their
+  stage gate's Request Changes), pass only the choice; their
   words are attached for you. Where their own words still travel (what to change
   at the summary or a recovery question, a `--reason`), put them in single
   quotes, never double quotes, so no shell runs a `$(...)`, a backtick, or a

@@ -858,6 +858,17 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(grouped).toContain('--units "<unit>,<unit>"');
   });
 
+  // At the code plan question what to change is the agent's --details after
+  // the choice; no copy says the engine keeps their words there for it.
+  test("no protocol or SKILL says Plan Approval keeps the person's words as what to change", () => {
+    const found: string[] = [];
+    for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      if (/Plan Approval\), pass only the choice/.test(body)) found.push(rel);
+    }
+    expect(found).toEqual([]);
+  });
+
   // When the person asks to change a check or the Guard Policy, the agent runs
   // the setter; no copy tells them to type a switch, and none still says a
   // tool reads the meaning of their words.
