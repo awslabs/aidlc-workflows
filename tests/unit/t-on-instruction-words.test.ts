@@ -1,22 +1,21 @@
-// `log answer --on-instruction '<words>'` records a choice the person left to
-// the agent, with the words that handed it over. The words have to be the
-// person's: they are kept only when something the person said holds them (a
-// message the human-turn hook kept, a question box's reply, the request that
-// started the work), whatever the case, spacing or punctuation of the quote.
-// In a live run on Claude Code the agent added three questions after a
-// Request Changes pick, answered them itself and recorded its own summary as
-// the person's instruction; the record said they left those answers to it.
-// Where the record lacks some of the person's words (a host that passed none,
-// a record gone with the day, no hook at all), no quote can be proved not
-// theirs, and the choice is recorded as before.
-// covers: cli:aidlc-log(answer), function:handleAnswer, function:holdsQuote, function:personsSaidWords
+// `log answer --on-instruction` records a choice the person left to the
+// agent. The agent names the message that left it (`--message <id>`, or the
+// message the question was logged naming); the engine proves the message is
+// theirs, unspent and this chat's, and the record names it with their whole
+// words. No quote is compared: words the agent passes with the flag (the form
+// from before --message) are its own text, kept as such and claiming nothing,
+// so a misread shows in the record instead of being hunted by a matcher. In a
+// live run on Claude Code the agent once recorded its own summary as the
+// person's instruction; now the record can only say they left it to the agent
+// beside a message of theirs.
+// covers: cli:aidlc-log(answer), function:handleAnswer, function:proveMessage
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { holdsQuote, MESSAGE_TEXT_MAX_CHARS, readMessage, saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
+import { listMessages, saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { cleanupTestProject, createTestProject, seededRecordDir, seedStateFile } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
@@ -41,18 +40,21 @@ function project(): string {
   return p;
 }
 
-function run(p: string, args: string[], input?: string): { status: number; out: string } {
+function run(p: string, args: string[], input?: string, chat = CHAT): { status: number; out: string } {
   const r = spawnSync(BUN, args, {
     cwd: p,
     encoding: "utf-8",
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-    env: { ...process.env, CLAUDE_PROJECT_DIR: p, AIDLC_PROJECT_DIR: p },
+    env: {
+      ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0", AIDLC_SESSION_OVERRIDE: chat,
+      CLAUDE_PROJECT_DIR: p, AIDLC_PROJECT_DIR: p,
+    },
     ...(input === undefined ? {} : { input }),
   });
   return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
-const log = (p: string, args: string[]) => run(p, [LOG, ...args, "--project-dir", p]);
+const log = (p: string, args: string[], chat = CHAT) => run(p, [LOG, ...args, "--project-dir", p], undefined, chat);
 const hook = (p: string, payload: object) => {
   const r = run(p, [join(TOOLS, "aidlc.ts"), "engine", "hook", "record-human-turn"], JSON.stringify(payload));
   expect(r.status, r.out).toBe(0);
@@ -68,8 +70,12 @@ const picked = (p: string, question: string, answer: string) => hook(p, {
   tool_response: { answers: { [question]: answer } },
 });
 
-const leftToAgent = (p: string, quote: string) =>
-  log(p, ["answer", "--stage", STAGE, "--details", "Q5: A; Q6: A; Q7: A", "--on-instruction", quote]);
+const leftToAgent = (p: string, pointer: string[], chat = CHAT) =>
+  log(p, ["answer", "--stage", STAGE, "--details", "Q5: A; Q6: A; Q7: A", "--on-instruction", ...pointer], chat);
+
+// The id of the message the latest turn kept.
+const latestId = (p: string): string =>
+  auditBlockField(readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN").at(-1)!.block, "Message Id")!;
 
 function askQuestions(p: string): void {
   expect(log(p, ["decision", "--stage", STAGE, "--decision", "Q5-Q7", "--options", "A,B,C"]).status).toBe(0);
@@ -83,173 +89,95 @@ function fieldOf(row: { block: string }, name: string): string | null {
   return row.block.match(new RegExp(`^\\*\\*${name}\\*\\*: (.*)$`, "m"))?.[1] ?? null;
 }
 
-function refused(r: { status: number; out: string }): void {
-  expect(r.status).not.toBe(0);
-  // The refusal names the step: their own words, or the questions shown and a wait.
-  expect(r.out).toContain("Quote their own words that left it to you");
-  expect(r.out).toContain("show them the questions and end your turn");
-}
+const claimed = (row: { block: string }) =>
+  fieldOf(row, "Answer Source") === "chosen by the agent as the person asked";
 
-describe("t-on-instruction-words: a choice left to the agent quotes words the person said", () => {
-  test("the agent's own words are not recorded as the person's instruction", () => {
+describe("t-on-instruction-words: a choice left to the agent names the message that left it", () => {
+  test("the agent's own words never stand for theirs: recorded as its text, with no claim", () => {
     const p = project();
     typed(p, "Build a local CLI that converts CSV to JSON, and approve each gate.");
     askQuestions(p);
-    refused(leftToAgent(p, "Grounded from the user request (approve each gate); confirm at summary."));
-    expect(answers(p)).toHaveLength(0);
+    for (const quote of ["Grounded from the user request (approve each gate); confirm at summary.", "up to you", "ok"]) {
+      const r = leftToAgent(p, [quote]);
+      expect(r.status, r.out).toBe(0);
+    }
+    for (const row of answers(p)) {
+      expect(claimed(row)).toBe(false);
+      expect(fieldOf(row, "Instruction")).toBeNull();
+    }
+    expect(fieldOf(answers(p)[0], "Conductor Summary")).toBe("Grounded from the user request (approve each gate); confirm at summary.");
   });
 
-  test("their words copied exactly are recorded", () => {
+  test("their message named: the claim, the message and its whole words, whatever words came with the flag", () => {
     const p = project();
     typed(p, "Q1 is B. Choose the recommended answers for the rest.");
+    const id = latestId(p);
     askQuestions(p);
-    const r = leftToAgent(p, "Choose the recommended answers for the rest.");
+    const r = leftToAgent(p, ["--message", id]);
     expect(r.status, r.out).toBe(0);
-    expect(fieldOf(answers(p)[0], "Answer Source")).toBe("chosen by the agent as the person asked");
-    expect(fieldOf(answers(p)[0], "Instruction")).toBe("Choose the recommended answers for the rest.");
+    const row = answers(p)[0];
+    expect(claimed(row)).toBe(true);
+    expect(fieldOf(row, "Message Id")).toBe(id);
+    expect(fieldOf(row, "Person Reply")).toBe("Q1 is B. Choose the recommended answers for the rest.");
   });
 
-  test("a quote that differs only in case, spacing or punctuation is their words", () => {
-    const p = project();
-    // A typographic apostrophe and dash, as a phone or a Mac keyboard types them.
-    typed(p, "Honestly \u2014 it\u2019s up to you,\r\n   pick whatever\u2019s best!");
-    askQuestions(p);
-    for (const quote of ["it's up to you, pick whatever's best", "UP TO YOU pick whatevers best", "up to you."]) {
-      const r = leftToAgent(p, quote);
-      expect(r.status, `${quote}: ${r.out}`).toBe(0);
-    }
-    expect(answers(p)).toHaveLength(3);
-    // Words cut from the middle are not a quote.
-    refused(leftToAgent(p, "honestly pick whatever's best"));
-  });
-
-  test("a script written without spaces between words is matched as written", () => {
-    const p = project();
-    typed(p, "\u8cea\u554f\u306f\u304a\u4efb\u305b\u3057\u307e\u3059\u3002");
-    askQuestions(p);
-    const r = leftToAgent(p, "\u304a\u4efb\u305b\u3057\u307e\u3059");
-    expect(r.status, r.out).toBe(0);
-  });
-
-  test("the same letters inside other words they said are not a quote", () => {
-    const p = project();
-    typed(p, "Scale it up to your expected load, and let me look at it first.");
-    askQuestions(p);
-    refused(leftToAgent(p, "up to you"));
-    refused(leftToAgent(p, "ok"));
-    expect(answers(p)).toHaveLength(0);
-  });
-
-  // A word's edge is a space or either end; in a script written without spaces,
-  // a seam between two of its letters too, but never inside a number or a letter.
-  test("a quote holds only as whole words", () => {
-    expect(holdsQuote("Scale it up to your expected load", "up to you")).toBe(false);
-    expect(holdsQuote("Fine, up to you", "up to you")).toBe(true);
-    expect(holdsQuote("let me look at it first", "ok")).toBe(false);
-    expect(holdsQuote("ok, go", "ok")).toBe(true);
-    expect(holdsQuote("measure twice", "sure")).toBe(false);
-    expect(holdsQuote("ship version 20", "version 2")).toBe(false);
-    // An emoji typed after their words, with a space or without, is a word of its own.
-    expect(holdsQuote("up to you \u{1F44D}", "up to you")).toBe(true);
-    expect(holdsQuote("up to you\u{1F44D}", "up to you")).toBe(true);
-    expect(holdsQuote("\u8cea\u554f\u306f\u304a\u4efb\u305b\u3057\u307e\u3059\u3002", "\u304a\u4efb\u305b\u3057\u307e\u3059")).toBe(true);
-    // Thai: a quote after a tone mark holds; a letter cut from its vowel, or a digit from its number, does not.
-    expect(holdsQuote("\u0e43\u0e2b\u0e49\u0e04\u0e38\u0e13\u0e40\u0e25\u0e37\u0e2d\u0e01\u0e40\u0e25\u0e22", "\u0e04\u0e38\u0e13\u0e40\u0e25\u0e37\u0e2d\u0e01")).toBe(true);
-    expect(holdsQuote("\u0e17\u0e35\u0e48", "\u0e17")).toBe(false);
-    expect(holdsQuote("version \u0e52\u0e50", "version \u0e52")).toBe(false);
-  });
-
-  test("words in a file pass the same check", () => {
+  test("words in a file are the agent's own too", () => {
     const p = project();
     typed(p, "up to you & $HOME");
     askQuestions(p);
     const dir = join(seededRecordDir(p), ".aidlc-engine", "answer-text");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "mine.txt"), "whatever you think\n");
-    refused(log(p, ["answer", "--stage", STAGE, "--details", "A", "--on-instruction-file", ".aidlc-engine/answer-text/mine.txt"]));
-    writeFileSync(join(dir, "theirs.txt"), "up to you & $HOME\n");
-    const r = log(p, ["answer", "--stage", STAGE, "--details", "A", "--on-instruction-file", ".aidlc-engine/answer-text/theirs.txt"]);
+    const r = log(p, ["answer", "--stage", STAGE, "--details", "A", "--on-instruction-file", ".aidlc-engine/answer-text/mine.txt"]);
     expect(r.status, r.out).toBe(0);
-    expect(fieldOf(answers(p)[0], "Instruction")).toBe("up to you & $HOME");
+    expect(claimed(answers(p)[0])).toBe(false);
+    expect(fieldOf(answers(p)[0], "Conductor Summary")).toBe("whatever you think");
   });
 
-  test("the request that started the work is their words too", () => {
+  test("the request that started the work can be the message that left it", () => {
     const p = project();
-    appendAuditEntry("WORKFLOW_STARTED", { Request: "/aidlc Build it with the simplest stack and guide me through it" }, p);
-    typed(p, "Looks correct");
+    appendAuditEntry("WORKFLOW_STARTED", { Request: "/aidlc Build it with the simplest stack and pick the defaults" }, p);
+    typed(p, "Build it with the simplest stack and pick the defaults");
+    const id = latestId(p);
     askQuestions(p);
-    const r = log(p, ["answer", "--stage", STAGE, "--details", "Guide me", "--on-instruction", "guide me through it"]);
+    const r = leftToAgent(p, ["--message", id]);
     expect(r.status, r.out).toBe(0);
+    expect(claimed(answers(p)[0])).toBe(true);
   });
 
-  test("in a question box, what they picked or wrote is their words, and the agent's question is not", () => {
+  test("in a question box, the message its reply came in is the one named", () => {
     const p = project();
-    const question = "Shall I choose the answers for the three questions I added?";
-    picked(p, question, "Let you decide");
-    picked(p, "Anything else?", "No, you pick, I trust you");
+    picked(p, "Shall I choose the answers for the three questions I added?", "Let you decide");
+    const id = latestId(p);
     askQuestions(p);
-    refused(leftToAgent(p, "choose the answers for the three questions I added"));
-    for (const quote of ["Let you decide", "you pick, I trust you"]) {
-      const r = leftToAgent(p, quote);
-      expect(r.status, `${quote}: ${r.out}`).toBe(0);
-    }
+    const r = leftToAgent(p, ["--message", id]);
+    expect(r.status, r.out).toBe(0);
+    expect(fieldOf(answers(p)[0], "Message Id")).toBe(id);
   });
 
-  test("a chat's first line, kept before that chat joined the work, is their words too", () => {
+  test("a chat's first line, kept before that chat joined the work, is named from that chat", () => {
     const p = project();
     typed(p, "Looks correct");
-    // The hook keeps a chat's message before the chat is on the work, and names it in no row of the work.
+    const other = "t-on-instruction-other-chat";
     saveMessage(p, {
-      session: "another-chat", at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt",
+      session: other, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt",
       text: "/aidlc carry on, and pick the defaults for me", picker: null, words: "carry on, and pick the defaults for me",
       settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
     });
+    const id = listMessages(p).find((message) => message.session === other)!.id;
     askQuestions(p);
-    const r = leftToAgent(p, "pick the defaults for me");
+    const r = leftToAgent(p, ["--message", id], other);
     expect(r.status, r.out).toBe(0);
+    expect(claimed(answers(p)[0])).toBe(true);
   });
 
-  describe("where the record lacks some of their words, the choice is recorded as before", () => {
-    test("a host that passed no words with their message", () => {
-      const p = project();
-      typed(p, "");
-      const turn = readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN").at(-1);
-      expect(readMessage(p, auditBlockField(turn!.block, "Message Id") ?? "")?.text).toBe("");
-      askQuestions(p);
-      const r = leftToAgent(p, "you choose");
-      expect(r.status, r.out).toBe(0);
-    });
-
-    test("a message of theirs whose record is gone", () => {
-      const p = project();
-      typed(p, "you choose");
-      typed(p, "Looks correct");
-      const first = readAuditShardEvents(p).find((row) => row.event === "HUMAN_TURN");
-      const id = auditBlockField(first!.block, "Message Id");
-      rmSync(join(p, "aidlc", ".aidlc-sessions", "messages", `${id}.json`));
-      askQuestions(p);
-      const r = leftToAgent(p, "whatever you think is best");
-      expect(r.status, r.out).toBe(0);
-    });
-
-    test("a message of theirs too long to keep whole, whose end left the choice", () => {
-      const p = project();
-      const brief = `${"Here is the brief. ".repeat(Math.ceil(MESSAGE_TEXT_MAX_CHARS / 19))}Pick whatever defaults make sense.`;
-      expect(brief.length).toBeGreaterThan(MESSAGE_TEXT_MAX_CHARS);
-      typed(p, brief);
-      const turn = readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN").at(-1);
-      expect(readMessage(p, auditBlockField(turn!.block, "Message Id") ?? "")?.cut).toBe(true);
-      askQuestions(p);
-      const r = leftToAgent(p, "pick whatever defaults make sense");
-      expect(r.status, r.out).toBe(0);
-    });
-
-    test("no turn of theirs on record at all", () => {
-      const p = project();
-      appendAuditEntry("WORKFLOW_STARTED", { Request: "/aidlc build the lunch poll" }, p);
-      askQuestions(p);
-      const r = leftToAgent(p, "you choose");
-      expect(r.status, r.out).toBe(0);
-    });
+  test("a message with no words of theirs proves nothing: the answer is the agent's own, with no claim", () => {
+    const p = project();
+    typed(p, "");
+    askQuestions(p);
+    const r = leftToAgent(p, []);
+    expect(r.status, r.out).toBe(0);
+    expect(claimed(answers(p)[0])).toBe(false);
+    expect(fieldOf(answers(p)[0], "Message Id")).toBeNull();
   });
 });

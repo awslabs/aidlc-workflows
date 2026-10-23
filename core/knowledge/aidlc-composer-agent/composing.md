@@ -106,7 +106,7 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
   approving a front composition. In-flight, the row is read-only: a
   recompose lands only stage skips and adds, so the proposal names the route
   (when the person asks to raise or lower it, the conductor runs
-  `{{INVOKE}} engine config set guard-policy <value> --person-words '<their words>'`). Changing scope alone
+  `{{INVOKE}} engine config set guard-policy <value> --message <id>`, `<id>` the message they asked in). Changing scope alone
   never lowers the running policy.
   A memory layer that declares strict wins over any proposal; the
   validator and the intent-create command both refuse a relaxed or off value

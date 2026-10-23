@@ -52,7 +52,7 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
-import { classifyTerminalCommand } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { classifyTerminalCommand, MESSAGE_FILL, MESSAGE_SLOT } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -281,7 +281,7 @@ describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
         .replace(" [--skip <changes.skip>]", " --skip team-formation")
         .replace(" [--add <changes.add>]", "")
         // No settings were approved with this stage change.
-        .replace(" [approved setting flags --person-words '<their words>']", "")
+        .replace(` [approved setting flags --message '${MESSAGE_SLOT}']`, "")
         .split(/\s+/);
       expect(argv.shift()).toBe(native ? "aidlc" : "bun");
       const before = readFileSync(seededStateFile(proj), "utf-8");
@@ -664,15 +664,17 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(created.message)).toContain("to start the new intent");
     const kept = runEmitted(String(ask.continue_command));
     expect(kept.kind).toBe("print");
-    // No line of the person's is on record here, so the step names their words
-    // for the agent to fill with the reply that asked.
+    // No line of the person's is on record here, so the step names the message
+    // slot for the agent to fill with the id of the message that asked.
     expect(String(kept.message)).toContain(
-      "config set depth minimal --learnings off --person-words '<their words>'` to update the configuration",
+      `config set depth minimal --learnings off --message '${MESSAGE_SLOT}'\` to update the configuration${MESSAGE_FILL}`,
     );
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
     // A setting typed alone is still for the active work.
     const alone = directiveOf(runNext(proj, ["--learnings", "off"]).out);
-    expect(String(alone.message)).toContain("config set learnings off --person-words '<their words>'` to update the configuration");
+    expect(String(alone.message)).toContain(
+      `config set learnings off --message '${MESSAGE_SLOT}'\` to update the configuration${MESSAGE_FILL}`,
+    );
   });
 
   test("the reshape answer applies the typed settings to the active work first, then composes", () => {
@@ -688,9 +690,10 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     const first = runEmitted(compose);
     expect(first.kind).toBe("print");
     const message = String(first.message);
-    // No line of the person's is on record here, so the step names their words.
+    // No line of the person's is on record here, so the step names the message slot.
     expect(message).toContain(
-      "config set review none --learnings off --person-words '<their words>'` to apply the settings typed with this request to the work being reshaped",
+      `config set review none --learnings off --message '${MESSAGE_SLOT}'\` to apply the settings typed with this request to the ` +
+        `work being reshaped${MESSAGE_FILL}`,
     );
     const then = /then run `([^`]+)` and follow what it returns/.exec(message)?.[1];
     expect(then, message).toBeDefined();
@@ -749,7 +752,7 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
       (new RegExp(`"${label}": \`[^\`]*? next ([^\`]+)\``).exec(named)?.[1] ?? "").split(" ");
     const kept = directiveOf(runNext(proj, command("Part of the active work")).out);
     expect(String(kept.message)).toContain(
-      "config set depth minimal --guard-policy relaxed --person-words '<their words>'` to update the configuration",
+      `config set depth minimal --guard-policy relaxed --message '${MESSAGE_SLOT}'\` to update the configuration${MESSAGE_FILL}`,
     );
     // The separate-work choice reaches the plan question, then the creation.
     const separate = createdThrough(directiveOf(runNext(proj, command("Separate new piece of work")).out));

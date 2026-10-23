@@ -2,11 +2,11 @@
 //
 // A setting the person asks for in their own words ("lead agent only from
 // here") is carried out by the agent with the config setter. The work records
-// it as the person's when the agent names that reply (--person-words): the
-// state line says "set by you", the CEREMONY_SET row names them as its source
-// and carries their words, as the rows for a check they turn off already do.
-// The same setter run with no word of theirs behind it still says "set by a
-// command".
+// it as the person's when the agent names the message that asked for it
+// (--message): the state line says "set by you", the CEREMONY_SET row names them
+// as its source and carries their words and the message's id, as the rows for a
+// check they turn off already do. The same setter run with no message of theirs
+// named still says "set by a command".
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -59,7 +59,9 @@ function project(): { proj: string; state: string } {
   return { proj, state: join(intents, active, "aidlc-state.md") };
 }
 
-function said(proj: string, prompt: string): void {
+// The person types `prompt`; the human-turn hook keeps it. Returns the id of
+// the message it kept.
+function said(proj: string, prompt: string): string {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj,
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
@@ -68,6 +70,10 @@ function said(proj: string, prompt: string): void {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   expect(result.status, result.stderr).toBe(0);
+  const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
 }
 
 function ceremonyRows(proj: string) {
@@ -77,8 +83,8 @@ function ceremonyRows(proj: string) {
 describe("a setting asked for in plain words is the person's", () => {
   test("lead agent only from here: the agent's setter records collaborators off as set by you, with their words", () => {
     const { proj, state } = project();
-    said(proj, "lead agent only from here");
-    const set = utility(proj, ["config-change", "--collaborators", "off", "--person-words", "lead agent only from here"]);
+    const id = said(proj, "lead agent only from here");
+    const set = utility(proj, ["config-change", "--collaborators", "off", "--message", id]);
     expect(set.status, set.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), "Collaborators")).toBe("off (set by you)");
     const rows = ceremonyRows(proj);
@@ -87,10 +93,11 @@ describe("a setting asked for in plain words is the person's", () => {
     expect(auditBlockField(rows[0].block, "New")).toBe("off");
     expect(auditBlockField(rows[0].block, "Source")).toBe("you");
     expect(auditBlockField(rows[0].block, "Person Reply")).toBe("lead agent only from here");
+    expect(auditBlockField(rows[0].block, "Message Id")).toBe(id);
     expect(utility(proj, ["status"]).stdout).toContain("Collaborators: off (set by you)\n");
   });
 
-  test("the same setter with no word of the person's behind it still says set by a command", () => {
+  test("the same setter with no message of the person's named still says set by a command", () => {
     const { proj, state } = project();
     const set = utility(proj, ["config-change", "--collaborators", "off"]);
     expect(set.status, set.stderr).toBe(0);
@@ -103,11 +110,11 @@ describe("a setting asked for in plain words is the person's", () => {
 
   test("a setting turned back on at their word is theirs too, and an on carries no words", () => {
     const { proj, state } = project();
-    said(proj, "no sensors on this one");
-    expect(utility(proj, ["config-change", "--sensors", "off", "--person-words", "no sensors on this one"]).status).toBe(0);
+    const off = said(proj, "no sensors on this one");
+    expect(utility(proj, ["config-change", "--sensors", "off", "--message", off]).status).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), "Sensors")).toBe("off (set by you)");
-    said(proj, "bring the sensors back");
-    expect(utility(proj, ["config-change", "--sensors", "on", "--person-words", "bring the sensors back"]).status).toBe(0);
+    const on = said(proj, "bring the sensors back");
+    expect(utility(proj, ["config-change", "--sensors", "on", "--message", on]).status).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), "Sensors")).toBe("on (set by you)");
     const rows = ceremonyRows(proj);
     expect(rows).toHaveLength(2);
@@ -118,10 +125,10 @@ describe("a setting asked for in plain words is the person's", () => {
 
   test("the way back the agent runs after an off they asked for is the command's, not theirs", () => {
     const { proj, state } = project();
-    said(proj, "lead agent only from here");
-    expect(utility(proj, ["config-change", "--collaborators", "off", "--person-words", "lead agent only from here"]).status).toBe(0);
+    const id = said(proj, "lead agent only from here");
+    expect(utility(proj, ["config-change", "--collaborators", "off", "--message", id]).status).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), "Collaborators")).toBe("off (set by you)");
-    // No new word from the person: their turn stands behind the off, not behind this.
+    // No message named: their message stands behind the off, not behind this.
     expect(utility(proj, ["config-change", "--collaborators", "on"]).status).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), "Collaborators")).toBe("on (set by a command)");
     const rows = ceremonyRows(proj);

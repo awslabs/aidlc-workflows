@@ -61,7 +61,14 @@ import {
   shellCommandInvocations,
   writeTargets,
 } from "../../dist/claude/.claude/hooks/aidlc-review-freeze.ts";
-import { readAllAuditShards, setGuardPolicyLine } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  auditBlockField,
+  MESSAGE_FILL,
+  MESSAGE_SLOT,
+  readAllAuditShards,
+  readAuditShardEvents,
+  setGuardPolicyLine,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { KIRO_HOOK_GROUPS } from "../../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 import {
   cleanupTestProject,
@@ -1484,8 +1491,9 @@ const PERSON = {
   AIDLC_UNATTENDED: "0",
 };
 
-// The person's message, as the human-turn hook records it.
-function personSays(p: string, prompt: string): void {
+// The person's message, as the human-turn hook records it; returns the id of
+// the message it kept.
+function personSays(p: string, prompt: string): string {
   const said = spawnSync(BUN, [join(DIST_CLAUDE, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
     cwd: p,
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: PERSON.AIDLC_SESSION_OVERRIDE, prompt }),
@@ -1494,6 +1502,10 @@ function personSays(p: string, prompt: string): void {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   expect(said.status, said.stderr).toBe(0);
+  const turn = readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
 }
 
 function logTool(p: string, args: string[]): void {
@@ -1659,8 +1671,8 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
   });
 
   // The person picks "Turn this check off" by its number. The choice tells the
-  // agent to run its command with that reply as their words, so the check is
-  // recorded as theirs.
+  // agent to run its command naming the message that reply came in, so the
+  // check is recorded as theirs.
   test("the turn-it-off choice picked by its number: the check is off, set by you", () => {
     const p = projBeforeGate();
     recordReview(p, "READY");
@@ -1670,11 +1682,12 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
     const remedies = asked.remedies as { op: string; action: string }[];
     const at = remedies.findIndex((remedy) => remedy.op === "lower-fence");
     expect(at, JSON.stringify(asked)).toBeGreaterThan(-1);
-    expect(remedies[at].action).toContain("--person-words '<their words>'");
+    expect(remedies[at].action).toContain(`\`--message '${MESSAGE_SLOT}'\` added${MESSAGE_FILL}`);
+    expect(remedies[at].action).not.toContain("--person-words");
     const dispatcher = join(DIST_CLAUDE, "tools", "aidlc.ts");
-    personSays(p, String(at + 1));
+    const picked = personSays(p, String(at + 1));
     const off = spawnSync(BUN, [
-      dispatcher, "engine", "config", "set", "guard.review-freeze", "off", "--person-words", String(at + 1), "--project-dir", p,
+      dispatcher, "engine", "config", "set", "guard.review-freeze", "off", "--message", picked, "--project-dir", p,
     ], {
       cwd: p,
       env: { ...process.env, ...PERSON, CLAUDE_PROJECT_DIR: p },

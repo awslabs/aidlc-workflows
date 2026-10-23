@@ -301,12 +301,12 @@ After approval:
 or the machine switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` can turn the plan
 stop off for this piece of work; the engine then routes straight to the build
 with the notice above. When the person asks for it, in their own words or with
-`/aidlc --plan-approval off`, run `{{INVOKE}} engine config set guard.plan-approval off --person-words '<their words>'`
+`/aidlc --plan-approval off`, run `{{INVOKE}} engine config set guard.plan-approval off --message <id>`, with `<id>` the message they asked in,
 and say in one line that it is off. When they only ask about it ("skip plan
 approval?"), answer in one line, offer to turn it off for this piece of work, and
 show the plan question again; their yes is the ask. Never suggest turning it off
 otherwise.
-Turning it back on (`config set plan-approval on --person-words '<their words>'`) is fine whenever they ask.
+Turning it back on (`config set plan-approval on --message <id>`) is fine whenever they ask.
 - A new stage attempt (a jump, a rejected gate, a workflow restart) needs its own
   approval: `next` asks again, or, while plan approval is off, builds the plan
   for that attempt with the same one-line notice. After a rejected gate, while the plan is still
@@ -338,7 +338,8 @@ the override; the reason travels in that file, never on the command line:
 bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --questions-file "<code-generation-record>/code-generation-questions.md" --details "Approve Plan" --override-file "<code-generation-record>/override-reason.txt" --unit "<directive.unit>"
 ```
 
-Tell the person the `say` line it prints, once, then run `next`.
+Tell the person in one line, in your own words, that their approval to build it with no check of the project's
+files is recorded, then run `next`.
 
 > **Build-and-Test loop-back:** The loop-back protocol module
 > (`aidlc-common/protocols/stage-protocol-loopback.md`) defines this replay.

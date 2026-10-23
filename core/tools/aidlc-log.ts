@@ -14,10 +14,8 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { prepareReviewCopy, removeReviewCopy } from "./aidlc-kiro-review-copy.ts";
 import {
   chatsSince,
-  holdsQuote,
   latestSpendingTimestamp,
   listMessages,
-  personsSaidWords,
   proveMessage,
   readMessage,
   type StoredMessage,
@@ -149,6 +147,7 @@ import {
   windowMessageIds,
   personSpokeSinceReviewRequest,
   ANSWER_SOURCE_ON_INSTRUCTION,
+  CONDUCTOR_SUMMARY_FIELD,
   unitSkippedUnits,
   readActiveAuditShardEvents,
   sortAttemptEvents,
@@ -378,6 +377,12 @@ function parseFlags(
         flags[a.slice(2)] = "true";
         continue;
       }
+      // --on-instruction is the kind ("they left it to me"), so it stands alone;
+      // a value after it is the agent's own text, the form before --message.
+      if (a === "--on-instruction" && (i + 1 >= args.length || args[i + 1].startsWith("--"))) {
+        flags["on-instruction"] = "true";
+        continue;
+      }
       if (i + 1 >= args.length) {
         error(`${a} expects a value, got end of arguments.`);
       }
@@ -533,7 +538,8 @@ const DECISION_OPTIONS: ReadonlySet<string> = new Set([
 ]);
 // --units, --reason and --park: the engine's Plan Approval question, recorded as
 // the person chose (which Units, what to change, and whether to stop for now).
-// --on-instruction: a stage question the person left to the agent.
+// --on-instruction: a stage question the person left to the agent, with
+// --message naming the message that left it.
 // --ends-turn: their reply also asked something, which the agent answers.
 const ANSWER_OPTIONS: ReadonlySet<string> = new Set([
   ...LOG_INTERACTION_OPTIONS, "--details", "--units", "--reason", "--park", "--on-instruction",
@@ -1356,7 +1362,7 @@ function handleAnswers(args: string[]): void {
 // --- Subcommand: answer ---
 // Usage: aidlc-log answer --stage <slug> --details <text>
 //   [--checkpoint summary-confirmation --questions-file <path>
-//   [--unit <unit>] [--single]] [--on-instruction <the person's words>]
+//   [--unit <unit>] [--single]] [--on-instruction [--message <id>]]
 //
 // Fires AFTER the user answers a question.
 
@@ -1816,12 +1822,13 @@ function handleAnswer(args: string[]): void {
   if (flags["ends-turn"] === "true") rowEndsTurn = true;
   // A stage question the person left to the agent. Checkpoints and approvals
   // stay the person's own each time, and an unattended run has nobody to hand
-  // anything over.
-  const instruction = flags["on-instruction"]?.replace(/\s+/g, " ").trim();
+  // anything over. Words given with the flag (or in --on-instruction-file) are
+  // the agent's own text, the form from before --message: kept as such, and
+  // never read as the person's.
+  const instruction = flags["on-instruction"] === "true"
+    ? ""
+    : flags["on-instruction"]?.replace(/\s+/g, " ").trim();
   if (instruction !== undefined) {
-    if (instruction === "") {
-      error("--on-instruction needs the person's own words that left the choice to you.");
-    }
     if (flags.checkpoint !== undefined) {
       error(`--on-instruction is for a stage question the person left to you; --checkpoint ${flags.checkpoint} ` +
         "is theirs to answer. Ask them and record their reply.");
@@ -1859,8 +1866,8 @@ function handleAnswer(args: string[]): void {
     // Request Changes names the exact report, so the agent never guesses its
     // flags: a solo walk reports the stage, a team-owned Unit gate its Unit.
     const report = picked.op === "request-changes"
-      ? `run \`${requestChangesReportCommand(pd, picked.stage, picked.unit)}\` with their exact words added ` +
-        "as a single-quoted --reason."
+      ? `run \`${requestChangesReportCommand(pd, picked.stage, picked.unit)}\`: their messages go on the record ` +
+        "as what should change."
       : "";
     const message = picked.op !== "request-changes"
       ? `Recorded that the person chose "${picked.action}". Carry it out now.`
@@ -2345,10 +2352,7 @@ function handleAnswer(args: string[]): void {
           stage: flags.stage,
           override: recorded.overridden,
           ...(recorded.overridden
-            ? {
-              failed_checks: recorded.failedChecks,
-              say: "Recorded that you approved building this plan with no check of the project's files.",
-            }
+            ? { failed_checks: recorded.failedChecks }
             : { note: "the normal receipt path succeeded, so the override was not needed and nothing was overridden" }),
           ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
         }),
@@ -2451,16 +2455,20 @@ function handleAnswer(args: string[]): void {
     // question it was logged with (a question logged after the reply arrived).
     // An explicit id that fails its proof refuses; an inherited one falls back
     // to the presence test below.
+    // A choice the person left to the agent names the message that left it the
+    // same way, which may also have given an approval ("approve, the rest is up
+    // to you"); with none named, the answer is the agent's own, with no claim.
     let named: StoredMessage | null = null;
-    if (instruction === undefined && !autonomousDecision) {
+    if (!autonomousDecision) {
+      const request = { request: instruction !== undefined };
       if (flags.message !== undefined) {
-        const proof = proveMessage(pd, flags.message, "answer");
+        const proof = proveMessage(pd, flags.message, "answer", request);
         if ("refusal" in proof) error(proof.refusal);
         named = proof.message;
       } else {
         const inherited = latestDecisionMessageId(pd, flags.stage, flags.unit);
         if (inherited !== null) {
-          const proof = proveMessage(pd, inherited, "answer");
+          const proof = proveMessage(pd, inherited, "answer", request);
           if ("message" in proof) named = proof.message;
         }
       }
@@ -2484,16 +2492,13 @@ function handleAnswer(args: string[]): void {
         error("Nothing the person said in this piece of work is on record, so no choice was left to you. Ask them." +
           unattendedHumanPresenceHint());
       }
-      // The words have to be theirs. Where the record lacks some of what they
-      // said, nothing proves a quote is not theirs, and it stands as before.
-      const words = personsSaidWords(pd, readAuditShardEvents(pd));
-      if (words.everyTurnHeld && !words.said.some((said) => holdsQuote(said, instruction))) {
-        error("Cannot record this as a choice the person left to you: those words are not in anything they said. " +
-          "Quote their own words that left it to you (--on-instruction '<their words>'), or show them the " +
-          "questions and end your turn; their reply answers them.");
+      // The record says the person left it to the agent only beside the
+      // message that did, whose whole words it keeps; words the agent passed
+      // with the flag are its own and claim nothing.
+      if (named !== null) {
+        fields["Answer Source"] = ANSWER_SOURCE_ON_INSTRUCTION;
       }
-      fields["Answer Source"] = ANSWER_SOURCE_ON_INSTRUCTION;
-      fields.Instruction = instruction;
+      if (instruction !== "") fields[CONDUCTOR_SUMMARY_FIELD] = instruction;
     } else if (autonomousDecision) {
       // autonomous Construction: no human presence required
     } else if (humanPresenceGuardDisabled()) {

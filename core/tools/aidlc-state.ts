@@ -104,8 +104,8 @@ import {
   guardRecoveryAskSelected,
   SKELETON_STANCES,
   guardRecoveryFeedbackStatus,
+  CONDUCTOR_SUMMARY_FIELD,
   selectedGuardRecoveryRemedyAction,
-  normalizeGuardRecoveryText,
   answeredBeforeShownStep,
   messageRetryStep,
   personRepliedSinceGateShown,
@@ -365,10 +365,6 @@ function emitAudit(
   return timestamp;
 }
 
-// The GATE_REJECTED field that keeps the conductor's own feedback text when the
-// person's recorded words became the Feedback and the two differ. Declared at
-// module top: the command dispatch below runs before later consts initialise.
-const CONDUCTOR_SUMMARY_FIELD = "Conductor Summary";
 // The person's own words at a gate they answered, kept whole by the human-turn
 // hook, and the message that holds them; the agent read them and reported the
 // choice, and the receipt carries both. Without `message`, every reply of theirs
@@ -7808,13 +7804,7 @@ function handleReject(args: string[]): void {
   if (!teamGate) {
     validateSlugInState(content, slug, ["awaiting-approval", "in-progress"]);
   }
-  const feedbackStatus = guardRecoveryFeedbackStatus(
-    pd,
-    content,
-    slug,
-    teamGate?.unit,
-    feedback ?? "",
-  );
+  const feedbackStatus = guardRecoveryFeedbackStatus(pd, content, slug, teamGate?.unit);
   if (feedbackStatus === "other-remedy") {
     const selectedAction = selectedGuardRecoveryRemedyAction(
       pd,
@@ -7851,16 +7841,15 @@ function handleReject(args: string[]): void {
     isAutonomousConstructionGate(content, stage, pd);
   // The person's own words. Their replies since the last decision and since
   // the stage started (or the one message the agent named), kept whole by the
-  // human-turn hook, are the feedback, and the conductor's text, when it says
-  // something else, is kept beside them as the Conductor Summary. A
-  // guard-recovery ask binds its own feedback above, and autonomous
-  // Construction has no person at the gate. With no recorded words the
-  // conductor's text is the feedback.
+  // human-turn hook, are the feedback, and the conductor's text is kept beside
+  // them as the Conductor Summary: at a gate and after a guard-recovery Request
+  // Changes alike. Autonomous Construction has no person at the gate. With no
+  // recorded words the conductor's text is the feedback.
   const conductorFeedback = feedback;
   let personsWords: string | null = null;
   let personsMessage: string | null = null;
   let personsMessages: Record<string, string> = {};
-  if (!autonomousDecision && feedbackStatus === "not-applicable") {
+  if (!autonomousDecision && (feedbackStatus === "not-applicable" || feedbackStatus === "ready")) {
     if (message !== undefined && !humanPresenceGuardDisabled()) {
       const proof = proveMessage(pd, message, "change request");
       if ("refusal" in proof) refuseForAgent(proof.refusal);
@@ -7880,11 +7869,9 @@ function handleReject(args: string[]): void {
       personsWords = null;
     }
   }
-  const conductorSummary =
-    personsWords !== null && conductorFeedback &&
-      normalizeGuardRecoveryText(conductorFeedback) !== normalizeGuardRecoveryText(personsWords)
-      ? conductorFeedback
-      : undefined;
+  // Beside their words the agent's text is its own, kept whole: nothing
+  // compares the two.
+  const conductorSummary = personsWords !== null && conductorFeedback ? conductorFeedback : undefined;
   if (personsWords !== null) feedback = personsWords;
   if (!feedback) {
     refuseForAgent(
@@ -7898,13 +7885,6 @@ function handleReject(args: string[]): void {
       `Refusing to reject "${slug}": revision feedback ${formatReceivedReply(feedback)} is ` +
         "cancellation boilerplate. Re-present the original held gate with every offered choice " +
         "and wait for the human to choose one.",
-    );
-  }
-  if (feedbackStatus === "mismatch") {
-    refuseForAgent(
-      `Refusing to reject "${slug}": --feedback does not exactly match the ` +
-        "human's separate guard-recovery response. Pass their text unchanged.",
-      { personDecided: true },
     );
   }
 

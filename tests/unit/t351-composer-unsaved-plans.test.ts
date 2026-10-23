@@ -42,9 +42,11 @@ import {
   loadScopeMapping,
   planChangesBetween,
   planWithChanges,
+  MESSAGE_SLOT,
   scopeGuardPolicyDefault,
   splitSlugList,
 } from "../../core/tools/aidlc-lib.ts";
+import { listMessages } from "../../core/tools/aidlc-message-store.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -100,8 +102,10 @@ function installedProject(): string {
 
 /** Run one of the project's OWN tools, with no fixture seams leaking in, so
  *  writes and reads follow the real resolution ladder into this project. */
-function runTool(proj: string, tool: string, args: string[]): { status: number; out: string } {
-  const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+function runTool(
+  proj: string, tool: string, args: string[], extra: Record<string, string> = {},
+): { status: number; out: string } {
+  const env: Record<string, string | undefined> = { ...process.env, ...extra, CLAUDE_PROJECT_DIR: proj };
   delete env.AIDLC_SCOPE_MAPPING;
   delete env.AIDLC_SCOPE_GRID;
   delete env.AIDLC_SCOPES_DIR;
@@ -381,8 +385,8 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
     expect(validated.status, validated.stdout + validated.stderr).toBe(0);
     const echoed = JSON.parse(validated.stdout) as { base_scope: string; plan_changes: { skip: string[]; add: string[] } };
     expect(withEnvAndFreshCaches(POLICY_ENV, () => scopeGuardPolicyDefault(echoed.base_scope))).toBe("off");
-    // What the conductor runs on approval, naming the person's approval. The
-    // presence bypass is off, so a lowering would be refused.
+    // What the conductor runs on approval, naming the message the person
+    // approved in. The presence bypass is off, so a lowering would be refused.
     const session = "01995000-7a11-7000-8000-000000000351";
     const env = {
       ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0",
@@ -393,9 +397,11 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
       input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, cwd: proj, prompt: "Approve" }),
     });
     expect(approved.status, approved.stderr).toBe(0);
+    const [message] = listMessages(proj);
+    expect(message?.text).toBe("Approve");
     const args = [
       "intent-create", "--scope", echoed.base_scope, "--guard-policy", "relaxed", "--arguments", "x", "--label", "relaxed-plan",
-      "--person-words", "Approve",
+      "--message", message.id,
     ];
     if (echoed.plan_changes.skip.length > 0) args.push("--skip", echoed.plan_changes.skip.join(","));
     if (echoed.plan_changes.add.length > 0) args.push("--add", echoed.plan_changes.add.join(","));
@@ -1290,12 +1296,24 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
     expect(span, printed.message).toBeDefined();
     return span as string;
   }
+  // The creation as the agent runs it on the person's Approve: a setting the
+  // print asks their message for names the message the hook kept for it.
   function runCreation(proj: string, printed: Printed): { status: number; out: string } {
-    const args = creationOf(printed).split(" intent create ")[1]
-      .replace(/--label "[^"]*"/, "--label hardening")
-      .replace(/--person-words '[^']*'/, "--person-words Approve")
-      .split(/\s+/).filter(Boolean);
-    return runTool(proj, "aidlc-utility.ts", ["intent-create", ...args]);
+    let args = creationOf(printed).split(" intent create ")[1].replace(/--label "[^"]*"/, "--label hardening");
+    const chat = { AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000000352" };
+    if (args.includes(`--message '${MESSAGE_SLOT}'`)) {
+      const kept = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+        cwd: proj, encoding: "utf-8", env: { ...process.env, ...chat, CLAUDE_PROJECT_DIR: proj },
+        input: JSON.stringify({
+          hook_event_name: "UserPromptSubmit", session_id: chat.AIDLC_SESSION_OVERRIDE, cwd: proj, prompt: "Approve",
+        }),
+      });
+      expect(kept.status, kept.stderr).toBe(0);
+      const message = listMessages(proj).findLast((entry) => entry.text === "Approve");
+      expect(message).toBeDefined();
+      args = args.replace(`--message '${MESSAGE_SLOT}'`, `--message ${message!.id}`);
+    }
+    return runTool(proj, "aidlc-utility.ts", ["intent-create", ...args.split(/\s+/).filter(Boolean)], chat);
   }
   const lists = (changes: { skip: string[]; add: string[] }): string[] => [
     ...(changes.skip.length > 0 ? ["--skip", changes.skip.join(",")] : []),

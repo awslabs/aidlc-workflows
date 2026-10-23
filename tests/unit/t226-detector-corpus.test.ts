@@ -20,6 +20,8 @@ import {
   isEngineEngagementSegment,
   isEngineToolCall,
   isShellToolName,
+  MESSAGE_FILL,
+  MESSAGE_SLOT,
   parseLiteralShellInvocation,
   shellCommandText,
 } from "../../core/tools/aidlc-lib.ts";
@@ -1249,27 +1251,32 @@ describe("detector corpus", () => {
     }
   });
 
-  test("a setting their line did not carry is the same dispatch with the words flag its step names", () => {
+  test("a setting their line did not carry is the same dispatch with the message flag its step names", () => {
     const command = "bun .claude/tools/aidlc.ts engine orchestrate next --sensors off";
-    const fill = ", with <their words> the person's reply that asked for it, word for word";
+    const fill = MESSAGE_FILL;
     const step = (named: string, said = fill): string => JSON.stringify({
       kind: "print",
       message: `Run \`${named}\` to update the configuration${said}, then print its output verbatim and stop.`,
     });
     const setter = "bun .claude/tools/aidlc.ts engine config set sensors off";
-    expect(isEngineToolCall("Bash", { command }, step(`${setter} --person-words '<their words>'`))).toBe(false);
+    expect(isEngineToolCall("Bash", { command }, step(`${setter} --message '${MESSAGE_SLOT}'`))).toBe(false);
+    // The fill names the ids of the messages on record, with their times.
+    expect(isEngineToolCall("Bash", { command }, step(
+      `${setter} --message '${MESSAGE_SLOT}'`, `${fill} (0a1b2c3d, sent 2026-10-23T04:00:00Z; 4e5f6a7b, sent 2026-10-23T04:01:00Z)`,
+    ))).toBe(false);
     for (const other of [
-      step(`${setter} --person-words 'please turn the sensors off'`),
-      step(`${setter} --person-words`),
-      step(`${setter} --person-words '<their words>'`, ""),
+      step(`${setter} --message 0a1b2c3d`),
+      step(`${setter} --message`),
+      step(`${setter} --message '${MESSAGE_SLOT}'`, ""),
+      step(`${setter} --person-words '<their words>'`, ", with <their words> the person's reply that asked for it, word for word"),
       step(setter),
     ]) {
       expect(isEngineToolCall("Bash", { command }, other), other).toBe(true);
     }
   });
 
-  test("a scope change or a check typed with next is the same dispatch, with the words flag its step names", () => {
-    const fill = ", with <their words> the person's reply that asked for it, word for word";
+  test("a scope change or a check typed with next is the same dispatch, with the message flag its step names", () => {
+    const fill = MESSAGE_FILL;
     const step = (named: string, said: string, verb: string): string => JSON.stringify({
       kind: "print",
       message: `Run \`${named}\` to ${verb}${said}, then print its output verbatim and stop.`,
@@ -1285,13 +1292,13 @@ describe("detector corpus", () => {
     ]) {
       const command = `${engine} orchestrate next ${typed}`;
       const setter = `${engine} ${named}`;
-      expect(isEngineToolCall("Bash", { command }, step(`${setter} --person-words '<their words>'`, fill, verb)), command).toBe(false);
+      expect(isEngineToolCall("Bash", { command }, step(`${setter} --message '${MESSAGE_SLOT}'`, fill, verb)), command).toBe(false);
       for (const other of [
-        step(`${setter} --person-words 'please'`, fill, verb),
-        step(`${setter} --person-words`, fill, verb),
-        step(`${setter} --person-words '<their words>'`, "", verb),
+        step(`${setter} --message 0a1b2c3d`, fill, verb),
+        step(`${setter} --message`, fill, verb),
+        step(`${setter} --message '${MESSAGE_SLOT}'`, "", verb),
         step(setter, fill, verb),
-        step(`${setter.replace(" off", " on")} --person-words '<their words>'`, fill, verb),
+        step(`${setter.replace(" off", " on")} --message '${MESSAGE_SLOT}'`, fill, verb),
       ]) {
         expect(isEngineToolCall("Bash", { command }, other), `${command}: ${other}`).toBe(true);
       }

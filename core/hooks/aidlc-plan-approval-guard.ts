@@ -1161,6 +1161,9 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
       if (!(RECORDABLE_PROJECT_BYPASSES as readonly string[]).includes(name)) return false;
       changes = true;
       lowers ||= arg === "--bypass";
+    } else if (arg === "--message") {
+      // The message the person asked in, which the setter itself proves.
+      if (args[++index] === undefined) return false;
     } else if (arg === "--project-dir") {
       // The way back the engine prints names this project when it ran
       // elsewhere: the same folder by identity, however it is spelled.

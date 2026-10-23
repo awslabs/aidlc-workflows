@@ -42,7 +42,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { hookChildEnv, setGuardPolicyLine } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditBlockField, hookChildEnv, readAuditShardEvents, setGuardPolicyLine } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   resetAidlcEnv,
@@ -154,7 +154,7 @@ interface Project {
   nextWith: (args: string[]) => Run;
   continueWith: (token: string) => Run;
   probeNext: () => Run;
-  report: (args: string[]) => Run;
+  report: (args: string[], extra?: Record<string, string>) => Run;
   stopHook: (entries: TranscriptEntry[], stopHookActive: boolean) => Run;
   // A pick in the question box; `labels` are the options it showed (only the picked one by default).
   humanPick: (question: string, label: string, labels?: string[]) => Run;
@@ -267,8 +267,8 @@ function project(policy?: "off" | "relaxed" | "strict"): Project {
       }
       return run;
     },
-    report: (args) =>
-      spawn([BUN, tool("orchestrate"), "report", ...args, "--project-dir", dir], env, dir),
+    report: (args, extra = {}) =>
+      spawn([BUN, tool("orchestrate"), "report", ...args, "--project-dir", dir], { ...env, ...extra }, dir),
     stopHook: (entries, stopHookActive) => {
       writeFileSync(
         transcriptPath,
@@ -486,22 +486,21 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
       selected_op: "request-changes",
     });
 
-    // A paraphrase is refused; the human's own words, re-wrapped and with the
-    // label typed casually, are accepted and open the revision.
-    const paraphrased = rejectedReport(
-      p,
-      "Request Changes",
-      "Please split the save-search flow in two",
-    );
-    expect(String(directive(paraphrased).message)).toContain("does not exactly match");
-    const accepted = rejectedReport(
-      p,
-      "request changes.",
-      "Split the\n  save-search workflow   into two steps",
-    );
-    expect(accepted.code, accepted.stderr).toBe(0);
+    // The agent's paraphrase opens the revision with the person's own words
+    // on the record, named by their message, and the paraphrase kept beside
+    // them as the agent's: nothing compares the two.
+    // The agent's command runs in the person's chat, so their words are tied to it.
+    const paraphrased = p.report([
+      "--stage", "functional-design", "--result", "rejected", "--user-input", "Request Changes",
+      "--reason", "Please split the save-search flow in two",
+    ], { AIDLC_SESSION_OVERRIDE: SESSION });
+    expect(paraphrased.code, paraphrased.stderr).toBe(0);
     const state = readFileSync(join(seededRecordDir(p.dir), "aidlc-state.md"), "utf-8");
     expect(state).toMatch(/^- \[R\] functional-design/m);
+    const rejection = readAuditShardEvents(p.dir).findLast((row) => row.event === "GATE_REJECTED")!;
+    expect(auditBlockField(rejection.block, "Feedback")).toContain(feedback);
+    expect(auditBlockField(rejection.block, "Conductor Summary")).toBe("Please split the save-search flow in two");
+    expect(auditBlockField(rejection.block, "Message Id")).toMatch(/^[0-9a-f]{8}$/);
     const stateAfterReject = p.stopHook(entries, false);
     expect(stateAfterReject.stdout.trim()).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

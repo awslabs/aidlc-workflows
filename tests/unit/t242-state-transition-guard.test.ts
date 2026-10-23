@@ -23,7 +23,12 @@ import {
 } from "../../dist/claude/.claude/hooks/aidlc-state-transition-guard.ts";
 import { violatesRuntimeIntegrity } from "../../dist/claude/.claude/hooks/runtime-integrity.ts";
 import { resolveAction, ROUTES } from "../../dist/claude/.claude/tools/aidlc.ts";
-import { ENGINE_OWNED_STATE_TRANSITIONS, UTILITY_COMMANDS } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  ENGINE_OWNED_STATE_TRANSITIONS,
+  MESSAGE_FILL,
+  MESSAGE_SLOT,
+  UTILITY_COMMANDS,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../../dist/claude/.claude/tools/aidlc-settings.ts";
 import {
   cleanupTestProject,
@@ -2160,7 +2165,8 @@ describe("t242 state-transition ownership guard", () => {
     expect(words).toContain("aidlc-orchestrate.ts report");
     // The agent offers the switch and, when the person says so, runs the setter itself.
     expect(words).toContain("offer to turn the state-transition check off for this piece of work");
-    expect(words).toContain("config-change --guard.state-transition off --person-words '<their words>'` yourself");
+    expect(words).toContain(`config-change --guard.state-transition off --message '${MESSAGE_SLOT}'\` yourself${MESSAGE_FILL} (their yes)`);
+    expect(words).not.toContain("--person-words");
     expect(words).not.toContain("/aidlc config set");
     const delegated = spawnSync(process.execPath, [HOOK], {
       input: JSON.stringify({

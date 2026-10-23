@@ -30,7 +30,8 @@ import {
   HARNESS_MATRIX,
   harnessByName,
 } from "../harness/harness-matrix.ts";
-import { intentDisplayLabel, loadScopeMapping, readIntentRegistry, toPosix } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { intentDisplayLabel, loadScopeMapping, MESSAGE_SLOT, readIntentRegistry, toPosix } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { listMessages } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { mintQuestionId, saveQuestion } from "../../dist/claude/.claude/tools/aidlc-question-store.ts";
 
 const BUN = process.execPath;
@@ -183,7 +184,7 @@ function asWork(words: string) {
 }
 
 // The person's approval of a composed plan, recorded as their hook records a
-// reply; the creation the engine prints names it in place of <their words>.
+// reply; the creation the engine prints names its message in place of <id>.
 const APPROVAL = "Approve";
 function personApproves(p = proj): void {
   const r = Bun.spawnSync({
@@ -199,10 +200,15 @@ function personApproves(p = proj): void {
   expect(r.exitCode, r.stderr.toString()).toBe(0);
 }
 
-function printedCommand(message: string): string {
+// The command as the agent runs it. A setting the print asks their message for
+// names the message the person approved in; with none of theirs on record, the
+// agent names none.
+function printedCommand(message: string, p = proj): string {
   const command = message.match(/Run `([^`]+)`/)?.[1];
   expect(command, message).toBeDefined();
-  return command!.replace('"<2-3 word kebab essence>"', "pending-work").replace("'<their words>'", `'${APPROVAL}'`);
+  const approved = listMessages(p).findLast((entry) => entry.text === APPROVAL);
+  return command!.replace('"<2-3 word kebab essence>"', "pending-work")
+    .replace(` --message '${MESSAGE_SLOT}'`, approved === undefined ? "" : ` --message ${approved.id}`);
 }
 
 // The person names a routing option in chat: `next` runs none of them; it

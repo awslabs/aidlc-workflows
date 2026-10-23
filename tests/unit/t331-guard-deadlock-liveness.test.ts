@@ -3067,7 +3067,7 @@ describe("AttemptView projections and refusal streaks", () => {
       }
       expect(selected(), scenario.name).toBe(scenario.selectedOp);
       expect(
-        guardRecoveryFeedbackStatus(project, state, "functional-design", undefined, "anything"),
+        guardRecoveryFeedbackStatus(project, state, "functional-design", undefined),
         scenario.name,
       ).toBe(scenario.feedbackStatus);
     }
@@ -3098,8 +3098,8 @@ describe("AttemptView projections and refusal streaks", () => {
           { op: "request-changes", action: "Ask what should change" },
         ],
       });
-      const status = (stage: string, unit: string | undefined, feedback = "anything") =>
-        guardRecoveryFeedbackStatus(project, state, stage, unit, feedback);
+      const status = (stage: string, unit: string | undefined) =>
+        guardRecoveryFeedbackStatus(project, state, stage, unit);
       // No selection yet: nothing to bind to.
       expect(status("functional-design", undefined)).toBe("not-applicable");
       expect(consumeSharedDirectiveAsk(project, "Ask what should change")).toBe(true);
@@ -3118,12 +3118,12 @@ describe("AttemptView projections and refusal streaks", () => {
       expect(status("functional-design", "beta")).toBe("not-applicable");
       expect(status("nfr-requirements", undefined)).toBe("not-applicable");
 
-      // The human's separate feedback, which the agent records once more, then the conductor's exact or altered copy.
+      // The human's separate feedback, which the agent records once more: the ask is ready, and the
+      // rejection takes their words from their messages, whatever text the conductor passes beside them.
       expect(consumeSharedDirectiveAsk(project, "Split the  save-search\nflow")).toBe(true);
       recordGuardRecoveryChoice(project, "Request Changes: Split the save-search flow", true);
       const bound = ownership === "solo" ? undefined : "alpha";
-      expect(status("functional-design", bound, "Split the save-search flow")).toBe("match");
-      expect(status("functional-design", bound, "Split the save search flow")).toBe("mismatch");
+      expect(status("functional-design", bound)).toBe("ready");
     }
   });
 

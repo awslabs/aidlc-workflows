@@ -16,6 +16,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, createTestProject, FIXTURES_DIR, REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
@@ -36,7 +37,7 @@ afterEach(() => {
 function workspace(): {
   proj: string;
   run: (args: string[], extra?: Record<string, string | undefined>) => string;
-  said: (words: string) => void;
+  said: (words: string) => string;
 } {
   const proj = createTestProject();
   made.push(proj);
@@ -71,11 +72,17 @@ function workspace(): {
       expect(r.exitCode, `${args.join(" ")}: ${r.stdout}${r.stderr}`).toBe(0);
       return r.stdout.toString().trim();
     },
+    // The person types `words` in the chat; the id of the message the hook kept
+    // is what a setter names (--message) for what they asked.
     said: (words) => {
       const r = spawn(["engine", "hook", "record-human-turn"], JSON.stringify({
         hook_event_name: "UserPromptSubmit", cwd: proj, session_id: SESSION, prompt: words,
       }));
       expect(r.exitCode, r.stderr.toString()).toBe(0);
+      const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+      const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+      expect(id).not.toBeNull();
+      return id as string;
     },
   };
 }
@@ -85,57 +92,57 @@ const lastLine = (out: string): string => out.split(/\r?\n/).filter((line) => li
 describe("t-switch-offers-wider-place: the switch's own line carries the one wider-place question", () => {
   test("this piece of work: the line, then the whole project offered", () => {
     const { run, said } = workspace();
-    said("turn the review freeze check off");
-    const out = run(["engine", "config", "set", "guard.review-freeze", "off", "--person-words", "turn the review freeze check off"]);
+    const m1 = said("turn the review freeze check off");
+    const out = run(["engine", "config", "set", "guard.review-freeze", "off", "--message", m1]);
     expect(out).toContain("is off for this piece of work");
     expect(lastLine(out)).toEndWith(PROJECT_OFFER);
   });
 
   test("this piece of work, already off there: said, and the whole project offered", () => {
     const { run, said } = workspace();
-    said("turn the review freeze check off");
-    run(["engine", "config", "set", "guard.review-freeze", "off", "--person-words", "turn the review freeze check off"]);
-    said("turn the review freeze check off");
-    const out = run(["engine", "config", "set", "guard.review-freeze", "off", "--person-words", "turn the review freeze check off"]);
+    const m1 = said("turn the review freeze check off");
+    run(["engine", "config", "set", "guard.review-freeze", "off", "--message", m1]);
+    const m2 = said("turn the review freeze check off");
+    const out = run(["engine", "config", "set", "guard.review-freeze", "off", "--message", m2]);
     expect(out).toContain("already off");
     expect(lastLine(out)).toEndWith(PROJECT_OFFER);
   });
 
   test("this project: the line, then the whole machine offered", () => {
     const { run, said } = workspace();
-    said("turn the review freeze check off for this project");
-    const out = run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes"]);
+    const m1 = said("turn the review freeze check off for this project");
+    const out = run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes", "--message", m1]);
     expect(out).toContain("is off for this project since");
     expect(lastLine(out)).toEndWith(MACHINE_OFFER);
   });
 
   test("this project, already off there: said, and the whole machine offered", () => {
     const { run, said } = workspace();
-    said("turn the review freeze check off for this project");
-    run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes"]);
-    const out = run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes"]);
+    const m1 = said("turn the review freeze check off for this project");
+    run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes", "--message", m1]);
+    const out = run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes", "--message", m1]);
     expect(out).toContain("already off for this project");
     expect(lastLine(out)).toEndWith(MACHINE_OFFER);
   });
 
   test("nowhere wider to go: this machine, a check with no project place, and the Guard Policy ask nothing", () => {
     const { run, said } = workspace();
-    said("turn the review freeze check off for this machine");
-    expect(run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--global", "--yes"])).not.toContain("?");
-    said("turn the state transition check off");
-    expect(run(["engine", "config", "set", "guard.state-transition", "off", "--person-words", "turn the state transition check off"]))
+    const m1 = said("turn the review freeze check off for this machine");
+    expect(run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--global", "--yes", "--message", m1])).not.toContain("?");
+    const m2 = said("turn the state transition check off");
+    expect(run(["engine", "config", "set", "guard.state-transition", "off", "--message", m2]))
       .not.toContain("?");
-    said("relax the change checks");
-    expect(run(["engine", "config", "set", "guard-policy", "relaxed", "--person-words", "relax the change checks"])).not.toContain("?");
+    const m3 = said("relax the change checks");
+    expect(run(["engine", "config", "set", "guard-policy", "relaxed", "--message", m3])).not.toContain("?");
   });
 
   test("plan approval and summary confirmation for this piece of work offer the whole project too", () => {
     const { run, said } = workspace();
-    said("stop asking me to approve the code plan");
-    const plan = run(["engine", "config", "set", "plan-approval", "off", "--person-words", "stop asking me to approve the code plan"]);
+    const m1 = said("stop asking me to approve the code plan");
+    const plan = run(["engine", "config", "set", "plan-approval", "off", "--message", m1]);
     expect(lastLine(plan)).toEndWith(PROJECT_OFFER);
-    said("turn summary confirmation off");
-    const summary = run(["engine", "config", "set", "summary-confirmation", "off", "--person-words", "turn summary confirmation off"]);
+    const m2 = said("turn summary confirmation off");
+    const summary = run(["engine", "config", "set", "summary-confirmation", "off", "--message", m2]);
     expect(lastLine(summary)).toEndWith(PROJECT_OFFER);
   });
 
@@ -147,27 +154,27 @@ describe("t-switch-offers-wider-place: the switch's own line carries the one wid
       "- **Change Control**: strict (from scope feature)\n- **Plan Approval**: on (from scope feature)\n" +
         "- **Summary Confirmation**: on (from scope feature)",
     ));
-    said("change the scope to express");
-    const out = run(["engine", "scope", "change", "--scope", "express", "--person-words", "change the scope to express"]);
+    const m1 = said("change the scope to express");
+    const out = run(["engine", "scope", "change", "--scope", "express", "--message", m1]);
     expect(out).toContain("Plan Approval changed");
     expect(out).not.toContain("?");
   });
 
   test("a wider place that already has it off is not offered", () => {
     const { run, said } = workspace();
-    said("turn the review freeze check off for this machine");
-    run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--global", "--yes"]);
-    said("turn the review freeze check off for this project");
-    expect(run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes"])).not.toContain("?");
-    said("turn the review freeze check off");
-    expect(run(["engine", "config", "set", "guard.review-freeze", "off", "--person-words", "turn the review freeze check off"]))
+    const m1 = said("turn the review freeze check off for this machine");
+    run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--global", "--yes", "--message", m1]);
+    const m2 = said("turn the review freeze check off for this project");
+    expect(run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes", "--message", m2])).not.toContain("?");
+    const m3 = said("turn the review freeze check off");
+    expect(run(["engine", "config", "set", "guard.review-freeze", "off", "--message", m3]))
       .not.toContain("?");
   });
 
   test("with the environment deciding, nothing wider is offered", () => {
     const { run, said } = workspace();
-    said("turn the reviewer read scope check off");
-    const out = run(["engine", "config", "set", "guard.reviewer-scope", "off", "--person-words", "turn the reviewer read scope check off"], {
+    const m1 = said("turn the reviewer read scope check off");
+    const out = run(["engine", "config", "set", "guard.reviewer-scope", "off", "--message", m1], {
       AIDLC_DISABLE_REVIEWER_SCOPE_HOOK: "1",
     });
     expect(out).not.toContain("?");

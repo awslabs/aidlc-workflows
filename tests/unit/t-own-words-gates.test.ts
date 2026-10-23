@@ -857,14 +857,14 @@ describe("a recovery question: a pick in a question box is recorded, every typed
     expect(response()?.picked_by).toBeUndefined();
   });
 
-  test("Request Changes with what to change, read by the agent, is ready and bound to their words", () => {
+  test("Request Changes with what to change, read by the agent, is ready for the rejection that keeps their words", () => {
     ask();
     consumeSharedDirectiveAsk(proj, "split the save-search flow into two steps");
     const picked = recordGuardRecoveryChoice(proj, "Request Changes: split the save-search flow into two steps", true);
     expect(picked).toMatchObject({ op: "request-changes", awaitingWords: false });
     expect(response()).toMatchObject({ selected_op: "request-changes", status: "ready", picked_by: "person" });
-    expect(guardRecoveryFeedbackStatus(proj, readFileSync(seededStateFile(proj), "utf-8"), "functional-design", undefined,
-      "split the save-search flow into two steps")).toBe("match");
+    expect(guardRecoveryFeedbackStatus(proj, readFileSync(seededStateFile(proj), "utf-8"), "functional-design", undefined))
+      .toBe("ready");
   });
 
   test("no tool holds the agent to a reading of a typed number: its record stands as it hands it", () => {
@@ -890,8 +890,8 @@ describe("a recovery question: a pick in a question box is recorded, every typed
     expect(response()?.selected_op ?? null).toBeNull();
     expect(response()).not.toHaveProperty("feedback_sha256");
     expect(recordGuardRecoveryChoice(proj, "reconfirm-summary", false).op).toBe("reconfirm-summary");
-    expect(guardRecoveryFeedbackStatus(proj, readFileSync(seededStateFile(proj), "utf-8"), "functional-design", undefined,
-      "2")).toBe("other-remedy");
+    expect(guardRecoveryFeedbackStatus(proj, readFileSync(seededStateFile(proj), "utf-8"), "functional-design", undefined))
+      .toBe("other-remedy");
   });
 
   test("the agent can correct its own misread in one step", () => {

@@ -763,21 +763,17 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(p.marker().guard_recovery_response).toMatchObject({
       status: "ready", selected_op: "request-changes",
     });
-    const mismatch = p.report("rejected", [
-      "--user-input", "Request Changes", "--reason", "Make all saved searches visible to the team.",
-    ]);
-    // Their own words are on record: the step is to pass them, not to ask again.
-    expect(mismatch.kind, JSON.stringify(mismatch)).toBe("print");
-    expect(String(mismatch.message)).not.toContain("is still open");
-    expect(String(mismatch.message)).toContain("does not exactly match");
-    expect(p.state()).toBe(beforeRejection);
-    expect(p.events("GATE_REJECTED", STAGE)).toHaveLength(0);
-
-    const rejected = p.report("rejected", ["--user-input", "Request Changes", "--reason", feedback]);
+    // The agent's own account differs from what they said: the rejection keeps
+    // their words from their message and the agent's text beside them.
+    const agentsAccount = "Make all saved searches visible to the team.";
+    const rejected = p.report("rejected", ["--user-input", "Request Changes", "--reason", agentsAccount]);
     expect(rejected.kind, JSON.stringify(rejected)).toBe("print");
     expect(p.state()).toMatch(/^- \[R\] requirements-analysis/m);
     expect(p.events("GATE_REJECTED", STAGE)).toHaveLength(1);
-    expect(p.events("GATE_REJECTED", STAGE)[0].block).toContain(feedback);
+    const row = p.events("GATE_REJECTED", STAGE)[0].block;
+    expect(auditBlockField(row, "Feedback")).toContain(feedback);
+    expect(auditBlockField(row, "Conductor Summary")).toBe(agentsAccount);
+    expect(auditBlockField(row, "Message Id")).not.toBeNull();
     p.deniedCompletion();
 
     const revisedId = p.confirm(CHANGED);

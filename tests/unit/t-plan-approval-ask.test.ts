@@ -86,6 +86,8 @@ import {
   readActiveDirectiveMarker,
   findStageBySlug,
   artifactFilename,
+  auditBlockField,
+  readAuditShardEvents,
   reviewArtifactFingerprint,
   unitCompletedReceipts,
   readProtectedResponse,
@@ -194,6 +196,15 @@ function reply(proj: string, prompt: string, session = SESSION): string {
   });
   expect(result.status, result.stderr).toBe(0);
   return result.stdout ?? "";
+}
+
+// The id of the message the hook kept for the latest turn (its HUMAN_TURN
+// row's Message Id): what a setter names for the person's request.
+function turnId(proj: string): string {
+  const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
 }
 
 function answer(
@@ -927,18 +938,19 @@ describe("the engine asks for Plan Approval", () => {
   });
 
   // "Approve it, and turn the sensors off": the agent records the approval
-  // first, then runs the setter with their words and no chat it can name. The
-  // approval their reply led to leaves the setting it also asked for theirs.
+  // first, then runs the setter naming their message, with no chat it can name.
+  // The approval their reply led to leaves the setting it also asked for theirs.
   test("an approval and a setting in one reply: the approval recorded first, the setting is still theirs", () => {
     const proj = project();
     askFor(proj);
     const words = "approve it, and turn the sensors off";
     reply(proj, words);
+    const id = turnId(proj);
     // The approval row lands in a later second than their reply.
     Bun.sleepSync(1100);
     const approved = answer(proj, "Approve Plan");
     expect(approved.code, approved.message).toBe(0);
-    const set = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "sensors", "off", "--person-words", words, "--project-dir", proj], {
+    const set = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "sensors", "off", "--message", id, "--project-dir", proj], {
       cwd: proj,
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
       encoding: "utf-8",
@@ -946,6 +958,27 @@ describe("the engine asks for Plan Approval", () => {
     });
     expect(set.status, `${set.stdout}${set.stderr}`).toBe(0);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Sensors**: off (set by you)");
+  });
+
+  // The other order: the setter naming their message runs first, as the plan
+  // question's own step says for a setting beside the answer. The setting takes
+  // nothing of the reply away, so the approval in it still records.
+  test("an approval and a setting in one reply: the setting run first, the approval still records", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "approve it, and turn the sensors off");
+    const id = turnId(proj);
+    const set = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "sensors", "off", "--message", id, "--project-dir", proj], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(set.status, `${set.stdout}${set.stderr}`).toBe(0);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Sensors**: off (set by you)");
+    const approved = answer(proj, "Approve Plan");
+    expect(approved.code, approved.message).toBe(0);
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
   });
 
   test("Guard Policy off typed before a plan choice lands on this work through the setter, which then builds", () => {
@@ -3152,7 +3185,8 @@ describe("a project whose files cannot all be read", () => {
       writeBuildAnyway(proj, "that folder is a dev mount");
       const built = buildAnyway(proj);
       expect(built.status, built.out).toBe(0);
-      expect(built.out).toContain("Recorded that you approved building this plan with no check of the project's files.");
+      // The receipt prints no line for the person; the record keeps the override.
+      expect(built.out).not.toContain("Recorded that you approved building this plan with no check of the project's files.");
       expect(auditBlock(proj, "PLAN_APPROVAL_OVERRIDDEN")).toContain("**Person Reply**: build it anyway, that folder is a dev mount");
       const recorded = auditBlock(proj, "PLAN_APPROVAL_RECORDED");
       expect(recorded).toContain("**Override**: yes");
@@ -3374,14 +3408,14 @@ describe("a question about the switch is no answer to the plan question", () => 
 // The conductor's call on #1677's asked form, from the same live run: a
 // question about the check turns nothing off, the agent answers it and offers,
 // and a yes is the ask. A request, plain or phrased as a question, is done at
-// once by the setter the agent runs, with their words. No tool reads the words.
+// once by the setter the agent runs, naming their message. No tool reads the words.
 describe("a question about plan approval turns nothing off; a request does", () => {
   // The setter as the agent runs it under production guards: no presence bypass,
-  // with the words of the reply that asked for it (the agent read them).
-  function setter(proj: string, words: string): { code: number; out: string } {
+  // naming the message that asked for it (the agent read it).
+  function setter(proj: string, message: string): { code: number; out: string } {
     const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
-    const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "guard.plan-approval", "off", "--person-words", words], {
+    const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "guard.plan-approval", "off", "--message", message], {
       cwd: proj,
       env,
       encoding: "utf-8",
@@ -3398,7 +3432,7 @@ describe("a question about plan approval turns nothing off; a request does", () 
     expect(offRows(proj)).toBe(0);
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     reply(proj, "yes");
-    const lowered = setter(proj, "yes");
+    const lowered = setter(proj, turnId(proj));
     expect(lowered.code, lowered.out).toBe(0);
     expect(offRows(proj)).toBeGreaterThan(0);
     expect(auditText(proj)).toContain("**Person Reply**: yes");
@@ -3409,7 +3443,7 @@ describe("a question about plan approval turns nothing off; a request does", () 
       const proj = project(policy);
       askFor(proj);
       reply(proj, words);
-      const lowered = setter(proj, words);
+      const lowered = setter(proj, turnId(proj));
       expect(lowered.code, `${words}: ${lowered.out}`).toBe(0);
       expect(auditText(proj)).toContain(`**Person Reply**: ${words}`);
     }
@@ -3420,7 +3454,7 @@ describe("a question about plan approval turns nothing off; a request does", () 
     askFor(proj);
     reply(proj, "skip plan approval for this work");
     expect(offRows(proj)).toBe(0);
-    const lowered = setter(proj, "skip plan approval for this work");
+    const lowered = setter(proj, turnId(proj));
     expect(lowered.code, lowered.out).toBe(0);
     expect(offRows(proj)).toBeGreaterThan(0);
     expect(auditText(proj)).toContain("**Person Reply**: skip plan approval for this work");
@@ -3448,7 +3482,7 @@ describe("a question about plan approval turns nothing off; a request does", () 
     reply(proj, "/aidlc");
     askFor(proj);
     reply(proj, "skip plan approval for this work");
-    const lowered = setter(proj, "skip plan approval for this work");
+    const lowered = setter(proj, turnId(proj));
     expect(lowered.code, lowered.out).toBe(0);
     expect(offRows(proj)).toBeGreaterThan(0);
   });

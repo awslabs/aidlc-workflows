@@ -121,6 +121,14 @@ function recordHumanPrompt(proj: string, prompt: string, env: Record<string, str
   return result.stdout.toString();
 }
 
+// The id of the message the hook kept for the person's latest turn.
+function lastMessageId(proj: string): string {
+  const turn = readAuditShardEvents(proj).filter((entry) => entry.event === "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
+}
+
 describe("t338 atomic per-intent settings", () => {
   test.each([
     { extra: [], learnings: "on (from scope classic)" },
@@ -550,8 +558,8 @@ describe("t338 atomic per-intent settings", () => {
 });
 
 describe("t338 summary confirmation off is the person's switch", () => {
-  const summaryRefusal = "Turning summary confirmation off skips the person's `Looks correct` check before a stage writes its output, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it.";
-  /** No resolved session and no presence bypass, so only a typed turn can lower. */
+  const summaryRefusal = "Turning summary confirmation off skips the person's `Looks correct` check before a stage writes its output, so it is their call. Run it with --message <id>, the message they asked in, when they ask for it.";
+  /** No resolved session and no presence bypass, so only their typed line or the message the agent names can lower. */
   const SESSIONLESS = { ...FENCE_ENV_CLEAR, AIDLC_SESSION_OVERRIDE: undefined, AIDLC_SESSION_OVERRIDE_SOURCE: undefined };
 
   test.each<{ via: string; scope: string; tool: string; args: string[] }>([
@@ -588,7 +596,7 @@ describe("t338 summary confirmation off is the person's switch", () => {
     const { proj, state } = project("feature");
     recordHumanPrompt(proj, "skip the looks correct check from now on");
     const changed = run(DISPATCHER, [
-      "engine", "config", "set", "summary-confirmation", "off", "--person-words", "skip the looks correct check from now on",
+      "engine", "config", "set", "summary-confirmation", "off", "--message", lastMessageId(proj),
     ], proj, SESSIONLESS);
     expect(changed.status, changed.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toStartWith("off (");
@@ -613,11 +621,14 @@ describe("t338 summary confirmation off is the person's switch", () => {
   test("\"approve, and turn the summary confirmation off\" at a grouped approval does both", () => {
     const { proj, state } = project("feature");
     recordHumanPrompt(proj, "approve, and turn the summary confirmation off");
+    const id = lastMessageId(proj);
+    // A row in the same second as the message is no decision after it.
+    Bun.sleepSync(1100);
     appendAuditEntry("GATE_APPROVED", { Stage: "functional-design", "User Input": "Approve" }, proj);
     appendAuditEntry("GATE_APPROVED", {
       Stage: "nfr-requirements", "User Input": "Approve", "Approved Together With": "functional-design",
     }, proj);
-    const changed = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "off"], proj, SESSIONLESS);
+    const changed = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "off", "--message", id], proj, SESSIONLESS);
     expect(changed.status, changed.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toStartWith("off (");
   });

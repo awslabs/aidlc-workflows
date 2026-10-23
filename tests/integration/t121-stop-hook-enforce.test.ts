@@ -4304,7 +4304,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(JSON.parse(result.out).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("(h) a setting their line did not carry, typed with next, allows the stop after the step that names their words", () => {
+  test("(h) a setting their line did not carry, typed with next, allows the stop after the step that names their message", () => {
     for (const format of ["claude", "codex"] as const) {
       for (const { typed, command, reply } of [
         { typed: "--scope mvp --sensors off", command: "scope change --scope mvp --sensors off", reply: "Switched to mvp: 22 stages (7 done), 19 approval gates." },
@@ -4312,13 +4312,13 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       ]) {
         const proj = makeProject();
         seedActive(proj);
-        const named = `${command} --person-words '<their words>'`;
+        const named = `${command} --message '<id>'`;
         const output = terminalModifierDispatch(proj, typed.split(" "), named, false);
         const tp = seedTranscriptEntries(proj, format, [
           { kind: "human", text: "switch to mvp and turn the checks off" },
           { kind: "bash", id: "modifier-call", command: `bun .claude/tools/aidlc.ts engine orchestrate next ${typed}` },
           { kind: "result", id: "modifier-call", output },
-          { kind: "bash", id: "setter-call", command: `bun .claude/tools/aidlc.ts engine ${command} --person-words 'switch to mvp and turn the checks off'` },
+          { kind: "bash", id: "setter-call", command: `bun .claude/tools/aidlc.ts engine ${command} --message 0a1b2c3d` },
           { kind: "result", id: "setter-call", output: reply },
           { kind: "text" },
         ]);

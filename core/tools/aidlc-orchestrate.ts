@@ -213,6 +213,7 @@ import {
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
+  writeRecordFileNoFollow,
   evaluateGuardRefusal,
   filterProducesByKind,
   firstInScopeStageOfPhase,
@@ -314,8 +315,9 @@ import {
   openPendingDecision,
   parseCheckboxes,
   parseGuardPolicy,
-  PERSON_WORDS_FILL,
-  PERSON_WORDS_SLOT,
+  MESSAGE_FILL,
+  MESSAGE_SLOT,
+  messageFill,
   plannedStages,
   resolveGuardPolicy,
   guardPolicyAcceptsChanges,
@@ -456,8 +458,6 @@ import {
   withdrawProtectedReplyWords,
   writeActiveDirectiveMarker,
   writeEngineFileNoFollow,
-  ANSWER_TEXT_DIR,
-  writeRecordFileNoFollow,
   type PlanApprovalLegacyOfferCandidate,
   workspaceCommandUtilityArgv,
   workspaceRecordExists,
@@ -3080,7 +3080,7 @@ function configSetCommand(modifiers: string[], personWords = false): string {
   return [
     aidlcDispatcherInvocation(`config set ${modifiers[0]}`),
     ...modifiers.slice(1).map((modifier) => `--${modifier}`),
-    ...(personWords ? [`--person-words '${PERSON_WORDS_SLOT}'`] : []),
+    ...(personWords ? [`--message '${MESSAGE_SLOT}'`] : []),
   ].join(" ");
 }
 
@@ -3773,7 +3773,7 @@ function openPlanQuestionReplyDirective(
   const typed = settings.length > 0
     ? ` The line also carries ${settings.map((modifier) => `\`--${modifier}\``).join(" ")}: if the words answer the ` +
       `question, those settings are for this work, so run \`${configSetCommand(settings, needsWords)}\`` +
-      `${needsWords ? `${PERSON_WORDS_FILL},` : ""} first and print its output ` +
+      `${needsWords ? `${MESSAGE_FILL},` : ""} first and print its output ` +
       "verbatim; if the words are new work, the settings ride with them."
     : "";
   const record = `\`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval ` +
@@ -4434,23 +4434,11 @@ function reclassifyCommand(projectDir: string, type: "greenfield" | "brownfield"
   return `${aidlcDispatcherInvocation("workspace reclassify")} --project-type ${type}${target}`;
 }
 
-// The answer text file the words a project-type change was said in go to.
-const PROJECT_TYPE_WORDS_FILE = `${ANSWER_TEXT_DIR}/project-type-words.txt`;
-
-// The words a project-type change was said in, on the reclassify step: the
-// words `next` was given, in the work's answer text file so no shell reads them
-// on the way; otherwise the slot the agent fills with the person's words, and
-// the sentence that says so.
-function projectTypeWordsArg(projectDir: string, words: string | undefined): { arg: string; fill: string } {
-  const slot = { arg: ` --person-words '${PERSON_WORDS_SLOT}'`, fill: `${PERSON_WORDS_FILL},` };
-  const root = recordDir(projectDir);
-  if (!words?.trim() || root === null || isReadOnlyEngineProbe()) return slot;
-  try {
-    writeRecordFileNoFollow(root, PROJECT_TYPE_WORDS_FILE, words);
-  } catch {
-    return slot;
-  }
-  return { arg: ` --person-words-file ${PROJECT_TYPE_WORDS_FILE}`, fill: "" };
+// The message a project-type change was said in, on the reclassify step: the
+// slot the agent fills with its id, and the sentence that names the ids it can
+// name.
+function projectTypeMessageArg(projectDir: string): { arg: string; fill: string } {
+  return { arg: ` --message '${MESSAGE_SLOT}'`, fill: `${messageFill(projectDir)},` };
 }
 
 // True when `--project-type` is the whole request: nothing else for routing
@@ -5877,7 +5865,7 @@ function typedSettingsFirst(flags: ParsedFlags, pd: string): string {
   const typed = typedSettingModifiers(flags);
   if (typed.length === 0) return "";
   const unnamed = settingNeedsTheirWords(pd, typed);
-  return `\`${configSetCommand(typed, unnamed)}\`${unnamed ? PERSON_WORDS_FILL : ""} and say the line it prints, then `;
+  return `\`${configSetCommand(typed, unnamed)}\`${unnamed ? messageFill(pd) : ""} and say the line it prints, then `;
 }
 
 // The way back to a stage of finished work, beside the plan step; `settings`
@@ -6014,7 +6002,7 @@ function createPrintDirective(
   const named = cmd.filter((part) => /^--(guard-policy|guard\.[a-z-]+|sensors|learnings|summary-confirmation|plan-approval|collaborators) /.test(part))
     .map((part) => part.slice(2));
   const unnamed = settingNeedsTheirWords(projectDir, named);
-  if (unnamed) cmd.push(`--person-words '${PERSON_WORDS_SLOT}'`);
+  if (unnamed) cmd.push(`--message '${MESSAGE_SLOT}'`);
   // Disclose the ceremony on the print: an explicitly named scope creates
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
@@ -6024,7 +6012,7 @@ function createPrintDirective(
   // New work, like the first, carries on in this chat: the creation binds the
   // chat to the new work, so the next `next` runs its first stage.
   const directive = printDirective(
-    `${runCmd} to start the ${flags.newIntent ? "new intent" : "workflow"}${cost}${unnamed ? PERSON_WORDS_FILL : ""}, ` +
+    `${runCmd} to start the ${flags.newIntent ? "new intent" : "workflow"}${cost}${unnamed ? messageFill(projectDir) : ""}, ` +
       `then re-run \`next\` to continue.${labelHint}`,
   );
   // The user named a scope (or one was inferred and confirmed), so the spoken
@@ -6317,13 +6305,13 @@ function composeDispatchDirective(
       "This is mode in-flight, not matched/custom routing: preserve the current scope, depth, frozen actions, and full effective grid; stock-distance rankings are advisory only and MUST NOT trigger stock-grid adoption. Return the exact approved command delta as changes.skip and changes.add arrays.",
       "A request to turn sensors, learnings, summary confirmation, collaborators, plan approval, or reviews on or off is not a stage flip: the composer returns it as settingsChanges (plan_approval only as on: the person turns plan approval off in their own words, never through the composer), typed values you show on the approval gate under \"Also suggested by the composer\" and apply only when the human approves them, by running next with the matching flags, following its directive, and relaying the output (a setting the human asks for in plain chat, without compose, you apply directly with next); build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, collaborators to --collaborators, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command. A review level set for the piece of work replaces its scope's ceiling, so full reviews is --review adversarial and changes no stages. When the composer reports a kill switch set in the environment (config get shows env AIDLC_DISABLE_<NAME>), say in one line that starting the editor or CLI without that variable turns it back on, and never look for where it is set: shell startup files, environment listings, and harness settings files can hold credentials.",
       "When the composer returns empty changes.skip and changes.add and no settingsChanges, write no marker, present no approval gate, and run no recompose: relay its answer and stop. When it returns only settingsChanges, write the marker and present them on the gate (Approve / Reject): on approve, delete the marker, then apply them by running next with the matching flags, which ends the turn; run no recompose. A request with both offers Approve all / Approve stages only / Reject: on Approve all, run ONE recompose carrying the stage delta and the settingsChanges as its matching flags, so both land in the same write, then delete the marker (leave summary confirmation off out of it, because recompose refuses that lowering; after it lands, run " +
-        `\`${aidlcDispatcherInvocation("config set summary-confirmation off")} --person-words '${PERSON_WORDS_SLOT}'\`` +
-        ` yourself, which carries out their approval${PERSON_WORDS_FILL}); on Approve stages only, run the recompose without them and delete the marker; on reject, delete the marker and apply nothing.`,
+        `\`${aidlcDispatcherInvocation("config set summary-confirmation off")} --message '${MESSAGE_SLOT}'\`` +
+        ` yourself, which carries out their approval${MESSAGE_FILL}); on Approve stages only, run the recompose without them and delete the marker; on reject, delete the marker and apply nothing.`,
       "BEFORE presenting the gate, write the pending-proposal marker `aidlc/.aidlc-compose-pending` (any content) so the turn can end at the gate; on approve run `" +
         aidlcDispatcherInvocation("recompose") +
-        ` [--skip <changes.skip>] [--add <changes.add>] [approved setting flags --person-words '${PERSON_WORDS_SLOT}']\`` +
+        ` [--skip <changes.skip>] [--add <changes.add>] [approved setting flags --message '${MESSAGE_SLOT}']\`` +
         " (join each nonempty array with commas; omit the flag when its approved array is empty, never pass a bare --skip or --add; " +
-        `with setting flags, ${PERSON_WORDS_SLOT} is the person's reply that approved them, word for word) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.`,
+        `with setting flags, ${MESSAGE_SLOT} is the id of the person's message that approved them) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.`,
     );
   } else {
     parts.push(
@@ -9896,8 +9884,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     if (alone || !projectTypeRecordedAsPersons(stateContent, flags.projectType)) {
       // Said with more of a request, the reclassify directive says to run
       // the same `next` again so the rest of the request is carried on. The
-      // words it was said in are recorded beside the change.
-      const words = projectTypeWordsArg(pd, flags.intent);
+      // message it was said in is recorded beside the change.
+      const words = projectTypeMessageArg(pd);
       emit(printDirective(
         `Run \`${reclassifyCommand(pd, flags.projectType)}${words.arg}${alone ? "" : " --then-rerun"}\`${words.fill} ` +
           "and act on the directive it returns.",
@@ -10129,10 +10117,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const unnamed = settingNeedsTheirWords(pd, typed);
       const parts = [
         `--scope ${scopeArg(flags.scope)}`, ...typed.map((modifier) => `--${modifier}`),
-        ...(unnamed ? [`--person-words '${PERSON_WORDS_SLOT}'`] : []),
+        ...(unnamed ? [`--message '${MESSAGE_SLOT}'`] : []),
       ];
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
-      const fill = unnamed ? PERSON_WORDS_FILL : "";
+      const fill = unnamed ? messageFill(pd) : "";
       emit(flags.planChanges ? planChangeDirective(flags.planChanges, command, null, false, null, fill) : turnEndingPrint(
         `Run \`${command}\` to change scope${fill}, then print its output verbatim and stop.`,
       ));
@@ -10174,7 +10162,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const unnamed = settingNeedsTheirWords(pd, reshapeSettings);
       emit(printDirective(
         `Run \`${configSetCommand(reshapeSettings, unnamed)}\` to apply the settings typed with this request to the work being reshaped` +
-          `${unnamed ? PERSON_WORDS_FILL : ""}, ` +
+          `${unnamed ? messageFill(pd) : ""}, ` +
           `then run \`${aidlcToolInvocation("orchestrate")} next compose --request ${question.id}\` and follow what it returns.`,
       ));
       return;
@@ -10399,9 +10387,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       for (const modifier of modifiers) parts.push(`--${modifier}`);
       // A setting read from their words names those words, as Branch 5's does.
       const unnamed = settingNeedsTheirWords(pd, modifiers);
-      if (unnamed) parts.push(`--person-words '${PERSON_WORDS_SLOT}'`);
+      if (unnamed) parts.push(`--message '${MESSAGE_SLOT}'`);
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
-      const fill = unnamed ? PERSON_WORDS_FILL : "";
+      const fill = unnamed ? messageFill(pd) : "";
       // On finished work the change starts the first stage the new scope adds
       // after the last one (the tool reads the same predicate), so nothing
       // waits on the person and the agent carries on into it (#2261). Over
@@ -10455,7 +10443,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       // their words for the setter as this one does.
       const unnamed = settingNeedsTheirWords(pd, modifiers);
       const command = configSetCommand(modifiers, unnamed);
-      const fill = unnamed ? PERSON_WORDS_FILL : "";
+      const fill = unnamed ? messageFill(pd) : "";
       emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
         pickedUpIfTurnEnds(
           settingPrint(
@@ -10678,7 +10666,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     if (settingBeforeWork) {
       const unnamed = settingNeedsTheirWords(pd, typedBeforeWork);
       const kept = `Run \`${configSetCommand(typedBeforeWork, unnamed)}\` to keep these settings for the piece of work the person starts ` +
-        `next${unnamed ? PERSON_WORDS_FILL : ""}, then print its output verbatim and ${thenWait}`;
+        `next${unnamed ? messageFill(pd) : ""}, then print its output verbatim and ${thenWait}`;
       emit(pickFollows ? printDirective(kept) : turnEndingPrint(kept));
       return;
     }

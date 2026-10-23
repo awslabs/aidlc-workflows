@@ -751,7 +751,7 @@ before the rename); the composer never flips it. Mark that row read-only in
 the rendered proposal: a recompose lands only `changes.skip` / `changes.add`,
 so a policy edit there would be discarded. Name the route instead: when the
 person asks to raise or lower it, the conductor runs
-`{{INVOKE}} engine config set guard-policy <value> --person-words '<their words>'`, before any scope change
+`{{INVOKE}} engine config set guard-policy <value> --message <id>` (`<id>` the message they asked in), before any scope change
 they also asked for. Changing scope alone never lowers the running policy.
 Pass `guardPolicy` to `validate-grid --guard-policy <value>` so the
 validator checks it with the grid. For a front composition the conductor

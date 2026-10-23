@@ -458,8 +458,9 @@ from the person's reply in whatever words they used; the engine reads only that
 label or its number), and the person changes the mode by saying so. A reused
 mode opens no decision, so `hasPendingDecision` and the gate-answer pairing are
 unchanged. The protocol's Step 2 keeps only what is the conductor's reading: a
-request that already said how to answer is recorded with `--on-instruction`,
-and an unclear reply gets one short follow-up.
+request that already said how to answer is recorded with `--on-instruction
+--message <id>`, naming the message that said it, and an unclear reply gets one
+short follow-up.
 
 #### Guide Me (Interactive Mode)
 
@@ -581,18 +582,16 @@ ask targeted follow-up. Do NOT proceed until resolved.
 - When the user leaves a choice to the agent ("up to you", "whatever you think
   is best", or "choose the recommended answers" for this stage), the agent
   decides: it picks the option that best fits what they have said and records
-  it with `log answer --on-instruction '<their words>'` (single-quoted, like
-  every piece of the person's text on a command line), so the record shows
-  the agent chose it as they asked. The tool keeps the words only when
-  something the person said holds them, case, spacing and punctuation aside
-  (`holdsQuote` and `personsSaidWords` in `aidlc-message-store.ts`, the same
-  check the live drives' person-turn check makes): a message the human-turn
-  hook kept, a question box's reply, or the request that started the work.
-  Otherwise it tells the agent to quote their words or show the questions and
-  wait. Where the record lacks some of what they said (a host that passed no
-  words, a message too long to keep whole, a message older than the store
-  keeps, no hook), the choice is recorded as before. The agent then says one
-  line: "You left <the question> to me, so I chose <the choice>. Say if you
+  it with `log answer --on-instruction --message <id>`, naming the message
+  that left the choice to it, so the record shows the agent chose it as they
+  asked. The engine proves that message (it exists, came through this chat,
+  and no decision after it has used it up, other than the one it gave itself)
+  and keeps their whole words with the answer as `Person Reply`. Words written
+  after the flag are the agent's own (`Conductor Summary`) and claim nothing;
+  no quote is compared. With no message named (by the flag, or by the question
+  it answers when that question was logged naming one), the answer is recorded
+  as the agent's own, with no claim that the person left it. The agent then
+  says one line: "You left <the question> to me, so I chose <the choice>. Say if you
   want something else."
   (for several questions, "You left <Stage>'s <N> questions to me, so I chose
   the recommended answers: ... Say if you want any of them changed."), and

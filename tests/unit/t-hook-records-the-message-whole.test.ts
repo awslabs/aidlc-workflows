@@ -201,6 +201,14 @@ function lastTurnMark(proj: string): string | null {
   return auditBlockField(turns[turns.length - 1], "Reply");
 }
 
+/** The id of the message the hook kept for the latest turn: what the agent names with --message. */
+function lastMessageId(proj: string): string {
+  const turns = rows(proj, "HUMAN_TURN");
+  const id = turns.length === 0 ? null : auditBlockField(turns[turns.length - 1], "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
+}
+
 function state(proj: string): string {
   return readFileSync(seededStateFile(proj), "utf-8");
 }
@@ -240,7 +248,7 @@ describe("the hook records the message whole and applies nothing", () => {
     expect("applied" in record).toBe(false);
   });
 
-  test("plain words at the plan question: recorded as a reply, nothing changed; the agent's setter then lowers it with their words", () => {
+  test("plain words at the plan question: recorded as a reply, nothing changed; the agent's setter then lowers it on their message", () => {
     const proj = openWork();
     askFor(proj);
     const before = state(proj);
@@ -248,11 +256,15 @@ describe("the hook records the message whole and applies nothing", () => {
     expect(state(proj)).toBe(before);
     expect(rows(proj, "CEREMONY_SET")).toHaveLength(0);
     expect(lastTurnMark(proj)).toBeNull();
-    // The agent read their words and names them; the setter finds them on record.
-    const lowered = configSet(proj, ["plan-approval", "off", "--person-words", "skip plan approval for this work"]);
+    // The agent read their words and names the message they sent them in; the
+    // setter proves it and records their whole words by id.
+    const id = lastMessageId(proj);
+    const lowered = configSet(proj, ["plan-approval", "off", "--message", id]);
     expect(lowered.status, lowered.out).toBe(0);
     expect(getField(state(proj), "Plan Approval")).toBe("off (set by you)");
-    expect(rows(proj, "CEREMONY_SET").join("\n")).toContain("**Person Reply**: skip plan approval for this work");
+    const row = rows(proj, "CEREMONY_SET").join("\n");
+    expect(row).toContain("**Person Reply**: skip plan approval for this work");
+    expect(row).toContain(`**Message Id**: ${id}`);
   });
 
   test("a flags-only Guard Policy line: next names the setter, and the setter says it was asked in the chat", () => {

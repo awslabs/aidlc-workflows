@@ -937,11 +937,13 @@ Policy. Changed stored values or sources are audited with scope provenance;
 explicit overrides and absent legacy rows are preserved. Explicit Guard
 Policy and ceremony flags store `<value> (set by you)` when the record shows
 the person asked (`settingTheirs`: their typed line, their own terminal, or
-`--person-words` that equal a reply of theirs in this chat since the last
-decision) and `<value> (set by a command)` otherwise. When the agent sends such
+the message the agent names with `--message <id>`, which the setter proves came
+from them through this chat and was not used up by a later decision) and
+`<value> (set by a command)` otherwise. When the agent sends such
 a setting through `next` and the person's line did not carry it, the `config
-set` step `next` names ends with `--person-words '<their words>'`, for the
-agent to fill with the reply that asked.
+set` step `next` names ends with `--message '<id>'`, for the agent to fill with
+the id of the person's message that asked for it (the step names the ids and
+times of the messages it can name).
 A same-value source change still counts as a change; `review adversarial`
 clears `Review Override` to an empty string.
 
@@ -1100,7 +1102,7 @@ and the person's review of what the agent runs are the outer boundary. See the
 | `WORKSPACE_SCAFFOLDED` | `tools/aidlc-utility.ts` | Net-new directory tree created by init |
 | `WORKSPACE_SCANNED` | `tools/aidlc-utility.ts` | Brownfield workspace detection complete |
 | `WORKSPACE_INITIALISED` | `tools/aidlc-utility.ts` | State file materialized; carries `Project Type Source` (`workspace scan`, or `you` when creation had `--project-type`) |
-| `WORKSPACE_RECLASSIFIED` | `tools/aidlc-utility.ts` | `workspace reclassify --project-type <t>`: the person said the work is a new project or existing code. Carries `Old Project Type` and `New Project Type` (each with who set it), optional `Person Words` (the words the type was said in: the request `next` was given with it, or the person's words the agent passed), `Scanned As` and the rescanned stack, optional `Repos Recorded`, and `Reverse Engineering` (`back on the plan`, `skipped`, or `plan unchanged`) |
+| `WORKSPACE_RECLASSIFIED` | `tools/aidlc-utility.ts` | `workspace reclassify --project-type <t>`: the person said the work is a new project or existing code. Carries `Old Project Type` and `New Project Type` (each with who set it), optional `Message Id` and `Person Reply` (the person's message the agent named with `--message` as the one the type was said in, and its words), or `Conductor Summary` (words passed in the form before `--message`, the agent's own), `Scanned As` and the rescanned stack, optional `Repos Recorded`, and `Reverse Engineering` (`back on the plan`, `skipped`, or `plan unchanged`) |
 
 ### Documents
 
@@ -1866,11 +1868,15 @@ A repeated `next` preserves that response only when the state, gate, and ordered
 remedy `op`, `label`, `action`, structured `operation`, and `interaction` still match.
 A changed target or interaction therefore cannot inherit the old selection.
 The Stop hook releases the turn on the ask. `reject` is allowed only
-after `selected_op` records `request-changes` and matching human feedback arrives:
-`--feedback` must be that human's own words, compared whitespace-normalized. A
-paraphrase is refused, and a selection alone is refused with "ask what should
-change". Legacy consumed responses without `selected_op` are refused rather than
-treated as authorization.
+after `selected_op` records `request-changes` and the recovery record is
+`ready`. The rejection then keeps the person's words from their messages (their
+replies since the last decision and since the stage started, or the one message
+the agent names with `--message <id>`) as its `Feedback`, and the agent's
+`--feedback` or `--reason` text, when it says something else, as `Conductor
+Summary`; no match between the two is required. The selection and feedback digests remain
+the hook's record that the person replied. A selection alone is refused with
+"ask what should change". Legacy consumed responses without `selected_op` are
+refused rather than treated as authorization.
 
 After upgrading from a runtime whose recovery marker stored only `op` and
 `action`, an in-flight ask is reissued once to obtain the structured operation

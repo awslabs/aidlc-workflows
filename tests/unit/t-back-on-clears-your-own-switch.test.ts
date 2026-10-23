@@ -12,6 +12,8 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { listMessages } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { cleanupTestProject, createTestProject, FIXTURES_DIR, REPO_ROOT, runOrchestrateNext, seededStateFile } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
@@ -69,20 +71,32 @@ function workspace(open = true) {
     expect(r.exitCode, `${args.join(" ")}: ${r.stdout}${r.stderr}`).toBe(0);
     return r.stdout.toString().trim();
   };
-  const said = (words: string): void => {
+  // The person types `words` in the chat; the id of the message the hook kept
+  // is what a setter names (--message) for what they asked. With work open the
+  // turn row names it; with none open there is no row, and it is the one
+  // message record the hook added.
+  const said = (words: string): string => {
+    const turns = () => readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN");
+    const rowsBefore = turns().length;
+    const before = new Set(listMessages(proj).map((message) => message.id));
     const r = spawn(["engine", "hook", "record-human-turn"], JSON.stringify({
       hook_event_name: "UserPromptSubmit", cwd: proj, session_id: SESSION, prompt: words,
     }));
     expect(r.exitCode, r.stderr.toString()).toBe(0);
+    const after = turns();
+    const added = listMessages(proj).filter((message) => !before.has(message.id)).map((message) => message.id);
+    const id = after.length > rowsBefore ? auditBlockField(after.at(-1)!.block, "Message Id") : added.length === 1 ? added[0] : null;
+    expect(id).not.toBeNull();
+    return id as string;
   };
   const off = (name: string, place: "local" | "project" | "global"): void => {
-    said("turn it off");
-    run(["config", "flags", "--bypass", name, `--${place}`, "--yes"]);
+    const id = said("turn it off");
+    run(["config", "flags", "--bypass", name, `--${place}`, "--yes", "--message", id]);
   };
-  // The person asks in chat; the agent runs the setter with their words.
+  // The person asks in chat; the agent runs the setter naming their message.
   const backOn = (key: string, words: string, extra: Record<string, string | undefined> = {}): string => {
-    said(words);
-    return run(["engine", "config", "set", key, "on", "--person-words", words], extra);
+    const id = said(words);
+    return run(["engine", "config", "set", key, "on", "--message", id], extra);
   };
   const file = (place: "local" | "project" | "global"): string =>
     place === "local" ? join(proj, "aidlc.settings.local.json")
@@ -245,6 +259,7 @@ describe("t-back-on-clears-your-own-switch: back on while a settings file keeps 
     const w = workspace();
     w.off("AIDLC_DISABLE_PLAN_APPROVAL_GUARD", "local");
     w.said("what is the next stage about?");
+    // Words the agent passes itself (--person-words) name no message of theirs.
     const out = w.run(["engine", "config", "set", "plan-approval", "on", "--person-words", "turn plan approval back on"]);
     expect(out).toContain("is still off: aidlc.settings.local.json keeps it off for this project.");
     expect(w.recorded("local")).toEqual(["AIDLC_DISABLE_PLAN_APPROVAL_GUARD"]);
@@ -443,8 +458,8 @@ describe("t-back-on-clears-your-own-switch: the agent's config flags clear does 
 
   test("the undo of a switch recorded in the machine's file names that file, and does what it says", () => {
     const w = teamClone();
-    w.said("turn plan approval off on this machine");
-    const out = w.run(["config", "flags", "--bypass", SWITCH, "--global", "--yes"]);
+    const asked = w.said("turn plan approval off on this machine");
+    const out = w.run(["config", "flags", "--bypass", SWITCH, "--global", "--yes", "--message", asked]);
     expect(out).toContain(`. To undo: bun .claude/tools/aidlc.ts ${back("global")}`);
     w.said("undo that");
     w.run(["config", "flags", "--clear-bypass", SWITCH, "--global", "--yes"]);
