@@ -4090,13 +4090,26 @@ function turnEndingPrint(message: string): PrintDirective {
 // may have this step of its own to take. The first stop of a turn is the
 // agent's step; a second one, after it stopped a program and ran the command
 // again, hands the person the line, so a stop that missed never loops.
+// The step runs the same command again, so a request this `next` read from its
+// file (and removed) is written back for it.
 function lockFolderHeldStep(projectDir: string | null | undefined, line: string): PrintDirective {
+  restoreSpentRequestFile?.();
   const session = engineSessionId;
   if (!projectDir || !session) return turnEndingPrint(lockFolderHeldAgentStep(line, "uncounted"));
   const again = personLineHeardThisTurn(projectDir, session, LOCK_FOLDER_HELD_STEP_KEY);
-  if (!again) markPersonLineHeardThisTurn(projectDir, session, LOCK_FOLDER_HELD_STEP_KEY);
+  if (!again) {
+    markPersonLineHeardThisTurn(projectDir, session, LOCK_FOLDER_HELD_STEP_KEY);
+    // The count lives in the chat's person-lines record, which keeps nothing
+    // where no workflow is selected: there the words bound the retry.
+    if (!personLineHeardThisTurn(projectDir, session, LOCK_FOLDER_HELD_STEP_KEY)) {
+      return turnEndingPrint(lockFolderHeldAgentStep(line, "uncounted"));
+    }
+  }
   return turnEndingPrint(lockFolderHeldAgentStep(line, again ? "again" : "first"));
 }
+
+// What the running `next` read from a request file, put back for the held step.
+let restoreSpentRequestFile: (() => void) | null = null;
 
 // The question for a folder set up as a new project that now holds code.
 // Null when the type was the person's word, Construction has started, or the
@@ -18700,12 +18713,12 @@ const REQUEST_TEXT_MAX_BYTES = 64 * 1024;
 function nextArgsWithRequestFile(
   args: readonly string[],
   projectDir: string,
-): { args: string[]; spend(): void } | string {
+): { args: string[]; spend(): void; restore(): void } | string {
   // The flag counts only in front of the `--` mark: behind it the token is one
   // of the person's words ("add a --request-file option"), as every flag is.
   const options = beforeDelimiter(args);
   const at = options.indexOf("--request-file");
-  if (at < 0) return { args: [...args], spend: () => {} };
+  if (at < 0) return { args: [...args], spend: () => {}, restore: () => {} };
   const usage =
     `--request-file needs a file directly inside ${REQUEST_TEXT_DIR}/ in this project, for example ` +
     `${REQUEST_TEXT_DIR}/request.txt.`;
@@ -18746,6 +18759,15 @@ function nextArgsWithRequestFile(
         // Left in its gitignored folder; the next request replaces it.
       }
     },
+    // The request as it was read, for a step that runs the same command again.
+    restore: () => {
+      if (isReadOnlyEngineProbe()) return;
+      try {
+        writeRecordFileNoFollow(projectDir, relativePath, text);
+      } catch {
+        // Not written back: the same command says the request could not be read.
+      }
+    },
   };
 }
 
@@ -18771,6 +18793,7 @@ export function main(argv: string[]): void {
   if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
   const resolvedProjectDir = resolveProjectDir(projectDir);
   let spendRequestFile = (): void => {};
+  let restoreRequestFile = (): void => {};
   if (subcommand === "next") {
     // Read once, before anything reads the request.
     const withRequest = nextArgsWithRequestFile(subArgs, resolvedProjectDir);
@@ -18780,6 +18803,7 @@ export function main(argv: string[]): void {
     }
     subArgs = withRequest.args;
     spendRequestFile = withRequest.spend;
+    restoreRequestFile = withRequest.restore;
   }
   const resolvedSelection = engineWorkflowSelection(resolvedProjectDir);
   engineProjectDir = resolvedProjectDir;
@@ -18866,6 +18890,7 @@ export function main(argv: string[]): void {
     noteRestartRequest(subArgs, true);
   }
   spendRequestFile();
+  restoreSpentRequestFile = restoreRequestFile;
   if (commandKind) engineInvocation = {
     commandKind,
     commandSha256: sha256(
@@ -18913,6 +18938,7 @@ export function main(argv: string[]): void {
     });
   } finally {
     engineInvocation = null;
+    restoreSpentRequestFile = null;
     activeRetiredGuardPolicyNotice = null;
     activeHookHealthNotice = undefined;
     activeSwitchOffNotices = null;

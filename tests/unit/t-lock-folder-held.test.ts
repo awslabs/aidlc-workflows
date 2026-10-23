@@ -32,7 +32,7 @@ import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -656,6 +656,40 @@ describe("next meets a held lock folder", () => {
     // The program stops: the work goes on.
     rmSync(lockDirOf(proj), { recursive: true, force: true });
     expect(["run-stage", "load-steering"]).toContain(directiveOf(runNext(proj, [], { held: false, session: true })).kind);
+  });
+
+  // The turn's stops are counted in the chat's person-lines record, which keeps
+  // nothing where no workflow is selected (markPersonLinesHeard); a folder in
+  // the record's place stands in for that here. Then the words bound the retry.
+  test("where the turn's stops cannot be counted, the step carries its own bound", () => {
+    const proj = guardProject("off");
+    started(proj);
+    const record = join(proj, "aidlc", ".aidlc-sessions", `${SESSION}.person-lines`);
+    rmSync(record, { recursive: true, force: true });
+    mkdirSync(record, { recursive: true });
+    for (let i = 0; i < 2; i++) {
+      expect(directiveOf(runNext(proj, [], { held: true, session: true }))).toEqual({ kind: "print", message: AGENT_STEP_UNCOUNTED });
+    }
+  });
+
+  // On Kiro IDE (and opencode on Windows) a request the shell would change goes
+  // through a file the engine reads and removes; the step's same command reads
+  // it again, so the file is back when the step says so.
+  test("a request read from a file is there again for the same command", () => {
+    const proj = guardProject("off");
+    started(proj);
+    const file = join(proj, "aidlc", ".aidlc-request-text", "request.txt");
+    const request = "Fix the login & signup forms";
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${request}\n`);
+    // A plan word with new words while work is in progress: the routing question, which the held folder stops.
+    const command = ["--scope", "bugfix", "--request-file", "aidlc/.aidlc-request-text/request.txt"];
+    expect(directiveOf(runNext(proj, command, { held: true, session: true }))).toEqual({ kind: "print", message: AGENT_STEP });
+    expect(readFileSync(file, "utf8")).toBe(request);
+    rmSync(lockDirOf(proj), { recursive: true, force: true });
+    const again = directiveOf(runNext(proj, command, { held: false, session: true }));
+    expect(again.kind, JSON.stringify(again)).toBe("ask");
+    expect(existsSync(file)).toBe(false);
   });
 
   test("continue: the same step, counted in the same turn; without the Windows line, today's words", () => {
