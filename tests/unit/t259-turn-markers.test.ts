@@ -44,6 +44,7 @@ import {
   markEngineTouch,
   markHumanTurn,
   readAuditShardEvents,
+  stageDir,
   stateFilePath,
   STOP_HOOK_PROBE_ENV,
   turnMarkersShowConversational,
@@ -465,6 +466,61 @@ describe("t259 the engine's last word ended the turn", () => {
       env: { ...env, AIDLC_UNATTENDED: "1" },
     });
     expect(stopped.stdout).toContain('"decision":"block"');
+  });
+
+  // A live Claude Code run: "switch this to the mvp plan", typed while the
+  // agent wrote Intent Capture's questions, ended the turn with "The work picks
+  // up at Intent Capture & Framing." before any question was on screen, and
+  // the person had to say go on. A questions file written after the person's
+  // last turn has not been in front of them, so the setting or switch carries
+  // on to the questions. Once a question is shown (logged), or the file was
+  // there before they typed, or no turn of theirs is marked, the turn ends.
+  test("a setting or switch typed while the agent writes the stage's questions carries on to them", () => {
+    const QUESTIONS = "# Feasibility & Constraints Questions\n\n## Q1. [architect] Where does it run?\nA. Laptop\nB. Cloud\nX. Other (please specify)\n\n[Answer]:\n";
+    for (const typed of [["--depth", "minimal"], ["--scope", "mvp"]]) {
+      for (const written of ["after their turn", "after their turn, then shown", "before their turn", "with no turn marked"] as const) {
+        const label = `${typed.join(" ")}, questions written ${written}`;
+        const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+        tempDirs.push(proj);
+        const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+        delete env[STOP_HOOK_PROBE_ENV];
+        const run = (args: string[]) =>
+          spawnSync(process.execPath, [".claude/tools/aidlc.ts", ...args], { cwd: proj, encoding: "utf-8", env });
+        const dir = stageDir(proj, "ideation", "feasibility");
+        mkdirSync(dir, { recursive: true });
+        const file = join(dir, "feasibility-questions.md");
+        writeFileSync(file, QUESTIONS);
+        if (written === "with no turn marked") {
+          expect(existsSync(humanTurnMarkerPath(proj)), label).toBe(false);
+        } else {
+          markHumanTurn(proj);
+          const turn = statSync(humanTurnMarkerPath(proj)).mtimeMs / 1000;
+          const at = written === "before their turn" ? turn - 5 : turn + 5;
+          utimesSync(file, at, at);
+        }
+        if (written === "after their turn, then shown") {
+          const asked = run(["engine", "log", "decision", "--stage", "feasibility", "--decision", "Q1", "--options", "A. Laptop,B. Cloud,X. Other"]);
+          expect(asked.status, `${label}: ${asked.stdout}${asked.stderr}`).toBe(0);
+        }
+        const printed = JSON.parse(run(["engine", "orchestrate", "next", ...typed]).stdout);
+        expect(printed.kind, label).toBe("print");
+        const command = /`bun \.claude\/tools\/aidlc\.ts (engine [^`]*)`/.exec(printed.message)?.[1];
+        expect(command, `${label}: ${printed.message}`).toBeDefined();
+        if (written === "after their turn") {
+          expect(printed.message, label).toContain("print its output verbatim and re-run next to carry on with the work.");
+          expect(printed.narration, label).toBeUndefined();
+          expect(existsSync(turnEndMarkerPath(proj)), label).toBe(false);
+          // The same turn goes on to the stage, whose questions the agent asks.
+          expect(run(command!.split(" ")).status, label).toBe(0);
+          const after = JSON.parse(run(["engine", "orchestrate", "next"]).stdout);
+          expect([after.kind, after.stage], label).toEqual(["run-stage", "feasibility"]);
+        } else {
+          expect(printed.message, label).toContain("print its output verbatim and stop.");
+          expect(printed.narration, label).toBe("The work picks up at Feasibility & Constraints.");
+          expect(existsSync(turnEndMarkerPath(proj)), label).toBe(true);
+        }
+      }
+    }
   });
 
   // A plan proposal waiting for the person's approve, edit or reject is a stop

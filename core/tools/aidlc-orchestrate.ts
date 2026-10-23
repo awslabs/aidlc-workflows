@@ -446,6 +446,7 @@ import {
   HOOKS_OFF_RERUN,
   hookStatusPathLinked,
   humanTurnMintAllowed,
+  writtenSincePersonSpoke,
   assertNoSymlinkInChainOrThrow,
   sessionsDir,
   type WorkspaceCommand,
@@ -4823,7 +4824,9 @@ function stillParkedLine(): string {
 // at its checkpoint). The walk's own step names it: the Unit's stage, the
 // summary confirmation after one, or the Unit's checkpoint. A paused walk is
 // already said to be paused, and a block whose Units are all covered has no
-// step of its own, so neither gets a line. Off a Unit walk, Current Stage is it.
+// step of its own, so neither gets a line. Off a Unit walk, Current Stage is
+// it while it is still to do: finished work, or a stage a switch skipped, has
+// no place to name, and the setting's own line says what changed.
 // When the work carries on in the same turn (`onlyOnWalk`), the step in hand is
 // where it goes, so the line is said only where the agent could not read that
 // from Current Stage: a Unit walk's own step. A Codex run printed "The work
@@ -4834,33 +4837,43 @@ function withWorkPicksUpLine<T extends Directive>(
   const current = (getField(stateContent, "Current Stage") ?? "").trim();
   const walk = scope ? unitMajorWalkBeat(pd, scope, stateContent, current) : null;
   if (onlyOnWalk && walk === null) return directive;
-  const at = walk === null ? nodeForSlug(current)?.name ?? "" : walkStepPlace(walk.step);
+  const at = walk !== null
+    ? walkStepPlace(walk.step)
+    : currentStageStillToDo(scope, stateContent) ? nodeForSlug(current)?.name ?? "" : "";
   if (at) (directive as { narration?: string }).narration = `The work picks up at ${at}.`;
   return directive;
 }
 
+// Whether the Current Stage is still to do on the work's own recorded plan:
+// it has a box, neither done nor skipped, and the plan runs it (that record
+// already holds the project-type adjustment: a new project's Reverse
+// Engineering reads SKIP there).
+function currentStageStillToDo(scope: string, stateContent: string): boolean {
+  const current = (getField(stateContent, "Current Stage") ?? "").trim();
+  const box = parseCheckboxes(stateContent).find((c) => c.slug === current)?.state;
+  if (box === undefined || box === "completed" || box === "skipped") return false;
+  return effectivePlanAction(current, scope, stateContent) === "EXECUTE";
+}
+
 // Whether the place withWorkPicksUpLine names is still where the work picks up
-// after a switch to `newScope`: the Current Stage is still to do, the work's
-// own recorded plan runs it (that record already holds the project-type
-// adjustment: a new project's Reverse Engineering reads SKIP there), and the
+// after a switch to `newScope`: the Current Stage is still to do, and the
 // new scope's grid runs it (the switch rebuilds the plan from that grid, and
 // skips a waiting stage it does not run); off a Unit-by-Unit walk, whose own
 // steps a switch can change (a stage it adds or drops moves a Unit's next step,
 // and the summary confirmation follows the scope).
 function scopeSwitchKeepsPlace(pd: string, scope: string, stateContent: string, newScope: string): boolean {
   const current = (getField(stateContent, "Current Stage") ?? "").trim();
-  const box = parseCheckboxes(stateContent).find((c) => c.slug === current)?.state;
-  if (box === undefined || box === "completed" || box === "skipped") return false;
-  if (effectivePlanAction(current, scope, stateContent) !== "EXECUTE") return false;
+  if (!currentStageStillToDo(scope, stateContent)) return false;
   if (effectivePlanAction(current, newScope, null) !== "EXECUTE") return false;
   return !scope || unitMajorWalkBeat(pd, scope, stateContent, current) === null;
 }
 
 // Whether a setting typed in chat ends the turn. It does when the person must
 // act next: the current stage waits at its gate or in revision, the engine's
-// plan question is open, a question the stage logged or wrote has no answer, or
-// a Unit walk stands at a summary, a checkpoint or a pause; a `next` there would
-// show them their question again. While the stage is simply running, the
+// plan question is open, a question the stage logged, or wrote before their
+// last turn, has no answer, or a Unit walk stands at a summary, a checkpoint or
+// a pause; a `next` there would show them their question again. While the stage
+// is simply running, the
 // setting is said and the agent goes back to `next` for the work: a live run
 // stopped after "turn the specialist reviewers off" and the person had to type
 // "ok, carry on". Anything unreadable ends the turn, as every setting did before.
@@ -4883,8 +4896,15 @@ function settingEndsTurn(pd: string, scope: string, stateContent: string): boole
     if (phase.length === 0) return true;
     const dirs = [stageDir(pd, phase, slug)];
     if (walk !== null && walk.step.kind === "work") dirs.push(join(docsRoot(pd), phase, walk.step.unit, walk.step.stage.slug));
+    // A questions file written after the person's last turn has not been in
+    // front of them, so the agent goes on to ask it: a live run ended the turn
+    // on a switch typed while the questions were written, and the person had
+    // to say go on. A menu of questions shown since is logged, which the open
+    // question above reads. In "I'll edit the file", a save that lands between
+    // a typed setting and the agent's `next` carries on too, and the agent says
+    // once more to send done.
     return dirs.some((dir) => existsSync(dir) && readdirSync(dir)
-      .filter((file) => file.endsWith("-questions.md"))
+      .filter((file) => file.endsWith("-questions.md") && !writtenSincePersonSpoke(pd, join(dir, file)))
       .some((file) => /\[Answer\]:[ \t]*_*[ \t]*$/m.test(readFileSync(join(dir, file), "utf-8"))));
   } catch {
     return true;

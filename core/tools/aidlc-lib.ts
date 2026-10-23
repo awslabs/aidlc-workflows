@@ -29352,6 +29352,17 @@ export function engineMarkedSincePersonSpoke(projectDir: string): boolean {
   }
 }
 
+// The file at `path` was written after the person's last turn, so it has not
+// been in front of them since. Any unreadable mark or file is no evidence.
+export function writtenSincePersonSpoke(projectDir: string, path: string): boolean {
+  try {
+    const human = turnMarkerStat(projectDir, "human-turn");
+    return human?.isFile() === true && statSync(path).mtimeMs > human.mtimeMs;
+  } catch {
+    return false;
+  }
+}
+
 
 // The engine mark for the work an intent or space switch selects. Written only
 // when the record has none (work made before the markers shipped, or a fresh

@@ -507,3 +507,29 @@ describe("t-scope-change-reopens-finished-work: a scope switch over running work
     }
   }
 });
+
+// A setting typed where nothing picks up ends the turn on the setting's own
+// line. On finished work it read "The work picks up at Deployment Execution."
+// beside "Depth changed: ...", and after a switch skipped the stage waiting at
+// its gate it named that stage, though the work picks up after it.
+describe("t-scope-change-reopens-finished-work: a setting names no place where nothing picks up", () => {
+  test("a setting typed on finished work names no place to pick up", () => {
+    const proj = finishedBugfix();
+    for (const typed of [["--depth", "minimal"], ["--review", "none"], ["--guard-policy", "relaxed"]]) {
+      const print = next(proj, typed);
+      expect(print.kind, typed.join(" ")).toBe("print");
+      expect(print.message, typed.join(" ")).toContain(STOP);
+      expect(print.narration, typed.join(" ")).toBeUndefined();
+    }
+  });
+
+  test("a setting typed after a switch skipped the stage waiting at its gate names no place there", () => {
+    const proj = featureAtFeasibility("awaiting-approval");
+    expect(actOnScopeChangePrint(proj, next(proj, ["--scope", "bugfix"]))).toContain("Skipped Feasibility & Constraints");
+    expect(box(state(proj), "feasibility")).toBe("S");
+    const print = next(proj, ["--review", "none"]);
+    expect(print.kind).toBe("print");
+    expect(print.message).toContain(STOP);
+    expect(print.narration).toBeUndefined();
+  });
+});
