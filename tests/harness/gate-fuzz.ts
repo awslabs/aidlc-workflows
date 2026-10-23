@@ -36,7 +36,7 @@
 // every shipped scope that copies the project at every point the agent hands
 // the turn to the person (the scope run's stand-in, scope-run.ts, on each
 // tool's own hook wiring, scope-hosts.ts). gate-fuzz-run.ts is the long mode
-// and replays a run by its id; tests/unit/t-gate-fuzz.test.ts is the suite's.
+// and replays a run by its id; tests/integration/t-gate-fuzz.test.ts is the suite's.
 
 import { createHash } from "node:crypto";
 import {
