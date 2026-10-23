@@ -9399,8 +9399,10 @@ function handleIntentRepos(
     if (missingValueFlags.has(flag)) die(`intent ${verb} refused: --${flag} needs a value.`);
   }
   if (verb === "remove-repo" && flags.url !== undefined) die("intent remove-repo takes no --url: the folder stays where it is.");
-  const reason = auditReason(flags.reason);
-  const personWords = flags["person-words"]?.replace(/\s+/g, " ").trim() || null;
+  // The audit is committed: an address with a credential in either is kept
+  // with its userinfo hidden, as every printed address is.
+  const reason = auditReason(flags.reason === undefined ? undefined : maskUserinfo(flags.reason));
+  const personWords = maskUserinfo(flags["person-words"]?.replace(/\s+/g, " ").trim() ?? "") || null;
   const selection = resolveWorkflowSelection(projectDir);
   const space = selection.space;
   const dirName = selection.intent;
@@ -9422,7 +9424,7 @@ function handleIntentRepos(
       const why = err instanceof CloneFailure ? err.reason : maskUserinfo(errorMessage(err));
       die(
         `Could not clone ${name} from ${address}: ${why}. Nothing was changed. To clone it yourself, run ` +
-          `git clone -- ${address} ${target}, then add it again.`,
+          `git clone -- ${address} "${target}", then add it again.`,
       );
     }
   }

@@ -223,6 +223,13 @@ describe("intent add-repo / remove-repo", () => {
     expect(readUnitSourceManifest(proj, "code-generation", "alpha").ok).toBe(true);
   });
 
+  test("a reason that carries an address with a credential is recorded without it", () => {
+    const r = utility(["intent", "add-repo", "app-b", "--reason", "the API moved to https://bot:s3cret-tok@git.example.invalid/acme/app-b.git"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(audit()).not.toContain("s3cret-tok");
+    expect(audit()).toContain("**Reason**: the API moved to https://***@git.example.invalid/acme/app-b.git");
+  });
+
   test("a repo already recorded changes nothing and says so", () => {
     const r = utility(["intent", "add-repo", "app-a"]);
     expect(r.rc, r.out).toBe(0);
@@ -441,7 +448,10 @@ describe("intent add-repo clones a repo that is not here yet", () => {
   test("a hosted --url creates repos.json under its owner, without the credential, and no secret is printed or recorded", () => {
     bareRepo("acme", "payments");
     insteadOf("https://user:s3cret-tok@example.invalid/acme/", "acme");
-    const r = utility(["intent", "add-repo", "payments", "--url", "https://user:s3cret-tok@example.invalid/acme/payments.git"]);
+    const r = utility([
+      "intent", "add-repo", "payments", "--url", "https://user:s3cret-tok@example.invalid/acme/payments.git",
+      "--person-words", "add payments from https://user:s3cret-tok@example.invalid/acme/payments.git",
+    ]);
     expect(r.rc, r.out).toBe(0);
     expect(r.out).toContain("Cloned payments from https://***@example.invalid/acme/payments.git");
     expect(r.out).toContain(
@@ -452,6 +462,7 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     expect(manifest).toEqual({ org: "acme", repos: [{ name: "payments", url: "https://example.invalid/acme/payments.git" }] });
     expect(r.out).not.toContain("s3cret-tok");
     expect(audit()).not.toContain("s3cret-tok");
+    expect(audit()).toContain("**Person Words**: add payments from https://***@example.invalid/acme/payments.git");
     expect(readFileSync(join(proj, "repos.json"), "utf-8")).not.toContain("s3cret-tok");
   });
 
@@ -461,7 +472,7 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     const r = utility(["intent", "add-repo", "payments", "--url", missing]);
     expect(r.rc).not.toBe(0);
     expect(r.out).toContain(`Could not clone payments from ${missing}: `);
-    expect(r.out).toContain(`Nothing was changed. To clone it yourself, run git clone -- ${missing} ${join(proj, "payments")}, then add it again.`);
+    expect(r.out).toContain(`Nothing was changed. To clone it yourself, run git clone -- ${missing} "${join(proj, "payments")}", then add it again.`);
     expect(r.out).not.toContain("Cloning into");
     expect(repos()).toEqual(["app-a"]);
     expect(audit()).not.toContain("INTENT_REPOS_CHANGED");

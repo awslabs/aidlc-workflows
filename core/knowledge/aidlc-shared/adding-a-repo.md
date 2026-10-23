@@ -59,7 +59,7 @@ Engineering shows as behind for the new repo until it is revisited.
   the repo is cloned, run the same add again.
 - **The host cut the command off** (a command timeout in the host tool): run the
   same add again with a longer timeout where the host allows one; otherwise
-  give the person the `git clone -- <address> <workspace>/<name>` command, then
+  give the person the `git clone -- <address> "<workspace>/<name>"` command, then
   add the repo once it is there. A leftover `.aidlc-workspace-sync-txn-*`
   folder in the workspace is ignored by the managed `.gitignore` block and can
   be deleted.
