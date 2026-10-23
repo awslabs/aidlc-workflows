@@ -30,7 +30,7 @@ import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harne
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -617,8 +617,14 @@ describe("next meets a held lock folder", () => {
 
   test("continue: the same step, counted in the same turn; without the Windows line, today's words", () => {
     const proj = guardProject("off");
+    // A team's memory grown past one message (about 30 KB more rule text, as
+    // t-copilot-directive-budget's), so the stage's rules come in parts on every
+    // platform and the next part is a `continue`.
+    appendFileSync(
+      join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+      Array.from({ length: 20 }, (_, index) => `\n## Team practice ${index}\n${"x".repeat(1500)}\n`).join(""),
+    );
     started(proj);
-    // The stage's rules come in parts here, so its next part is a `continue`.
     const part = directiveOf(runNext(proj, [], { held: false, session: true }));
     expect(part.kind, JSON.stringify(part)).toBe("load-steering");
     const receipt = String(part.receipt);
