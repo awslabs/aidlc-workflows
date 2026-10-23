@@ -198,9 +198,13 @@ cards doing the work, and the guard notes nothing for them.
   stage from the latest `STAGE_STARTED` in the audit tail. This is a
   **forward-only** mirror: it never rewinds `Current Stage` to a completed or
   skipped stage, and never fires when the workflow is not `Running` (guards
-  against resurrecting a finished workflow). Both audit-tail hooks match
-  `execute_bash`, Windows `execute_pwsh`, and the `shell` alias — the
-  IDE surfaces no task event the sync could parse.
+  against resurrecting a finished workflow). It also leaves `Current Stage`
+  alone when a Unit reopen moved the work back to it after that
+  `STAGE_STARTED`, or in the same second in another clone's audit file (the
+  reopen's rows carry `Moved From`): the move writes no start of its own, so
+  the last start names the stage the work left. Both
+  audit-tail hooks match `execute_bash`, Windows `execute_pwsh`, and the
+  `shell` alias — the IDE surfaces no task event the sync could parse.
 - **front gate for the two audit-tail hooks**: they run once for every shell
   command, in the next card's `catch-up` (or, in a project whose hook files are
   older, as the `aidlc-after-shell` card), so `catch-up` and the dispatcher's

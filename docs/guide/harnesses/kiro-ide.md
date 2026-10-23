@@ -454,7 +454,7 @@ its zero-latency path.
 | `aidlc-log-subagent` | `PostToolUse` (`^(?!subagent_response$)(subagent_.+\|invoke_sub_agent\|orchestrate_subagent)$`) | Records `SUBAGENT_COMPLETED` with the delegate's identity, one row per stage of an `orchestrate_subagent` pipeline. The matcher is broad so any delegate name reaches the adapter; it leaves out the auxiliary `subagent_response` shell, which the adapter also drops on every other entry point |
 | after a command (`execute_bash\|execute_pwsh\|shell`) | no card: the next card does it | The two hooks below, in this order, once per command, by the next card that runs anyway and before anything else in it. When the command made a new piece of work, the rebuild gets its name, so the chat that ran it joins it |
 | `rebuild-stage-graph` | after a command | Recompiles the runtime graph (gated on the audit tail) |
-| `sync-workflow-state` | after a command | Forward-only sync of `Current Stage` from the latest `STAGE_STARTED` in the audit (the IDE surfaces no task payload to parse) |
+| `sync-workflow-state` | after a command | Forward-only sync of `Current Stage` from the latest `STAGE_STARTED` in the audit (the IDE surfaces no task payload to parse); a Unit reopen after that start leaves `Current Stage` where the reopen put it |
 
 `aidlc-session-end` has **no registration**: Kiro's `Stop` trigger fires at the
 end of every assistant turn, not at conversation close, on both surfaces, so

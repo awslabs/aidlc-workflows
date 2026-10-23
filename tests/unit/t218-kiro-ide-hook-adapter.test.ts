@@ -5781,6 +5781,129 @@ describe("t218 forward-only sync-statusline (finding 1: no state resurrection)",
   });
 });
 
+// A Kiro IDE run reopened Code Generation for two Units from a failed Build
+// and Test, and every reopen was undone by this sync: the last STAGE_STARTED
+// was Build and Test's own, which the reopen had reset to not started, so the
+// sync put Current Stage back on it and every way out was refused.
+describe("t218 sync-workflow-state keeps a Unit reopen's Current Stage", () => {
+  const ts = "2026-10-22T22:04:20Z";
+
+  // The Unit-scoped row `aidlc-jump.ts reopen` writes for each Unit, with
+  // `Moved From` when it moved Current Stage back from a later stage.
+  function appendReopen(
+    dir: string,
+    row: { stages: string; unit: string; movedFrom?: string; via?: string; shard?: string; at?: string },
+  ): void {
+    const shard = join(seededAuditDir(dir), row.shard ?? pinnedShardName());
+    const target = row.stages.split(",")[0];
+    const block = `\n## Gate Rejected\n**Timestamp**: ${row.at ?? ts}\n**Event**: GATE_REJECTED\n**Stage**: ${target}\n` +
+      `**Gate Stages**: ${row.stages}\n**Gate Scope**: unit-end\n**Unit**: ${row.unit}\n**Reopen**: ${row.via ?? "jump"}\n` +
+      `**Feedback**: Reopened for unit ${row.unit}.\n${row.movedFrom ? `**Moved From**: ${row.movedFrom}\n` : ""}\n---\n`;
+    const before = existsSync(shard) ? readFileSync(shard, "utf-8") : "# AI-DLC Audit Log\n";
+    writeFileSync(shard, before + block, "utf-8");
+  }
+
+  // The state a reopen from Build and Test leaves: back on `current`, Build
+  // and Test reset.
+  function reopenedTo(dir: string, current = "code-generation"): void {
+    const path = seededStateFile(dir);
+    writeFileSync(path, readFileSync(path, "utf-8")
+      .replace("- [-] requirements-analysis — EXECUTE", "- [x] requirements-analysis — EXECUTE")
+      .replace(`- [ ] ${current} — EXECUTE`, `- [-] ${current} — EXECUTE`), "utf-8");
+    setStateField(dir, "Current Stage", current);
+  }
+
+  const syncOnce = (dir: string) => {
+    const r = runIde(dir, "sync-workflow-state", ctx("execute_bash", "Output:\nok\n\nExit Code: 0"));
+    expect(r.code, r.stderr).toBe(0);
+  };
+
+  function withProject(body: (dir: string) => void): void {
+    const dir = scratchProject(true);
+    try {
+      body(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  for (const via of ["jump", "redo", "change"]) {
+    test(`a reopen (${via}) that moved the work back from Build and Test stays where it put it`, () => {
+      withProject((dir) => {
+        reopenedTo(dir);
+        // The same second for all three rows: only their order counts.
+        appendStageStarted(dir, "build-and-test", ts);
+        for (const unit of ["u1-single-order", "u3-order-status"]) {
+          appendReopen(dir, { stages: "code-generation", unit, movedFrom: "build-and-test", via });
+        }
+        const before = readFileSync(seededStateFile(dir), "utf-8");
+        syncOnce(dir);
+        syncOnce(dir);
+        expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(before);
+      });
+    });
+  }
+
+  // Each clone writes its own audit file; rows two clones wrote in the same
+  // second have no order, whichever file is read first.
+  for (const shard of ["0-other-clone.md", "zz-other-clone.md"]) {
+    test(`a move and a start two clones wrote in the same second keep the move (${shard})`, () => {
+      withProject((dir) => {
+        reopenedTo(dir);
+        appendStageStarted(dir, "build-and-test", ts);
+        appendReopen(dir, { stages: "code-generation", unit: "u1-single-order", movedFrom: "build-and-test", shard });
+        syncOnce(dir);
+        expect(stateField(dir, "Current Stage")).toBe("code-generation");
+      });
+    });
+  }
+
+  test("a start another clone wrote a second after the move still syncs forward", () => {
+    withProject((dir) => {
+      reopenedTo(dir);
+      appendReopen(dir, { stages: "code-generation", unit: "u1-single-order", movedFrom: "build-and-test" });
+      writeFileSync(join(seededAuditDir(dir), "0-other-clone.md"), "# AI-DLC Audit Log\n\n## Stage Start\n" +
+        "**Timestamp**: 2026-10-22T22:04:21Z\n**Event**: STAGE_STARTED\n**Stage**: build-and-test\n**Agent**: orchestrator\n\n---\n");
+      syncOnce(dir);
+      expect(stateField(dir, "Current Stage")).toBe("build-and-test");
+    });
+  });
+
+  test("a later stage of the reopened block keeps the move too", () => {
+    withProject((dir) => {
+      reopenedTo(dir);
+      appendStageStarted(dir, "build-and-test", ts);
+      appendReopen(dir, {
+        stages: "functional-design,code-generation", unit: "u1-single-order", movedFrom: "build-and-test",
+      });
+      syncOnce(dir);
+      expect(stateField(dir, "Current Stage")).toBe("code-generation");
+    });
+  });
+
+  test("a stage started after the move still syncs forward", () => {
+    withProject((dir) => {
+      reopenedTo(dir);
+      appendReopen(dir, { stages: "code-generation", unit: "u1-single-order", movedFrom: "build-and-test" });
+      appendStageStarted(dir, "build-and-test", ts);
+      syncOnce(dir);
+      expect(stateField(dir, "Current Stage")).toBe("build-and-test");
+    });
+  });
+
+  // A reopen inside the per-unit walk leaves Current Stage where it was and
+  // writes no `Moved From`, so a state behind the audit still catches up.
+  test("a reopen that moved nothing does not hold the sync back", () => {
+    withProject((dir) => {
+      reopenedTo(dir);
+      appendStageStarted(dir, "build-and-test", ts);
+      appendReopen(dir, { stages: "code-generation", unit: "u1-single-order" });
+      syncOnce(dir);
+      expect(stateField(dir, "Current Stage")).toBe("build-and-test");
+    });
+  });
+});
+
 describe("t218 latestStartedStageSlug filters single-stage rows (finding 2)", () => {
   test("F2: a --single STAGE_STARTED does not rewrite the main pointer", () => {
     const dir = scratchProject(true);

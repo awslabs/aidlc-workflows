@@ -1869,6 +1869,30 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "alpha" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A reopen from Build and Test moves Current Stage back with no start of its
+  // own; its rows name the stage it left (the Kiro IDE audit-sync hook keeps the
+  // move by it). A reopen inside the per-unit stages moves nothing and says so.
+  test("a reopen from Build and Test names the stage it moved back from; one inside the walk does not", () => {
+    const p = gatesApprovedUntil("code-generation");
+    for (const result of ["awaiting-approval", "approved"]) {
+      const report = tool(p, "orchestrate", [
+        "report", "--stage", "code-generation", "--result", result, "--user-input", "Approve",
+      ]);
+      expect(report.status, report.out).toBe(0);
+    }
+    expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Current Stage**: build-and-test");
+    reopenFor(p, ["--stage", "code-generation", "--unit", "alpha"]);
+    reopenFor(p, ["--stage", "code-generation", "--unit", "beta"]);
+    const rows = readAuditShardEvents(p).filter((row) =>
+      row.event === "GATE_REJECTED" && auditBlockField(row.block, "Reopen") !== null);
+    expect(rows.map((row) => [auditBlockField(row.block, "Unit"), auditBlockField(row.block, "Moved From")])).toEqual([
+      ["alpha", "build-and-test"],
+      ["beta", null],
+    ]);
+    expect(jumped(p)).toBe(0);
+    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "alpha" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // A unit's step reopened behind its stage approval, then "skip to build":
   // that unit moves on, and the stage stays approved for every other unit.
   test("after the stage gates, a jump ahead from a reopened step moves only that unit on", () => {

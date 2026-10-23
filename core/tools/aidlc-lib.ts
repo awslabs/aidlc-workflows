@@ -39267,13 +39267,30 @@ export function unitOpenCheckpoints(
 // single-stage run's STAGE_STARTED would become the "latest" and the IDE
 // sync would repoint the main Current Stage at it.
 export function latestStartedStageSlug(audit: string): string | null {
-  const started = findAllEvents(audit, "STAGE_STARTED").filter(
-    (ev) => !/^\*\*Workflow\*\*:\s*single-stage:/m.test(ev.block),
-  );
+  const started = findAllEvents(audit, "STAGE_STARTED").filter((ev) => !isSingleStageStart(ev.block));
   if (started.length === 0) return null;
   const last = started[started.length - 1];
   const m = last.block.match(/^\*\*Stage\*\*:\s*([a-z][a-z0-9-]*)\s*$/m);
   return m ? m[1] : null;
+}
+
+function isSingleStageStart(block: string): boolean {
+  return /^\*\*Workflow\*\*:\s*single-stage:/m.test(block);
+}
+
+// Whether Current Stage `stage` is where a Unit reopen moved the work back to,
+// with no main-workflow STAGE_STARTED definitely after it. `aidlc-jump.ts
+// reopen` marks its GATE_REJECTED rows `Moved From` only when it moved Current
+// Stage back from a later stage, a move that writes no start of its own, so the
+// latest start still names the stage the work left. Rows two clones wrote in
+// the same second are unordered, and then the move holds.
+export function unitReopenMovedTo(rows: readonly AuditShardEvent[], stage: string): boolean {
+  const moves = rows.filter((row) =>
+    (row.event === "STAGE_STARTED" && !isSingleStageStart(row.block)) ||
+    (row.event === "GATE_REJECTED" && auditBlockField(row.block, "Reopen") !== null &&
+      (auditBlockField(row.block, "Moved From") ?? "") !== ""));
+  return maximalAttemptEvents(moves).some((row) =>
+    row.event === "GATE_REJECTED" && gateStagesFromBlock(row.block).includes(stage));
 }
 
 // --- Data loaders ---

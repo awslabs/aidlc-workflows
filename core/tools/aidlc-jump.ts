@@ -269,6 +269,27 @@ function handleReopen(args: string[]): void {
   const changeWords = flags.via === "change"
     ? personsGateReply(pd, resolveInvokingSessionId(pd), gateStage).words
     : null;
+  // From a later stage of the same phase (Build and Test, say) the work moves
+  // back to the target as a backward jump moves it, but with no STAGE_JUMPED or
+  // STAGE_STARTED: only these Units start the step again. Each Unit's row names
+  // the stage the work moved back from, the one record of that move (the Kiro
+  // IDE audit-sync hook reads it).
+  const current = getField(content, "Current Stage")?.trim() ?? "";
+  const from = findStageBySlug(current);
+  let stagesReset: string[] = [];
+  let movedFrom: string | undefined;
+  if (from && !isPerUnitStage(from) && from.phase === targetStage.phase && stageIndex(current) > stageIndex(targetSlug)) {
+    const scope = flags.scope || getField(content, "Scope") || "feature";
+    const scopeMapping = loadScopeMapping()[scope];
+    if (!scopeMapping) error(`Unknown scope: ${scope}`);
+    const suffixes = scope === (getField(content, "Scope") || "")
+      ? parseStateStageSuffixes(content)
+      : new Map<string, "EXECUTE" | "SKIP">();
+    const moved = movedState(content, targetSlug, targetStage, "backward", scope, suffixes, scopeMapping);
+    content = moved.content;
+    stagesReset = moved.stagesReset;
+    movedFrom = current;
+  }
   for (const unit of units) {
     emitAudit(pd, "GATE_REJECTED", {
       Stage: targetSlug,
@@ -284,6 +305,7 @@ function handleReopen(args: string[]): void {
         : flags.via === "change"
           ? changeWords ?? `Reopened ${stageName} for unit ${unit} for a change.`
           : `Reopened ${stageName} for unit ${unit} (/aidlc --stage ${targetSlug}).`,
+      ...(movedFrom ? { "Moved From": movedFrom } : {}),
     });
     // Redo is the person's answer to the re-use question for this Unit's step
     // too: recorded here, so the reopened step redoes it without asking again.
@@ -301,23 +323,6 @@ function handleReopen(args: string[]): void {
     content = removeField(content, field);
   }
   content = setField(content, "Last Updated", isoTimestamp());
-  // From a later stage of the same phase (Build and Test, say) the work moves
-  // back to the target as a backward jump moves it, but with no STAGE_JUMPED:
-  // only these Units start the step again.
-  const current = getField(content, "Current Stage")?.trim() ?? "";
-  const from = findStageBySlug(current);
-  let stagesReset: string[] = [];
-  if (from && !isPerUnitStage(from) && from.phase === targetStage.phase && stageIndex(current) > stageIndex(targetSlug)) {
-    const scope = flags.scope || getField(content, "Scope") || "feature";
-    const scopeMapping = loadScopeMapping()[scope];
-    if (!scopeMapping) error(`Unknown scope: ${scope}`);
-    const suffixes = scope === (getField(content, "Scope") || "")
-      ? parseStateStageSuffixes(content)
-      : new Map<string, "EXECUTE" | "SKIP">();
-    const moved = movedState(content, targetSlug, targetStage, "backward", scope, suffixes, scopeMapping);
-    content = moved.content;
-    stagesReset = moved.stagesReset;
-  }
   writeStateFile(pd, content);
   console.log(JSON.stringify({
     reopened: targetSlug, stages, units, ...(stagesReset.length > 0 ? { stages_reset: stagesReset } : {}),

@@ -24,9 +24,11 @@ import {
   parseCheckboxes,
   readActiveDirectiveMarker,
   readAllAuditShards,
+  readAuditShardEvents,
   readStateFile,
   resolveProjectDirFromHook,
   stateFilePath,
+  unitReopenMovedTo,
 } from "../tools/aidlc-lib.ts";
 import { setStatus } from "../tools/aidlc-utility.ts";
 
@@ -112,6 +114,17 @@ if (source === "ide-audit-sync") {
     hookDebug(projectDir, "sync-workflow-state", "skip: audit slug already done/skipped", {
       auditSlug,
       auditState: auditCb.state,
+    });
+    return noop();
+  }
+  // (d) Current Stage is where a Unit reopen moved the work back to, after
+  //     that start: the reopen writes no STAGE_STARTED of its own, so the last
+  //     start names the stage the work left. Syncing would put Current Stage
+  //     back on it while the Units redo their step.
+  if (unitReopenMovedTo(readAuditShardEvents(projectDir), current)) {
+    hookDebug(projectDir, "sync-workflow-state", "skip: a Unit reopen after the last start", {
+      auditSlug,
+      current,
     });
     return noop();
   }
