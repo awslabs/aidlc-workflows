@@ -12567,7 +12567,14 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
         reject(slug, `its checkbox is not pending ([${state}]), so the plan can no longer change it. ${instead}`);
       }
       const idx = graph.findIndex((s) => s.slug === slug);
-      if (currentIdx !== -1 && idx !== -1 && idx <= currentIdx) {
+      // Reverse Engineering owed behind the cursor is one `next` goes back to,
+      // so the plan still reaches it: a skip takes it off, and on existing code
+      // an add (the skip's undo) puts it back where `next` runs it.
+      const owedRe = slug === "reverse-engineering" &&
+        (skipping || declaredProjectType(getField(content, "Project Type") ?? "") === "Brownfield") &&
+        reverseEngineeringOwedBehindCursor(skipping ? content : setStageSuffix(content, slug, "EXECUTE"),
+          recordDir(projectDir, flags.intent, flags.space));
+      if (!owedRe && currentIdx !== -1 && idx !== -1 && idx <= currentIdx) {
         const instead = idx === currentIdx
           ? (skipping ? movePast(slug) : runAlone(slug))
           : (skipping ? "The workflow does not go back to it, so there is nothing to skip." : runAlone(slug));

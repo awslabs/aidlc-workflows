@@ -949,6 +949,44 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     expect(String(next(proj).message)).toContain("execute --target reverse-engineering --direction redo --scope classic");
   });
 
+  test("skipped once it is owed, it comes off the plan, next goes on, and the undo brings it back", () => {
+    const proj = project();
+    expect(create(proj, "classic").status).toBe(0);
+    addRepo(proj);
+    expect(run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]).status).toBe(0);
+    expect(reverseEngineeringOwedBehindCursor(state(proj))).toBe(true);
+    // "it's existing code, yes, but skip the reverse engineering": next names the plan change.
+    const step = String(next(proj, ["--skip", "reverse-engineering"]).message);
+    expect(step).toContain("recompose --skip reverse-engineering --reason 'the person asked to skip it'");
+    const skip = run(UTIL, proj, ["recompose", "--skip", "reverse-engineering", "--reason", "the person asked to skip it"]);
+    expect(skip.status, said(skip)).toBe(0);
+    const s = state(proj);
+    expect(stageLine(s, "reverse-engineering")).toBe(`- [ ] reverse-engineering ${SEP} SKIP`);
+    expect(reverseEngineeringOwedBehindCursor(s)).toBe(false);
+    expect(auditText(proj)).toContain("**Stages skipped**: reverse-engineering");
+    const go = next(proj);
+    expect(go.kind).toBe("run-stage");
+    expect(go.stage).toBe("practices-discovery");
+    // The undo the skip's line names.
+    expect(step).toContain("recompose --add reverse-engineering");
+    const undo = run(UTIL, proj, ["recompose", "--add", "reverse-engineering"]);
+    expect(undo.status, said(undo)).toBe(0);
+    expect(reverseEngineeringOwedBehindCursor(state(proj))).toBe(true);
+    expect(String(next(proj).message)).toContain("execute --target reverse-engineering --direction redo --scope classic");
+  });
+
+  test("on a new project already past it, adding it stays refused and names the single run", () => {
+    const proj = project();
+    expect(create(proj, "classic").status).toBe(0);
+    expect(field(state(proj), "Current Stage")).toBe("practices-discovery");
+    const before = state(proj);
+    const add = run(UTIL, proj, ["recompose", "--add", "reverse-engineering"]);
+    expect(add.status).not.toBe(0);
+    expect(said(add)).toContain("behind the current stage");
+    expect(said(add)).toContain("--stage reverse-engineering --single");
+    expect(state(proj)).toBe(before);
+  });
+
   test("kept as a new project first, existing code said later still brings it back", () => {
     const proj = project();
     expect(create(proj, "feature", ["--skip", "reverse-engineering"]).status).toBe(0);
