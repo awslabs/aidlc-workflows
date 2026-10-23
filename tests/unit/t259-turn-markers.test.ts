@@ -49,7 +49,7 @@ import {
   STOP_HOOK_PROBE_ENV,
   turnMarkersShowConversational,
 } from "../../core/tools/aidlc-lib.ts";
-import { FIXTURES_DIR, setupIntegrationProject } from "../harness/fixtures.ts";
+import { FIXTURES_DIR, runOrchestrateNext, setupIntegrationProject } from "../harness/fixtures.ts";
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -510,10 +510,11 @@ describe("t259 the engine's last word ended the turn", () => {
           expect(printed.message, label).toContain("print its output verbatim and re-run next to carry on with the work.");
           expect(printed.narration, label).toBeUndefined();
           expect(existsSync(turnEndMarkerPath(proj)), label).toBe(false);
-          // The same turn goes on to the stage, whose questions the agent asks.
+          // The same turn goes on to the stage, whose questions the agent asks
+          // (past the stage's rules, when they come ahead of it).
           expect(run(command!.split(" ")).status, label).toBe(0);
-          const after = JSON.parse(run(["engine", "orchestrate", "next"]).stdout);
-          expect([after.kind, after.stage], label).toEqual(["run-stage", "feasibility"]);
+          const after = runOrchestrateNext(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), proj, [], { cwd: proj, env }).directive;
+          expect([after?.kind, after?.stage], label).toEqual(["run-stage", "feasibility"]);
         } else {
           expect(printed.message, label).toContain("print its output verbatim and stop.");
           expect(printed.narration, label).toBe("The work picks up at Feasibility & Constraints.");
