@@ -464,8 +464,10 @@ import {
   takeSessionSelectionNotice,
   addPendingPersonLines,
   markPersonLinesHeard,
+  markPersonLineHeardThisTurn,
   pendingPersonLines,
   personLineHeard,
+  personLineHeardThisTurn,
   PLAN_FIELD,
   PLAN_NAME_PATTERN,
   extractMarkdownSection,
@@ -483,6 +485,7 @@ import {
   waveEligible,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
+import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
   checkpointPolicyEnabled,
   loadConstructionEvidence,
@@ -2600,11 +2603,12 @@ function emit(requested: Directive): void {
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
       }
       // A program holding the lock folder is not freed by a retry or by doctor:
-      // the step is to stop it. That comes before showing an open question
-      // unpublished, whose reply would land on the question beneath it (#2047);
-      // once the program stops, the same command asks it with its marker.
+      // the step is to stop it (lockFolderHeldStep). That comes before showing
+      // an open question unpublished, whose reply would land on the question
+      // beneath it (#2047); once the program stops, the same command asks it
+      // with its marker.
       if (e instanceof ActiveDirectiveLockFolderHeldError && e.personLine) {
-        writePrepared(prepareEmission(errorDirective(e.message)));
+        writePrepared(prepareEmission(lockFolderHeldStep(projectDir, e.message)));
         return;
       }
       if (prepared.marker !== undefined && openQuestionMarkers.has(prepared.marker)) {
@@ -4079,6 +4083,19 @@ function turnEndingPrint(message: string): PrintDirective {
   const directive = printDirective(message);
   turnEndingPrints.add(directive);
   return directive;
+}
+
+// Where a command stopped on a lock folder a program holds (`line` is the
+// person's): a print, since every harness stops on an `error`, and the agent
+// may have this step of its own to take. The first stop of a turn is the
+// agent's step; a second one, after it stopped a program and ran the command
+// again, hands the person the line, so a stop that missed never loops.
+function lockFolderHeldStep(projectDir: string | null | undefined, line: string): PrintDirective {
+  const session = engineSessionId;
+  if (!projectDir || !session) return turnEndingPrint(lockFolderHeldAgentStep(line, "uncounted"));
+  const again = personLineHeardThisTurn(projectDir, session, LOCK_FOLDER_HELD_STEP_KEY);
+  if (!again) markPersonLineHeardThisTurn(projectDir, session, LOCK_FOLDER_HELD_STEP_KEY);
+  return turnEndingPrint(lockFolderHeldAgentStep(line, again ? "again" : "first"));
 }
 
 // The question for a folder set up as a new project that now holds code.
@@ -18503,11 +18520,11 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     }
   } catch (error) {
     if (!(error instanceof ActiveDirectiveLockContendedError)) throw error;
-    writePrepared(prepareEmission(errorDirective(
+    writePrepared(prepareEmission(
       error instanceof ActiveDirectiveLockFolderHeldError && error.personLine
-        ? error.message
-        : "The workflow is busy for a moment. Run the same command again.",
-    )));
+        ? lockFolderHeldStep(pd, error.message)
+        : errorDirective("The workflow is busy for a moment. Run the same command again."),
+    ));
   }
 }
 
