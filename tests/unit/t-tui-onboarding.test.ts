@@ -211,19 +211,24 @@ describe("Kiro CLI's V3 offer at launch", () => {
   });
 
   test("the offer is answered Remind me later and never Enter on another option", async () => {
+    const chat = "›  ask a question or describe a task ↵";
     let now = 0;
     const timing = { now: () => now, sleep: async (ms: number) => { now += ms; } };
     for (const [start, move] of [[0, "Down"], [2, "Up"], [1, null]] as const) {
       let caret: number = start;
+      let taken = false;
       const keys: string[] = [];
       const backend = {
-        capture: () => kiroV3Offer(caret),
+        capture: () => taken ? chat : kiroV3Offer(caret),
         send: (_session: string, key: string, _literal: boolean, noEnter: boolean) => {
           expect(noEnter).toBe(true);
           keys.push(key);
           if (key === "Down") caret++;
           else if (key === "Up") caret--;
-          else expect(caret).toBe(1);
+          else {
+            expect(caret).toBe(1);
+            taken = true;
+          }
         },
       };
       expect(await remindKiroV3OfferLater(backend, "kiro", kiroV3Offer(start), timing)).toBe(true);
@@ -237,12 +242,17 @@ describe("Kiro CLI's V3 offer at launch", () => {
       let caret = 0;
       let movedAt = 0;
       let losing: number = lost;
+      let taken = false;
       const keys: string[] = [];
       const slow = {
-        capture: () => kiroV3Offer(now - movedAt >= lagMs ? caret : caret - 1),
+        capture: () => taken ? chat : kiroV3Offer(now - movedAt >= lagMs ? caret : caret - 1),
         send: (_session: string, key: string) => {
           keys.push(key);
-          if (key === "Enter") return expect(caret).toBe(1);
+          if (key === "Enter") {
+            expect(caret).toBe(1);
+            taken = true;
+            return;
+          }
           if (losing-- > 0) return;
           caret += key === "Down" ? 1 : -1;
           movedAt = now;

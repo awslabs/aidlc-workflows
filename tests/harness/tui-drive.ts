@@ -851,9 +851,10 @@ export function kiroV3OfferNavigation(screen: string): "Up" | "Down" | "Enter" |
  * configs, so no fixture gate applies; the release journey's project is not
  * one. The other two answers change the machine's Kiro and are never sent:
  * Enter goes only on a settled screen with "Remind me later" selected, and
- * only one key is ever on its way, so the painted caret is Kiro's own. No
- * one-attempt marker: an offer painted again was not taken, and answering it
- * again is right. The Enter goes into the drive's record of the person's turns
+ * only one key is ever on its way, so the painted caret is Kiro's own. The
+ * answer returns only once the offer is off the screen, so no later poll or
+ * wait reads the answered offer as a new one; no one-attempt marker, since an
+ * offer a later launch paints is answered again. The Enter goes into the drive's record of the person's turns
  * as one more empty turn at its start, the same as the trust prompt's Enter.
  */
 export async function remindKiroV3OfferLater(
@@ -880,9 +881,19 @@ export async function remindKiroV3OfferLater(
       continue;
     }
     if (navigation === "Enter") {
+      const answered = screen;
       await backend.send(session, "Enter", false, true);
-      writeTuiTrace(session, "kiro_v3_offer_remind_later", { keys: [...moves, "Enter"], screen });
-      return true;
+      // Kiro keeps the answered offer painted while it starts its chat, whose
+      // first screen takes a second Enter as "No, exit".
+      while (now() < deadline) {
+        await pause(POLL_INTERVAL_MS);
+        screen = await backend.capture(session, false, "physical");
+        if (!kiroV3OfferNavigation(screen)) {
+          writeTuiTrace(session, "kiro_v3_offer_remind_later", { keys: [...moves, "Enter"], screen: answered });
+          return true;
+        }
+      }
+      throw new Error(`Kiro did not take Remind me later on its V3 offer; refusing another Enter\n---- last pane ----\n${screen}`);
     }
     if (moves.length === 2) break;
     moves.push(navigation);
