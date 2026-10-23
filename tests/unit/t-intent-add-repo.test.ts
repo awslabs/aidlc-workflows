@@ -110,11 +110,11 @@ function bareRepo(owner: string, name: string): string {
   return bare;
 }
 
+// A backslash inside a quoted git config value is an escape, so the base is
+// written with forward slashes, which git takes on Windows too.
 function insteadOf(prefix: string, owner: string): void {
-  writeFileSync(
-    gitConfig,
-    `${readFileSync(gitConfig, "utf-8")}[url "${join(gitHome, "remotes", owner)}/"]\n\tinsteadOf = ${prefix}\n`,
-  );
+  const base = join(gitHome, "remotes", owner).replaceAll("\\", "/");
+  writeFileSync(gitConfig, `${readFileSync(gitConfig, "utf-8")}[url "${base}/"]\n\tinsteadOf = ${prefix}\n`);
 }
 
 function stagingLeft(): string[] {
@@ -501,7 +501,7 @@ describe("intent add-repo clones a repo that is not here yet", () => {
 
   test("a repo repos.json declares but nobody cloned is cloned from its own entry; repos.json is left as it is", () => {
     bareRepo("acme", "payments");
-    const raw = `{ "org": "elsewhere", "repos": [{ "name": "app-a" }, { "name": "payments", "url": "${join(gitHome, "remotes", "acme", "payments.git")}" }] }\n`;
+    const raw = `{ "org": "elsewhere", "repos": [{ "name": "app-a" }, { "name": "payments", "url": ${JSON.stringify(join(gitHome, "remotes", "acme", "payments.git"))} }] }\n`;
     writeFileSync(join(proj, "repos.json"), raw);
     const r = utility(["intent", "add-repo", "payments"]);
     expect(r.rc, r.out).toBe(0);
