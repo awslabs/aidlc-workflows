@@ -338,6 +338,7 @@ import {
   parseKnowledgeCommand,
   openDecisionBlock,
   hasPendingDecision,
+  decisionWaitsOnPerson,
   type PluginCommand,
   parsePluginCommand,
   PHASE_NUMBERS,
@@ -3467,24 +3468,26 @@ function unitMajorStopStage(projectDir: string, stateContent: string, currentSlu
 // in hooks/aidlc-continue-workflow.ts), so the two agree about the same turn:
 // a unit-major walk, and a Unit's checkpoint (its learnings question and
 // approval), run ahead of Current Stage and log under the stage `next` directs,
-// and that stage's open question counts too. Null under autonomous
-// Construction (no person is answering), outside a [-] stage, or when the
-// state or audit cannot be read (never fail `next`).
+// and that stage's open question counts too. Which question waits on the
+// person is decisionWaitsOnPerson's, the Stop hook's reader too: under
+// autonomous Construction the person who is there answers it; an unattended
+// driver has nobody to answer a plain one. Null outside a [-] stage, or when
+// the state or audit cannot be read (never fail `next`).
 function openStageQuestion(projectDir: string, stateContent: string): { stage: string; block: string } | null {
   try {
-    if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") return null;
     // `**Current Stage**:` with or without the bold markers or backticks, as the hook reads it.
     const stage = (stateContent.match(/Current Stage\*{0,2}:?\s*`?([^\n`]*)`?/)?.[1] ?? "").trim();
     if (stage.length === 0) return null;
     if (parseCheckboxes(stateContent).find((row) => row.slug === stage)?.state !== "in-progress") return null;
+    const waits = (block: string | null): block is string => block !== null && decisionWaitsOnPerson(stateContent, block);
     const block = openDecisionBlock(projectDir, stage, "STAGE_STARTED");
-    if (block !== null) return { stage, block };
+    if (waits(block)) return { stage, block };
     const ahead = unitMajorStopStage(projectDir, stateContent, stage);
     if (ahead === null || ahead === stage || !hasPendingDecision(projectDir, ahead, undefined, undefined, true)) {
       return null;
     }
     const aheadBlock = openDecisionBlock(projectDir, ahead);
-    return aheadBlock === null ? null : { stage: ahead, block: aheadBlock };
+    return waits(aheadBlock) ? { stage: ahead, block: aheadBlock } : null;
   } catch {
     return null;
   }

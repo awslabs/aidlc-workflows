@@ -25,7 +25,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
@@ -483,6 +483,22 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
     expect(shown.message).toContain("end your turn");
     expect(shown.message).toContain("answer --stage functional-design --details");
     expect(shown.narration).toContain("Picking up where we left off");
+  });
+
+  // Under "Continue automatically" the person who is there still answers the
+  // questions the stage asks them, so a new chat shows it again as well.
+  test("under autonomous Construction, shows the stage's open chat question again too", () => {
+    const p = construction();
+    writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8").replace(
+      "- **Construction Autonomy Mode**: gated", "- **Construction Autonomy Mode**: autonomous"));
+    appendAuditEntry("STAGE_STARTED", { Stage: "functional-design" }, p);
+    const asked = tool(p, "log", ["decision", "--stage", "functional-design", "--session", OLD,
+      "--decision", "Which name do you want for the module?", "--options", "core,main"]);
+    expect(asked.status, asked.out).toBe(0);
+    const shown = bare(p, NEW);
+    expect(shown.kind, JSON.stringify(shown)).toBe("print");
+    expect(shown.message).toContain('"Which name do you want for the module?"');
+    expect(shown.message).toContain("end your turn");
   });
 
   test("a Construction policy question comes back in its own words, so the pick in its question box answers it", () => {

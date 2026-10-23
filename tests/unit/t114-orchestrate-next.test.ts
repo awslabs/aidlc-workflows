@@ -1633,17 +1633,49 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     }
   });
 
-  test("control: autonomous Construction leaves prose to the routing ask, as the Stop hook does", () => {
-    proj = createOrchestrationTestProject();
-    seedStateFile(proj, MID_IDEATION);
+  // Under "Continue automatically" a question the stage logged is still the
+  // person's to answer, as the Stop hook waits on it; an unattended driver has
+  // nobody to answer a plain one, only a checkpoint question (the same rule).
+  const autonomous = (): void => {
     const statePath = seededStateFile(proj);
     writeFileSync(
       statePath,
       readFileSync(statePath, "utf-8").replace("- **Scope**: feature", "- **Scope**: feature\n- **Construction Autonomy Mode**: autonomous"),
       "utf-8",
     );
+  };
+  const unattended = (args: string[]): Directive => JSON.parse(runNext(proj, args, { AIDLC_UNATTENDED: "1" }).out) as Directive;
+
+  test("autonomous Construction: prose over the open logged question gets a command for each reading", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    autonomous();
     seedAudit(openDecision);
-    expect(asWork([ANSWER]).ask_type).toBe("new-work-routing");
+    const d = directive([ANSWER]);
+    expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
+    expect(d.message).toContain('Stage "feasibility" has a question you asked');
+    expect(d.message).toContain("answer --stage feasibility --details");
+  });
+
+  test("control: an unattended driver under autonomous Construction leaves prose at a plain question to the routing ask", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    autonomous();
+    seedAudit(openDecision);
+    const d = unattended([ANSWER]);
+    expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
+    expect(d.message).not.toContain("has a question you asked");
+    expect(d.message).toContain("may ask to redo, jump to a stage, or start fresh");
+  });
+
+  test("an unattended driver under autonomous Construction still reads a checkpoint question as open", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    autonomous();
+    seedAudit([openDecision[0], { ...openDecision[1], checkpoint: "Construction Verification Command" }]);
+    const d = unattended([ANSWER]);
+    expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
+    expect(d.message).toContain('Stage "feasibility" has a question you asked');
   });
 
   test("control: an answered question leaves prose to the routing ask", () => {

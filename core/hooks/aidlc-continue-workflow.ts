@@ -207,7 +207,7 @@ import {
   hasCurrentSharedResumeWait,
   turnEndIsOpen,
   hasCurrentSharedGuardRecoveryWait,
-  auditBlockField,
+  decisionWaitsOnPerson,
   openPendingDecision,
   humanTurnMintAllowed,
   humanRepliedSinceGate,
@@ -883,14 +883,13 @@ function isPendingQuestionStop(
 // afterward. That audit handshake is the positive human-wait signal for prompts
 // that are not represented by a blank tag in `<slug>-questions.md`, such as the
 // §13 learning selection and "Anything to add?" prompts. Keep the same strict
-// stage-state gate as the question-file carve-out. Under autonomous
-// Construction a person who is there still answers the questions the agent
-// asks them (the protocol keeps failures theirs, and this hook's own carry-on
-// step tells the agent to log a question and end its turn), so a logged
-// question waits as it does elsewhere. An unattended driver (AIDLC_UNATTENDED=1)
-// has nobody to answer: there only a checkpoint question waits (the
-// verification command, a plan approval, a summary confirmation, a
-// Construction policy change), and the loop stays alive for a plain one.
+// stage-state gate as the question-file carve-out. Which logged question waits
+// on the person is decisionWaitsOnPerson's (aidlc-lib.ts), the reader `next`
+// uses too: under autonomous Construction a person who is there still answers
+// the questions the agent asks them (the protocol keeps failures theirs, and
+// this hook's own carry-on step tells the agent to log a question and end its
+// turn); an unattended driver (AIDLC_UNATTENDED=1) has nobody to answer a
+// plain one, so there the loop stays alive for it.
 function isPendingDecisionStop(
   projectDir: string,
   stateContent: string,
@@ -898,10 +897,8 @@ function isPendingDecisionStop(
   activeUnit?: string,
 ): boolean {
   try {
-    const checkpointsOnly = !humanTurnMintAllowed() &&
-      getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous";
     const waitsOnThePerson = (open: string | null): boolean =>
-      open !== null && (!checkpointsOnly || auditBlockField(open, "Checkpoint") !== null);
+      open !== null && decisionWaitsOnPerson(stateContent, open);
     const currentSlug = currentStageSlug(stateContent);
     const teamUnitMajorDirective =
       isTeamUnitOwnership(stateContent) &&

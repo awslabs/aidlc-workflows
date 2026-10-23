@@ -15333,6 +15333,19 @@ export function hasPendingDecision(
   return openPendingDecision(projectDir, stage, afterEvent, unit, workflowAttempt) !== null;
 }
 
+// Whether an open logged question (its DECISION_RECORDED block) waits on the
+// person. Under autonomous Construction a person who is there still answers
+// the questions the agent asks them; an unattended driver (AIDLC_UNATTENDED=1)
+// has nobody to answer, so there only a checkpoint question waits (the
+// verification command, a plan approval, a summary confirmation, a
+// Construction policy change). The Stop hook (isPendingDecisionStop) and
+// `next` (openStageQuestion) both read it here.
+export function decisionWaitsOnPerson(stateContent: string, block: string): boolean {
+  return humanTurnMintAllowed() ||
+    getField(stateContent, "Construction Autonomy Mode")?.trim() !== "autonomous" ||
+    auditBlockField(block, "Checkpoint") !== null;
+}
+
 // The open DECISION_RECORDED block itself (null when none is open), so a reader
 // can tell a checkpoint question (its `Checkpoint` field) from a plain one.
 export function openPendingDecision(
