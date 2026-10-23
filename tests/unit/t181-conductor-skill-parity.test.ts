@@ -1702,6 +1702,10 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "--on-instruction --message <id>`, with `<id>` the message of theirs that left it to you",
       '**SAY:** "You left <the question> to me, so I chose <the choice>. Say if you want something else."',
       '**SAY:** "Approvals are still yours: I\'ll stop at each stage for you to approve."',
+      // "Do not ask me anything" beside the choice waives the summary confirmation
+      // for the work; an isolated run reads only its own scope's, so it still asks.
+      "Outside an isolated `--single` run, when the message that left the questions to you also says not to ask them anything",
+      "run `{{INVOKE}} engine config set summary-confirmation off --message <id>` with that message's id",
       "When the person's request already chose",
       "answers in their own words, those words are their answer",
     ]) {

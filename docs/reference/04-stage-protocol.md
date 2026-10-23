@@ -597,6 +597,12 @@ ask targeted follow-up. Do NOT proceed until resolved.
   the recommended answers: ... Say if you want any of them changed."), and
   once per piece of work: "Approvals are still yours: I'll stop at each stage
   for you to approve." A checkpoint or an approval is never left to the agent.
+  Outside an isolated `--single` run, a message that leaves the questions to the
+  agent and also says not to ask anything waives the summary confirmation for
+  the piece of work: the agent runs `config set summary-confirmation off
+  --message <id>` on that message, says in one line that it is off and can be
+  turned back on, and generates. An isolated run reads only its own scope's
+  summary setting, so it still asks.
 
 ### Plan and Question File Location
 

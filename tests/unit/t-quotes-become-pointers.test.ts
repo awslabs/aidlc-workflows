@@ -17,10 +17,11 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { join } from "node:path";
 import {
-  auditBlockField, formatGuardPolicy, getField, readAuditShardEvents, setGuardPolicyLine,
+  auditBlockField, checkSummaryConfirmationEvidence, findStageBySlug, formatGuardPolicy, getField, readAuditShardEvents,
+  setGuardPolicyLine,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
-  AIDLC_SRC, cleanupTestProject, createTestProject, seedAidlcMemory, seedStateFile,
+  AIDLC_SRC, cleanupTestProject, createTestProject, seedAidlcMemory, seededStateFile, seedStateFile,
 } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
@@ -171,6 +172,29 @@ describe.each(POLICIES)("Guard Policy %s: a choice left to the agent names the m
     expect(r.out).toContain(`message ${theirs} was not sent on this piece of work`);
     expect(r.out).not.toContain("you pick");
     expect(answers(proj)).toHaveLength(0);
+  });
+
+  // The stage protocol's waiver: questions left to the agent by someone who
+  // also said not to ask them anything. The setter on that same message turns
+  // the summary confirmation off for this work, and the stage owes none.
+  test("left to the agent and not to be asked: the summary confirmation goes off on that message, and none is owed", () => {
+    const proj = project();
+    const words = "Use the recommended answer for every question and finish the stage now. Do not ask me anything.";
+    const id = said(proj, words);
+    ask(proj);
+    const r = log(proj, ["answer", "--stage", STAGE, "--details", "Q5: A; Q6: A; Q7: A", "--on-instruction", "--message", id]);
+    expect(r.status, r.out).toBe(0);
+    const off = run(proj, [DISPATCHER, "engine", "config", "set", "summary-confirmation", "off", "--message", id,
+      "--project-dir", proj]);
+    expect(off.status, off.out).toBe(0);
+    expect(off.out).toContain(`is off for this piece of work, because you said: "${words}"`);
+    const row = rows(proj, "CEREMONY_SET").at(-1);
+    expect(field(row, "Key")).toBe("summary_confirmation");
+    expect(field(row, "Source")).toBe("you");
+    expect(field(row, "Message Id")).toBe(id);
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    expect(checkSummaryConfirmationEvidence(proj, findStageBySlug(STAGE)!, { stateContent: state }))
+      .toMatchObject({ ok: true, required: false });
   });
 
   test("the old value form is the agent's own text: recorded, no claim, no refusal", () => {
