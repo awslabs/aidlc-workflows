@@ -739,13 +739,18 @@ export async function judge(reply: Reply, tool: LiveTool, rig: LiveRig, ex: Exch
   return { reply, tool, failures, decisions, refusalsMet, asks, read: read.slice(-1500) };
 }
 
+/** The project as the person's chat finds it at the reply's wait. */
+export async function seedWait(proj: string, wait: Question): Promise<void> {
+  return buildQuestion(proj, wait);
+}
+
 /** Drive and judge one reply on one tool. */
 /** `keep`: a folder that keeps each reply's audit and what the agent told the person, read after the run. */
 export async function driveReply(reply: Reply, tool: LiveTool, judgeDir: string, keep: string | null = null): Promise<Verdict> {
   const rig = liveRig(tool);
   let ex: Exchange | null = null;
   try {
-    await buildQuestion(rig.proj, reply.wait);
+    await seedWait(rig.proj, reply.wait);
     if (reply.beside) {
       spawnTool([process.execPath, join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-log.ts"), "decision", "--stage", "requirements-analysis",
         "--decision", reply.beside.decision, "--options", reply.beside.options.join(","), "--project-dir", rig.proj], rig.proj, rig.env);
