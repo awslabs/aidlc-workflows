@@ -472,7 +472,7 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     const r = utility(["intent", "add-repo", "payments", "--url", missing]);
     expect(r.rc).not.toBe(0);
     expect(r.out).toContain(`Could not clone payments from ${missing}: `);
-    expect(r.out).toContain(`Nothing was changed. To clone it yourself, run git clone -- ${missing} "${join(proj, "payments")}", then add it again.`);
+    expect(r.out).toContain(`Nothing was changed. To clone it yourself, run git clone -- "${missing}" "${join(proj, "payments")}", then add it again.`);
     expect(r.out).not.toContain("Cloning into");
     expect(repos()).toEqual(["app-a"]);
     expect(audit()).not.toContain("INTENT_REPOS_CHANGED");
@@ -485,7 +485,19 @@ describe("intent add-repo clones a repo that is not here yet", () => {
     const r = utility(["intent", "add-repo", "payments", "--url", "https://user:s3cret-tok@127.0.0.1:9/acme/payments.git"]);
     expect(r.rc).not.toBe(0);
     expect(r.out).toContain("Could not clone payments from https://***@127.0.0.1:9/acme/payments.git: ");
+    expect(r.out).toContain(`run git clone -- <the address with its credential> "${join(proj, "payments")}", then add it again.`);
     expect(r.out).not.toContain("s3cret-tok");
+  });
+
+  test("a failed clone of a repo repos.json puts on a branch names that branch in the command to run by hand", () => {
+    const missing = join(gitHome, "nowhere", "payments.git");
+    writeFileSync(
+      join(proj, "repos.json"),
+      `{ "org": "acme", "repos": [{ "name": "app-a" }, { "name": "payments", "url": ${JSON.stringify(missing)}, "branch": "release" }] }\n`,
+    );
+    const r = utility(["intent", "add-repo", "payments"]);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain(`To clone it yourself, run git clone --branch release -- "${missing}" "${join(proj, "payments")}", then add it again.`);
   });
 
   test("no repos.json and no --url: one line says what to give, and nothing changes", () => {

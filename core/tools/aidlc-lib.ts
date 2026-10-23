@@ -28038,8 +28038,9 @@ function readStageBaseline(
 // the baseline as it was at the add, so its existing files are nobody's change;
 // so do the workspace files a clone's install wrote (CLONE_WRITES_AT_ROOT). A
 // repo the baseline already lists is never touched; the latest addition for a
-// repo wins. An addition missing on this machine leaves the baseline missing,
-// as a missing baseline is.
+// repo wins. A repo no longer in the work leaves the baseline, as it left the
+// walk (workspaceSourceState walks intentRepos). An addition missing on this
+// machine leaves the baseline missing, as a missing baseline is.
 function withRepoBaselineAdditions(
   projectDir: string,
   stageSlug: string,
@@ -28050,12 +28051,17 @@ function withRepoBaselineAdditions(
   space?: string,
 ): SourceBaselineResult {
   if (baseline.state !== "ready" || from === null) return baseline;
+  const repos = new Set(intentRepos(projectDir, intent, space));
+  const inWork = (repo: string): boolean => repo === "" || repos.size === 0 || repos.has(repo);
+  const kept: WorkspaceSourceListing = new Map(
+    [...baseline.listing].filter(([key]) => inWork(splitSourcePathKey(key)?.repo ?? "")),
+  );
   const additions = sortAttemptEvents(rows.filter((row) =>
     row.event === "INTENT_REPOS_CHANGED" &&
     auditBlockField(row.block, REPO_BASELINE_ADDITION_FIELD) !== null &&
     !attemptEventDefinitelyBefore(row, from)));
-  if (additions.length === 0) return baseline;
-  const listed = new Set([...baseline.listing.keys()].map((key) => splitSourcePathKey(key)?.repo ?? ""));
+  if (additions.length === 0) return kept.size === baseline.listing.size ? baseline : { state: "ready", listing: kept };
+  const listed = new Set([...kept.keys()].map((key) => splitSourcePathKey(key)?.repo ?? ""));
   const joined = new Map<string, WorkspaceSourceListing>();
   const written = new Map<string, string>();
   for (const row of additions) {
@@ -28070,13 +28076,13 @@ function withRepoBaselineAdditions(
         if (cloned && parsed !== null && CLONE_WRITES_AT_ROOT.has(parsed.path)) written.set(key, entry);
         continue;
       }
-      if (listed.has(repo)) continue;
+      if (listed.has(repo) || !inWork(repo)) continue;
       if (!byRepo.has(repo)) byRepo.set(repo, new Map());
       byRepo.get(repo)!.set(key, entry);
     }
     for (const [repo, entries] of byRepo) joined.set(repo, entries);
   }
-  const listing: WorkspaceSourceListing = new Map(baseline.listing);
+  const listing: WorkspaceSourceListing = new Map(kept);
   for (const entries of joined.values()) for (const [key, entry] of entries) listing.set(key, entry);
   for (const [key, entry] of written) listing.set(key, entry);
   return { state: "ready", listing };

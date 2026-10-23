@@ -6577,6 +6577,30 @@ describe("t314 a repo added during the work joins the stage-entry baseline", () 
     rmSync(bare, { recursive: true, force: true });
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  // The work's current repos are what the stage walks now, so a repo that left
+  // the work leaves the baseline too.
+  test("a repo added and removed again leaves nothing to claim", () => {
+    intent("add-repo", "payments");
+    intent("remove-repo", "payments");
+    reviewUnitsInAppA();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("payments/");
+    expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a repo the stage began with and set-repos left out leaves nothing to claim", () => {
+    const registry = join(intentsDirOf(proj), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = ["app-a", "payments"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    restartBaseline(proj);
+    intent("set-repos", "app-a");
+    reviewUnitsInAppA();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("payments/");
+    expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("after a remove and a second add, the latest add's listing is the one that counts", () => {
     intent("add-repo", "payments");
     commitIn("payments", "README.md", "# payments, edited between the adds\n");

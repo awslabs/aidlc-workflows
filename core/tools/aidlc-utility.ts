@@ -9420,12 +9420,13 @@ function handleIntentRepos(
     try {
       staged = stageWorkspaceRepo(projectDir, clone.org, clone.repo);
     } catch (err) {
-      const address = maskUserinfo(clone.repo.url ?? `git@github.com:${clone.org}/${name}.git`);
+      const url = clone.repo.url ?? `git@github.com:${clone.org}/${name}.git`;
+      const address = maskUserinfo(url);
       const why = err instanceof CloneFailure ? err.reason : maskUserinfo(errorMessage(err));
-      die(
-        `Could not clone ${name} from ${address}: ${why}. Nothing was changed. To clone it yourself, run ` +
-          `git clone -- ${address} "${target}", then add it again.`,
-      );
+      // The clone stageWorkspaceRepo makes, with the credential left for the person to put back.
+      const byHand = `git clone ${clone.repo.branch ? `--branch ${clone.repo.branch} ` : ""}-- ` +
+        `${address === url ? `"${url}"` : "<the address with its credential>"} "${target}"`;
+      die(`Could not clone ${name} from ${address}: ${why}. Nothing was changed. To clone it yourself, run ${byHand}, then add it again.`);
     }
   }
   const outcome = withAuditLock(projectDir, () => {
