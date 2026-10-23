@@ -1864,6 +1864,7 @@ async function mutationIntent(
     }
     shellCommand = command;
     const {
+      leadingDirectoryChange,
       shellCommandAltersExecutableResolution,
       shellCommandInvocationDetails,
       shellWriteTargets,
@@ -1876,13 +1877,22 @@ async function mutationIntent(
     const powerShellCommand = powerShellHint
       ? powerShellReading(command, shellCommandInvocationDetails)
       : null;
-    const analysed = powerShellCommand ?? command;
     const dialect: ShellDialect = {
       powerShell: powerShellCommand !== null,
       pathsAsWritten: powerShellCommand !== null,
       enginePaths: powerShellCommand !== null || process.platform === "win32",
     };
-    targets = shellWriteTargets(analysed, cwd);
+    // `cd <folder> && <command>` runs <command> from <folder>, so it is read
+    // from there, each time the line starts by moving to a folder the reader
+    // is certain of. Any other move stays opaque (shellInvocationNeedsApproval).
+    let analysed = powerShellCommand ?? command;
+    let from = cwd;
+    const shell = dialect.powerShell ? "powershell" : "posix";
+    for (let move = leadingDirectoryChange(analysed, from, shell); move !== null;
+      move = leadingDirectoryChange(analysed, from, shell)) {
+      ({ dir: from, rest: analysed } = move);
+    }
+    targets = shellWriteTargets(analysed, from);
     const invocations = shellCommandInvocationDetails(analysed);
     const dynamic =
       shellUsesDynamicEvaluation(analysed) ||
@@ -1890,14 +1900,14 @@ async function mutationIntent(
     opaqueShell =
       dynamic ||
       invocations.some((invocation) =>
-        shellInvocationNeedsApproval(projectDir, cwd, invocation, targets.length > 0, analysed, dialect, context)
+        shellInvocationNeedsApproval(projectDir, from, invocation, targets.length > 0, analysed, dialect, context)
       );
     // A command that names AI-DLC and that the shell reading refused: an
     // untrusted spelling (a retained version, a copy of the tools outside the
-    // trusted folder, a shim), a wrapper or a `cd` elsewhere, a second command
-    // beside it, or a command engineCommandAdmitted refuses. The passes below
-    // for a command that writes nothing never admit it: it lives or dies by
-    // the shell reading.
+    // trusted folder, a shim), a wrapper or a `cd` it cannot follow, a second
+    // command beside it, or a command engineCommandAdmitted refuses. The passes
+    // below for a command that writes nothing never admit it: it lives or dies
+    // by the shell reading.
     const looksLikeEngine = invocations.some((invocation) =>
       normalizedCommandName(invocation.executable ?? invocation.name).replace(/\.(?:cmd|ps1)$/, "") === "aidlc" ||
       invocation.args.some((arg) => /^aidlc(?:-[A-Za-z0-9._-]+)?\.ts$/.test(basename(arg)))) ||

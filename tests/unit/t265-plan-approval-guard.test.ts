@@ -3148,6 +3148,8 @@ describe("t265b hook lifecycle", () => {
         `cd ${proj}; aidlc ${next}`,
         `cd ${proj}; aidlc --version`,
         `Set-Location -LiteralPath '${proj}'; aidlc ${next} 2>$null | Select-Object -Last 1`,
+        // A location change moves the reading: the engine run from a subfolder.
+        `cd '${join(proj, "other")}'; aidlc ${next}`,
         // A program that writes nothing is not refused for its spelling: a
         // path or an extension names some other program, and that program is
         // neither the engine nor a write.
@@ -3177,7 +3179,6 @@ describe("t265b hook lifecycle", () => {
         `aidlc ${next} 2> src/inline.ts`,
         "Get-Content (Set-Content src/inline.ts code)",
         "Get-ChildItem | Select-Object @{n='x';e={Remove-Item src/app.ts}}",
-        `cd '${join(proj, "other")}'; aidlc ${next}`,
         // A wrapper is not read as plain PowerShell, so the command is not read whole.
         "env Get-Content aidlc/x.md",
       ]) {
@@ -3316,6 +3317,79 @@ describe("t265b hook lifecycle", () => {
       rmSync(proj, { recursive: true, force: true });
       rmSync(machine, { recursive: true, force: true });
       rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  // The rest of #2456's case: a line that starts with a `cd` is read from the
+  // folder the `cd` moves to, the way the shell runs it, so the build still
+  // waits there. While the plan waits, a write into the project after a `cd` is
+  // refused, from a subfolder and from outside, under both readings, and so is
+  // the completion report; a write outside the project after a `cd` there is
+  // judged as that write is; a `cd` the reader cannot follow keeps the starting
+  // folder's reading. The refusal's way on runs as named and with the `cd` too.
+  test("a line that starts with a cd is read from where the cd leads: a write into the project still waits for the plan", () => {
+    const proj = scratchProject();
+    const outside = mkdtempSync(join(realpathSync.native(tmpdir()), "aidlc-t265-cd-outside-"));
+    try {
+      seedState(proj);
+      mkdirSync(join(proj, "src"), { recursive: true });
+      mkdirSync(join(proj, "other"), { recursive: true });
+      writeFileSync(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), "// installed tool fixture\n");
+      const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+      const p = shellQuoted(proj);
+      const named = "bun .claude/tools/aidlc-orchestrate.ts next";
+      // VS Code hands a hook `c:\...` where an agent writes `C:\...`.
+      const lowerDrive = (path: string) => path.replace(/^[A-Z](?=:)/, (drive) => drive.toLowerCase());
+      const upperDrive = (path: string) => path.replace(/^[a-z](?=:)/, (drive) => drive.toUpperCase());
+      for (const asked of [false, true]) {
+        seedUnit(proj, null, { plan: true, answer: null });
+        if (asked) {
+          writeActiveDirectiveMarker(proj, {
+            kind: "ask", ask_type: "plan-approval", stage: "code-generation",
+            state_sha256: stateDigest(readFileSync(statePath, "utf-8")),
+          });
+        }
+        for (const marked of [false, true]) {
+          const mark = marked ? { aidlc_shell: "powershell" } : {};
+          for (const terminal of [join(proj, "other"), outside]) {
+            const run = (command: string) => runHook(proj, { ...BASH(command), cwd: terminal, ...mark });
+            const where = `${asked ? "asked" : "written"} ${marked ? "powershell" : "posix"} in ${terminal}`;
+            for (const command of [
+              `cd ${p} && echo x > src/app.ts`,
+              `cd ${p}; echo x > src/app.ts`,
+              `cd ${shellQuoted(join(proj, "src"))} && echo x > app.ts`,
+              `cd ${shellQuoted(outside)} && echo x > ${shellQuoted(join(proj, "src", "app.ts"))}`,
+              `cd ${p} && aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"`,
+              `(cd ${p} && echo x > src/app.ts)`,
+              `cd "$P" && echo x > src/app.ts`,
+            ]) {
+              const refused = run(command);
+              expect(refused.code, `${where}: ${command}\n${refused.stderr}`).toBe(2);
+            }
+            if (!asked) expect(run(`cd ${p} && echo x > src/app.ts`).stderr).toContain(`\`${named}\``);
+            for (const command of [
+              // A `>` into a file is not plain PowerShell, so under the mark this
+              // write waits as it does without the `cd`.
+              ...(marked ? [] : [`cd ${shellQuoted(outside)} && echo x > out.txt`]),
+              // Unquoted, a Windows path keeps its backslashes only in PowerShell.
+              ...(marked || process.platform !== "win32" ? [`cd ${proj}; aidlc doctor`] : []),
+              `cd ${p} && ${named}`,
+            ]) {
+              const passed = run(command);
+              expect(passed.code, `${where}: ${command}\n${passed.stderr}`).toBe(0);
+            }
+          }
+          const fromRoot = runHook(proj, { ...BASH(named), cwd: proj, ...mark });
+          expect(fromRoot.code, fromRoot.stderr).toBe(0);
+          const drive = runHook(proj, {
+            ...BASH(`cd ${shellQuoted(upperDrive(join(proj, "other")))}; aidlc doctor`), cwd: lowerDrive(proj), ...mark,
+          });
+          expect(drive.code, drive.stderr).toBe(0);
+        }
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
     }
   });
 
