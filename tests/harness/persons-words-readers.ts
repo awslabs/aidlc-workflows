@@ -1006,11 +1006,11 @@ export const STILL_TO_GO: Record<string, ToGo> = {
   // S2b: the ids.
   [`${ORCH}#takePersonsOwnLine`]: { use: "decides", slice: "S2b", row: "R7 (reading-lead: S2b)", why: "\"already read\" compares the person's words with the words a reading step kept; S2b compares the message id; the line itself stays the /aidlc parse (then ALLOWED)" },
   "core/tools/aidlc-question-store.ts#wordsAlreadyRead": { use: "decides", slice: "S2b", row: "R7 (reading-lead: S2b)", why: "as above", from: [`${ORCH}#takePersonsOwnLine`] },
-  [`${ORCH}#emit`]: { use: "decides", slice: "S6", row: "R28 (lean, reading-lead to confirm)", why: "a routed request's words withdrawn from the plan ask's replies by text, and handed to notePlanApprovalAskReply" },
-  [`${ORCH}#withdrawRoutedWords`]: { use: "decides", slice: "S6", row: "R28 (lean, reading-lead to confirm)", why: "drops kept reply lines equal to a routed request's words; as withdrawSettingWords" },
-  [`${ORCH}#planProposalDirective`]: { use: "decides", slice: "S2b", row: "R7 (lean, reading-lead to confirm)", why: "reuses a kept question whose text equals the request; S2b compares the message id" },
-  [`${ORCH}#freshWorkRoute`]: { use: "decides", slice: "S2b", row: "R7 (lean, reading-lead to confirm)", why: "as above", from: [`${ORCH}#routeNext`] },
-  [`${ORCH}#routeNext`]: { use: "decides", slice: "S2b", row: "R7 (lean, reading-lead to confirm)", why: "next itself: through planProposalDirective; otherwise it quotes and previews their request (then ALLOWED)" },
+  [`${ORCH}#emit`]: { use: "decides", slice: "S2b", row: "R7 (reading-lead, 2026-10-23)", why: "a routed request's words withdrawn from the plan ask's replies by text, and handed to notePlanApprovalAskReply" },
+  [`${ORCH}#withdrawRoutedWords`]: { use: "decides", slice: "S2b", row: "R7 (reading-lead, 2026-10-23)", why: "drops kept reply lines equal to a routed request's words (the routing question's text); S2b names the message" },
+  [`${ORCH}#planProposalDirective`]: { use: "decides", slice: "S2b", row: "R7 (reading-lead, 2026-10-23)", why: "reuses a kept question whose text equals the request; S2b compares the message id" },
+  [`${ORCH}#freshWorkRoute`]: { use: "decides", slice: "S2b", row: "R7 (reading-lead, 2026-10-23)", why: "as above", from: [`${ORCH}#routeNext`] },
+  [`${ORCH}#routeNext`]: { use: "decides", slice: "S2b", row: "R7 (reading-lead, 2026-10-23)", why: "next itself: through planProposalDirective; otherwise it quotes and previews their request (then ALLOWED)" },
   // S6: quotes become pointers; the setters name their message.
   [`${STORE}#personsSaidWords`]: { use: "decides", slice: "S6", row: "R27", why: "gathers everything they said for a quote to be found in" },
   [`${STORE}#holdsQuote`]: { use: "decides", slice: "S6", row: "R27", why: "finds the agent's quote inside their words", from: [`${LOG}#handleAnswer`] },
