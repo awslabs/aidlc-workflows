@@ -42,6 +42,11 @@
 //                   session's own model and effort live in the person's
 //                   PERSONAL Kiro settings (aidlc-kiro-session.ts): a project
 //                   chat.modelDefaults replaces that whole map, so none ships.
+//   - Devin CLI     agent .md frontmatter `model:` only (effort rides inside
+//                   the model id). Every tier ships `model: inherit`, the
+//                   measured parent-model value — an OMITTED key runs the
+//                   organization's default subagent model instead (see the
+//                   devin slot's comment in TierProjection).
 //
 // Kiro collapse rule (dormant while no tier pins a Kiro model): two tiers
 // whose Kiro model IDs are equal are the same tier on Kiro (there is no
@@ -112,10 +117,17 @@ export type TierProjection = {
    *  accounts reject every named model), so a pinned id would hard-fail
    *  installs on lower plans; agents inherit the session model instead. */
   cursor: { model: string | null };
-  /** Devin CLI agent surfaces: model-only BY DESIGN, like copilot — the
-   *  harness inherits the session model and there is no pinnable value, so
-   *  every tier ships null. */
-  devin: { model: null };
+  /** Devin CLI agent .md frontmatter `model:`. Model-only BY DESIGN — Devin
+   *  carries effort inside the model id (claude-sonnet-5-medium), so a
+   *  profile has no effort key to project. Measured on devin 3000.11.92
+   *  (tests/e2e/t-exec-devin-subagent-model.serial.test.ts): a profile
+   *  WITHOUT `model:` runs the organization's default subagent model, NOT
+   *  the parent's; an explicit `model: inherit` follows the parent's model —
+   *  the same undocumented path any unrecognized value takes, so every tier
+   *  ships "inherit" to hold the session model for delegated work. A full
+   *  model id pins the subagent off the session, beating the user's
+   *  agent.subagent_model setting. */
+  devin: { model: string };
 };
 
 export type Harness = keyof TierProjection;
@@ -132,7 +144,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     opencode: { model: null, variant: null },
     copilot: { model: null },
     cursor: { model: null },
-    devin: { model: null },
+    devin: { model: "inherit" },
   },
   balanced: {
     // Effort pinned to medium. Balanced is the reviewer tier - both
@@ -146,7 +158,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     kiro: { model: null },
     opencode: { model: null, variant: "medium" },
     copilot: { model: null },
-    devin: { model: null },
+    devin: { model: "inherit" },
   },
   templated: {
     // The tier remains a models-dial group for pattern-following work, but the
@@ -158,7 +170,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     opencode: { model: null, variant: null },
     copilot: { model: null },
     cursor: { model: null },
-    devin: { model: null },
+    devin: { model: "inherit" },
   },
 };
 

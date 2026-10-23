@@ -123,14 +123,18 @@ runners are explicit-only: `/aidlc-domain-design`, `/aidlc-bugfix`, etc.
 - **Structured gates** — render via Devin's native `ask_user_question` tool
   (per `question-rendering.md`). Gate semantics live in the engine.
 - **Subagent dispatch** — the ensemble protocol uses `run_subagent` with a named `profile` and native task text. Native-field translation, background completion, and reviewer attribution (a foreground reviewer window: a per-unit reviewer must be dispatched in the foreground with no background subagent pending, or the dispatch is refused with a remedy) are implemented and accepted live; their remaining [limits and follow-ups](../../reference/research/devin/07-subagent-lifecycle-and-ensemble.md) are recorded per finding. Shipped AI-DLC custom profiles
-  carry no `model:` and use the **default subagent model**, not automatic
-  inheritance of the parent's model. The documented Subagent router default is
+  carry `model: inherit`, so every agent runs on your session's model and
+  effort. Measured on devin 3000.11.92: a profile with no `model:` runs the
+  **default subagent model** instead (the documented router default is
   SWE-1.6; an org/enterprise admin can select another model in **Default
-  subagent model**, or **None** to disable subagents. The default can coincide
-  with the parent's selected model. Custom profiles can also pin `model:`;
-  AI-DLC does not project those overrides. `/aidlc --doctor` warns about the
-  shipped policy but does not inspect the effective organization
-  setting/model. See
+  subagent model**, or **None** to disable subagents), while `inherit`
+  follows the parent's model. `model: inherit` is not documented by Devin and
+  was measured on Devin CLI 3000.11.92. To pin one agent to
+  a fixed model, run `aidlc config models --agent <name> --model <id>` with a
+  full model ID from `devin models list` (Devin carries effort inside the ID,
+  e.g. `claude-sonnet-5-medium`). `/aidlc --doctor` reports each profile's
+  model and checks pins against the account's list, but does not inspect the
+  effective organization setting/model. See
   [Devin model resolution](https://docs.devin.ai/cli/subagents#which-model-does-a-subagent-use).
 - **Subagent tool restriction** — the Devin projection adds an explicit
   `allowed-tools` list to every shipped core agent profile, excluding
@@ -239,8 +243,11 @@ fails, refresh the install with `aidlc config` or upgrade AI-DLC. The marker pat
 existing installs must update the adapter and doctor together, merge the new
 ignore entry, and fully restart Devin CLI to generate evidence. The MCP check
 verifies registry presence, not live MCP availability; disabled servers do not
-fail it. `/aidlc --doctor` also warns (non-failing) about the shipped subagent
-model policy but does not inspect the effective organization setting/model.
+fail it. `/aidlc --doctor` also reports the `Devin subagent model` row: the
+`model:` value each shipped profile carries (a profile with none warns — it
+would run the organization's default subagent model, not the session's), and
+whether a pinned ID appears in the account's `devin models list`. It does not
+inspect the effective organization setting/model.
 Two "Devin compatibility imports" rows report the `read_config_from`
 isolation separately for the project file and the user-level config — the
 project row warns when `.devin/config.json` leaves a documented source at

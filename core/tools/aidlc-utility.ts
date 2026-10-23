@@ -136,6 +136,9 @@ import {
   checkDevinDesktop,
   checkDevinHostAvailability,
   checkDevinVersion,
+  defaultModelsListExec,
+  parseDevinModelsList,
+  type ModelsListExecFn,
 } from "./aidlc-devin-version.ts";
 import {
   auditDevinImportConfig,
@@ -476,7 +479,15 @@ import {
   runtimeHarnessName,
   runtimeProjectDir,
 } from "./aidlc-runtime-paths.ts";
-import { HARNESS_PRODUCT_NAMES } from "./aidlc-model-policy.ts";
+import {
+  HARNESS_PRODUCT_NAMES,
+  markdownSurfaceValues,
+  modelAgentStem,
+  readAgentTiers,
+  type AgentTiers,
+} from "./aidlc-model-policy.ts";
+import { modelsCommand } from "./aidlc-config-command.ts";
+import { resolveAidlcSettings } from "./aidlc-settings.ts";
 import { copyRuntimeUrl } from "./aidlc-release.ts";
 import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
 import {
@@ -3963,6 +3974,98 @@ export function harnessTreeVersionsCheck(projectDir: string): DoctorCheck | null
   };
 }
 
+// The "Devin subagent model" row(s): a fact read of the installed
+// .devin/agents/*.md `model:` lines for the shipped agent set, not a fixed
+// advisory. A profile with no model: at all runs the organization's default
+// subagent model rather than the session's (measured on 3000.11.92;
+// model: inherit is the parent-model value), so that is the warn case. A
+// pinned id is checked against the account's own `devin models list` when a
+// CLI binary was found; the exec goes through an injectable seam
+// (aidlc-devin-version.ts) so unit tests never spawn a real devin.
+export function devinSubagentModelChecks(
+  projectDir: string,
+  binaryPath: string | null,
+  exec: ModelsListExecFn = defaultModelsListExec,
+): DoctorCheck[] {
+  const invoke = aidlcInvocation();
+  let tiers: AgentTiers;
+  try {
+    tiers = readAgentTiers(join(projectDir, ".devin"));
+  } catch (error) {
+    return [{
+      pass: false,
+      severity: "warn",
+      label: `Devin subagent model: installed agent data could not be read (${errorMessage(error)})`,
+      fix: `refresh with \`${invoke} config\``,
+    }];
+  }
+  const agentsDir = join(projectDir, ".devin", "agents");
+  const missing: string[] = [];
+  const pinned: Array<{ agent: string; model: string }> = [];
+  for (const name of Object.keys(tiers).sort()) {
+    const stem = modelAgentStem(name);
+    const path = join(agentsDir, `${stem}.md`);
+    const model = existsSync(path)
+      ? markdownSurfaceValues(readFileSync(path, "utf-8"), "effort").model
+      : undefined;
+    if (!model) missing.push(stem);
+    else if (model !== "inherit") pinned.push({ agent: name, model });
+  }
+  if (missing.length > 0) {
+    return [{
+      pass: false,
+      severity: "warn",
+      label: `Devin subagent model: ${missing.length} AI-DLC agent(s) have no model set and use your organization's default subagent model, not your session's (e.g. ${missing[0]})`,
+      fix: `refresh with \`${invoke} config\``,
+    }];
+  }
+  // `models list` runs only when a pin needs verifying; an unreadable list is
+  // said on the pass row, never turned into a false "not listed" warning.
+  let listed: Set<string> | null = null;
+  if (binaryPath !== null && pinned.length > 0) {
+    const result = exec(binaryPath);
+    if (!result.timedOut && result.exitCode === 0) {
+      const ids = parseDevinModelsList(result.stdout);
+      if (ids.size > 0) listed = ids;
+    }
+  }
+  // The fix commands name the settings layer that actually records the pin —
+  // a settings mutation refuses without exactly one of them, and a command
+  // printed by doctor has to run as printed.
+  const sources = resolveAidlcSettings(projectDir).sources;
+  const layerFlag = (agent: string): string => {
+    const source = sources[`models.agents.${agent}.model.devin`];
+    return source === "machine"
+      ? "--global"
+      : source === "project"
+      ? "--project"
+      : "--local";
+  };
+  const checks: DoctorCheck[] = [];
+  for (const pin of pinned) {
+    if (listed !== null && !listed.has(pin.model)) {
+      const layer = layerFlag(pin.agent);
+      checks.push({
+        pass: false,
+        severity: "warn",
+        label: `Devin subagent model: ${pin.agent} is set to ${pin.model}, which your Devin account does not list; Devin runs it on your session's model instead`,
+        fix: `set an ID from \`devin models list\` with \`${modelsCommand(projectDir, "devin", `--agent ${pin.agent} --model <id> ${layer} --yes`)}\`, or go back to inheriting with \`${modelsCommand(projectDir, "devin", `--agent ${pin.agent} --model default ${layer} --yes`)}\``,
+      });
+    }
+  }
+  if (checks.length > 0) return checks;
+  const pinsText = pinned.length > 0
+    ? `, except ${pinned.map((pin) => `${pin.agent} (${pin.model})`).join(", ")}`
+    : "";
+  const unchecked = pinned.length > 0 && listed === null
+    ? " (not checked against your account: devin models list unavailable)"
+    : "";
+  return [{
+    pass: true,
+    label: `Devin subagent model: AI-DLC agents use your Devin session's model and effort${pinsText}${unchecked}`,
+  }];
+}
+
 export async function collectDoctorReport(
   projectDir: string,
   extraChecks: readonly DoctorCheck[] = [],
@@ -5072,12 +5175,9 @@ export async function collectDoctorReport(
       label: devinDesktopResult.label,
       fix: devinDesktopResult.fix,
     });
-    results.push({
-      pass: false,
-      severity: "warn",
-      label: "Devin subagent model: shipped AI-DLC custom profiles omit model: and use the default subagent model, not automatic parent-model inheritance (documented router default: SWE-1.6; effective organization setting/model not inspected)",
-      fix: 'Ask an organization/enterprise admin to review "Default subagent model" and select the desired model (select your primary model there to align unpinned profiles); None disables subagents. Custom profile model: overrides follow Devin configuration, not the parent model picker.',
-    });
+    results.push(
+      ...devinSubagentModelChecks(projectDir, devinVerResult.binaryPath),
+    );
     // Devin hook dispatch: every core-hook argv the adapter can emit in
     // compiled mode must resolve in the compiled dispatcher — without running
     // any hook (side-effect-free probe; see devinHookDispatchProbe).

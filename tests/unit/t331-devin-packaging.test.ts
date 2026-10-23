@@ -69,6 +69,7 @@ import {
   machineReachingTools,
 } from "../../core/tools/aidlc.ts";
 import { HARNESS_HONESTY } from "../../core/tools/aidlc-model-policy.ts";
+import { devinSubagentModelChecks } from "../../core/tools/aidlc-utility.ts";
 import {
   DEVIN_IMPORT_EXPECTED,
   DEVIN_IMPORT_SOURCES,
@@ -99,6 +100,13 @@ const ENGINE = join(DEVIN_ROOT, ".devin");
 const ONBOARDING_REL = join(".devin", "rules", "aidlc-onboarding.md");
 const devinOnboarding = (root: string): string =>
   readFileSync(join(root, ONBOARDING_REL), "utf-8");
+
+const temp9gDirs: string[] = [];
+function temp9g(): string {
+  const dir = mkdtempSync(join(tmpdir(), "t331-devin-models-"));
+  temp9gDirs.push(dir);
+  return dir;
+}
 
 function* walk(dir: string): Generator<string> {
   for (const entry of readdirSync(dir).sort()) {
@@ -609,11 +617,11 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       expect(status, output).toBe(0);
       expect(output).toContain("Devin hook execution evidence: SessionStart last ran");
       expect(output).toContain("current hook approval is not verified");
-      expect(output).toContain("Devin subagent model:");
-      expect(output).toContain("Default subagent model");
-      expect(output).toContain("SWE-1.6");
-      expect(output).toContain("effective organization setting/model not inspected");
-      expect(output).toContain("None disables subagents");
+      // Every shipped profile carries model: inherit, so the row passes as a
+      // fact read of the installed files.
+      expect(output).toContain(
+        "Devin subagent model: AI-DLC agents use your Devin session's model and effort",
+      );
 
       const jsonRun = spawnSync(
         "bun",
@@ -636,9 +644,7 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
         check.label.startsWith("Devin subagent model:"),
       );
       expect(advisory.length).toBe(1);
-      expect(advisory[0]!.pass).toBe(false);
-      expect(advisory[0]!.severity).toBe("warn");
-      expect(envelope.data.warnings).toBeGreaterThanOrEqual(1);
+      expect(advisory[0]!.pass).toBe(true);
       expect(envelope.data.failed).toBe(0);
 
       for (const bad of ["", "not-json", "null", "{}", '{"lastRun":123}', '{"lastRun":"not-a-date"}']) {
@@ -1073,7 +1079,12 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
           : fullTools;
         expect(fm["allowed-tools"], `${root}/${file}`).toEqual(expectedTools);
         expect([...match[1].matchAll(/^allowed-tools:/gm)].length).toBe(1);
-        for (const key of ["tools", "model", "max-nesting"]) expect(key in fm).toBe(false);
+        // Every shipped Devin profile carries exactly one `model: inherit`
+        // (measured: an omitted key runs the org default subagent model, not
+        // the session's); no other model/effort surface may appear.
+        expect(fm["model"], `${root}/${file}`).toBe("inherit");
+        expect([...match[1].matchAll(/^model:/gm)].length).toBe(1);
+        for (const key of ["tools", "effort", "variant", "max-nesting"]) expect(key in fm).toBe(false);
         const core = readFileSync(join(coreDir, file), "utf-8");
         const coreMatch = core.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)!;
         const coreFm = Bun.YAML.parse(coreMatch[1]) as Record<string, unknown>;
@@ -1122,11 +1133,13 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
   test("21: Devin onboarding explains the subagent model policy and native allowlist", () => {
     for (const root of [DEVIN_ROOT, join(REPO_ROOT, "dist-release", "devin")]) {
       const agents = devinOnboarding(root);
+      expect(agents).toContain("`model: inherit`");
+      expect(agents).toContain("session's model and effort");
       expect(agents).toContain("Default subagent model");
-      expect(agents).toContain("SWE-1.6");
-      expect(agents).toContain("not automatic parent-model inheritance");
       expect(agents).toContain("does not inspect the effective organization setting/model");
       expect(agents).toContain("**None** disables subagents");
+      expect(agents).toContain("aidlc config models --agent <name> --model <id>");
+      expect(agents).toContain("devin models list");
       expect(agents).toContain("a Devin-native `allowed-tools` list without `run_subagent`, `read_subagent`, or `skill`");
       expect(agents).toContain("the parent conductor owns delegation");
       expect(agents).toContain("subject to their `allowed-tools` lists and host permissions");
@@ -1134,9 +1147,90 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
     }
   });
 
-  test("22: model-policy honesty names the default subagent model, not session inheritance", () => {
+  test("22: model-policy honesty names the session model and Devin's in-ID effort", () => {
     const message = HARNESS_HONESTY.devin.message;
-    expect(message).toContain("default subagent model");
-    expect(message).not.toContain("Devin CLI inherits the session model");
+    expect(message).toContain("session's model and effort");
+    expect(message).toContain("model ID");
+    expect(message).toContain("devin models list");
+    expect(HARNESS_HONESTY.devin.model).toBe(true);
+    expect(HARNESS_HONESTY.devin.effort).toBe(false);
   });
+
+  // The subagent-model row reads installed .devin/agents/*.md files directly;
+  // the `models list` exec is injected so no test here spawns a real devin.
+  test("9g: Devin subagent model row reads installed profiles and checks pins through the seam", () => {
+    const listedExec = () => ({
+      stdout: "Available models (1 families)\n\nProbe (probe)\n  probe-listed-model    Probe Listed  [Free]\n  aliases: listed-alias\n",
+      stderr: "",
+      exitCode: 0,
+      timedOut: false,
+    });
+    const failedExec = () => ({ stdout: "", stderr: "boom", exitCode: 1, timedOut: false });
+    const copy = () => {
+      const project = join(temp9g(), "project");
+      cpSync(DEVIN_ROOT, project, { recursive: true });
+      return project;
+    };
+    try {
+    const agentFile = (project: string, name: string) =>
+      join(project, ".devin", "agents", `aidlc-${name}-agent.md`);
+    const pin = (project: string, name: string, id: string) =>
+      writeFileSync(
+        agentFile(project, name),
+        readFileSync(agentFile(project, name), "utf-8").replace(/^model: inherit$/m, `model: ${id}`),
+      );
+
+    // All shipped profiles carry model: inherit → a fact pass.
+    let project = copy();
+    expect(devinSubagentModelChecks(project, "/fake/devin", listedExec)).toEqual([{
+      pass: true,
+      label: "Devin subagent model: AI-DLC agents use your Devin session's model and effort",
+    }]);
+
+    // A profile with no model: at all falls to the org default → warn.
+    project = copy();
+    writeFileSync(
+      agentFile(project, "developer"),
+      readFileSync(agentFile(project, "developer"), "utf-8").replace(/^model: inherit\n/m, ""),
+    );
+    const missingRow = devinSubagentModelChecks(project, "/fake/devin", listedExec);
+    expect(missingRow).toHaveLength(1);
+    expect(missingRow[0]!.pass).toBe(false);
+    expect(missingRow[0]!.label).toContain("1 AI-DLC agent(s) have no model set");
+    expect(missingRow[0]!.label).toContain("aidlc-developer-agent");
+
+    // A listed pin passes and names the pin.
+    project = copy();
+    pin(project, "developer", "probe-listed-model");
+    expect(devinSubagentModelChecks(project, "/fake/devin", listedExec)).toEqual([{
+      pass: true,
+      label: "Devin subagent model: AI-DLC agents use your Devin session's model and effort, except developer (probe-listed-model)",
+    }]);
+
+    // An unlisted pin warns and names the way back.
+    pin(project, "architect", "not-a-real-model-xyz");
+    const unlisted = devinSubagentModelChecks(project, "/fake/devin", listedExec);
+    expect(unlisted).toHaveLength(1);
+    expect(unlisted[0]!.severity).toBe("warn");
+    expect(unlisted[0]!.label).toContain(
+      "architect is set to not-a-real-model-xyz, which your Devin account does not list",
+    );
+    expect(unlisted[0]!.fix).toContain("config models --agent architect --model <id> --local --yes");
+    expect(unlisted[0]!.fix).toContain("config models --agent architect --model default --local --yes");
+
+    // The account list unreadable passes with the not-checked suffix — never
+    // a false "not listed" warning. No CLI at all behaves the same.
+    project = copy();
+    pin(project, "developer", "probe-listed-model");
+    const unread = devinSubagentModelChecks(project, "/fake/devin", failedExec);
+    expect(unread).toEqual([{
+      pass: true,
+      label: "Devin subagent model: AI-DLC agents use your Devin session's model and effort, except developer (probe-listed-model) (not checked against your account: devin models list unavailable)",
+    }]);
+    expect(devinSubagentModelChecks(project, null, listedExec)).toEqual(unread);
+    } finally {
+      for (const dir of temp9gDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
 });

@@ -180,6 +180,62 @@ export function checkDevinHostAvailability(
   };
 }
 
+/** Injectable execution for `models list`: same result shape as ExecFn, must
+ *  invoke [binary, "models", "list"] without shell interpolation. */
+export type ModelsListExecFn = (
+  binary: string,
+) => { stdout: string; stderr: string; exitCode: number | null; timedOut: boolean };
+
+/** Default `models list` execution: [binary, "models", "list"], no shell,
+ *  15s timeout (a bigger catalog print than --version), stdout/stderr
+ *  separate. */
+export const defaultModelsListExec: ModelsListExecFn = (binary: string) => {
+  try {
+    const r = Bun.spawnSync([binary, "models", "list"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 15_000,
+    });
+    return {
+      stdout: r.stdout?.toString() ?? "",
+      stderr: r.stderr?.toString() ?? "",
+      exitCode: r.exitCode ?? null,
+      timedOut: r.exitedDueToTimeout ?? false,
+    };
+  } catch (e) {
+    return {
+      stdout: "",
+      stderr: e instanceof Error ? e.message : String(e),
+      exitCode: null,
+      timedOut: false,
+    };
+  }
+};
+
+/** The model ids `devin models list` advertises to a `model:` profile value:
+ *  the first token of every indented entry line plus every alias on an
+ *  `aliases: a, b` line. Family headers sit flush-left and carry no usable
+ *  id, so they are skipped. An empty parse is not an empty account — the
+ *  caller treats it as "the list could not be read". */
+export function parseDevinModelsList(stdout: string): Set<string> {
+  const ids = new Set<string>();
+  for (const line of stdout.split(/\r?\n/)) {
+    if (!/^\s/.test(line)) continue;
+    const trimmed = line.trim();
+    const aliases = /^aliases:\s*(.+)$/.exec(trimmed);
+    if (aliases) {
+      for (const alias of aliases[1].split(",")) {
+        const name = alias.trim();
+        if (name) ids.add(name);
+      }
+      continue;
+    }
+    const id = /^(\S+)/.exec(trimmed)?.[1];
+    if (id) ids.add(id);
+  }
+  return ids;
+}
+
 /** Default execution: invokes [binary, "--version"] with a 10s timeout,
  *  capturing stdout and stderr separately. No shell interpolation. */
 export const defaultExec: ExecFn = (binary: string) => {

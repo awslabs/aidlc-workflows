@@ -165,22 +165,23 @@ export const HARNESS_HONESTY = Object.freeze({
       "GitHub Copilot runs every agent on the model you choose in its model picker (/model in the Copilot CLI), so a model or effort set here is kept for other tools and changes nothing in GitHub Copilot.",
   }),
   devin: Object.freeze({
-    model: false,
+    model: true,
     effort: false,
     groupEffort: false,
     message:
-      "AI-DLC does not project Devin model or effort overrides; shipped custom profiles use the default subagent model, not automatic parent-model inheritance. Ask an admin to review the organization's Default subagent model setting.",
+      "Devin CLI runs every AI-DLC agent on your session's model and effort unless a model is set for that agent. Devin carries effort in the model ID (for example claude-sonnet-5-medium), so an effort set here without a model is kept for other tools and changes nothing in Devin CLI; set a model for an agent in aidlc config models, with an ID from `devin models list`.",
   }),
 });
 
 type HarnessHonesty = (typeof HARNESS_HONESTY)[ModelHarness];
 
-// Where a harness can pin neither an agent's model nor its effort, every agent
-// runs on the session's model and effort, and nothing AI-DLC records changes
-// that. Setup and doctor say so instead of asking for a policy.
+// Where a harness cannot pin an agent's effort, every agent still runs on the
+// session's effort (Devin carries it inside the model id, so a per-agent
+// effort there can only ride on a model pin), and on a harness that cannot
+// pin a model either, the model too. Setup and doctor say so instead of
+// asking for a policy.
 export function sessionSetsAgentModels(harness: ModelHarness): boolean {
-  const honesty: HarnessHonesty = HARNESS_HONESTY[harness];
-  return !honesty.model && !honesty.effort;
+  return !HARNESS_HONESTY[harness].effort;
 }
 
 // The project folder whose agent files carry a harness's model policy, or null
@@ -189,7 +190,7 @@ export function sessionSetsAgentModels(harness: ModelHarness): boolean {
 // this, so they never disagree on where a change lands.
 export function modelPolicyAgentsDir(harness: ModelHarness, harnessDir: string): string | null {
   if (harness === "opencode") return ".opencode/agents";
-  if (harness === "claude" || harness === "codex" || harness === "kiro") return `${harnessDir}/agents`;
+  if (harness === "claude" || harness === "codex" || harness === "kiro" || harness === "devin") return `${harnessDir}/agents`;
   return null;
 }
 
@@ -214,12 +215,38 @@ export function sessionModelsDetail(
   harness: ModelHarness,
   policy: ModelPolicyRecord | null,
 ): string {
-  const recorded = modelPolicyIsEmpty(policy)
-    ? ""
-    : policy?.preset
+  // A harness that cannot pin an agent's model at all keeps the flat account:
+  // every agent follows the session, and a recorded policy is named whole.
+  if (!HARNESS_HONESTY[harness].model) {
+    const recorded = modelPolicyIsEmpty(policy)
+      ? ""
+      : policy?.preset
+      ? `; the recorded ${policy.preset} preset does not apply here`
+      : "; the recorded policy does not apply here";
+    return `every agent uses your ${HARNESS_PRODUCT_NAMES[harness]} session's model and effort${recorded}`;
+  }
+  // A model-capable session-set harness (Devin): model pins are honored, so
+  // the sentence names the pinned agents; effort has no per-agent surface.
+  const pinned = Object.keys(policy?.agents ?? {})
+    .filter((name) => policy?.agents?.[name]?.model !== undefined)
+    .sort();
+  const product = HARNESS_PRODUCT_NAMES[harness];
+  const base = pinned.length === 0
+    ? `every agent uses your ${product} session's model and effort`
+    : `every agent except ${pinned.join(", ")} uses your ${product} session's model and effort; ` +
+      (pinned.length === 1
+        ? "that agent uses the model set for it"
+        : "those use the model set for them");
+  const effortRecorded = policy?.preset === undefined &&
+    (Object.keys(policy?.groups ?? {}).length > 0 ||
+      Object.keys(policy?.profiles ?? {}).length > 0 ||
+      Object.values(policy?.agents ?? {}).some((agent) => agent.effort !== undefined));
+  const recorded = policy?.preset
     ? `; the recorded ${policy.preset} preset does not apply here`
-    : "; the recorded policy does not apply here";
-  return `every agent uses your ${HARNESS_PRODUCT_NAMES[harness]} session's model and effort${recorded}`;
+    : effortRecorded
+    ? "; the recorded effort policy does not apply here"
+    : "";
+  return `${base}${recorded}`;
 }
 
 export type AgentTiers = Record<string, Tier>;
@@ -693,6 +720,20 @@ export function applyModelPolicyToProjection(
         }),
       );
     }
+  } else if (harness === "devin") {
+    // Devin profiles carry model only: effort rides inside the model id, so
+    // an agent's effective policy is written as the model line alone (never
+    // an effort key Devin would ignore anyway).
+    for (const item of effective) {
+      const path = join(agentsRoot, `${modelAgentStem(item.agent)}.md`);
+      if (!existsSync(path)) throw new Error(`${path}: missing agent surface`);
+      writeFileSync(
+        path,
+        writeMarkdownAgentSurface(readFileSync(path, "utf-8"), {
+          model: item.model,
+        }),
+      );
+    }
   } else if (harness === "kiro") {
     const modelEfforts: Array<{ model: string; effort: KiroEffort }> = [];
     for (const item of effective) {
@@ -713,7 +754,7 @@ export function applyModelPolicyToProjection(
   return effective;
 }
 
-function markdownSurfaceValues(
+export function markdownSurfaceValues(
   content: string,
   effortKey: "effort" | "variant",
 ): { model?: string; effort?: ModelEffort } {
@@ -800,6 +841,9 @@ export function modelPolicySurfaceDrift(
     } else if (harness === "opencode") {
       path = join(agentsRoot, `${modelAgentStem(name)}.md`);
       if (existsSync(path)) actual = markdownSurfaceValues(readFileSync(path, "utf-8"), "variant");
+    } else if (harness === "devin") {
+      path = join(agentsRoot, `${modelAgentStem(name)}.md`);
+      if (existsSync(path)) actual = markdownSurfaceValues(readFileSync(path, "utf-8"), "effort");
     } else if (harness === "kiro") {
       path = join(agentsRoot, `${modelAgentStem(name)}.json`);
       if (existsSync(path)) {

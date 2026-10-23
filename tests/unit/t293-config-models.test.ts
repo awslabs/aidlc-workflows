@@ -1724,6 +1724,45 @@ describe("t293 doctor model policy advisory", () => {
     });
   });
 
+  test("on Devin the session-models line names agent model pins", () => {
+    const project = temp("aidlc-t293-doctor-devin-");
+    cpSync(join(DIST, "devin"), project, { recursive: true });
+    // No recorded policy: the plain sentence.
+    expect(modelsPolicyCheck(project, true)).toEqual({
+      pass: true,
+      label: "Models: every agent uses your Devin CLI session's model and effort",
+    });
+    const write = (models: Record<string, unknown>) => {
+      const settings = projectSettingsPath(project);
+      writeFileSync(settings, `${JSON.stringify({ schemaVersion: 1, models }, null, 2)}\n`);
+      invalidateSettingsCache(settings);
+    };
+    // A preset is shared, not expressible on Devin.
+    write({ schemaVersion: 1, preset: "balanced" });
+    expect(modelsPolicyCheck(project, true)).toEqual({
+      pass: true,
+      label: "Models: every agent uses your Devin CLI session's model and effort; the recorded balanced preset does not apply here",
+    });
+    // A devin pin names the pinned agent and stays quiet about the rest.
+    write({
+      schemaVersion: 1,
+      agents: { developer: { model: { devin: "claude-opus-5-5-medium" } } },
+    });
+    expect(modelsPolicyCheck(project, true)).toEqual({
+      pass: true,
+      label: "Models: every agent except developer uses your Devin CLI session's model and effort; that agent uses the model set for it",
+    });
+    // A pin recorded for another harness never counts for Devin.
+    write({
+      schemaVersion: 1,
+      agents: { developer: { model: { claude: "opus" } } },
+    });
+    expect(modelsPolicyCheck(project, true)).toEqual({
+      pass: true,
+      label: "Models: every agent uses your Devin CLI session's model and effort",
+    });
+  });
+
   test("the host names messages use match each shipped harness", () => {
     // The names are fixed in the tools so a project file cannot change them;
     // they must still say what each harness calls itself.
@@ -1749,6 +1788,30 @@ describe("t293 doctor model policy advisory", () => {
 });
 
 describe("t293 projection application", () => {
+  test("a Devin agent model pin rewrites only that profile and `default` restores inherit", () => {
+    const project = install("devin");
+    const agentsDir = join(project, ".devin", "agents");
+    const developer = join(agentsDir, "aidlc-developer-agent.md");
+    const architect = join(agentsDir, "aidlc-architect-agent.md");
+    const models = (...args: string[]) =>
+      run(["config", "models", "--project-dir", project, ...args], project, runtimeEnv());
+    const pinned = models("--project", "--agent", "developer", "--model", "claude-opus-5-5-medium", "--yes");
+    expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
+    expect(readFileSync(developer, "utf-8")).toMatch(/^model: claude-opus-5-5-medium$/m);
+    expect(readFileSync(developer, "utf-8")).not.toMatch(/^effort:/m);
+    expect(readFileSync(architect, "utf-8")).toMatch(/^model: inherit$/m);
+    // The settings file keys the pin to devin, not to every harness.
+    expect((projectSettings(project).models as { agents: Record<string, { model: Record<string, string> }> }).agents.developer.model)
+      .toEqual({ devin: "claude-opus-5-5-medium" });
+    const drift = models("--check");
+    expect(drift.status, drift.stdout + drift.stderr).toBe(0);
+    // Removing the override restores the shipped inherit surface.
+    const removed = models("--project", "--agent", "developer", "--model", "default", "--yes");
+    expect(removed.status, removed.stdout + removed.stderr).toBe(0);
+    expect(readFileSync(developer, "utf-8")).toMatch(/^model: inherit$/m);
+    expect(models("--check").status).toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("applying an empty policy to a copied projection is byte-identical", () => {
     const root = temp("aidlc-t293-empty-policy-");
     cpSync(join(DIST, "claude"), root, { recursive: true });

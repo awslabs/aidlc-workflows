@@ -1,6 +1,6 @@
 # Agent profiles, model selection, and tool restrictions
 
-**Finding:** DEVIN-03. **Status:** Implemented for shipped core profiles; documented profile fields pinned from the 3000.11.3 bundle; effective model and plugin policy not inferred. **Source baseline:** `6e208f7b`. **Fact-checked:** 2026-09-12; profile fields and model pins 2026-10-10.
+**Finding:** DEVIN-03. **Status:** Implemented for shipped core profiles; documented profile fields pinned from the 3000.11.3 bundle; subagent model resolution measured live on 3000.11.92; plugin policy not inferred. **Source baseline:** `6e208f7b`. **Fact-checked:** 2026-09-12; profile fields and model pins 2026-10-10; model resolution measured 2026-10-22 on `devin 3000.11.92` (ground truth: `metadata.generation_model` of assistant messages in `~/.local/share/devin/cli/sessions.db`).
 
 ## Why this was needed
 
@@ -12,7 +12,17 @@ Flat `.devin/agents/aidlc-<role>-agent.md` files are custom profiles. Devin deri
 
 Shared `display_name`, `examples`, `disallowedTools`, and `maxTurns` metadata is retained where authored. Devin's documented profile frontmatter fields are exactly `name`, `description`, `model`, `allowed-tools` (alias `tools`), and `max-nesting` (3000.11.3 bundle, `subagents.mdx:296-303`), so `disallowedTools` and `maxTurns` are inert on Devin; prior native diagnostics reported CFG005 warnings. Retention is deliberate — the same bodies render on every harness — with one noted consequence: the two review-only persona bodies still describe `maxTurns: 60` as a HARD cap that Devin does not enforce (open finding in the index). AI-DLC's own metadata parser still requires `display_name` consistently. Do not recreate the removed field-stripper or Devin-only parser exemption to silence warnings.
 
-AI-DLC's Devin model projection omits model pins. Custom profiles without `model:` use Devin's default subagent model, not automatic parent-model inheritance. The documented Subagent router default is SWE-1.6; an organization can select a different default or None. A profile `model:` pin is the separate Devin override — and on 3000.11.3 it was NOT validated at spawn on this account: a profile pinned to a nonexistent model and one pinned to `opus` both ran, with no refusal and no failed-start event (R2/R2b), so the "unsupported model is refused" claim is account policy at most. The effective model can coincide with the parent and is not measured by AI-DLC doctor. Built-in subagent_general's inheritance policy does not describe AI-DLC custom profiles. The merge also added `devin` to the harness-keyed tables this honesty depends on: `HARNESS_PRODUCT_NAMES` (`"Devin CLI"`) in `aidlc-model-policy.ts`, `HOST_LABELS` in `aidlc-runtime-paths.ts`, `MODEL_HARNESSES` and the settings schema in `aidlc-settings.ts`, and `RELEASE_DISTRIBUTIONS` in `scripts/verify-release.ts`. It is deliberately absent from `scripts/ci-update-from-previous.ts` `HARNESSES` — that check installs the previous published release, which has no Devin.
+AI-DLC's Devin model projection now writes `model: inherit` on every shipped profile, so each agent follows the session's model and effort. The 2026-10-22 measurement on `devin 3000.11.92` (sessions.db `metadata.generation_model`):
+
+| Profile `model:` value | Observed `generation_model` |
+| --- | --- |
+| (key omitted) | organization's default subagent model (router; swe-2-medium on this account) — NOT the parent's model |
+| `inherit` | the parent's model exactly (`gpt-6-luna-low` parent → `gpt-6-luna-low`; Fusion parent → `claude-opus-5-5-high`) |
+| full id with effort suffix (`claude-sonnet-5-medium`, `claude-opus-5-high`) | that id, independent of the parent, beating the user's `agent.subagent_model` |
+| alias (`sonnet`) | resolved (`claude-sonnet-5-low`) |
+| unrecognized (`not-a-real-model-xyz`) | the parent's model, silently, no error — `inherit` rides this same undocumented fallback path |
+
+Devin carries effort inside the model id; profiles have no effort field, and `aidlc config models` writes a per-agent `model:` pin at config time. Devin reads profile files at session start — before even the SessionStart hook — so a rewritten profile reaches running work only from the next session (the open-work line says so). `/aidlc --doctor` reports each profile's `model:` and checks pins against `devin models list` when the CLI is found; it does not inspect the effective organization setting/model. Earlier, on 3000.11.3, a `model:` pin was NOT validated at spawn on this account (R2/R2b: a nonexistent model and `opus` both ran with no refusal), consistent with the unrecognized-value fallback measured on 3000.11.92. Built-in subagent_general's inheritance policy does not describe AI-DLC custom profiles. The merge also added `devin` to the harness-keyed tables this honesty depends on: `HARNESS_PRODUCT_NAMES` (`"Devin CLI"`) in `aidlc-model-policy.ts`, `HOST_LABELS` in `aidlc-runtime-paths.ts`, `MODEL_HARNESSES` and the settings schema in `aidlc-settings.ts`, and `RELEASE_DISTRIBUTIONS` in `scripts/verify-release.ts`. It is deliberately absent from `scripts/ci-update-from-previous.ts` `HARNESSES` — that check installs the previous published release, which has no Devin.
 
 The manifest adds a native `allowed-tools` list to the 14 named core profiles, excluding `run_subagent`, `read_subagent`, and `skill`. This restricts tool availability, independently of native default nesting behavior. It is not a permission auto-approval list, shell sandbox, or guarantee about arbitrary plugin profiles. Devin always withholds ask_user_question from subagents; the parent owns human questions.
 
@@ -30,7 +40,7 @@ The explicit list is generated for the manifest's core profile roster. Do not ex
 | --- | --- | --- |
 | Persona identity and metadata | Named profiles retain authored fields and body; AI-DLC still requires display_name | t331 profile tests; shared metadata parser |
 | Non-delegating core profiles | Every listed core profile excludes direct subagent and skill tools; other harnesses remain unchanged | t331 tests 19–20 |
-| Model advisory | Doctor explains the default-subagent policy without claiming actual model inspection | t331 tests 9c, 21–22; aidlc-model-policy |
+| Model advisory | Doctor reads each installed profile's `model:` and checks pins against `devin models list`; `model: inherit` follows the parent (undocumented path — guarded live) | t331 tests 9c, 21–22 + doctor-row seam cases; t-exec-devin-subagent-model live test; aidlc-model-policy |
 | Host profile schema update | Recheck supported fields, warnings, tools, nesting, and model precedence against the new CLI | Live profile/organization verification NOT RUN |
 | Plugin profile | Independently review its grants and model rather than assuming the core allowlist applies | Plugin-host acceptance gap |
 
@@ -48,6 +58,7 @@ Superseded: inherit-by-omission means parent-model inheritance; unsupported Clau
 - `core/tools/aidlc-lib.ts` — parseAgentFrontmatter
 - `core/tools/aidlc-utility.ts` — Devin model advisory
 - `tests/unit/t331-devin-packaging.test.ts`
+- `tests/e2e/t-exec-devin-subagent-model.serial.test.ts` — the live model-resolution probe (gated on AIDLC_DEVIN_EXEC_LIVE=1)
 - <https://docs.devin.ai/cli/subagents>
 
 [Back to findings index](index.md)
