@@ -298,12 +298,12 @@ export interface RunStageDirective {
   // continues with the readable context; rule-delivery failures are blocking
   // error directives instead.
   context_warnings?: string[];
-  // What the person replied to this stage's questions that no answer holds
-  // yet (a chat that ended before the agent wrote or logged it), in order,
-  // the stage's questions and answers already on record before it, and what
-  // the agent does with it. Present only while the stage's questions file
-  // still has a blank answer.
-  kept_replies?: { answered: Array<{ question: string; answer: string }>; replies: string[]; note: string };
+  // What the person replied since the stage started that no decision has used
+  // yet (a chat may have ended before the agent wrote or logged it), in order,
+  // the stage's questions and answers on record, each in order and unpaired,
+  // and what the agent does with it. Present only while the stage's questions
+  // file still has a blank answer.
+  kept_replies?: { questions: string[]; answers: string[]; replies: string[]; note: string };
   // What the person said when they stopped the work at this stage (the park
   // row keeps their words), and what the agent does with it. Present on the
   // step that resumes there, until a row of the stage says the agent acted.
@@ -2868,14 +2868,10 @@ function checkOptionalKeptReplies(
     return;
   }
   for (const key of Object.keys(value)) {
-    if (key !== "answered" && key !== "replies" && key !== "note") errors.push(`${kind}: kept_replies unknown key: ${key}`);
+    if (!["questions", "answers", "replies", "note"].includes(key)) errors.push(`${kind}: kept_replies unknown key: ${key}`);
   }
-  const answered = value.answered;
-  if (!Array.isArray(answered) || !answered.every((entry) =>
-    isPlainObject(entry) && typeof entry.question === "string" && typeof entry.answer === "string" &&
-    Object.keys(entry).every((key) => key === "question" || key === "answer"))) {
-    errors.push(`${kind}: kept_replies.answered must be an array of { question, answer } strings`);
-  }
+  checkStringArray(value, "questions", kind, errors);
+  checkStringArray(value, "answers", kind, errors);
   checkStringArray(value, "replies", kind, errors);
   checkString(value, "note", kind, errors);
 }

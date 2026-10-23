@@ -364,8 +364,9 @@ describe("the guard judges only the build: records and engine commands pass, the
   });
 
   // Under relaxed and off the opening retired the step, not the person's
-  // approval: the build's calls go on from it, each with one row, while another
-  // completion still waits for a current step.
+  // approval: the build's calls go on from it, each with one row. Another
+  // completion is the engine's own command, with no row: the gate it reports
+  // into stays open for the person.
   test.each(["relaxed", "off"] as const)("S11a %s: at the open gate the build's calls go on from the approved plan, one row each", async (policy) => {
     const proj = openCodeGenerationGate(policy);
     created.push(proj);
@@ -381,10 +382,13 @@ describe("the guard judges only the build: records and engine commands pass, the
       expect(verdict.code, `${describeCall(call)} -> ${verdict.said}`).toBe(0);
     }
     expect(rows() - before).toBe(passes.length);
-    const completed = await claude.call(proj, SESSION, {
-      tool: "Bash", command: "bun .claude/tools/aidlc-orchestrate.ts report --stage code-generation --result completed",
-    });
-    expect(completed.code, completed.said).toBe(2);
+    const completed = "bun .claude/tools/aidlc-orchestrate.ts report --stage code-generation --result completed";
+    const admitted = await claude.call(proj, SESSION, { tool: "Bash", command: completed });
+    expect(admitted.code, admitted.said).toBe(0);
+    expect(rows() - before).toBe(passes.length);
+    // The engine, checking for the person's reply as in a run, keeps the gate open.
+    runNamed(proj, completed, { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(/^- \[\?\] code-generation /m);
   });
 
   // The gate's own report showing it again passes the guard under strict too;

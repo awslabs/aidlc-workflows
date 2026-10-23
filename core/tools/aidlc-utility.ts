@@ -230,6 +230,7 @@ import {
   parseGuardPolicy,
   parseGuardPolicyStateLine,
   resolveGuardPolicy,
+  composeGateOpen,
   composeMarkerPath,
   COMPOSE_MARKER_TTL_MS,
   defaultScope,
@@ -12697,13 +12698,27 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     }
 
     const droppedUnitWork = droppedUnitWorkLine(projectDir, before, content, flags.intent, flags.space);
+    // The person's approval at the in-flight compose question: its step runs
+    // this before deleting the question's marker and names nothing after it,
+    // so the work goes on from here, as after their approval at a stage's gate.
+    // The engine's other plan-change steps say what comes after themselves.
+    let approvedAtCompose = false;
+    try {
+      approvedAtCompose = composeGateOpen(projectDir);
+    } catch {
+      // An unreadable marker names no step; the plan change itself has landed.
+    }
     process.stdout.write(
       `Recomposed: ${skipList.length} skipped (${skipList.join(", ") || "none"}), ` +
         `${addList.length} added (${addList.join(", ") || "none"})\n` +
         `Stages in scope: ${executeStages.length}\n` +
         `Completed: ${completedCount}/${executeStages.length}\n` +
         (droppedUnitWork === null ? "" : `${droppedUnitWork}\n`) +
-        settingsUpdate.lines.map((line) => `${line}\n`).join(""),
+        settingsUpdate.lines.map((line) => `${line}\n`).join("") +
+        (approvedAtCompose
+          ? "Then delete `aidlc/.aidlc-compose-pending`, apply any setting the same approval also named, and run " +
+            `\`${aidlcToolInvocation("orchestrate")} next\`; follow what it returns, so the work carries on.\n`
+          : ""),
     );
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }

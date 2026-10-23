@@ -4284,7 +4284,7 @@ describe("a pass past the cap runs only when the person asked for it", () => {
     try {
       const words = "Please have the reviewer look at the requirements again";
       typed(proj, words);
-      const asked = runReview(proj, [...pass(2), "--person-asked"]);
+      const asked = runReview(proj, [...pass(2), "--person-asked"], { AIDLC_SESSION_OVERRIDE: "t271-person" });
       expect(asked.status, asked.stderr).toBe(0);
       const row = auditBlocks(proj, "REVIEW_REQUESTED").at(-1)!;
       expect(auditBlockField(row, "Iteration")).toBe("2");

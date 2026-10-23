@@ -29362,6 +29362,17 @@ export function engineMarkedSincePersonSpoke(projectDir: string): boolean {
   }
 }
 
+// The file at `path` was written after the person's last turn, so it has not
+// been in front of them since. Any unreadable mark or file is no evidence.
+export function writtenSincePersonSpoke(projectDir: string, path: string): boolean {
+  try {
+    const human = turnMarkerStat(projectDir, "human-turn");
+    return human?.isFile() === true && statSync(path).mtimeMs > human.mtimeMs;
+  } catch {
+    return false;
+  }
+}
+
 
 // The engine mark for the work an intent or space switch selects. Written only
 // when the record has none (work made before the markers shipped, or a fresh
@@ -29948,138 +29959,70 @@ export function answeredBeforeShownStep(
   return { step: messageRetryStep(replies, decision), named: true };
 }
 
-// What the person replied in any chat since the stage started, after the
-// latest answer the engine recorded, in the order they gave it, or null: the
-// words they typed (kept by the human-turn hook) and the labels they picked
-// in a question box (the `Picked` field of their HUMAN_TURN rows). These are
-// replies no answer holds yet: a chat that ended before the agent wrote or
-// logged them leaves them here for the stage's next run. `answered` is the
-// stage's questions and answers already on record, so a later chat knows what
-// the replies came after. Nothing here reads meaning into them. A stage
-// already at its gate, or a chat whose kept words miss one of these replies,
-// gives none.
+// What the person replied in any chat since the stage started that nothing has
+// used yet, in the order they gave it, or null: a decision uses their replies
+// (MESSAGE_SPENDING_EVENTS; an answer uses none), and so do the rows that end
+// the human-turn hook's own record of them (GATE_WORDS_SPENT_BY: a gate shown or
+// decided, the work finished; and a Unit's step skipped at their request, whose
+// words were the skip). It hands back the words of each reply as the message
+// record keeps them, and the labels they picked in a question box (the
+// `Picked` field of their HUMAN_TURN rows). A chat that ended before the agent
+// wrote or logged them leaves them here for the stage's next run. `questions` and `answers` are
+// the stage's questions and answers on record, each in order and never paired:
+// which reply answers which question is the agent's to read. Nothing here
+// reads meaning into them. A stage already at its gate, or a reply whose
+// message is no longer on record whole, gives none; a turn that names no
+// message (an older release's record) is left out.
 export function keptRepliesSinceStageStart(
   projectDir: string,
   stage: { stage: string; unit?: string },
-): { replies: string[]; answered: Array<{ question: string; answer: string }> } | null {
-  const shardPath = auditFilePath(projectDir);
-  const shard = projectRelativePath(projectDir, shardPath);
-  let records: GateWordsRecord[] = [];
-  let content: string;
+): { replies: string[]; questions: string[]; answers: string[] } | null {
+  let rows: AuditShardEvent[];
   try {
-    const dir = gateWordsDir(projectDir);
-    // Every chat's file: the stage may have been asked in an earlier one. A
-    // chat that only picked in the question box typed nothing and has none.
-    if (existsSync(dir)) {
-      records = readdirSync(dir).flatMap((name) => {
-        if (!name.endsWith(".json")) return [];
-        let session: unknown;
-        try {
-          session = (JSON.parse(readRegularFileNoFollowOrThrow(join(dir, name), "gate words", GATE_WORDS_MAX_FILE_BYTES)
-            .toString("utf-8")) as { session?: unknown } | null)?.session;
-        } catch {
-          return [];
-        }
-        const record = typeof session === "string" ? readGateWords(projectDir, session) : null;
-        return record !== null && record.shard === shard && record.messages.length > 0 ? [record] : [];
-      });
-    }
-    content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
+    rows = ownShardRows(projectDir).mine;
   } catch {
     return null;
   }
-  const separator = /\r?\n---\r?\n/g;
-  let start = 0;
-  let from = 0;
-  let answered: Array<{ question: string; answer: string }> = [];
-  let asked: string | null = null;
-  // A turn that picked in the question box: where its row ends (the shard size
-  // right after it, which is where words typed in that turn were kept), and
-  // the labels picked. A turn that answered another engine question (where
-  // the work belongs, a switch) is no reply to the stage.
-  const picked: Array<{ end: number; labels: string[] }> = [];
-  for (;;) {
-    const match = separator.exec(content);
-    const end = match ? match.index + match[0].length : content.length;
-    const block = content.slice(start, match ? match.index : content.length).replace(/\r\n/g, "\n");
-    const event = auditBlockField(block, "Event");
-    const ours = auditBlockField(block, "Stage") === stage.stage &&
-      (stage.unit === undefined || auditBlockField(block, "Unit") === stage.unit);
-    if (event !== null && GATE_WORDS_LIFECYCLE_EVENTS.has(event) && ours) {
-      if (event !== "STAGE_STARTED") return null;
-      from = start;
-      answered = [];
-      asked = null;
-    } else if (event !== null && GATE_WORDS_ANSWERED_BY.has(event)) {
-      from = start;
-      if (event === "QUESTION_ANSWERED" && ours) {
-        answered.push({ question: asked ?? "", answer: auditBlockField(block, "Details") ?? "" });
-        asked = null;
-      }
-    } else if (event === "DECISION_RECORDED" && ours) {
-      asked = auditBlockField(block, "Decision");
-    } else if (event === "HUMAN_TURN" && auditBlockField(block, "Reply") === null &&
-      auditBlockField(block, OPEN_QUESTION_FIELD) === null) {
-      const raw = auditBlockField(block, "Picked");
-      let labels: unknown = null;
-      try {
-        labels = raw === null ? null : JSON.parse(raw);
-      } catch {
-        labels = null;
-      }
-      if (Array.isArray(labels)) {
-        const texts = labels.filter((label): label is string => typeof label === "string" && label.trim().length > 0);
-        if (texts.length > 0) picked.push({ end, labels: texts });
-      }
+  let from = -1;
+  let questions: string[] = [];
+  let answers: string[] = [];
+  for (const [index, row] of rows.entries()) {
+    const ours = auditBlockField(row.block, "Stage") === stage.stage &&
+      (stage.unit === undefined || auditBlockField(row.block, "Unit") === stage.unit);
+    if (GATE_WORDS_LIFECYCLE_EVENTS.has(row.event) && ours) {
+      if (row.event !== "STAGE_STARTED") return null;
+      from = index;
+      questions = [];
+      answers = [];
+    } else if (
+      MESSAGE_SPENDING_EVENTS.has(row.event) || GATE_WORDS_SPENT_BY.has(row.event) ||
+      (row.event === "UNIT_SKIPPED" && auditBlockField(row.block, "Reason") === PERSON_ASKED_SKIP_REASON)
+    ) {
+      from = index;
+    } else if (row.event === "QUESTION_ANSWERED" && ours) {
+      answers.push(auditBlockField(row.block, "Details") ?? "");
+    } else if (row.event === "DECISION_RECORDED" && ours) {
+      questions.push(auditBlockField(row.block, "Decision") ?? "");
     }
-    if (match === null) break;
-    start = end;
   }
-  const floor = Buffer.byteLength(content.slice(0, from), "utf-8");
-  if (records.some((record) => record.dropped > floor)) return null;
-  const typed = records.flatMap((record) => record.messages.filter((message) => message.offset > floor));
-  const replies = [
-    ...typed,
-    // A turn whose typed words were kept is not handed back twice.
-    ...picked.flatMap(({ end, labels }) => {
-      const offset = Buffer.byteLength(content.slice(0, end), "utf-8");
-      if (offset <= floor || typed.some((message) => message.offset === offset)) return [];
-      return labels.map((text) => ({ offset, text }));
-    }),
-  ]
-    .sort((a, b) => a.offset - b.offset)
-    .map((message) => message.text);
-  return replies.length > 0 ? { replies, answered } : null;
-}
-
-// Where the person's latest turn was a picker reply, the note an answer gets
-// when none of their picks carried it: the agent logged a choice they never
-// saw, or one they did not pick. Null when the turn was typed, when a pick
-// matches (its label, with or without the "(Recommended)" decorator), or when
-// the answer is only an option letter or number. It is a note on the record,
-// never a refusal, so it never throws.
-export function pickerAnswerNote(projectDir: string, details: string): string | null {
-  try {
-    const content = readAppendOnlyFileNoFollowOrThrow(auditFilePath(projectDir), "audit shard").toString("utf-8");
-    const blocks = content.replace(/\r\n/g, "\n").split("\n---\n");
-    let turn: string | undefined;
-    for (let index = blocks.length - 1; index >= 0 && turn === undefined; index--) {
-      if (auditBlockField(blocks[index], "Event") === "HUMAN_TURN") turn = blocks[index];
+  const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  const replies: string[] = [];
+  // A turn that only commanded AIDLC, or that answered another engine question
+  // (where the work belongs, a switch), is no reply to the stage.
+  for (const row of rows.slice(from + 1)) {
+    if (!isReplyTurn(row)) continue;
+    const picked = pickedLabelList(auditBlockField(row.block, "Picked"));
+    if (picked.length > 0) {
+      replies.push(...picked);
+      continue;
     }
-    const raw = turn === undefined ? null : auditBlockField(turn, "Picked");
-    if (!raw) return null;
-    const picked = JSON.parse(raw) as unknown;
-    if (!Array.isArray(picked) || picked.length === 0 || !picked.every((pick) => typeof pick === "string")) return null;
-    const plain = (text: string) => stripRecommendedDecorator(text).trim().toLowerCase();
-    const answer = plain(details);
-    if (answer === "" || /^(?:[a-z]|\d+)[.)]?$/.test(answer)) return null;
-    if (picked.some((pick) => plain(pick) === answer || answer.includes(plain(pick)) || plain(pick).includes(answer))) {
-      return null;
-    }
-    return `Not what the person picked in the picker (${picked.map((pick) => `"${pick}"`).join(", ")}).`;
-  } catch {
-    return null;
+    const id = auditBlockField(row.block, "Message Id");
+    if (id === null) continue;
+    const message = readMessage(projectDir, id);
+    if (message === null || message.cut === true) return null;
+    if (message.words !== null && message.words.trim() !== "") replies.push(message.words);
   }
+  return replies.length > 0 ? { replies, questions, answers } : null;
 }
 
 // The person's latest chat turn in this clone's ledger for the selected work:
@@ -30134,18 +30077,24 @@ export function latestPersonTurn(
   }
 }
 
-// The labels a HUMAN_TURN row's `Picked` field carries, as one line, or null.
-function pickedLabels(raw: string | null): string | null {
-  if (raw === null) return null;
+// The labels a HUMAN_TURN row's `Picked` field carries, in the order shown.
+function pickedLabelList(raw: string | null): string[] {
+  if (raw === null) return [];
   let picked: unknown;
   try {
     picked = JSON.parse(raw);
   } catch {
-    return null;
+    return [];
   }
-  if (!Array.isArray(picked)) return null;
-  const labels = picked.filter((label): label is string => typeof label === "string" && label.trim().length > 0);
-  return labels.length > 0 ? labels.map((label) => label.trim()).join(", ") : null;
+  if (!Array.isArray(picked)) return [];
+  return picked.filter((label): label is string => typeof label === "string" && label.trim().length > 0)
+    .map((label) => label.trim());
+}
+
+// The same labels as one line, or null.
+function pickedLabels(raw: string | null): string | null {
+  const labels = pickedLabelList(raw);
+  return labels.length > 0 ? labels.join(", ") : null;
 }
 
 // The person's words at an Approve / Request Changes question as what to
@@ -31273,6 +31222,14 @@ export function effectiveUnitGateRhythm(
 // enforcement forever. 24h is generous enough to cover a long human pause at an
 // open gate while still catching a stranded marker.
 export const COMPOSE_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
+
+// Whether an in-flight compose proposal waits on the person's approve, edit or
+// reject: its marker is on disk and fresh. A stale orphan is no open question,
+// as the Stop hook reads it. A failed read throws; each caller decides.
+export function composeGateOpen(projectDir: string): boolean {
+  const marker = composeMarkerPath(projectDir);
+  return existsSync(marker) && Date.now() - statSync(marker).mtimeMs <= COMPOSE_MARKER_TTL_MS;
+}
 
 // `<projectDir>/aidlc/.aidlc-subagent-inflight`: the workspace-level background
 // dispatch ledger. Entries are session-scoped and reference-counted so
@@ -42818,6 +42775,42 @@ export function isLearningsNoteDecision(block: string): boolean {
   const offered = (auditBlockField(block, "Options") ?? "").split(",").map((option) => option.trim());
   return LEARNINGS_NOTE_CHOICES.every((choice) => offered.includes(choice));
 }
+/** Its value for Intent Capture's Assumption Confirmation, written by the command that stage names. */
+export const ASSUMPTION_CONFIRMATION_QUESTION_KIND = "assumption-confirmation";
+export const ASSUMPTION_CONFIRMATION_CHOICES = ["Accept assumptions", "Convert to follow-up questions"] as const;
+/**
+ * True when a DECISION_RECORDED block is Intent Capture's Assumption
+ * Confirmation: its Question Kind says so. A row with no kind is that question
+ * when it offers both of its choices (with or without their option letters),
+ * as one recorded before the kind existed does.
+ */
+export function isAssumptionConfirmationDecision(block: string): boolean {
+  const kind = auditBlockField(block, QUESTION_KIND_FIELD);
+  if (kind !== null) return kind === ASSUMPTION_CONFIRMATION_QUESTION_KIND;
+  const offered = (auditBlockField(block, "Options") ?? "").split(",")
+    .map((option) => offeredChoiceLabel(option, ASSUMPTION_CONFIRMATION_CHOICES)?.choice);
+  return ASSUMPTION_CONFIRMATION_CHOICES.every((choice) => offered.includes(choice));
+}
+// The offered choice the conductor's --details names: the label itself, in any
+// case, after an optional option prefix ("1." or "B)") and without the
+// "(Recommended)" decorator, optionally followed by what the person asked
+// (`rest`). This checks the conductor's input names an offered choice; it never
+// reads the person's meaning, which is the conductor's to read.
+export function offeredChoiceLabel(details: string, choices: readonly string[]): { choice: string; rest: string } | null {
+  const text = stripRecommendedDecorator(details.trim())
+    .replace(/^(?:(?:[A-Za-z]|\d+)[.)])\s*/, "")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .trim();
+  for (const choice of choices) {
+    const head = text.slice(0, choice.length);
+    if (head.toLowerCase() !== choice.toLowerCase()) continue;
+    const tail = text.slice(choice.length);
+    if (tail === "" || /^[\s:;,.!-]/.test(tail)) {
+      return { choice, rest: tail.replace(/^[\s:;,.!-]+/, "").trim() };
+    }
+  }
+  return null;
+}
 /**
  * For a typed reply, true when the agent's recorded answer picks Add a note:
  * the whole answer, or one of its picks when it records several ("Keep none of
@@ -43809,6 +43802,22 @@ export function writeGuardStoodAside(line: string): void {
   process.stdout.write(
     `${runtimeHarnessName() === "claude" ? JSON.stringify({ systemMessage: line }) : line}\n`,
   );
+}
+
+/**
+ * A line for the agent on a PreToolUse call that goes on, where the harness
+ * delivers one: Claude Code reads the hook's additionalContext there (2.1.9 and
+ * later; measured on 2.1.309) and shows the person none of it. The Codex,
+ * Copilot, Cursor, Kiro CLI and opencode adapters drop this hook's output on a
+ * call that goes on, and Kiro IDE does not read PreToolUse stdout, so there it
+ * writes nothing and returns false.
+ */
+export function writeGuardAgentContext(line: string): boolean {
+  if (runtimeHarnessName() !== "claude") return false;
+  process.stdout.write(
+    `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: line } })}\n`,
+  );
+  return true;
 }
 
 /**

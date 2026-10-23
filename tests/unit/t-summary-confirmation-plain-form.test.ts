@@ -201,7 +201,7 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
   // A reply from before the summary's own question record counts when the
   // agent names it: which question it answers is the agent's reading, so the
   // engine says it back.
-  test("a reply after another question in between counts when the agent names it as the summary's, said back", () => {
+  test("a reply after another question in between counts when the agent names it as the summary's, nothing said back", () => {
     const { proj, questions } = project();
     appendAuditEntry("DECISION_RECORDED", {
       Stage: STAGE, Decision: "Does this all look correct?", Options: "Looks correct,Request changes",
@@ -222,8 +222,7 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
     );
     expect(recorded.status, recorded.error).toBe(0);
     expect(rows(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(1);
-    expect((JSON.parse(recorded.stdout.trim().split("\n").at(-1)!) as { say?: string }).say)
-      .toBe('Recorded your "looks right to me" for "Does this all look correct?".');
+    expect((JSON.parse(recorded.stdout.trim().split("\n").at(-1)!) as { say?: string }).say).toBeUndefined();
   });
 
   // An answer spends no reply, but a reply from before the summary's question

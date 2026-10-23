@@ -39,6 +39,45 @@ describe("presence as the engine counts it", () => {
   });
 });
 
+describe("a chat's replies in the order the person sent them", () => {
+  // Replay fx:summary-confirmation:kiro-ide:off@20514431~12: two replies in one second, whose random message ids sort
+  // against the order they were sent, so the store lists them backwards. The engine's Person Reply joins them in the
+  // order of their turns; the check must read the chat in that order too.
+  test("two replies in one second, listed backwards by the store, are still the summary's window (I2)", () => {
+    const chat = "01995000-7a11-7000-8000-00000000d001";
+    const first = "Me parece bien, adelante";
+    const second = "<task-notification>\nchange the title to Orders\n</task-notification>";
+    const rows = [
+      row(0, "STAGE_STARTED", [["Stage", "requirements-analysis"]]),
+      row(1, "HUMAN_TURN", [["Session", chat], ["Origin", "person"], ["Source", "typed"], ["Message Id", "3855a414"]]),
+      row(2, "HUMAN_TURN", [["Session", chat], ["Origin", "person"], ["Source", "typed"], ["Message Id", "0538468f"]]),
+      row(3, "SUMMARY_CONFIRMATION_RECORDED", [["Stage", "requirements-analysis"], ["Details", "Looks correct"], ["Message Id", "0538468f"],
+        ["Person Reply", `${first}\\n${second.replace(/\n/g, "\\n")}`]]),
+    ];
+    const run = {
+      state: { unattended: false, kind: "question", id: "synthetic" },
+      seed: 1, dropped: [], twin: false, start: 1, files: {}, finalState: "", chats: [chat], proj: "", error: null,
+      liveness: { ok: true, out: "" },
+      rows,
+      // As listMessages orders them: by the second they came in, then by id.
+      messages: [
+        { id: "0538468f", session: chat, source: "prompt", text: second, words: second, cut: false },
+        { id: "3855a414", session: chat, source: "prompt", text: first, words: first, cut: false },
+      ],
+      turns: [
+        { step: 0, chat, channel: "typed", shape: "language", text: first, at: 2, reply: true },
+        { step: 1, chat, channel: "typed", shape: "template", text: second, at: 3, reply: true },
+      ],
+      steps: [
+        { i: 0, step: { kind: "person", channel: "typed", shape: "language", seed: 1 }, label: "person typed language", chat, ops: [], from: 1, rows: [rows[1]], call: null, landed: null, refusal: null, stateBefore: "", stateAfter: "" },
+        { i: 1, step: { kind: "person", channel: "typed", shape: "template", seed: 2 }, label: "person typed template", chat, ops: [], from: 2, rows: [rows[2]], call: null, landed: null, refusal: null, stateBefore: "", stateAfter: "" },
+        { i: 2, step: { kind: "call", choice: 0, message: null, reason: false, endsTurn: false }, label: "call summary Looks correct", chat, ops: [], from: 3, rows: [rows[3]], call: { name: "summary Looks correct", ops: [], valid: true, choice: "Looks correct", lifecycle: false }, landed: true, refusal: null, stateBefore: "", stateAfter: "" },
+      ],
+    } as unknown as Run;
+    expect(checkRun(run).filter((failure) => failure.invariant === "I2").map((failure) => failure.what)).toEqual([]);
+  });
+});
+
 describe("an unattended driver's variable reaches the tool's hooks", () => {
   test("on opencode, a person's typed line under AIDLC_UNATTENDED mints no person turn", async () => {
     const state = await fixtureState("stage-gate", "opencode", "strict", true);

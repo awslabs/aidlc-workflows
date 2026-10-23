@@ -1,15 +1,22 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { headingKey } from "./aidlc-artifact-vocabulary.ts";
 import {
+	ASSUMPTION_CONFIRMATION_CHOICES,
 	asksForHelp,
+	auditBlockField,
+	type AuditShardEvent,
 	authoritativeProjectDescription,
 	errorMessage,
+	isAssumptionConfirmationDecision,
 	markdownBlocks,
 	type MarkdownLine,
 	normalizeMarkdownLabel,
+	offeredChoiceLabel,
+	parseAuditShardEvents,
 	printUsageAndExit,
 	readProjectDescriptionAuthority,
+	sortAttemptEvents,
 	visibleMarkdownLines,
 } from "./aidlc-lib.ts";
 import { knownActiveSpace, sensorFireUsage } from "./aidlc-runtime-paths.ts";
@@ -44,7 +51,8 @@ interface SourceUniverse {
 	registered: Set<string>;
 	canonicalScopeDeclaration?: string;
 	answeredQuestions: Set<string>;
-	assumptionsAccepted: boolean;
+	// Null when the record holds no Assumption Confirmation question.
+	assumptionsAccepted: boolean | null;
 	acceptedAssumptions: Set<string>;
 	pastedDocumentPresent: boolean;
 	findings: string[];
@@ -61,7 +69,6 @@ interface RecordAuthority {
 
 const ASSUMPTIONS_HEADING = "Assumptions & Open Questions";
 const REVIEW_HEADING = "Review";
-const ACCEPT_ASSUMPTIONS_ANSWER = "A. Accept assumptions";
 // Lines the `## Assumption Confirmation` section owns as scaffolding rather
 // than assumption text: its two fixed option literals and the answer tag.
 const CONFIRMATION_SCAFFOLD_RE =
@@ -350,9 +357,37 @@ function answerIsFilled(answer: string): boolean {
 	return normalized.length > 0 && !/^_+$/.test(normalized);
 }
 
+// Whether the person accepted the assumptions, as the record says: the answer
+// the agent logged after the stage's latest Assumption Confirmation question.
+// The record's own rows, never the questions file's answer line, which the
+// person may write in their own words. Null when no such question is on record
+// (a record from before it was logged): nothing is said about what it cannot
+// know.
+function assumptionsAcceptedOnRecord(stageDir: string, stage: string): boolean | null {
+	const recordRoot = findRecordRoot(stageDir);
+	if (!recordRoot) return null;
+	let rows: AuditShardEvent[];
+	try {
+		const dir = join(recordRoot, "audit");
+		const shards = readdirSync(dir).filter((name) => name.endsWith(".md")).sort();
+		rows = sortAttemptEvents(shards.flatMap((name, index) =>
+			parseAuditShardEvents(readFileSync(join(dir, name), "utf-8"), join(dir, name), index)));
+	} catch {
+		return null;
+	}
+	const ours = (row: AuditShardEvent): boolean => auditBlockField(row.block, "Stage") === stage;
+	const asked = rows.findLastIndex((row) =>
+		row.event === "DECISION_RECORDED" && ours(row) && isAssumptionConfirmationDecision(row.block));
+	if (asked < 0) return null;
+	const answer = rows.slice(asked + 1).find((row) => row.event === "QUESTION_ANSWERED" && ours(row));
+	return answer !== undefined && offeredChoiceLabel(auditBlockField(answer.block, "Details") ?? "",
+		ASSUMPTION_CONFIRMATION_CHOICES)?.choice === ASSUMPTION_CONFIRMATION_CHOICES[0];
+}
+
 function parseSourceUniverse(
 	questionsPath: string,
 	stageDir: string,
+	stage: string,
 ): SourceUniverse {
 	const findings: string[] = [];
 	if (!existsSync(questionsPath)) {
@@ -485,7 +520,6 @@ function parseSourceUniverse(
 	if (assumptionAnswers.length > 1) {
 		findings.push("duplicate [Answer]: entries for Assumption Confirmation");
 	}
-	const assumptionAnswer = assumptionAnswers[0] ?? "";
 	// Parse the original document before projecting its confirmation entries:
 	// a definition or lazy continuation keeps the same meaning on both sides.
 	const confirmationStart = lines.findIndex((line) => {
@@ -510,8 +544,7 @@ function parseSourceUniverse(
 			? { canonicalScopeDeclaration }
 			: {}),
 		answeredQuestions,
-			assumptionsAccepted:
-				assumptionAnswer.trim() === ACCEPT_ASSUMPTIONS_ANSWER,
+			assumptionsAccepted: assumptionsAcceptedOnRecord(stageDir, stage),
 			acceptedAssumptions,
 			pastedDocumentPresent: authority.pastedDocumentPresent,
 			findings,
@@ -1050,7 +1083,7 @@ export function main(argv: string[]): void {
 	const questionsPath = resolve(
 		join(stageDir, `${flags.stage ?? "intent-capture"}-questions.md`),
 	);
-	const universe = parseSourceUniverse(questionsPath, stageDir);
+	const universe = parseSourceUniverse(questionsPath, stageDir, flags.stage ?? "intent-capture");
 	const findings = [...universe.findings];
 	let hasAssumptions = false;
 	for (const path of scanPaths) {
@@ -1058,7 +1091,7 @@ export function main(argv: string[]): void {
 		findings.push(...inspected.findings);
 		hasAssumptions ||= inspected.hasAssumptions;
 	}
-	if (hasAssumptions && !universe.assumptionsAccepted) {
+	if (hasAssumptions && universe.assumptionsAccepted === false) {
 		findings.push(
 			"retained assumptions require an answered ## Assumption Confirmation with Accept assumptions",
 		);

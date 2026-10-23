@@ -2388,24 +2388,28 @@ function handlePark(args: string[]): void {
     : result));
 }
 
-// The person's words that stop the work here, kept on the park row as the
-// approval row keeps them: their latest turn's kept words when a reply of
-// theirs stands behind this park (the reading handlePark uses), else the
-// Person Reply of the approval that same reply gave (GATE_APPROVED spends the
-// chat's kept words, so after "approve, and stop here" the row is where they
-// are). Null when the hook kept none (a slash line, a picker pick, a no-text
-// turn), when they are a non-answer, or when no reply of theirs is behind the
-// park. Nothing here reads meaning into them: the step that resumes at the
-// parked stage hands them to the agent, who does.
-function parkedWords(pd: string): string | null {
+// The person's words that stop the work here, and the message that holds them,
+// kept on the park row as the approval row keeps them: every reply of theirs
+// in this chat that no decision has used yet (personsGateReply) when a reply of
+// theirs stands behind this park (the reading handlePark uses), else the words
+// of the approval that same reply gave (after "approve, and stop here" the
+// approval used it, so the row is where they are). None when none were kept (a
+// slash line, a no-text turn), when they are a non-answer, or when no reply of
+// theirs is behind the park. Nothing here reads meaning into them: the step that resumes
+// at the parked stage hands them to the agent, who does.
+function parkedWords(pd: string, stage: string): Record<string, string> {
+  const fields = (words: string | null, id: string | null): Record<string, string> =>
+    words && !isNonAnswer(words)
+      ? { [PERSONS_WORDS_FIELD]: words, ...(id ? { [PERSONS_MESSAGE_FIELD]: id } : {}) }
+      : {};
   try {
-    if (!personSpokeSinceGate(pd, { replies: true, outlivesApproval: true })) return null;
-    const typed = latestPersonTurn(pd)?.words ?? null;
-    if (typed && !isNonAnswer(typed)) return typed;
+    if (!personSpokeSinceGate(pd, { replies: true, outlivesApproval: true })) return {};
+    const reply = personsGateReply(pd, resolveInvokingSessionId(pd), stage);
+    if (reply.words && !isNonAnswer(reply.words)) return fields(reply.words, reply.messageId);
     const rows = sortAttemptEvents(readAuditShardEvents(pd));
     let turnAt = -1;
     for (let i = 0; i < rows.length; i++) if (rows[i].event === "HUMAN_TURN") turnAt = i;
-    if (turnAt === -1) return null;
+    if (turnAt === -1) return {};
     for (let i = rows.length - 1; i > turnAt; i--) {
       const row = rows[i];
       const theirApproval = row.event === "PLAN_APPROVAL_RECORDED" ||
@@ -2413,12 +2417,16 @@ function parkedWords(pd: string): string | null {
           auditBlockField(row.block, "Autonomous") !== "true" &&
           auditBlockField(row.block, APPROVED_TOGETHER_WITH_FIELD) === null);
       if (!theirApproval) continue;
-      const words = auditBlockField(row.block, PERSONS_WORDS_FIELD);
-      return words && !isNonAnswer(words) ? words : null;
+      // An approval row that kept no words of theirs (a Plan Approval receipt)
+      // stood on that same turn, whose message holds them.
+      const turnId = auditBlockField(rows[turnAt].block, PERSONS_MESSAGE_FIELD);
+      const words = auditBlockField(row.block, PERSONS_WORDS_FIELD) ??
+        (turnId === null ? null : readMessage(pd, turnId)?.words ?? null);
+      return fields(words, auditBlockField(row.block, PERSONS_MESSAGE_FIELD) ?? turnId);
     }
-    return null;
+    return {};
   } catch {
-    return null;
+    return {};
   }
 }
 
@@ -2478,11 +2486,8 @@ export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): Par
     const timestamp = isoTimestamp();
     // The conductor's own park after a reply that asked for something else
     // keeps none of it: the step that resumes here calls these words their stop.
-    const words = opts.attended === true ? parkedWords(pd) : null;
-    emitAudit(pd, "WORKFLOW_PARKED", {
-      Stage: currentSlug,
-      ...(words ? { [PERSONS_WORDS_FIELD]: words } : {}),
-    });
+    const words = opts.attended === true ? parkedWords(pd, currentSlug) : {};
+    emitAudit(pd, "WORKFLOW_PARKED", { Stage: currentSlug, ...words });
     content = setOrInsertField(content, "## Runtime State", "Parked", timestamp);
     content = setOrInsertField(content, "## Runtime State", "Parked At Stage", currentSlug);
     // A person's park is theirs to resume, so the Stop hook lets it end an

@@ -7,11 +7,11 @@
 // asked for one more message (a live Kiro IDE run). The summary counts a reply
 // that came after its question was recorded, as a stage gate does; when the
 // agent showed it first, it names the message that answered (--message), and
-// the engine says that reply back once. The refusal names the person's message
-// ids and times, never their words, so the agent retries without asking them
-// again; a message from before the stage started cannot be named. No reply
-// since the last decision still records nothing, with no line about a missed
-// reply.
+// the engine says nothing back for the agent to read out. The refusal names
+// the person's message ids and times, never their words, so the agent retries
+// without asking them again; a message from before the stage started cannot
+// be named. No reply since the last decision still records nothing, with no
+// line about a missed reply.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -70,9 +70,11 @@ function says(proj: string, prompt: string): void {
   expect(result.exitCode, result.stderr.toString()).toBe(0);
 }
 
-// The guards these cases are about stay on, as the agent meets them.
+// The guards these cases are about stay on, as the agent meets them, in the
+// chat the person typed in.
 function log(proj: string, args: string[]) {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+  const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SESSION_OVERRIDE: SESSION };
+  delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
   delete env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   const result = Bun.spawnSync({
@@ -162,7 +164,7 @@ describe("t-summary-shown-before-logged: a summary answered before its question 
       expect(events(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(0);
     });
 
-    test(`the agent names the reply it read the confirmation from, and it is recorded on that message, said back once (Guard Policy ${policy})`, () => {
+    test(`the agent names the reply it read the confirmation from, and it is recorded on that message, nothing said back (Guard Policy ${policy})`, () => {
       const { proj, questions } = project(policy);
       questionsLeftToTheAgent(proj);
       says(proj, "looks correct");
@@ -176,7 +178,7 @@ describe("t-summary-shown-before-logged: a summary answered before its question 
       expect(receipts).toHaveLength(1);
       expect(auditBlockField(receipts[0].block, "Message Id")).toBe(reply.id);
       expect(auditBlockField(receipts[0].block, "Person Reply")).toBe("looks correct");
-      expect(said(recorded.out)).toBe(`Recorded your "looks correct" for "${SUMMARY}".`);
+      expect(said(recorded.out)).toBeUndefined();
       expect(events(proj, "HUMAN_TURN")).toHaveLength(turns);
     });
 
@@ -187,8 +189,10 @@ describe("t-summary-shown-before-logged: a summary answered before its question 
       says(proj, "yes, looks correct");
       const recorded = answerSummary(proj, questions, "Looks correct");
       expect(recorded.status, recorded.out).toBe(0);
+      // Every reply of theirs in this chat that no decision has used yet: the
+      // answers' replies spend none (the audit escapes the line break).
       expect(auditBlockField(events(proj, "SUMMARY_CONFIRMATION_RECORDED")[0].block, "Person Reply"))
-        .toBe("yes, looks correct");
+        .toBe("go with the recommended\\nyes, looks correct");
       expect(said(recorded.out)).toBeUndefined();
     });
 
@@ -207,7 +211,7 @@ describe("t-summary-shown-before-logged: a summary answered before its question 
       const recorded = answerSummary(proj, questions, "Looks correct", "Looks correct", reply.id);
       expect(recorded.status, recorded.out).toBe(0);
       expect(events(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(2);
-      expect(said(recorded.out)).toBe(`Recorded your "looks correct now" for "${SUMMARY}".`);
+      expect(said(recorded.out)).toBeUndefined();
     });
 
     // An answer spends no reply, but the summary asked after it is a question

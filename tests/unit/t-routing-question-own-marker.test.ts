@@ -556,23 +556,18 @@ function askVerification(proj: string): string {
   return command;
 }
 
-test("Codex: register the verification question before the reply, then apply its receipt", () => {
+test("Codex: the verification question shown before it is logged takes the reply already given, then its receipt applies", () => {
   const proj = checkpointProject("strict");
   const command = verificationCommand(proj);
   writeFileSync(join(seededRecordDir(proj), "verification-command.txt"), command);
   const identity = ["--stage", "code-generation", "--checkpoint", "verification-command",
     "--command-file", "verification-command.txt"];
-  // A reply before registration cannot authorize the later question.
+  // The agent showed the question, the person approved, then the agent logged
+  // it: their reply answers it, as it does the agent's other questions.
   say(proj, "Approve", "codex");
   const asked = engine(proj, ["log", "decision", ...identity,
     "--decision", "Use this command to verify each completed Unit?", "--options", "Approve,Request Changes"]);
   expect(asked.code, asked.out).toBe(0);
-  const early = engine(proj, ["log", "answer", ...identity, "--details", "Approve"]);
-  expect(early.code, early.out).not.toBe(0);
-  expect(readAuditShardEvents(proj).filter((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toEqual([]);
-  // Show that registered question and wait. Do not log a new decision after
-  // the reply: the existing question now has the human-turn hook's evidence.
-  say(proj, "Approve", "codex", SESSION, "t2");
   const approved = engine(proj, ["log", "answer", ...identity, "--details", "Approve"]);
   expect(approved.code, approved.out).toBe(0);
   const applied = engine(proj, ["state", "set-construction-verification-command",

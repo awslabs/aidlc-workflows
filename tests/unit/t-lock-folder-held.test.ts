@@ -14,9 +14,13 @@
 //   - the plan-approval guard: Guard Policy off and relaxed go on with one line,
 //     said once a turn and again on the next turn, and leave no row claiming a
 //     start that was not published; strict refuses with the line, and once the
-//     program stops the same write goes through and `next` moves on;
+//     program stops the same write goes through and `next` moves on; the
+//     agent's own stop command goes through under strict and starts nothing;
 //   - the guard that held the lock says the line once its own call goes through;
-//   - `next` says the line instead of "Retry ... run doctor";
+//   - `next` and `continue` hand the agent a step that ends the turn instead of
+//     "Retry ... run doctor": stop a program it started itself and run the
+//     command again, else show the person the line; a second stop in the same
+//     turn hands over the line, and without the Windows line today's words stay;
 //   - a folder of a provably dead owner, or our own release, held for the
 //     give-up time (10 s) is given up early; a live owner, or one of unknown
 //     generation, still waits its whole budget.
@@ -26,9 +30,9 @@ import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harne
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -54,6 +58,8 @@ import {
   _setLockFolderHeldGiveUpMsForTests,
   _setLockFolderHeldPlatformForTests,
   LOCK_FOLDER_HELD_GIVE_UP_MS,
+  lockFolderHeldAgentStep,
+  lockFolderHeldGoesOnStep,
   lockFolderHeldLine,
 } from "../../core/tools/aidlc-lock-line.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
@@ -134,6 +140,38 @@ const WINDOWS_GOES_ON = lockFolderHeldLine("goes-on", 300_000, "win32");
 const GUARD_GOES_ON = lockFolderHeldLine("goes-on", 300, "win32");
 // A guard whose own call went through, then could not move the folder.
 const GUARD_WENT_THROUGH = lockFolderHeldLine("went-through", 300, "win32");
+// Where an engine command stopped: the agent stops a program it, or an agent it
+// sent (Code Generation's developer), left running and runs the command again;
+// the person hears the line only when neither started one, or when the step
+// stops again in the same turn.
+const STOP_YOURS =
+  "A program is holding the project folder, so this step stopped. If you, or an agent you sent, started a dev " +
+  "server, a file watcher or another long-running program over the project in this conversation, and the person did " +
+  "not ask to keep it running, stop it and everything it started (on Windows, stopping an npx or npm parent leaves " +
+  "the server running: stop the whole process tree by its Windows process id, for example " +
+  "`taskkill //T //F //PID <pid>` in Git Bash, or the node process whose command line names the server), then run " +
+  "the same command again.";
+const AGENT_STEP = `${STOP_YOURS} If neither of you started one, show the person this line and end your turn: "${WINDOWS_HELD}"`;
+// Where no chat reaches the engine to count the turn's stops, the words bound the retry.
+const AGENT_STEP_UNCOUNTED = `${STOP_YOURS} If neither of you started one, or the step stops again after it was stopped, ` +
+  `show the person this line and end your turn: "${WINDOWS_HELD}"`;
+const PERSON_STEP = `Show the person this line and end your turn: "${WINDOWS_HELD}"`;
+// Where the guard lets the call go on: the same step around the go-on or
+// went-through line, with no command to run again.
+const GOES_ON_STOP =
+  "A program is holding the project folder, so AI-DLC cannot update its record of this work and each step waits on " +
+  "it; this call goes ahead. If you, or an agent you sent, started a dev server, a file watcher or another " +
+  "long-running program over the project in this conversation, and the person did not ask to keep it running, stop " +
+  "it and everything it started (on Windows, stopping an npx or npm parent leaves the server running: stop the whole " +
+  "process tree by its Windows process id, for example `taskkill //T //F //PID <pid>` in Git Bash, or the node " +
+  "process whose command line names the server), then carry on.";
+const goesOnStep = (line: string | null) =>
+  `${GOES_ON_STOP} If neither of you started one, tell the person this line once and carry on: "${line}"`;
+// On Claude Code the agent reads a PreToolUse hook's additionalContext on a call
+// that goes on, and the person reads its systemMessage.
+const toAgent = (step: string) =>
+  JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: step } });
+const toPerson = (line: string | null) => JSON.stringify({ systemMessage: line });
 
 describe("the lock line", () => {
   test("says what the person meets, on Windows only", () => {
@@ -160,6 +198,16 @@ describe("the lock line", () => {
         expect(lockFolderHeldLine(outcome, 300_000, platform)).toBeNull();
       }
     }
+  });
+
+  test("gives the agent its step around the person's line, which stays as it is", () => {
+    const line = WINDOWS_HELD as string;
+    expect(lockFolderHeldAgentStep(line, "first")).toBe(AGENT_STEP);
+    expect(lockFolderHeldAgentStep(line, "again")).toBe(PERSON_STEP);
+    expect(lockFolderHeldAgentStep(line, "uncounted")).toBe(AGENT_STEP_UNCOUNTED);
+    for (const step of [AGENT_STEP, PERSON_STEP, AGENT_STEP_UNCOUNTED]) expect(step).toEndWith(`"${line}"`);
+    expect(lockFolderHeldGoesOnStep(GUARD_GOES_ON as string)).toBe(goesOnStep(GUARD_GOES_ON));
+    expect(lockFolderHeldGoesOnStep(GUARD_WENT_THROUGH as string)).toBe(goesOnStep(GUARD_WENT_THROUGH));
   });
 });
 
@@ -389,6 +437,8 @@ function guard(
   file: string,
   fault: Fault,
   platform: NodeJS.Platform = "win32",
+  command?: string,
+  harness?: string,
 ): { code: number; stdout: string; stderr: string } {
   // Outside the project: a file there would count as source changed since approval.
   const preload = join(tmpdir(), `aidlc-lfh-faults-${randomUUID()}.ts`);
@@ -404,10 +454,14 @@ function guard(
   ].join("\n"));
   if (fault === "held" && !existsSync(lockDirOf(proj))) seedDeadOwner(lockDirOf(proj));
   const result = spawnSync(BUN, ["--preload", preload, join(proj, ".claude", "hooks", "aidlc-plan-approval-guard.ts")], {
-    cwd: proj, env: env(proj, { AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS: "300" }), encoding: "utf-8",
+    cwd: proj,
+    env: env(proj, { AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS: "300", ...(harness ? { AIDLC_HARNESS_NAME: harness } : {}) }),
+    encoding: "utf-8",
     input: JSON.stringify({
-      hook_event_name: "PreToolUse", session_id: SESSION, cwd: proj, tool_name: "Write",
-      tool_input: { file_path: join(proj, "src", file), content: "x\n" },
+      hook_event_name: "PreToolUse", session_id: SESSION, cwd: proj,
+      ...(command === undefined
+        ? { tool_name: "Write", tool_input: { file_path: join(proj, "src", file), content: "x\n" } }
+        : { tool_name: "Bash", tool_input: { command } }),
     }),
     timeout: remainingOperationTimeoutMs(120_000),
   });
@@ -425,28 +479,47 @@ function started(proj: string): void {
 
 describe("the plan-approval guard meets a held lock folder", () => {
   for (const policy of ["off", "relaxed"] as const) {
-    test(`Guard Policy ${policy}: the write goes on with the line, once a turn, and no row claims a start`, () => {
+    test(`Guard Policy ${policy}: the write goes on; the agent gets its step, the person the line on a second hit, once a turn`, () => {
       const proj = guardProject(policy);
       started(proj);
       const rows = asideRows(proj);
       const first = guard(proj, "b.ts", "held");
       expect(first.code, first.stderr).toBe(0);
-      expect(first.stdout).toContain(JSON.stringify({ systemMessage: GUARD_GOES_ON }));
-      const again = guard(proj, "c.ts", "held");
-      expect(again.code, again.stderr).toBe(0);
-      expect(again.stdout).not.toContain("A program is watching");
+      expect(first.stdout.trim()).toBe(toAgent(goesOnStep(GUARD_GOES_ON)));
+      // Still held after the agent's turn to stop its program: the person hears the line.
+      const second = guard(proj, "c.ts", "held");
+      expect(second.code, second.stderr).toBe(0);
+      expect(second.stdout.trim()).toBe(toPerson(GUARD_GOES_ON));
+      const third = guard(proj, "c2.ts", "held");
+      expect(third.code, third.stderr).toBe(0);
+      expect(third.stdout).not.toContain("A program is");
       say(proj, "is it done yet?");
       const nextTurn = guard(proj, "d.ts", "held");
       expect(nextTurn.code, nextTurn.stderr).toBe(0);
-      expect(nextTurn.stdout).toContain(JSON.stringify({ systemMessage: GUARD_GOES_ON }));
+      expect(nextTurn.stdout.trim()).toBe(toAgent(goesOnStep(GUARD_GOES_ON)));
       expect(asideRows(proj)).toBe(rows);
       // Without the Windows line the write still goes on, and nothing is said, on a turn that could say it.
       say(proj, "and now?");
       const plain = guard(proj, "e.ts", "held", "linux");
       expect(plain.code, plain.stderr).toBe(0);
       expect(plain.stdout).not.toContain("systemMessage");
+      expect(plain.stdout).not.toContain("additionalContext");
     });
   }
+
+  // Codex, Copilot, Cursor, Kiro CLI and opencode drop this hook's output on a
+  // call that goes on, and Kiro IDE does not read PreToolUse stdout, so no line
+  // reaches their agent: the guard writes the person's line as before.
+  test("on a harness with no channel to the agent here, the guard writes the line as before", () => {
+    const proj = guardProject("off");
+    started(proj);
+    const first = guard(proj, "b.ts", "held", "win32", undefined, "codex");
+    expect(first.code, first.stderr).toBe(0);
+    expect(first.stdout.trim()).toBe(GUARD_GOES_ON as string);
+    const again = guard(proj, "c.ts", "held", "win32", undefined, "codex");
+    expect(again.code, again.stderr).toBe(0);
+    expect(again.stdout).not.toContain("A program is");
+  });
 
   test("Guard Policy strict: refused with the line; once the program stops the write goes through and next moves on", () => {
     const proj = guardProject("strict");
@@ -463,19 +536,38 @@ describe("the plan-approval guard meets a held lock folder", () => {
     expect(next(proj).kind).toBe("run-stage");
   });
 
-  test("the guard whose own call went through says so, and what the next step meets, once a turn", () => {
+  // The engine's step tells the agent to stop a program it started. Under
+  // strict the stop it names goes through with the folder held, and starts
+  // nothing; this guard's own refusal stays the person's line, never a step.
+  test("Guard Policy strict: the agent's own stop command goes through and starts nothing; a write keeps the line", () => {
+    const proj = guardProject("strict");
+    started(proj);
+    const rows = () => readAuditShardEvents(proj).length;
+    const before = rows();
+    for (const command of ["taskkill //T //F //PID 1", "taskkill /T /F /PID 1"]) {
+      const stop = guard(proj, "", "held", "win32", command);
+      expect(stop.code, stop.stderr).toBe(0);
+      expect(`${stop.stdout}${stop.stderr}`).toBe("");
+    }
+    expect(rows()).toBe(before);
+    const write = guard(proj, "b.ts", "held");
+    expect(write.code).toBe(2);
+    expect(write.stderr.trim()).toBe(WINDOWS_HELD as string);
+  });
+
+  test("the guard whose own call went through gives the agent its step, and the person the line on a second hit", () => {
     const proj = guardProject("off");
     started(proj);
     const held = guard(proj, "b.ts", "release");
     expect(held.code, held.stderr).toBe(0);
-    expect(held.stdout).toContain(JSON.stringify({ systemMessage: GUARD_WENT_THROUGH }));
-    // The next step meets the held folder: the same cause is said once a turn.
+    expect(held.stdout.trim()).toBe(toAgent(goesOnStep(GUARD_WENT_THROUGH)));
+    // The next step meets the held folder: the second hit of the turn is the person's.
     const next1 = guard(proj, "c.ts", "held");
     expect(next1.code, next1.stderr).toBe(0);
-    expect(next1.stdout).not.toContain("A program is watching");
+    expect(next1.stdout.trim()).toBe(toPerson(GUARD_GOES_ON));
     say(proj, "how is it going?");
     const nextTurn = guard(proj, "d.ts", "held");
-    expect(nextTurn.stdout).toContain(JSON.stringify({ systemMessage: GUARD_GOES_ON }));
+    expect(nextTurn.stdout.trim()).toBe(toAgent(goesOnStep(GUARD_GOES_ON)));
     // Under strict it says nothing: the next write is refused with the line, which is then true.
     const strict = guardProject("strict");
     started(strict);
@@ -488,62 +580,155 @@ describe("the plan-approval guard meets a held lock folder", () => {
   });
 });
 
+// `next` (or `verb`) run in its own process with the fault hooks and the line
+// module's platform set, as the guard's preload sets them. `session` names the
+// chat the way a host's shell does; without it the engine cannot count a turn's stops.
+function runNext(
+  proj: string,
+  args: string[],
+  options: { held: boolean; session?: boolean; platform?: NodeJS.Platform; verb?: "next" | "continue" },
+): string {
+  const tools = join(proj, ".claude", "tools");
+  const driver = join(tmpdir(), `aidlc-lfh-next-${randomUUID()}.ts`);
+  writeFileSync(driver, [
+    `const lib = await import(${JSON.stringify(join(tools, "aidlc-lib.ts"))});`,
+    `const line = await import(${JSON.stringify(join(tools, "aidlc-lock-line.ts"))});`,
+    `line._setLockFolderHeldPlatformForTests(${JSON.stringify(options.platform ?? "win32")});`,
+    options.held ? "lib._setAuditLockFaultHooksForTests({ failReapRename: (path) => path.includes('active-directive.lock') });" : "",
+    `const { main } = await import(${JSON.stringify(join(tools, "aidlc-orchestrate.ts"))});`,
+    `main(${JSON.stringify([options.verb ?? "next", ...args])});`,
+  ].join("\n"));
+  if (options.held && !existsSync(lockDirOf(proj))) seedDeadOwner(lockDirOf(proj));
+  // The chat comes only from `session`, never from the shell running the tests.
+  const hostChat = {
+    CLAUDE_CODE_SESSION_ID: undefined, CLAUDE_PID: undefined, CODEX_THREAD_ID: undefined, KIRO_SESSION_ID: undefined,
+    AIDLC_SESSION_OVERRIDE: options.session ? SESSION : undefined, AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
+  };
+  const result = spawnSync(BUN, [driver], {
+    cwd: proj,
+    env: { ...env(proj, { AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS: "300" }), ...hostChat },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(120_000),
+  });
+  rmSync(driver, { force: true });
+  expect(result.status, result.stderr).toBe(0);
+  return result.stdout;
+}
+
+const directiveOf = (stdout: string): { kind: string; message?: string; receipt?: string } =>
+  JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}") as { kind: string; message?: string; receipt?: string };
+
+const turnEndMark = (proj: string) => join(seededRecordDir(proj), ".aidlc-engine", "turn-end");
+
 describe("next meets a held lock folder", () => {
-  test("its error step is the line, not Retry or doctor", () => {
+  test("the agent's step: stop a program it started and run the command again, else the person's line", () => {
     const proj = guardProject("off");
-    const tools = join(proj, ".claude", "tools");
-    const driver = join(proj, "next-held.ts");
-    writeFileSync(driver, [
-      `const lib = await import(${JSON.stringify(join(tools, "aidlc-lib.ts"))});`,
-      `const line = await import(${JSON.stringify(join(tools, "aidlc-lock-line.ts"))});`,
-      'line._setLockFolderHeldPlatformForTests("win32");',
-      "lib._setAuditLockFaultHooksForTests({ failReapRename: () => true });",
-      `const { main } = await import(${JSON.stringify(join(tools, "aidlc-orchestrate.ts"))});`,
-      `main(["next", "--project-dir", ${JSON.stringify(proj)}]);`,
-    ].join("\n"));
-    seedDeadOwner(lockDirOf(proj));
-    const result = spawnSync(BUN, [driver], {
-      cwd: proj, env: env(proj, { AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS: "300" }), encoding: "utf-8",
-      timeout: remainingOperationTimeoutMs(120_000),
+    const held = directiveOf(runNext(proj, ["--project-dir", proj], { held: true }));
+    expect(held.kind).toBe("print");
+    expect(held.message).toBe(AGENT_STEP_UNCOUNTED);
+    expect(JSON.stringify(held)).not.toContain("--doctor");
+    // The step ends the turn, so the Stop hook lets an agent that showed the line stop there.
+    expect(existsSync(turnEndMark(proj))).toBe(true);
+    // Without the Windows line, today's words.
+    rmSync(lockDirOf(proj), { recursive: true, force: true });
+    const plain = directiveOf(runNext(proj, ["--project-dir", proj], { held: true, platform: "linux" }));
+    expect(plain).toEqual({
+      kind: "error",
+      message: "The directive could not be published, so no work directive was issued. Retry the command; if " +
+        "coordination remains busy, run `/aidlc --doctor`.",
     });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain(JSON.stringify(WINDOWS_HELD).slice(1, -1));
-    expect(result.stdout).not.toContain("--doctor");
+  });
+
+  test("a second stop in the same turn hands over the person's line, so stopping the wrong program never loops", () => {
+    const proj = guardProject("off");
+    started(proj);
+    const first = directiveOf(runNext(proj, [], { held: true, session: true }));
+    expect(first.kind).toBe("print");
+    expect(first.message).toBe(AGENT_STEP);
+    // The agent stopped its program and ran the command again; the folder is still held.
+    const again = directiveOf(runNext(proj, [], { held: true, session: true }));
+    expect(again.kind).toBe("print");
+    expect(again.message).toBe(PERSON_STEP);
+    expect(directiveOf(runNext(proj, [], { held: true, session: true })).message).toBe(PERSON_STEP);
+    // The person writes again: their turn starts with the agent's step.
+    say(proj, "I closed it, carry on");
+    expect(directiveOf(runNext(proj, [], { held: true, session: true })).message).toBe(AGENT_STEP);
+    // The program stops: the work goes on.
+    rmSync(lockDirOf(proj), { recursive: true, force: true });
+    expect(["run-stage", "load-steering"]).toContain(directiveOf(runNext(proj, [], { held: false, session: true })).kind);
+  });
+
+  // The turn's stops are counted in the chat's person-lines record, which keeps
+  // nothing where no workflow is selected (markPersonLinesHeard); a folder in
+  // the record's place stands in for that here. Then the words bound the retry.
+  test("where the turn's stops cannot be counted, the step carries its own bound", () => {
+    const proj = guardProject("off");
+    started(proj);
+    const record = join(proj, "aidlc", ".aidlc-sessions", `${SESSION}.person-lines`);
+    rmSync(record, { recursive: true, force: true });
+    mkdirSync(record, { recursive: true });
+    for (let i = 0; i < 2; i++) {
+      expect(directiveOf(runNext(proj, [], { held: true, session: true }))).toEqual({ kind: "print", message: AGENT_STEP_UNCOUNTED });
+    }
+  });
+
+  // On Kiro IDE (and opencode on Windows) a request the shell would change goes
+  // through a file the engine reads and removes; the step's same command reads
+  // it again, so the file is back when the step says so.
+  test("a request read from a file is there again for the same command", () => {
+    const proj = guardProject("off");
+    started(proj);
+    const file = join(proj, "aidlc", ".aidlc-request-text", "request.txt");
+    const request = "Fix the login & signup forms";
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${request}\n`);
+    // A plan word with new words while work is in progress: the routing question, which the held folder stops.
+    const command = ["--scope", "bugfix", "--request-file", "aidlc/.aidlc-request-text/request.txt"];
+    expect(directiveOf(runNext(proj, command, { held: true, session: true }))).toEqual({ kind: "print", message: AGENT_STEP });
+    expect(readFileSync(file, "utf8")).toBe(request);
+    rmSync(lockDirOf(proj), { recursive: true, force: true });
+    const again = directiveOf(runNext(proj, command, { held: false, session: true }));
+    expect(again.kind, JSON.stringify(again)).toBe("ask");
+    expect(existsSync(file)).toBe(false);
+  });
+
+  test("continue: the same step, counted in the same turn; without the Windows line, today's words", () => {
+    const proj = guardProject("off");
+    // A team's memory grown past one message (about 30 KB more rule text, as
+    // t-copilot-directive-budget's), so the stage's rules come in parts on every
+    // platform and the next part is a `continue`.
+    appendFileSync(
+      join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+      Array.from({ length: 20 }, (_, index) => `\n## Team practice ${index}\n${"x".repeat(1500)}\n`).join(""),
+    );
+    started(proj);
+    const part = directiveOf(runNext(proj, [], { held: false, session: true }));
+    expect(part.kind, JSON.stringify(part)).toBe("load-steering");
+    const receipt = String(part.receipt);
+    const held = { held: true, session: true, verb: "continue" } as const;
+    expect(directiveOf(runNext(proj, [receipt], held))).toEqual({ kind: "print", message: AGENT_STEP });
+    expect(directiveOf(runNext(proj, [receipt], held))).toEqual({ kind: "print", message: PERSON_STEP });
+    rmSync(lockDirOf(proj), { recursive: true, force: true });
+    expect(directiveOf(runNext(proj, [receipt], { ...held, platform: "linux" }))).toEqual({
+      kind: "error", message: "The workflow is busy for a moment. Run the same command again.",
+    });
+    // The program stops: the same part goes on.
+    rmSync(lockDirOf(proj), { recursive: true, force: true });
+    expect(["run-stage", "load-steering"]).toContain(directiveOf(runNext(proj, [receipt], { ...held, held: false })).kind);
   });
 
   test("a question it cannot publish is not shown: a reply would land on the question beneath it", () => {
     const proj = guardProject("off");
     started(proj);
-    const tools = join(proj, ".claude", "tools");
-    const run = (args: string[], held: boolean): string => {
-      const driver = join(tmpdir(), `aidlc-lfh-next-${randomUUID()}.ts`);
-      writeFileSync(driver, [
-        `const lib = await import(${JSON.stringify(join(tools, "aidlc-lib.ts"))});`,
-        `const line = await import(${JSON.stringify(join(tools, "aidlc-lock-line.ts"))});`,
-        'line._setLockFolderHeldPlatformForTests("win32");',
-        held ? "lib._setAuditLockFaultHooksForTests({ failReapRename: (path) => path.includes('active-directive.lock') });" : "",
-        `const { main } = await import(${JSON.stringify(join(tools, "aidlc-orchestrate.ts"))});`,
-        `main(${JSON.stringify(["next", ...args])});`,
-      ].join("\n"));
-      if (held && !existsSync(lockDirOf(proj))) seedDeadOwner(lockDirOf(proj));
-      const result = spawnSync(BUN, [driver], {
-        cwd: proj, env: env(proj, { AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS: "300" }), encoding: "utf-8",
-        timeout: remainingOperationTimeoutMs(120_000),
-      });
-      rmSync(driver, { force: true });
-      expect(result.status, result.stderr).toBe(0);
-      return result.stdout;
-    };
     // The person asks for other work; the engine keeps their words for the question where it belongs.
-    const reading = run(["Add a dark mode toggle"], false);
+    const reading = runNext(proj, ["Add a dark mode toggle"], { held: false });
     const request = /--request ([0-9a-f]+)/.exec(reading)?.[1] ?? "";
     expect(request, reading).not.toBe("");
-    // Held, the line instead of a question no marker binds.
-    const held = run(["--request", request], true);
+    // Held, the step instead of a question no marker binds.
+    const held = runNext(proj, ["--request", request], { held: true, session: true });
     expect(held).not.toContain('"kind":"ask"');
-    expect(held).toContain(JSON.stringify(WINDOWS_HELD).slice(1, -1));
+    expect(directiveOf(held)).toEqual({ kind: "print", message: AGENT_STEP });
     // Once the program stops, the same command asks the question, with its marker.
-    expect(run(["--request", request], false)).toContain('"kind":"ask"');
+    expect(runNext(proj, ["--request", request], { held: false })).toContain('"kind":"ask"');
   });
 });
-

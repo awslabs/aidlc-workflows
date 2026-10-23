@@ -36,7 +36,7 @@ import * as ts from "typescript";
 import { REPO_ROOT } from "./fixtures.ts";
 
 export type Use = "decides" | "keeps";
-export type Slice = "S2a" | "S2b" | "S3" | "S6" | "S9" | "PA-fixes";
+export type Slice = "S2a" | "S2b" | "S2c" | "S3" | "S6" | "S9" | "PA-fixes";
 
 export interface Allowed {
   use: Use;
@@ -872,7 +872,9 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${LOG}#handleAnswers`]: { use: "keeps", why: "the audit writer: a batch of answers, blank details left out" },
   "core/tools/aidlc-jump.ts#handleReopen": { use: "keeps", why: "the audit writer: a reopen for a change keeps their words as Feedback" },
   [`${STATE}#parkedWords`]: { use: "keeps", why: "the audit writer: the park row's Person Reply" },
-  [`${STATE}#parkWorkflow`]: { use: "keeps", why: "the audit writer: the park row" },
+  // The recorded answer's Details is the choice the agent recorded, never the file's [Answer]: line (S2a's R31).
+  [`${LIB}#offeredChoiceLabel`]: { use: "decides", why: "the agent's --details, or a recorded answer's Details, against the labels the question offered (O4)", from: ["core/tools/aidlc-sensor-claim-sources.ts#assumptionsAcceptedOnRecord"] },
+  "core/tools/aidlc-sensor-claim-sources.ts#assumptionsAcceptedOnRecord": { use: "decides", why: "the claim-sources sensor reads whether the Intent Capture assumptions were accepted from the recorded answer to that question" },
   [`${STATE}#requireHumanConstructionPolicyChange`]: { use: "keeps", why: "the audit writer: the Construction policy row's Person Reply" },
   [`${STATE}#emitConstructionPolicySet`]: { use: "keeps", why: "the audit writer: the Construction policy row", from: [`${STATE}#handleSetConstructionIteration`, `${STATE}#handleSetConstructionPolicy`, `${STATE}#handleSetUnitOwnership`] },
   [`${STATE}#handleSetConstructionIteration`]: { use: "keeps", why: "hands the policy row its Person Reply" },
@@ -892,7 +894,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#withKeptReplies`]: { use: "keeps", why: "the resume re-show: hands the agent the replies a stage kept" },
   [`${ORCH}#withParkedReply`]: { use: "keeps", why: "the resume re-show: the words they parked the work with" },
   [`${ORCH}#wordsAtPark`]: { use: "keeps", why: "the resume re-show: reads the park row's Person Reply" },
-  [`${READER}#stripRecommendedDecorator`]: { use: "keeps", why: "a cut of the agent's \"(Recommended)\" mark, given words by the places that compare (each listed)", from: [`${HOOK}#pickerFreeText`, `${LIB}#isSummaryConfirmationChoice`, `${LIB}#pickerAnswerNote`, `${READER}#exactOptionPick`, `${READER}#isOneOfChoices`, `${POSTURE}#recordPlanApprovalHumanResponse`] },
+  [`${READER}#stripRecommendedDecorator`]: { use: "keeps", why: "a cut of the agent's \"(Recommended)\" mark, given words by the places that compare (each listed)", from: [`${LIB}#isSummaryConfirmationChoice`, `${LIB}#offeredChoiceLabel`, `${READER}#exactOptionPick`, `${READER}#isOneOfChoices`, `${POSTURE}#recordPlanApprovalHumanResponse`] },
   [`${READER}#isOneOfChoices`]: { use: "decides", why: "a question box's pick, host structure: whether the box offered the protected question's own labels", from: [`${POSTURE}#pickerAsksProtectedQuestion`] },
   [`${POSTURE}#pickerAsksProtectedQuestion`]: { use: "decides", why: "a question box's pick, host structure (DESIGN 2.2 item 6: a box pick stays structure)", from: [`${POSTURE}#recordProtectedHumanResponse`] },
   [`${LIB}#guardRecoveryTextSha256`]: { use: "keeps", why: "the digest of the guard-recovery reply its record keeps (consumeSharedDirectiveAsk writes it; guardRecoveryFeedbackStatus matches it until S6)", from: [`${LIB}#consumeSharedDirectiveAsk`, `${LIB}#guardRecoveryFeedbackStatus`] },
@@ -987,7 +989,7 @@ export const ALLOWED_UNREACHED: Record<string, Allowed> = {
 
 /** The agent-argument checks (O4): they read the agent's argv or the file it wrote, never the person's words. */
 export const AGENT_ARGUMENT_CHECKS: readonly string[] = [
-  `${LOG}#offeredChoiceLabel`, `${LIB}#summaryConfirmationAnswer`, `${LIB}#summaryAnswerFromFile`, `${LIB}#offeredGuardRemedy`,
+  `${LIB}#summaryConfirmationAnswer`, `${LIB}#summaryAnswerFromFile`, `${LIB}#offeredGuardRemedy`,
   `${LIB}#picksAddANote`,
 ];
 
@@ -996,13 +998,11 @@ export const AGENT_ARGUMENT_CHECKS: readonly string[] = [
  * lines; a place that stays after it, keeping the words, moves to ALLOWED in the same change.
  */
 export const STILL_TO_GO: Record<string, ToGo> = {
-  [`${HOOK}#pickerFreeText`]: { use: "decides", slice: "S2a", row: "R34", why: "reads a box's free text as a pick when it equals a label, decoration and case aside", from: [`${HOOK}#respond`] },
   // S2a: the agent's own questions: no default by position, no say-back, no pairing.
   [`${LIB}#latestPersonTurn`]: { use: "decides", slice: "S2a", row: "R24", why: "the latest turn's words as the default Person Reply, a pick's labels decoded" },
   [`${LIB}#pickedLabels`]: { use: "decides", slice: "S2a", row: "R24", why: "latestPersonTurn's decode of a row's Picked", from: [`${LIB}#latestPersonTurn`] },
+  [`${LIB}#pickedLabelList`]: { use: "decides", slice: "S2a", row: "R26", why: "the decode of a row's Picked for keptRepliesSinceStageStart and pickedLabels", from: [`${LIB}#keptRepliesSinceStageStart`, `${LIB}#pickedLabels`] },
   [`${LIB}#keptRepliesSinceStageStart`]: { use: "decides", slice: "S2a", row: "R26", why: "pairs the kept replies with the logged questions" },
-  [`${LIB}#pickerAnswerNote`]: { use: "decides", slice: "S2a", row: "O2", why: "compares the agent's answer with the person's box pick" },
-  [`${LOG}#lateQuestionHint`]: { use: "keeps", slice: "S2a", row: "R22", why: "the order hint quotes the replies that came before the question" },
   // S2b: the ids.
   [`${ORCH}#takePersonsOwnLine`]: { use: "decides", slice: "S2b", row: "R7 (reading-lead: S2b)", why: "\"already read\" compares the person's words with the words a reading step kept; S2b compares the message id; the line itself stays the /aidlc parse (then ALLOWED)" },
   "core/tools/aidlc-question-store.ts#wordsAlreadyRead": { use: "decides", slice: "S2b", row: "R7 (reading-lead: S2b)", why: "as above", from: [`${ORCH}#takePersonsOwnLine`] },
@@ -1037,12 +1037,11 @@ export interface FuzzRow {
   why: string;
 }
 export const FUZZ_STILL_TO_GO: readonly FuzzRow[] = [
-  { group: "I2 QUESTION_ANSWERED names no message", slice: "S2a", row: "R24", why: "handleAnswer with no --message takes Person Reply from latestPersonTurn and names no message; the window names it" },
-  { group: "I2 SUMMARY_CONFIRMATION_RECORDED names no message", slice: "S2a", row: "R25", why: "the summary confirmation takes Person Reply from latestPersonTurn and names no message" },
+  { group: "I2 QUESTION_ANSWERED names no message", slice: "S2c", row: "DESIGN.md item 7 (reading-lead, 2026-10-23)", why: "an answer logged in a chat with no reply of its own since the last decision names no message: the window is this chat's, and a named id from another chat of the same work is refused" },
+  { group: "I2 QUESTION_ANSWERED names no message", slice: "S2b", row: "the ids (reading-lead, 2026-10-23)", why: "the code plan and protected questions' own answers name no message" },
   { group: "I2 VERIFICATION_COMMAND_RECORDED names no message", slice: "S2a", row: "R24", why: "the verification answer takes Person Reply from the protected response and names no message" },
   { group: "I2 GATE_REJECTED names no message", slice: "S2b", row: "the ids (reading-lead, 2026-10-23)", why: "a Unit or batch checkpoint reject with no --message writes the protected response's words and no Message Id" },
   { group: "I2 GATE_APPROVED names no message", slice: "S2b", row: "the ids (reading-lead, 2026-10-23)", why: "a Unit or batch checkpoint approval with no --message writes no Message Id" },
   { group: "I2 REQUEST_ROUTED names no message", slice: "S2b", row: "the ids (reading-lead, 2026-10-23)", why: "a routing pick records no Message Id" },
   { group: "I5 the person's words copied into QUESTION_ANSWERED.User Input", slice: "PA-fixes", row: "F3", why: "recordPlanApprovalAnswer's fallback puts their words in a Request Changes' User Input; PA-fixes makes User Input the agent's change text and Person Reply their words" },
-  { group: "I5 the record differs in file aidlc/spaces/default/intents/fixture-<HEX>/.aidlc-engine/gate-words/<CHAT#>.json", slice: "S2a", row: "R34", why: "pickerFreeText: a box's free text equal to a label (decoration aside) is taken as a pick, so its words are not kept" },
 ];

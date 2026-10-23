@@ -181,8 +181,7 @@ import {
   auditFilePath,
   REDO_REUSE_SOURCE,
   boltSlugForUnit,
-  composeMarkerPath,
-  COMPOSE_MARKER_TTL_MS,
+  composeGateOpen,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   type CheckboxState,
   CHANGE_CONTROL_FIELD,
@@ -447,6 +446,7 @@ import {
   HOOKS_OFF_RERUN,
   hookStatusPathLinked,
   humanTurnMintAllowed,
+  writtenSincePersonSpoke,
   assertNoSymlinkInChainOrThrow,
   sessionsDir,
   type WorkspaceCommand,
@@ -473,8 +473,10 @@ import {
   takeSessionSelectionNotice,
   addPendingPersonLines,
   markPersonLinesHeard,
+  markPersonLineHeardThisTurn,
   pendingPersonLines,
   personLineHeard,
+  personLineHeardThisTurn,
   PLAN_FIELD,
   PLAN_NAME_PATTERN,
   extractMarkdownSection,
@@ -492,6 +494,7 @@ import {
   waveEligible,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
+import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
   checkpointPolicyEnabled,
   loadConstructionEvidence,
@@ -2320,11 +2323,12 @@ function withBuiltPlanReviewRoute(directive: Directive): Directive {
 // instead of asking them again (a chat can end between their reply and the
 // agent writing it down).
 const KEPT_REPLIES_NOTE =
-  "The person already replied to this stage's questions in an earlier chat, and no answer records these replies " +
-  "yet. `answered` lists what is already on record for this stage, in order (the way they chose to answer comes " +
-  "first), and `replies` came after it, in the order they typed them. Read them against the questions file: write " +
-  "each answer they gave on its [Answer]: line and record it with `log answer`, then ask only what is still open. " +
-  "Never ask them again what they already answered.";
+  "The person already replied to this stage's questions, and the questions file still has a blank answer. " +
+  "`replies` is everything they said since the stage started that no decision has used yet, in the order they " +
+  "typed it; `questions` and `answers` are the stage's questions and answers on record, each in order (the way " +
+  "they chose to answer comes first). Which reply answers which question is yours to read, against the questions " +
+  "file: write each answer they gave on its [Answer]: line, record with `log answer` only what `answers` does not " +
+  "hold yet, then ask only what is still open. Never ask them again what they already answered.";
 
 // Whether a questions file in `dir` still has a blank answer.
 function hasBlankAnswer(dir: string): boolean {
@@ -2348,7 +2352,9 @@ function withKeptReplies(directive: Directive): Directive {
       ...(directive.phase === "construction" && directive.unit ? { unit: directive.unit } : {}),
     });
     if (kept === null) return directive;
-    directive.kept_replies = { answered: kept.answered, replies: kept.replies, note: KEPT_REPLIES_NOTE };
+    directive.kept_replies = {
+      questions: kept.questions, answers: kept.answers, replies: kept.replies, note: KEPT_REPLIES_NOTE,
+    };
   } catch (e) {
     recordHookDrop(projectDir, "kept-replies", errorMessage(e));
   }
@@ -2609,11 +2615,12 @@ function emit(requested: Directive): void {
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
       }
       // A program holding the lock folder is not freed by a retry or by doctor:
-      // the step is to stop it. That comes before showing an open question
-      // unpublished, whose reply would land on the question beneath it (#2047);
-      // once the program stops, the same command asks it with its marker.
+      // the step is to stop it (lockFolderHeldStep). That comes before showing
+      // an open question unpublished, whose reply would land on the question
+      // beneath it (#2047); once the program stops, the same command asks it
+      // with its marker.
       if (e instanceof ActiveDirectiveLockFolderHeldError && e.personLine) {
-        writePrepared(prepareEmission(errorDirective(e.message)));
+        writePrepared(prepareEmission(lockFolderHeldStep(projectDir, e.message)));
         return;
       }
       if (prepared.marker !== undefined && openQuestionMarkers.has(prepared.marker)) {
@@ -4090,6 +4097,32 @@ function turnEndingPrint(message: string): PrintDirective {
   return directive;
 }
 
+// Where a command stopped on a lock folder a program holds (`line` is the
+// person's): a print, since every harness stops on an `error`, and the agent
+// may have this step of its own to take. The first stop of a turn is the
+// agent's step; a second one, after it stopped a program and ran the command
+// again, hands the person the line, so a stop that missed never loops.
+// The step runs the same command again, so a request this `next` read from its
+// file (and removed) is written back for it.
+function lockFolderHeldStep(projectDir: string | null | undefined, line: string): PrintDirective {
+  restoreSpentRequestFile?.();
+  const session = engineSessionId;
+  if (!projectDir || !session) return turnEndingPrint(lockFolderHeldAgentStep(line, "uncounted"));
+  const again = personLineHeardThisTurn(projectDir, session, LOCK_FOLDER_HELD_STEP_KEY);
+  if (!again) {
+    markPersonLineHeardThisTurn(projectDir, session, LOCK_FOLDER_HELD_STEP_KEY);
+    // The count lives in the chat's person-lines record, which keeps nothing
+    // where no workflow is selected: there the words bound the retry.
+    if (!personLineHeardThisTurn(projectDir, session, LOCK_FOLDER_HELD_STEP_KEY)) {
+      return turnEndingPrint(lockFolderHeldAgentStep(line, "uncounted"));
+    }
+  }
+  return turnEndingPrint(lockFolderHeldAgentStep(line, again ? "again" : "first"));
+}
+
+// What the running `next` read from a request file, put back for the held step.
+let restoreSpentRequestFile: (() => void) | null = null;
+
 // The question for a folder set up as a new project that now holds code.
 // Null when the type was the person's word, Construction has started, or the
 // folder still scans as a new project.
@@ -4824,7 +4857,9 @@ function stillParkedLine(): string {
 // at its checkpoint). The walk's own step names it: the Unit's stage, the
 // summary confirmation after one, or the Unit's checkpoint. A paused walk is
 // already said to be paused, and a block whose Units are all covered has no
-// step of its own, so neither gets a line. Off a Unit walk, Current Stage is it.
+// step of its own, so neither gets a line. Off a Unit walk, Current Stage is
+// it while it is still to do: finished work, or a stage a switch skipped, has
+// no place to name, and the setting's own line says what changed.
 // When the work carries on in the same turn (`onlyOnWalk`), the step in hand is
 // where it goes, so the line is said only where the agent could not read that
 // from Current Stage: a Unit walk's own step. A Codex run printed "The work
@@ -4835,33 +4870,43 @@ function withWorkPicksUpLine<T extends Directive>(
   const current = (getField(stateContent, "Current Stage") ?? "").trim();
   const walk = scope ? unitMajorWalkBeat(pd, scope, stateContent, current) : null;
   if (onlyOnWalk && walk === null) return directive;
-  const at = walk === null ? nodeForSlug(current)?.name ?? "" : walkStepPlace(walk.step);
+  const at = walk !== null
+    ? walkStepPlace(walk.step)
+    : currentStageStillToDo(scope, stateContent) ? nodeForSlug(current)?.name ?? "" : "";
   if (at) (directive as { narration?: string }).narration = `The work picks up at ${at}.`;
   return directive;
 }
 
+// Whether the Current Stage is still to do on the work's own recorded plan:
+// it has a box, neither done nor skipped, and the plan runs it (that record
+// already holds the project-type adjustment: a new project's Reverse
+// Engineering reads SKIP there).
+function currentStageStillToDo(scope: string, stateContent: string): boolean {
+  const current = (getField(stateContent, "Current Stage") ?? "").trim();
+  const box = parseCheckboxes(stateContent).find((c) => c.slug === current)?.state;
+  if (box === undefined || box === "completed" || box === "skipped") return false;
+  return effectivePlanAction(current, scope, stateContent) === "EXECUTE";
+}
+
 // Whether the place withWorkPicksUpLine names is still where the work picks up
-// after a switch to `newScope`: the Current Stage is still to do, the work's
-// own recorded plan runs it (that record already holds the project-type
-// adjustment: a new project's Reverse Engineering reads SKIP there), and the
+// after a switch to `newScope`: the Current Stage is still to do, and the
 // new scope's grid runs it (the switch rebuilds the plan from that grid, and
 // skips a waiting stage it does not run); off a Unit-by-Unit walk, whose own
 // steps a switch can change (a stage it adds or drops moves a Unit's next step,
 // and the summary confirmation follows the scope).
 function scopeSwitchKeepsPlace(pd: string, scope: string, stateContent: string, newScope: string): boolean {
   const current = (getField(stateContent, "Current Stage") ?? "").trim();
-  const box = parseCheckboxes(stateContent).find((c) => c.slug === current)?.state;
-  if (box === undefined || box === "completed" || box === "skipped") return false;
-  if (effectivePlanAction(current, scope, stateContent) !== "EXECUTE") return false;
+  if (!currentStageStillToDo(scope, stateContent)) return false;
   if (effectivePlanAction(current, newScope, null) !== "EXECUTE") return false;
   return !scope || unitMajorWalkBeat(pd, scope, stateContent, current) === null;
 }
 
 // Whether a setting typed in chat ends the turn. It does when the person must
 // act next: the current stage waits at its gate or in revision, the engine's
-// plan question is open, a question the stage logged or wrote has no answer, or
-// a Unit walk stands at a summary, a checkpoint or a pause; a `next` there would
-// show them their question again. While the stage is simply running, the
+// plan question is open, a question the stage logged, or wrote before their
+// last turn, has no answer, or a Unit walk stands at a summary, a checkpoint or
+// a pause; a `next` there would show them their question again. While the stage
+// is simply running, the
 // setting is said and the agent goes back to `next` for the work: a live run
 // stopped after "turn the specialist reviewers off" and the person had to type
 // "ok, carry on". Anything unreadable ends the turn, as every setting did before.
@@ -4875,8 +4920,7 @@ function settingEndsTurn(pd: string, scope: string, stateContent: string): boole
     // Stop hook honours the same marker as a turn-stop while it is fresh, so a
     // setting typed under it must not hand the agent back to the work and walk
     // past their pick. A stale orphan is no gate, exactly as the hook reads it.
-    const marker = composeMarkerPath(pd);
-    if (existsSync(marker) && Date.now() - statSync(marker).mtimeMs <= COMPOSE_MARKER_TTL_MS) return true;
+    if (composeGateOpen(pd)) return true;
     if (openPendingDecision(pd, slug) !== null) return true;
     const walk = scope ? unitMajorWalkBeat(pd, scope, stateContent, slug) : null;
     if (walk !== null && walk.step.kind !== "work") return true;
@@ -4884,8 +4928,15 @@ function settingEndsTurn(pd: string, scope: string, stateContent: string): boole
     if (phase.length === 0) return true;
     const dirs = [stageDir(pd, phase, slug)];
     if (walk !== null && walk.step.kind === "work") dirs.push(join(docsRoot(pd), phase, walk.step.unit, walk.step.stage.slug));
+    // A questions file written after the person's last turn has not been in
+    // front of them, so the agent goes on to ask it: a live run ended the turn
+    // on a switch typed while the questions were written, and the person had
+    // to say go on. A menu of questions shown since is logged, which the open
+    // question above reads. In "I'll edit the file", a save that lands between
+    // a typed setting and the agent's `next` carries on too, and the agent says
+    // once more to send done.
     return dirs.some((dir) => existsSync(dir) && readdirSync(dir)
-      .filter((file) => file.endsWith("-questions.md"))
+      .filter((file) => file.endsWith("-questions.md") && !writtenSincePersonSpoke(pd, join(dir, file)))
       .some((file) => /\[Answer\]:[ \t]*_*[ \t]*$/m.test(readFileSync(join(dir, file), "utf-8"))));
   } catch {
     return true;
@@ -13716,9 +13767,11 @@ function unitsOwingStage(projectDir: string, stage: GraphStage, context: UnitWor
 }
 
 // A Code Generation completion (the gate opening or shown again, the stage
-// completed, an approval with no gate open) waits while its plan does, after the
-// stage's own completion checks; the plan's question is `next`'s. The remedy the
-// person picked at the recovery question is theirs. Null when it may go on.
+// completed, an approval with no gate open, an isolated run closing) waits while
+// its plan does, after the stage's own completion checks; the plan's question is
+// `next`'s. The remedy the person picked at the recovery question is theirs.
+// `targets` names an isolated run's own target, which is outside the main
+// workflow's Units. Null when it may go on.
 function codeGenerationCompletionWaits(
   projectDir: string,
   node: GraphStage,
@@ -13726,12 +13779,14 @@ function codeGenerationCompletionWaits(
   stateContent: string,
   args: string[],
   unit: string | undefined,
+  targets?: ReadonlyArray<string | null>,
 ): Directive | null {
   if (node.slug !== "code-generation") return null;
   const marker = readActiveDirectiveMarker(projectDir, stateContent);
   if (guardRecoveryAnswerAdmits(marker, ["engine", "orchestrate", "report", ...args], projectDir)) return null;
-  const targets = codeGenerationReportTargets(projectDir, node, scope, stateContent, unit);
-  return codeGenerationCompletionPlanWaits(projectDir, stateContent, targets)
+  return codeGenerationCompletionPlanWaits(
+    projectDir, stateContent, targets ?? codeGenerationReportTargets(projectDir, node, scope, stateContent, unit),
+  )
     ? printDirective(codeGenerationPlanWaitsStep())
     : null;
 }
@@ -16433,6 +16488,7 @@ function checkStageCompletionEvidence(
 function handleSingleReport(
   flags: ReportFlags,
   projectDir: string | undefined,
+  args: string[],
 ): void {
   if (!flags.result) {
     emit(errorDirective(
@@ -16521,6 +16577,15 @@ function handleSingleReport(
   );
   if (!evidence.ok) {
     emit(errorDirective(evidence.message));
+    return;
+  }
+  // An isolated run builds the zero-Unit target: it closes once that plan lets
+  // it build, as the main workflow's completion does.
+  const planWaits = codeGenerationCompletionWaits(
+    pd, node, singleScope ?? "", loadStateFileIfPresent(pd) ?? "", args, undefined, [null],
+  );
+  if (planWaits !== null) {
+    emit(planWaits);
     return;
   }
   const completionError = appendSingleStageAuditEvents(pd, [{
@@ -17083,7 +17148,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // main-workflow branches, so a single-stage commit can never fall through to a
   // state-mutating subcommand.
   if (flags.single) {
-    handleSingleReport(flags, projectDir);
+    handleSingleReport(flags, projectDir, args);
     return;
   }
 
@@ -18558,11 +18623,11 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     }
   } catch (error) {
     if (!(error instanceof ActiveDirectiveLockContendedError)) throw error;
-    writePrepared(prepareEmission(errorDirective(
+    writePrepared(prepareEmission(
       error instanceof ActiveDirectiveLockFolderHeldError && error.personLine
-        ? error.message
-        : "The workflow is busy for a moment. Run the same command again.",
-    )));
+        ? lockFolderHeldStep(pd, error.message)
+        : errorDirective("The workflow is busy for a moment. Run the same command again."),
+    ));
   }
 }
 
@@ -18738,12 +18803,12 @@ const REQUEST_TEXT_MAX_BYTES = 64 * 1024;
 function nextArgsWithRequestFile(
   args: readonly string[],
   projectDir: string,
-): { args: string[]; spend(): void } | string {
+): { args: string[]; spend(): void; restore(): void } | string {
   // The flag counts only in front of the `--` mark: behind it the token is one
   // of the person's words ("add a --request-file option"), as every flag is.
   const options = beforeDelimiter(args);
   const at = options.indexOf("--request-file");
-  if (at < 0) return { args: [...args], spend: () => {} };
+  if (at < 0) return { args: [...args], spend: () => {}, restore: () => {} };
   const usage =
     `--request-file needs a file directly inside ${REQUEST_TEXT_DIR}/ in this project, for example ` +
     `${REQUEST_TEXT_DIR}/request.txt.`;
@@ -18784,6 +18849,15 @@ function nextArgsWithRequestFile(
         // Left in its gitignored folder; the next request replaces it.
       }
     },
+    // The request as it was read, for a step that runs the same command again.
+    restore: () => {
+      if (isReadOnlyEngineProbe()) return;
+      try {
+        writeRecordFileNoFollow(projectDir, relativePath, text);
+      } catch {
+        // Not written back: the same command says the request could not be read.
+      }
+    },
   };
 }
 
@@ -18809,6 +18883,7 @@ export function main(argv: string[]): void {
   if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
   const resolvedProjectDir = resolveProjectDir(projectDir);
   let spendRequestFile = (): void => {};
+  let restoreRequestFile = (): void => {};
   if (subcommand === "next") {
     // Read once, before anything reads the request.
     const withRequest = nextArgsWithRequestFile(subArgs, resolvedProjectDir);
@@ -18818,6 +18893,7 @@ export function main(argv: string[]): void {
     }
     subArgs = withRequest.args;
     spendRequestFile = withRequest.spend;
+    restoreRequestFile = withRequest.restore;
   }
   const resolvedSelection = engineWorkflowSelection(resolvedProjectDir);
   engineProjectDir = resolvedProjectDir;
@@ -18904,6 +18980,7 @@ export function main(argv: string[]): void {
     noteRestartRequest(subArgs, true);
   }
   spendRequestFile();
+  restoreSpentRequestFile = restoreRequestFile;
   if (commandKind) engineInvocation = {
     commandKind,
     commandSha256: sha256(
@@ -18951,6 +19028,7 @@ export function main(argv: string[]): void {
     });
   } finally {
     engineInvocation = null;
+    restoreSpentRequestFile = null;
     activeRetiredGuardPolicyNotice = null;
     activeHookHealthNotice = undefined;
     activeSwitchOffNotices = null;

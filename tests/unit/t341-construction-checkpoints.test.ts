@@ -1105,18 +1105,15 @@ describe("t341 verification command consent", () => {
     const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--session", "t341-command"];
     const env = { ...process.env };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
-    submitCommandChoice(dir, "t341-command", "hello", env);
+    // The person typed their reply before the agent logged the question: no
+    // decision has used it, so it is the reply the answer stands on.
+    submitCommandChoice(dir, "t341-command", "Approve", env);
     const decision = cli(dir, "log", ["decision", ...identity, "--command", "exit 0", "--decision", "Use this command?", "--options", "Approve,Request Changes"], env);
     expect(decision.code, decision.out).toBe(0);
     const mismatch = cli(dir, "log", ["answer", ...identity, "--command", "exit 1", "--details", "Approve"], env);
     expect(mismatch.code).not.toBe(0);
     expect(mismatch.out).toContain("Command SHA-256");
-    const absent = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
-    expect(absent.code).not.toBe(0);
-    // The question is open and the reply came before it: none is on record yet.
-    expect(absent.out).toContain("none is on record yet");
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
-    submitCommandChoice(dir, "t341-command", "Approve", env);
     const approved = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
     expect(approved.code, approved.out).toBe(0);
     const receipts = readAuditShardEvents(dir).filter((row) => row.event === "VERIFICATION_COMMAND_RECORDED");
@@ -1208,23 +1205,31 @@ describe("t341 verification command consent", () => {
     expect(cli(dir, "log", answer, env).code).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("re-minting the same command invalidates an earlier hook response, including replayed bytes", () => {
+  test("re-minting the same command takes the reply already typed; replayed hook bytes back nothing", () => {
     const dir = project();
-    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0", "--session", "t341-command"];
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--session", "t341-command"];
     const env = { ...process.env };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
-    const decision = ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"];
-    const answer = ["answer", ...identity, "--details", "Approve"];
-    expect(cli(dir, "log", decision, env).code).toBe(0);
+    const decision = (command: string) =>
+      ["decision", ...identity, "--command", command, "--decision", "Use this command?", "--options", "Approve,Request Changes"];
+    const answer = (command: string) => ["answer", ...identity, "--command", command, "--details", "Approve"];
+    const receipts = () => readAuditShardEvents(dir).filter((row) => row.event === "VERIFICATION_COMMAND_RECORDED");
+    expect(cli(dir, "log", decision("exit 0"), env).code).toBe(0);
     submitCommandChoice(dir, "t341-command", "Approve", env);
     const previous = readProtectedResponse(dir, "t341-command")!;
-    expect(cli(dir, "log", decision, env).code).toBe(0);
-    expect(cli(dir, "log", answer, env).code).not.toBe(0);
+    // Asked again, the question takes the Approve no decision has used: they are not asked twice.
+    expect(cli(dir, "log", decision("exit 0"), env).code).toBe(0);
+    const again = cli(dir, "log", answer("exit 0"), env);
+    expect(again.code, again.out).toBe(0);
+    expect(receipts()).toHaveLength(1);
+    // That Approve is used now: the hook's bytes replayed for the next question back nothing.
+    expect(cli(dir, "log", decision("exit 2"), env).code).toBe(0);
     writeProtectedResponse(dir, previous);
-    expect(cli(dir, "log", answer, env).code).not.toBe(0);
-    expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
+    expect(cli(dir, "log", answer("exit 2"), env).code).not.toBe(0);
+    expect(receipts()).toHaveLength(1);
     submitCommandChoice(dir, "t341-command", "Approve", env);
-    expect(cli(dir, "log", answer, env).code).toBe(0);
+    expect(cli(dir, "log", answer("exit 2"), env).code).toBe(0);
+    expect(receipts()).toHaveLength(2);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("decision and answer require the invoking session even with presence bypassed", () => {

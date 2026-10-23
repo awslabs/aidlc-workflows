@@ -190,6 +190,19 @@ describe("the park row keeps the words that stopped the work", () => {
     expect(parkedWords(proj)).toBe("let's stop for today");
   });
 
+  // Everything they said since the last decision is the stop's context: the
+  // row keeps every reply in this chat, whole, and names the latest message.
+  test("two replies and then the stop: the park row keeps both and names the latest message", () => {
+    says(proj, "the export can wait");
+    says(proj, "let's stop for today");
+    const r = state(proj, ["park", "--person-asked"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(parkedWords(proj)).toBe("the export can wait\\nlet's stop for today");
+    const turn = events(proj, "HUMAN_TURN").at(-1)!;
+    expect(auditBlockField(events(proj, "WORKFLOW_PARKED")[0].block, "Message Id"))
+      .toBe(auditBlockField(turn.block, "Message Id"));
+  });
+
   // The agent's own park after a reply that asked for something else: the
   // words were no stop, so the step that resumes there never says they were.
   test("the agent's own park after the person's reply keeps none of their words", () => {

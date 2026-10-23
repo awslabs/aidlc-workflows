@@ -1539,13 +1539,24 @@ export function checkRun(run: Run): Failure[] {
         }
       }
       // Since S1 a decision's words are every unspent reply of theirs in this chat, in order, ending with the message
-      // the row names: a remark and the answer are both kept.
-      const chatWords = run.messages.filter((m) => m.session === message?.session).map((m) => m.words ?? m.text);
-      const at = message === null ? -1 : run.messages.filter((m) => m.session === message.session).findIndex((m) => m.id === message.id);
+      // the row names: a remark and the answer are both kept. The order is the record's, the HUMAN_TURN row that names
+      // each message, as the engine reads it: the store lists messages by the second they came in and then by their
+      // random id, so two replies in one second can list backwards.
+      const turnAt = new Map<string, number>();
+      for (const r of rows) {
+        const named = r.event === "HUMAN_TURN" ? field(r, "Message Id") : null;
+        if (named !== null && !turnAt.has(named)) turnAt.set(named, r.index);
+      }
+      const chat = run.messages.filter((m) => m.session === message?.session).map((m, i) => ({ m, i }))
+        .sort((a, b) => (turnAt.get(a.m.id) ?? Number.POSITIVE_INFINITY) - (turnAt.get(b.m.id) ?? Number.POSITIVE_INFINITY) || a.i - b.i)
+        .map(({ m }) => m);
+      const chatWords = chat.map((m) => m.words ?? m.text);
+      const at = message === null ? -1 : chat.findIndex((m) => m.id === message.id);
       // A row's field is one line: the audit writer writes each line break in it as \n (renderAuditBlock).
       const oneLine = (text: string) => text.replace(/\r\n?|\n|\u2028|\u2029/g, "\\n");
       const windowOf = (value: string) => at >= 0 && chatWords.slice(0, at + 1).some((_, from) => oneLine(chatWords.slice(from, at + 1).join("\n")) === value);
-      for (const name of ["Person Reply", "Feedback"]) {
+      // The summary receipt's Feedback is the agent's text after the choice ("Request changes: <what>"), like Reason.
+      for (const name of row.event === "SUMMARY_CONFIRMATION_RECORDED" ? ["Person Reply"] : ["Person Reply", "Feedback"]) {
         const value = field(row, name);
         if (value !== null && message !== null && value !== oneLine(message.words ?? message.text) && !windowOf(value)) {
           failures.push({ invariant: "I2", what: `${row.event} ${name} is not the message's words`, source: "", step: s.i, detail: `${JSON.stringify(clip(value, 120))} vs ${JSON.stringify(clip(message.words ?? message.text, 120))}` });

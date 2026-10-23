@@ -53,8 +53,7 @@ Load this module when the engine lists `summary` in `directive.protocol_modules`
   reply of theirs since you recorded it, or a questions file whose stored
   choice differs from the one you record. When they replied before you recorded
   the prompt (you showed the summary first), add `--message <id>` naming the
-  message that answered it, without asking them again; when the receipt output
-  carries `say`, tell the person that line once.
+  message that answered it, without asking them again.
   An **Other** selection with no words of their own follows the Other-escape
   rule in stage-protocol.md section 1: discuss it, re-present the confirmation, and leave the tag
   and receipt untouched. Every other reply follows the reply-reading rule there.

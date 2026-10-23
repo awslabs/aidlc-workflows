@@ -44,11 +44,12 @@ import {
   markEngineTouch,
   markHumanTurn,
   readAuditShardEvents,
+  stageDir,
   stateFilePath,
   STOP_HOOK_PROBE_ENV,
   turnMarkersShowConversational,
 } from "../../core/tools/aidlc-lib.ts";
-import { FIXTURES_DIR, setupIntegrationProject } from "../harness/fixtures.ts";
+import { FIXTURES_DIR, runOrchestrateNext, setupIntegrationProject } from "../harness/fixtures.ts";
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -467,6 +468,62 @@ describe("t259 the engine's last word ended the turn", () => {
     expect(stopped.stdout).toContain('"decision":"block"');
   });
 
+  // A live Claude Code run: "switch this to the mvp plan", typed while the
+  // agent wrote Intent Capture's questions, ended the turn with "The work picks
+  // up at Intent Capture & Framing." before any question was on screen, and
+  // the person had to say go on. A questions file written after the person's
+  // last turn has not been in front of them, so the setting or switch carries
+  // on to the questions. Once a question is shown (logged), or the file was
+  // there before they typed, or no turn of theirs is marked, the turn ends.
+  test("a setting or switch typed while the agent writes the stage's questions carries on to them", () => {
+    const QUESTIONS = "# Feasibility & Constraints Questions\n\n## Q1. [architect] Where does it run?\nA. Laptop\nB. Cloud\nX. Other (please specify)\n\n[Answer]:\n";
+    for (const typed of [["--depth", "minimal"], ["--scope", "mvp"]]) {
+      for (const written of ["after their turn", "after their turn, then shown", "before their turn", "with no turn marked"] as const) {
+        const label = `${typed.join(" ")}, questions written ${written}`;
+        const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+        tempDirs.push(proj);
+        const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+        delete env[STOP_HOOK_PROBE_ENV];
+        const run = (args: string[]) =>
+          spawnSync(process.execPath, [".claude/tools/aidlc.ts", ...args], { cwd: proj, encoding: "utf-8", env });
+        const dir = stageDir(proj, "ideation", "feasibility");
+        mkdirSync(dir, { recursive: true });
+        const file = join(dir, "feasibility-questions.md");
+        writeFileSync(file, QUESTIONS);
+        if (written === "with no turn marked") {
+          expect(existsSync(humanTurnMarkerPath(proj)), label).toBe(false);
+        } else {
+          markHumanTurn(proj);
+          const turn = statSync(humanTurnMarkerPath(proj)).mtimeMs / 1000;
+          const at = written === "before their turn" ? turn - 5 : turn + 5;
+          utimesSync(file, at, at);
+        }
+        if (written === "after their turn, then shown") {
+          const asked = run(["engine", "log", "decision", "--stage", "feasibility", "--decision", "Q1", "--options", "A. Laptop,B. Cloud,X. Other"]);
+          expect(asked.status, `${label}: ${asked.stdout}${asked.stderr}`).toBe(0);
+        }
+        const printed = JSON.parse(run(["engine", "orchestrate", "next", ...typed]).stdout);
+        expect(printed.kind, label).toBe("print");
+        const command = /`bun \.claude\/tools\/aidlc\.ts (engine [^`]*)`/.exec(printed.message)?.[1];
+        expect(command, `${label}: ${printed.message}`).toBeDefined();
+        if (written === "after their turn") {
+          expect(printed.message, label).toContain("print its output verbatim and re-run next to carry on with the work.");
+          expect(printed.narration, label).toBeUndefined();
+          expect(existsSync(turnEndMarkerPath(proj)), label).toBe(false);
+          // The same turn goes on to the stage, whose questions the agent asks
+          // (past the stage's rules, when they come ahead of it).
+          expect(run(command!.split(" ")).status, label).toBe(0);
+          const after = runOrchestrateNext(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), proj, [], { cwd: proj, env }).directive;
+          expect([after?.kind, after?.stage], label).toEqual(["run-stage", "feasibility"]);
+        } else {
+          expect(printed.message, label).toContain("print its output verbatim and stop.");
+          expect(printed.narration, label).toBe("The work picks up at Feasibility & Constraints.");
+          expect(existsSync(turnEndMarkerPath(proj)), label).toBe(true);
+        }
+      }
+    }
+  });
+
   // A plan proposal waiting for the person's approve, edit or reject is a stop
   // the engine itself put up: the Stop hook honours its marker while it is
   // fresh. A setting typed under it must not hand the agent back to the work
@@ -650,15 +707,6 @@ describe("t259 the stage's work recorded through log leaves the engine mark", ()
     const asked = log("decision", "--stage", "feasibility", "--decision", "Which team?", "--options", "Team A,Team B");
     expect(asked.status, asked.stderr).toBe(0);
     expect(turnMarkersShowConversational(proj)).toBe(true);
-    // The answer before the person replied to the question is refused, and
-    // the refusal tells the agent to show the question and end its turn: the
-    // turn is still the person's to answer, so the stop stays allowed.
-    const early = log("answer", "--stage", "feasibility", "--details", "Team A");
-    expect(early.status, early.stdout).not.toBe(0);
-    expect(early.stderr).toContain("came before this question was logged");
-    expect(early.stderr).toContain("end your turn");
-    expect(turnMarkersShowConversational(proj)).toBe(true);
-
     // The person replies (the prompt hook moves the human mark), and the
     // answer recorded after it is the stage's work going on.
     await Bun.sleep(20);
@@ -716,6 +764,8 @@ describe("t259 the stage's work recorded through log leaves the engine mark", ()
           !/^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_|AIDLC_)/i.test(key) && key !== "TERM_PROGRAM"),
       );
       env.CLAUDE_PROJECT_DIR = proj;
+      // The chat the person typed in, as a real run's command resolves it.
+      env.AIDLC_SESSION_OVERRIDE = "t259-note";
       const run = (args: string[], input?: string) =>
         spawnSync(process.execPath, [".claude/tools/aidlc.ts", "engine", ...args], { cwd: proj, encoding: "utf-8", env, input });
       markEngineTouch(proj);

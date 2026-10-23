@@ -1610,10 +1610,7 @@ kiro-cli chat --agent-engine v2 --agent aidlc, then give it once more." The
 agent is told never to offer to turn a check off for them.
 
 A `log answer` for a question the agent logged after the person's reply is
-refused too, and the refusal says so to the agent. When the person's message is
-on record, it names that message (`--message <id>`), so they are not asked
-again; the line about an answer that didn't reach AI-DLC is said only if no
-message of theirs answers it.
+recorded on that reply: the person is not asked again.
 
 Only `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers human presence, set machine-wide
 or recorded with `aidlc config flags --bypass` (AI-DLC then says it is off).
@@ -1966,19 +1963,16 @@ left a choice to the agent). The same file named from the project folder, or by
 its full path, is read too. The engine reads only that folder, through no link,
 up to 64 KiB, and removes the file once read.
 
-A plain `log answer` needs a reply the person sent after the question was logged
-(or a question box pick of their latest reply still unspent); a reply sent
-before it is no answer to it, and the refusal names the way on.
-`log decision --message <id>` and `log answer --message <id>` name the person's
-message that answered a question the agent logged after the reply arrived. The
-engine proves the record exists, came through this chat, and is not spent by a
-later approval or decision, and reads none of its words; the answer is recorded
-and the person is not asked again. A refused answer names the id when such a
-message exists. The id is engine-to-agent text and is never shown to the person.
-When the answer is recorded for questions logged after that message, the output
-carries `say`, one line for the person naming those questions and the answer as
-recorded, and an `agent_note`: the agent tells them the line once, unless it
-showed them those questions before they replied.
+A plain `log answer` needs a reply of the person's in this chat that no
+decision has used yet, sent before or after the question was logged: which
+question it answers is the agent's reading. The answer's row keeps every such
+reply's words (Person Reply) and names the latest (Message Id); when the engine
+cannot name the chat, it keeps only the id where one chat replied and neither
+where more did, and records the answer either way. `log decision --message <id>` and `log answer --message <id>` name
+one message instead, such as one sent while another engine question was open.
+The engine proves the record exists, came through this chat, and is not spent
+by a later approval or decision, and reads none of its words. The id is
+engine-to-agent text and is never shown to the person.
 See [Hooks and Tools](../reference/06-hooks-and-tools.md#read-only-audit-commands) for pairing rules, ordering, and filters.
 
 ### `aidlc engine bolt set-autonomy` - change Construction approvals
@@ -2966,7 +2960,7 @@ Stages in scope: 22
 Completed: 4/22
 ```
 
-Runs under the audit lock, rejects flips that would starve a remaining stage of a required input, other than a skip you named with `/aidlc --skip`, after which the stages that read it run from what there is (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the protected stage-routing anchor - in either direction, any recompose against a workflow whose Status is not Running, and, under autonomous Construction, a recompose with no request of yours on record, or one run with `AIDLC_UNATTENDED=1`: that refusal names `aidlc-bolt.ts set-autonomy --mode gated`, which switches to stopping for approval at each Bolt), rebuilds the derived state fields, and emits `RECOMPOSED`. Each refusal of a stage names what you can do instead: jump to or past the stage, run it on its own with `/aidlc --stage <slug> --single`, add or skip the stages a missing input involves, or change to a scope that runs or skips it. Reached through `/aidlc --skip <slug>`, `/aidlc --add <slug>`, a jump to a skipped stage, and `/aidlc compose` mid-workflow, not typed directly.
+Runs under the audit lock, rejects flips that would starve a remaining stage of a required input, other than a skip you named with `/aidlc --skip`, after which the stages that read it run from what there is (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the protected stage-routing anchor - in either direction, any recompose against a workflow whose Status is not Running, and, under autonomous Construction, a recompose with no request of yours on record, or one run with `AIDLC_UNATTENDED=1`: that refusal names `aidlc-bolt.ts set-autonomy --mode gated`, which switches to stopping for approval at each Bolt), rebuilds the derived state fields, and emits `RECOMPOSED`. Each refusal of a stage names what you can do instead: jump to or past the stage, run it on its own with `/aidlc --stage <slug> --single`, add or skip the stages a missing input involves, or change to a scope that runs or skips it. Reached through `/aidlc --skip <slug>`, `/aidlc --add <slug>`, a jump to a skipped stage, and `/aidlc compose` mid-workflow, not typed directly. For a change you approved at a `/aidlc compose` question (its marker `aidlc/.aidlc-compose-pending` still on disk and fresh), the output ends with one more line for the agent: delete the marker and run `next`, so your work carries on in the same turn.
 
 ### `aidlc engine scope save` - keep a plan as a scope
 

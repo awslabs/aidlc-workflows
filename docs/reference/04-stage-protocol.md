@@ -113,7 +113,7 @@ with a fresh timestamp.
 | # | Check |
 |---|-------|
 | 1 | At the approval gate, call `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. When `ceremony.sensors` is `on`, gate-bound sensors run once per existing deliverable (`upstream-coverage` and `claim-sources` once per output folder) before the transaction when a person will answer the gate (a gate the engine approves itself under Construction autonomy runs only its blocking sensors). A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
-| 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `aidlc engine log decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc engine log answer`. A question logged after the person already replied takes that reply with `--message <id>` (the refusal names the id); the person is never asked again. |
+| 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `aidlc engine log decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc engine log answer`. A question logged after the person already replied takes that reply (any reply of theirs in this chat that no decision has used yet); `--message <id>` names one sent while another engine question was open. The person is never asked again. |
 | 3 | After an approval-gate response, call `aidlc engine orchestrate report --stage <slug> --result approved --user-input "Approve"` for approval or `aidlc engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"` for request-changes, passing the choice they made by its label (the engine keeps their own words as the feedback; add `--reason '<what they asked to change>'` only to say more). Never call the log tool's `decision` or `answer` verb for the gate. After revision work, report `--result revised` before re-presenting it. |
 | 4 | Record the choice the person made, read from their reply; the human-turn hook keeps their exact words with it. Never choose for them or paraphrase their words in an answer or note; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
@@ -476,9 +476,11 @@ and an unclear reply gets one short follow-up.
   talk it through."
 - After each batch, IMMEDIATELY write answers to the questions file
 - A resumed stage whose questions file still has a blank answer carries
-  `kept_replies` on its `run-stage`: what the person replied that no answer
-  holds yet, in order, after the stage's answers already on record. Record
-  those answers first; never ask them again
+  `kept_replies` on its `run-stage`: every reply of the person's since the
+  stage started that no decision has used yet, in order, beside the stage's
+  questions and answers on record, unpaired. The agent reads which reply
+  answers which question and records what is not on record yet first; never
+  ask them again
 - A stage resumed where the work was parked carries `parked_reply` on its
   `run-stage`: what the person said when they stopped the work there (the
   `WORKFLOW_PARKED` row keeps their words), with one note. Read it before
@@ -500,9 +502,8 @@ and an unclear reply gets one short follow-up.
   record it with the matching `aidlc-log.ts answer` command (`--details "Looks
   correct"`, or `--details 'Request changes: <what they asked to change>'`). The
   receipt binds the human turn to the exact questions-file digest and keeps
-  their words. A reply that came before the prompt was recorded still counts,
-  and the receipt output's `say` line tells the person once what was recorded
-  for which question. On **Request
+  their words. A reply that came before the prompt was recorded counts when the
+  agent names it with `--message <id>`. On **Request
   changes**, ask **"What should change?"** only when they did not say, and stop
   again before editing any answer. After feedback and revision, reset the confirmation to
   blank before re-prompting. A reply that picks neither choice gets the one

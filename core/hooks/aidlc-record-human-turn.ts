@@ -93,7 +93,6 @@ import {
   sortAttemptEvents,
   splitKiroCommandArgs,
   stateFilePath,
-  stripRecommendedDecorator,
   suppliedTurnOrigin,
   swarmWorkerWorktreeMeta,
   terminalCommandRelay,
@@ -368,14 +367,6 @@ function stoppedReviewNote(projectDir: string): string | null {
   return null;
 }
 
-// The words a person typed into a single-choice picker's free-text field. A
-// pick of one of the offered labels is the conductor's wording, not theirs.
-function pickerFreeText(text: string, picker: PlanApprovalPickerQuestion | undefined): string {
-  if (!picker || !text || picker.severalPicks || picker.options === null) return "";
-  const typed = stripRecommendedDecorator(text).toLowerCase();
-  return picker.options.some((label) => stripRecommendedDecorator(label).toLowerCase() === typed) ? "" : text;
-}
-
 // What a question box carried back, one entry per question it asked: the
 // question as shown and the reply as given, verbatim. Claude Code keys each
 // reply by its question; Codex keys it by the question's id, with a list of
@@ -440,6 +431,29 @@ function pickerReplies(
   } catch {
     return { entries: [], cut };
   }
+}
+
+// The choices each question of a question box offered, keyed by the question
+// as shown, for the record. A question whose choices the hook cannot read is
+// left out.
+function pickerOptions(input: string): Map<string, string[]> {
+  const options = new Map<string, string[]>();
+  try {
+    const payload = JSON.parse(input) as { tool_input?: unknown; toolInput?: unknown };
+    const toolInput = payload.tool_input ?? payload.toolInput;
+    const asked = toolInput !== null && typeof toolInput === "object" &&
+        Array.isArray((toolInput as Record<string, unknown>).questions)
+      ? (toolInput as { questions: unknown[] }).questions
+      : [];
+    for (const entry of asked) {
+      const question = entry !== null && typeof entry === "object" ? (entry as Record<string, unknown>).question : null;
+      const labels = extractOptionLabels(entry);
+      if (typeof question === "string" && labels !== null) options.set(question, labels);
+    }
+  } catch {
+    // A payload that does not parse offers nothing to record.
+  }
+  return options;
 }
 
 // Every pick a picker reply reports, in its order: one label per question, or
@@ -541,7 +555,7 @@ try {
   // harness reports it under, so it pairs only with the recorded question.
   let pickerQuestion: PlanApprovalPickerQuestion | undefined;
   let pickerUnanswered = false;
-  // Every pick a picker reply carried, for the record (pickerAnswerNote).
+  // Every pick a picker reply carried, for the record.
   let picked: string[] = [];
   // Who sent this turn. An adapter that read its host's own signals says so in
   // `origin`; Claude Code's transcript is read here; anything unknown is a
@@ -844,11 +858,14 @@ try {
             ...(messageId ? { "Message Id": messageId } : {}),
           }, projectDir);
           // Keep what the person typed in this chat (recordGateWords in
-          // aidlc-lib.ts). A command to AIDLC instructs the framework; of a
-          // picker reply, free text typed into it counts. Never blocks the turn.
+          // aidlc-lib.ts). A command to AIDLC instructs the framework; the one
+          // answer a single-choice box carried back counts, since the host
+          // gives no mark between a pick and text typed into it (several picks
+          // are the row's Picked). Never blocks the turn.
           const typedWords = openQuestion !== null ? "" : typedPrompt
             ? (notAReply ? "" : entryReply ?? typedPrompt)
-            : pickerFreeText(humanResponseText, pickerQuestion);
+            : pickerQuestion === undefined || pickerQuestion.severalPicks || pickerQuestion.options === null
+            ? "" : humanResponseText;
           if (sessionId && typedWords) {
             try {
               recordGateWords(projectDir, sessionId, typedWords);
@@ -879,12 +896,15 @@ try {
           // after the turn's words, which are kept at the shard's size just
           // after its row.
           if (pickerQuestion !== undefined && !notAReply) {
+            const offered = pickerOptions(input);
             for (const { question, reply } of pickerReplies(input).entries) {
               if (reply === null) continue; // a question left blank carried no pick
+              const options = offered.get(question);
               appendAuditEntryUnlocked("QUESTION_REPLIED", {
                 ...(sessionId ? { Session: sessionId } : {}),
                 Question: question,
                 Reply: reply,
+                ...(options !== undefined ? { Options: JSON.stringify(options) } : {}),
               }, projectDir);
             }
           }

@@ -1,4 +1,4 @@
-// covers: hook:aidlc-review-freeze, file:hooks/aidlc-kiro-adapter.ts, hook:review-freeze-command, function:freshReviewReceipts, function:producesArtifactFile, function:producesArtifactUnit, audit:REVIEW_FREEZE_BLOCKED, function:guardRefusalHookNote, function:pendingGuardRecoveryAsk
+// covers: hook:aidlc-review-freeze, file:hooks/aidlc-kiro-adapter.ts, hook:review-freeze-command, function:leadingDirectoryChange, function:freshReviewReceipts, function:producesArtifactFile, function:producesArtifactUnit, audit:REVIEW_FREEZE_BLOCKED, function:guardRefusalHookNote, function:pendingGuardRecoveryAsk
 //
 // t264 - the deterministic PreToolUse enforcement of the §12a terminal-receipt
 // ordering (the receipt-invalidation loop's hook half; the prose half is
@@ -53,6 +53,7 @@ import { basename, dirname, join, relative, relative as relativePath, resolve } 
 import {
   blockReason,
   judgeFreeze,
+  leadingDirectoryChange,
   REVIEW_FREEZE_FALLBACK_GUIDANCE,
   reviewFreezeRecoveryGuidance,
   shellCommandAltersExecutableResolution,
@@ -669,6 +670,65 @@ describe("t264 (a) judgeFreeze decision table", () => {
     // The POSIX reading of the same line drops the backslashes.
     expect(writeTargets("Bash", { command: "cd .kiro\\hooks; echo x > y.json" }, "/p")
       .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""))).not.toContain("/p/.kiro/hooks/y.json");
+  });
+
+  // The plan-approval guard reads the rest of a line from where its first `cd`
+  // leads only when the shell is certain to be there when the rest runs.
+  test("leadingDirectoryChange follows only a first move it is certain of", () => {
+    const root = createTestProject();
+    tempDirs.push(root);
+    const dir = join(root, "proj");
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(root, "file.txt"), "x\n");
+    const q = (word: string) => `'${word}'`;
+    const move = (command: string, shell: "posix" | "powershell" = "posix") =>
+      leadingDirectoryChange(command, root, shell);
+    for (const [command, shell] of [
+      [`cd ${q(dir)} && aidlc doctor`, "posix"],
+      [`cd -- ${q(dir)}; aidlc doctor`, "posix"],
+      [`cd ${q(dir)}\naidlc doctor`, "posix"],
+      // A drive letter in either case names the same drive.
+      [`cd ${q(dir.replace(/^[A-Z](?=:)/, (drive) => drive.toLowerCase()))} && aidlc doctor`, "posix"],
+      [`Set-Location -LiteralPath ${q(dir)} ; aidlc doctor`, "powershell"],
+      [`sl ${q(dir)} ; aidlc doctor`, "powershell"],
+      [`Push-Location ${q(dir)} ; aidlc doctor`, "powershell"],
+    ] as const) {
+      const followed = move(command, shell);
+      expect(followed?.dir.toLowerCase(), command).toBe(resolve(dir).toLowerCase());
+      expect(followed?.rest.trim(), command).toBe("aidlc doctor");
+    }
+    // Folders the lexer would name but the shell would not enter: bash drops a
+    // backslash-newline inside quotes, and does not split a word at U+00A0.
+    if (process.platform !== "win32") mkdirSync(join(root, "a\nb"));
+    mkdirSync(`${dir}\u00a0`);
+    // A relative or computed folder, one that is missing or a file, a second
+    // operand or an option, a group, a redirect, a join that runs the rest
+    // anyway or elsewhere, a wrapper, POSIX pushd, nothing after the join, and
+    // a line whose continuations or blanks the lexer reads differently.
+    for (const command of [
+      "cd proj && aidlc doctor",
+      `cd ${q(`${dir}/src/..`)} && aidlc doctor`,
+      `cd ${q(join(root, "missing"))}; aidlc doctor`,
+      `cd ${q(join(root, "file.txt"))}; aidlc doctor`,
+      `cd ${q(dir)} ${q(dir)} && aidlc doctor`,
+      `cd -P ${q(dir)} && aidlc doctor`,
+      'cd "$HOME" && aidlc doctor',
+      `cd ${q(`${dir}*`)} && aidlc doctor`,
+      `(cd ${q(dir)} && aidlc doctor)`,
+      `{ cd ${q(dir)}; aidlc doctor; }`,
+      `cd ${q(dir)} 2>/dev/null && aidlc doctor`,
+      `cd ${q(dir)} || aidlc doctor`,
+      `cd ${q(dir)} | aidlc doctor`,
+      `cd ${q(dir)} & aidlc doctor`,
+      `builtin cd ${q(dir)} && aidlc doctor`,
+      `pushd ${q(dir)} && aidlc doctor`,
+      `cd ${q(dir)} && `,
+      `cd ${q(dir)}`,
+      `cd "${join(root, "a\\\nb")}" && aidlc doctor`,
+      `cd ${q(dir)}\u00a0 && aidlc doctor`,
+    ]) {
+      expect(move(command), command).toBeNull();
+    }
   });
 
   test("writeTargets: a PowerShell command is read as PowerShell (#1639)", () => {

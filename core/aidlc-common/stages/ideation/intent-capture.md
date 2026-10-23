@@ -208,7 +208,9 @@ Otherwise:
    and these options: `A. Accept assumptions` and
    `B. Convert to follow-up questions`.
 2. Present those two options as a structured question, log it through the
-   standard question decision/answer pair, END YOUR TURN, and wait.
+   standard question decision/answer pair (`log decision` with
+   `--question-kind assumption-confirmation`, then `log answer` with the
+   choice they made), END YOUR TURN, and wait.
 3. On `Accept assumptions`, fill the confirmation answer exactly as
    `[Answer]: A. Accept assumptions` and retain the `[assumption]` labels.
    Acceptance does not turn an assumption into fact.

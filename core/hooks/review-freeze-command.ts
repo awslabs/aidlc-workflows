@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { accessSync, constants, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 // The file-writing tools whose targets the freeze inspects. Read-only tools
@@ -1734,6 +1734,50 @@ function traceabilityTableWrite(args: readonly string[]): string | undefined {
     if (args[i].startsWith("--output-path=")) return args[i].slice("--output-path=".length);
   }
   return undefined;
+}
+
+/**
+ * The folder a command line's first command moves the shell to from `cwd`,
+ * and the rest of the line, which runs there: `cd <folder>` (read as
+ * PowerShell, any of its location changes, bound as powerShellLocationChanges
+ * binds them) joined to the rest by `&&`, `;` or a newline. Null unless the
+ * folder is certain: one literal absolute operand with no glob, `.` or `..`
+ * part, naming a folder that exists and can be entered now (so after a `;` the
+ * rest runs there too). On Windows the folder names the drive `cwd` is on, in
+ * either case: cmd.exe's `cd` never changes the drive, and Git Bash reads `/x`
+ * from its own root. A group, subshell, redirect, variable, option or wrapper on
+ * the move is not followed, nor is a line whose whitespace or continuations the
+ * lexer decodes differently from the shell.
+ */
+export function leadingDirectoryChange(
+  command: string,
+  cwd: string,
+  shell: CommandShell = "posix",
+): { dir: string; rest: string } | null {
+  if (/[^\S \t\n]/u.test(command) || command.includes("\\\n")) return null;
+  const [first] = shellCommandSegments(command);
+  const joint = /^(?:&&|;|\n)/.exec(command.slice(first.length))?.[0];
+  const rest = command.slice(first.length + (joint?.length ?? 0));
+  if (joint === undefined || rest.trim() === "" || /[()<>{}[\]*?$`]/.test(first)) return null;
+  const [name = "", ...args] = shellWords(first);
+  const move = name === "cd" && args.length === (args[0] === "--" ? 2 : 1) ? directoryChange(name, args) : "unknown";
+  const operands = shell === "powershell"
+    ? Object.hasOwn(POWERSHELL_LOCATION_COMMANDS, name.toLowerCase()) ? powerShellLocationChanges(first, 0) : []
+    : typeof move === "object" ? [move.operand] : [];
+  const operand = operands.length === 1 ? operands[0] : null;
+  if (
+    typeof operand !== "string" || !isAbsolute(operand) ||
+    operand.split(/[\\/]+/).some((part) => part === "." || part === "..") ||
+    (process.platform === "win32" &&
+      !(/^[A-Za-z]:[\\/]/.test(operand) && operand[0].toLowerCase() === resolve(cwd)[0].toLowerCase()))
+  ) return null;
+  const dir = resolve(operand);
+  try {
+    accessSync(dir, constants.X_OK);
+    return statSync(dir).isDirectory() ? { dir, rest } : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -1128,13 +1128,14 @@ describe("t342 Construction checkpoint routing", () => {
     expect(policyChoice(p, "decision", field, "disabled").status).toBe(0);
     policyHuman(p, "Approve");
     expect(policyChoice(p, "answer", field, "enabled").status).not.toBe(0);
-    // Re-presenting a proposal invalidates the old hook response.
-    expect(policyChoice(p, "decision", field, "disabled").status).toBe(0);
-    expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
     // The typed reply is the agent's to read; its Request Changes records no change.
+    expect(policyChoice(p, "decision", field, "disabled").status).toBe(0);
     policyHuman(p, "Request Changes");
     expect(policyChoice(p, "answer", field, "disabled", "t342-policy", "Request Changes").status).toBe(0);
     expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
+    // That reply is used now: the proposal shown again waits for a new one.
+    expect(policyChoice(p, "decision", field, "disabled").status).toBe(0);
+    expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
     expect(readFileSync(seededStateFile(p))).toEqual(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

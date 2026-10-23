@@ -17,9 +17,9 @@ import {
   holdsQuote,
   latestSpendingTimestamp,
   listMessages,
-  messageIsReply,
   personsSaidWords,
   proveMessage,
+  readMessage,
   type StoredMessage,
 } from "./aidlc-message-store.ts";
 import {
@@ -55,6 +55,7 @@ import {
   protectedQuestionRelativePath,
   mintProtectedQuestion,
   protectedTargetDigest,
+  readProtectedQuestion,
   readProtectedResponse,
   protectedReplyFloor,
   requireProtectedResponse,
@@ -122,6 +123,8 @@ import {
   QUESTION_KIND_FIELD,
   answerModeFromReply,
   isAnswerModeDecision,
+  offeredChoiceLabel,
+  ASSUMPTION_CONFIRMATION_QUESTION_KIND,
   openDecisionBlock,
   isoTimestamp,
   latestPipelineLinkArtifactMtime,
@@ -142,7 +145,7 @@ import {
   readAuditShardEvents,
   backgroundAgentOutSince,
   isRequestTurn,
-  latestPersonTurn,
+  personsGateReply,
   personSpokeSinceReviewRequest,
   ANSWER_SOURCE_ON_INSTRUCTION,
   unitSkippedUnits,
@@ -196,7 +199,6 @@ import {
   resolveWorkflowSelection,
   resolveReviewClass,
   stripRecommendedDecorator,
-  pickerAnswerNote,
   isSummaryConfirmationChoice,
   isSummaryConfirmationOptions,
   isLearningsNoteDecision,
@@ -966,8 +968,8 @@ function demoteReviewHeadings(body: Buffer): { bytes: Buffer; changed: string[] 
 
 // --- Subcommand: decision ---
 // Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>]
-//   [--rationale <text>] [--question-kind answer-mode|learnings-note] [--checkpoint summary-confirmation
-//   --questions-file <path> [--unit <unit>] [--single]]
+//   [--rationale <text>] [--question-kind answer-mode|learnings-note|assumption-confirmation]
+//   [--checkpoint summary-confirmation --questions-file <path> [--unit <unit>] [--single]]
 //
 // Fires BEFORE AskUserQuestion, recording what options will be shown.
 // The chat this command serves, when the engine can tell (the hook's override,
@@ -991,105 +993,6 @@ function decisionRowsInScope(rows: AuditShardEvent[], stage: string, unit: strin
 function latestDecisionMessageId(pd: string, stage: string, unit: string | undefined): string | null {
   const question = decisionRowsInScope(readAuditShardEvents(pd), stage, unit).at(-1);
   return question === undefined ? null : auditBlockField(question.block, "Message Id");
-}
-
-// The person's messages that arrived before the latest question of this scope
-// was logged: the turn row naming the message orders it against the question
-// row; a message with no turn row yet (new work's first message) by time.
-function messagesBeforeQuestion(pd: string, stage: string, unit: string | undefined): StoredMessage[] {
-  const rows = readAuditShardEvents(pd);
-  const question = decisionRowsInScope(rows, stage, unit).at(-1);
-  if (question === undefined) return [];
-  const spentAt = latestSpendingTimestamp(rows);
-  const chat = invokingChat(pd);
-  // With no chat the engine can name, the hint follows the proof's one-chat rule.
-  if (chat === null && chatsSince(rows, pd, spentAt).size > 1) return [];
-  const turnOf = new Map<string, AuditShardEvent>();
-  for (const row of rows) {
-    if (row.event !== "HUMAN_TURN") continue;
-    const id = auditBlockField(row.block, "Message Id");
-    if (id !== null) turnOf.set(id, row);
-  }
-  const before = (row: AuditShardEvent): boolean =>
-    row.shardIndex === question.shardIndex ? row.pos < question.pos : row.timestamp < question.timestamp;
-  return listMessages(pd).filter((message) => {
-    if (chat !== null && message.session !== chat) return false;
-    if (spentAt !== null && message.at < spentAt) return false;
-    if (!messageIsReply(rows, message)) return false;
-    const turn = turnOf.get(message.id);
-    return turn === undefined ? message.at < question.timestamp : before(turn);
-  });
-}
-
-// Whether the person's reply answers the latest question of this scope: a reply
-// turn provably after the question's row (same shard by position, another shard
-// by a later second), or a question box pick of their latest reply still
-// unspent (a box answers the questions it showed, whenever the agent logs them).
-// A reply sent before the question was logged is no reply to it: the agent
-// names that message (--message) when it does answer, or records the choice the
-// person left to it (--on-instruction). No question in scope asks nothing here.
-function replyAnswersQuestion(pd: string, stage: string, unit: string | undefined): boolean {
-  const rows = readAuditShardEvents(pd);
-  const question = decisionRowsInScope(rows, stage, unit).at(-1);
-  if (question === undefined) return true;
-  const after = (row: AuditShardEvent, than: AuditShardEvent): boolean =>
-    row.shardIndex === than.shardIndex ? row.pos > than.pos : row.timestamp > than.timestamp;
-  const replies = rows.filter((row) => isReplyTurn(row));
-  if (replies.some((row) => after(row, question))) return true;
-  const turn = replies.reduce<AuditShardEvent | null>((latest, row) => latest === null || after(row, latest) ? row : latest, null);
-  if (turn === null) return false;
-  const picks = rows.filter((row) => row.event === "QUESTION_REPLIED" && row.shardIndex === turn.shardIndex && row.pos > turn.pos).length;
-  const answers = rows.filter((row) => row.event === "QUESTION_ANSWERED" && after(row, turn)).length;
-  return answers < picks;
-}
-
-// The ordinary questions of this scope logged after the person's message that
-// answers them and not answered yet: the person may never have seen them. A
-// message is ordered against a question as messagesBeforeQuestion orders it.
-function questionsLoggedAfter(pd: string, stage: string, unit: string | undefined, message: StoredMessage): string[] {
-  const rows = readAuditShardEvents(pd);
-  const after = (row: AuditShardEvent, than: AuditShardEvent): boolean =>
-    row.shardIndex === than.shardIndex ? row.pos > than.pos : row.timestamp > than.timestamp;
-  const turn = rows.find((row) => row.event === "HUMAN_TURN" && auditBlockField(row.block, "Message Id") === message.id);
-  const answered = rows.filter((row) =>
-    row.event === "QUESTION_ANSWERED" && auditBlockField(row.block, "Stage") === stage &&
-    (unit === undefined || auditBlockField(row.block, "Unit") === unit)).at(-1);
-  return decisionRowsInScope(rows, stage, unit)
-    .filter((row) => auditBlockField(row.block, "Checkpoint") === null)
-    .filter((row) => turn === undefined ? message.at < row.timestamp : after(row, turn))
-    .filter((row) => answered === undefined || after(row, answered))
-    .map((row) => (auditBlockField(row.block, "Decision") ?? "").replace(/\s+/g, " ").trim())
-    .filter((question) => question !== "");
-}
-
-// What the person is told when their reply answered questions they may never
-// have seen: the answer as recorded and the questions it was taken for. Only
-// the agent knows whether it showed them the questions, so the note leaves it
-// that call.
-function takenFromReply(questions: string[], details: string): { say: string; note: string } {
-  const quoted = questions.map((question) => `"${question}"`);
-  const named = quoted.length === 1 ? quoted[0] : `${quoted.slice(0, -1).join(", ")} and ${quoted.at(-1)}`;
-  const one = questions.length === 1;
-  return {
-    say: `From your reply I took "${details.replace(/\s+/g, " ").trim()}" for ${named}, which I had not asked you ` +
-      "yet. Tell me if you meant something else.",
-    note: `Unless you showed the person ${one ? "that question" : "those questions"} before they replied, tell them ` +
-      "the say line once, giving each choice in its words where it shows only a letter; if you showed " +
-      `${one ? "it" : "them"}, say nothing about it.`,
-  };
-}
-
-function lateQuestionHint(candidates: StoredMessage[]): string {
-  const shown = candidates.map((message) => {
-    const words = (message.words ?? message.text).replace(/\s+/g, " ").trim();
-    return `${message.id} "${words.length > 40 ? `${words.slice(0, 40)}...` : words}"`;
-  });
-  if (candidates.length === 1) {
-    return `The person's message arrived before this question was logged: ${shown[0]}. If it answers the question, ` +
-      `record the answer with --message ${candidates[0].id}; do not ask them again.`;
-  }
-  return `The person's messages arrived before this question was logged: ${shown.join(", ")}. If one answers the ` +
-    "question, record the answer with --message <id>, the id of the message it answers; do not ask them again.";
 }
 
 function handleDecision(args: string[]): void {
@@ -1172,12 +1075,16 @@ function handleDecision(args: string[]): void {
   // names it; the answer reads the field, never the question's words.
   if (flags["question-kind"] !== undefined) {
     const kind = flags["question-kind"];
-    if (kind !== ANSWER_MODE_QUESTION_KIND && kind !== LEARNINGS_NOTE_QUESTION_KIND) {
+    if (
+      kind !== ANSWER_MODE_QUESTION_KIND && kind !== LEARNINGS_NOTE_QUESTION_KIND &&
+      kind !== ASSUMPTION_CONFIRMATION_QUESTION_KIND
+    ) {
       error(
         `--question-kind ${JSON.stringify(kind)} is not a kind log decision records. Its kinds are ` +
-          `"${ANSWER_MODE_QUESTION_KIND}", for the question of how the person answers a stage's questions, and ` +
-          `"${LEARNINGS_NOTE_QUESTION_KIND}", for the learnings question "${LEARNINGS_NOTE_QUESTION}"; leave ` +
-          "the flag off for any other question.",
+          `"${ANSWER_MODE_QUESTION_KIND}", for the question of how the person answers a stage's questions, ` +
+          `"${LEARNINGS_NOTE_QUESTION_KIND}", for the learnings question "${LEARNINGS_NOTE_QUESTION}", and ` +
+          `"${ASSUMPTION_CONFIRMATION_QUESTION_KIND}", for Intent Capture's Assumption Confirmation; leave the ` +
+          "flag off for any other question.",
       );
     }
     fields[QUESTION_KIND_FIELD] = kind;
@@ -1220,8 +1127,8 @@ function handleDecision(args: string[]): void {
     Object.assign(fields, claimAttemptFields(pd, flags.unit));
   }
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
-  // A question logged after the person already replied names the message that
-  // answered it; its answers inherit the id.
+  // A question logged with the message that answered it names it; its answers
+  // inherit the id.
   if (flags.message !== undefined) {
     const proof = proveMessage(pd, flags.message, "decision");
     if ("refusal" in proof) error(proof.refusal);
@@ -1506,7 +1413,7 @@ function pendingSummaryDecision(
   unit: string | undefined,
   workflow: string | undefined,
   questionsFile: string,
-): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string; question?: string } {
+): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string } {
   const entries = readAuditShardEvents(pd).filter((entry) => {
     // A turn that was only a command to AIDLC is no reply to the summary.
     if (entry.event === "HUMAN_TURN") return isReplyTurn(entry);
@@ -1638,11 +1545,7 @@ function pendingSummaryDecision(
       ambiguity: latestActionTimestamp,
     };
   }
-  return {
-    pending: true,
-    humanAfterDecision: false,
-    question: auditBlockField(latestActions[0].block, "Decision") ?? undefined,
-  };
+  return { pending: true, humanAfterDecision: false };
 }
 
 // Which chat's reply answers it is the protected question's (requireProtectedResponse):
@@ -1693,27 +1596,6 @@ function pendingConstructionPolicyDecision(pd: string, stage: string, field: str
     auditBlockField(decision.block, "Value") === value;
 }
 
-
-// The offered choice the conductor's --details names: the label itself, in any
-// case, after an optional option prefix ("1." or "B)") and without the
-// "(Recommended)" decorator, optionally followed by what the person asked
-// (`rest`). This checks the conductor's input names an offered choice; it never
-// reads the person's meaning, which is the conductor's to read.
-function offeredChoiceLabel(details: string, choices: readonly string[]): { choice: string; rest: string } | null {
-  const text = stripRecommendedDecorator(details.trim())
-    .replace(/^(?:(?:[A-Za-z]|\d+)[.)])\s*/, "")
-    .replace(/^["'`]+|["'`]+$/g, "")
-    .trim();
-  for (const choice of choices) {
-    const head = text.slice(0, choice.length);
-    if (head.toLowerCase() !== choice.toLowerCase()) continue;
-    const tail = text.slice(choice.length);
-    if (tail === "" || /^[\s:;,.!-]/.test(tail)) {
-      return { choice, rest: tail.replace(/^[\s:;,.!-]+/, "").trim() };
-    }
-  }
-  return null;
-}
 
 // The person's own words for a protected question, as the human-turn hook kept
 // them, for the receipt.
@@ -1882,12 +1764,29 @@ function answerEnginePlanApproval(
   console.log(JSON.stringify({ recorded: choice, message }));
 }
 
-// The person's message the agent names (--message) as the reply to the
-// verification command or a Construction policy question: after the stage started.
+// The person's message behind the answer to the verification command or a
+// Construction policy question, after the stage started: the one the agent
+// names (--message), or, when the hook kept no reply to the question (the agent
+// showed it before logging it), their latest typed reply in this chat that no
+// decision has used yet, as for the agent's other questions. A question box's
+// reply answered the question the box listed, and the hook already kept it when
+// that was this one. A Request Changes recorded on one of this chat's protected
+// questions used the replies before it, though it spends nothing elsewhere.
 function namedProtectedReply(
-  pd: string, stage: string, message: string | undefined,
+  pd: string, stage: string, session: string, message: string | undefined,
 ): { message: string; floor: string | null } | undefined {
-  return message === undefined ? undefined : { message, floor: protectedReplyFloor(pd, [stage]) };
+  const floor = protectedReplyFloor(pd, [stage]);
+  if (message !== undefined) return { message, floor };
+  const question = readProtectedQuestion(pd, session);
+  if (question !== null && readProtectedResponse(pd, session)?.challengeId === question.challengeId) return undefined;
+  const rows = readAuditShardEvents(pd);
+  const declined = rows.findLastIndex((row) => row.event === "QUESTION_ANSWERED" &&
+    auditBlockField(row.block, "Session") === session &&
+    [VERIFICATION_COMMAND_CHECKPOINT, CONSTRUCTION_POLICY_CHECKPOINT].includes(auditBlockField(row.block, "Checkpoint") ?? ""));
+  const since = new Set(rows.slice(declined + 1).map((row) => auditBlockField(row.block, "Message Id")));
+  const typed = personsGateReply(pd, session, stage).replies
+    .findLast((reply) => since.has(reply.id) && readMessage(pd, reply.id)?.source === "prompt");
+  return typed === undefined ? undefined : { message: typed.id, floor };
 }
 
 function handleAnswer(args: string[]): void {
@@ -2184,7 +2083,7 @@ function handleAnswer(args: string[]): void {
         kind: "verification-command",
         targetDigest: protectedTargetDigest({ commandSha256: verificationCommand.sha256 }),
         choice: flags.details,
-      }, namedProtectedReply(pd, flags.stage, flags.message));
+      }, namedProtectedReply(pd, flags.stage, fields.Session, flags.message));
       Object.assign(fields, protectedPersonsWords(pd, fields.Session));
       const emitted = flags.details === "Approve" ? "VERIFICATION_COMMAND_RECORDED" : "QUESTION_ANSWERED";
       if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", fields);
@@ -2202,7 +2101,7 @@ function handleAnswer(args: string[]): void {
         kind: "construction-policy",
         targetDigest: protectedTargetDigest({ field: fields.Field, value: fields.Value }),
         choice: flags.details,
-      }, namedProtectedReply(pd, flags.stage, flags.message));
+      }, namedProtectedReply(pd, flags.stage, fields.Session, flags.message));
       Object.assign(fields, protectedPersonsWords(pd, fields.Session));
       const emitted = flags.details === "Approve" ? "CONSTRUCTION_POLICY_RECORDED" : "QUESTION_ANSWERED";
       // Append first: a failed append leaves the human's one-shot answer retryable.
@@ -2269,13 +2168,13 @@ function handleAnswer(args: string[]): void {
           }).step);
         }
       }
-      // Their words go on the receipt. A reply that came before the question
-      // was recorded is the conductor's reading, so the engine says it back.
-      const words = named !== null ? named.words : latestPersonTurn(pd)?.words;
-      if (named !== null) fields["Message Id"] = named.id;
+      // Their words go on the receipt: the message named, or every reply of
+      // theirs in this chat that no decision has used yet (personsGateReply).
+      const reply = named !== null ? null : personsGateReply(pd, invokingChat(pd), flags.stage);
+      const words = named !== null ? named.words : reply!.words;
+      const messageId = named !== null ? named.id : reply!.messageId;
+      if (messageId) fields["Message Id"] = messageId;
       if (words && !isNonAnswer(words)) fields["Person Reply"] = words;
-      const kept = words && !isNonAnswer(words) ? `"${words.replace(/\s+/g, " ").trim()}"` : "reply";
-      const sayBack = pending.question !== undefined ? `Recorded your ${kept} for "${pending.question}".` : null;
       // The confirmation authorizes the outputs generated from it. Mint the
       // authorization id from the attempt, the scope, and the confirmed content
       // (identical confirmations mint the same id; changed answers a new one),
@@ -2380,7 +2279,6 @@ function handleAnswer(args: string[]): void {
           choice: flags.details,
           ...(positive ? { summary_authorization_id: authorization.id } : {}),
           ...(summaryFeedback !== null ? { feedback: summaryFeedback } : {}),
-          ...(sayBack !== null ? { say: sayBack } : {}),
           ...(asksWhat ? { agent_note: 'Ask "What should change?" and end the turn; their next reply is what should change.' } : {}),
         }),
       );
@@ -2562,15 +2460,17 @@ function handleAnswer(args: string[]): void {
       }
     }
     // The person's own words go on the record beside the choice the agent read
-    // in them, as they do at a gate and for the engine's own questions.
-    // Read before this answer is on record, which would close the questions.
-    const taken = named === null ? [] : questionsLoggedAfter(pd, flags.stage, flags.unit, named);
+    // in them, as they do at a gate: the message named, or every reply of
+    // theirs in this chat that no decision has used yet (personsGateReply).
+    // Which question a reply answers is the agent's reading, so a question
+    // logged after the reply that answers it records on that reply.
     if (named !== null) {
       fields["Message Id"] = named.id;
       if (named.words && !isNonAnswer(named.words)) fields["Person Reply"] = named.words;
     } else if (instruction === undefined && !autonomousDecision) {
-      const words = latestPersonTurn(pd)?.words;
-      if (words && !isNonAnswer(words)) fields["Person Reply"] = words;
+      const reply = personsGateReply(pd, invokingChat(pd), flags.stage);
+      if (reply.words) fields["Person Reply"] = reply.words;
+      if (reply.messageId) fields["Message Id"] = reply.messageId;
     }
     if (instruction !== undefined) {
       if (!personSpokeInThisWork(pd)) {
@@ -2593,48 +2493,15 @@ function handleAnswer(args: string[]): void {
       // scoped test off-switch
     } else if (named !== null) {
       // The proved message is the person's reply to this question.
-    } else if (humanActedSinceLastAnswer(pd) && !replyAnswersQuestion(pd, flags.stage, flags.unit)) {
-      // A reply is on record since the last decision, but it came before this
-      // question was logged, so it is no answer to it (an answer recorded on it
-      // would carry words the person never gave to this question). The agent
-      // names the message when it does answer, records the choice the person
-      // left to it as theirs to leave, or shows the question and waits.
-      const late = messagesBeforeQuestion(pd, flags.stage, flags.unit);
-      error(
-        "Cannot record this answer: the person's last reply came before this question was logged, so it does " +
-          "not answer it." + (late.length > 0 ? ` ${lateQuestionHint(late)}` : "") +
-          " If they left the choice to you in their own words, record it with --on-instruction '<their words>'. " +
-          "Otherwise show the question and end your turn; their next reply answers it.",
-      );
     } else if (!humanActedSinceLastAnswer(pd)) {
-      // One reply answers every question that was open when it arrived, each
-      // as its own answer: an answer spends no reply. A question asked after
-      // it waits for the next reply, unless the person's message that
-      // answered it arrived before it was logged: then the agent names that
-      // message instead of asking again.
-      // The steps for a reply the hooks missed hold only when the person's
-      // reply did not answer this question: said bare beside a message that
-      // did, they told the person an answer that had arrived was lost.
-      const late = messagesBeforeQuestion(pd, flags.stage, flags.unit);
-      const missed = unattendedHumanPresenceHint(pd);
-      if (late.length > 0) {
-        error(
-          `Cannot record this answer: the question was logged after the person's reply. ${lateQuestionHint(late)}` +
-            (missed === "" ? "" : ` If no message of theirs answers it:${missed}`),
-        );
-      }
+      // One reply answers every question the agent asked, each as its own
+      // answer: an answer spends no reply.
       error(
         "Cannot record this answer because no new human reply has arrived for the question. "
           + "Wait for the human to type an answer, then try again."
           + commandTurnHint(pd)
-          + missed,
+          + unattendedHumanPresenceHint(pd),
       );
-    }
-    // Where the person replied in a picker, an answer none of their picks
-    // carried is still recorded, with a note saying what they picked.
-    if (instruction === undefined && !autonomousDecision) {
-      const note = pickerAnswerNote(pd, flags.details);
-      if (note !== null) fields["Picker Note"] = note;
     }
 
     try {
@@ -2654,23 +2521,17 @@ function handleAnswer(args: string[]): void {
     const asksForNote = fromBox ?? (picksAddANote(flags.details) && question !== undefined &&
       isLearningsNoteDecision(question.block));
     if (asksForNote) rowEndsTurn = true;
-    const sayBack = taken.length > 0 ? takenFromReply(taken, flags.details) : null;
-    const notes = [
-      ...(asksForNote
-        ? [
-          "When their reply already says what the note is, that is the note: take their words and do " +
-          "not ask for it again. Otherwise ask what the note should say. End the turn at the question you ask " +
-          "next; their next reply answers it.",
-        ]
-        : []),
-      ...(sayBack !== null ? [sayBack.note] : []),
-    ];
     console.log(
       JSON.stringify({
         emitted: "QUESTION_ANSWERED",
         stage: flags.stage,
-        ...(sayBack !== null ? { say: sayBack.say } : {}),
-        ...(notes.length > 0 ? { agent_note: notes.join(" ") } : {}),
+        ...(asksForNote
+          ? {
+            agent_note: "When their reply already says what the note is, that is the note: take their words and do " +
+              "not ask for it again. Otherwise ask what the note should say. End the turn at the question you ask " +
+              "next; their next reply answers it.",
+          }
+          : {}),
       })
     );
   });
@@ -4124,8 +3985,9 @@ function handleReview(args: string[]): void {
         fields["Request Id"] = requestId;
         if (lifted) {
           fields["Person Asked"] = "true";
-          const words = latestPersonTurn(pd)?.words;
-          if (words && !isNonAnswer(words)) fields["Person Reply"] = words;
+          const reply = personsGateReply(pd, invokingChat(pd), flags.stage as string);
+          if (reply.words) fields["Person Reply"] = reply.words;
+          if (reply.messageId) fields["Message Id"] = reply.messageId;
         }
         stampRequestedSourceBinding(node, true);
         openReviewDraftSlot(attempt.floor);
