@@ -36,7 +36,7 @@ import * as ts from "typescript";
 import { REPO_ROOT } from "./fixtures.ts";
 
 export type Use = "decides" | "keeps";
-export type Slice = "S2a" | "S2b" | "S3" | "S6" | "S9";
+export type Slice = "S2a" | "S2b" | "S3" | "S6" | "S9" | "PA-fixes";
 
 export interface Allowed {
   use: Use;
@@ -698,13 +698,21 @@ export function scanPersonsWords(options: { root?: string; files?: string[] } = 
     }
     return "copy";
   };
+  // A name that declares something (a field, a function, a binding) is no use of a value.
+  const namesADeclaration = (p: ts.Node): boolean => ts.isPropertyAssignment(p) || ts.isPropertySignature(p) ||
+    ts.isPropertyDeclaration(p) || ts.isMethodDeclaration(p) || ts.isMethodSignature(p) || ts.isFunctionDeclaration(p) ||
+    ts.isClassDeclaration(p) || ts.isInterfaceDeclaration(p) || ts.isTypeAliasDeclaration(p) || ts.isEnumDeclaration(p) ||
+    ts.isEnumMember(p) || ts.isVariableDeclaration(p) || ts.isParameter(p) || ts.isBindingElement(p) ||
+    ts.isGetAccessorDeclaration(p) || ts.isSetAccessorDeclaration(p) || ts.isImportSpecifier(p) || ts.isExportSpecifier(p) ||
+    ts.isNamespaceImport(p) || ts.isImportClause(p) || ts.isModuleDeclaration(p) || ts.isTypeParameterDeclaration(p) ||
+    ts.isFunctionExpression(p) || ts.isClassExpression(p);
   const DECIDING = (kind: string) => kind === "compare" || kind === "match" || kind === "decode" || kind.startsWith("decides through");
   const valueNodes = (sf: ts.SourceFile, each: (n: ts.Expression) => void) => {
     const visit = (n: ts.Node) => {
       if (fnId.has(n) && BOUNDARY[declName(n)] !== undefined) return;
       if ((ts.isIdentifier(n) || ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n) || ts.isCallExpression(n)) &&
         !(n.parent && ts.isPropertyAccessExpression(n.parent) && n.parent.name === n) &&
-        !(n.parent && (ts.isPropertyAssignment(n.parent) || ts.isDeclaration(n.parent)) && (n.parent as { name?: ts.Node }).name === n) &&
+        !(n.parent && namesADeclaration(n.parent) && (n.parent as { name?: ts.Node }).name === n) &&
         !(n.parent && ts.isTypeNode(n.parent))) {
         each(n);
       }
@@ -873,6 +881,19 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${LIB}#guardRecoveryTextSha256`]: { use: "keeps", why: "the digest of the guard-recovery reply its record keeps (consumeSharedDirectiveAsk writes it; guardRecoveryFeedbackStatus matches it until S6)", from: [`${LIB}#consumeSharedDirectiveAsk`, `${LIB}#guardRecoveryFeedbackStatus`] },
   [`${LIB}#normalizeGuardRecoveryText`]: { use: "keeps", why: "the spacing cut before that digest, and before handleReject's duplicate check", from: [`${LIB}#guardRecoveryTextSha256`, `${STATE}#handleReject`] },
   [`${LIB}#contentSha256`]: { use: "keeps", why: "that digest", from: [`${LIB}#guardRecoveryTextSha256`] },
+  // A question box's pick of an engine-handed list, host structure since S3 (#2926): a typed reply is the agent's to read.
+  [`${HOOK}#extractResponseText`]: { use: "decides", why: "a question box's payload, host structure: unwraps the box's JSON (a typed prompt is kept as typed since S3)", from: [`${HOOK}#respond`] },
+  [`${LIB}#consumeSharedDirectiveAsk`]: { use: "decides", why: "guard recovery: the box's pick when the box offered the remedies, and the reply's digest the recovery record keeps", from: [`${HOOK}#respond`] },
+  [`${POSTURE}#recordProtectedHumanResponse`]: { use: "decides", why: "the protected question's response: the box's pick only, and the words kept with presence", from: [`${HOOK}#respond`] },
+  [`${READER}#protectedQuestionPick`]: { use: "decides", why: "a question box's pick of the protected question's choices", from: [`${POSTURE}#recordProtectedHumanResponse`] },
+  [`${ASK}#notePlanApprovalAskReply`]: { use: "decides", why: "Plan Approval: the box's pick only, and the replies after the ask kept for the record", from: [`${HOOK}#respond`] },
+  [`${READER}#exactOptionPick`]: { use: "decides", why: "a box's pick matched to the engine's list the box offered (DESIGN 2.2 item 6)", from: [`${LIB}#consumeSharedDirectiveAsk`, `${ASK}#notePlanApprovalAskReply`, `${READER}#protectedQuestionPick`, `${POSTURE}#recordPlanApprovalHumanResponse`] },
+  [`${UNIT_CP}#askConstructionCheckpoint`]: { use: "keeps", why: "the audit writer: the replies typed while the review ran become the checkpoint's response" },
+  [`${UNIT_CP}#rejectConstructionCheckpoint`]: { use: "keeps", why: "the audit writer: the checkpoint reject's Feedback and Reason" },
+  [`${SWARM_CP}#rejectSwarmCheckpoint`]: { use: "keeps", why: "the audit writer: the batch reject's Feedback and Reason" },
+  [`${LIB}#changeRequestWords`]: { use: "keeps", why: "the reject's lines joined as the change to make", from: [`${UNIT_CP}#rejectConstructionCheckpoint`, `${SWARM_CP}#rejectSwarmCheckpoint`] },
+  [`${LIB}#requireProtectedResponse`]: { use: "keeps", why: "the audit writer: a named message's words become the protected response's" },
+  [`${ASK}#recordPlanApprovalAnswer`]: { use: "keeps", why: "the audit writer: the plan answer keeps the replies' words" },
   // The shape reads: the blank test and the `/aidlc` parse (BOUNDARY), with the callers that run them.
   [`${HOOK}#messageParse`]: { use: "keeps", why: "the /aidlc parse: the flags the engine's own parser finds, and the words after them", from: [`${HOOK}#respond`] },
   [`${HOOK}#helpRelay`]: { use: "keeps", why: "the /aidlc parse: a typed help request relays AI-DLC's help", from: [`${HOOK}#respond`] },
@@ -914,25 +935,7 @@ export const AGENT_ARGUMENT_CHECKS: readonly string[] = [
  * lines; a place that stays after it, keeping the words, moves to ALLOWED in the same change.
  */
 export const STILL_TO_GO: Record<string, ToGo> = {
-  // S3: the engine-handed lists read from typed words move to the agent (box picks stay structure).
-  [`${HOOK}#extractResponseText`]: { use: "decides", slice: "S3", row: "R14", why: "unwraps JSON-shaped typed text; S3 keeps it for a box payload only (then ALLOWED as host structure)", from: [`${HOOK}#respond`] },
-  [`${LIB}#consumeSharedDirectiveAsk`]: { use: "decides", slice: "S3", row: "R12", why: "the guard-recovery picks from typed words and the only-remedy rule; S3 keeps the box's pick and the reply's digest", from: [`${HOOK}#respond`] },
-  [`${POSTURE}#recordProtectedHumanResponse`]: { use: "decides", slice: "S3", row: "R4", why: "the protected question's pick from typed words; S3 keeps a box pick and presence", from: [`${HOOK}#respond`] },
-  [`${READER}#protectedQuestionPick`]: { use: "decides", slice: "S3", row: "R4, R5", why: "picks a protected question's choice from typed words", from: [`${UNIT_CP}#askConstructionCheckpoint`, `${POSTURE}#recordProtectedHumanResponse`] },
-  [`${UNIT_CP}#askConstructionCheckpoint`]: { use: "decides", slice: "S3", row: "R5", why: "the checkpoint's earlier reply picked from words typed while the review ran" },
-  [`${ASK}#notePlanApprovalAskReply`]: { use: "decides", slice: "S3", row: "R6", why: "Plan Approval's pick from a typed reply; S3 keeps a box pick and the replies after the ask", from: [`${HOOK}#respond`] },
-  [`${ASK}#notePlanApprovalFileAnswer`]: { use: "decides", slice: "S3", row: "R10", why: "reads \"done\" and the file's answer line", from: [`${HOOK}#respond`] },
-  [`${ASK}#saidDone`]: { use: "decides", slice: "S3", row: "R9", why: "the word \"done\" in their words", from: [`${ASK}#notePlanApprovalFileAnswer`] },
-  [`${ASK}#recordPlanApprovalAnswer`]: { use: "decides", slice: "S3", row: "R8", why: "the plan answer checked against a pick read from the kept replies" },
-  [`${ASK}#planApprovalReplyEditableFiles`]: { use: "decides", slice: "S3", row: "R8", why: "a pick read from the latest kept reply" },
-  [`${READER}#exactOptionPick`]: { use: "decides", slice: "S3", row: "R4, R6, R8, R12, R3", why: "the exact-pick reader over typed words; after S3 only a box's labels reach it (then ALLOWED as host structure)", from: [`${LIB}#changeRequestWords`, `${LIB}#consumeSharedDirectiveAsk`, `${ASK}#notePlanApprovalAskReply`, `${ASK}#planApprovalReplyEditableFiles`, `${ASK}#recordPlanApprovalAnswer`, `${READER}#protectedQuestionPick`, `${POSTURE}#recordPlanApprovalHumanResponse`] },
   [`${HOOK}#pickerFreeText`]: { use: "decides", slice: "S2a", row: "R34", why: "reads a box's free text as a pick when it equals a label, decoration and case aside", from: [`${HOOK}#respond`] },
-  [`${LIB}#changeRequestWords`]: { use: "decides", slice: "S3", row: "R3", why: "the line-is-only-a-pick filter over the checkpoint reject's words", from: [`${UNIT_CP}#rejectConstructionCheckpoint`, `${SWARM_CP}#rejectSwarmCheckpoint`] },
-  // S9: the confession tripwires go (R30 over the checkpoint rejects' kept words; O3 over the agent's text).
-  [`${LIB}#selfAttributedDecisionMarker`]: { use: "decides", slice: "S9", row: "R30", why: "a phrase list over the checkpoint reject's kept words", from: [`${UNIT_CP}#rejectConstructionCheckpoint`, `${STATE}#handleReject`, `${SWARM_CP}#rejectSwarmCheckpoint`] },
-  [`${LIB}#maskQuotedDecisionExamples`]: { use: "keeps", slice: "S9", row: "R30", why: "the tripwire's own masking", from: [`${LIB}#selfAttributedDecisionMarker`] },
-  [`${UNIT_CP}#rejectConstructionCheckpoint`]: { use: "decides", slice: "S9", row: "R3 (S3), R30 (S9)", why: "the reject's words through changeRequestWords and the tripwire; after both it only keeps them (then ALLOWED as the writer)" },
-  [`${SWARM_CP}#rejectSwarmCheckpoint`]: { use: "decides", slice: "S9", row: "R3 (S3), R30 (S9)", why: "as above, for the batch" },
   // S2a: the agent's own questions: no default by position, no say-back, no pairing.
   [`${LIB}#latestPersonTurn`]: { use: "decides", slice: "S2a", row: "R24", why: "the latest turn's words as the default Person Reply, a pick's labels decoded" },
   [`${LIB}#pickedLabels`]: { use: "decides", slice: "S2a", row: "R24", why: "latestPersonTurn's decode of a row's Picked", from: [`${LIB}#latestPersonTurn`] },
@@ -951,7 +954,7 @@ export const STILL_TO_GO: Record<string, ToGo> = {
   [`${STORE}#replyOfTheirs`]: { use: "decides", slice: "S6", row: "R28", why: "--person-words equal to a reply of theirs" },
   [`${GUARD_SWITCH}#saidInChat`]: { use: "keeps", slice: "S6", row: "R28", why: "the setters' reading of whether a setting is theirs; S6 names the message" },
   [`${LIB}#guardRecoveryFeedbackStatus`]: { use: "decides", slice: "S6", row: "R29", why: "the reject's --feedback matched to the recovery reply's digest", from: [`${STATE}#handleReject`] },
-  [`${STATE}#handleReject`]: { use: "decides", slice: "S6", row: "R29 (S6), O3 (S9)", why: "the digest match and the tripwire; its duplicate check (Conductor Summary left off when it equals their words) stays, then ALLOWED as the writer" },
+  [`${STATE}#handleReject`]: { use: "decides", slice: "S6", row: "R29", why: "the guard-recovery digest match; its duplicate check (Conductor Summary left off when it equals their words) stays, then ALLOWED as the writer" },
   [`${ORCH}#withdrawSettingWords`]: { use: "decides", slice: "S6", row: "R28 (reading-lead: S6a)", why: "drops kept reply lines equal to the latest turn's words; S6 withdraws by the message id" },
   [`${LIB}#withdrawProtectedReplyWords`]: { use: "decides", slice: "S6", row: "R28 (reading-lead: S6a)", why: "as above, for the protected response", from: [`${ORCH}#withdrawSettingWords`] },
   [`${ASK}#withdrawPlanApprovalReplies`]: { use: "decides", slice: "S6", row: "R28 (reading-lead: S6a)", why: "as above, for the plan ask's replies", from: [`${ORCH}#withdrawSettingWords`] },
@@ -971,9 +974,9 @@ export const FUZZ_STILL_TO_GO: readonly FuzzRow[] = [
   { group: "I2 QUESTION_ANSWERED names no message", slice: "S2a", row: "R24", why: "handleAnswer with no --message takes Person Reply from latestPersonTurn and names no message; the window names it" },
   { group: "I2 SUMMARY_CONFIRMATION_RECORDED names no message", slice: "S2a", row: "R25", why: "the summary confirmation takes Person Reply from latestPersonTurn and names no message" },
   { group: "I2 VERIFICATION_COMMAND_RECORDED names no message", slice: "S2a", row: "R24", why: "the verification answer takes Person Reply from the protected response and names no message" },
-  { group: "I2 GATE_REJECTED names no message", slice: "S3", row: "R5", why: "a batch reject (rejectSwarmCheckpoint) writes the protected response's words with no Message Id; S3 gives the checkpoint commands --message" },
-  { group: "I2 GATE_APPROVED names no message", slice: "S3", row: "R5", why: "a Unit or batch checkpoint approval writes the protected response's words with no Message Id; as above" },
-  { group: "I2 REQUEST_ROUTED names no message", slice: "S3", row: "R13", why: "a routing pick records no Message Id; S3 has the agent run the choice's own command on the message" },
-  { group: "I5 the person's words copied into QUESTION_ANSWERED.User Input", slice: "S3", row: "R8", why: "a plan's Request Changes copies their words into User Input; S3 records the agent's choice as handed" },
+  { group: "I2 GATE_REJECTED names no message", slice: "S2b", row: "the ids (reading-lead, 2026-10-23)", why: "a Unit or batch checkpoint reject with no --message writes the protected response's words and no Message Id" },
+  { group: "I2 GATE_APPROVED names no message", slice: "S2b", row: "the ids (reading-lead, 2026-10-23)", why: "a Unit or batch checkpoint approval with no --message writes no Message Id" },
+  { group: "I2 REQUEST_ROUTED names no message", slice: "S2b", row: "the ids (reading-lead, 2026-10-23)", why: "a routing pick records no Message Id" },
+  { group: "I5 the person's words copied into QUESTION_ANSWERED.User Input", slice: "PA-fixes", row: "F3", why: "recordPlanApprovalAnswer's fallback puts their words in a Request Changes' User Input; PA-fixes makes User Input the agent's change text and Person Reply their words" },
   { group: "I5 the record differs in file aidlc/spaces/default/intents/fixture-<HEX>/.aidlc-engine/gate-words/<CHAT#>.json", slice: "S2a", row: "R34", why: "pickerFreeText: a box's free text equal to a label (decoration aside) is taken as a pick, so its words are not kept" },
 ];
