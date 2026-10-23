@@ -691,6 +691,9 @@
       "t249-copilot-adapter.test.ts"
     ]
   ],
+  "parallel": {
+    "darwin": 3
+  },
   "platformWeights": {
     "darwin": {
       "t-agent-conduct.test.ts": 0.1,

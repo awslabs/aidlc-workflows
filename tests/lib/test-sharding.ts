@@ -9,15 +9,27 @@ export interface ShardConfig {
   affinityGroups: string[][];
   /** Per-OS measurements override the conservative fallback, never the inventory. */
   platformWeights?: Record<string, Record<string, number>>;
+  /** Per-OS cap on unit files a shard runs side by side; a platform not named runs them one at a time. */
+  parallel?: Record<string, number>;
 }
 
 export function shardConfigForPlatform(config: ShardConfig, platform: string): ShardConfig {
   return { ...config, weights: { ...config.weights, ...config.platformWeights?.[platform] } };
 }
 
-interface WeightedGroup {
+export interface WeightedGroup {
   files: string[];
   weight: number;
+}
+
+/**
+ * How many files a unit shard starts at once: the trial cap when one is given
+ * (AIDLC_TEST_UNIT_PARALLEL, a trial off the platform the weights file names),
+ * else the platform's `parallel` entry, else one. -P stays the ceiling.
+ */
+export function unitFileWorkers(config: ShardConfig, platform: string, requested: number, trialCap?: string): number {
+  const cap = Number(trialCap || config.parallel?.[platform] || 1);
+  return Number.isInteger(cap) && cap > 1 ? Math.min(requested, cap) : 1;
 }
 
 export function parseShardSpec(value: string): ShardSpec {
@@ -76,38 +88,13 @@ export function assignWeightedShards(
 
   validateShardConfig(files, config);
   const originalOrder = new Map(files.map((file, index) => [file, index]));
-  const assigned = new Set<string>();
-  const groups: WeightedGroup[] = [];
-
-  for (const affinity of config.affinityGroups) {
-    const members = affinity.filter((file) => originalOrder.has(file));
-    for (const file of members) assigned.add(file);
-    groups.push({
-      files: members,
-      weight: members.reduce(
-        (sum, file) => sum + (config.weights[file] ?? config.defaultSeconds),
-        0,
-      ),
-    });
-  }
-
-  for (const file of files) {
-    if (assigned.has(file)) continue;
-    groups.push({
-      files: [file],
-      weight: config.weights[file] ?? config.defaultSeconds,
-    });
-  }
+  const groups = weightedGroups(files, config);
 
   if (total > groups.length) {
     throw new Error(
       `--shard count ${total} exceeds ${groups.length} assignable test groups`,
     );
   }
-
-  groups.sort(
-    (a, b) => b.weight - a.weight || a.files[0].localeCompare(b.files[0]),
-  );
 
   const shards = Array.from({ length: total }, (_, index) => ({
     index,
@@ -126,6 +113,42 @@ export function assignWeightedShards(
     shard.files.sort(
       (a, b) => (originalOrder.get(a) ?? 0) - (originalOrder.get(b) ?? 0),
     ),
+  );
+}
+
+/**
+ * The files as jobs, longest first: each affinity group with a file present is
+ * one job, its files in group order and its weight their sum; every other file
+ * is its own job.
+ */
+export function weightedGroups(files: string[], config: ShardConfig): WeightedGroup[] {
+  const present = new Set(files);
+  const assigned = new Set<string>();
+  const groups: WeightedGroup[] = [];
+
+  for (const affinity of config.affinityGroups) {
+    const members = affinity.filter((file) => present.has(file));
+    if (members.length === 0) continue;
+    for (const file of members) assigned.add(file);
+    groups.push({
+      files: members,
+      weight: members.reduce(
+        (sum, file) => sum + (config.weights[file] ?? config.defaultSeconds),
+        0,
+      ),
+    });
+  }
+
+  for (const file of files) {
+    if (assigned.has(file)) continue;
+    groups.push({
+      files: [file],
+      weight: config.weights[file] ?? config.defaultSeconds,
+    });
+  }
+
+  return groups.sort(
+    (a, b) => b.weight - a.weight || a.files[0].localeCompare(b.files[0]),
   );
 }
 

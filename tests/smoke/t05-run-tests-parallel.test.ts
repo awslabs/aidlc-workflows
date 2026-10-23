@@ -15,8 +15,10 @@
 //   runBunTestFile streams the "=== START <name> ===" / "=== DONE <name>
 //     (<STATUS>) ===" markers.
 //   aggregateTierResults folds the *.meta sidecars and deletes them.
-//   runTier forces smoke|unit to effectiveParallel=1 and tags the "## <label>"
-//     banner with "(parallel=N)" only when effectiveParallel > 1.
+//   runTier runs smoke one file at a time, and unit too unless a --shard run
+//     has a cap (unitFileWorkers: the weights file's entry for the platform, or
+//     AIDLC_TEST_UNIT_PARALLEL); it tags the "## <label>" banner with
+//     "(parallel=N)" only when effectiveParallel > 1.
 //   main dispatches the selected levels, including --ci's integration run and
 //     --e2e ("E2E Tests (full lifecycle)").
 //   printSummary prints "Test files:", "Failed files:", "Total assertions:",
@@ -54,6 +56,8 @@ import {
   parseShardSpec,
   shardConfigForPlatform,
   type ShardConfig,
+  unitFileWorkers,
+  weightedGroups,
 } from "../lib/test-sharding.ts";
 
 // The runner lives at <repo>/tests/run-tests.sh. We invoke it with `bash` to
@@ -77,9 +81,10 @@ interface RunResult {
  */
 function run(args: string[], envOverrides: Record<string, string | undefined> = {}): RunResult {
   const env = { ...process.env };
-  // A selector for this outer meta-test must not silently filter the nested
-  // runner's planted fixtures. Individual calls can still opt in explicitly.
+  // A selector or a unit worker cap for this outer meta-test must not silently
+  // reach the nested runner. Individual calls can still opt in explicitly.
   delete env.BUN_OPTIONS;
+  delete env.AIDLC_TEST_UNIT_PARALLEL;
   for (const [key, value] of Object.entries(envOverrides)) {
     if (value === undefined) {
       delete env[key];
@@ -257,6 +262,68 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     );
   }, PER_TEST_TIMEOUT);
 
+  test("a unit shard runs its files side by side only on a platform the weights file caps", () => {
+    const cap = UNIT_SHARD_CONFIG.parallel?.darwin ?? 0;
+    expect(cap).toBeGreaterThan(1);
+    expect(unitFileWorkers(UNIT_SHARD_CONFIG, "darwin", 8)).toBe(Math.min(8, cap));
+    expect(unitFileWorkers(UNIT_SHARD_CONFIG, "darwin", 2)).toBe(Math.min(2, cap));
+    for (const platform of ["linux", "win32"]) {
+      expect(unitFileWorkers(UNIT_SHARD_CONFIG, platform, 8), platform).toBe(1);
+    }
+    // A trial cap applies to one run on any platform; -P stays the ceiling.
+    expect(unitFileWorkers(UNIT_SHARD_CONFIG, "linux", 8, "4")).toBe(4);
+    expect(unitFileWorkers(UNIT_SHARD_CONFIG, "linux", 2, "4")).toBe(2);
+    expect(unitFileWorkers(UNIT_SHARD_CONFIG, "linux", 8, "not a number")).toBe(1);
+  });
+
+  test("side-by-side unit files keep the binary affinity as one job and start the longest first", () => {
+    const files = readdirSync(join(TESTS_ROOT, "unit"))
+      .filter((file) => file.endsWith(".test.ts"))
+      .sort();
+    const jobs = weightedGroups(files, UNIT_SHARD_CONFIG);
+    expect(jobs.flatMap((job) => job.files).sort()).toEqual(files);
+    const weight = (file: string) => UNIT_SHARD_CONFIG.weights[file] ?? UNIT_SHARD_CONFIG.defaultSeconds;
+    const pair = jobs.find((job) => job.files.includes("t238-build-binaries.test.ts"));
+    expect(pair?.files).toEqual(["t238-build-binaries.test.ts", "t249-copilot-adapter.test.ts"]);
+    expect(pair?.weight).toBe(weight("t238-build-binaries.test.ts") + weight("t249-copilot-adapter.test.ts"));
+    const weights = jobs.map((job) => job.weight);
+    expect(weights).toEqual([...weights].sort((a, b) => b - a));
+    // A run holding none of a group's files has no job for it.
+    expect(weightedGroups(["t06-claude-md-paths.test.ts"], UNIT_SHARD_CONFIG).map((job) => job.files))
+      .toEqual([["t06-claude-md-paths.test.ts"]]);
+  });
+
+  test.each([
+    ["a shard with a trial cap", ["--shard", "1/1"], { AIDLC_TEST_UNIT_PARALLEL: "2" }, 2],
+    ["a shard with the weights file's cap for this platform", ["--shard", "1/1"], {}, unitFileWorkers(UNIT_SHARD_CONFIG, process.platform, 4)],
+    ["no shard, even with a trial cap", [], { AIDLC_TEST_UNIT_PARALLEL: "2" }, 1],
+  ] as const)("a unit run as %s starts files side by side only when it has more than one worker", (_label, shard, env, workers) => {
+    const plants = [1, 2, 3].map((i) => join(TESTS_ROOT, "unit", `tZ${i}-unit-slow-t05.test.ts`));
+    for (const [idx, plant] of plants.entries()) {
+      writeFileSync(plant, plantedBunTestSource(
+        `planted slow unit ${idx + 1}`,
+        "  await new Promise((resolve) => setTimeout(resolve, 300));\n  expect(true).toBe(true);",
+      ), "utf-8");
+    }
+    try {
+      const r = run(["--unit", ...shard, "-P", "4", "--no-llm", "--filter", "^tZ[0-9]-unit-slow-t05$"], {
+        AIDLC_TEST_PACKAGE_READY: "1", ...env,
+      });
+      expect(r.status, r.out).toBe(0);
+      const modifiers = [...(workers > 1 ? [`parallel=${workers}`] : []), ...(shard.length ? ["shard=1/1"] : [])];
+      const banner = "## Unit Tests (unit, process, and workflow contracts)";
+      expect(r.out.split("\n")).toContain(modifiers.length ? `${banner} (${modifiers.join(", ")})` : banner);
+      const markers = r.out.split("\n").filter((line) => /^=== (START|DONE)/.test(line));
+      const firstDone = markers.findIndex((line) => line.startsWith("=== DONE"));
+      expect(firstDone).toBeGreaterThanOrEqual(0);
+      const startsBeforeFirstDone = markers.slice(0, firstDone).filter((line) => line.startsWith("=== START")).length;
+      if (workers > 1) expect(startsBeforeFirstDone).toBeGreaterThanOrEqual(2);
+      else expect(startsBeforeFirstDone).toBe(1);
+    } finally {
+      for (const plant of plants) rmSync(plant, { force: true });
+    }
+  }, PER_TEST_TIMEOUT);
+
   test("shared CI flags run only the selected deterministic unit shard", () => {
     const file = "t68-version-changelog-sync.test.ts";
     const files = readdirSync(join(TESTS_ROOT, "unit"))
@@ -284,8 +351,9 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     expect(stamp).toBeDefined();
     const execution = JSON.parse(readFileSync(join(stamp!, file.replace(/\.test\.ts$/, ".execution.json")), "utf8"));
     expect(execution.noLlm).toBe(true);
+    const workers = unitFileWorkers(UNIT_SHARD_CONFIG, process.platform, 8);
     expect(r.out).toContain(
-      `## Unit Tests (unit, process, and workflow contracts) (shard=${selected}/8)`,
+      `## Unit Tests (unit, process, and workflow contracts) (${workers > 1 ? `parallel=${workers}, ` : ""}shard=${selected}/8)`,
     );
     expect(r.out).toContain(`=== START ${file} ===`);
     expect(r.out).toContain("Test files: 1");

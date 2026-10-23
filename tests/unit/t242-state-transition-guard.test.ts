@@ -11,7 +11,8 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import * as ts from "typescript";
 import {
@@ -2211,23 +2212,32 @@ describe("t242 state-transition ownership guard", () => {
   });
 
   test("a delegated refusal resolves no project writes no row and mints no clone id beside the install", () => {
-    const cloneId = join(REPO_ROOT, "dist", "claude", "aidlc", ".aidlc-clone-id");
-    rmSync(cloneId, { force: true });
-    const env = unownedEnv();
-    delete env.CLAUDE_PROJECT_DIR;
-    delete env.AIDLC_PROJECT_DIR;
-    const delegated = spawnSync(process.execPath, [HOOK], {
-      input: JSON.stringify({
-        hook_event_name: "PreToolUse",
-        tool_name: "Bash",
-        tool_input: { command: "bun .claude/tools/aidlc-state.ts gate-start feasibility" },
-        agent_type: "aidlc-developer-agent",
-      }),
-      encoding: "utf-8",
-      env,
-    });
-    expect(delegated.status).toBe(2);
-    expect(existsSync(cloneId)).toBe(false);
+    // The hook finds its project from its own path, so it runs from a copy of the
+    // install: another test file running a tool from the shared dist/claude at the
+    // same moment may mint a clone id there.
+    const install = mkdtempSync(join(tmpdir(), "t242-install-"));
+    try {
+      cpSync(join(REPO_ROOT, "dist", "claude"), install, { recursive: true });
+      const cloneId = join(install, "aidlc", ".aidlc-clone-id");
+      rmSync(cloneId, { force: true });
+      const env = unownedEnv();
+      delete env.CLAUDE_PROJECT_DIR;
+      delete env.AIDLC_PROJECT_DIR;
+      const delegated = spawnSync(process.execPath, [join(install, ".claude", "hooks", basename(HOOK))], {
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "bun .claude/tools/aidlc-state.ts gate-start feasibility" },
+          agent_type: "aidlc-developer-agent",
+        }),
+        encoding: "utf-8",
+        env,
+      });
+      expect(delegated.status).toBe(2);
+      expect(existsSync(cloneId)).toBe(false);
+    } finally {
+      rmSync(install, { recursive: true, force: true });
+    }
   });
 
   test("the state CLI rejects every unowned lifecycle verb before dispatch", () => {

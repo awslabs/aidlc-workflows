@@ -28,8 +28,8 @@ export interface RetryEvidence {
 /** Isolated live files: one Bedrock-backed journey can take most of an hour. */
 export const ISOLATED_RETRY_MAX_MS = 25 * 60_000;
 /**
- * Ordinary smoke/unit/integration files (merge queue). Shards run serially, so
- * a retry adds the file's time again; ten minutes covers every file that
+ * Ordinary smoke/unit/integration files (merge queue). A retry adds the file's
+ * time again to its worker; ten minutes covers every file that
  * flaked in the queue on 2026-10-03 (the longest ran about 7.5 minutes on its
  * slowest OS) and about 98% of all files.
  */

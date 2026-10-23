@@ -127,6 +127,7 @@ describe("refresh", () => {
       defaultSeconds: 1,
       weights: { "t-a.test.ts": 5, "t-c.test.ts": 40, "t-gone.test.ts": 9 },
       affinityGroups: [["t-a.test.ts", "t-b.test.ts"]],
+      parallel: { darwin: 3 },
     })}\n`);
     return root;
   }
@@ -152,6 +153,8 @@ describe("refresh", () => {
       // t-c keeps its old weight (its only row failed); t-gone is dropped; t-new stays unweighted.
       weights: { "t-a.test.ts": 110, "t-b.test.ts": 10, "t-c.test.ts": 40 },
       affinityGroups: [["t-a.test.ts", "t-b.test.ts"]],
+      // The worker cap is a setting, not a measurement: a refresh keeps it.
+      parallel: { darwin: 3 },
       platformWeights: {
         darwin: { "t-a.test.ts": 30, "t-b.test.ts": 10 },
         win32: { "t-a.test.ts": 110, "t-b.test.ts": 3 },
