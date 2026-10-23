@@ -455,6 +455,9 @@ const STUB_ATTEMPT = "--aidlc-attempt-id 00000000-0000-4000-8000-000000000001";
 const PROMPTED_PROSE_FAMILIES = new Set([
   "engine worktree discard", "engine worktree merge", "engine worktree purge", "engine swarm finalize",
   "unit land", "engine intent archive", "engine recompose", "engine bolt set-autonomy",
+  // Adding a repo can clone it from the network and changes which repos the
+  // work covers: the host's own Allow prompt is the door before it.
+  "engine intent add-repo",
   "engine state set-construction-checkpoints", "unit claim", "engine gen runners", "engine config set",
   // The knowledge skill names the engine route for `onboard`, because the copy
   // of a document the person named happens at the command layer. Onboarding

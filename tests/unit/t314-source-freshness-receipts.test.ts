@@ -64,7 +64,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve as resolvePath } from "node:path";
+import { basename, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   _legacyWorkspaceSourceFingerprintForTests,
@@ -6556,6 +6556,25 @@ describe("t314 a repo added during the work joins the stage-entry baseline", () 
     expect(r.rc).not.toBe(0);
     expect(r.out).toContain("payments/src/consent.ts");
     expect(r.out).not.toContain("payments/src/api.ts");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // The clone's install writes repos.json and aidlc.code-workspace at the
+  // workspace root (and the managed .gitignore block): AI-DLC's own writes at
+  // the add, nobody's change.
+  test("a cloned repo's own writes at the workspace root are no Unit's change", () => {
+    const bare = join(proj, "..", `${basename(proj)}-payments.git`);
+    git(join(proj, "payments"), ["clone", "-q", "--bare", ".", bare]);
+    rmSync(join(proj, "payments"), { recursive: true, force: true });
+    writeFileSync(join(proj, "repos.json"), '{ "org": "acme", "repos": [{ "name": "app-a" }] }\n', "utf-8");
+    intent("add-repo", "payments", "--url", bare);
+    expect(readFileSync(join(proj, "repos.json"), "utf-8")).toContain('"payments"');
+    expect(existsSync(join(proj, "aidlc.code-workspace"))).toBe(true);
+    reviewUnitsInAppA();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("no Unit's review covers");
+    expect(r.out).not.toContain("repos.json");
+    expect(r.rc, r.out).toBe(0);
+    rmSync(bare, { recursive: true, force: true });
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("after a remove and a second add, the latest add's listing is the one that counts", () => {

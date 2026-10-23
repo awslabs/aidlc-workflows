@@ -28035,8 +28035,9 @@ function readStageBaseline(
 
 // A repo that joined the work after the stage's baseline was taken (intent
 // add-repo, a Source Baseline Addition on its INTENT_REPOS_CHANGED row) joins
-// the baseline as it was at the add, so its existing files are nobody's change.
-// A repo the baseline already lists is never touched; the latest addition for a
+// the baseline as it was at the add, so its existing files are nobody's change;
+// so do the workspace files a clone's install wrote (CLONE_WRITES_AT_ROOT). A
+// repo the baseline already lists is never touched; the latest addition for a
 // repo wins. An addition missing on this machine leaves the baseline missing,
 // as a missing baseline is.
 function withRepoBaselineAdditions(
@@ -28056,13 +28057,20 @@ function withRepoBaselineAdditions(
   if (additions.length === 0) return baseline;
   const listed = new Set([...baseline.listing.keys()].map((key) => splitSourcePathKey(key)?.repo ?? ""));
   const joined = new Map<string, WorkspaceSourceListing>();
+  const written = new Map<string, string>();
   for (const row of additions) {
     const added = readStageBaseline(projectDir, stageSlug, auditBlockField(row.block, REPO_BASELINE_ADDITION_FIELD) ?? "", intent, space);
     if (added.state !== "ready") return added;
+    const cloned = auditBlockField(row.block, "Cloned From") !== null;
     const byRepo = new Map<string, WorkspaceSourceListing>();
     for (const [key, entry] of added.listing) {
-      const repo = splitSourcePathKey(key)?.repo ?? "";
-      if (repo === "" || listed.has(repo)) continue;
+      const parsed = splitSourcePathKey(key);
+      const repo = parsed?.repo ?? "";
+      if (repo === "") {
+        if (cloned && parsed !== null && CLONE_WRITES_AT_ROOT.has(parsed.path)) written.set(key, entry);
+        continue;
+      }
+      if (listed.has(repo)) continue;
       if (!byRepo.has(repo)) byRepo.set(repo, new Map());
       byRepo.get(repo)!.set(key, entry);
     }
@@ -28070,8 +28078,13 @@ function withRepoBaselineAdditions(
   }
   const listing: WorkspaceSourceListing = new Map(baseline.listing);
   for (const entries of joined.values()) for (const [key, entry] of entries) listing.set(key, entry);
+  for (const [key, entry] of written) listing.set(key, entry);
   return { state: "ready", listing };
 }
+
+// What a clone's install writes at the workspace root: repos.json and
+// workspace-sync's two generated files.
+const CLONE_WRITES_AT_ROOT: ReadonlySet<string> = new Set(["repos.json", "aidlc.code-workspace", ".gitignore"]);
 
 export const REPO_BASELINE_ADDITION_FIELD = "Source Baseline Addition";
 
