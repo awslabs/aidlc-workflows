@@ -192,7 +192,7 @@ const EVERY_UNIT = `bun .claude/tools/aidlc.ts engine recompose --skip code-gene
 // Unit at its beat, and for every Unit from here by the stage's own skip.
 const FIRST_THIS_UNIT = `bun .claude/tools/aidlc-orchestrate.ts report --stage functional-design --unit alpha --result skipped --reason '${PERSON}'`;
 const FIRST_EVERY_UNIT = `bun .claude/tools/aidlc-orchestrate.ts report --stage functional-design --result skipped --reason '${PERSON}'`;
-const EVERY_FROM = "Otherwise they mean every Unit from here";
+const EVERY_FROM = "If they name no Unit, they mean every Unit from here";
 
 describe("a skip the person asks for while Construction walks Unit by Unit is carried out", () => {
   test("Code Generation for this Unit only: the Unit is skipped, owes no checkpoint, and the walk goes on to the next Unit", () => {
@@ -554,6 +554,57 @@ describe("a skip the person asks for at the walk's first stage, while a Unit is 
     expect(state).toContain("- [ ] nfr-requirements \u2014 SKIP");
     const after = next(proj);
     expect(`${after.kind} ${after.stage}/${after.unit}`, JSON.stringify(after)).toBe("run-stage nfr-design/alpha");
+  });
+
+  // Words that name another Unit are neither this Unit nor every Unit: that
+  // Unit's step is skipped for it while it works on it.
+  test("words naming another Unit skip nothing now, and the line says when that Unit's step can be skipped", () => {
+    for (const [designed, stage, name] of [[false, "functional-design", "Functional Design"], [1, "nfr-requirements", "NFR Requirements"]] as const) {
+      const proj = walk(["alpha", "beta"], designed);
+      const message = String(next(proj, ["--skip", stage]).message);
+      const other = message.slice(message.indexOf("If they name another Unit"), message.indexOf(EVERY_FROM));
+      expect(other, message).toContain(
+        `run nothing and tell them in one line: "${name} can be skipped for one Unit while that Unit is working on it; the alpha Unit is on ${name} now." and stop.`,
+      );
+      expect(named({ message: other })).toEqual([]);
+    }
+  });
+
+  // An earlier Unit's finished work for the stage keeps its approval: only the
+  // Units from here on are skipped, each on its own record.
+  test("every Unit from here after an earlier Unit did the stage: skipped for this Unit and the later ones only", () => {
+    const proj = walk(["alpha", "beta", "gamma"]);
+    const alphaCode = run(proj, "aidlc-orchestrate.ts", [
+      "report", "--stage", "code-generation", "--unit", "alpha", "--result", "skipped", "--reason", PERSON,
+    ]);
+    expect(alphaCode.status, alphaCode.out).toBe(0);
+    const onBeta = next(proj);
+    expect(`${onBeta.kind} ${onBeta.stage}/${onBeta.unit}`, JSON.stringify(onBeta)).toBe("run-stage functional-design/beta");
+    const step = next(proj, ["--skip", "functional-design"]);
+    const every = segment(String(step.message), EVERY_FROM);
+    const command = named(every);
+    expect(command, String(step.message)).toEqual([FIRST_EVERY_UNIT]);
+    expect(every.message).toContain(
+      '"Skipped Functional Design for every Unit from here. It can still be run for the beta Unit with ' +
+        '`/aidlc --stage functional-design --unit beta`, and for each Unit after it the same way."',
+    );
+    const skipped = runNamed(proj, command[0]);
+    expect(skipped.status, skipped.out).toBe(0);
+    expect(skipped.out).not.toContain('"kind":"error"');
+    expect(readFileSync(stateFile(proj), "utf-8")).toContain("- [-] functional-design \u2014 EXECUTE");
+    const audit = readAllAuditShards(proj);
+    for (const unit of ["beta", "gamma"]) {
+      expect(audit).toMatch(new RegExp(`\\*\\*Event\\*\\*: UNIT_SKIPPED\\n\\*\\*Stage\\*\\*: functional-design\\n\\*\\*Unit\\*\\*: ${unit}\\n`));
+    }
+    expect(audit).not.toMatch(/\*\*Event\*\*: UNIT_SKIPPED\n\*\*Stage\*\*: functional-design\n\*\*Unit\*\*: alpha\n/);
+    expect(audit).not.toMatch(/\*\*Event\*\*: STAGE_SKIPPED\n\*\*Stage\*\*: functional-design\n/);
+    const after = next(proj);
+    expect(`${after.kind} ${after.stage}/${after.unit}`, JSON.stringify(after)).toBe("run-stage nfr-requirements/beta");
+    // The way back the line names: that Unit's step reopened for it.
+    const back = next(proj, ["--stage", "functional-design", "--unit", "beta"]);
+    expect(back.kind, JSON.stringify(back)).toBe("print");
+    expect(back.message).toContain("reopen --target functional-design");
+    expect(back.message).toContain("--units beta");
   });
 
   test("the agent's own skip of the whole stage, naming no Unit, is still refused, naming the Unit's own skip", () => {
