@@ -76,13 +76,23 @@ function gitEnv(): NodeJS.ProcessEnv {
   };
 }
 
+// A refusal prints {"error": "..."}: its text is read the way it is said, so a
+// Windows path in it has single backslashes.
 function utility(args: string[]): { rc: number; out: string } {
   const r = spawnSync(process.execPath, [UTIL, ...args, "--project-dir", proj], {
     cwd: proj,
     encoding: "utf-8",
     env: gitEnv(),
   });
-  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  const out = `${r.stdout ?? ""}${r.stderr ?? ""}`.split("\n").map((line) => {
+    try {
+      const value = JSON.parse(line) as { error?: unknown };
+      return typeof value?.error === "string" ? value.error : line;
+    } catch {
+      return line;
+    }
+  }).join("\n");
+  return { rc: r.status ?? -1, out };
 }
 
 function git(dir: string, args: string[]): void {
