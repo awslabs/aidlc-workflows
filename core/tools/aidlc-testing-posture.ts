@@ -103,7 +103,6 @@ import {
   sourceListingSha256,
   parseSourceListing,
   parseCheckboxes,
-  personSpokeSinceGate,
   structuredField,
   structuredFieldSpan,
   toPosix,
@@ -127,7 +126,7 @@ import {
   writePlanApprovalLegacyRecoveryResponse,
   noteEngineAskMark,
   humanTurnState,
-  latestPersonTurn,
+  latestReplyAfter,
   personRepliedAfter,
   unattendedHumanPresenceHint,
   writeApprovedPlanCopy,
@@ -138,6 +137,7 @@ import {
   isoTimestamp,
   markProtectedQuestionReplied,
   readProtectedResponse,
+  PROTECTED_RESPONSE_REPLIES_MAX,
   PROTECTED_RESPONSE_WORDS_MAX_CHARS,
   writeWorkspaceSourceSnapshot,
   type GuardRemedyOp,
@@ -160,7 +160,7 @@ import {
   TESTING_POSTURE_SUBCOMMANDS,
 } from "./aidlc-lib.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
-import { noReplySince } from "./aidlc-message-store.ts";
+import { noReplySince, personTurnStands, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
 import { aidlcToolInvocation, entrySkillInvocation, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer, isOneOfChoices, pickerOffersChoices, protectedQuestionPick,
@@ -1848,16 +1848,21 @@ export function approvedPlanChangeLine(
 
 /**
  * Write the approved plan, test instructions and answer back: the person said
- * to go back to the plan they approved. Their word since their last decision
- * stands behind it: the agent going back on its own would undo an edit that
- * may be the person's.
+ * to go back to the plan they approved. Their turn with no decision after it
+ * stands behind it, or the message the agent names (`message`, the request
+ * form: "approve, and go back" in one message): the agent going back on its
+ * own would undo an edit that may be the person's.
  */
-export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTarget): string {
-  if (!personSpokeSinceGate(projectDir, { requests: true })) {
-    throw new Error(
+export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTarget, message?: string): string {
+  if (message !== undefined) {
+    const proof = proveMessage(projectDir, message, "request", { request: true });
+    if ("refusal" in proof) throw new Error(proof.refusal);
+  } else if (!personTurnStands(projectDir, "plain", { requests: true })) {
+    throw new Error(requestMessageStep(
+      projectDir,
       "The person has not said to go back to the plan they approved. Ask them \"" + APPROVED_PLAN_UNDO_QUESTION +
         "\" and run this again only after they say yes.",
-    );
+    ));
   }
   const authority = resolveCodeGenerationAuthority(projectDir, target);
   const copy = readApprovedPlanCopy(projectDir, authority);
@@ -4077,7 +4082,7 @@ function protectedQuestionFromAnotherChat(projectDir: string, session: string): 
 // picker asked this question. Nothing is inferred from the words here.
 export function recordProtectedHumanResponse(
   projectDir: string, session: string, responseText: string, questionText: string | null,
-  picker?: PlanApprovalPickerQuestion,
+  picker?: PlanApprovalPickerQuestion, messageId?: string,
 ): { recorded: boolean } {
   return withAuditLock(projectDir, () => {
     const text = responseText.trim();
@@ -4090,8 +4095,11 @@ export function recordProtectedHumanResponse(
     }
     if (!text || isNonAnswer(text)) return { recorded: false };
     const previous = readProtectedResponse(projectDir, session);
-    const earlier = previous?.challengeId === question.challengeId ? previous.words : undefined;
+    const same = previous?.challengeId === question.challengeId;
+    const earlier = same ? previous.words : undefined;
     const words = (earlier ? `${earlier}\n${text}` : text).slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
+    const replies = [...(same ? previous.replies ?? [] : []), { ...(messageId ? { messageId } : {}), words: text }]
+      .slice(-PROTECTED_RESPONSE_REPLIES_MAX);
     // A pick in a question box that asked this question (or, with no question
     // text, the one question open) is the host's own structure and is kept as
     // the choice; a typed reply, in any words, is the conductor's to read.
@@ -4103,6 +4111,7 @@ export function recordProtectedHumanResponse(
       responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
       words,
       at: isoTimestamp(),
+      replies,
     });
     return { recorded: true };
   });
@@ -4141,10 +4150,10 @@ export function personAskedForPlanApprovalOverride(projectDir: string): boolean 
   return humanTurnState(projectDir, { replies: true }) === "acted";
 }
 
-/** Their words for the record: their latest reply since the offer, when the host passed any. */
-export function planApprovalOverridePersonReply(projectDir: string): string | null {
+/** Their latest reply since the offer, for the record: its message, and its words when the host passed any. */
+export function planApprovalOverridePersonReply(projectDir: string): { messageId: string; words: string | null } | null {
   const offered = engineAskMark(projectDir, PLAN_APPROVAL_OVERRIDE_OFFERED);
-  return offered === null ? null : latestPersonTurn(projectDir, { repliesAfter: offered })?.words ?? null;
+  return offered === null ? null : latestReplyAfter(projectDir, offered);
 }
 
 /** The refusal when no such reply is on record, with the step for an unattended run or a reply not recorded. */
@@ -5538,6 +5547,15 @@ function targetFromArgs(
   throw new Error(`${subcommand} requires exactly one of --unit <unit> or --stage-level`);
 }
 
+// The message the agent names with `--message <id>`, the one the person asked in.
+function messageFromArgs(args: string[]): string | undefined {
+  const at = args.lastIndexOf("--message");
+  if (at < 0) return undefined;
+  const id = args[at + 1];
+  if (!id || id.startsWith("--")) throw new Error("--message requires the id of the person's message");
+  return id;
+}
+
 // What the human-turn hook recorded for the pending Plan Approval question,
 // as the same notice line the hook adds. Several harnesses never show the
 // conductor that line, so this read gives them the same next step.
@@ -5708,7 +5726,7 @@ export function main(argv: string[]): void {
         console.log(recordedPlanApprovalReply(projectDir, replySession(projectDir, argv)));
         return;
       case "restore":
-        console.log(restoreApprovedPlan(projectDir, targetFromArgs(argv, "restore")));
+        console.log(restoreApprovedPlan(projectDir, targetFromArgs(argv, "restore"), messageFromArgs(argv)));
         return;
       default:
         throw new Error(

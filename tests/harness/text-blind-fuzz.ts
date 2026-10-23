@@ -2,9 +2,9 @@
 //
 // A fixed seed's runs at every question the engine knows (the answers corpus's fixtures), every tool's hook wiring in
 // turn and every Guard Policy in turn, each played twice with other words of the same shapes and checked against I1 to
-// I9 (DESIGN.md section 4.2; I5 is the text-blind property, I8 runs on every fourth). Today's main still has readers of
-// the person's words, so a run can fail in a known way: each such group is a FUZZ_STILL_TO_GO row in
-// persons-words-readers.ts, named with the slice that removes it, and a failure no row names fails the test.
+// I9 (DESIGN.md section 4.2; I5 is the text-blind property, I8 runs on every fourth). A failure no FUZZ_STILL_TO_GO row
+// in persons-words-readers.ts names fails the test; a known failure a change cannot remove at once is a row there,
+// named with the slice that removes it.
 // The output names the run and the row, never the person's text.
 //
 // The runs are split over unit files by `shard` (each file is one shard of the unit tier's tail);

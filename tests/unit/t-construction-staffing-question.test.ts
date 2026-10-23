@@ -369,7 +369,7 @@ describe("who builds the Units is asked once as Inception ends", () => {
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
     const ran = runState(proj, ["set-unit-ownership", "team"], env);
     expect(ran.rc).not.toBe(0);
-    expect(ran.out).toContain("No message from the person since the last decision");
+    expect(ran.out).toContain("No message of the person's that asks to change");
     expect(state(proj)).toBe(before);
     expect(events(proj, "CONSTRUCTION_POLICY_SET")).toEqual([]);
     expect(events(proj, "UNIT_OWNERSHIP_SET")).toEqual([]);

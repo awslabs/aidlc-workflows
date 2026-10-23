@@ -2046,6 +2046,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       for (const command of [
         "aidlc engine state set-construction-checkpoints disabled",
         "bun .aidlc/tools/aidlc-state.ts set-construction-checkpoints disabled",
+        // The message they asked in beside it, which the setter proves.
+        "aidlc engine state set-construction-checkpoints disabled --message 0a1b2c3d",
       ]) {
         // The setter's own check passes for exactly this value: no second confirmation.
         expect(decision(command, "Construction Checkpoints=disabled"), command).toBe("allow");
@@ -2076,7 +2078,10 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         // Not asked for: the host still asks.
         expect(decision(command), command).toBeUndefined();
       }
-      // The person's words beside the switch (--person-words) are still that switch.
+      // The message they asked in beside the switch (--message, the setter proves it) is still that
+      // switch, and so is the words form from before it.
+      expect(decision("aidlc engine config set plan-approval off --message 0a1b2c3d", "plan-approval=off")).toBe("allow");
+      expect(decision("aidlc engine config set plan-approval off --message 0a1b2c3d")).toBeUndefined();
       expect(decision("aidlc engine config set guard.review-freeze off --person-words 'turn the review freeze off'",
         "guard.review-freeze=off")).toBe("allow");
       expect(decision("aidlc engine config set guard.review-freeze off --person-words-file .aidlc-engine/answer-text/answer.txt",

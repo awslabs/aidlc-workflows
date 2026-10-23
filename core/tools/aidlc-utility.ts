@@ -1,5 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { hasStoredMessages } from "./aidlc-message-store.ts";
+import { hasStoredMessages, proveMessage, requestMessageStep, type StoredMessage } from "./aidlc-message-store.ts";
 import { createHash, randomUUID } from "node:crypto";
 import {
   constants as fsConstants,
@@ -471,6 +471,7 @@ import {
   personAskedForThisLowering,
   personAskedSinceGate,
   personSaidProjectType,
+  CONDUCTOR_SUMMARY_FIELD,
   clearProjectTypeAsked,
   readAnswerTextFile,
   recordDir,
@@ -482,6 +483,7 @@ import {
   isScopedReviewCopy,
   KIRO_CONDUCTOR_AGENT_FILE,
   PERSON_ASKED_SKIP_REASON,
+  personsWordsText,
 } from "./aidlc-lib.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
@@ -597,8 +599,10 @@ function validateIntentSettingsArgs(
 ): void {
   const allowed = new Set<string>([...CONFIG_KEYS, ...Object.keys(RETIRED_CONFIG_KEYS), "intent", "space", "project-dir"]);
   if (command === "scope-change") allowed.add("scope");
-  // The person's own words the agent says asked for this: the setter proves them
-  // against their replies before it records the setting as theirs.
+  // The message the person asked in (--message), which the setter proves before
+  // it records the setting as theirs; the words form from before it is taken as
+  // the agent's own text.
+  allowed.add("message");
   allowed.add("person-words");
   allowed.add("person-words-file");
   // Inspect option names before the parser's object assignment as well, so
@@ -645,6 +649,7 @@ const INTENT_CREATE_VALUE_FLAGS = [
   "skip",
   "add",
   "plan-name",
+  "message",
   "person-words",
   "person-words-file",
   "repos",
@@ -7912,7 +7917,7 @@ function answerAlreadyStarted(projectDir: string, questionId: string, sessionId?
 // the CREATED intent's record (the active-intent cursor set first makes the
 // default-resolving state/audit helpers resolve there).
 function handleIntentCreate(projectDir: string, flags: Record<string, string>): void {
-  readPersonWordsFile(projectDir, flags);
+  const named = setterMessage(projectDir, flags);
   // An engine question's answer names its request by id. The copy is removed
   // once the answer starts work, so look for that work before the copy.
   const questionId = flags.request;
@@ -8091,12 +8096,12 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   consumeCeremoniesCreationGrant(projectDir, initialSelection.sessionId);
   // Whose a setting this creation carries reads as: the one rule the setter
   // uses (settingTheirs), on their own terminal, their own typed line or the
-  // reply of theirs the agent names; a creation that names no request takes
-  // nobody's line, only their named reply.
+  // message of theirs the agent names; a creation that names no request takes
+  // nobody's line, only their named message.
   const theirsAtCreation = (key: string, value: string): boolean =>
     commandAtPersonsTerminal() ||
     settingTheirs(
-      projectDir, initialSelection.sessionId, key, questionId !== undefined ? value : undefined, flags["person-words"],
+      projectDir, initialSelection.sessionId, key, questionId !== undefined ? value : undefined, named.message,
     ) !== null;
   for (const key of CEREMONY_KEYS) {
     if (key === "plan_approval") continue;
@@ -8125,13 +8130,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   // who typed `--plan-approval off` with the work they are describing gets it on
   // the work they pick instead of a refusal telling the agent to create the work
   // and run the setter afterwards.
-  // Their own words, or their own terminal: either makes the lowering theirs, so
-  // the work records it as set by them (personAskedForThisLowering).
-  // A recorded presence bypass authorizes the lowering, as it does on main, but
-  // it is nobody's word: the setting stays "set by a command".
-  const loweringAuthorized = (): boolean =>
-    personAskedForThisLowering(projectDir, initialSelection.sessionId) ||
-    fenceKeyBypassed(projectDir, initialSelection.sessionId);
+  // The message they asked in, their own terminal, or their own typed line for
+  // these settings: each makes the lowering theirs, so the work records it as
+  // set by them (personAskedForThisLowering, theirsAtCreation). A recorded
+  // presence bypass authorizes the lowering, as it does on main, but it is
+  // nobody's word: the setting stays "set by a command".
+  const loweringAuthorized = (lowered: ReadonlyArray<[string, string]>): boolean =>
+    personAskedForThisLowering(named.message) ||
+    fenceKeyBypassed(projectDir, initialSelection.sessionId) ||
+    (lowered.length > 0 && lowered.every(([key, value]) => theirsAtCreation(key, value)));
   // A check typed off is the person's call too, under the same rule. A team's
   // strict Guard Policy keeps it on, as it keeps a check granted before the
   // work existed (fencesAsked above): the work is created with the check on,
@@ -8141,7 +8148,9 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   if (fencesTypedOff.length > 0 && teamKeptCheck === null) {
     const wanted: GuardSwitch = { key: `guard.${fencesTypedOff[0]}`, value: "off" };
     if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted));
-    if (!loweringAuthorized()) die(guardSwitchRefusal(wanted, projectDir));
+    if (!loweringAuthorized(fencesTypedOff.map((fence) => [`guard.${fence}`, "off"]))) {
+      die(guardSwitchRefusal(wanted, projectDir));
+    }
     for (const fence of fencesTypedOff) if (!fencesAsked.includes(fence)) fencesAsked.push(fence);
   }
   if (requestedCeremony.plan_approval === "off") {
@@ -8150,8 +8159,9 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       const wanted: GuardSwitch = { key: "plan-approval", value: "off" };
       // An unattended driver never lowers a check, whoever asked.
       if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted));
-      if (!loweringAuthorized()) die(guardSwitchRefusal(wanted, projectDir));
-      if (theirsAtCreation("plan-approval", "off") || theirsAtCreation("guard.plan-approval", "off")) {
+      const typedOff = theirsAtCreation("plan-approval", "off") || theirsAtCreation("guard.plan-approval", "off");
+      if (!typedOff && !loweringAuthorized([])) die(guardSwitchRefusal(wanted, projectDir));
+      if (typedOff) {
         ceremonySetByPerson.plan_approval = true;
       }
     }
@@ -8164,7 +8174,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     const wanted: GuardSwitch = { key: "guard-policy", value: requestedChangeControl };
     // An unattended driver never lowers fences, including a recorded presence bypass.
     if (process.env.AIDLC_UNATTENDED === "1") die(guardSwitchRefusal(wanted));
-    if (!loweringAuthorized()) die(guardSwitchRefusal(wanted, projectDir));
+    if (!loweringAuthorized([["guard-policy", requestedChangeControl]])) die(guardSwitchRefusal(wanted, projectDir));
   }
   // Theirs on record (their line, their terminal, or kept as theirs), or the command's.
   if (requestedChangeControl !== null && !guardPolicySetByPerson) {
@@ -11601,8 +11611,10 @@ function projectTypeWords(type: string): string {
 // write, audited first. Moving the workflow back to run it is `next`'s job.
 function handleReclassify(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
   const usage = (message: string): never =>
-    die(`${message}\nUsage: workspace reclassify --project-type <greenfield|brownfield> [--intent <slug>] [--space <name>] [--person-words <their words> | --person-words-file <file>] [--then-rerun] [--project-dir <path>]`);
-  const allowed = new Set(["project-type", "intent", "space", "person-words", "person-words-file", "then-rerun", "project-dir"]);
+    die(`${message}\nUsage: workspace reclassify --project-type <greenfield|brownfield> [--intent <slug>] [--space <name>] [--message <id>] [--then-rerun] [--project-dir <path>]`);
+  const allowed = new Set([
+    "project-type", "intent", "space", "message", "person-words", "person-words-file", "then-rerun", "project-dir",
+  ]);
   for (const arg of rawArgs) {
     if (!arg.startsWith("--")) continue;
     const name = arg.slice(2).split("=")[0];
@@ -11629,18 +11641,14 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
         `to the request that starts it (${entrySkillInvocation()} --project-type ${declared.toLowerCase()} "<what to build>").`,
     );
   }
-  // The words the person said it in, given inline or left in the work's answer
-  // text file: recorded beside the change, and read by the check below. A file
-  // that cannot be read leaves them out; the change is recorded either way.
-  readPersonWordsFile(projectDir, flags, true);
-  const typedWords = flags["person-words"];
-  const personWords = typedWords === undefined || typedWords === "true"
-    ? undefined
-    : typedWords.replace(/\s+/g, " ").trim() || undefined;
+  // The message the person said it in (--message), proved: recorded beside the
+  // change, and read by the check below. Words from the form before --message
+  // are the agent's own text, recorded as such.
+  const named = setterMessage(projectDir, flags, true);
   // What the folder is, is the person's word: it is recorded as theirs only
   // once they have said something since the last decision (an answer to the
   // question, or the command they typed), after the question when it was asked,
-  // or when the words are a whole message of theirs in this chat (the message
+  // or when the agent names the message of theirs that said it (the message
   // that started the work leaves no turn). The chat is the one running this
   // command, else the chat most recently active here. At the person's own
   // terminal no chat answer can arrive: the step that works there is named
@@ -11648,14 +11656,14 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
   if (!humanPresenceGuardDisabled() && !personSaidProjectType(projectDir, {
     chat: selection.sessionId ?? readCurrentSessionId(projectDir),
     type: declared === "Brownfield" ? "brownfield" : "greenfield",
-    words: personWords,
+    ...(named.message !== undefined ? { message: named.message } : {}),
     intent,
     space,
   })) {
     die(personAtOwnTerminal(projectDir)
       ? OWN_TERMINAL_PRESENCE_STEP
-      : "The person has not said yet whether this folder is existing code. Ask them the question you were given, " +
-        "end the turn, and run this command after they answer.");
+      : requestMessageStep(projectDir, "The person has not said yet whether this folder is existing code. Ask them " +
+        "the question you were given, end the turn, and run this command after they answer."));
   }
 
   // The registry row is workspace state and the plan is the work's own: hold
@@ -11729,7 +11737,12 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
         fields: {
           "Old Project Type": `${previous} (${previousSource})`,
           "New Project Type": `${declared} (${PROJECT_TYPE_SOURCE_PERSON})`,
-          ...(personWords !== undefined ? { "Person Words": personWords } : {}),
+          ...(named.message !== undefined
+            ? {
+              ...(named.message.words ? { "Person Reply": personsWordsText(named.message.words) } : {}),
+              "Message Id": named.message.id,
+            }
+            : named.agentText !== undefined ? { [CONDUCTOR_SUMMARY_FIELD]: named.agentText } : {}),
           "Scanned As": scan.projectType,
           Languages: scan.languages,
           Frameworks: scan.frameworks,
@@ -11994,7 +12007,7 @@ function stagesStillToRun(content: string): StageEntry[] {
 function handleScopeChange(projectDir: string, flags: Record<string, string>): void {
   const newScope = flags.scope;
   if (!newScope) die("--scope is required for scope-change");
-  readPersonWordsFile(projectDir, flags);
+  const named = setterMessage(projectDir, flags);
   const selection = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
@@ -12005,10 +12018,13 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     const scopeMapping = loadScopeMapping();
     const newScopeDef = scopeMapping[newScope];
     if (!newScopeDef) die(`Unknown scope: ${newScope}. Valid scopes: ${Object.keys(scopeMapping).join(", ")}`);
-    // The person's own request for the change, on this work's record, with no
-    // unattended driver in the way. One reply that approves and asks for the
-    // change does both: the approval recorded from it does not use it up.
-    const personAsked = (): boolean => personAskedSinceGate(projectDir, { intent, space });
+    // The person's own request for the change, with no unattended driver in
+    // the way: the message the agent names, or their turn on this work's
+    // record. One reply that approves and asks for the change does both: the
+    // approval recorded from it does not use it up.
+    const personAsked = (): boolean =>
+      process.env.AIDLC_UNATTENDED !== "1" &&
+      (named.message !== undefined || personAskedSinceGate(projectDir, { intent, space }));
     // Under "Continue automatically" the person's own scope change goes
     // through like any other, and the remaining work keeps their autonomy
     // choice. Only a change nobody asked for (an unattended driver) is
@@ -12040,13 +12056,17 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         const strictness = { off: 0, relaxed: 1, strict: 2 } as const;
         const nextPolicy = scopeDefinitionGuardPolicy(newScopeDef);
         // Scope changes raise the policy automatically. A lower default
-        // follows the scope only on the person's own request for the change,
-        // on this work's own record (the authority a direct Guard Policy
-        // lowering needs); otherwise the work keeps its value and the output
-        // says so in one line.
+        // follows the scope only when the change is the person's by the rule
+        // behind every "set by you" (settingTheirs): the message the agent
+        // names, their own terminal, or the scope typed on their own line,
+        // with no unattended driver in the way; otherwise the work keeps its
+        // value and the output says so in one line.
         if (strictness[nextPolicy] >= strictness[previousCC.value]) {
           requested["guard-policy"] ??= { value: nextPolicy, source };
-        } else if (personAsked()) {
+        } else if (
+          process.env.AIDLC_UNATTENDED !== "1" &&
+          settingTheirs(projectDir, selection.sessionId ?? null, "scope", newScope, named.message, { intent, space }) !== null
+        ) {
           requested["guard-policy"] ??= { value: nextPolicy, source };
         } else {
           // The person asked for the switch: the setting it kept is said as a
@@ -12067,7 +12087,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     // Apply against the original scope so previous settings and effective
     // output describe the state before this transaction.
     const update = applyIntentSettings(projectDir, contentBefore, requested, {
-      intent, space, sessionId: selection.sessionId, fail: die, reviewScope: newScope, personWords: flags["person-words"],
+      intent, space, sessionId: selection.sessionId, fail: die, reviewScope: newScope, ...named,
     });
     let content = update.content;
     const auditEntries = update.audit;
@@ -12414,7 +12434,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
   const usage = (message: string): never => die(
     `${message}\nUsage: recompose [--skip <slug,...>] [--add <slug,...>] ` +
     "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--collaborators <on|off>] [--review <adversarial|advisory|none>] " +
-    "[--person-words <their words> | --person-words-file <file>] [--reason <text>] [--intent <slug>] [--space <name>] [--project-dir <path>] - repeat --skip/--add to list more stages.",
+    "[--message <id>] [--reason <text>] [--intent <slug>] [--space <name>] [--project-dir <path>] - repeat --skip/--add to list more stages.",
   );
   const flips = { skip: new Set<string>(), add: new Set<string>() };
   // Settings approved together with the stage changes land in the same state
@@ -12423,13 +12443,14 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
   const settings: IntentSettingsRequest = {};
   // Why the plan changed, when the engine knows (a jump to a skipped stage).
   let reason: string | undefined;
-  // The reply of theirs that approved the settings, as the agent names it: the
-  // setter proves it (settingTheirs) before it records them as theirs.
-  let personWords: string | undefined;
+  // The message of theirs that approved the settings, as the agent names it
+  // (--message): proved before the settings are recorded as theirs. Words from
+  // the form before it (--person-words, --person-words-file) are the agent's.
+  const named: Record<string, string> = {};
   const allowed = new Set<string>([
-    "skip", "add", "reason", "person-words", "person-words-file", "intent", "space", "project-dir", ...settingKeys,
+    "skip", "add", "reason", "message", "person-words", "person-words-file", "intent", "space", "project-dir",
+    ...settingKeys,
   ]);
-  let personWordsFile: string | undefined;
   // Preserve the original tokens before parseArgs collapses repeated flags,
   // including in-process CLI dispatch;
   // process.argv may still belong to the outer `aidlc engine` invocation.
@@ -12455,20 +12476,13 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       for (const slug of slugs) flips[name].add(slug);
     } else if (name === "reason") {
       reason = value.trim();
-    } else if (name === "person-words") {
-      personWords = value;
-    } else if (name === "person-words-file") {
-      personWordsFile = value;
+    } else if (name === "message" || name === "person-words" || name === "person-words-file") {
+      named[name] = value;
     } else if (settingKeys.has(name as ConfigKey)) {
       settings[name as ConfigKey] = { value, source: "you" };
     }
   }
-  if (personWordsFile !== undefined) {
-    const read: Record<string, string> = { "person-words-file": personWordsFile };
-    if (personWords !== undefined) read["person-words"] = personWords;
-    readPersonWordsFile(projectDir, read);
-    personWords = read["person-words"];
-  }
+  const asked = setterMessage(projectDir, named);
   const skipList = [...flips.skip];
   const addList = [...flips.add];
   if (skipList.length === 0 && addList.length === 0) {
@@ -12669,7 +12683,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     // The approved settings, applied to the recomposed content before the one write.
     const settingsUpdate = Object.keys(settings).length > 0
       ? applyIntentSettings(projectDir, content, settings, {
-          intent: flags.intent, space: flags.space, sessionId: readCurrentSessionId(projectDir), fail: die, personWords,
+          intent: flags.intent, space: flags.space, sessionId: readCurrentSessionId(projectDir), fail: die, ...asked,
         })
       : { content, audit: [], lines: [] };
     content = setField(settingsUpdate.content, "Last Updated", isoTimestamp());
@@ -12943,8 +12957,29 @@ function readPersonWordsFile(projectDir: string, flags: Record<string, string>, 
   }
 }
 
+// The message the agent named as the one the person asked in (--message),
+// proved by the message proof's request form: the setting is then theirs
+// (settingTheirs) and a lowering stands on it, beside the approval the same
+// message gave. A message that does not prove refuses with the proof's own
+// words. Words passed the way from before --message (--person-words,
+// --person-words-file) are the agent's own text: kept as such, proving nothing.
+function setterMessage(
+  projectDir: string,
+  flags: Record<string, string>,
+  unreadableIsNone = false,
+): { message?: StoredMessage; agentText?: string } {
+  readPersonWordsFile(projectDir, flags, unreadableIsNone);
+  const words = flags["person-words"];
+  const agentText = words === undefined || words === "true" ? undefined : words.replace(/\s+/g, " ").trim() || undefined;
+  if (flags.message === undefined) return { agentText };
+  const proof = proveMessage(projectDir, flags.message, "setting", { request: true });
+  if ("refusal" in proof) die(proof.refusal);
+  return { message: proof.message, agentText };
+}
+
+
 function handleConfigChange(projectDir: string, flags: Record<string, string>): void {
-  readPersonWordsFile(projectDir, flags);
+  const named = setterMessage(projectDir, flags);
   const selection = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
@@ -12957,13 +12992,13 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
     if (!selection.sessionId || flags.intent !== undefined || selection.intent !== null) die(NO_STATE_FILE_MESSAGE);
     const lines = keepSettingsForNextWork(
       projectDir, selection.sessionId, intentSettingsFromFlags(flags), space, die,
-      workToPickUp(projectDir, space, null) !== null, flags["person-words"],
+      workToPickUp(projectDir, space, null) !== null, named.message,
     );
     process.stdout.write(`${lines.join("\n")}\n`);
     return;
   }
   const lines = writeSettings(projectDir, intent, space, intentSettingsFromFlags(flags), {
-    sessionId: selection.sessionId, fail: die, personWords: flags["person-words"],
+    sessionId: selection.sessionId, fail: die, ...named,
   });
   process.stdout.write(`${lines.join("\n")}\n`);
 }
@@ -12977,7 +13012,7 @@ function writeSettings(
   request: IntentSettingsRequest,
   options: {
     sessionId: string | null; fail?: (message: string) => never; typedByPerson?: boolean;
-    personWords?: string; notTheirs?: ReadonlySet<string>;
+    message?: StoredMessage; agentText?: string; notTheirs?: ReadonlySet<string>;
   },
 ): string[] {
   let lines: string[] = [];
@@ -12985,7 +13020,7 @@ function writeSettings(
     const content = readConfigState(projectDir, { intent, space });
     const update = applyIntentSettings(projectDir, content, request, {
       intent, space, sessionId: options.sessionId, typedByPerson: options.typedByPerson,
-      personWords: options.personWords, notTheirs: options.notTheirs,
+      message: options.message, agentText: options.agentText, notTheirs: options.notTheirs,
       ...(options.fail ? { fail: options.fail } : {}),
     });
     if (update.content !== content) {

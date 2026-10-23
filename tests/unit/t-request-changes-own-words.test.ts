@@ -203,11 +203,14 @@ describe("Request Changes records the person's own words", () => {
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("2\\nRename the list command to todo ls.\\nAnd keep done as it is.");
   });
 
-  test("a conductor that passes the same words adds no Conductor Summary", () => {
+  // Nothing compares the agent's text with their words: the record keeps both,
+  // whatever the agent's text says.
+  test("a conductor that passes the same words: their words are the Feedback, its text the Conductor Summary", () => {
     says(proj, TYPED);
-    rejectWith(proj, slug, ["--reason", `  ${TYPED.replace(/ /g, "  ")} `]);
+    const passed = `  ${TYPED.replace(/ /g, "  ")} `;
+    rejectWith(proj, slug, ["--reason", passed]);
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(TYPED);
-    expect(field(proj, "GATE_REJECTED", "Conductor Summary")).toBeNull();
+    expect(field(proj, "GATE_REJECTED", "Conductor Summary")).not.toBeNull();
   });
 
   test("with no recorded words the row is the conductor's text, beside the message it stands on", () => {

@@ -89,6 +89,8 @@ export interface StoredQuestion {
    * the routing question answers it, so the work starts once.
    */
   approvedRequest?: string;
+  /** The person's message the words came in, by its record's id; a question derived from another keeps that one's. */
+  messageId?: string;
   createdAt: string;
 }
 
@@ -168,7 +170,8 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
     (question.approvedRequest === undefined ||
       (typeof question.approvedRequest === "string" && QUESTION_ID.test(question.approvedRequest))) &&
     (question.answeredBy === undefined ||
-      (typeof question.answeredBy === "string" && QUESTION_ID.test(question.answeredBy)))
+      (typeof question.answeredBy === "string" && QUESTION_ID.test(question.answeredBy))) &&
+    (question.messageId === undefined || (typeof question.messageId === "string" && QUESTION_ID.test(question.messageId)))
   ) {
     return question as StoredQuestion;
   }
@@ -260,34 +263,6 @@ export function pruneExpiredQuestions(projectDir: string): void {
       // Not ours to remove, or already gone: keep going.
     }
   }
-}
-
-/**
- * Whether `next` has already read these words for this chat: a routing question
- * holding exactly this text, saved at or after `sinceIso` (the time of the
- * message that carried them). The reading step over work nobody has selected
- * saves one, so the bare `next` the agent runs after that step is not read as
- * the same line again.
- */
-export function wordsAlreadyRead(projectDir: string, text: string, sinceIso: string): boolean {
-  let names: string[];
-  try {
-    names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
-  } catch {
-    return false;
-  }
-  const since = Date.parse(sinceIso);
-  for (const name of names) {
-    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
-    if (!QUESTION_ID.test(id)) continue;
-    const question = readStoredQuestion(projectDir, id);
-    if (question?.answeredBy !== undefined) continue;
-    if (question === null || question.origin !== "routing" || question.text !== text) continue;
-    const at = Date.parse(question.createdAt);
-    // The question is saved after the message that led to it, never before.
-    if (Number.isNaN(since) || (!Number.isNaN(at) && at >= since)) return true;
-  }
-  return false;
 }
 
 /**
@@ -414,11 +389,15 @@ export function saveQuestion(
   stateSha256?: string,
   settings?: QuestionSettings,
   approvedRequest?: string,
+  messageId?: string,
 ): StoredQuestion {
   pruneExpiredQuestions(projectDir);
   // A question derived from another keeps that one's root, never the parent, so
-  // a chain of asks stays one hop from where the person's words were said.
-  const root = composedFrom ? readStoredQuestion(projectDir, composedFrom)?.composedFrom ?? composedFrom : undefined;
+  // a chain of asks stays one hop from where the person's words were said, and
+  // the message they came in.
+  const parent = composedFrom ? readStoredQuestion(projectDir, composedFrom) : null;
+  const root = composedFrom ? parent?.composedFrom ?? composedFrom : undefined;
+  const carried = parent?.messageId ?? messageId;
   const question: StoredQuestion = {
     id: mintQuestionId(projectDir),
     text,
@@ -430,6 +409,7 @@ export function saveQuestion(
     ...(stateSha256 ? { stateSha256 } : {}),
     ...(settings && (settings.newWork.length > 0 || settings.existingWork.length > 0) ? { settings } : {}),
     ...(approvedRequest && QUESTION_ID.test(approvedRequest) ? { approvedRequest } : {}),
+    ...(carried && QUESTION_ID.test(carried) ? { messageId: carried } : {}),
     createdAt: new Date().toISOString(),
   };
   writeRecordFileNoFollow(projectDir, questionRel(projectDir, question.id), `${JSON.stringify(question)}\n`);

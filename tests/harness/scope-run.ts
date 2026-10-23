@@ -801,6 +801,19 @@ export class AgentStandIn {
     return first === undefined ? null : this.follow(this.host.bash(first.trim()));
   }
 
+  /**
+   * The id of the person's latest message, as the human-turn hook's context
+   * line names it to the agent: what a setter or a review they asked for names
+   * (--message).
+   */
+  latestMessageId(): string {
+    const turn = auditEvents(this.host.proj)
+      .filter((e) => e.event === "HUMAN_TURN" && field(e.block, "Message Id") !== null).at(-1);
+    const id = turn === undefined ? null : field(turn.block, "Message Id");
+    if (id === null) this.fail("no message of the person's is on record for the setter to name");
+    return id;
+  }
+
   fail(message: string, directive?: Directive): never {
     const tail = this.host.trace.slice(-25).join("\n");
     const shown = directive ? `\nlast directive: ${clip(JSON.stringify(directive), 1500)}` : "";
@@ -1113,7 +1126,10 @@ export class AgentStandIn {
       const choice = this.answers.autonomy();
       this.askPerson("autonomy", stage, "How should I continue building the remaining work?",
         ["Continue automatically", "Review each checkpoint"], choice);
-      this.must("bolt", "set-autonomy", "--mode", choice === "Continue automatically" ? "autonomous" : "gated");
+      // The grant names the message the person chose in; going back to gated needs none.
+      this.must("bolt", "set-autonomy", ...(choice === "Continue automatically"
+        ? ["--mode", "autonomous", "--message", this.latestMessageId()]
+        : ["--mode", "gated"]));
       return;
     }
     if (d.gate === "unresolved") {
@@ -1410,7 +1426,7 @@ export class AgentStandIn {
     const forUnit = unit === null ? [] : ["--unit", unit];
     const pass = String(iteration);
     const requestArgs = ["log", "review", "--stage", stage, "--reviewer", reviewer, "--iteration", pass, ...forUnit,
-      ...(personAsked ? ["--person-asked"] : [])];
+      ...(personAsked ? ["--person-asked", "--message", this.latestMessageId()] : [])];
     let request = this.must(...requestArgs);
     // A units block the engine cannot read comes back as the agent's step, a
     // print: write the block, then ask again. A failed command over it would

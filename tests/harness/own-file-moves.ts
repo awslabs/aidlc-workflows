@@ -129,7 +129,7 @@ export function walk(spec: WalkSpec): HandOff[] {
       ? (stage, a) => {
         if (stage !== "units-generation") return undefined;
         a.person.say("build it stage by stage: every Unit through each stage before the next");
-        const set = a.host.bash(`bun ${a.host.dir}/tools/aidlc-state.ts set-construction-iteration stage-major`);
+        const set = a.host.bash(`bun ${a.host.dir}/tools/aidlc-state.ts set-construction-iteration stage-major --message ${a.latestMessageId()}`);
         if (set.status !== 0) a.fail(`stage-major was refused: ${set.stderr || set.stdout}`);
         return undefined;
       }

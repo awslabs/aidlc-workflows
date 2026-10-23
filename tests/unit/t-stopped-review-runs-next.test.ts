@@ -230,6 +230,16 @@ function checkpoint(p: string, unit: string, action: string, extra: string[] = [
   return tool(p, "bolt", ["checkpoint", "--unit", unit, "--kind", "unit", "--action", action, "--session", SESSION, ...extra]);
 }
 
+// The approval over the unfinished review names the person's latest message
+// (--message), from the chat they said it in.
+function verifyOverReview(p: string, unit: string) {
+  const turn = readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN" &&
+    auditBlockField(row.block, "Session") === SESSION && auditBlockField(row.block, "Message Id") !== null).at(-1);
+  const id = turn ? auditBlockField(turn.block, "Message Id") ?? "" : "";
+  return tool(p, "bolt", ["checkpoint", "--unit", unit, "--kind", "unit", "--action", "verify", "--session", SESSION,
+    "--over-unfinished-review", "--message", id], { ...agentEnv(), AIDLC_SESSION_OVERRIDE: SESSION });
+}
+
 const unitApprovals = (p: string, unit: string) => events(p, "GATE_APPROVED")
   .filter((row) => auditBlockField(row.block, "Checkpoint") === "construction-unit" && auditBlockField(row.block, "Unit") === unit);
 
@@ -313,7 +323,7 @@ describe("(a) the person writes while a review has no verdict: the agent hears t
     build(p, "alpha");
     review(p, "alpha");
     expect(says(p, AS_IT_IS)).toContain(NOTE);
-    const verified = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
+    const verified = verifyOverReview(p, "alpha");
     expect(verified.json?.verified, verified.out).toBe(true);
     // Their words are the approval: no question, no second yes.
     const approved = checkpoint(p, "alpha", "approve");
@@ -477,7 +487,7 @@ describe("a verdict that comes in after the person approved the Unit as it is", 
     const requested = tool(p, "log", reviewArgs("alpha", 1));
     expect(requested.status, requested.out).toBe(0);
     says(p, AS_IT_IS);
-    const verified = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
+    const verified = verifyOverReview(p, "alpha");
     expect(verified.json?.verified, verified.out).toBe(true);
     const approved = checkpoint(p, "alpha", "approve");
     expect(approved.json?.approved, approved.out).toBe(true);

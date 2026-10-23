@@ -5,17 +5,19 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  auditBlockField, gateWordsSinceUnitReview, latestPersonTurn, personsGateReply, readProtectedResponse, sessionsDir,
+  auditBlockField, gateWordsSinceUnitReview, personsGateReply, readProtectedResponse, sessionsDir,
 } from "../../../core/tools/aidlc-lib.ts";
 import { listMessages, type StoredMessage } from "../../../core/tools/aidlc-message-store.ts";
 
 /** The words compared to a label. */
 export function approvedByWords(message: StoredMessage): boolean {
+  // @ts-expect-error PersonsWords is no string: the brand refuses this read
   return message.words === "Approve";
 }
 
 /** Through a local, after normalising, as the legacy nonce match normalises. */
 export function approvedAfterNormalising(message: StoredMessage): boolean {
+  // @ts-expect-error PersonsWords is no string: the brand refuses this read
   const said = message.text.trim().toLowerCase().replace(/\s*\(recommended\)\s*$/, "");
   return said.startsWith("approve");
 }
@@ -23,6 +25,7 @@ export function approvedAfterNormalising(message: StoredMessage): boolean {
 /** A destructured field, searched. */
 export function saidYes(message: StoredMessage): boolean {
   const { words } = message;
+  // @ts-expect-error PersonsWords is no string: the brand refuses this read
   return words?.includes("yes") === true;
 }
 
@@ -32,6 +35,7 @@ export function looksLikeYes(text: string): boolean {
 }
 export function latestSaidYes(projectDir: string): boolean {
   const latest = listMessages(projectDir).at(-1);
+  // @ts-expect-error PersonsWords is no string: the brand refuses this read
   return latest !== undefined && looksLikeYes(latest.words ?? "");
 }
 
@@ -42,12 +46,12 @@ export function gatePickNumber(projectDir: string, stage: string): number {
 
 /** The gate-words record, through the reader that hands its words out. */
 export function reviewWordsApprove(projectDir: string, session: string, unit: string): boolean {
-  return gateWordsSinceUnitReview(projectDir, session, unit, ["code-generation"])?.some((words) => words === "Approve") === true;
+  return gateWordsSinceUnitReview(projectDir, session, unit, ["code-generation"])?.some((reply) => reply.words === "Approve") === true;
 }
 
-/** latestPersonTurn's words, in a switch. */
+/** A field the engine hands the words out in (personsGateReply().words), in a switch. */
 export function latestTurnChoice(projectDir: string): string {
-  switch (latestPersonTurn(projectDir)?.words) {
+  switch (personsGateReply(projectDir, null, "requirements-analysis").words) {
     case "1": return "Approve";
     default: return "none";
   }
@@ -66,6 +70,7 @@ export function approvalReplyWasApprove(block: string): boolean {
 /** A digest of their text compared to one kept from their text. */
 export function sameReplyAsBefore(message: StoredMessage, kept: StoredMessage): boolean {
   const digest = (text: string) => createHash("sha256").update(text).digest("hex");
+  // @ts-expect-error PersonsWords is no string: the brand refuses this read
   return digest(message.text) === digest(kept.text);
 }
 

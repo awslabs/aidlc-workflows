@@ -40,6 +40,7 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { listMessages } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
+import { personsWordsText } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -640,7 +641,7 @@ describe("t149 Codex typed guard switch", () => {
       expect(typed.stdout).not.toContain("never run a setter for it");
       const [record] = listMessages(dir);
       expect(record.settings).toEqual([{ key: "guard.review-freeze", value: "off" }]);
-      expect(record.words).toBe("fix the parser");
+      expect(record.words && personsWordsText(record.words)).toBe("fix the parser");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

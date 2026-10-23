@@ -26,7 +26,7 @@ what they say, in their own words and in context, and do it.
   approval, "Review the plan" brings the question back.
 - When they ask to turn a check off for this piece of work, in their own words
   or by picking a guard's turn-it-off choice, run the setter yourself (that
-  choice's `command`, or `{{INVOKE}} engine config set guard.<fence> off --person-words '<their words>'`) and
+  choice's `command`, or `{{INVOKE}} engine config set guard.<fence> off --message <id>`, with `<id>` the message they asked in) and
   say in one line that it is off for this piece of work, comes back on for the
   next one, and that they can ask you to turn it back on. Never hand them a
   command to type.
@@ -328,9 +328,8 @@ recovery protocol's Session resume says, never as Request Changes.
   text holds any of `$`, a backtick, a quote, `%`, `&`, `|`, `<`, `>`, `^`, `!`
   or a line break goes in a file instead, so no shell reads it at all: write it
   with your file tool to `<record>/.aidlc-engine/answer-text/answer.txt` and
-  pass `--details-file .aidlc-engine/answer-text/answer.txt` (or
-  `--on-instruction-file` for their words that left a choice to you); the
-  engine reads the file and removes it.
+  pass `--details-file .aidlc-engine/answer-text/answer.txt`; the engine reads
+  the file and removes it.
 - **They also asked to stop for now:** record their choice with `--park`, or run
   `park --person-asked`, and tell them how to resume.
 
@@ -544,15 +543,15 @@ back an answer that names none, so the person is never asked again because of
 how they worded it. If their reply leaves the mode unclear, ask one short
 follow-up instead of guessing. When their request already said how they want to
 answer ("guide me through it"), do not ask it again: record the question as the
-step names it, then their choice with `--on-instruction '<their words>'` (in
-single quotes, as **Their words on a command line** above says), and say
+step names it, then their choice with `--on-instruction --message <id>`, with
+`<id>` the message that said it, and say
 **SAY:** "You asked to be guided, so I'll ask the questions here. Say if you'd
 rather edit the file or chat." The tool stamps the row.
 Never write the audit shard yourself.
 
 When the person asks for a different way at any stage ("let me just edit the
 file"), switch for this stage (see "Users can switch modes mid-stage" below) and
-record the new choice the same way, with `--on-instruction '<their words>'`, so
+record the new choice the same way, with `--on-instruction --message <id>`, so
 the later stages use it too.
 
 **Step 3a: If "Guide me" (interactive mode):**
@@ -654,7 +653,7 @@ When contradictions are detected:
   - Answers that dodge the question or change the subject
   - Relaxing, lowering, or disabling a previously defined quality target (e.g.
     a test coverage threshold) instead of meeting it
-- When a user leaves a choice to you ("up to you", "whatever you think is best", or "choose the recommended answers" for this stage), decide: pick the option that best fits what they have said so far and record it with `{{INVOKE}} engine log answer --stage <slug> --details '<your choice>' --on-instruction '<their words that left it to you>'`, each in single quotes as **Their words on a command line** above says (a choice's text can come from the project), so the record shows you chose it as they asked. Then say one line. For one question: **SAY:** "You left <the question> to me, so I chose <the choice>. Say if you want something else." For several: **SAY:** "You left <Stage>'s <N> questions to me, so I chose the recommended answers: <question: choice; ...>. Say if you want any of them changed." The first time in a piece of work, also say once: **SAY:** "Approvals are still yours: I'll stop at each stage for you to approve." A checkpoint or an approval is never left to you: ask the person.
+- When a user leaves a choice to you ("up to you", "whatever you think is best", or "choose the recommended answers" for this stage), decide: pick the option that best fits what they have said so far and record it with `{{INVOKE}} engine log answer --stage <slug> --details '<your choice>' --on-instruction --message <id>`, with `<id>` the message of theirs that left it to you and the choice in single quotes as **Their words on a command line** above says (a choice's text can come from the project), so the record shows you chose it as they asked and names their message. Then say one line. For one question: **SAY:** "You left <the question> to me, so I chose <the choice>. Say if you want something else." For several: **SAY:** "You left <Stage>'s <N> questions to me, so I chose the recommended answers: <question: choice; ...>. Say if you want any of them changed." The first time in a piece of work, also say once: **SAY:** "Approvals are still yours: I'll stop at each stage for you to approve." A checkpoint or an approval is never left to you: ask the person.
 
 ---
 

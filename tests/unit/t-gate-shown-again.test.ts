@@ -29,6 +29,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   readAuditShardEvents,
+  personsWordsText,
   setGuardPolicyLine,
   turnEndMarkerPath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -201,7 +202,8 @@ describe("t-gate-shown-again", () => {
           expect(owed.stdout).not.toContain(CARRY_ON);
           const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1)?.block ?? "";
           const id = /\*\*Message Id\*\*: (\S+)/.exec(turn)?.[1] ?? "";
-          expect(readMessage(proj, id)?.text).toBe("Approve");
+          const kept = readMessage(proj, id);
+          expect(kept && personsWordsText(kept.text)).toBe("Approve");
         }
       });
     }

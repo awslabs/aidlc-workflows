@@ -717,11 +717,11 @@ export async function judge(reply: Reply, tool: LiveTool, rig: LiveRig, ex: Exch
     for (const problem of unbackedDecisions(rig.proj, start.cursor, ledger)) failures.push({ pass: "P3", what: problem.slice(0, 300) });
   }
   // P4: the message record keeps each line whole, and the decision row names it.
-  const messages = store().listMessages(rig.proj);
+  const kept = store().listMessages(rig.proj).map((m) => lib().personsWordsText(m.text));
   // A blank line has no words to keep.
   for (const line of reply.inputs.filter((l) => l.trim().length > 0)) {
     const text = said(line, tool);
-    if (!messages.some((m) => m.text === text || m.text.trim() === text.trim())) failures.push({ pass: "P4", what: `no message record holds ${JSON.stringify(text.slice(0, 80))} whole` });
+    if (!kept.some((whole) => whole === text || whole.trim() === text.trim())) failures.push({ pass: "P4", what: `no message record holds ${JSON.stringify(text.slice(0, 80))} whole` });
   }
   for (const row of rowsOf(rig.proj).slice(start.rows)) {
     if (["GATE_APPROVED", "GATE_REJECTED", "PLAN_APPROVAL_RECORDED", "QUESTION_ANSWERED", "SUMMARY_CONFIRMATION_RECORDED", "REQUEST_ROUTED"].includes(row.event) && fieldOf(row, "Message Id") === null) {

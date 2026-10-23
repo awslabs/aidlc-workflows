@@ -91,7 +91,9 @@ describe("Request Changes from a recovery question names the report to run", () 
   const expectStageReport = (message: string) => {
     expect(message).toMatch(/orchestrate(\.ts)? report --stage "?functional-design"? --result rejected --user-input ['"]Request Changes['"]/);
     expect(message).not.toContain("--unit");
-    expect(message).toContain("--reason");
+    // Their words reach the rejection from their messages: the step asks for no copy of them.
+    expect(message).toContain("their messages go on the record as what should change");
+    expect(message).not.toContain("--reason");
   };
 
   test("a bare pick: ask what should change, then run the stage's report with their words", () => {

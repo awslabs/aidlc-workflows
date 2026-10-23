@@ -88,11 +88,11 @@ then the execution setting; when the person asks for parallel Units, run both
 setters as **Changing Construction policy** below describes:
 
 ```bash
-{{INVOKE}} engine state set-construction-iteration stage-major
-{{INVOKE}} engine state set-construction-execution swarm
+{{INVOKE}} engine state set-construction-iteration stage-major --message <id>
+{{INVOKE}} engine state set-construction-execution swarm --message <id>
 ```
 
-Swarm may use guided (`gated`) or automatic (`autonomous`) batch completion
+with `<id>` the message they asked in. Swarm may use guided (`gated`) or automatic (`autonomous`) batch completion
 approval. Unit-major remains serial and refuses a contradictory swarm setting;
 select serial before changing back to unit-major. Legacy workflows without the
 execution field retain their existing autonomy-based swarm routing. Team-owned
@@ -109,18 +109,18 @@ A withdrawn question must be asked again.
 When the person asks in their own words to change `Construction Checkpoints`,
 `Construction Execution`, or `Construction Iteration` ("turn checkpoints off",
 "from here on, build one unit at a time", "run the Units in parallel"), do it
-in that turn: run the typed setter, then say its `notice` line to them word for
-word. Do not ask them to confirm it. For example:
+in that turn: run the typed setter with `--message <id>`, the message they
+asked in, then say its `notice` line to them word for word. Do not ask them to
+confirm it. For example:
 
 ```bash
-{{INVOKE}} engine state set-construction-checkpoints disabled
-{{INVOKE}} engine state set-construction-iteration unit-major
-{{INVOKE}} engine state set-construction-execution swarm
+{{INVOKE}} engine state set-construction-checkpoints disabled --message <id>
+{{INVOKE}} engine state set-construction-iteration unit-major --message <id>
+{{INVOKE}} engine state set-construction-execution swarm --message <id>
 ```
 
-During Construction the setter makes the change only when a message from the
-person since the last decision is on record, and it keeps their words with the
-change. It is never yours to make on your own: not to clear a refusal, not
+During Construction the setter makes the change on the message it names, and it
+keeps that message's words with the change. It is never yours to make on your own: not to clear a refusal, not
 because autonomy is on, not from another gate's answer. When a setter names a
 setting that has to change first (parallel needs stage-major and checkpoints
 on; one Unit at a time needs serial), run that setter first and say both lines.
@@ -161,8 +161,9 @@ options:
 
 Map **Continue automatically** to `autonomous` and **Review each checkpoint** to
 `gated`. Record the explicit answer only with
-`{{INVOKE}} engine bolt set-autonomy --mode <autonomous|gated>`, never with
-`log decision` or `log answer` first, then re-run `next`.
+`{{INVOKE}} engine bolt set-autonomy --mode autonomous --message <id>` (the
+message they chose it in) or `--mode gated`, never with `log decision` or
+`log answer` first, then re-run `next`.
 Escalation requires a fresh human turn; revocation to `gated` does not.
 
 Explicit on-demand requests remain valid at any point during Construction.

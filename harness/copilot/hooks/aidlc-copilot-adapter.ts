@@ -779,20 +779,21 @@ export async function run(
       // Onboarding and sync run the extractor the project's harness names.
       case "knowledge": return verb === "onboard" || verb === "sync";
       // One of the person's checks switched as they asked runs click-free when
-      // the setter would carry it out (on always, off once they asked since the
-      // last decision), with or without their words beside it (--person-words, or
-      // --person-words-file for words in a file);
+      // they asked since the last decision (on always), with or without the
+      // message they asked in beside it (--message, which the setter proves), or
+      // the words form from before it (--person-words, --person-words-file);
       // any other setting keeps the prompt.
       case "config":
         return verb === "set" && !(
-          (rest.length === 2 || (rest.length === 4 && (rest[2] === "--person-words" || rest[2] === "--person-words-file"))) &&
+          (rest.length === 2 ||
+            (rest.length === 4 && (rest[2] === "--message" || rest[2] === "--person-words" || rest[2] === "--person-words-file"))) &&
           personCheckSwitchAllowed(projectDir, rest[0], rest[1])
         );
       // Turning Construction checkpoints on or off runs click-free when the
       // setter's own check passes (the person asked for it since the last
       // decision, or chose it); without that it keeps the prompt.
       case "state-passthrough":
-        if (verb === "set-construction-checkpoints" && rest.length === 1 &&
+        if (verb === "set-construction-checkpoints" && (rest.length === 1 || (rest.length === 3 && rest[1] === "--message")) &&
           constructionPolicyChangeAllowed(projectDir, "Construction Checkpoints", rest[0])) return false;
         if (ENGINE_OWNED_STATE_TRANSITIONS.has(verb)) return stateTransitionStandsAside();
         return GATE_SETTERS_KEEP_PROMPT.has(verb);

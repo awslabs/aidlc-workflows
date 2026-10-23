@@ -195,7 +195,9 @@ const POWERSHELL = ["pwsh", "powershell"].find((exe) =>
     expect(readAllAuditShards(p)).not.toContain("secret");
   });
 
-  test("the person's words that left a choice to the agent travel the same way", () => {
+  // The words in an --on-instruction-file are the agent's own text, kept whole;
+  // the person's words reach the record from the message the agent names.
+  test("the text beside a choice left to the agent travels the same way, and their words by the message", () => {
     const p = project();
     const human = spawnSync(BUN, [join(TOOLS, "aidlc.ts"), "engine", "hook", "record-human-turn"], {
       cwd: p, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -203,10 +205,18 @@ const POWERSHELL = ["pwsh", "powershell"].find((exe) =>
       input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t-answer-text", prompt: "up to you & $HOME" }),
     });
     expect(human.status, `${human.stdout}${human.stderr}`).toBe(0);
+    const id = field(p, "HUMAN_TURN", "Message Id");
+    expect(id).not.toBeNull();
     askQuestion(p);
-    const words = writeAnswer(p, "words.txt", "up to you & $HOME");
-    const r = log(p, ["answer", "--stage", "feasibility", "--details", "A", "--on-instruction-file", words]);
+    const words = writeAnswer(p, "words.txt", "they said up to you & $HOME");
+    const r = log(p, [
+      "answer", "--stage", "feasibility", "--details", "A", "--on-instruction-file", words, "--message", id as string,
+    ]);
     expect(r.status, r.out).toBe(0);
-    expect(field(p, "QUESTION_ANSWERED", "Instruction")).toBe("up to you & $HOME");
+    expect(field(p, "QUESTION_ANSWERED", "Conductor Summary")).toBe("they said up to you & $HOME");
+    expect(field(p, "QUESTION_ANSWERED", "Person Reply")).toBe("up to you & $HOME");
+    expect(field(p, "QUESTION_ANSWERED", "Instruction")).toBeNull();
+    expect(readdirSync(join(seededRecordDir(p), FOLDER))).toEqual([]);
+    shellsSeeNoText(p);
   });
 });

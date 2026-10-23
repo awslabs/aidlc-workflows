@@ -1568,7 +1568,8 @@ describe("t328 human-only break-glass override", () => {
     const output = JSON.parse(minted.stdout) as { override: boolean; failed_checks: string[]; say?: string };
     expect(output.override).toBe(true);
     expect(output.failed_checks.join("\n")).toContain("workspace source cannot be bound");
-    expect(output.say).toBe("Recorded that you approved building this plan with no check of the project's files.");
+    // The agent says it in its own words; the engine hands it no line.
+    expect(output.say).toBeUndefined();
     expect(evaluateCodeGenerationApproval(project, { unit: null })).toMatchObject({
       ok: true,
       reason: "approved",

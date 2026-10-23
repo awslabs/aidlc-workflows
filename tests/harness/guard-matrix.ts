@@ -425,7 +425,7 @@ export function runCell(cell: GuardCell, change: GuardChange, options: CellOptio
       const then = beforeWaves?.(stage, agent);
       const walk = (mode: string, words: string) => {
         agent.person.say(words);
-        const set = agent.host.bash(`bun .claude/tools/aidlc-state.ts set-construction-iteration ${mode}`);
+        const set = agent.host.bash(`bun .claude/tools/aidlc-state.ts set-construction-iteration ${mode} --message ${agent.latestMessageId()}`);
         if (set.status !== 0) agent.fail(`${mode} was refused: ${set.stderr || set.stdout}`);
       };
       if (stage === "units-generation") walk("stage-major", "build it stage by stage: every Unit through each stage before the next");

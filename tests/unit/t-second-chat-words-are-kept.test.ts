@@ -213,10 +213,10 @@ describe("a fresh clone with no choice made on this machine stays as today", () 
     expect(logged.stderr).not.toContain("more than one chat has sent messages");
   });
 
-  test("two chats that joined through their turns alone still make the work's chat ambiguous", () => {
+  test("two chats that joined through their turns alone: the message the agent names is theirs on this work", () => {
     // Both met the workspace before the choice; the choice is made here; both speak. Each hook turn joins its chat
-    // read-only (the binding file still says no record until the chat's own next command writes it), so the one-chat
-    // rule must read the chats the way the door does, not the file on disk.
+    // read-only (the binding file still says no record until the chat's own next command writes it), and a turn of
+    // this work names each message, so the one the agent names proves whichever of the two chats it came through.
     const proj = openWork();
     writeSessionBinding(proj, FIRST, "default", null, "unjoined");
     said(proj, "approve", FIRST);
@@ -232,8 +232,9 @@ describe("a fresh clone with no choice made on this machine stays as today", () 
       encoding: "utf-8",
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
-    expect(logged.status, `${logged.stdout}${logged.stderr}`).not.toBe(0);
-    expect(`${logged.stdout}${logged.stderr}`).toContain("more than one chat has sent messages");
+    expect(logged.status, `${logged.stdout}${logged.stderr}`).toBe(0);
+    const decided = readAuditShardEvents(proj).filter((row) => row.event === "DECISION_RECORDED");
+    expect(decided.map((row) => auditBlockField(row.block, "Message Id"))).toEqual([id]);
   });
 
   test("words typed in a chat before the work was chosen here do not make the work's chat ambiguous afterwards", () => {

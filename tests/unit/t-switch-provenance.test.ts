@@ -128,6 +128,14 @@ function reply(proj: string, prompt: string, session = SESSION): string {
   return out;
 }
 
+/** The id of the message the human-turn hook kept for the person's last turn. */
+function lastMessageId(proj: string): string {
+  const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
+}
+
 function utility(proj: string, args: string[]): { status: number; stdout: string; stderr: string } {
   const result = spawnSync(BUN, [UTILITY, ...args, "--project-dir", proj], {
     cwd: proj,
@@ -368,12 +376,12 @@ describe("a setter the person runs in their own terminal", () => {
     expect(auditBlockField(disabled[0].block, "Person Reply")).toBeNull();
   });
 
-  test("run by the agent for what they asked in the chat, the reply it names stands behind it", () => {
+  test("run by the agent for what they asked in the chat, the message it names stands behind it", () => {
     const proj = openWork();
     const asked = "turn the state transition check off";
     reply(proj, asked);
     // The agent's own tool call: pipes, no terminal of theirs behind it.
-    const off = configSet(proj, ["guard.state-transition", "off", "--person-words", asked], null);
+    const off = configSet(proj, ["guard.state-transition", "off", "--message", lastMessageId(proj)], null);
     expect(off.status, off.out).toBe(0);
     expect(off.out).toContain(`because you said: "${asked}"`);
     const disabled = readAuditShardEvents(proj).filter((row) => row.event === "GUARD_DISABLED");
@@ -414,10 +422,10 @@ describe("a terminal that the person's own tool runs", () => {
     { host: "Cursor", mark: { TERM_PROGRAM: "cursor" } },
     { host: "Copilot", mark: { COPILOT_AGENT_ID: "a1" } },
     { host: "Claude Code", mark: { CLAUDECODE: "1" } },
-  ])("$host: the switch is the agent's, so their own words stand behind it, never 'set by you'", ({ mark }) => {
+  ])("$host: the switch is the agent's, so the message it names stands behind it, never 'set by you'", ({ mark }) => {
     const proj = openWork();
     reply(proj, ASKED);
-    const off = inHostTerminal(proj, mark, ["--person-words", ASKED]);
+    const off = inHostTerminal(proj, mark, ["--message", lastMessageId(proj)]);
     expect(off.status, off.out).toBe(0);
     expect(off.out).toContain(`because you said: "${ASKED}"`);
     expect(off.out).not.toContain("set by you.");
@@ -448,7 +456,7 @@ describe("a command the person typed, with no turn of theirs on record", () => {
     const off = atATerminal(proj, ["guard.state-transition", "off"]);
     expect(off.status, off.out).toBe(0);
     expect(off.out).toContain("The state transition check (it keeps the engine, not an agent, moving the work along) is off for this piece of work, set by you.");
-    expect(off.out).not.toContain("No reply from the person has arrived");
+    expect(off.out).not.toContain("the message they asked in");
     expect(guardsOff(readFileSync(seededStateFile(proj), "utf-8"))).toContain("state-transition");
     const disabled = readAuditShardEvents(proj).filter((row) => row.event === "GUARD_DISABLED");
     expect(disabled).toHaveLength(1);
@@ -471,7 +479,9 @@ describe("a command the person typed, with no turn of theirs on record", () => {
     const before = readFileSync(seededStateFile(proj), "utf-8");
     const refused = configSet(proj, ["guard.state-transition", "off"], null);
     expect(refused.status).not.toBe(0);
-    expect(refused.out).toContain("No reply from the person has arrived");
+    expect(refused.out).toContain("Run it with --message <id>, the message they asked in, when they ask for it.");
+    // No message of theirs is on record, so no retry is named.
+    expect(refused.out).not.toContain("If their message");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 });

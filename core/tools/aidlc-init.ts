@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { proveMessage } from "./aidlc-message-store.ts";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -512,6 +513,8 @@ type ChoicesMutationContext = {
   settings?: SettingsMutation;
   /** A no-layer clear's other layers that also record the bypass. */
   extraSettings?: SettingsMutation[];
+  /** The id `--message` named: the message the person asked in. */
+  message?: string;
 };
 
 type SettingsMutation = {
@@ -557,12 +560,14 @@ const CONFIG_VALUE_FLAGS = new Set([
   "--hook-debug",
   "--bypass",
   "--clear-bypass",
+  "--message",
   "--writing-up-effort",
 ]);
 
 const CHOICE_VALUE_FLAGS = new Set([
   "--bypass",
   "--clear-bypass",
+  "--message",
   "--completions",
   "--default-scope",
   "--from",
@@ -3456,6 +3461,7 @@ function validateChoiceArgs(
         "--default-scope",
         "--harness",
         "--hook-debug",
+        "--message",
         "--plan-token",
         "--project-dir",
         "--sensor-timeout-ms",
@@ -3495,9 +3501,9 @@ function validateChoiceArgs(
   }
   // A check the person relies on is switched off for the project only when they
   // asked, by the rule every lowering follows (personAskedForThisLowering): from
-  // a chat, a turn of theirs since the last decision, or before any work their
-  // message there. A command no chat is named for (a script, a test) records as
-  // before.
+  // a chat, the message they asked in (--message), proved; a message that does
+  // not prove refuses with the proof's own words. A command no chat is named for
+  // (a script, a test) records as before.
   const lowered = section === "flags"
     ? valuesAfter(argv, "--bypass").find((name): name is RecordableProjectBypass =>
       (PERSON_CHECK_SWITCHES as readonly string[]).includes(name))
@@ -3510,8 +3516,13 @@ function validateChoiceArgs(
     } catch {
       chat = null;
     }
-    if (chat !== null && !personAskedForThisLowering(projectDir, chat) && !fenceKeyBypassed(projectDir, chat)) {
-      return guardSwitchRefusal(bypassedCheck(lowered), projectDir);
+    if (chat !== null) {
+      const named = valuesAfter(argv, "--message").at(-1);
+      const proof = named === undefined ? null : proveMessage(projectDir, named, "setting", { request: true });
+      if (proof !== null && "refusal" in proof) return proof.refusal;
+      if (!personAskedForThisLowering(proof?.message) && !fenceKeyBypassed(projectDir, chat)) {
+        return guardSwitchRefusal(bypassedCheck(lowered), projectDir);
+      }
     }
   }
   const mutationFlags = section === "flags"
@@ -4302,6 +4313,7 @@ function prepareChoiceSection(
       notes: summary.notes,
       ...(settings ? { settings } : {}),
       ...(extraSettings.length > 0 ? { extraSettings } : {}),
+      ...(valuesAfter(argv, "--message").length > 0 ? { message: valuesAfter(argv, "--message").at(-1) } : {}),
     },
   };
 }
@@ -11593,7 +11605,9 @@ function handleSettingsOnlySection(
     // cleared switch.
     const switchLines = section === "flags"
       ? [...new Set(mutations.flatMap((change) =>
-        recordSwitchChange(projectDir, change.target, change.previous, change.next, { otherFiles: false })
+        recordSwitchChange(projectDir, change.target, change.previous, change.next, {
+          otherFiles: false, message: valuesAfter(argv, "--message").at(-1),
+        })
       ))]
       : [];
     if (options.mode === "human") {
@@ -12404,7 +12418,9 @@ function recordBypassesOnly(
     // The lines above already name any other file that still records a
     // cleared switch.
     const switchLines = [...new Set(mutations.flatMap((change) =>
-      recordSwitchChange(projectDir, change.target, change.previous, change.next, { otherFiles: false })
+      recordSwitchChange(projectDir, change.target, change.previous, change.next, {
+        otherFiles: false, message: context.message,
+      })
     ))];
     // With several harnesses and none named, no one harness's setup is the
     // person's to finish here.
@@ -13906,6 +13922,7 @@ export async function main(
           choicesContext.settings.target,
           choicesContext.settings.previous,
           choicesContext.settings.next,
+          { message: choicesContext.message },
         )
       : [];
     if (modelsContext && options.mode === "human") {

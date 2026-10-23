@@ -61,6 +61,7 @@ import {
   writeSessionIntentHandoff,
   writeSessionIntentUuid,
   stateDigest,
+  personsWordsText,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
@@ -419,7 +420,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       const [record] = listMessages(dir);
       // Only the text after the last request header is the person's turn, and
       // their line is a command to AI-DLC, so it carries no words of their own.
-      expect(record.text).toBe("/aidlc config set summary-confirmation off");
+      expect(personsWordsText(record.text)).toBe("/aidlc config set summary-confirmation off");
       expect(record.words).toBeNull();
       const lowered = spawnSync(
         process.execPath,

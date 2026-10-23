@@ -29,9 +29,11 @@
 // gating the authored source covers every tree.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { cleanupTestProject, createTestProject, REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
+import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 /** Authored conductor SKILLs for every manifest-discovered distribution. */
@@ -465,8 +467,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "Asking for the guards or the checks as a whole to be off (\"turn the guards off\") is Guard Policy `off`",
       ...PHRASE_AND_LINE,
       "Where it applies is what they say: this piece of work, this project, or this machine.",
-      "`{{INVOKE}} config flags --bypass <switch> --local --yes`",
-      "`{{INVOKE}} engine config set <key> <on|off> --person-words '<their words>'`",
+      "`{{INVOKE}} config flags --bypass <switch> --local --yes --message <id>`",
+      "`{{INVOKE}} engine config set <key> <on|off> --message <id>`",
     ]) {
       if (!onboarding.includes(tok)) problems.push(`core/templates/onboarding-harness.md  missing: ${tok}`);
     }
@@ -860,6 +862,30 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
 
   // At the code plan question what to change is the agent's --details after
   // the choice; no copy says the engine keeps their words there for it.
+  // The skills' Construction setter sentence names --message exactly when the
+  // setter takes it: a sentence ahead of its engine has the agent run a command
+  // the setter refuses.
+  test("every SKILL's Construction setters carry --message exactly when the setter takes it", () => {
+    const proj = createTestProject();
+    try {
+      mkdirSync(dirname(seededStateFile(proj)), { recursive: true });
+      writeFileSync(seededStateFile(proj),
+        "# AI-DLC State Tracking\n\n## Project Information\n- **Project**: t181\n- **State Version**: 8\n- **Lifecycle Phase**: CONSTRUCTION\n");
+      const run = spawnSync(process.execPath, [
+        join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-state.ts"),
+        "set-construction-checkpoints", "disabled", "--message", "m0000000", "--project-dir", proj,
+      ], { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      const said = `${run.stdout}${run.stderr}`;
+      expect(said, "the setter ran against a state file").not.toContain("State file not found");
+      const takesMessage = !/requires exactly one value/.test(said);
+      const named = "set-construction-execution <serial|swarm>`, each with `--message <id>`";
+      const wrong = skills.filter((rel) => readFileSync(join(REPO_ROOT, rel), "utf-8").includes(named) !== takesMessage);
+      expect(wrong, `the setter ${takesMessage ? "takes" : "refuses"} --message`).toEqual([]);
+    } finally {
+      cleanupTestProject(proj);
+    }
+  });
+
   test("no protocol or SKILL says Plan Approval keeps the person's words as what to change", () => {
     const found: string[] = [];
     for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
@@ -910,8 +936,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         .map((file) => readFileSync(join(REPO_ROOT, file), "utf-8"))
         .join("\n");
       for (const setter of [
-        "run `{{INVOKE}} engine config set guard-policy <value> --person-words '<their words>'` yourself",
-        "running `{{INVOKE}} engine config set summary-confirmation off --person-words '<their words>'` yourself",
+        "run `{{INVOKE}} engine config set guard-policy <value> --message <id>` yourself",
+        "running `{{INVOKE}} engine config set summary-confirmation off --message <id>` yourself",
       ]) {
         if (!body.includes(setter)) found.push(`${rel}  missing: ${setter}`);
       }
@@ -1673,7 +1699,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       .replace(/\s+/g, " ");
     for (const rule of [
       'When a user leaves a choice to you ("up to you", "whatever you think is best", or "choose the recommended answers" for this stage), decide',
-      "--on-instruction '<their words that left it to you>'",
+      "--on-instruction --message <id>`, with `<id>` the message of theirs that left it to you",
       '**SAY:** "You left <the question> to me, so I chose <the choice>. Say if you want something else."',
       '**SAY:** "Approvals are still yours: I\'ll stop at each stage for you to approve."',
       "When the person's request already chose",
@@ -1845,7 +1871,6 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       for (const token of [
         "goes in a file instead, so no shell reads it at all",
         "`<record>/.aidlc-engine/answer-text/answer.txt` and pass `--details-file .aidlc-engine/answer-text/answer.txt`",
-        "`--on-instruction-file`",
       ]) {
         if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
       }

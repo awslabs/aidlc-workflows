@@ -59,8 +59,8 @@ import {
   steeringTokenKeyPathFor,
   toPosix,
   harnessDir,
-  PERSON_WORDS_FILL,
-  PERSON_WORDS_SLOT,
+  MESSAGE_SLOT,
+  messageFill,
   UNBINDABLE_FINGERPRINT,
   visibleMarkdownLines,
   withActiveDirectiveLock,
@@ -147,6 +147,8 @@ export interface PlanApprovalAskResult {
 export interface PlanApprovalAskReply {
   session: string;
   text: string;
+  /** The person's message it came in, by its record's id. */
+  messageId?: string;
 }
 
 export interface PlanApprovalAskRecord {
@@ -1245,6 +1247,8 @@ function approveTarget(
   unit: string | null,
   session: string,
   words?: string,
+  // The message record of the latest reply the words hold.
+  messageId?: string,
 ): TargetApproval {
   const dir = codeGenerationRecordDir(projectDir, unit);
   const planPath = join(dir, PLAN_FILE);
@@ -1382,6 +1386,7 @@ function approveTarget(
     Session: session,
     "Asked By": "engine",
     ...(words ? { "Person Reply": words } : {}),
+    ...(words && messageId ? { "Message Id": messageId } : {}),
     ...(unit !== null ? { Unit: unit, ...claimAttemptFields(projectDir, unit) } : {}),
   }, projectDir);
   clearPlanApprovalReviewRequest(projectDir, authority.targetId, authority.intentId);
@@ -1401,6 +1406,7 @@ function requestChangesFor(
   session: string,
   feedback: string | undefined,
   words?: string,
+  messageId?: string,
 ): PlanApprovalAskResult {
   const approval = evaluateCodeGenerationApproval(projectDir, { unit });
   const dir = codeGenerationRecordDir(projectDir, unit);
@@ -1434,6 +1440,7 @@ function requestChangesFor(
     "Asked By": "engine",
     ...(feedback ? { "User Input": feedback } : {}),
     ...(words && words !== feedback ? { "Person Reply": words } : {}),
+    ...(words && messageId ? { "Message Id": messageId } : {}),
     ...(unit !== null ? { Unit: unit } : {}),
   }, projectDir);
   return {
@@ -1478,6 +1485,7 @@ export function notePlanApprovalAskReply(
   session: string,
   text: string,
   picker?: PlanApprovalPickerQuestion,
+  messageId?: string,
 ): boolean {
   return withAuditLock(projectDir, () => {
     const open = currentPlanApprovalAsk(projectDir, "all");
@@ -1494,7 +1502,10 @@ export function notePlanApprovalAskReply(
     if (!reply || isNonAnswer(reply)) return true;
     const replies = [
       ...(record.replies ?? []),
-      { session: session || "unidentified-session", text: reply.slice(0, ASK_REPLY_MAX_CHARS) },
+      {
+        session: session || "unidentified-session", text: reply.slice(0, ASK_REPLY_MAX_CHARS),
+        ...(messageId ? { messageId } : {}),
+      },
     ].slice(-ASK_REPLIES_MAX);
     writePlanApprovalAsk(projectDir, { ...record, replies });
     // A grouped change request still needs to know which plan, so the
@@ -1617,7 +1628,7 @@ function correctReadRequestChanges(
   const words = record.replies?.map((reply) => reply.text).join("\n") || undefined;
   const results = record.results.filter((result) => !targets.includes(result.unit));
   for (const unit of targets) {
-    const outcome = approveTarget(projectDir, record, unit, session, words);
+    const outcome = approveTarget(projectDir, record, unit, session, words, record.replies?.at(-1)?.messageId);
     if (!outcome.ok) throw new Error(outcome.notice);
     results.push({ ...outcome.result, read: true, turns });
   }
@@ -1732,16 +1743,16 @@ export function openEngineQuestion(projectDir: string): string | null {
 }
 
 /**
- * The person sent these words to separate new work or a reshape: the code plan
- * question of this piece of work keeps none of them as its reply.
+ * The person sent the words of this message to separate new work or a
+ * reshape: the code plan question of this piece of work keeps none of them as
+ * its reply.
  */
-export function withdrawPlanApprovalReplies(projectDir: string, text: string): void {
-  const same = (reply: string): boolean => reply.replace(/\s+/g, " ").trim().toLowerCase() ===
-    text.replace(/\s+/g, " ").trim().toLowerCase();
+export function withdrawPlanApprovalReplies(projectDir: string, which: { messageId: string }): void {
+  const drop = (reply: PlanApprovalAskReply): boolean => reply.messageId === which.messageId;
   withAuditLock(projectDir, () => {
     const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
-    if (record === null || !record.replies?.some((reply) => same(reply.text))) return;
-    writePlanApprovalAsk(projectDir, { ...record, replies: record.replies.filter((reply) => !same(reply.text)) });
+    if (record === null || !record.replies?.some(drop)) return;
+    writePlanApprovalAsk(projectDir, { ...record, replies: record.replies.filter((reply) => !drop(reply)) });
   });
 }
 
@@ -1879,12 +1890,14 @@ export function recordPlanApprovalAnswer(
       throw new Error(
         "The person has not answered the plan question since it was shown: their message since then was a " +
           "question or a command to AIDLC, not an answer. Answer them and end the turn. If they want plan approval " +
-          `off for this work, run \`${aidlcDispatcherInvocation("config set guard.plan-approval off")} --person-words ` +
-          `'${PERSON_WORDS_SLOT}'\`${PERSON_WORDS_FILL}, and say so in one line. Then record the choice they make.`,
+          `off for this work, run \`${aidlcDispatcherInvocation("config set guard.plan-approval off")} --message ` +
+          `'${MESSAGE_SLOT}'\`${messageFill(projectDir)}, and say so in one line. Then record the choice they make.`,
       );
     }
     // Their words, whole: what to change when they asked for changes.
     const words = replies.map((reply) => reply.text).join("\n");
+    const latest: PlanApprovalAskReply = replies[replies.length - 1];
+    const messageId = latest.messageId;
     const who = session || replies[replies.length - 1].session;
     const units = record.targets.map((target) => target.unit);
     const answered = new Set((record.results ?? []).map((result) => result.unit));
@@ -1918,10 +1931,10 @@ export function recordPlanApprovalAnswer(
         // What to change is the agent's reading of their words, passed after the
         // choice; their words stay whole beside it. With none, the revision
         // step asks them what should change.
-        results.push(requestChangesFor(projectDir, record, unit, who, answer.feedback?.trim() || undefined, words));
+        results.push(requestChangesFor(projectDir, record, unit, who, answer.feedback?.trim() || undefined, words, messageId));
         continue;
       }
-      const outcome = approveTarget(projectDir, record, unit, who, words);
+      const outcome = approveTarget(projectDir, record, unit, who, words, messageId);
       if (outcome.ok) {
         results.push(outcome.result);
         approved.push(unit);
