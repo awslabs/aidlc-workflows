@@ -103,10 +103,12 @@ describe("the live answers check in a fresh chat", () => {
     await opens(proj, SESSION);
     await say(proj, "/aidlc fix the login", "claude");
     const read = await next(proj, ["fix", "the", "login"]);
+    // The line is the person's request, not a reply: the routing question opens from it, in this chat.
+    expect(String(read.directive?.message ?? ""), read.out).not.toContain("has not answered");
     const request = /--request ([0-9a-f]+)/.exec(String(read.directive?.message ?? ""))?.[1];
     expect(request).toBeDefined();
     const asked = await next(proj, ["--request", request!, "--propose", "bugfix"]);
-    expect(asked.directive?.kind).toBe("ask");
+    expect(asked.directive?.ask_type, asked.out).toBe("new-work-routing");
     expect(readAuditShardEvents(proj).slice(start).map((row) => row.event)).toContain("SESSION_STARTED");
     // The person replies now: nothing has carried on yet, though rows were written since the drive began.
     const reply = readAuditShardEvents(proj).length;
