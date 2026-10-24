@@ -208,10 +208,9 @@ describe("Kiro CLI's V3 offer at launch", () => {
     expect(kiroV3OfferNavigation(kiroV3Offer(1, KIRO_V3_OPTIONS.slice(0, 2)))).toBeNull();
     expect(kiroV3OfferNavigation(kiroV3Offer(1, KIRO_V3_OPTIONS, "Upgrade now?"))).toBeNull();
     expect(kiroV3OfferNavigation(`${kiroV3Offer(1)}\n›  ask a question or describe a task ↵`)).toBeNull();
-  });
 
-  test("on Windows Server the ASCII > caret is read the same way", () => {
-    // kiroV3Offer(0) with ">" is byte for byte the screen Kiro CLI 2.33.1 paints there.
+    // On Windows Server the caret is an ASCII ">": kiroV3Offer(0) with ">" is byte for byte the screen Kiro CLI 2.33.1
+    // paints there.
     const windows = (screen: string) => screen.replace("❯", ">");
     expect(kiroV3OfferNavigation(windows(kiroV3Offer(0)))).toBe("Down");
     expect(kiroV3OfferNavigation(windows(kiroV3Offer(1)))).toBe("Enter");
