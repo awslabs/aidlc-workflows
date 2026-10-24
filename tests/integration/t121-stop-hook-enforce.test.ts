@@ -4243,9 +4243,10 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   test("(h) typed guard-policy and ceremony switches through next allow the stop after their config result (#1369)", () => {
     for (const format of ["claude", "codex"] as const) {
       for (const { typed, command, reply } of [
-        { typed: "--guard-policy relaxed", command: "config set guard-policy relaxed", reply: "Guard Policy is already relaxed (set by you)" },
-        { typed: "--change-control Relaxed", command: "config set guard-policy relaxed", reply: "Guard Policy set to relaxed" },
-        { typed: "--depth minimal --summary-confirmation off", command: "config set depth minimal --summary-confirmation off", reply: "Depth set to Minimal" },
+        // A setting that turns a check off names the setter with --verbatim (the step prints its output as it is).
+        { typed: "--guard-policy relaxed", command: "config set guard-policy relaxed --verbatim", reply: "Guard Policy is already relaxed (set by you)" },
+        { typed: "--change-control Relaxed", command: "config set guard-policy relaxed --verbatim", reply: "Guard Policy set to relaxed" },
+        { typed: "--depth minimal --summary-confirmation off", command: "config set depth minimal --summary-confirmation off --verbatim", reply: "Depth set to Minimal" },
         // next names a level word lowercased, whatever case the person typed.
         { typed: "--review Advisory --depth Standard", command: "config set depth standard --review advisory", reply: "Depth set to Standard" },
       ]) {
