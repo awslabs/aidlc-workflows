@@ -1533,7 +1533,7 @@ export function otherWorkNote(
       : "";
     return `${work} (${shown}${more})`;
   });
-  // A step stays under the transport cap however many pieces of work there are.
+  // The note stays bounded however many pieces of work there are.
   if (works.length > OTHER_WORKS_SHOWN) {
     listed.push(`and ${works.length - OTHER_WORKS_SHOWN} more, each listing its files in its Units' source manifests ` +
       "under its record's `construction/` folder");

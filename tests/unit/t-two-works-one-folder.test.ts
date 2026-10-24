@@ -288,7 +288,7 @@ describe("what is still this work's to account for", () => {
     const registry = join(setup.project, "aidlc", "spaces", "default", "intents", "intents.json");
     const rows = JSON.parse(readFileSync(registry, "utf-8")) as { dirName: string }[];
     writeFileSync(registry, `${JSON.stringify(rows.filter((row) => row.dirName !== "other-work"))}\n`);
-    expect(otherOpenWorkClaims(setup.project, "code-generation").map((work) => work.paths)).toEqual([["version.ts"]]);
+    expect(otherOpenWorkClaims(setup.project, "code-generation").map((work) => [work.work, work.paths])).toEqual([["other-work", ["version.ts"]]]);
   });
 
   test("in a Bolt worktree, one Unit's own folder, there is no other work", () => {
