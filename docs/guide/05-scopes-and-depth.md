@@ -45,7 +45,7 @@ Each scope's stage count below is the stages it runs after Initialization's thre
 - **Stages:** 5 of 30
 - **Default depth:** Minimal
 - **Skips:** Market Research, Feasibility, Team Formation, Mockups, User Stories, most Operation stages
-- **Plan approval:** Off. Once a code plan is written you see one line naming it, code generation starts, and the line asks whether you want to look at the plan first; you can also ask to see a plan before it is built, or to be asked about every plan
+- **Plan approval:** Off. Once a code plan is written you see one line naming it, code generation starts, and the line says you can ask to go over the plan at any time; you can also ask to see a plan before it is built, or to be asked about every plan
 
 ### bugfix
 
@@ -159,7 +159,7 @@ full Inception-through-Operation lifecycle and a lighter teaching test floor.
 - **Review cap:** None
 - **Includes:** Initialization, conditional Reverse Engineering, Requirements Analysis, Code Generation, Build and Test, and the conditional Deployment Pipeline, Deployment Execution, and Observability Setup stages
 - **Skips:** Ideation, design, Units Generation, Delivery Planning, CI Pipeline, environment provisioning, and the late operations stages
-- **Plan approval:** Off, like poc: each code plan is built as written after one line naming it, which asks whether you want to look at it first
+- **Plan approval:** Off, like poc: each code plan is built as written after one line naming it, which says you can ask to go over it at any time
 
 ---
 

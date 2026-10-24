@@ -1102,12 +1102,15 @@ export function legacyPlanApprovalOffNotice(
     "for you to approve. Updating Kiro IDE lets plans build without asking.";
 }
 
+// The build starts as this line is said, so it asks nothing: a question here
+// could not change a build already running. Going over the plan stays the
+// person's to ask for, in their own words.
 function planApprovalOffNotice(projectDir: string, units: Array<string | null>, setting: PlanApprovalSetting): string {
   const paths = units.map((unit) => targetView(projectDir, unit).plan_path);
   const written = paths.length === 1 ? `Plan written: ${paths[0]}.` : `Plans written: ${paths.join(", ")}.`;
   return `${written} Plan approval (${CHECK_GLOSS["plan-approval"]}) is off for this piece of work ` +
     `(${changeControlSourceLabel(setting.source)}). Starting code generation now. ` +
-    "Do you want me to go over the plan with you?";
+    `You can ask me to go over the ${paths.length === 1 ? "plan" : "plans"} at any time.`;
 }
 
 /**

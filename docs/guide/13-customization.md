@@ -304,16 +304,15 @@ plan. The `plan_approval` ceremony decides whether it asks on this piece of work
 - **Off** (express and poc): once the plan is written you see one line, and the
   build starts:
 
-  > Plan written: aidlc/spaces/default/intents/260820-checkout/construction/code-generation/code-generation-plan.md. Plan approval (you approve each code plan before it is built) is off for this piece of work (from scope poc). Starting code generation now. Do you want me to go over the plan with you?
+  > Plan written: aidlc/spaces/default/intents/260820-checkout/construction/code-generation/code-generation-plan.md. Plan approval (you approve each code plan before it is built) is off for this piece of work (from scope poc). Starting code generation now. You can ask me to go over the plan at any time.
 
   The audit trail gets a `PLAN_APPROVAL_SKIPPED` row carrying the fingerprint of
   the plan that was built, and the questions file reads
   `[Answer]: Plan approval off`. Nothing records that you approved it.
 
 **Review the plan first.** With plan approval off, the line that names each
-plan asks whether you want to look at it first; say yes, or ask to review the
-plan in your own words at any time, and that plan is shown for
-approval while the build waits. The setting stays off: the next plan builds
+plan says you can ask to go over it at any time, and the build starts; ask in
+your own words, and that plan is shown for approval while the build waits. The setting stays off: the next plan builds
 without asking. If the plan is already being built when you ask, that build
 finishes, then its plan is shown beside what was built, and nothing else starts
 until you answer. Approving keeps what was built; changes you ask for come back

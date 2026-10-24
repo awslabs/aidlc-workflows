@@ -132,6 +132,8 @@ interface Emitted {
     status?: string;
     feedback?: string;
     note?: string;
+    notice?: string;
+    skipped?: boolean;
     editing?: boolean;
     choices?: string[];
     targets?: Array<{ unit: string | null; plan_path: string; summary: string[] }>;
@@ -2407,6 +2409,17 @@ describe("one question for several ready Units", () => {
     // A later Unit's plan is a record of this work too: it passes.
     expect(guardWrite(pd, join(codeGenerationRecordDir(pd, "later"), "code-generation-plan.md")).code).toBe(0);
     expect(guardWrite(pd, join(pd, "src", "alpha.ts")).code).toBe(2);
+  });
+
+  // With plan approval off the batch builds at once, so its one line names
+  // every plan and asks nothing.
+  test("with plan approval off, the batch's line names every plan and says they can be gone over at any time", () => {
+    const pd = swarmFixture(true, GROUP, "off");
+    const routed = swarmState(pd);
+    expect(routed.plan_approval.skipped, JSON.stringify(routed)).toBe(true);
+    expect(routed.plan_approval.notice).toContain("Plans written: ");
+    expect(routed.plan_approval.notice).toContain("Starting code generation now. You can ask me to go over the plans at any time.");
+    expect(routed.plan_approval.notice).not.toContain("?");
   });
 
   test("shows every Unit's summary, and 'approve all' approves each Unit separately", () => {
