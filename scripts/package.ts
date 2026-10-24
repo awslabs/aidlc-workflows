@@ -26,7 +26,7 @@
 //
 // THE TOKENS: core/ prose carries {{HARNESS_DIR}}, {{INVOKE}}, {{TOOL_PREFIX}},
 // {{TRUSTED_NAMESPACE}} and {{OPTION_LETTERS}}; here they become the harness's
-// own values (the dir is `.claude`/`.kiro`/`.codex`/`.aidlc`/`.cursor`; the
+// own values (the dir is `.claude`/`.kiro`/`.codex`/`.aidlc`/`.cursor`/`.grok`; the
 // letters are optionLetters()). Truthful carve-outs in core
 // (workspace-detection's 3-dir list, the `$CLAUDE_PROJECT_DIR on Claude Code`
 // note) never carried the token, so they pass through untouched.
@@ -415,7 +415,7 @@ function transform(
     // (aidlc-includes.ts ACTIVE_MEMORY_DIR), the same path on every install.
     const posixPath = srcPath.split(sep).join("/");
     if (
-      (harness === "cursor" || harness === "opencode" || harness === "copilot") &&
+      (harness === "cursor" || harness === "opencode" || harness === "copilot" || harness === "grok") &&
       posixPath.includes("/agents/") &&
       posixPath.endsWith("-agent.md")
     ) {
@@ -866,9 +866,9 @@ function buildTree(
 ): string[] {
   const harnessDir = m.harnessDir;
   const treeRoot = join(outRoot, harnessDir);
-  // Every harness projects onto ONE of the six flavors the tier module
-  // knows (Kiro CLI and Kiro IDE share the "kiro" flavor - identical model
-  // dial). Declared per manifest, never inferred from the harness name.
+  // Every harness projects onto ONE flavor the tier module knows (Kiro CLI
+  // and Kiro IDE share the "kiro" flavor - identical model dial). Declared
+  // per manifest, never inferred from the harness name.
   const harnessKind = m.tierFlavor;
   const letters = optionLetters(m);
   // 1. Copy core dirs with token substitution + rules rename. Manifest-declared
@@ -1468,6 +1468,7 @@ function rewriteNativeInvocations(
     "codex-adapter": true,
     "cursor-adapter": true,
     "copilot-adapter": true,
+    "grok-adapter": true,
   };
   const projectPrefix = String.raw`(?:"?(?:\$\{?CLAUDE_PROJECT_DIR\}?/)?`;
   const suffix = `"?)`;

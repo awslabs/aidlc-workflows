@@ -44,6 +44,7 @@ export type ModelHarness =
   | "codex"
   | "copilot"
   | "cursor"
+  | "grok"
   | "kiro"
   | "kiro-ide"
   | "opencode";
@@ -160,6 +161,13 @@ export const HARNESS_HONESTY = Object.freeze({
     message:
       "Cursor runs every agent on the model you choose in its model picker, so a model or effort set here is kept for other tools and changes nothing in Cursor.",
   }),
+  grok: Object.freeze({
+    model: false,
+    effort: false,
+    groupEffort: false,
+    message:
+      "Grok Build runs every agent on the session model, so a model or effort set here is kept for other tools and changes nothing in Grok Build.",
+  }),
   copilot: Object.freeze({
     model: false,
     effort: false,
@@ -212,6 +220,7 @@ export const HARNESS_PRODUCT_NAMES: Readonly<Record<ModelHarness, string>> = Obj
   codex: "Codex CLI",
   copilot: "GitHub Copilot",
   cursor: "Cursor",
+  grok: "Grok Build",
   kiro: "Kiro CLI",
   "kiro-ide": "Kiro",
   opencode: "opencode",

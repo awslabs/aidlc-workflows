@@ -46,6 +46,7 @@ const HARNESS_NAMES = [
   "codex",
   "copilot",
   "cursor",
+  "grok",
   "kiro",
   "kiro-ide",
   "opencode",
@@ -903,7 +904,8 @@ describe("t299 first-run setup wizard", () => {
   test("Kiro IDE's row elsewhere asks for Kiro CLI's model with Enter keeping Kiro auto, and saves no effort", () => {
     const kept = kiroSeam({});
     // Kiro IDE from the harness list, recommended defaults, Enter at the model list.
-    const keep = runWizard("6\n\n\n", {
+    // Grok is row 5, so Kiro (Kiro IDE and Kiro CLI on v3) is row 7.
+    const keep = runWizard("7\n\n\n", {
       harnesses: { claude: { found: false } },
       env: kept.env,
       probed: ["kiro", "kiro-ide"],
@@ -918,7 +920,7 @@ describe("t299 first-run setup wizard", () => {
     expect(kiroWrites(kept.writes)).toEqual([]);
 
     const chosen = kiroSeam({});
-    const choose = runWizard("6\n\n2\n", {
+    const choose = runWizard("7\n\n2\n", {
       harnesses: { claude: { found: false } },
       env: chosen.env,
       probed: ["kiro", "kiro-ide"],
@@ -930,7 +932,7 @@ describe("t299 first-run setup wizard", () => {
 
     // A write Kiro refuses names the command that saves the chosen model again.
     const refused = kiroSeam({}, { failWrite: "chat.defaultModel" });
-    const failed = runWizard("6\n\n2\n", {
+    const failed = runWizard("7\n\n2\n", {
       harnesses: { claude: { found: false } },
       env: refused.env,
       probed: ["kiro", "kiro-ide"],
@@ -1213,8 +1215,8 @@ describe("t299 first-run setup wizard", () => {
     expect(supported.stdout).toContain("Choose the harness for this project first.");
 
     // Below the kiro row's own 2.6 floor neither Kiro row is detected, so
-    // setup asks instead of taking one; the person still can choose Kiro CLI.
-    const unsupported = runWizard("5\n\n", {
+    // setup asks instead of taking one. Row 6 is Kiro CLI (V2); Grok is row 5.
+    const unsupported = runWizard("6\n\n", {
       harnesses: { claude: { found: false }, kiro: { found: true, version: "kiro-cli 2.5.9" } },
       probed: ["kiro", "kiro-ide"],
     });
@@ -1237,9 +1239,9 @@ describe("t299 first-run setup wizard", () => {
     });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Choose the harness for this project first.");
-    expect(result.stdout).toContain("    5. Kiro CLI (V2)   (detected, default)\n");
+    expect(result.stdout).toContain("    6. Kiro CLI (V2)   (detected, default)\n");
     expect(result.stdout).toContain(
-      `    6. Kiro${" ".repeat(12)}(detected)  Kiro IDE and Kiro CLI on its v3 engine\n`,
+      `    7. Kiro${" ".repeat(12)}(detected)  Kiro IDE and Kiro CLI on its v3 engine\n`,
     );
     expect(result.stdout).toContain("Using Kiro CLI (V2).");
     const kiroDir = join(result.project, ".kiro");
@@ -1253,9 +1255,10 @@ describe("t299 first-run setup wizard", () => {
       kiro: { found: true, version: "kiro-cli 2.28.0" },
       "kiro-ide": { found: true, version: "kiro-cli 2.28.0" },
     };
-    // Kiro auto: 6 at the picker, then Enter at the defaults and the model list keeps it.
+    // Kiro auto: 7 at the picker (Grok is 5, Kiro CLI (V2) is 6), then Enter at the
+    // defaults and the model list keeps it.
     const auto = kiroSeam({});
-    const onAuto = runWizard("6\n\n\n", { harnesses: bothKiro, env: auto.env });
+    const onAuto = runWizard("7\n\n\n", { harnesses: bothKiro, env: auto.env });
     expect(onAuto.status, onAuto.stdout + onAuto.stderr).toBe(0);
     expect(onAuto.stdout).toContain("Using Kiro.");
     expect(onAuto.stdout).toContain("Choose the Kiro CLI session model (Enter keeps Kiro auto):");
@@ -1264,7 +1267,7 @@ describe("t299 first-run setup wizard", () => {
 
     // A saved model is kept, and no preset effort is written for it.
     const saved = kiroSeam({ "chat.defaultModel": "claude-opus-5" });
-    const kept = runWizard("6\n\n", { harnesses: bothKiro, env: saved.env });
+    const kept = runWizard("7\n\n", { harnesses: bothKiro, env: saved.env });
     expect(kept.status, kept.stdout + kept.stderr).toBe(0);
     expect(kept.stdout).toContain("Using Kiro.");
     // Neither the keep-or-choose question nor the model list.
@@ -1273,7 +1276,7 @@ describe("t299 first-run setup wizard", () => {
     expect(kiroWrites(saved.writes)).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("an earlier detected harness stays the default over both Kiro trees, and 6 takes Kiro", () => {
+  test("an earlier detected harness stays the default over both Kiro trees, and 7 takes Kiro", () => {
     const bothKiro = {
       kiro: { found: true, version: "kiro-cli 2.28.0" },
       "kiro-ide": { found: true, version: "kiro-cli 2.28.0" },
@@ -1283,16 +1286,16 @@ describe("t299 first-run setup wizard", () => {
     });
     expect(withClaude.status, withClaude.stdout + withClaude.stderr).toBe(0);
     expect(withClaude.stdout).toContain(`    1. Claude Code     (detected, default)\n`);
-    expect(withClaude.stdout).toContain("    5. Kiro CLI (V2)   (detected)\n");
+    expect(withClaude.stdout).toContain("    6. Kiro CLI (V2)   (detected)\n");
     expect(withClaude.stdout).toContain(
-      `    6. Kiro${" ".repeat(12)}(detected)  Kiro IDE and Kiro CLI on its v3 engine\n`,
+      `    7. Kiro${" ".repeat(12)}(detected)  Kiro IDE and Kiro CLI on its v3 engine\n`,
     );
     expect(withClaude.stdout).toContain("Using Claude Code.");
     expect(existsSync(join(withClaude.project, ".kiro"))).toBe(false);
 
-    const kiro = runWizard("6\n\n", { harnesses: { claude: { found: false }, ...bothKiro } });
+    const kiro = runWizard("7\n\n", { harnesses: { claude: { found: false }, ...bothKiro } });
     expect(kiro.status, kiro.stdout + kiro.stderr).toBe(0);
-    expect(kiro.stdout).toContain("    5. Kiro CLI (V2)   (detected, default)\n");
+    expect(kiro.stdout).toContain("    6. Kiro CLI (V2)   (detected, default)\n");
     expect(kiro.stdout).toContain("Using Kiro.");
     const cli = JSON.parse(readFileSync(join(kiro.project, ".kiro", "settings", "cli.json"), "utf-8"));
     expect(cli["chat.agentEngine"]).toBe("v3");
@@ -1871,6 +1874,7 @@ describe("t299 first-run setup wizard", () => {
       ["codex", "codex                         open Codex CLI in this repo"],
       ["copilot", "copilot                        open Copilot CLI in this repo"],
       ["cursor", "cursor                         open Cursor in this repo"],
+      ["grok", "grok                           open Grok Build in this repo"],
       ["kiro", "kiro-cli chat                  open Kiro CLI in this repo"],
       ["opencode", "opencode                       open opencode in this repo"],
     ] as const
@@ -1892,11 +1896,11 @@ describe("t299 first-run setup wizard", () => {
       for (const kiroIdeWord of ["Reload Window", "Restricted Mode", "agent picker", "Kiro IDE"]) {
         expect(result.stdout).not.toContain(kiroIdeWord);
       }
-      // Agents on Cursor and Copilot keep the session's model and effort, so
-      // the recommended defaults record no preset there.
+      // Agents on Cursor, Grok Build, and Copilot keep the session's model
+      // and effort, so the recommended defaults record no preset there.
       const settings = join(result.project, "aidlc.settings.json");
       const models = existsSync(settings) ? JSON.parse(readFileSync(settings, "utf-8")).models : undefined;
-      if (harness === "copilot" || harness === "cursor") {
+      if (harness === "copilot" || harness === "cursor" || harness === "grok") {
         expect(result.stdout).toContain("Records no model preset: every agent uses your ");
         expect(result.stdout).toContain("  Model preset ... not needed  (every agent uses your ");
         expect(models).toBeUndefined();
@@ -2387,7 +2391,7 @@ describe("t299 first-run setup wizard", () => {
 describe("t299 first-run guidance helpers", () => {
   // Every tree but Cursor's ships hook-activation advice: each names the step
   // that got its hooks running live, which the generic restart advice is not.
-  test("only Kiro IDE ships first-run steps and an editor name; every tree but Cursor's ships hook-activation advice", () => {
+  test("only Kiro IDE ships first-run steps and an editor name; every tree but Cursor and Grok Build ships hook-activation advice", () => {
     for (const harness of HARNESS_NAMES) {
       const root = join(RUNTIME, harness);
       const harnessDir = readdirSync(root).find((entry) =>
@@ -2401,15 +2405,18 @@ describe("t299 first-run guidance helpers", () => {
       expect(Object.hasOwn(projection, "firstRunSteps"), harness).toBe(kiroIde);
       expect(Object.hasOwn(projection, "editorTerminalApp"), harness).toBe(kiroIde);
       const copilot = harness === "copilot";
-      expect(Object.hasOwn(shipped, "hookActivation"), harness).toBe(harness !== "cursor");
+      // Grok Build v1 ships no hookActivation block. Folder trust and the git
+      // repository are the onboarding and doctor checks, not this advice object.
+      const shipsHookActivation = harness !== "cursor" && harness !== "grok";
+      expect(Object.hasOwn(shipped, "hookActivation"), harness).toBe(shipsHookActivation);
       // The agent's own step needs a hook on its shell command that beats in
       // the record before the engine runs (Kiro IDE's guard does, #2167). Only
       // Kiro IDE, whose tree also runs in Kiro CLI, gives its own host a line.
-      expect(Object.hasOwn(shipped.hookActivation ?? {}, "agentStep"), harness).toBe(harness !== "cursor");
+      expect(Object.hasOwn(shipped.hookActivation ?? {}, "agentStep"), harness).toBe(shipsHookActivation);
       expect(Object.hasOwn(shipped.hookActivation ?? {}, "agentStepInHost"), harness).toBe(kiroIde);
       // notRunYet needs a heartbeat on the first chat message: the human-turn
       // hook leaves one, and the Kiro IDE and Copilot adapters too.
-      expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunYet"), harness).toBe(harness !== "cursor");
+      expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunYet"), harness).toBe(shipsHookActivation);
       // notRunInWorkflow needs a guard heartbeat before each engine command;
       // only Copilot pins one.
       expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunInWorkflow"), harness).toBe(copilot);

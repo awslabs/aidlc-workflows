@@ -3,10 +3,10 @@
 // Several core protocol modules end a section with one `### <tool>` subsection
 // per harness (the construction, topology, reviewer and swarm bindings). Each
 // harness reads only its own, so a dist tree that carried all seven would hand
-// the agent six other tools' instructions on every load. The packager keeps the
+// the agent the other tools' instructions on every load. The packager keeps the
 // matching subsection and drops the rest.
 //
-// A run is the seven tool headings in a row at one level, ended by the next
+// A run is the tool headings in a row at one level, ended by the next
 // heading at that level or above, or the end of the file. Fenced code is not
 // read for headings. A tool heading outside a complete run, a run missing a
 // tool, or a run naming one twice is a build error, so a new harness or a
@@ -20,6 +20,7 @@ export const BINDING_HEADINGS: Readonly<Record<string, string>> = {
   cursor: "Cursor",
   opencode: "opencode",
   copilot: "GitHub Copilot",
+  grok: "Grok",
 };
 
 const TOOL_NAMES: ReadonlySet<string> = new Set(Object.values(BINDING_HEADINGS));

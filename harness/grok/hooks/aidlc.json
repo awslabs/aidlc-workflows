@@ -1,0 +1,108 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .grok/hooks/aidlc-grok-adapter.ts session-start",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .grok/hooks/aidlc-grok-adapter.ts session-end",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .grok/hooks/aidlc-grok-adapter.ts mint",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .grok/hooks/aidlc-grok-adapter.ts guards",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .grok/hooks/aidlc-grok-adapter.ts audit-and-sensors",
+            "timeout": 600
+          },
+          {
+            "type": "command",
+            "command": "bun .grok/hooks/aidlc-grok-adapter.ts runtime-compile",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .grok/hooks/aidlc-grok-adapter.ts task-failure",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .grok/hooks/aidlc-grok-adapter.ts validate-state",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .grok/hooks/aidlc-grok-adapter.ts stop",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .grok/hooks/aidlc-grok-adapter.ts subagent-stop",
+            "timeout": 600
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -10,8 +10,8 @@ import {
   realpathSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { REPO_ROOT } from "./fixtures.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 import { STOP_HOOK_PROBE_ENV } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -25,11 +25,13 @@ const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const COPILOT_DIST = join(REPO_ROOT, "dist", "copilot");
 const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
 const CURSOR_DIST = join(REPO_ROOT, "dist", "cursor");
+const GROK_DIST = join(REPO_ROOT, "dist", "grok");
 
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
 const COPILOT_BIN = process.env.AIDLC_COPILOT_BIN ?? "copilot";
 const OPENCODE_BIN = process.env.AIDLC_OPENCODE_BIN ?? "opencode";
 const CURSOR_BIN = process.env.AIDLC_CURSOR_BIN ?? "agent";
+const GROK_BIN = process.env.AIDLC_GROK_BIN ?? "grok";
 
 const OPENCODE_MODEL =
   process.env.AIDLC_OPENCODE_MODEL ??
@@ -615,6 +617,65 @@ export function runCursor(proj: string, promptText: string): ExecResult {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, PWD: proj },
       timeout: remainingOperationTimeoutMs(TEST_TIMEOUT_MS, { phase: "Cursor exec" }),
+    },
+  );
+  return {
+    rc: result.status ?? -1,
+    out: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+  };
+}
+
+export interface GrokProject {
+  proj: string;
+  root: string;
+}
+
+// A scratch install: dist/grok copied verbatim (the engine and native surfaces
+// at .grok/, AGENTS.md and the aidlc/ memory tree at the root), then
+// git-initialized. Grok Build skips project skills and hooks until the folder
+// is a git repository and is trusted.
+export function setupGrokProject(): GrokProject {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "grok-run-")));
+  const proj = join(root, "proj");
+  cpSync(GROK_DIST, proj, { recursive: true });
+  initializeGit(proj);
+  return { proj, root };
+}
+
+// `grok --trust -p` is the headless surface. --trust grants the scratch folder
+// so project skills and hooks load. AI-DLC does not ship .grok/config.toml;
+// the allow rules are the ones the Grok guide tells a person to add, passed
+// here so a read-only status command is admitted and any other command is not.
+// --verbatim keeps `/aidlc --status` as the person's message.
+export function runGrok(proj: string, promptText: string): ExecResult {
+  const path = [join(homedir(), ".local", "bin"), join(homedir(), ".bun", "bin"), process.env.PATH ?? ""]
+    .filter((entry) => entry.length > 0)
+    .join(delimiter);
+  const result = spawnSync(
+    GROK_BIN,
+    [
+      "--trust",
+      "-p",
+      promptText,
+      "--verbatim",
+      "--no-plan",
+      "--output-format",
+      "plain",
+      "--max-turns",
+      "12",
+      "--allow",
+      "Bash(bun .grok/tools/aidlc*)",
+      "--allow",
+      "Bash(bun .grok/hooks/aidlc*)",
+      "--allow",
+      "Bash(aidlc *)",
+    ],
+    {
+      cwd: proj,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, PWD: proj, PATH: path },
+      timeout: remainingOperationTimeoutMs(TEST_TIMEOUT_MS, { phase: "Grok exec" }),
     },
   );
   return {

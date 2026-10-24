@@ -114,6 +114,9 @@ export type TierProjection = {
    *  accounts reject every named model), so a pinned id would hard-fail
    *  installs on lower plans; agents inherit the session model instead. */
   cursor: { model: string | null };
+  /** Grok Build agent .md frontmatter. Model-only and always omitted: every
+   *  agent inherits the Grok Build session model, same contract as Cursor. */
+  grok: { model: string | null };
 };
 
 export type Harness = keyof TierProjection;
@@ -130,6 +133,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     opencode: { model: null, variant: null },
     copilot: { model: null },
     cursor: { model: null },
+    grok: { model: null },
   },
   balanced: {
     // Effort pinned to medium. Balanced is the reviewer tier - both
@@ -143,6 +147,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     kiro: { model: null },
     opencode: { model: null, variant: "medium" },
     copilot: { model: null },
+    grok: { model: null },
   },
   templated: {
     // The tier remains a models-dial group for pattern-following work, but the
@@ -154,6 +159,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     opencode: { model: null, variant: null },
     copilot: { model: null },
     cursor: { model: null },
+    grok: { model: null },
   },
 };
 

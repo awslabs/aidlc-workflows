@@ -95,7 +95,7 @@ describe("t355 our own plugins share one catalogue per host format", () => {
 
   test("each host that reads a catalogue gets one aidlc-plugins listing every plugin of ours", () => {
     const withCatalogue = Object.values(TARGETS).filter((target) => target.hostCatalogue);
-    expect(withCatalogue.map((target) => target.harnessName).sort()).toEqual(["claude", "codex", "copilot", "cursor"]);
+    expect(withCatalogue.map((target) => target.harnessName).sort()).toEqual(["claude", "codex", "copilot", "cursor", "grok"]);
     expect(written.sort()).toEqual(withCatalogue.map((target) => `${target.marketplaceDir}/marketplace.json`).sort());
     for (const target of withCatalogue) {
       const catalogue = JSON.parse(

@@ -237,6 +237,7 @@ describe("t329 project-description and document-input boundaries", () => {
       "codex",
       "copilot",
       "cursor",
+      "grok",
       "kiro",
       "kiro-ide",
       "opencode",
