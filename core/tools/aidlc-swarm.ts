@@ -1041,9 +1041,13 @@ function workerRecordEdits(projectDir: string, wt: string, stageSlug: string): R
       (segments[0] === "construction" && segments.length > 3 && segments[2] === stageSlug)
     ) continue;
     // As a checkout writes it, so a CRLF checkout compares and merges as on
-    // disk; none when the base has no file there (a folder counts as none).
-    const shown = git(["cat-file", "--filters", `${base}:./${path}`]);
-    const baseBytes: Buffer | null = shown.status === 0 ? shown.stdout : null;
+    // disk; none when the base has no file there (nothing, a folder, or a file
+    // git cannot show).
+    const kind = git(["cat-file", "-t", `${base}:./${path}`]);
+    const shown = kind.status === 0 && kind.stdout.toString().trim() === "blob"
+      ? git(["cat-file", "--filters", `${base}:./${path}`])
+      : null;
+    const baseBytes: Buffer | null = shown?.status === 0 ? shown.stdout : null;
     let unitBytes: Buffer | null;
     try {
       unitBytes = presentRecordBytes(assertNoSymlinkInChainOrThrow(anchor, path), path);
