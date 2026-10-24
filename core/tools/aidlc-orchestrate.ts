@@ -12454,7 +12454,12 @@ function attachBoundedWave(
   directive: RunStageDirective,
   wave: RunStageWave,
   codekbCtx: CodekbCtx,
-): string | null {
+): void {
+  // Measured as the wave step goes out: it lists the lead's persona as a file,
+  // as prepareEmission does for every step whose body does not run here, and
+  // the conductor persona goes ahead of it when the two do not fit together
+  // (personaSentAhead).
+  listLeadPersona(directive);
   const entries: RunStageWaveEntry[] = [];
   for (const entry of wave.entries) {
     const candidate = {
@@ -12462,25 +12467,21 @@ function attachBoundedWave(
       entries: [...entries, entry],
     };
     directive.wave = candidate;
+    const { conductor_persona: _sentAhead, ...alone } = directive;
     // Leave room for the final transport's canonical rules_in_context paths
     // and JSON framing. A large batch degrades to deterministic same-batch
     // prefixes across successive next calls; it never spills into a dependent
-    // batch merely to fit one directive.
+    // batch merely to fit one directive. The first entry, the step's own Unit,
+    // always goes: a step too long even for it gets the size error every step
+    // gets, which says what to change.
     if (
-      Buffer.byteLength(JSON.stringify(directive), "utf-8") >
-      directiveMaxBytes() - 1024
+      entries.length > 0 &&
+      Buffer.byteLength(JSON.stringify(alone), "utf-8") >
+        directiveMaxBytes() - 1024
     ) {
       break;
     }
     entries.push(entry);
-  }
-  if (entries.length === 0) {
-    delete directive.wave;
-    return (
-      `Cannot emit the active wave for stage "${directive.stage}" within the ` +
-      `${directiveMaxBytes()}-byte directive limit. Reduce the stage's path/context ` +
-      "fan-out or process this workflow with a smaller unit batch."
-    );
   }
   directive.wave = { batch_index: wave.batch_index, entries };
   directive.protocol_modules = [...(directive.protocol_modules ?? []), "wave"];
@@ -12489,7 +12490,6 @@ function attachBoundedWave(
       bootstrapDirectiveMemory(entry.unit_memory_path, codekbCtx);
     }
   }
-  return null;
 }
 
 // Resolve the first unsettled Bolt-DAG batch from one healed snapshot. A batch
@@ -12845,11 +12845,7 @@ function emitPerUnitRunStage(
       );
       directive.gate = false;
       directive.unit = wave.unit;
-      const waveError = attachBoundedWave(directive, wave.wave, codekbCtx);
-      if (waveError !== null) {
-        emit(errorDirective(waveError));
-        return;
-      }
+      attachBoundedWave(directive, wave.wave, codekbCtx);
       emit(directive);
       return;
     }
@@ -18687,11 +18683,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
         codekbCtx,
       );
       if (wave.state === "active" && wave.unit === payload.u) {
-        const waveError = attachBoundedWave(directive, wave.wave, codekbCtx);
-        if (waveError !== null) {
-          emit(errorDirective(waveError));
-          return;
-        }
+        attachBoundedWave(directive, wave.wave, codekbCtx);
       }
     }
   }
