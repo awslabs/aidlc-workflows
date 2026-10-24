@@ -393,11 +393,26 @@ describe("a stage the person asks to skip with a scope switch in the same comman
       expect(commands, message).toEqual([SWITCH]);
       expect(message).toContain('"User Stories is already skipped."');
       expect(message).not.toContain("The plan is unchanged");
+      // The switch alone goes on with the running work here, and so does this.
+      expect(message).toEndWith("Then re-run `next` to carry on with the work.");
       const ran = runNamed(proj, SWITCH);
       expect(ran.status, ran.out).toBe(0);
       expect(readFileSync(stateFile(proj), "utf-8")).toContain(`${stage} — SKIP`);
     });
   }
+
+  // A stage already done is never said to be skipped: recompose names it done,
+  // as it does without the switch.
+  test("a stage already done, named with the switch: it is not said to be skipped", () => {
+    const proj = startedAt("feature", "units-generation");
+    const path = stateFile(proj);
+    writeFileSync(path, readFileSync(path, "utf-8").replace("- [S] user-stories — EXECUTE", "- [x] user-stories — EXECUTE"));
+    const { message, commands } = switchesAndSkips(proj, "bugfix", "user-stories");
+    expect(message).not.toContain("already skipped");
+    expect(commands, message).toEqual([
+      SWITCH, "bun .claude/tools/aidlc.ts engine recompose --skip user-stories --reason 'the person asked to skip it'",
+    ]);
+  });
 
   // The open question stays the person's to answer: the step names its report
   // after the switch and the change, as the skip alone does at an open gate.
