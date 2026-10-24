@@ -577,8 +577,7 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(command.endsWith("engine recompose --skip team-formation --reason 'the person asked to skip it'"), d.message).toBe(true);
     expect(d.message).toContain('"Skipped Team Formation. You can undo that any time."');
     expect(d.message).toContain("If they later ask to undo it, run `");
-    expect(d.message.endsWith("recompose --add team-formation --reason 'the person asked to undo skipping it'`."), d.message)
-      .toBe(true);
+    expect(d.message.endsWith("recompose --add team-formation`."), d.message).toBe(true);
     // The one line is all the person hears: recompose's counts stay out of the reply.
     expect(d.message).toContain("do not show its output");
     expect(d.message).not.toContain("print its output verbatim");
@@ -652,25 +651,64 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     const undo = runTool(proj, "aidlc.ts", engine(/If they later ask to undo it, run `([^`]*)`/.exec(d.message)?.[1] ?? ""));
     expect(undo.status, undo.out).toBe(0);
     expect(suffixOf(stateOf(proj), "deployment-pipeline")).toBe("EXECUTE");
-    expect(auditOf(proj)).toContain("**Reason**: the person asked to undo skipping it");
   });
 
-  // Only the undo the step names carries its reason: an add of the person's
-  // own, a stage the plan leaves out or a skipped one put back by a fresh add,
-  // is checked as before.
-  test("a person's own add carries no reason and is still checked", () => {
+  // The same put back in the person's own words, a later message or a new
+  // chat ("put Deployment Pipeline back"), reaches a fresh `next --add`, not the
+  // undo line; it goes through as the undo does, whether the stage was skipped
+  // later or at the plan pick, and for a stage the person had added.
+  test("a stage this work skipped, put back in the person's own words, goes through", () => {
+    const putBack = (proj: string, slug: string): void => {
+      const step = nextDirective(proj, ["--add", slug]);
+      const command = /Run `([^`]*engine recompose [^`]*)`/.exec(step.message)?.[1] ?? "";
+      expect(command.endsWith(`engine recompose --add ${slug}`), step.message).toBe(true);
+      const back = runTool(proj, "aidlc.ts", engine(command));
+      expect(back.status, back.out).toBe(0);
+      expect(suffixOf(stateOf(proj), slug)).toBe("EXECUTE");
+    };
+    const skipNamed = (proj: string, slug: string): void => {
+      const step = nextDirective(proj, ["--skip", slug]);
+      const skip = runTool(proj, "aidlc.ts", engine(/Run `([^`]*engine recompose [^`]*)`/.exec(step.message)?.[1] ?? ""));
+      expect(skip.status, skip.out).toBe(0);
+      expect(suffixOf(stateOf(proj), slug)).toBe("SKIP");
+    };
+    const later = installedProject();
+    expect(runTool(later, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix"]).status).toBe(0);
+    skipNamed(later, "deployment-pipeline");
+    putBack(later, "deployment-pipeline");
+    const atPick = installedProject();
+    expect(runTool(atPick, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix", "--skip", "deployment-pipeline"]).status)
+      .toBe(0);
+    expect(suffixOf(stateOf(atPick), "deployment-pipeline")).toBe("SKIP");
+    putBack(atPick, "deployment-pipeline");
+    // A stage the scope leaves out, added at the pick and then skipped: the
+    // work's own record, not the scope's plan, says it was skipped here.
+    const added = installedProject();
+    expect(runTool(added, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix", "--add", "observability-setup"]).status)
+      .toBe(0);
+    skipNamed(added, "observability-setup");
+    putBack(added, "observability-setup");
+  });
+
+  // A stage the work never skipped is checked as before, alone or beside a put
+  // back: an add whose inputs the plan leaves out is refused for that stage.
+  test("a stage the work never skipped is still checked, alone or beside a put back", () => {
     const proj = installedProject();
     expect(runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix"]).status).toBe(0);
-    const d = nextDirective(proj, ["--skip", "deployment-pipeline"]);
-    expect(runTool(proj, "aidlc.ts", engine(/Run `([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? "")).status).toBe(0);
-    const back = /Run `([^`]*engine recompose [^`]*)`/.exec(nextDirective(proj, ["--add", "deployment-pipeline"]).message)?.[1] ?? "";
-    expect(back.endsWith("engine recompose --add deployment-pipeline"), back).toBe(true);
     const own = /Run `([^`]*engine recompose [^`]*)`/.exec(nextDirective(proj, ["--add", "observability-setup"]).message)?.[1] ?? "";
     expect(own.endsWith("engine recompose --add observability-setup"), own).toBe(true);
     const add = runTool(proj, "aidlc.ts", engine(own));
     expect(add.status).not.toBe(0);
     expect(add.out).toContain("Recompose rejected by the strict validator");
     expect(suffixOf(stateOf(proj), "observability-setup")).toBe("SKIP");
+    const d = nextDirective(proj, ["--skip", "deployment-pipeline"]);
+    expect(runTool(proj, "aidlc.ts", engine(/Run `([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? "")).status).toBe(0);
+    const both = /Run `([^`]*engine recompose [^`]*)`/.exec(nextDirective(proj, ["--add", "deployment-pipeline,observability-setup"]).message)?.[1] ?? "";
+    const mixed = runTool(proj, "aidlc.ts", engine(both));
+    expect(mixed.status).not.toBe(0);
+    expect(mixed.out).toContain('Stage \\"observability-setup\\" requires');
+    expect(mixed.out).not.toContain('Stage \\"deployment-pipeline\\" requires');
+    expect(suffixOf(stateOf(proj), "deployment-pipeline")).toBe("SKIP");
   });
 
   // A live run on Claude Code: "approve build and test. and skip the deployment
