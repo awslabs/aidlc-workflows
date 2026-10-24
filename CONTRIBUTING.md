@@ -10,6 +10,7 @@ This file covers the project-wide conventions (reporting, PR flow, security, lic
 
 For the path from PR review through nightly previews and stable publication,
 see [Development and Releases](DEVELOPERS.md).
+Only users with the repository **Maintain** or **Admin** role may click **Merge when ready**.
 
 ## How this repository is built
 

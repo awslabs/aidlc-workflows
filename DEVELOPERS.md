@@ -60,10 +60,11 @@ have a separate setting under **Settings → Advanced Security**.
 
 ## 2. Merge to `main`
 
-Once the checks and review feedback are addressed, a maintainer adds the PR to
-the merge queue. The queue runs the CI workflow on the queued merge commit,
-including the cross-OS checks that PR pushes skip, and squash-merges it. The
-merged commit becomes eligible for preview testing and publication.
+Once the checks and review feedback are addressed, a repository maintainer
+(Maintain role or higher) clicks **Merge when ready** to add the PR to the merge
+queue. The queue runs the CI workflow on the queued merge commit, including the
+cross-OS checks that PR pushes skip, and squash-merges it. The merged commit
+becomes eligible for preview testing and publication.
 
 The `ci.yml` workflow has PR, merge-queue, manual-dispatch, and reusable
 workflow triggers, but no push-to-`main` trigger. CI does not run again on
