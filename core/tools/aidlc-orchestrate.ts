@@ -586,7 +586,6 @@ import {
   openPlanApprovalQuestion,
   planApprovalKeptReplyWaits,
   planApprovalOverrideOffers,
-  withdrawLatestPlanApprovalReply,
   withdrawPlanApprovalReplies,
   publishPlanApprovalAsk,
   publishPlanApprovalSkip,
@@ -18720,7 +18719,8 @@ function handlePark(args: string[], projectDir: string | undefined): void {
   // hook anyway, so this is belt-and-braces rather than load-bearing.)
   touchEngineMarker(projectDir);
   // --person-asked: the conductor read the person asking to stop.
-  const res = spawnState(pd, ["park", ...(args.includes("--person-asked") ? ["--person-asked"] : [])]);
+  const asked = args.includes("--person-asked");
+  const res = spawnState(pd, ["park", ...(asked ? ["--person-asked"] : [])]);
   if (res.exitCode !== 0) {
     // The state tool's refusal arrives as its JSON envelope: say its words.
     emit(stateRefusalDirective("Cannot park the workflow", "this step", (res.stderr || res.stdout).trim()));
@@ -18728,13 +18728,18 @@ function handlePark(args: string[], projectDir: string | undefined): void {
   }
   // The message that asked for the park ("let's stop here for today") is no
   // reply to an open code plan question: when the work comes back, the
-  // question is theirs to answer. A park typed as a command kept no such
-  // message, and an earlier reply of theirs stays.
-  try {
-    const turn = readAuditShardEvents(pd).filter((row) => row.event === "HUMAN_TURN").at(-1);
-    if (turn !== undefined && auditBlockField(turn.block, "Reply") === null) withdrawLatestPlanApprovalReply(pd);
-  } catch {
-    // The reply stays kept; the question is asked again with it.
+  // question is theirs to answer. Only that message is taken back, by its id:
+  // a reply they gave before it (a change, then a stop picked in the agent's
+  // own question box) stays kept, and so does every reply under the
+  // conductor's own park. A park typed as a command kept no such message.
+  if (asked) {
+    try {
+      const turn = readAuditShardEvents(pd).filter((row) => row.event === "HUMAN_TURN").at(-1);
+      const messageId = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+      if (messageId !== null) withdrawPlanApprovalReplies(pd, { messageId });
+    } catch {
+      // The reply stays kept; the question is asked again with it.
+    }
   }
   emit(parkedAfterPark(pd, res.stdout));
 }

@@ -332,7 +332,7 @@ describe("a number for the routing question answers it alone while the code plan
       const proj = project(policy);
       expect(next(proj).ask_type).toBe("plan-approval");
       say(proj, "let's stop here for today");
-      run(proj, [ORCHESTRATE, "park", "--project-dir", proj], "");
+      run(proj, [ORCHESTRATE, "park", "--person-asked", "--project-dir", proj], "");
       const routing = routingQuestionOverThePlan(proj, false);
       say(proj, "1");
       const back = nextNamed(proj, routing.continue_command);

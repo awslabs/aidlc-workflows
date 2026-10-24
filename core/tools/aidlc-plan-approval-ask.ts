@@ -1793,9 +1793,9 @@ export function openEngineQuestion(projectDir: string): string | null {
 }
 
 /**
- * The person sent the words of this message to separate new work or a
- * reshape: the code plan question of this piece of work keeps none of them as
- * its reply.
+ * The person sent the words of this message to separate new work, to a
+ * reshape, or to park the work: the code plan question of this piece of work
+ * keeps none of them as its reply.
  */
 export function withdrawPlanApprovalReplies(projectDir: string, which: { messageId: string }): void {
   const drop = (reply: PlanApprovalAskReply): boolean => reply.messageId === which.messageId;
@@ -1803,18 +1803,6 @@ export function withdrawPlanApprovalReplies(projectDir: string, which: { message
     const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
     if (record === null || !record.replies?.some(drop)) return;
     writePlanApprovalAsk(projectDir, { ...record, replies: record.replies.filter((reply) => !drop(reply)) });
-  });
-}
-
-/**
- * The person's latest message asked to park the work: an instruction to the
- * framework, like a slash command, not a reply the code plan question keeps.
- */
-export function withdrawLatestPlanApprovalReply(projectDir: string): void {
-  withAuditLock(projectDir, () => {
-    const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
-    if (record === null || !record.replies?.length) return;
-    writePlanApprovalAsk(projectDir, { ...record, replies: record.replies.slice(0, -1) });
   });
 }
 
