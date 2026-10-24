@@ -741,7 +741,10 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("1bd: an execute_pwsh command reaches the plan-approval guard and the review freeze read as PowerShell", () => {
+  // Kiro CLI on Windows runs its shell tool in PowerShell, whatever name the
+  // call carries (`execute_pwsh`, or `execute_bash` and `shell`, the names its
+  // agent hooks match); elsewhere only `execute_pwsh` is PowerShell's.
+  test("1bd: a Kiro shell command reaches the plan-approval guard and the review freeze read as PowerShell where it runs in PowerShell", () => {
     const dir = scratchProject(true);
     try {
       seedUnapprovedCodeGeneration(dir, "todo-core");
@@ -756,8 +759,9 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         }, [], { AIDLC_COMPILED_EXECUTABLE: "" });
       // The plan's own file before any plan: PowerShell's reading puts it in
       // the stage's record; the POSIX reading drops the backslashes.
+      const windows = process.platform === "win32";
       expect(call("plan-approval-guard", "execute_pwsh").code).toBe(0);
-      expect(call("plan-approval-guard", "execute_bash").code).toBe(2);
+      expect(call("plan-approval-guard", "execute_bash").code).toBe(windows ? 0 : 2);
       for (const [target, file] of [
         ["plan-approval-guard", "aidlc-plan-approval-guard.ts"],
         ["review-freeze", "aidlc-review-freeze.ts"],
@@ -769,7 +773,8 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         }
         const shells = readFileSync(capture, "utf-8").trim().split("\n")
           .map((line) => (JSON.parse(line) as { aidlc_shell?: unknown }).aidlc_shell);
-        expect({ target, shells }).toEqual({ target, shells: ["powershell", undefined, undefined] });
+        const posix = windows ? "powershell" : undefined;
+        expect({ target, shells }).toEqual({ target, shells: ["powershell", posix, posix] });
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
