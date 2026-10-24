@@ -2111,9 +2111,11 @@ are excluded from later swarm batches.
 
 Before initial protected Code Generation prepare, commit the already-approved
 parent application source so the selected base can reproduce it. This includes
-approved inline skeleton source before switching to a parallel batch. The rule
-applies to legacy autonomy and new checkpoint workflows alike; an autonomy grant
-never authorizes an automatic commit.
+approved inline skeleton source before switching to a parallel batch. Files Git
+ignores and does not track, such as a `.env` or a log, are not part of it: they
+stay where they are, and a Unit's worktree, like any Git checkout, does not have
+them. The rule applies to legacy autonomy and new checkpoint workflows alike; an
+autonomy grant never authorizes an automatic commit.
 
 ```bash
 aidlc engine swarm prepare --batch <N> --units "<exact emitted Units>"
