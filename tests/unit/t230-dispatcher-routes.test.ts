@@ -1647,6 +1647,35 @@ describe("t230 dispatcher global flag translation", () => {
       .toBe("aidlc: --project-dir may be specified only once\n");
   });
 
+  // A flag `next` takes with no value takes no word, so the word after it is
+  // theirs and a flag of ours after it is one of their words too, on the
+  // request route and on the shortcuts that stand for it.
+  test("a flag of ours after a flag that takes no value and a word of theirs stays where they typed it", () => {
+    for (const words of [
+      ["next", "--new-intent", "fix", "--project-dir", "handling"],
+      ["next", "--resume", "fix", "--verbose", "output"],
+    ]) {
+      expect(resolveAction(["engine", "orchestrate", ...words])).toEqual({
+        type: "delegate",
+        tool: "aidlc-orchestrate.ts",
+        args: words,
+      });
+    }
+    for (const shortcut of [["--resume", "fix"], ["--scope", "bugfix", "fix"]]) {
+      expect(resolveAction([...shortcut, "--project-dir", "handling"])).toEqual({
+        type: "delegate",
+        tool: "aidlc-orchestrate.ts",
+        args: ["next", ...shortcut, "--project-dir", "handling"],
+      });
+    }
+    // With no word of theirs on the line the option is still ours.
+    expect(resolveAction(["--resume", "--project-dir", "relative/project"])).toEqual({
+      type: "delegate",
+      tool: "aidlc-orchestrate.ts",
+      args: ["next", "--project-dir", resolve(process.cwd(), "relative/project"), "--resume"],
+    });
+  });
+
   // Every reader of the line takes the same boundary, not just the resolver:
   // the project policy and the delegate's environment read it too, and before
   // this they resolved the person's own word as the folder to work in. Then an
