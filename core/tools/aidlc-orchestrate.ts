@@ -524,6 +524,7 @@ import {
   type UnitClaimOverview,
 } from "./aidlc-unit.ts";
 import {
+  type ApprovedComposerPlan,
   approvedComposerPlan,
   type Consume,
   type GraphStage,
@@ -605,9 +606,12 @@ import {
   stepNextCommand,
 } from "./aidlc-testing-posture.ts";
 import {
+  ceremoniesCreationGranted,
   checksAre,
   fenceMemoryLockRefusal,
+  guardPolicyCreationGranted,
   guardPolicyNamed,
+  planApprovalCreationAsked,
   planApprovalMemoryLockRefusal,
   settingsKeptSince,
   settingTheirs,
@@ -6112,6 +6116,11 @@ function createPrintDirective(
   if (approved) {
     const changed = approved.changes.skip.length > 0 || approved.changes.add.length > 0;
     const asApproved = flags.planChanges !== undefined || !changed;
+    // A custom plan approved as the gate showed it (a list typed for a plan
+    // with stage changes) also runs at the depth, settings and Guard Policy
+    // shown beside its stages. A matched plan is left as typed: with no list,
+    // its Approve reads the same as a plain pick of that scope after a Reject.
+    if (changed && flags.planChanges !== undefined) fillApprovedPlanSettings(flags, approved, projectDir);
     if (flags.planChanges) flags.planChanges = changed ? approved.changes : undefined;
     if (asApproved && !flags.projectType && approved.projectType) {
       const scanned = detectedProjectType(projectDir);
@@ -6183,6 +6192,34 @@ function createPrintDirective(
   // it speaks from.
   carriesNarration.add(directive);
   return directive;
+}
+
+// What an approved custom plan carries that its Approve command left out. A
+// value typed with the command stays: unlike a retyped stage list, it may be
+// the person's own word at Approve, and a typed lowering still meets intent
+// create's own check. So does a setting the person asked for in this chat
+// before the work existed, which intent create applies from their words. A
+// lowering filled here names their message, as a typed one does.
+function fillApprovedPlanSettings(flags: ParsedFlags, plan: ApprovedComposerPlan, projectDir: string): void {
+  let session: string | null = null;
+  try {
+    session = resolveInvokingSessionId(projectDir);
+  } catch {
+    session = null;
+  }
+  const request = flags.request ?? null;
+  if (plan.depth && !flags.depth) flags.depth = plan.depth;
+  const asked = ceremoniesCreationGranted(projectDir, session, request);
+  for (const key of CEREMONY_KEYS) {
+    const value = plan.settings?.[key];
+    if (value === undefined || flags.ceremony?.[key] !== undefined) continue;
+    if (key === "plan_approval" ? planApprovalCreationAsked(projectDir, session, request) : asked[key] !== undefined) continue;
+    flags.ceremony = { ...flags.ceremony, [key]: value };
+  }
+  if (plan.settings?.review && !flags.review) flags.review = plan.settings.review;
+  if (plan.guardPolicy && !flags.changeControl && guardPolicyCreationGranted(projectDir, session, request) === null) {
+    flags.changeControl = plan.guardPolicy;
+  }
 }
 
 // A plan named with nothing after it (`/aidlc bugfix`, `/aidlc --scope bugfix`)
