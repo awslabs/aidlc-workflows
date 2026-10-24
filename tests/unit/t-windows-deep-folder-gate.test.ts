@@ -192,17 +192,17 @@ const times = (text: string, part: string): number => text.split(part).length - 
 
 describe("the Units Generation gate", () => {
   test("Unit names that make the folder too deep: the gate says it once, and not again when it is shown again", async () => {
-    const { UNIT_RECORD_DEPTH } = await import(HELPER);
+    const { RECORD_DEPTH, UNIT_RECORD_DEPTH } = await import(HELPER);
     // A name long enough to pass 260 from this folder, and config's own threshold not met.
     const { proj, units } = project((depth) => {
       const length = Math.min(64, Math.max(4, 260 - depth - UNIT_RECORD_DEPTH));
       return ["u2-billing", `u1-${"o".repeat(length - 3)}`];
     });
-    expect(proj.length + 1 + 185, proj).toBeLessThanOrEqual(260);
+    expect(proj.length + 1 + RECORD_DEPTH, proj).toBeLessThanOrEqual(260);
     const longest = Math.max(...units.map((name) => name.length));
     const opened = openGate(proj);
     console.log(`gate in a ${proj.length}-character folder:\n${JSON.stringify(opened, null, 2)}`);
-    expect(opened.kind, JSON.stringify(opened)).toBe("print");
+    expect(String(opened.message), JSON.stringify(opened)).toContain(`Recorded awaiting-approval for "${STAGE}"`);
     const narration = String(opened.narration ?? "");
     expect(times(narration, SAID), narration).toBe(WINDOWS ? 1 : 0);
     expect(JSON.stringify(opened).split(SAID).length - 1).toBe(WINDOWS ? 1 : 0);
@@ -224,7 +224,8 @@ describe("the Units Generation gate", () => {
     // Short enough that the longest name lands the deepest record at 260, not over it.
     expect(proj.length, proj).toBeLessThanOrEqual(260 - 1 - UNIT_RECORD_DEPTH - 1);
     const opened = openGate(proj);
-    expect(opened.kind, JSON.stringify(opened)).toBe("print");
+    // The gate opened: a refused one is a print too.
+    expect(String(opened.message), JSON.stringify(opened)).toContain(`Recorded awaiting-approval for "${STAGE}"`);
     expect(JSON.stringify(opened)).not.toContain(SAID);
   });
 });
