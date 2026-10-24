@@ -667,6 +667,7 @@ import {
 import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
 import { markSwitchOffNoticesSaid, type SwitchOffNotice, switchOffNotices } from "./aidlc-recorded-switches.ts";
 import { kiroHooksOffNotices, markKiroHooksOffSaid } from "./aidlc-kiro-hooks-off.ts";
+import { deepFolder } from "./aidlc-folder-depth.ts";
 import {
   readRuleBundle,
   restoreSpacePhaseRules,
@@ -19383,6 +19384,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           failedCheckNotices(pd, node, unit).join(" "),
         ].filter(Boolean).join("\n");
         if (narration) gateReply.narration = narration;
+        // On Windows, the Unit names Units Generation just wrote deepen their
+        // records past what config counted: config's line, said once, last, the
+        // first time this gate opens.
+        const dag = slug === "units-generation" && flags.result === "awaiting-approval" && !revalidatingOpenGate
+          ? resolveBoltDag(pd)
+          : null;
+        const deepUnits = dag?.state === "ok" ? deepFolder(pd, process.platform, dag.units)?.note : undefined;
+        if (deepUnits) gateReply.narration = [gateReply.narration, deepUnits].filter(Boolean).join("\n");
         addReviewCheckOffer(gateReply, pd, node, unit);
         addContextParkOffer(gateReply, pd);
         addRevisionCycle(gateReply, pd, slug, unit);
