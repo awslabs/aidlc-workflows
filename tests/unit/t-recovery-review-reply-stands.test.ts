@@ -110,8 +110,9 @@ describe("t-recovery-review-reply-stands: after the recovery review, the person'
     const { proj, approve } = await approvedThenStale();
     const verdict = review(proj, 2, "READY");
     const note = String(verdict.agent_note ?? "");
-    expect(note).toContain(`their reply at the gate still stands: if their message ${approve} (sent `);
-    expect(note).toContain("run the same `report` with `--message <id>`, without asking them again");
+    expect(note).toContain(`record the person's reply at the "${STAGE}" gate, which still stands, without asking them again: if their message ${approve} (sent `);
+    expect(note).toContain(`--result approved --user-input "Approve" --message <id>`);
+    expect(note).toContain(`--result rejected --user-input "Request Changes" --message <id>`);
     const recorded = last(engine(proj, ["engine", "orchestrate", "report", "--stage", STAGE, "--result", "approved",
       "--user-input", "Approve", "--message", approve]).stdout);
     expect(recorded.kind, JSON.stringify(recorded)).toBe("done");

@@ -1379,7 +1379,15 @@ export type ReviewVerdictStep =
   | { kind: "unit"; next: string; complete?: string }
   | { kind: "learnings"; brief: string }
   | { kind: "gate"; report: string; summary: boolean; brief: string }
-  | { kind: "reply-stands"; replies: ReadonlyArray<{ id: string; at: string }>; report: string; brief: string };
+  | {
+    kind: "reply-stands";
+    stage: string;
+    replies: ReadonlyArray<{ id: string; at: string }>;
+    approve: string;
+    reject: string;
+    report: string;
+    brief: string;
+  };
 const NO_FURTHER_PASS = "No further review pass follows: run stage-completion verification, then ";
 export function reviewVerdictNote(step: ReviewVerdictStep): string {
   switch (step.kind) {
@@ -1401,10 +1409,11 @@ export function reviewVerdictNote(step: ReviewVerdictStep): string {
         `\`${step.report}\`, then \`${step.brief}\`, printing its output as the review brief, and ask the approval ` +
         "question in this turn.";
     case "reply-stands":
-      return `${NO_FURTHER_PASS}their reply at the gate still stands: if their message ` +
-        `${step.replies.map((reply) => `${reply.id} (sent ${reply.at})`).join(" or ")} answered it, run the same ` +
-        `\`report\` with \`--message <id>\`, without asking them again; otherwise run \`${step.report}\`, then ` +
-        `\`${step.brief}\`, printing its output as the review brief, and ask the approval question in this turn.`;
+      return `${NO_FURTHER_PASS}record the person's reply at the "${step.stage}" gate, which still stands, without ` +
+        `asking them again: if their message ${step.replies.map((reply) => `${reply.id} (sent ${reply.at})`).join(" or ")} ` +
+        `approved it, run \`${step.approve}\`; if it asked for changes, run \`${step.reject}\`. Otherwise run ` +
+        `\`${step.report}\`, then \`${step.brief}\`, printing its output as the review brief, and ask the approval ` +
+        "question in this turn.";
   }
 }
 

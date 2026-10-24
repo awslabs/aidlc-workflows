@@ -3169,9 +3169,13 @@ function reviewVerdictStep(
     personRepliedSinceGateShown(pd, { stage: flags.stage }) === true) {
     const replies = personsGateReply(pd, resolveInvokingSessionId(pd), flags.stage).replies;
     if (replies.length > 0) {
+      const report = `orchestrate report --stage ${quoteCommandArgument(flags.stage)}`;
       return reviewVerdictNote({
         kind: "reply-stands",
+        stage: flags.stage,
         replies,
+        approve: aidlcDispatcherInvocation(`${report} --result approved --user-input "Approve" --message <id>`),
+        reject: aidlcDispatcherInvocation(`${report} --result rejected --user-input "Request Changes" --message <id>`),
         report: stageGateReportCommand(flags.stage, "awaiting-approval"),
         brief,
       });
