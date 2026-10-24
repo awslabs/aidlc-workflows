@@ -5,14 +5,17 @@
 // it has started (the stage the work just entered has nothing in the record), recompose takes the add, the plan-change
 // step carries on, `next` goes back to the stage with the backward jump (which says nothing: the person never stood at
 // the stage the approval had just entered) and the stage runs, leaving the state the add-first order leaves
-// (t-approve-and-add-walk). The rule's own words cover the add typed in the next message, after a jump, or at a
-// workflow's start, while nothing after it has started. The jump's notice is also left out when the person themselves
-// asks to go back to the added stage before `next` ran the route: it would name a place they never were. Once anything
-// after the stage has started, a stage behind the cursor stays refused as before, and a scope change's stages behind
-// the cursor stay as the scope change leaves them.
+// (t-approve-and-add-walk). The Code Generation plan-approval guard lets that one jump through (it is the person's
+// add carried out, and nothing is built yet); any other jump, and the code, still wait for them. The rule's own words
+// cover the add typed in the next message, after a jump, or at a workflow's start, while nothing after it has
+// started. The jump's notice is also left out when the person themselves asks to go back to the added stage before
+// `next` ran the route: it would name a place they never were. Once anything after the stage has started, a stage
+// behind the cursor stays refused as before, and a scope change's stages behind the cursor stay as the scope change
+// leaves them.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { AIDLC_SRC, cleanupTestProject, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
@@ -72,6 +75,22 @@ const lastJson = (out: string): Record<string, unknown> =>
 const comparable = (proj: string): string => state(proj).replace(/^- \*\*Last Updated\*\*: .*$/gm, "");
 
 // The person approves (their own turn, unless it came with the line before), and the agent records it.
+// The Code Generation plan-approval guard's answer to the agent running `command`, as Claude Code's hook asks it in
+// a project with AI-DLC installed (the guard knows the engine's own commands by the installed tools).
+function guardAllows(proj: string, command: string, write?: string): { allowed: boolean; said: string } {
+  if (!existsSync(join(proj, ".claude", "tools"))) cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+  const call = write === undefined
+    ? { tool_name: "Bash", tool_input: { command } }
+    : { tool_name: "Write", tool_input: { file_path: join(proj, write), content: command } };
+  const r = spawnSync(process.execPath, [join(proj, ".claude", "hooks", "aidlc-plan-approval-guard.ts")], {
+    cwd: proj,
+    env: env(proj),
+    input: JSON.stringify({ hook_event_name: "PreToolUse", ...call, cwd: proj }),
+    encoding: "utf-8",
+  });
+  return { allowed: r.status === 0, said: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
 async function approve(proj: string, stage: string, said = true): Promise<void> {
   if (said) expect((await say(proj, "Approve", "claude")).status).toBe(0);
   const input = "Approve";
@@ -106,7 +125,7 @@ async function runToGate(proj: string, stage: string): Promise<void> {
 }
 
 // The agent's order the live runs met: the approval first, then `next --add <stage>` and the recompose its step names.
-async function approveThenAdd(proj: string, gate: string, added: string): Promise<void> {
+async function approveThenAdd(proj: string, gate: string, added: string): Promise<string> {
   expect((await say(proj, `Approve, and add ${findStageBySlug(added)?.name} next`, "claude")).status).toBe(0);
   await approve(proj, gate, false);
   const change = await next(proj, ["--add", added]);
@@ -118,6 +137,7 @@ async function approveThenAdd(proj: string, gate: string, added: string): Promis
   expect(message, change.out).not.toContain("Then stop.");
   const recomposed = await tool(proj, UTILITY, ["recompose", "--add", added]);
   expect(recomposed.status, recomposed.stdout + recomposed.stderr).toBe(0);
+  return message;
 }
 
 // `next` names the backward jump to the added stage; the jump runs and keeps no line for the person; the stage starts.
@@ -126,6 +146,10 @@ async function routedBack(proj: string, added: string, scope = "bugfix"): Promis
   expect(route.status, route.out).toBe(0);
   expect(route.directive?.kind, route.out).toBe("print");
   expect(String(route.directive?.message), route.out).toContain(`execute --target ${added} --direction backward --scope ${scope}`);
+  // The guards let the agent run the step as named (the Code Generation one arms on the stage the approval entered).
+  const named = /`([^`]*aidlc-jump\.ts execute[^`]*)`/.exec(String(route.directive?.message))?.[1] ?? "";
+  const guard = guardAllows(proj, named);
+  expect(guard.allowed, guard.said).toBe(true);
   const jumped = await tool(proj, JUMP, ["execute", "--target", added, "--direction", "backward", "--scope", scope]);
   expect(jumped.status, jumped.stdout + jumped.stderr).toBe(0);
   expect(lastJson(jumped.stdout).notice, jumped.stdout).toBeUndefined();
@@ -135,6 +159,7 @@ async function routedBack(proj: string, added: string, scope = "bugfix"): Promis
   expect(started.directive?.stage, started.out).toBe(added);
   expect(started.out).not.toContain("Moved back to");
   expect(current(proj)).toBe(added);
+  expect(events(proj).filter((row) => row.event === "PLAN_APPROVAL_BLOCKED")).toEqual([]);
 }
 
 describe("t-approve-then-add-next: the approval recorded first, the add of the stage it just passed over still lands", () => {
@@ -237,6 +262,73 @@ describe("t-approve-then-add-next: the approval recorded first, the add of the s
     const inside = await tool(dd, UTILITY, ["recompose", "--add", "user-stories"]);
     expect(inside.status).not.toBe(0);
     expect(inside.stdout + inside.stderr).toContain("behind the current stage");
+  });
+
+  test("the undo the add's line names, asked for before `next` goes back, puts the plan back", async () => {
+    const proj = await gateAt();
+    const message = await approveThenAdd(proj, "requirements-analysis", "user-stories");
+    const undo = /If they later ask to undo it, run `[^`]*?engine (recompose [^`]*)`/.exec(message)?.[1];
+    expect(undo, message).toContain("--skip user-stories");
+    const undone = await tool(proj, join(AIDLC_SRC, "tools", "aidlc.ts"), ["engine", ...(undo as string).split(" ").map((arg) => arg.replace(/^'|'$/g, ""))]);
+    expect(undone.status, undone.stdout + undone.stderr).toBe(0);
+    expect(state(proj)).toMatch(/^- \[ \] user-stories \u2014 SKIP/m);
+    const after = await next(proj, []);
+    expect(after.out).not.toContain("--direction backward");
+    expect(after.directive?.stage, after.out).toBe("code-generation");
+  });
+
+  test("at Code Generation just entered, the guard lets through only the move back to the added stage", async () => {
+    const proj = await gateAt("strict");
+    await approveThenAdd(proj, "requirements-analysis", "user-stories");
+    expect(current(proj)).toBe("code-generation");
+    const jump = "bun .claude/tools/aidlc-jump.ts execute";
+    // The move back, in each spelling the jump tool takes.
+    for (const command of [
+      `${jump} --target user-stories --direction backward --scope bugfix`,
+      `${jump} --target=user-stories --direction=backward --scope=bugfix`,
+      "bun .claude/tools/aidlc.ts engine jump execute --target user-stories --direction backward --scope bugfix",
+    ]) {
+      const back = guardAllows(proj, command);
+      expect(back.allowed, `${command}: ${back.said}`).toBe(true);
+    }
+    // Still waiting for the person: any other jump, and the code.
+    for (const command of [
+      `${jump} --target requirements-analysis --direction backward --scope bugfix`,
+      `${jump} --target user-stories --direction forward --scope bugfix`,
+      `${jump} --target user-stories --direction redo --scope bugfix`,
+      "bun .claude/tools/aidlc-jump.ts reopen --target user-stories --units todo-core",
+    ]) {
+      const other = guardAllows(proj, command);
+      expect(other.allowed, `${command}: ${other.said}`).toBe(false);
+    }
+    const code = guardAllows(proj, "export const refuseBlankTitle = true;\n", "src/todo.ts");
+    expect(code.allowed, code.said).toBe(false);
+    // Once Code Generation has something written, the move back waits too.
+    const plan = join(seededRecordDir(proj), "construction", "code-generation", "code-generation-plan.md");
+    mkdirSync(join(plan, ".."), { recursive: true });
+    writeFileSync(plan, "# Code Generation Plan\n", "utf-8");
+    const late = guardAllows(proj, `${jump} --target user-stories --direction backward --scope bugfix`);
+    expect(late.allowed, late.said).toBe(false);
+  });
+
+  test("with plan approval off, the move back goes through as any step does", async () => {
+    const proj = await gateAt();
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8").replace(/^(- \*\*Guard Policy\*\*:.*)$/m, "$1\n- **Plan Approval**: off (set by you)"));
+    expect(getField(state(proj), "Plan Approval")).toBe("off (set by you)");
+    await approveThenAdd(proj, "requirements-analysis", "user-stories");
+    await routedBack(proj, "user-stories");
+  });
+
+  test("a plan whose rows say EXECUTE behind the cursor with no add recorded is left as it is", async () => {
+    const proj = await gateAt();
+    await approve(proj, "requirements-analysis");
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8").replace(/^(- \[ \] user-stories \u2014 )SKIP\b/m, "$1EXECUTE"));
+    expect(state(proj)).toMatch(/^- \[ \] user-stories \u2014 EXECUTE/m);
+    const after = await next(proj, []);
+    expect(after.out).not.toContain("--direction backward");
+    expect(after.directive?.stage, after.out).toBe("code-generation");
   });
 
   test("a stage behind one the work finished stays refused", async () => {
