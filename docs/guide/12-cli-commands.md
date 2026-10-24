@@ -1625,7 +1625,8 @@ kiro-cli chat --agent-engine v2 --agent aidlc, then give it once more." The
 agent is told never to offer to turn a check off for them.
 
 A `log answer` for a question the agent logged after the person's reply is
-recorded on that reply: the person is not asked again.
+recorded, on that reply unless another answer already recorded it: the person
+is not asked again.
 
 Only `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers human presence, set machine-wide
 or recorded with `aidlc config flags --bypass` (AI-DLC then says it is off).
@@ -1987,7 +1988,7 @@ question it answers is the agent's reading. For a question with choices,
 `--details` is the choice the agent read from the reply, and their reply itself
 where no hook kept their words or the reply answers several questions. The answer's row keeps every such
 reply's words (Person Reply), except one an earlier answer already recorded
-unless it is the latest, and names the latest (Message Id), and every one of
+unless it is the latest and the question was logged before it, and names the latest (Message Id), and every one of
 them, oldest first, when there are several (Message Ids); when the engine
 cannot name the chat, it keeps only the id where one chat replied and neither
 where more did, and records the answer either way. `log decision --message <id>` and `log answer --message <id>` name

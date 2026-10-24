@@ -151,6 +151,7 @@ import {
   recordAcceptedChanges,
   governedChangeControl,
   guardPolicyAcceptsChanges,
+  ownShardRows,
   readAuditShardEvents,
   backgroundAgentOutSince,
   isRequestTurn,
@@ -2509,13 +2510,17 @@ function handleAnswer(args: string[]): void {
     // in them, as they do at a gate: the message named, or every reply of
     // theirs in this chat that no decision has used yet (personsGateReply).
     // Which question a reply answers is the agent's reading, so a question
-    // logged after the reply that answers it records on that reply.
+    // logged after the reply that answers it records on that reply, unless
+    // another answer already names it: the question's own row says which, the
+    // latest on this clone's shard, where the reply turns are read (a
+    // teammate's shard can sort after it and hold an older one).
+    const ownQuestion = decisionRowsInScope(ownShardRows(pd).mine, flags.stage, flags.unit).at(-1);
     if (named !== null) {
       fields["Message Id"] = named.id;
       const namedWords = named.words === null ? null : personsWordsText(named.words);
       if (namedWords && !isNonAnswer(namedWords)) fields["Person Reply"] = namedWords;
     } else if (instruction === undefined && !autonomousDecision) {
-      const reply = personsGateReply(pd, invokingChat(pd), flags.stage);
+      const reply = personsGateReply(pd, invokingChat(pd), flags.stage, ownQuestion);
       if (reply.words) fields["Person Reply"] = reply.words;
       if (reply.messageId) fields["Message Id"] = reply.messageId;
       Object.assign(fields, windowMessageIds(reply));
