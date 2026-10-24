@@ -995,7 +995,7 @@ export const ALLOWED: Record<string, Allowed> = {
   "core/tools/aidlc-jump.ts#handleReopen": { use: "keeps", why: "the audit writer: a reopen for a change keeps their words as Feedback" },
   [`${STATE}#parkedWords`]: { use: "keeps", why: "the audit writer: the park row's Person Reply" },
   // The recorded answer's Details is the choice the agent recorded, never the file's [Answer]: line (S2a's R31).
-  [`${LIB}#offeredChoiceLabel`]: { use: "decides", why: "the agent's --details, or a recorded answer's Details, against the labels the question offered (O4)", from: [`${LIB}#blockingSensorPicks`, "core/tools/aidlc-sensor-claim-sources.ts#assumptionsAcceptedOnRecord"] },
+  [`${LIB}#offeredChoiceLabel`]: { use: "decides", why: "the agent's --details, or a recorded answer's Details, against the labels the question offered (O4)", from: [`${LIB}#blockingSensorPicks`, `${ORCH}#learningsSinceStageStart`, "core/tools/aidlc-sensor-claim-sources.ts#assumptionsAcceptedOnRecord"] },
   "core/tools/aidlc-sensor-claim-sources.ts#assumptionsAcceptedOnRecord": { use: "decides", why: "the claim-sources sensor reads whether the Intent Capture assumptions were accepted from the recorded answer to that question" },
   [`${STATE}#requireHumanConstructionPolicyChange`]: { use: "keeps", why: "the audit writer: the Construction policy row's Person Reply" },
   [`${STATE}#emitConstructionPolicySet`]: { use: "keeps", why: "the audit writer: the Construction policy row's Person Reply, the words of the message the setter names" },
@@ -1118,6 +1118,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${LIB}#latestRecordedAnswerMode`]: { use: "decides", why: "O4: the answer mode the agent recorded (QUESTION_ANSWERED Details)" },
   [`${LIB}#answerModeFromReply`]: { use: "decides", why: "O4: reads the agent's recorded answer mode", from: [`${LIB}#latestRecordedAnswerMode`] },
   [`${LIB}#blockingSensorPicks`]: { use: "decides", why: "O4: the agent's recorded Fix findings or override choice (QUESTION_ANSWERED Details) against the engine's labels or their number on the decision's own Options list" },
+  [`${ORCH}#learningsSinceStageStart`]: { use: "decides", why: "O4 and a question box's pick, host structure: whether every learnings pick since the stage started is exactly \"Nothing to add\" or \"Keep none of these\", from the recorded answer's Details and the box reply's labels for the ritual's two questions; never typed words" },
 };
 
 /**

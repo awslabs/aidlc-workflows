@@ -3081,8 +3081,12 @@ function stageBox(state: string, stage: string): string | undefined {
 // Unit a pending stage is in flight too. An isolated single-stage run, a Unit
 // in a swarm Bolt or a wave (their own loop goes on), an autonomous
 // Construction gate and a stage no longer in flight keep the step their own
-// directive names: no note.
-function reviewVerdictStep(
+// directive names: no note. `next` names the same step between the verdict
+// and the gate's report (aidlc-orchestrate.ts finishedReviewStep), where the
+// person's words go with the step `next` hands (their branch would name `next`
+// again) and a learnings question answered since the stage started is not
+// asked again; `endsTurn` says the step ends the turn at the learnings question.
+export function reviewVerdictStep(
   pd: string,
   flags: Record<string, string>,
   verdict: string,
@@ -3096,6 +3100,7 @@ function reviewVerdictStep(
   },
   selection: { intent: string | null; space: string },
   request: { personAsked: boolean; recovery: boolean },
+  fromNext: { learningsAnswered: boolean; endsTurn?: boolean } | null = null,
 ): string | null {
   const { state, node, reviewClass } = context;
   const unit = flags.unit;
@@ -3117,7 +3122,10 @@ function reviewVerdictStep(
   ) !== null;
   // What the person said while the reviewer worked comes first
   // (stage-protocol-reviewer.md): `next` names the step, with their words.
-  if (personSpokeSinceReviewRequest(pd, flags.stage, flags.reviewer, unit, selection.intent, selection.space)) {
+  if (
+    fromNext === null &&
+    personSpokeSinceReviewRequest(pd, flags.stage, flags.reviewer, unit, selection.intent, selection.space)
+  ) {
     return reviewVerdictNote({ kind: "person-wrote", next: aidlcDispatcherInvocation("orchestrate next") });
   }
   if (!terminal) {
@@ -3150,7 +3158,11 @@ function reviewVerdictStep(
     backwardJumpBoundary(reviewInvalidationAttemptView(readAuditShardEvents(pd), flags.stage).floor) !== undefined;
   const brief = stageReviewBriefCommand(flags.stage, stale ? "stale" : box === "revising" ? "revision" : "first");
   if (box === "in-progress") {
-    if (learningsRitualRuns(ceremonyPolicyValues(getField(state, "Scope"), state).learnings, state, flags.stage)) {
+    if (
+      fromNext?.learningsAnswered !== true &&
+      learningsRitualRuns(ceremonyPolicyValues(getField(state, "Scope"), state).learnings, state, flags.stage)
+    ) {
+      if (fromNext !== null) fromNext.endsTurn = true;
       return reviewVerdictNote({ kind: "learnings", brief });
     }
     return reviewVerdictNote({
