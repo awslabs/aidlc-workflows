@@ -2378,7 +2378,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
         ));
         expect(message).toContain(
           'tell the person in one line: "Redoing Code Generation for unit beta from the start, plan included. ' +
-            'Its new plan comes back to you for approval."',
+            'Its plan comes back to you for approval."',
         );
         expect(message).not.toContain("unit resume");
         for (const [, name, rest] of message.matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
@@ -2425,7 +2425,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       );
       expect(answered.message).toContain(
         'tell the person in one line: "Redoing Code Generation for unit beta from the start, plan included. ' +
-          'Its new plan comes back to you for approval."',
+          'Its plan comes back to you for approval."',
       );
       for (const [, name, rest] of answered.message.matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
         if (name === "orchestrate" && rest === "park --person-asked") continue;
