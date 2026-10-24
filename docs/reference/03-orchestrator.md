@@ -1360,6 +1360,16 @@ stage's receipt for its new definition, so no later step or conversation says it
 again, `/aidlc --status` names the stage with that line, and a later change to
 what the stage now reads is raised as usual. A change to the person's work in
 the same window keeps the question above.
+A change to a finished stage's own documents made before the person's next
+message after the one that approved it ("yes, but add FR-2", then the edit)
+is approved with it, under every Guard Policy: the approval names that message
+(`Message Id`), the person has sent nothing since in any conversation on the
+work, and no decision since names another message or none (the run's own
+approval closes it). Nothing is said, and once a step is said a
+`STAGE_OUTPUT_AMENDED` row records the stage's receipt for the files as they
+are, so a later edit is raised as usual and `/aidlc --status` says nothing
+about it. An edit after the person's next message, or with an approval that
+names no message, keeps the question above.
 Inspection-unavailable stages remain a per-turn advisory because they need
 attention. Receipt-less histories are not shown by `next` or by
 `/aidlc --status`, so migration adds no warning.

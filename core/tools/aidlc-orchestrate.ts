@@ -573,7 +573,7 @@ import {
   runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { terminalDispatcherArgv } from "./aidlc.ts";
-import { appendAuditEntries, appendAuditEntry } from "./aidlc-audit.ts";
+import { appendAuditEntries, appendAuditEntry, type AuditEntryInput } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
 import {
@@ -626,7 +626,7 @@ import {
 } from "./aidlc-state.ts";
 import {
   inspectStageValidity, stageDefinitionChangedFields, stageDefinitionChangedLine, stageLabel, staleStageNote,
-  type StageValidityInspection,
+  stageOutputAmendedFields, type StageValidityInspection,
 } from "./aidlc-validity.ts";
 import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
 import { markSwitchOffNoticesSaid, type SwitchOffNotice, switchOffNotices } from "./aidlc-recorded-switches.ts";
@@ -773,8 +773,10 @@ let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "
 let activeStageValidityAdvisory: StageValidityAdvisory | undefined;
 // Finished stages AI-DLC itself now does differently: the line the next spoken
 // step carries when one now needs more than it had, and the rows that record
-// their new receipts once that step is spoken (see writePrepared).
-let activeRedefinedStages: { line: string | null; rows: Record<string, string>[] } | null = null;
+// their new receipts once that step is spoken (see writePrepared), with those
+// of stages whose own documents changed before the person's next message after
+// their approval.
+let activeRedefinedStages: { line: string | null; rows: AuditEntryInput[] } | null = null;
 let activeRetiredGuardPolicyNotice: string | null = null;
 // undefined until the first emission of this command reads it (hookHealthNotice).
 let activeHookHealthNotice: string | null | undefined;
@@ -812,8 +814,9 @@ function kiroHooksOffNoticesOnce(projectDir: string): string[] {
 
 function redefinedStagesNotice(
   redefined: StageValidityInspection["redefined"],
-): { line: string | null; rows: Record<string, string>[] } | null {
-  if (redefined.length === 0) return null;
+  amended: StageValidityInspection["amended"],
+): { line: string | null; rows: AuditEntryInput[] } | null {
+  if (redefined.length === 0 && amended.length === 0) return null;
   const said = redefined.filter((entry) => entry.said);
   const line = said.length === 0 ? null : stageDefinitionChangedLine(
     said.map(({ stage }) => stageLabel(nodeForSlug(stage), stage) ?? stage),
@@ -821,7 +824,14 @@ function redefinedStagesNotice(
   );
   return {
     line,
-    rows: redefined.map(({ stage, basis, said }) => stageDefinitionChangedFields(stage, basis, said ? line : null)),
+    rows: [
+      ...redefined.map(({ stage, basis, said }): AuditEntryInput => ({
+        eventType: "STAGE_DEFINITION_CHANGED", fields: stageDefinitionChangedFields(stage, basis, said ? line : null),
+      })),
+      ...amended.map(({ stage, basis, message }): AuditEntryInput => ({
+        eventType: "STAGE_OUTPUT_AMENDED", fields: stageOutputAmendedFields(stage, basis, message),
+      })),
+    ],
   };
 }
 
@@ -836,7 +846,7 @@ function projectStageValidityAdvisory(
     const validity = inspectStageValidity(projectDir, stateContent, {
       acceptContentChanges: guardPolicyAcceptsChanges(projectDir, stateContent),
     });
-    activeRedefinedStages = redefinedStagesNotice(validity.redefined);
+    activeRedefinedStages = redefinedStagesNotice(validity.redefined, validity.amended);
     if (validity.issues.length === 0 && validity.warnings.length === 0) {
       return undefined;
     }
@@ -1989,16 +1999,18 @@ function writePrepared(prepared: PreparedEmission): void {
     markSwitchOffNoticesSaid(engineProjectDir);
     activeSwitchOffNotices = [];
   }
-  // The same holds for a stage AI-DLC now does differently: once a step is
-  // spoken, its receipt for the new definition is recorded, so no later step or
-  // chat says it again. A row that cannot be written waits for the next step.
+  // The same holds for a stage AI-DLC now does differently, and for one whose
+  // own documents changed before the person's next message after its approval:
+  // once a step is spoken, its receipt for the new definition or the files as
+  // they are is recorded, so no later step or chat raises it again. A row that
+  // cannot be written waits for the next step.
   if (
     engineProjectDir && activeRedefinedStages !== null && !engineUnjoined &&
     kind !== "load-steering" && !isReadOnlyEngineProbe()
   ) {
     try {
-      for (const fields of activeRedefinedStages.rows) {
-        appendAuditEntry("STAGE_DEFINITION_CHANGED", fields, engineProjectDir);
+      for (const row of activeRedefinedStages.rows) {
+        appendAuditEntry(row.eventType, row.fields, engineProjectDir);
       }
     } catch (e) {
       recordHookDrop(engineProjectDir, "stage-definition-changed", errorMessage(e));
