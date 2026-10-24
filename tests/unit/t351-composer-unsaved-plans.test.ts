@@ -23,7 +23,8 @@
 // echoes into a command. The plan the composer validated keeps its scores on
 // its first audit entry, and no other plan or work picks them up (#2575). The
 // stage changes that plan's approval creates are the ones the validator kept
-// for its request, whatever list was typed on Approve, and so is the project
+// for its request (a list typed on Approve that is not theirs creates nothing
+// until the plan's own approval the step names runs), and so is the project
 // type it was validated for when the person typed none. A custom plan approved
 // with its list also runs at the depth, settings and Guard Policy the gate
 // showed, filled where the command left them out.
@@ -1326,8 +1327,9 @@ describe("t351 (9) a tailored plan's scores are on its first audit entry (#2575)
 describe("t351 (10) the plan the person approved is the plan created", () => {
   // On Approve the agent types the custom plan's stage changes into the
   // creation command. The validator already worked them out and keeps them for
-  // the request, so a list typed by hand that leaves a stage out still creates
-  // every stage the person approved.
+  // the request, so a list typed by hand that leaves a stage out creates
+  // nothing, and the plan's own approval the step names creates every stage
+  // the person approved.
   const TASK = "harden the deployment pipeline and add observability for our existing service";
   // The custom plan from the 2026-10-22 nightly (Codex, macOS): 18 stages after
   // Initialization, Intent Capture first.
@@ -1395,6 +1397,16 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
     ...(changes.skip.length > 0 ? ["--skip", changes.skip.join(",")] : []),
     ...(changes.add.length > 0 ? ["--add", changes.add.join(",")] : []),
   ];
+  /** A list that is not the plan's creates nothing: the `next` arguments of the
+   *  plan's own approval the step names instead, as the agent runs it on Approve. */
+  function approvalOf(step: Printed, description?: string): string[] {
+    expect(step.kind, step.message).toBe("print");
+    expect(step.message).not.toContain("intent create");
+    const span = [...step.message.matchAll(/`([^`]*)`/g)].map((m) => m[1]).find((s) => s.includes(" next --scope "));
+    expect(span, step.message).toBeDefined();
+    const args = (span as string).split(" next ")[1].replace(" -- <creationDescription>", "").split(" ").filter(Boolean);
+    return description === undefined ? args : [...args, "--", description];
+  }
 
   for (const policy of ["off", "relaxed", "strict"] as const) {
     test(`Guard Policy ${policy}: a typed list that leaves out Intent Capture still creates every approved stage`, () => {
@@ -1412,12 +1424,13 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
       expect(runTool(proj, "aidlc-graph.ts", ["ars", "--iae", "0.45", "--csu", "0.6", "--ve", "0.7", "--r", "0.65", "--ua", "0.55", "--method", "fallback"]).status).toBe(0);
       // The list the agent typed on Approve, Intent Capture left out.
       const typed = { skip: approved.skip, add: approved.add.filter((slug) => slug !== "intent-capture") };
-      const printed = next(proj, [
+      const step = next(proj, [
         "--scope", base, ...lists(typed),
         ...(echoed.creation_depth ? ["--depth", echoed.creation_depth] : []),
         ...(policy === "off" ? [] : ["--guard-policy", policy]),
         "--request", id,
       ]);
+      const printed = next(proj, approvalOf(step));
       expect(printed.kind, printed.message).toBe("print");
       const creation = creationOf(printed);
       expect(creation).toContain(`--add ${approved.add.join(",")}`);
@@ -1444,12 +1457,12 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
     });
   }
 
-  test("a matched plan is created as its stock scope, without a stage change typed beside it", () => {
+  test("a matched plan is created as its stock scope, through its own approval when a stage change is typed beside it", () => {
     const proj = installedProject();
     const id = compose(proj, "fix the flaky date parser");
     const bugfix = withEnvAndFreshCaches(POLICY_ENV, () => ({ settings: scopeSettingsOf("bugfix")!, policy: scopeGuardPolicyDefault("bugfix") }));
     validate(proj, { stages: stockGrid("bugfix"), scopeSettings: bugfix.settings, guardPolicy: bugfix.policy }, ["--matched", "bugfix"]);
-    const printed = next(proj, ["--scope", "bugfix", "--skip", "deployment-pipeline", "--request", id]);
+    const printed = next(proj, approvalOf(next(proj, ["--scope", "bugfix", "--skip", "deployment-pipeline", "--request", id])));
     expect(printed.kind, printed.message).toBe("print");
     expect(creationOf(printed)).not.toContain("--skip");
     expect(printed.narration).toContain("Setting up a bugfix workflow for this:");
@@ -1463,7 +1476,8 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
     const approved = echoed.plan_changes as { skip: string[]; add: string[] };
     expect(approved.add).toContain(ADD);
     const typed = { skip: approved.skip, add: approved.add.filter((slug) => slug !== ADD) };
-    const printed = next(proj, ["--scope", echoed.base_scope as string, ...lists(typed), "--request", entry, "--", "fix the parser"]);
+    const step = next(proj, ["--scope", echoed.base_scope as string, ...lists(typed), "--request", entry, "--", "fix the parser"]);
+    const printed = next(proj, approvalOf(step, "fix the parser"));
     expect(printed.kind, printed.message).toBe("print");
     expect(creationOf(printed)).toContain(`--add ${approved.add.join(",")}`);
   });
@@ -1582,7 +1596,7 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
     const record = JSON.parse(readFileSync(recordPath, "utf-8"));
     writeFileSync(recordPath, JSON.stringify({ ...record, plan: { ...record.plan, projectType: "existing code" } }));
     const retyped = { skip: approved.skip, add: approved.add.filter((slug) => slug !== "intent-capture") };
-    const junk = creationOf(next(proj, ["--scope", base, ...lists(retyped), "--request", id]));
+    const junk = creationOf(next(proj, approvalOf(next(proj, ["--scope", base, ...lists(retyped), "--request", id]))));
     expect(junk).toContain(`--add ${approved.add.join(",")}`);
     expect(junk).not.toContain("--project-type");
   });
