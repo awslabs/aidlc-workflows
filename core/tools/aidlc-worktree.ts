@@ -38,6 +38,7 @@ import {
   GIT_PLATFORM_ARGS,
   legacyBoltIdentity,
   gitCommitSourceListing,
+  gitSubmoduleNames,
   idSuffix,
   intentUuidForSelection,
   isValidRepoName,
@@ -228,28 +229,11 @@ function gitlinkPaths(checkoutDir: string): string[] | null {
   return paths;
 }
 
-function submoduleNames(checkoutDir: string): Map<string, string> {
-  const names = new Map<string, string>();
-  if (!existsSync(join(checkoutDir, ".gitmodules"))) return names;
-  const listed = runGit(
-    ["config", "-f", ".gitmodules", "-z", "--get-regexp", "^submodule\\..*\\.path$"],
-    checkoutDir,
-  );
-  if (!listed.ok) return names;
-  for (const record of listed.stdout.split("\0")) {
-    const newline = record.indexOf("\n");
-    if (newline === -1) continue;
-    const key = record.slice(0, newline);
-    names.set(record.slice(newline + 1), key.slice("submodule.".length, -".path".length));
-  }
-  return names;
-}
-
 function initializeBoltSubmodules(sourceDir: string, worktreeDir: string, prefix = "", depth = 1): string | null {
   if (depth > 16) return `submodules nest more than 16 levels deep under ${prefix || "the worktree"}`;
   const paths = gitlinkPaths(worktreeDir);
   if (paths === null) return `cannot list the submodules of ${prefix || "the worktree"}`;
-  const names = submoduleNames(worktreeDir);
+  const names = gitSubmoduleNames(worktreeDir);
   for (const path of paths) {
     const source = join(sourceDir, path);
     const name = names.get(path);

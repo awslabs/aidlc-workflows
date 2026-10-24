@@ -2127,6 +2127,14 @@ If the application source or plan changed, re-present any required Plan Approval
 The requirement concerns application source, not a blanket commit of unrelated
 framework records or other files.
 
+The same preflight names nested repositories whose source files would become
+empty folders in a Unit worktree because their gitlinks have no `.gitmodules`
+entry in the approved source or chosen base. Register them as Git submodules
+and choose a base with those entries, or build that Unit serially. This
+refusal creates no child worktrees and makes no parent commit. Registered
+submodules are copied from the main checkout without network access; gitlinks
+outside the selected source boundary do not block preparation.
+
 ### Construction verification command — record human authorization
 
 For checkpoint-enabled work, Delivery Planning proposes a real project check from

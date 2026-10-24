@@ -22755,6 +22755,23 @@ export function codekbSourceSize(dir: string): { files: number; lines: number } 
 export const GIT_PLATFORM_ARGS: readonly string[] =
   process.platform === "win32" ? ["-c", "core.longpaths=true"] : [];
 
+export function gitSubmoduleNames(checkoutDir: string, commit?: string): Map<string, string> {
+  const names = new Map<string, string>();
+  if (commit === undefined && !existsSync(join(checkoutDir, ".gitmodules"))) return names;
+  const source = commit === undefined ? ["-f", ".gitmodules"] : ["--blob", `${commit}:.gitmodules`];
+  const listed = spawnSync("git", [
+    ...GIT_PLATFORM_ARGS, "config", ...source, "-z", "--get-regexp", "^submodule\\..*\\.path$",
+  ], { cwd: checkoutDir, encoding: "utf-8", timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS });
+  if (listed.status !== 0) return names;
+  for (const record of listed.stdout.split("\0")) {
+    const newline = record.indexOf("\n");
+    if (newline === -1) continue;
+    const key = record.slice(0, newline);
+    names.set(record.slice(newline + 1), key.slice("submodule.".length, -".path".length));
+  }
+  return names;
+}
+
 // Git runs a configured `clean` filter as content enters a swarm snapshot index.
 // The canonical fingerprint already hashes the raw filesystem bytes, so the
 // immutable Source Commit must replace filtered index blobs with those same raw

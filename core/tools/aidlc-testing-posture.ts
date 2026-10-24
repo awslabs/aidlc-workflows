@@ -35,6 +35,9 @@ import {
   guardStandAsideSpeaks,
   guardStoodAsideLine,
   gitCommitSourceListing,
+  gitSubmoduleNames,
+  gitTreeLeafEntries,
+  isGitRepoDir,
   latestLedgerSession,
   latestMainWorkflowStageRunFloorForProject,
   legacyBoltName,
@@ -4916,6 +4919,33 @@ function approvedWorktreeSource(
   return { parentSource, expectedBytes: theirs(expected), theirs };
 }
 
+// Commit listings can read an embedded repo's own objects even when Git cannot
+// initialize that repo in a new worktree. Match the initializer's .gitmodules
+// lookup, and only consider gitlinks that carry selected source files.
+function unregisteredWorktreeSourcePaths(repoDir: string, commit: string, source: ReadonlyMap<string, string>): string[] {
+  const sourceKeys = [...source.keys()];
+  const missing: string[] = [];
+  const walk = (dir: string, oid: string, prefix: string, depth: number): void => {
+    if (depth > 16) throw new Error(`Submodules nest more than 16 levels deep under ${prefix}. Build this Unit serially.`);
+    const entries = gitTreeLeafEntries(dir, oid);
+    if (entries === null) throw new Error("Selected worktree source cannot be reproduced. Build this Unit serially.");
+    const names = gitSubmoduleNames(dir, oid);
+    for (const entry of entries) {
+      if (entry.mode !== "160000") continue;
+      const path = `${prefix}${entry.path}`;
+      if (!sourceKeys.some((key) => key.startsWith(`\0${path}/`))) continue;
+      if (!names.has(entry.path)) {
+        missing.push(path);
+        continue;
+      }
+      const nested = join(dir, entry.path);
+      if (isGitRepoDir(nested)) walk(nested, entry.oid, `${path}/`, depth + 1);
+    }
+  };
+  walk(repoDir, commit, "", 1);
+  return missing;
+}
+
 /**
  * Read-only initial preparation check: no child, audit, receipt, index or parent
  * commit is changed. The selected repository's committed source must reproduce
@@ -4950,11 +4980,20 @@ export function validateCodeGenerationForkApproval(
   const base = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "--end-of-options", `${baseCommit}^{commit}`]);
   const baseSource = gitCommitSourceListing(repo.cwd, base, repo.repo === null);
   if (!baseSource) throw new Error("Selected worktree base source cannot be reproduced. Choose a committed base before prepare.");
-  if (theirs(baseSource) === expectedBytes) return;
-  try {
-    worktreeApprovalGit(repo.cwd, ["merge-base", "--is-ancestor", base, parentHead]);
-  } catch {
-    throw new Error("Selected worktree base cannot fast-forward to the approved parent source. Choose an ancestor of the approved parent commit before prepare.");
+  if (theirs(baseSource) !== expectedBytes) {
+    try {
+      worktreeApprovalGit(repo.cwd, ["merge-base", "--is-ancestor", base, parentHead]);
+    } catch {
+      throw new Error("Selected worktree base cannot fast-forward to the approved parent source. Choose an ancestor of the approved parent commit before prepare.");
+    }
+  }
+  const source = parseSourceListing(expectedBytes)!;
+  const missing = new Set(unregisteredWorktreeSourcePaths(repo.cwd, parentHead, source));
+  if (base !== parentHead) {
+    for (const path of unregisteredWorktreeSourcePaths(repo.cwd, base, source)) missing.add(path);
+  }
+  if (missing.size > 0) {
+    throw new Error(`Nested repositories ${[...missing].map((path) => JSON.stringify(path)).join(", ")} have source files but no .gitmodules entry in the approved source or chosen base, so their Unit worktree cannot be prepared. Register them as Git submodules and choose a base with those entries, or build this Unit serially. No child was created and no parent commit was made.`);
   }
 }
 
