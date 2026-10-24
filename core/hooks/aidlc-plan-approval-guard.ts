@@ -1057,9 +1057,11 @@ function preparedBoltWorktreeUnit(projectDir: string, targets: string[], units: 
 }
 
 // Every target is a file of a landing AI-DLC staged in the main checkout for
-// one of `units` that git could not merge or that was combined since (the
-// landing owns which: stagedLandingClashFiles), reached through no symlink and
-// linked to no other file. Loaded only here, off every other tool call's path.
+// one of `units` that git could not merge or that was combined since, or, for a
+// clean merge whose commit the person's hook refused, that the landing staged
+// (the landing owns which: stagedLandingClashFiles), reached through no
+// symlink and linked to no other file. Loaded only here, off every other tool
+// call's path.
 async function landingClashFilesOnly(projectDir: string, targets: string[], units: readonly string[]): Promise<boolean> {
   if (units.length === 0) return false;
   try {
@@ -2546,9 +2548,10 @@ async function evaluate(
           !mutation.opaqueShell && mutation.targets.length > 0 &&
           preparedBoltWorktreeUnit(projectDir, mutation.targets, listed) !== null
         ) return 0;
-        // A listed Unit's landing that clashed in the main checkout is finished
-        // there: the files git could not merge, or combined since, are the
-        // agent's to write, as the landing's own line says.
+        // A listed Unit's landing that clashed in the main checkout, or whose
+        // commit the person's hook refused, is finished there: the files git
+        // could not merge, or combined since, or for a clean merge the files it
+        // staged, are the agent's to write, as the landing's own line says.
         if (
           !mutation.opaqueShell && mutation.targets.length > 0 &&
           await landingClashFilesOnly(projectDir, mutation.targets, listed)
