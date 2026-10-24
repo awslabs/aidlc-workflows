@@ -184,6 +184,8 @@ import {
   boltSlugForUnit,
   composeGateOpen,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
+  blockingSensorOverrideReport,
+  hasBlockingSensorOverrideAuthorization,
   type CheckboxState,
   CHANGE_CONTROL_FIELD,
   CEREMONY_FLAGS,
@@ -11310,6 +11312,27 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           return;
         }
       }
+    }
+    // The person picked Override blocking sensors at this stage's blocking
+    // check and the gate is still shut: the report that carries the override
+    // opens it. Handing back the stage instead sends the agent into reviewed
+    // work the person asked to approve as it is. The override names no Unit,
+    // so a team Unit gate, and a Unit's step a solo walk owes first, keep the
+    // stage's own step; under autonomy the report refuses an override, so
+    // none is named there.
+    if (
+      (currentState === "in-progress" || currentState === "revising") &&
+      readAutonomyMode(stateContent) !== "autonomous" &&
+      !isTeamUnitOwnership(stateContent) &&
+      hasBlockingSensorOverrideAuthorization(pd, currentSlug) &&
+      !walkOwes()
+    ) {
+      const result = currentState === "revising" ? "revised" : "awaiting-approval";
+      emit(printDirective(
+        `The person picked "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" at the ${nodeForSlug(currentSlug)?.name ?? currentSlug} ` +
+          `blocking check: run \`${blockingSensorOverrideReport(currentSlug, result)}\` and show the gate with what it returns.`,
+      ));
+      return;
     }
     // Under an autonomy grant, an eligible per-unit build stage fans out as a
     // swarm batch instead of a single run-stage. tryEmitSwarm advances the swarm

@@ -12602,6 +12602,55 @@ export function blockingSensorFixes(rows: ReadonlyArray<AuditShardEvent>, slug: 
   ));
 }
 
+function auditEventIsAfter(later: AuditShardEvent, earlier: AuditShardEvent): boolean {
+  if (later.shard === earlier.shard) return later.pos > earlier.pos;
+  return later.timestamp > earlier.timestamp;
+}
+
+// Whether the person's Override blocking sensors pick still stands for the
+// stage: it came after the stage last started, opened its gate or was sent
+// back, and nothing was asked or answered on the stage since. The state tool
+// accepts an override report on this test, and `next` names that report while
+// it holds, so the two never disagree about a pick.
+export function hasBlockingSensorOverrideAuthorization(projectDir: string, slug: string): boolean {
+  const rows = readAuditShardEvents(projectDir);
+  const stageRows = rows.filter((row) => {
+    const workflow = auditBlockField(row.block, "Workflow");
+    return auditBlockField(row.block, "Stage") === slug &&
+      !workflow?.startsWith("single-stage:");
+  });
+  const boundaries = stageRows.filter((row) =>
+    row.event === "STAGE_STARTED" ||
+    row.event === "STAGE_AWAITING_APPROVAL" ||
+    row.event === "GATE_REJECTED"
+  );
+  const interactions = stageRows.filter((row) =>
+    row.event === "DECISION_RECORDED" ||
+    row.event === "QUESTION_ANSWERED"
+  );
+  for (const [answer, choice] of blockingSensorPicks(rows, slug)) {
+    if (choice !== BLOCKING_SENSOR_OVERRIDE_CHOICE) continue;
+    if (!boundaries.every((boundary) => auditEventIsAfter(answer, boundary))) {
+      continue;
+    }
+    if (
+      interactions.every((row) =>
+        row === answer || auditEventIsAfter(answer, row)
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The report that carries the person's override: the one the state tool's
+// refusal names before the question and the one `next` names after the pick.
+export function blockingSensorOverrideReport(slug: string, result: "awaiting-approval" | "revised"): string {
+  return `${aidlcToolInvocation("orchestrate")} report --stage ${shellArg(slug)} --result ${result} ` +
+    `--override-blocking-sensors --user-input "${BLOCKING_SENSOR_OVERRIDE_CHOICE}"`;
+}
+
 const GATE_RESOLUTION_EVENTS = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
