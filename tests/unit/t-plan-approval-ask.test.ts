@@ -43,6 +43,9 @@
 //     and source edits go through, parking and coming back reach the build
 //     with no new question, and a rules part left behind by a state that moved
 //     back holds nothing.
+//   - an isolated Code Generation run with the workflow at another stage: its
+//     plan step, plan question and revision name that run's own `next`, which
+//     brings back that run's step; the workflow's own steps keep the bare `next`.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -122,7 +125,10 @@ interface Emitted {
   question?: string;
   message?: string;
   response_route?: string;
+  plan_note?: string;
+  question_note?: string;
   plan_approval: {
+    next?: string;
     status?: string;
     feedback?: string;
     note?: string;
@@ -2702,6 +2708,72 @@ describe("'review the plan' next to other questions and for groups", () => {
     expect(existsSync(legacy)).toBe(false);
     expect(planApprovalReviewRequested(pd, "unit:beta", other)).toBe(true);
     expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
+  });
+});
+
+// An isolated Code Generation run (`next --stage code-generation --single`)
+// while the workflow sits at another stage: every step of its plan names that
+// run's own `next`, since a bare `next` routes the main workflow (a live agent
+// that followed the plan step was handed Requirements Analysis).
+describe("an isolated Code Generation run's plan steps name that run's own next", () => {
+  const SINGLE = ["--stage", "code-generation", "--single"];
+  const WORKFLOW_NEXT = "bun .claude/tools/aidlc-orchestrate.ts next";
+  const OWN = `${WORKFLOW_NEXT} --stage code-generation --single --scope poc`;
+  const planStep = (command: string) =>
+    `Write this plan and its test instructions (Code Generation Steps 1 and 2), then run \`${command}\`: ` +
+    "AI-DLC asks the person to approve the plan itself, never you.";
+  // The project's own copy of the harness, as an installed project has it.
+  function isolated(): string {
+    const proj = project();
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    const stateFile = seededStateFile(proj);
+    writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
+      .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: requirements-analysis"), "utf-8");
+    reply(proj, "/aidlc --stage code-generation --single");
+    return proj;
+  }
+  // The command the step names, run as printed.
+  const own = (proj: string): Emitted => next(proj, OWN.split(" ").slice(3));
+
+  test("the plan step, the question and the build: each names it, and it brings back that run's step", () => {
+    const proj = isolated();
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    const planning = next(proj, SINGLE);
+    expect(planning, JSON.stringify(planning)).toMatchObject({ kind: "run-stage", stage: "code-generation", plan_approval: { status: "plan", next: OWN } });
+    expect(planning.plan_note).toBe(planStep(OWN));
+    writePlan(proj);
+    const asked = own(proj);
+    expect(asked, JSON.stringify(asked)).toMatchObject({ kind: "ask", ask_type: "plan-approval", stage: "code-generation", plan_approval: { next: OWN } });
+    expect(String(asked.question_note)).toEndWith(`, then run \`${OWN}\`.`);
+    replyAndRecord(proj, "approve", "Approve Plan");
+    expect(own(proj)).toMatchObject({ kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" } });
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(state);
+  });
+
+  test("Request Changes: the revision names it", () => {
+    const proj = isolated();
+    next(proj, SINGLE);
+    writePlan(proj);
+    const asked = own(proj);
+    expect(asked.ask_type, JSON.stringify(asked)).toBe("plan-approval");
+    replyAndRecord(proj, "rename slugify to toSlug", "Request Changes");
+    const revising = own(proj);
+    expect(revising, JSON.stringify(revising)).toMatchObject({ kind: "run-stage", stage: "code-generation", plan_approval: { status: "revise", next: OWN } });
+    expect(revising.plan_note).toBe(
+      `The person asked for changes to this plan: revise the plan and its test instructions from their words, then run \`${OWN}\`.`,
+    );
+  });
+
+  test("the workflow's own plan steps keep the bare next and carry no command of their own", () => {
+    const proj = project();
+    const planning = next(proj);
+    expect(planning.plan_approval).toEqual({ status: "plan" });
+    expect(planning.plan_note).toBe(planStep(WORKFLOW_NEXT));
+    writePlan(proj);
+    const asked = next(proj);
+    expect(asked.ask_type).toBe("plan-approval");
+    expect(asked.plan_approval).not.toHaveProperty("next");
+    expect(String(asked.question_note)).toEndWith(`, then run \`${WORKFLOW_NEXT}\`.`);
   });
 });
 
