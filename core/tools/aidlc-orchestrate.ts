@@ -408,6 +408,7 @@ import {
   readStateFile,
   resolveInvokingSessionId,
   recordHookDrop,
+  noteNamedJump,
   recoveryGuidance,
   markEngineTouch,
   markTurnEnd,
@@ -2782,6 +2783,17 @@ function emit(requested: Directive): void {
   ) {
     return;
   }
+  const jump = namedJumps.get(requested);
+  if (
+    jump !== undefined && prepared.transported.kind === "print" && engineInvocation?.attemptId &&
+    engineProjectDir && !isReadOnlyEngineProbe()
+  ) {
+    try {
+      noteNamedJump(engineProjectDir, engineInvocation.attemptId, jump);
+    } catch (e) {
+      recordHookDrop(engineProjectDir, "active-directive", errorMessage(e));
+    }
+  }
   writePrepared(prepared);
 }
 
@@ -4413,6 +4425,23 @@ function newWorkRoutingAskDirective(
 
 function printDirective(message: string): PrintDirective {
   return { kind: "print", message };
+}
+
+// A print whose step is one jump command, formatted from these arguments
+// (jumpCommandText). Issued to a Copilot claim, the claim keeps that exact
+// command (noteNamedJump): Copilot's settle leaves every print out of date, and
+// the plan-approval guard lets only the command the print named through on
+// the first ask, as every other harness does with the print still current.
+const namedJumps = new WeakMap<Directive, readonly string[]>();
+
+function jumpCommandText(args: readonly string[]): string {
+  return `${aidlcToolInvocation("jump")} ${args.map(shellArg).join(" ")}`;
+}
+
+function jumpStepPrint(message: string, jump: readonly string[] | undefined): PrintDirective {
+  const directive = printDirective(message);
+  if (jump !== undefined) namedJumps.set(directive, jump);
+  return directive;
 }
 
 // A print the agent stops after: a read-only utility, a setting or a scope
@@ -14733,7 +14762,7 @@ function unitMajorRedo(
   stateContent: string,
   currentSlug: string,
   named?: { unit: string; stage: string },
-): string | null {
+): { message: string; jump?: readonly string[] } | null {
   const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
   if (!walk || walk.step.kind === "covered") return null;
   if (!walk.block.some((stage) => unitsWithStageWork(projectDir, stage, walk.context).length > 0)) {
@@ -14757,12 +14786,16 @@ function unitMajorRedo(
       : step.stage.slug;
   if (named && (named.unit !== unit || named.stage !== redone)) return null;
   if (step.kind === "work" && !unitOpenCheckpoints(projectDir, redone).some((open) => open.unit === unit)) {
-    return `Redo accepted at "${redone}" for unit "${unit}". ${only} step is redone: ` +
-      `${unpark ? `run ${unpark}` : ""}re-run \`next\` and do "${redone}" for unit "${unit}" from the start. ` +
-      OTHER_UNITS_KEPT;
+    return {
+      message: `Redo accepted at "${redone}" for unit "${unit}". ${only} step is redone: ` +
+        `${unpark ? `run ${unpark}` : ""}re-run \`next\` and do "${redone}" for unit "${unit}" from the start. ` +
+        OTHER_UNITS_KEPT,
+    };
   }
-  const reopen = `${aidlcToolInvocation("jump")} reopen --target ${shellArg(redone)} ` +
-    `--stages ${shellArg(blockSlugs.slice(blockSlugs.indexOf(redone)).join(","))} --units ${shellArg(unit)} --via redo --scope ${shellArg(scope)}`;
+  const jump = [
+    "reopen", "--target", redone, "--stages", blockSlugs.slice(blockSlugs.indexOf(redone)).join(","),
+    "--units", unit, "--via", "redo", "--scope", scope,
+  ];
   // Code Generation is redone plan included, so its plan is approved again
   // unless plan approval is off.
   const name = walk.block.find((stage) => stage.slug === redone)?.name || redone;
@@ -14772,9 +14805,12 @@ function unitMajorRedo(
       (resolvePlanApprovalSetting(projectDir, stateContent).value === "off"
         ? ""
         : " Its plan comes back to you for approval.");
-  return `Redo accepted at "${redone}" for unit "${unit}". ${only} step is redone: run ` +
-    `${unpark}\`${reopen}\`, then tell the person in one line: "${line}" Then re-run \`next\` and do "${redone}" ` +
-    `for unit "${unit}" again from the start. ${OTHER_UNITS_KEPT}`;
+  return {
+    message: `Redo accepted at "${redone}" for unit "${unit}". ${only} step is redone: run ` +
+      `${unpark}\`${jumpCommandText(jump)}\`, then tell the person in one line: "${line}" Then re-run \`next\` and do ` +
+      `"${redone}" for unit "${unit}" again from the start. ${OTHER_UNITS_KEPT}`,
+    jump,
+  };
 }
 
 // A per-unit step a "redo <stage>" names, read from a solo unit-major walk:
@@ -17982,15 +18018,19 @@ function redoCurrentStage(pd: string, scope: string, stateContent: string, slug:
     );
   }
   // A saved scope that is not a scope name stops here, as every printed command does.
-  const scopeText = scopeArg(scope);
+  scopeArg(scope);
   if (!validScopes().has(scope)) {
     return errorDirective(
       `This workflow's scope is not one AI-DLC knows, so its stage cannot be redone from here. Run \`${entrySkillInvocation()} --status\` to see where it stands.`,
     );
   }
   const unitRedo = unitMajorRedo(pd, scope, stateContent, slug);
-  return printDirective(unitRedo ??
-    `Redo accepted at "${slug}". Run \`${aidlcToolInvocation("jump")} execute --target ${shellArg(slug)} --direction redo --scope ${scopeText}\` to reset the current stage, then re-run \`next\` to start it over.`);
+  if (unitRedo !== null) return jumpStepPrint(unitRedo.message, unitRedo.jump);
+  const jump = ["execute", "--target", slug, "--direction", "redo", "--scope", scope];
+  return jumpStepPrint(
+    `Redo accepted at "${slug}". Run \`${jumpCommandText(jump)}\` to reset the current stage, then re-run \`next\` to start it over.`,
+    jump,
+  );
 }
 
 // A redo, jump, or start-fresh request on re-entry, typed by the conductor
@@ -18114,7 +18154,7 @@ function emitTypedResumeChoice(
     : " If the person also asked to stop there for now, make"} the move, following each print up to where it says ` +
     `to re-run \`next\`, then run \`${aidlcToolInvocation("orchestrate")} park --person-asked\` in place of that \`next\` and act on its \`parked\` directive.`;
   const move = (directive: PrintDirective | ErrorDirective): PrintDirective | ErrorDirective =>
-    directive.kind === "print" ? printDirective(`${directive.message}${stopThere}`) : directive;
+    directive.kind === "print" ? jumpStepPrint(`${directive.message}${stopThere}`, namedJumps.get(directive)) : directive;
   if (choice === "resume") {
     emit(move(printDirective(
       `Resume choice accepted at "${slug}". Re-run \`next\` to continue from the last checkpoint.`,
@@ -18161,7 +18201,7 @@ function emitTypedResumeChoice(
       ? unitMajorRedo(pd, scope, stateContent, slug, { unit: flags.unit, stage: step })
       : null;
     if (own !== null) {
-      emit(move(printDirective(own)));
+      emit(move(jumpStepPrint(own.message, own.jump)));
       return;
     }
     emit(move(printDirective(
@@ -18178,8 +18218,10 @@ function emitTypedResumeChoice(
       emit(move(redoCurrentStage(pd, scope, stateContent, slug)));
       return;
     }
-    emit(move(printDirective(unitMajorRedo(pd, scope, stateContent, slug) ??
-      `Redo accepted at "${unitStep}": nothing is written for it yet, so it starts from the start. Re-run \`next\` and do "${unitStep}".`)));
+    const unitRedo = unitMajorRedo(pd, scope, stateContent, slug);
+    emit(move(unitRedo !== null
+      ? jumpStepPrint(unitRedo.message, unitRedo.jump)
+      : printDirective(`Redo accepted at "${unitStep}": nothing is written for it yet, so it starts from the start. Re-run \`next\` and do "${unitStep}".`)));
     return;
   }
   if (choice === "redo") {

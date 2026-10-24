@@ -9203,6 +9203,10 @@ interface ActiveDirectiveAttempt {
   // Present only when this claim started from a delivered, consumed restart
   // choice. It is not a result receipt and grants no Plan Approval.
   guard_recovery_selection_sha256?: string;
+  // The jump the print this claim returned names as its step (jumpClaimSha256),
+  // and the state it was named on (noteNamedJump). Grants no Plan Approval.
+  named_jump_sha256?: string;
+  named_jump_state_sha256?: string;
 }
 
 interface ActiveDirectiveResume {
@@ -10235,6 +10239,8 @@ function parseActiveDirectiveMarker(value: unknown): ActiveDirectiveMarker | nul
     ("resume_gate_revision" in attempt && !integer(attempt.resume_gate_revision)) ||
     ("guard_recovery_selection_sha256" in attempt &&
       !/^[0-9a-f]{64}$/.test(String(attempt.guard_recovery_selection_sha256 ?? ""))) ||
+    ("named_jump_sha256" in attempt && !/^[0-9a-f]{64}$/.test(String(attempt.named_jump_sha256 ?? ""))) ||
+    ("named_jump_state_sha256" in attempt && !/^[0-9a-f]{64}$/.test(String(attempt.named_jump_state_sha256 ?? ""))) ||
     (resume !== null &&
       (!["waiting", "selected", "superseded"].includes(String(resume.status)) ||
         typeof resume.issuing_stage !== "string" || !/^[0-9a-f]{64}$/.test(String(resume.issuing_state_sha256 ?? "")) ||
@@ -12161,6 +12167,42 @@ export function nextStageInvocation(stage: string, units: NextStageUnits = {}): 
 export function nextStageClaimSha256(stage: string, units: NextStageUnits = {}): string | null {
   const invocation = nextStageInvocation(stage, units);
   return invocation === null ? null : contentSha256(JSON.stringify(invocation.args));
+}
+
+// The claim identity of a jump command a step names: the jump tool's own
+// arguments, verb first, under its route, as the plan-approval guard reads the
+// command once the dispatcher prefix is gone. The same JSON-of-argv identity
+// as nextStageClaimSha256, over the arguments the print is formatted from.
+export function jumpClaimSha256(args: readonly string[]): string {
+  return contentSha256(JSON.stringify(["jump", ...args]));
+}
+
+// The jump a print just named as its step, kept on the Copilot command claim
+// that returned it, with the state it was named on. Copilot's settle leaves
+// every print out of date, so this is what lets the plan-approval guard admit
+// that one jump on the first ask, as every other harness does, while the
+// claim is still the last step (lastStepAdmitsPersonsMoves). Nothing is
+// written without that pending claim.
+export function noteNamedJump(projectDir: string, attemptId: string, args: readonly string[]): void {
+  transactActiveDirective(projectDir, (marker, target) => {
+    const attempt = marker?.active_attempt;
+    if (marker?.version !== 2 || attempt?.id !== attemptId || attempt.status !== "pending") {
+      return { marker, result: undefined, preserve: true };
+    }
+    let state: string;
+    try {
+      state = readFileSync(target.statePath, "utf-8");
+    } catch {
+      return { marker, result: undefined, preserve: true };
+    }
+    return {
+      marker: {
+        ...marker,
+        active_attempt: { ...attempt, named_jump_sha256: jumpClaimSha256(args), named_jump_state_sha256: stateDigest(state) },
+      },
+      result: undefined,
+    };
+  });
 }
 
 // The selected restart's own `next --stage` is matched by its claim identity
