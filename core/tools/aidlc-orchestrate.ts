@@ -15320,12 +15320,10 @@ function skippedJumpDirective(target: string, direction: string, current: string
 // direct graph lookup that names the requested target (the prose's "or 0.3 if
 // freshly initialized" degenerate case) and emits a plain run-stage — it is NOT
 // a commit, so it does not route through `execute`.
-// SKILL.md step 5 (Initialization guard) verbatim: jumping to an initialization
-// stage — or `--phase initialization` — is rejected. Init stages have bootstrap
-// behavior (create the state file, scaffold dirs) that doesn't fit the jump
-// model; the user must run `/aidlc --init`. The guard is prose-only in SKILL.md
-// (`aidlc-jump.ts resolve` treats init stages as valid targets, returning
-// valid:true), so the engine enforces it here rather than relaying a tool error.
+// Jumping to an initialization stage, or `--phase initialization`, is rejected.
+// Init stages have bootstrap behavior (create the state file, scaffold dirs)
+// that doesn't fit the jump model. `aidlc-jump.ts resolve` treats init stages as
+// valid targets, so the engine enforces it (initJumpRefusal for a stage).
 const INIT_JUMP_ERROR =
   `Cannot jump to initialization stages. The Initialization phase runs automatically when you start a workflow (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service").`;
 // With work already under way, asking for an initialization stage is asking to
@@ -15337,6 +15335,14 @@ function initStageDirective(base: string, projectDir: string): Directive {
       `If they want that, run \`${aidlcToolInvocation("orchestrate")} next --project-type brownfield\` ` +
       "(`--project-type greenfield` when it is a new project).",
   );
+}
+
+// The one check of an initialization stage as a jump target, asked by `next
+// --stage` and by the re-entry report's jump before it says the jump is
+// accepted, so the report never accepts an initialization stage the jump then
+// refuses.
+function initJumpRefusal(slug: string, projectDir: string): Directive | null {
+  return nodeForSlug(slug)?.phase === "initialization" ? initStageDirective(INIT_JUMP_ERROR, projectDir) : null;
 }
 
 // Why a jump cannot reopen its target for the unit the person named, said
@@ -15398,9 +15404,9 @@ function emitJumpDirective(
     const { targetSlug, direction } = resolved;
     // resolve validates SKIP/unknown but NOT the init-stage guard — enforce it
     // on the resolved target (covers --stage <init> against existing state).
-    const targetNode = nodeForSlug(targetSlug);
-    if (targetNode && targetNode.phase === "initialization") {
-      emit(initStageDirective(INIT_JUMP_ERROR, projectDir));
+    const initRefusal = initJumpRefusal(targetSlug, projectDir);
+    if (initRefusal) {
+      emit(initRefusal);
       return;
     }
     if (resolved.targetSkipped) {
@@ -15486,9 +15492,10 @@ function emitJumpDirective(
     ));
     return;
   }
-  // Init-stage guard applies on the no-state path too (SKILL.md step 5).
-  if (node.phase === "initialization") {
-    emit(errorDirective(INIT_JUMP_ERROR));
+  // Init-stage guard applies on the no-state path too.
+  const initRefusal = initJumpRefusal(node.slug, projectDir);
+  if (initRefusal) {
+    emit(initRefusal);
     return;
   }
   // Scope membership. resolve REQUIRES a state file, so this no-state branch
@@ -17310,6 +17317,14 @@ function emitTypedResumeChoice(
         `Run nothing. Tell the person in one line: "No stage is named ${target}. Which stage did you mean?" ` +
           "When they say, report again with `--choice jump --target <stage>`.",
       ));
+      return;
+    }
+    // An initialization target gets the refusal `next --stage` gives, as it
+    // is: nothing moves, so there is nothing to park after, and `move()` would
+    // rebuild the print without its turn-ending mark.
+    const initRefusal = initJumpRefusal(node.slug, pd);
+    if (initRefusal) {
+      emit(initRefusal);
       return;
     }
     emit(move(printDirective(
