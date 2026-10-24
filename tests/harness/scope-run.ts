@@ -27,6 +27,9 @@ import { cleanupTestProject, REPO_ROOT, setupIntegrationProject } from "./fixtur
 import { PersonTurnLedger } from "./person-turns.ts";
 import { testGuardEnvironment } from "./runner-profile.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
+import kiroManifest from "../../harness/kiro/manifest.ts";
+
+const KIRO_HOOK_SUFFIX = kiroManifest.hookCommandSuffix ?? "";
 
 export type Directive = Record<string, unknown> & { kind?: string };
 
@@ -294,7 +297,12 @@ export class ScopeHost {
 
   /** The argv for an AI-DLC command line, as the agent's shell or the tool's hook runner would run it. */
   argv(line: string): string[] {
-    const [first, ...rest] = commandWords(line);
+    // A Kiro CLI hook line ends with its row's exit shape, which hands back the
+    // command's own status in the shell Kiro starts it in: running the command is the same.
+    const command = KIRO_HOOK_SUFFIX !== "" && line.trimEnd().endsWith(KIRO_HOOK_SUFFIX)
+      ? line.trimEnd().slice(0, -KIRO_HOOK_SUFFIX.length)
+      : line;
+    const [first, ...rest] = commandWords(command);
     if (first === "bun" && this.launcher === null) return [process.execPath, ...rest];
     if (first === "aidlc" && this.launcher !== null) return [...this.launcher, ...rest];
     throw new Error(`the stand-in runs only ${this.launcher === null ? "bun" : "aidlc"} commands, got: ${line}`);

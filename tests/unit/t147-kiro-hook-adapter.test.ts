@@ -75,6 +75,7 @@ import {
 import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
 import { listMessages } from "../../core/tools/aidlc-message-store.ts";
 import { resolveAction } from "../../core/tools/aidlc.ts";
+import kiroManifest from "../../harness/kiro/manifest.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -2007,19 +2008,19 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
         matcher: "execute_bash",
         command:
-          `bun .kiro/tools/aidlc.ts engine adapter kiro state-transition-guard ${config.name}`,
+          `bun .kiro/tools/aidlc.ts engine adapter kiro state-transition-guard ${config.name}${kiroManifest.hookCommandSuffix}`,
         timeout_ms: EXTENDED_SUBPROCESS_TIMEOUT_MS,
       });
       expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
         matcher: "fs_write",
         command:
-          "bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard",
+          `bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard${kiroManifest.hookCommandSuffix}`,
         timeout_ms: EXTENDED_SUBPROCESS_TIMEOUT_MS,
       });
       expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
         matcher: "execute_bash",
         command:
-          "bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard",
+          `bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard${kiroManifest.hookCommandSuffix}`,
         timeout_ms: EXTENDED_SUBPROCESS_TIMEOUT_MS,
       });
     }
@@ -2038,7 +2039,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       const hooks = Object.values(config.hooks).flat();
       expect(hooks.length, name).toBeGreaterThan(0);
       for (const hook of hooks) {
-        const compound = /\b(?:continue-workflow|audit-and-sensors)(?:\s|$)/.test(hook.command);
+        const compound = /\b(?:continue-workflow|audit-and-sensors)(?:[\s;]|$)/.test(hook.command);
         expect(hook.timeout_ms, `${name}: ${hook.command}`).toBe(compound ? 3_600_000 : 1_800_000);
       }
     }

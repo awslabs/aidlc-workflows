@@ -197,6 +197,11 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   1.x and Kiro CLI v3 run). It is written to `harness.json`, and runtime code
   that depends on the layout reads it from the installed tree rather than from
   `name`.
+- `hookCommandSuffix` (Kiro `agent-v1` rows only, optional) - text the packager
+  appends to every hook command in the row's `agents/*.json`, so the shell the
+  host starts a hook in hands its exit code back (Kiro CLI:
+  `; exit $LASTEXITCODE`, for PowerShell on Windows and bash elsewhere). The
+  authored JSON carries the command without it.
 - `coreDirs: DirMap[]` — which `core/<src>` dirs project into `<harnessDir>/<dst>`.
   Rename or drop dirs here (Kiro `rules → steering`; Codex `rules → aidlc-rules`
   and drops `skills/` — see emit). The 3 session skills are core dirs for

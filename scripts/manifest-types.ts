@@ -261,6 +261,13 @@ export type HarnessManifest = {
    * layout reads it from the installed tree instead of from the row name.
    */
   kiroLayout?: "agent-v1" | "kas";
+  /**
+   * Kiro `agent-v1` rows only: text the packager appends to every hook command
+   * in the row's `agents/*.json`, so the shell the host starts each hook in
+   * hands the hook's own exit code back. The authored JSON carries the command
+   * without it.
+   */
+  hookCommandSuffix?: string;
   /** core/<src> → <harnessDir>/<dst> projections. */
   coreDirs: DirMap[];
   /** harness/<name>/<src> → <harnessDir>/<dst> authored-file copies. */
