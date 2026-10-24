@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { AuditShardEvent } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { afterAll, describe, expect, test } from "bun:test";
-import { cleanupTestProject, REPO_ROOT, setupIntegrationProject } from "./fixtures.ts";
+import { cleanupTestProject, proposalFollowUp, REPO_ROOT, setupIntegrationProject } from "./fixtures.ts";
 import { PersonTurnLedger } from "./person-turns.ts";
 import { testGuardEnvironment } from "./runner-profile.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
@@ -1627,8 +1627,21 @@ export class AgentStandIn {
       const named = scopes.find((c) => new RegExp(`\\b${c.scope}\\b`, "i").test(words));
       const command = named?.command ?? String(d.new_intent_command ?? "");
       const res = this.host.bash(command);
-      const out = parseJson(res.stdout) as Directive | null;
+      let out = parseJson(res.stdout) as Directive | null;
       if (!out) this.fail(`${command} printed no directive: ${clip(res.stdout + res.stderr)}`, d);
+      // A question that named no plan leaves it to the person: its separate-work
+      // answer reaches the plan step, the agent proposes the plan their words
+      // name, and they go ahead with it on the plan question.
+      const plans = /Plans: (.*)$/s.exec(String(out.kind === "print" ? out.message ?? "" : ""))?.[1]
+        .split(" / ").map((entry) => entry.split(" ")[0].replace(/:$/, "")) ?? [];
+      const plan = plans.find((name) => new RegExp(`\\b${name}\\b`, "i").test(words));
+      const propose = plan === undefined ? null : proposalFollowUp(out, plan);
+      if (propose !== null) {
+        const offer = this.next(...propose);
+        if (offer.ask_type !== "scope-confirm") this.fail(`the plan step for ${plan} asked no plan question`, offer);
+        this.askPerson("plan", "", String(offer.question ?? ""), ["Go ahead", "A different plan", "Tailor one"], "Go ahead");
+        out = this.follow(this.host.bash(String(offer.confirm_command)));
+      }
       this.pending = this.createFromPrint(out);
       return;
     }

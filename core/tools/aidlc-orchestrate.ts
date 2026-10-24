@@ -4239,7 +4239,10 @@ function newWorkRoutingAskDirective(
     new_work_description: authoritativeRequest(description),
     proposed_scope: proposedScope,
     new_intent_command: commands.newIntent,
-    scope_commands: scopeCommands(`${tool} next --new-intent`, stored.id, carried.newWork, projectDir).map((entry) =>
+    // A plan the person names in place of the proposed one has its row; with
+    // none proposed the separate-work answer picks the plan next, so no row
+    // that picks one is handed out beside it.
+    scope_commands: proposedScope === "" ? [] : scopeCommands(`${tool} next --new-intent`, stored.id, carried.newWork, projectDir).map((entry) =>
       entry.scope === proposedScope ? { ...entry, command: `${entry.command}${carried.planChanges}` } : entry),
     compose_command: commands.compose,
     // With a record to pick, the human continues it through its select command

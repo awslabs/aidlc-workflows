@@ -399,6 +399,8 @@ describe("t-plan-proposed-by-the-agent: finished work and new work beside active
     expect(ask.proposed_scope).toBe("");
     expect(String(ask.question)).toContain("you pick its plan next");
     expect(String(ask.new_intent_command)).not.toContain("--scope");
+    // The choice leaves the plan to the person, so no command that picks one is handed out beside it.
+    expect(ask.scope_commands).toEqual([]);
     const command = String(ask.new_intent_command);
     const step = next(CLAUDE_TOOLS, proj, command.split(" ").slice(command.split(" ").indexOf("next") + 1));
     expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
@@ -643,5 +645,25 @@ describe("t-plan-proposed-by-the-agent: the reading prints name the plan clause"
     const unselected = String(next(CLAUDE_TOOLS, proj, ["add CSV export"]).message);
     expect(unselected).toContain("add `--propose <plan>`");
     expectEveryPlan(unselected);
+  });
+});
+
+// The which-work question's separate-work answer that says "you pick its plan
+// next" goes on to the plan step, so the question hands out no command that
+// picks a plan beside it; with a plan named, every plan keeps its row, for a
+// person who names another. Before, the rows were there either way, and agents
+// on opencode and Kiro CLI ran the bugfix row for "2": work on a plan nobody picked.
+describe("t-plan-proposed-by-the-agent: the which-work question hands out no plan when its answer leaves the plan to the person", () => {
+  test("kiro, work here and none selected: no plan proposed, no plan rows; a plan proposed, every plan's row", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const read = next(KIRO_TOOLS, proj, ["fix the login"]);
+    const id = REQUEST.exec(String(read.message))![1];
+    const open = next(KIRO_TOOLS, proj, ["--request", id]);
+    expect(open.ask_type, JSON.stringify(open).slice(0, 300)).toBe("new-work-routing");
+    expect(open.proposed_scope).toBe("");
+    expect(open.scope_commands).toEqual([]);
+    const named = next(KIRO_TOOLS, proj, ["--request", id, "--propose", "bugfix"]);
+    expect(named.ask_type, JSON.stringify(named).slice(0, 300)).toBe("new-work-routing");
+    expect(named.scope_commands?.map((row) => row.scope).sort()).toEqual([...validScopes()].sort());
   });
 });
