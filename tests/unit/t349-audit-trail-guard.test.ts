@@ -275,6 +275,38 @@ describe("t349 audit trail guard: shell commands", () => {
     }
   });
 
+  test("the project's own folders and an audit command are not the audit trail", () => {
+    // A project under a folder named audit, a project named for audits, and a
+    // dependency audit, each with a write the parser cannot place.
+    const underAudit = "/work/audit/proj";
+    for (const [command, cwd] of [
+      [`cd ${underAudit} && npm test > "$TEST_LOG"`, underAudit],
+      [`npm test > ${underAudit}/build/test-$(date +%s).log`, underAudit],
+      [`cd ${underAudit} && npm test > ${underAudit}/build/test-$(date +%s).log`, `${underAudit}/src`],
+      [`cd /work/audit-service && npm test > "$(mktemp)"`, "/work/audit-service"],
+      [`npm audit --json > "$REPORT"`, CWD],
+      [`npm audit --json > npm-audit-$(date +%F).json`, CWD],
+      [`cd C:\\work\\audit\\proj && npm test > "$TEST_LOG"`, "C:\\work\\audit\\proj"],
+      [`echo x > C:/work/audit/proj/build/$(date +%s).log`, "C:\\work\\audit\\proj"],
+    ]) {
+      expect(bash(command, cwd), command).toBeNull();
+    }
+    // The trail itself stays refused from there, and a folder is cut only
+    // where its own spelling starts: `/audit` inside `$R/audit/` is not it.
+    for (const [command, cwd] of [
+      [`cd ${underAudit} && echo x >> "$R/audit/host.md"`, underAudit],
+      [`echo x >> ${underAudit}/${AUDIT}/$(hostname).md`, underAudit],
+      [`npm audit --json > ${RECORD}/audit/$(date +%s).md`, underAudit],
+      [`P=$R/aud""it/host.md; printf forged >> "$P"`, underAudit],
+      [`cd "$R/audit" && echo x >> "$F"`, underAudit],
+      [`echo x >> $R/audit/host.md`, "/audit/proj"],
+      [`cd /audit/proj && echo x >> "$R/audit/host.md"`, "/audit/proj"],
+      ["echo x >> C:\\work\\audit\\proj\\aidlc\\spaces\\default\\intents\\260925-login\\audit\\host.md", "C:\\work\\audit\\proj"],
+    ]) {
+      expect(bash(command, cwd), command).toBe("audit");
+    }
+  });
+
   test("an unrelated directory named intents is not the AIDLC workspace", () => {
     for (const command of [`echo x > "$TMPFILE"`, `printf x >> build/*.log`]) {
       expect(bash(command, "/work/intents/project"), command).toBeNull();
