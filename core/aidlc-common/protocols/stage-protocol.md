@@ -300,8 +300,11 @@ stage, jump to a stage, or start fresh is not a gate answer: report it as the
 recovery protocol's Session resume says, never as Request Changes.
 
 - **They chose:** record that choice by its label (`--user-input "Approve"`,
-  `--details "Request Changes"`, `--details "Approve Plan"`). A number, a letter,
-  "approved", "looks good", or a typo all name a choice: you know which.
+  `--details "Request Changes"`, `--details "Approve Plan"`). A number,
+  "approved", "looks good", or a typo all name a choice: you know which. A
+  letter names one only where the question showed letters; a lone letter at a
+  question shown with numbers or in a box, or "...", is unclear: ask once which
+  they meant.
 - **They approved and asked for something** ("looks fine but rename the
   handler"): record the approval, do what they asked, and say in one line what
   you changed. No second question.
