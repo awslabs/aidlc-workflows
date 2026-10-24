@@ -52,6 +52,7 @@ import {
   verificationCommandRecovery,
   constructionPolicyChangeAuthority,
   CONSTRUCTION_POLICY_RECOVERY,
+  swarmNeedsStageMajor,
   leftOutLine,
   PERSON_ASKED_SKIP_REASON,
   auditShardName,
@@ -1268,8 +1269,7 @@ function setConstructionPolicyField(content: string, field: string, value: strin
     getField(content, "Construction Checkpoints") !== "enabled"
   ) error("Enable Construction Checkpoints before selecting Construction Execution.");
   if (
-    field === "Construction Execution" && value === "swarm" &&
-    getField(content, "Construction Iteration") === "unit-major"
+    field === "Construction Execution" && value === "swarm" && swarmNeedsStageMajor(content)
   ) error("Select stage-major iteration before choosing swarm execution.");
   return setOrInsertField(content, "## Runtime State", field, value);
 }

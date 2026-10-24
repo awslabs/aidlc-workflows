@@ -13481,6 +13481,13 @@ export function validConstructionPolicyChange(field: string, value: string): boo
   }
 }
 
+// Building the Units in parallel needs stage-by-stage iteration first: the
+// execution setter refuses swarm while Construction builds one Unit at a time,
+// and the step after a yes to swarm names the iteration setter before it.
+export function swarmNeedsStageMajor(stateContent: string): boolean {
+  return getField(stateContent, "Construction Iteration") === "unit-major";
+}
+
 export function authorizedConstructionPolicyChange(
   projectDir: string,
   stateContent: string,
