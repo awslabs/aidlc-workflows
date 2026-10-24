@@ -150,15 +150,16 @@ before starting a second intent alongside the first:
  > 1. Part of the active work
       Continue the current workflow
    2. Separate new piece of work
-      Yes, set it up alongside the current one without changing it; you pick its plan next
+      Yes, set it up alongside the current one as "bugfix" work (6 stages, 6 approval gates) without changing it
    3. Reshape the active work
       Change how the remaining plan is shaped
    4. Type something.
    5. Chat about this
 ```
 
-- Choose **2** and you pick the new work's plan next (here the agent proposed
-  `bugfix`); then AI-DLC creates a second intent beside the first. In that run
+- Choose **2** and AI-DLC creates a second intent beside the first, on the plan
+  that option names, with its size (here the agent proposed `bugfix`). When the
+  option names no plan, you pick the new work's plan next. In that run
   the agent said: "I've set up the export timeout fix as a separate piece of
   work using the bug-fix plan, and it's waiting at Requirements Analysis. Your
   inventory API work is unchanged at the feasibility stage." The first intent's

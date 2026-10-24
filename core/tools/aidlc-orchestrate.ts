@@ -3444,16 +3444,21 @@ function unitPausedAskDirective(
 
 // The new-work routing ask's own options about an active workflow, in its
 // numbered order. The numbered rendering and the step that hands a reply to the
-// agent (routingQuestionReplyDirective) share them.
+// agent (routingQuestionReplyDirective) share them. `size` is the size of the
+// plan the separate-work answer starts (separateWorkSize), or "".
 type NewWorkRoute = "continue" | "separate" | "reshape";
-type RoutingOption = { readonly route: NewWorkRoute; readonly label: string; readonly detail: (scope: string) => string };
+type RoutingOption = {
+  readonly route: NewWorkRoute;
+  readonly label: string;
+  readonly detail: (scope: string, size: string) => string;
+};
 const NEW_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
   { route: "continue", label: "Part of the active work", detail: (_scope: string) => "Continue the current workflow" },
   {
     route: "separate",
     label: "Separate new piece of work",
-    detail: (scope: string) => scope
-      ? `Yes, set it up alongside the current one as "${scope}" work without changing it`
+    detail: (scope: string, size: string) => scope
+      ? `Yes, set it up alongside the current one as "${scope}" work${size ? ` (${size})` : ""} without changing it`
       : "Yes, set it up alongside the current one without changing it; you pick its plan next",
   },
   { route: "reshape", label: "Reshape the active work", detail: (_scope: string) => "Change how the remaining plan is shaped" },
@@ -3487,8 +3492,8 @@ const EXISTING_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
   {
     route: "separate",
     label: "Separate new piece of work",
-    detail: (scope: string) => scope
-      ? `Yes, set it up alongside the existing work as "${scope}" work without changing it`
+    detail: (scope: string, size: string) => scope
+      ? `Yes, set it up alongside the existing work as "${scope}" work${size ? ` (${size})` : ""} without changing it`
       : "Yes, set it up alongside the existing work without changing it; you pick its plan next",
   },
   {
@@ -3885,7 +3890,7 @@ function approvedPlanUndoReading(projectDir: string, stateContent: string): stri
 // change to this work: the conductor reads which, the same split as
 // openGateReplyDirective. The person's words never travel in the re-entry
 // report; the engine kept them for the other reading.
-function reentryReplyDirective(requestId: string, undo = "", work: string[] = [], openWork = ""): PrintDirective {
+function reentryReplyDirective(requestId: string, pd: string, undo = "", work: string[] = [], openWork = ""): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   // The pieces of work here by exact name, the one in progress marked: the
   // agent reads whether the words name exactly one ("the auth one" with auth
@@ -3909,15 +3914,15 @@ function reentryReplyDirective(requestId: string, undo = "", work: string[] = []
       `about something else, such as new work or a change to this work, or you cannot tell which, run \`${orchestrate} ` +
       `next --request ${requestId}\` and follow what it returns: the engine kept their words and asks the person where ` +
       "that work belongs, and a redo or jump they say there is read the same way. When their words describe new work, " +
-      "add `--propose <plan>` to that command, the plan from your scope table that fits the work, so the question " +
-      `can name it.${named}`,
+      "add `--propose <plan>` to that command, the plan below that fits the work, so the question " +
+      `can name it.${named} Plans: ${planChoicesLine(pd)}`,
   );
 }
 
 // The same words in team mode (Unit Ownership: team), where the stage, gate and
 // plan readings above belong to the project's main checkout: go on, or a
 // request the engine asks the person about.
-function teamWordsReplyDirective(requestId: string): PrintDirective {
+function teamWordsReplyDirective(requestId: string, pd: string): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   return printDirective(
     "Work is in progress, and the person's words may only ask for it to go on, or be new work or a change to this " +
@@ -3925,7 +3930,7 @@ function teamWordsReplyDirective(requestId: string): PrintDirective {
       `\`${orchestrate} next\` with nothing after it: the work continues where it stands. Otherwise, or if you cannot ` +
       `tell, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words ` +
       "and asks the person where that work belongs. When their words describe new work, add `--propose <plan>` to " +
-      "that command, the plan from your scope table that fits the work, so the question can name it.",
+      `that command, the plan below that fits the work, so the question can name it. Plans: ${planChoicesLine(pd)}`,
   );
 }
 
@@ -3935,7 +3940,7 @@ function teamWordsReplyDirective(requestId: string): PrintDirective {
 // name one piece and ask for it to go on (the pick question's own one-step
 // answer selects it and carries on), only name one piece, or describe new
 // work. The engine kept the words.
-function unselectedWordsReplyDirective(requestId: string, work: string[]): PrintDirective {
+function unselectedWordsReplyDirective(requestId: string, pd: string, work: string[]): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   return printDirective(
     `Work is in progress here (${work.join(", ")}), and none is selected in this chat. Read the person's words. If ` +
@@ -3946,7 +3951,7 @@ function unselectedWordsReplyDirective(requestId: string, work: string[]): Print
       `\`${aidlcDispatcherInvocation("intent")} switch <name>\`, say the line it prints, then stop. Otherwise (new work, ` +
       `or you cannot tell which), run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the ` +
       "engine kept their words. When their words describe new work, add `--propose <plan>` to that command, the plan " +
-      "from your scope table that fits the work, so the question can name it.",
+      `below that fits the work, so the question can name it. Plans: ${planChoicesLine(pd)}`,
   );
 }
 
@@ -4119,8 +4124,9 @@ function routingQuestionReplyDirective(question: StoredQuestion, words: string):
 
 function newWorkRoutingAskDirective(
   question: string,
-  // The prose rendering: its prompt, and the options in their numbered order.
-  routing: { prompt: string; options: readonly RoutingOption[] },
+  // The prose rendering: its prompt, the options in their numbered order, and
+  // the size of the plan the separate-work answer starts (separateWorkSize).
+  routing: { prompt: string; options: readonly RoutingOption[]; size: string },
   description: string,
   proposedScope: string,
   projectDir: string,
@@ -4146,7 +4152,7 @@ function newWorkRoutingAskDirective(
   );
   const tool = aidlcToolInvocation("orchestrate");
   const commands = routingAnswerCommands(stored.id, proposedScope, carried, availableIntents);
-  const options = routing.options.map((option) => ({ label: option.label, detail: option.detail(proposedScope) }));
+  const options = routing.options.map((option) => ({ label: option.label, detail: option.detail(proposedScope, routing.size) }));
   return {
     kind: "ask",
     ask_type: "new-work-routing",
@@ -5179,6 +5185,16 @@ function costClause(
   return `${c.shown} ${c.shown === 1 ? "stage" : "stages"}, ${c.gates} approval ${c.gates === 1 ? "gate" : "gates"}${perUnit}`;
 }
 
+// The size of the plan a routing question's separate-work answer starts, as
+// that answer's creation prints it: with the stage changes and the project
+// type the answer carries, read back as fillStoredSettings reads them. "" when
+// no plan is named.
+function separateWorkSize(scope: string, pd: string, carried: RoutingCarried): string {
+  if (scope === "") return "";
+  const kept = parseNextFlags(routingSettings(carried).newWork);
+  return kept.parseError ? costClause(scope, pd) : costClause(scope, pd, kept.planChanges, kept.projectType);
+}
+
 // --- Flag parsing ---
 
 export interface ParsedFlags {
@@ -5864,14 +5880,6 @@ function planProposalDirective(
       routingSettings(carriedRoutingFlags(flags)),
     );
   const next = `${aidlcToolInvocation("orchestrate")} next`;
-  const metadata = loadScopeMetadata();
-  const plans = [...validScopes()].map((scope) => {
-    const cost = effectiveScopeCostSummary(scope, pd, undefined, flags.projectType);
-    const meta = metadata[scope];
-    const hints = meta?.keywords?.length ? `; hints: ${meta.keywords.join(", ")}` : "";
-    const units = cost && cost.perUnitStages > 0 ? ", splits the work into Units" : "";
-    return `${scope}${cost ? ` (${cost.shown} ${cost.shown === 1 ? "stage" : "stages"}${units})` : ""}: ${meta?.description ?? ""}${hints}`;
-  });
   const words = `"${requestPreview(description)}".${documentSplitSentence(description)}`;
   // Words beside finished work may ask to go back to one of its stages: the
   // agent reads which, so the tool does not call them new work.
@@ -5883,8 +5891,22 @@ function planProposalDirective(
     `${opening}the plan below that fits it: run ` +
       `\`${next} --propose <plan> --request ${question.id}\` and it returns the question to show them (go ahead, ` +
       "a different plan, or a tailored one) with its answers; show it as given. When no ready-made plan fits, run " +
-      `\`${next} --propose compose --request ${question.id}\` instead. Create nothing yourself. Plans: ${plans.join(" / ")}`,
+      `\`${next} --propose compose --request ${question.id}\` instead. Create nothing yourself. Plans: ${planChoicesLine(pd, flags.projectType)}`,
   );
+}
+
+// Every plan this install ships, for the agent to propose the one that fits
+// the work: its length here, whether its stages split the work into Units,
+// what it is for, and the hints its author wrote.
+function planChoicesLine(pd: string, projectType?: "greenfield" | "brownfield"): string {
+  const metadata = loadScopeMetadata();
+  return [...validScopes()].map((scope) => {
+    const cost = effectiveScopeCostSummary(scope, pd, undefined, projectType);
+    const meta = metadata[scope];
+    const hints = meta?.keywords?.length ? `; hints: ${meta.keywords.join(", ")}` : "";
+    const units = cost && cost.perUnitStages > 0 ? ", splits the work into Units" : "";
+    return `${scope}${cost ? ` (${cost.shown} ${cost.shown === 1 ? "stage" : "stages"}${units})` : ""}: ${meta?.description ?? ""}${hints}`;
+  }).join(" / ");
 }
 
 // Finished work here, by the name the person knows it by and the record that
@@ -6586,16 +6608,18 @@ function intentPickPromptIfRecordsExist(
   const unlisted = hidden > 0 ? ` (${hidden} more ${hidden === 1 ? "has a record name that cannot" : "have record names that cannot"} be selected here)` : "";
   const inProgress = `${presentCount} piece${presentCount === 1 ? "" : "s"} of work in progress${spaceLabel}`;
   if (pendingWork?.description.trim()) {
+    const size = separateWorkSize(pendingWork.proposedScope, projectDir, pendingWork.carried);
     return newWorkRoutingAskDirective(
       `This project already has ${inProgress}, ` +
         `and none is currently selected: ${list}${unlisted}. You said: "${requestPreview(pendingWork.description)}".${documentSplitSentence(pendingWork.description)} ` +
         `Is this (1) part of existing work - select its record and continue it; ` +
-        `(2) a separate new piece of work - ${EXISTING_WORK_ROUTING_OPTIONS[1].detail(pendingWork.proposedScope)}; ` +
+        `(2) a separate new piece of work - ${EXISTING_WORK_ROUTING_OPTIONS[1].detail(pendingWork.proposedScope, size)}; ` +
         "or (3) a change to an existing remaining plan - select its record, then reshape it?",
       {
         prompt: `This project already has ${inProgress}, ` +
           `and none is currently selected: ${list}${unlisted}. You said: "${requestPreview(pendingWork.description)}".${documentSplitSentence(pendingWork.description)} What should I do?`,
         options: EXISTING_WORK_ROUTING_OPTIONS,
+        size,
       },
       pendingWork.description,
       pendingWork.proposedScope,
@@ -10633,7 +10657,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         targets: here.selectable.map(({ intent, selector }) => ({ intent: selector, uuid: intent.uuid ?? "" })),
         pick: true,
       });
-      emit(unselectedWordsReplyDirective(words.id, here.selectable.map(({ selector }) => selector)));
+      emit(unselectedWordsReplyDirective(words.id, pd, here.selectable.map(({ selector }) => selector)));
       return;
     }
   }
@@ -10877,7 +10901,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
-      emit(reentryReplyDirective(words.id, undo, workNamesHere(pd, selection), activeWorkLabel(stateContent)));
+      emit(reentryReplyDirective(words.id, pd, undo, workNamesHere(pd, selection), activeWorkLabel(stateContent)));
       return;
     }
   }
@@ -10907,7 +10931,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
       undefined, routingSettings(carriedRoutingFlags(flags)),
     );
-    emit(teamWordsReplyDirective(words.id));
+    emit(teamWordsReplyDirective(words.id, pd));
     return;
   }
   // A plan named by its word before the description (`/aidlc bugfix Fix login`)
@@ -10935,17 +10959,19 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       scope: routingScopeProposal ?? flags.scope ?? flags.positionalScope ?? proposed,
     };
     const carried = askedAgain?.carried ?? carriedRoutingFlags(flags);
+    const size = scopeChange ? "" : separateWorkSize(inferred.scope, pd, carried);
     emit(newWorkRoutingAskDirective(
       `Work is already in progress on: "${activeLabel}". You said: "${requestPreview(flags.intent)}".${documentSplitSentence(flags.intent)} ` +
         (scopeChange
           ? `Is this (1) a separate new piece of work - start new "${inferred.scope}" work for it, the current work stays as it is; ` +
             `(2) part of that work - change it to "${inferred.scope}" and continue it; `
           : "Is this (1) part of that work - continue it; (2) a separate new piece of work - " +
-            `${NEW_WORK_ROUTING_OPTIONS[1].detail(inferred.scope)}; `) +
+            `${NEW_WORK_ROUTING_OPTIONS[1].detail(inferred.scope, size)}; `) +
         "or (3) a change to how the remaining plan is shaped?",
       {
         prompt: `Work is already in progress on: "${activeLabel}". You said: "${requestPreview(flags.intent)}".${documentSplitSentence(flags.intent)} What should I do?`,
         options,
+        size,
       },
       flags.intent,
       inferred.scope,

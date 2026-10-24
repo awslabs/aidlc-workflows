@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, function:planProposalDirective, function:freshWorkOfferDirective, function:nextFlagShape
+// covers: subcommand:aidlc-orchestrate:next, function:planProposalDirective, function:planChoicesLine, function:freshWorkOfferDirective, function:nextFlagShape
 //
 // The plan for a request the person typed in their own words is proposed by the
 // agent, not matched from a keyword list. `next "<request>"` on a workspace
@@ -56,6 +56,7 @@ type Directive = Record<string, unknown> & {
   compose_command?: string;
   new_intent_command?: string;
   scope_commands?: Array<{ scope: string; command: string; stages?: string }>;
+  choices?: Array<{ label: string; detail?: string; command?: string }>;
 };
 
 const REQUEST = /--request ([0-9a-f]{8})/;
@@ -80,6 +81,20 @@ function reply(proj: string, prompt: string, session: string): void {
 function answerArgs(command: unknown): string[] {
   const text = String(command);
   return text.slice(text.indexOf(" next ") + 6).split(" ");
+}
+
+/** The size a separate-work answer's creation print gives the new work. */
+function creationSize(tools: string, proj: string, command: unknown): string {
+  const created = next(tools, proj, answerArgs(command));
+  const size = /to start the new intent \(([^)]+)\)/.exec(String(created.message))?.[1];
+  expect(size, JSON.stringify(created).slice(0, 300)).toMatch(/^\d+ stages?, \d+ approval gates?/);
+  return size!;
+}
+
+/** Every plan this install ships, each with its length here, as the plan proposal step lists them. */
+function expectEveryPlan(message: string): void {
+  expect(message).not.toContain("scope table");
+  for (const scope of validScopes()) expect(message).toMatch(new RegExp(`${scope} \\(\\d+ stages?(, [^)]*)?\\):`));
 }
 
 /**
@@ -360,6 +375,19 @@ describe("t-plan-proposed-by-the-agent: finished work and new work beside active
     expect(ask.proposed_scope).toBe("feature");
     expect(String(ask.question)).toContain('as "feature" work');
     expect(String(ask.new_intent_command)).toContain("--new-intent --scope feature --request");
+    // The option says the size of the plan that answer starts, as its creation says it.
+    const option = `as "feature" work (${creationSize(CLAUDE_TOOLS, proj, ask.new_intent_command)}) without changing it`;
+    expect(String(ask.question)).toContain(option);
+    expect(String(ask.numbered_prose_question)).toContain(option);
+    expect(ask.choices?.[1]?.detail).toContain(option);
+  });
+
+  test("a plan named before the words: the separate-work answer says that plan's size here", () => {
+    proj = activeProject();
+    const ask = next(CLAUDE_TOOLS, proj, ["bugfix", "fix the login"]);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
+    const size = creationSize(CLAUDE_TOOLS, proj, ask.new_intent_command);
+    expect(ask.choices?.[1]?.detail).toBe(`Yes, set it up alongside the current one as "bugfix" work (${size}) without changing it`);
   });
 
   test("with no plan proposed, the routing question says the plan comes next, and that answer reaches the proposal step", () => {
@@ -400,7 +428,9 @@ describe("t-plan-proposed-by-the-agent: work here but none selected", () => {
         // Kiro's routing harness asks which work it belongs to first, naming the plan.
         expect(chain.last.ask_type, note).toBe("new-work-routing");
         expect(chain.last.proposed_scope).toBe("bugfix");
-        expect(String(chain.last.question)).toContain('as "bugfix" work');
+        const option = `as "bugfix" work (${creationSize(tools, proj, chain.last.new_intent_command)}) without changing it`;
+        expect(String(chain.last.question)).toContain(option);
+        expect(chain.last.choices?.[1]?.detail).toContain(option);
       } else {
         expect(chain.last.ask_type, note).toBe("scope-confirm");
         expect(chain.last.proposed_scope).toBe("bugfix");
@@ -596,14 +626,22 @@ describe("t-plan-proposed-by-the-agent: creation retires the request's whole cha
 });
 
 describe("t-plan-proposed-by-the-agent: the reading prints name the plan clause", () => {
-  test("active work, team mode and the none-selected print all tell the agent to add --propose for new work", () => {
+  // The plan the agent proposes comes from the plans these prints list, each
+  // with its length here: the skill carries no scope table to pick it from.
+  test("active work, team mode and the none-selected print all tell the agent to add --propose for new work, from every plan with its length", () => {
     proj = activeProject();
-    expect(String(next(CLAUDE_TOOLS, proj, ["add CSV export"]).message)).toContain("add `--propose <plan>`");
+    const active = String(next(CLAUDE_TOOLS, proj, ["add CSV export"]).message);
+    expect(active).toContain("add `--propose <plan>`");
+    expectEveryPlan(active);
     const state = seededStateFile(proj);
     writeFileSync(state, readFileSync(state, "utf-8").replace("- **Current Stage**: feasibility", "- **Current Stage**: feasibility\n- **Unit Ownership**: team"));
-    expect(String(next(CLAUDE_TOOLS, proj, ["add CSV export"]).message)).toContain("add `--propose <plan>`");
+    const team = String(next(CLAUDE_TOOLS, proj, ["add CSV export"]).message);
+    expect(team).toContain("add `--propose <plan>`");
+    expectEveryPlan(team);
     cleanupTestProject(proj);
     proj = cloneWithWork(CLAUDE_TOOLS);
-    expect(String(next(CLAUDE_TOOLS, proj, ["add CSV export"]).message)).toContain("add `--propose <plan>`");
+    const unselected = String(next(CLAUDE_TOOLS, proj, ["add CSV export"]).message);
+    expect(unselected).toContain("add `--propose <plan>`");
+    expectEveryPlan(unselected);
   });
 });
