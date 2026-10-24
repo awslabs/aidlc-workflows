@@ -11,9 +11,12 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { auditBlockField, boltSlugForUnit, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
-  ISOLATED_GIT_ENV, approvePlan, cleanupCheckpointFixtures, fixture, git, prepare, reviewRevisedSource, swarm, writeUnitSource,
+  auditBlockField, boltSlugForUnit, mainCheckoutChangeRunFloor, readAuditShardEvents,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  ISOLATED_GIT_ENV, approvePlan, cleanupCheckpointFixtures, fixture, git, prepare, reviewRevisedSource, swarm, writeUnitSource, wt,
 } from "../harness/swarm-checkpoint.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
@@ -245,6 +248,24 @@ describe("a change the person asks for in the main checkout while the Units are 
       expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
     }
     expect(readFileSync(join(pd, "README.md"), "utf-8")).toBe(FIXED);
+  });
+
+  // A file the preparing Unit's own plan names reaches its worktree only as
+  // committed, approved source: the Unit is never built without the person's change.
+  test("a file the preparing Unit's plan names, asked for while another batch was out, still stops its prepare", () => {
+    const pd = fixture(["alpha", "beta"]);
+    approvePlan(pd, "alpha", "alpha.ts");
+    const asked = says(pd, ASKED);
+    // Recorded while no Unit being built named it (an earlier batch's request).
+    appendAuditEntry("MAIN_CHECKOUT_CHANGE_ALLOWED", {
+      Stage: "code-generation", "Run floor": mainCheckoutChangeRunFloor(pd), Paths: JSON.stringify(["src/alpha.ts"]),
+      "Message Id": asked,
+    }, pd);
+    writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 9;\n");
+    const prepared = prepare(pd, ["alpha", "beta"]);
+    expect(prepared.code).not.toBe(0);
+    expect(`${prepared.out}\n${prepared.err}`).toMatch(/Parent source has changed since Plan Approval|Approved parent source is not committed/);
+    expect(existsSync(wt(pd, "alpha"))).toBe(false);
   });
 
   test("with no message from the person on record, the held write says when the change can be made", () => {
