@@ -100,15 +100,13 @@ describe("t-confirm-and-switch-plan: a confirmed summary's documents are written
     await runNamed(proj, scopeChange);
     expect(getField(state(proj), "Scope")).toBe("express");
     const recover = await next(proj, []);
-    for (const command of named(String(recover.directive?.message ?? ""), /--result skipped/)) {
-      const skipped = await runNamed(proj, command);
-      const done = JSON.parse(skipped.stdout.trim().split("\n").findLast((row) => row.startsWith("{")) ?? "{}") as { narration?: string };
-      expect(done.narration).toBe("Intent Capture & Framing is not part of the express plan, so I skipped it.");
-    }
+    for (const command of named(String(recover.directive?.message ?? ""), /--result skipped/)) await runNamed(proj, command);
     expect(box(proj, "intent-capture")).toBe("S SKIP");
     expect(existsSync(join(stageFolder(proj), "intent-statement.md"))).toBe(true);
+    // The skip's line rides the next step, which goes straight on.
     const after = await next(proj, []);
     expect(after.directive?.stage).toBe("requirements-analysis");
+    expect(String(after.directive?.narration)).toMatch(/^Intent Capture & Framing is not part of the express plan, so I skipped it\. /);
     expect(JSON.stringify(after.directive?.consumes ?? [])).toContain("intent-capture/intent-statement.md");
   });
 

@@ -176,6 +176,7 @@ import {
   attemptEventDefinitelyBefore,
   attemptEventIsCrossShardTied,
   artifactFilename,
+  summaryConfirmedThisAttempt,
   auditBlockField,
   CONSTRUCTION_POLICY_CHECKPOINT,
   VERIFICATION_COMMAND_CHECKPOINT,
@@ -5085,6 +5086,29 @@ function currentStageStillToDo(scope: string, stateContent: string): boolean {
   const box = parseCheckboxes(stateContent).find((c) => c.slug === current)?.state;
   if (box === undefined || box === "completed" || box === "skipped") return false;
   return effectivePlanAction(current, scope, stateContent) === "EXECUTE";
+}
+
+// The running stage's documents a switch to `newScope` would leave unwritten
+// after the person confirmed its summary, by their project paths, with the
+// stage's name; null when the new scope runs the stage, the work is on a Unit
+// walk, the summary is not confirmed in this attempt, or nothing is missing.
+function confirmedDocumentsBeforeSwitch(
+  pd: string, scope: string, stateContent: string, newScope: string,
+): { stage: string; files: string } | null {
+  const current = (getField(stateContent, "Current Stage") ?? "").trim();
+  const node = nodeForSlug(current);
+  if (node === undefined || parseCheckboxes(stateContent).find((c) => c.slug === current)?.state !== "in-progress") return null;
+  if (effectivePlanAction(current, newScope, null) === "EXECUTE") return null;
+  if (unitMajorWalkBeat(pd, scope, stateContent, current) !== null) return null;
+  if (!summaryConfirmedThisAttempt(pd, current)) return null;
+  const folder = stageDir(pd, node.phase, current);
+  const missing = (node.produces ?? [])
+    .map((artifact) => join(folder, artifactFilename(artifact)))
+    .filter((path) => !existsSync(path))
+    .map((path) => `\`${toPosix(relative(pd, path))}\``);
+  if (missing.length === 0) return null;
+  const files = missing.length === 1 ? missing[0] : `${missing.slice(0, -1).join(", ")} and ${missing.at(-1)}`;
+  return { stage: node.name, files };
 }
 
 // Whether the place withWorkPicksUpLine names is still where the work picks up
@@ -10589,6 +10613,28 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       if (jump !== null) {
         emit(printDirective(
           `Run \`${command}\` to change scope${fill}, print its output verbatim, then run \`${jump}\` and follow what it returns.`,
+        ));
+        return;
+      }
+      // A reply that confirms the running stage's summary and asks for a plan
+      // without that stage ("1. also can you switch this to the express
+      // plan?"): the confirmation promised the stage's documents, so they are
+      // written first, and the switch then skips the stage as it does any
+      // running stage the new plan leaves out. Later stages read them where
+      // they are. A live Codex run switched first, and the documents were
+      // never written.
+      const confirmedFirst = !planChanges && stillParked === null &&
+        stageReopenedByScopeChange(stateContent, flags.scope) === null &&
+        !settingEndsTurn(pd, currentStateScope, stateContent)
+        ? confirmedDocumentsBeforeSwitch(pd, currentStateScope, stateContent, flags.scope)
+        : null;
+      if (confirmedFirst !== null) {
+        const { stage, files } = confirmedFirst;
+        emit(printDirective(
+          `The person confirmed ${stage}'s summary, and ${flags.scope} does not run ${stage}: first write ${files} ` +
+            `from what they confirmed, and do nothing else of ${stage} (no further question, no reviewer, no report, ` +
+            `no approval question). Then run \`${command}\` to change scope${fill}, print its output verbatim and ` +
+            "re-run next to carry on with the work.",
         ));
         return;
       }
@@ -17935,7 +17981,12 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           ? `${node.name} is not part of the ${scope} plan; what the Units already did for it stays as it is.`
           : reusedStore
             ? `${node.name} reused the existing code knowledge base, so I skipped the scan.`
-            : `${node.name} does not apply here, so I skipped it.`,
+            // The plan no longer runs it (the person's scope switch, or the
+            // work found to be new code): it may well apply, it is just not
+            // on this plan.
+            : planAction === "SKIP"
+              ? `${node.name} is not part of the ${scope} plan, so I skipped it.`
+              : `${node.name} does not apply here, so I skipped it.`,
       }),
     };
     // Carried only while the work goes on; the last stage's skip is said here.

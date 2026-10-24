@@ -14356,6 +14356,18 @@ export function readSummaryAuthorization(
 }
 
 /**
+ * Whether the person confirmed this stage's summary ("Looks correct") in its
+ * current attempt on the main workflow: the authorization `log answer` keeps,
+ * for the attempt computed the way `log answer` computes it. Stage level only.
+ */
+export function summaryConfirmedThisAttempt(projectDir: string, stage: string): boolean {
+  const authorization = readSummaryAuthorization(projectDir, stage, null);
+  if (authorization === null || authorization.workflow !== null || authorization.choice !== "Looks correct") return false;
+  const events = readAuditShardEvents(projectDir).filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event));
+  return authorization.attempt === summaryAttemptIdentity(summaryAttemptFloors(events, stage, undefined, false));
+}
+
+/**
  * The authorization a write at `relativePath` (record-relative, forward
  * slashes) descends from: the active confirmation for the path's stage and
  * Unit. A per-Unit path with no confirmation of its own falls back to the
