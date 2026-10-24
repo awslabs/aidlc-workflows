@@ -3007,6 +3007,11 @@ describe("t271 review iteration ceiling", () => {
           if (scenario.name === "duplicate review section") {
             expectedError = "the review has two Review sections; keep one and write it whole";
           }
+          // A review file signed by another agent is that agent's review: the
+          // refusal names the requested reviewer to dispatch, not a line to fix.
+          if (scenario.name === "forged reviewer") {
+            expectedError = "is signed by aidlc-architecture-reviewer-agent, and this review was requested from aidlc-product-lead-agent";
+          }
         } else {
           appendFileSync(artifact, scenario.suffix, "utf-8");
           if (
