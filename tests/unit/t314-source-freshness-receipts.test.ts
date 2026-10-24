@@ -6545,6 +6545,9 @@ process.stdin.on("end", () => server.stop(true));
     expect(refused.out).toContain("aidlc-swarm.ts allow-change notes.ts` with --message <id>");
     const allowed = runSwarm(proj, ["allow-change", "notes.ts", "--message", asked as string], chat);
     expect(allowed.rc, allowed.diagnostic).toBe(0);
+    // Every Unit has landed: the line promises no landing, only that the change is kept.
+    expect((JSON.parse(allowed.out) as { notice: string }).notice)
+      .toBe('notes.ts can change during this Code Generation, because you said: "also add the notes file". It is kept.');
     const r = guarded(proj, ["gate-start", "code-generation"], chat);
     expect(r.out).not.toContain("no longer matches the final reviewed swarm merge");
     expect(r.out).not.toContain("Kept them.");

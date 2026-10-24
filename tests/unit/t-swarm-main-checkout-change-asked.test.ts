@@ -128,7 +128,7 @@ describe("a change the person asks for in the main checkout while the Units are 
     const allowed = allowChange(pd, ["README.md", "--message", asked]);
     expect(allowed.code, `${allowed.out}\n${allowed.err}`).toBe(0);
     expect((JSON.parse(allowed.out) as { notice: string }).notice).toBe(
-      `README.md can change while the Units are built, because you said: "${ASKED}". It is kept when they land.`,
+      `README.md can change during this Code Generation, because you said: "${ASKED}". It is kept.`,
     );
     const lift = rows(pd, "MAIN_CHECKOUT_CHANGE_ALLOWED");
     expect(lift).toHaveLength(1);
