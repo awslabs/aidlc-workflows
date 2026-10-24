@@ -110,6 +110,7 @@ import {
   latestQuestion,
   pruneExpiredQuestions,
   QUESTION_UNAVAILABLE,
+  questionsFromMessage,
   startedRequestFor,
   type QuestionAskedAbout,
   type QuestionOrigin,
@@ -4290,9 +4291,9 @@ function teamWordsReplyDirective(requestId: string, pd: string): PrintDirective 
 // Words alone where work is in progress but none is selected in this chat (a
 // teammate's clone, a chat that has not joined the work): the agent reads
 // whether they only ask to go on (the bare `next` asks which piece to pick up),
-// name one piece and ask for it to go on (the pick question's own one-step
-// answer selects it and carries on), only name one piece, or describe new
-// work. The engine kept the words.
+// are about one piece (the pick question's own answer selects it, and the
+// words get that work's reading: wordsKeptForPick), only name one piece, or
+// describe new work. The engine kept the words.
 function unselectedWordsReplyDirective(
   requestId: string,
   pd: string,
@@ -4307,13 +4308,32 @@ function unselectedWordsReplyDirective(
     `Work is in progress here (${work.join(", ")}), and none is selected in this chat. Read the person's words. If ` +
       "they only ask for the work to go on (such as \"carry on\" or \"proceed\"), run " +
       `\`${orchestrate} next\` with nothing after it: it asks them which piece to pick up. If their words name exactly ` +
-      `one of the pieces and ask for it to go on, run \`${orchestrate} next --pick <name>\`: it selects that piece and ` +
-      `carries on with it. If their words only name exactly one of the pieces, run ` +
+      "one of the pieces and ask for it to go on, or ask something of one piece only (answer what it asks, redo or " +
+      `jump to a stage in it, start it fresh, or change it), run \`${orchestrate} next --pick <name>\`: it selects ` +
+      `that piece and reads their words against it. If their words only name exactly one of the pieces, run ` +
       `\`${aidlcDispatcherInvocation("intent")} switch <name>\`, say the line it prints, then stop.${backToFinished} Otherwise (new work, ` +
       `or you cannot tell which), run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the ` +
       "engine kept their words. When their words describe new work, add `--propose <plan>` to that command, the plan " +
       `below that fits the work, so the question can name it. Plans: ${planChoicesLine(pd)}`,
   );
+}
+
+// The words the reading step above kept from the message it reads now
+// (readingMessage), when the piece picked is one it listed: its own copy (no
+// digest, unlike the routing question asked with options, whose answer
+// already said where the words go). A later message of theirs, another
+// chat's, or a read that fails is none.
+function wordsKeptForPick(pd: string, record: string): string | null {
+  try {
+    const message = readingMessage(pd);
+    if (message === null) return null;
+    const kept = questionsFromMessage(pd, message.id).findLast((question) =>
+      question.origin === "routing" && question.askedAbout?.pick === true && question.stateSha256 === undefined &&
+      question.askedAbout.targets.some((target) => target.intent === record));
+    return kept?.text ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // The pieces of work in the space, newest first, the selected one marked: exact
@@ -5835,10 +5855,13 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   const knowledgeCommand = parseKnowledgeCommand(args);
   if (knowledgeCommand.kind !== "not-knowledge") return { knowledgeCommand };
   // The pick question's answer, `next --pick <record>`: select that record and
-  // carry on in the same turn, so picking work up takes one step.
+  // carry on in the same turn, so picking work up takes one step. Words the
+  // agent adds after the name are its copy of the person's: the step after the
+  // switch carries the engine's own (wordsKeptForPick), so they change nothing.
   if (args[0] === "--pick") {
     const name = args[1];
-    if (name === undefined || args.length > 2) {
+    const after = args[2] === "--" ? [] : args.slice(2);
+    if (name === undefined || after.some((arg) => arg.startsWith("-"))) {
       return { parseError: "--pick takes one record name; run the pick question's own command." };
     }
     return { workspaceCommand: { kind: "switch", noun: "intent", name, explicit: true }, carryOn: true };
@@ -9626,10 +9649,7 @@ function saveReadingQuestion(
   pd: string, text: string, scope: string, origin?: QuestionOrigin, askedAbout?: QuestionAskedAbout, newWork?: boolean,
   composedFrom?: string, stateSha256?: string, settings?: QuestionSettings, approvedRequest?: string,
 ): StoredQuestion {
-  const latest = engineSessionId === undefined
-    ? listMessages(pd).findLast((message) => message.source === "prompt") ?? null
-    : chatLatestMessage(pd, engineSessionId);
-  const message = latest !== null && latest.source === "prompt" ? latest : null;
+  const message = readingMessage(pd);
   const question = saveQuestion(
     pd, text, scope, origin, askedAbout, newWork, composedFrom, stateSha256, settings, approvedRequest, message?.id,
   );
@@ -9637,6 +9657,16 @@ function saveReadingQuestion(
     markLineHandedOut(pd, engineSessionId, message.id);
   }
   return question;
+}
+
+// The message a reading step keeps words under: the person's latest in this
+// chat, or of any chat when the engine cannot tell which chat runs it, when it
+// is a line they typed.
+function readingMessage(pd: string): ReturnType<typeof latestMessage> {
+  const latest = engineSessionId === undefined
+    ? listMessages(pd).findLast((message) => message.source === "prompt") ?? null
+    : chatLatestMessage(pd, engineSessionId);
+  return latest !== null && latest.source === "prompt" ? latest : null;
 }
 
 // The latest row of this clone's own shard (each clone appends to its own;
@@ -10288,14 +10318,18 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // Picking work up from the pick question is a request to carry on with it.
     // Parked work carries on as `--resume` does, through its unpark step: a
     // plain `next` would answer the park, since the turns that asked came
-    // before any work was selected and are not in its record.
+    // before any work was selected and are not in its record. Words the
+    // reading step kept for the piece picked (wordsKeptForPick) are passed on
+    // as typed there, so they get that work's own reading.
     if (flags.carryOn && command.kind === "switch") {
       const statePath = stateFilePath(resolveProjectDir(projectDir), command.name);
       const parked = existsSync(statePath) && parkedWhereItStands(readFileSync(statePath, "utf-8"));
+      const kept = parked || flags.pickedUp ? null : wordsKeptForPick(resolveProjectDir(projectDir), command.name);
+      const then = parked || flags.pickedUp ? " --resume" : kept === null ? "" : ` -- ${quoteCommandArgument(kept)}`;
       // Picked up by --resume: the person's one line, and the --resume they typed.
       const print = printDirective(
         `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, ${flags.pickedUp ? "" : "print its output verbatim, "}then run ` +
-          `\`${aidlcToolInvocation("orchestrate")} next${parked || flags.pickedUp ? " --resume" : ""}\` and follow what it returns.`,
+          `\`${aidlcToolInvocation("orchestrate")} next${then}\` and follow what it returns.`,
       );
       if (flags.pickedUp) print.narration = flags.pickedUp;
       emit(print);

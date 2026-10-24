@@ -316,6 +316,20 @@ export function latestQuestion(projectDir: string): StoredQuestion | null {
   return question.origin === "compose" ? readComposeEntry(projectDir, question.id) : readQuestion(projectDir, question.id);
 }
 
+/** The open questions kept from the person's message `messageId` (unanswered, unexpired), oldest first. */
+export function questionsFromMessage(projectDir: string, messageId: string): StoredQuestion[] {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
+  } catch {
+    return [];
+  }
+  return names
+    .map((name) => (name.endsWith(".json") ? readQuestion(projectDir, name.slice(0, -".json".length)) : null))
+    .filter((question): question is StoredQuestion => question?.messageId === messageId)
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+}
+
 /**
  * The first new-work question asked at or after `since` and within `withinMs`
  * of it: the request described right after words said before any was open. A

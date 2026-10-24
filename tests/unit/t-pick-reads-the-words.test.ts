@@ -19,13 +19,14 @@
 // Spawns the real engine and Claude Code's own human-turn hook, as
 // tests/unit/t-next-takes-the-persons-line does.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readdirSync, readFileSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
-import { cleanupTestProject, createOrchestrationTestProject, intentsDirOf, seededRecordDir } from "../harness/fixtures.ts";
+import { cleanupTestProject, createOrchestrationTestProject, intentsDirOf } from "../harness/fixtures.ts";
 import {
   buildState, DISPATCHER, type Directive, env, exec, next, type RunOptions, SECOND_SESSION, say,
 } from "../harness/aidlc-input-corpus.ts";
+import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { quoteCommandArgument } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -42,7 +43,7 @@ const READING = "the person's words may ask to redo";
 const THEN = /then run `[^`]* next( --resume| -- [^`]+)?` and follow what it returns/;
 
 /** A teammate's clone of a bug fix at Requirements Analysis: the record is there, the git-ignored selection is not. */
-async function clone(state: "work-open" | "parked" = "work-open"): Promise<string> {
+async function clone(state: "work-open" | "parked" | "gate-open" = "work-open"): Promise<string> {
   const proj = createOrchestrationTestProject();
   created.push(proj);
   await buildState(proj, state);
@@ -76,11 +77,11 @@ async function switchTo(proj: string, opts: RunOptions = {}): Promise<void> {
   expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
 }
 
-function auditRows(proj: string): number {
-  const dir = join(seededRecordDir(proj), "audit");
-  return readdirSync(dir).filter((name) => name.endsWith(".md"))
-    .reduce((n, name) => n + (readFileSync(join(dir, name), "utf-8").match(/^\*\*Event\*\*:/gm)?.length ?? 0), 0);
-}
+// A message keeps whole seconds; a reply comes in a later one, as a person's does.
+const laterSecond = (): Promise<void> => Bun.sleep(1100);
+
+/** The record's audit rows, every shard. */
+const auditRows = (proj: string): number => readAuditShardEvents(proj).length;
 
 describe("the words that led to a pick are read against the piece picked", () => {
   test("the reading step's own pick: after the switch, their words get the reading the selected work gives", async () => {
@@ -112,6 +113,21 @@ describe("the words that led to a pick are read against the piece picked", () =>
     expect(stepAfterSwitch(picked.directive), picked.out).toBe(`-- ${quoteCommandArgument(WORDS)}`);
   });
 
+  // Measured on Claude Code 2.1.310: the agent put their words after the name, and the refusal of that command
+  // ended the turn with the redo undone. The engine's own copy is what rides on.
+  test("the agent adds their words after the name: the same step, never a refusal", async () => {
+    const proj = await clone();
+    await typed(proj, WORDS);
+    for (const tail of [[WORDS], ["--", WORDS], ["redo", "it"]]) {
+      const picked = await next(proj, ["--pick", PIECE, ...tail]);
+      expect(picked.directive?.kind, picked.out).toBe("print");
+      expect(stepAfterSwitch(picked.directive), picked.out).toBe(`-- ${quoteCommandArgument(WORDS)}`);
+    }
+    // A flag after the name is still the agent's slip, named to it.
+    const flagged = await next(proj, ["--pick", PIECE, "--scope", "bugfix"]);
+    expect(flagged.directive?.kind, flagged.out).toBe("error");
+  });
+
   test("words with quotes and an apostrophe come back whole in the command", async () => {
     const proj = await clone();
     const words = `redo reverse engineering, the "legacy" scan missed Sam's folder`;
@@ -130,12 +146,41 @@ describe("the words that led to a pick are read against the piece picked", () =>
   });
 });
 
+// A fresh clone at a stage gate (shown in another chat), the person's `/aidlc approve`: the pick hands it to the
+// gate's own reading; whether it counts as their approval stays the gate's rule.
+describe("an approval typed before the pick gets the gate's reading", () => {
+  const GATE = 'Stage "requirements-analysis" is waiting for the person\'s approval';
+  test("the agent picks in the same turn: after the switch, the gate's reading of their word", async () => {
+    const proj = await clone("gate-open");
+    const here: RunOptions = { session: SECOND_SESSION };
+    await typed(proj, "approve", here);
+    const picked = await next(proj, ["--pick", PIECE], here);
+    expect(stepAfterSwitch(picked.directive), picked.out).toBe("-- approve");
+    await switchTo(proj, here);
+    const read = await next(proj, ["--", "approve"], here);
+    expect(String(read.directive?.message), read.out).toContain(GATE);
+  });
+
+  test("the person picks in a new message: the gate is shown again, as it was", async () => {
+    const proj = await clone("gate-open");
+    const here: RunOptions = { session: SECOND_SESSION };
+    await typed(proj, "approve", here);
+    const ask = await next(proj, [], here);
+    expect(ask.directive?.ask_type, ask.out).toBe("intent-pick");
+    await laterSecond();
+    await say(proj, "1", "claude", here);
+    const picked = await next(proj, ["--pick", PIECE], here);
+    expect(stepAfterSwitch(picked.directive), picked.out).toBe("");
+  });
+});
+
 describe("a pick with no words of this message before it keeps the bare next", () => {
   test("the person answers the pick question in a new message: their earlier words are not this message's", async () => {
     const proj = await clone();
     await typed(proj, WORDS);
     const ask = await next(proj, []);
     expect(ask.directive?.ask_type, ask.out).toBe("intent-pick");
+    await laterSecond();
     await say(proj, "1", "claude");
     const picked = await next(proj, ["--pick", PIECE]);
     expect(stepAfterSwitch(picked.directive), picked.out).toBe("");
@@ -164,9 +209,11 @@ describe("a pick with no words of this message before it keeps the bare next", (
     expect(id).toBeDefined();
     const offer = await next(proj, ["--propose", "bugfix", "--request", id!]);
     expect(offer.directive?.ask_type, offer.out).toBe("scope-confirm");
+    await laterSecond();
     await say(proj, "go ahead", "claude");
     const routing = await next(proj, String(offer.directive?.confirm_command).replace(/^.* next /, "").split(" "));
     expect(routing.directive?.ask_type, routing.out).toBe("new-work-routing");
+    await laterSecond();
     await say(proj, "1", "claude");
     const part = (routing.directive?.choices as Array<{ label: string; command?: string }>)
       .find((choice) => choice.label === "Part of existing work");
