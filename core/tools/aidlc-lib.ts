@@ -4209,7 +4209,8 @@ export function codekbFingerprintExcludes(projectDir: string, sourceDir: string)
 // source, so no Unit has to claim it. Keys are `<repo>\0<path>`; a sibling
 // repo holds none of these files. The source registry is AI-DLC's boundary
 // file, like its settings files, and every repo root may hold one, a recorded
-// checkout's (listed `<label>@checkout/.aidlc-source-paths.json`) included.
+// checkout's included: known by its listing name
+// (`<label>@checkout/.aidlc-source-paths.json`), as a claim is read.
 export function aidlcOwnedSourceKey(projectDir: string): (pathKey: string) => boolean {
   const owned = codekbFingerprintExcludes(projectDir, projectDir);
   return (pathKey) => {
@@ -26891,26 +26892,31 @@ function registryExcludesSourcePath(
 }
 
 // The root whose .aidlc-source-paths.json reaches a source key, as the walk
-// reads it, and the key's path within that root: a recorded repo's folder, a
-// recorded checkout's own folder (its files are keyed `<label>@checkout/<path>`
-// with no repo, and walked with the shell rule on), or the project root.
-// `shown` is how a line names the root ("" for the project root).
-function sourceKeyRegistryRoot(
+// reads it, and the key's path within that root: a recorded repo's folder (no
+// workspace shell there), a recorded checkout's own folder (its files are keyed
+// `<label>@checkout/<path>` with no repo, and walked with the shell rule on), or
+// the project root. `shown` is how a line names the root ("" for the project
+// root). The recorded checkouts are read once, on the first key that needs them.
+function sourceKeyRegistryRoots(
   projectDir: string,
-  key: string,
-  checkouts: () => readonly RecordedSourceCheckout[],
-): { root: string; path: string; carriesWorkspaceShell: boolean; shown: string } | null {
-  const parsed = splitSourcePathKey(key);
-  if (parsed === null) return null;
-  if (parsed.repo !== "") {
-    // The lone root or the roof carries the workspace shell; a sibling does not.
-    return { root: repoDir(projectDir, parsed.repo), path: parsed.path, carriesWorkspaceShell: false, shown: parsed.repo };
-  }
-  const named = namesSourceCheckout(parsed.path) ? recordedCheckoutOfListingPath(parsed.path, checkouts()) : null;
-  if (named !== null) {
-    return { root: named.checkout.real, path: named.rest, carriesWorkspaceShell: true, shown: named.checkout.path.replace(/[\\/]+$/, "") };
-  }
-  return { root: projectDir, path: parsed.path, carriesWorkspaceShell: true, shown: "" };
+  intent?: string,
+  space?: string,
+): (key: string) => { root: string; path: string; carriesWorkspaceShell: boolean; shown: string } | null {
+  let checkouts: readonly RecordedSourceCheckout[] | null = null;
+  return (key) => {
+    const parsed = splitSourcePathKey(key);
+    if (parsed === null) return null;
+    if (parsed.repo !== "") {
+      return { root: repoDir(projectDir, parsed.repo), path: parsed.path, carriesWorkspaceShell: false, shown: parsed.repo };
+    }
+    const named = namesSourceCheckout(parsed.path)
+      ? recordedCheckoutOfListingPath(parsed.path, (checkouts ??= readRecordedSourceCheckouts(projectDir, intent, space)))
+      : null;
+    if (named !== null) {
+      return { root: named.checkout.real, path: named.rest, carriesWorkspaceShell: true, shown: named.checkout.path.replace(/[\\/]+$/, "") };
+    }
+    return { root: projectDir, path: parsed.path, carriesWorkspaceShell: true, shown: "" };
+  };
 }
 
 /**
@@ -26923,11 +26929,10 @@ export function sourceKeyRegistryFiles(
   intent?: string,
   space?: string,
 ): string[] {
-  let checkouts: readonly RecordedSourceCheckout[] | null = null;
-  const recorded = () => (checkouts ??= readRecordedSourceCheckouts(projectDir, intent, space));
+  const reach = sourceKeyRegistryRoots(projectDir, intent, space);
   const files = new Set<string>();
   for (const key of keys) {
-    const shown = sourceKeyRegistryRoot(projectDir, key, recorded)?.shown;
+    const shown = reach(key)?.shown;
     if (shown === undefined) continue;
     const separator = shown.includes("\\") && !shown.includes("/") ? "\\" : "/";
     files.add(shown === "" ? SOURCE_FINGERPRINT_REGISTRY : `${inertPath(shown)}${separator}${SOURCE_FINGERPRINT_REGISTRY}`);
@@ -26937,7 +26942,7 @@ export function sourceKeyRegistryFiles(
 
 /**
  * The source keys (`<repo>\0<path>`) among `keys` that the `exclude` list of
- * the `.aidlc-source-paths.json` reaching them (sourceKeyRegistryRoot) now
+ * the `.aidlc-source-paths.json` reaching them (sourceKeyRegistryRoots) now
  * leaves out of the walk: the path itself or anything under it, unless a
  * registered `paths` entry names it or lies under it (a registered path always
  * wins, as in the walk). The match is by path alone, whatever the entry's mode,
@@ -26953,11 +26958,10 @@ export function registryExcludedSourceKeys(
 ): Set<string> {
   const excluded = new Set<string>();
   if (keys.length === 0) return excluded;
-  let checkouts: readonly RecordedSourceCheckout[] | null = null;
-  const recorded = () => (checkouts ??= readRecordedSourceCheckouts(projectDir, intent, space));
+  const reachOf = sourceKeyRegistryRoots(projectDir, intent, space);
   const registries = new Map<string, SourceFingerprintRegistry | null>();
   for (const key of keys) {
-    const reach = sourceKeyRegistryRoot(projectDir, key, recorded);
+    const reach = reachOf(key);
     if (reach === null) continue;
     if (!registries.has(reach.root)) {
       const failure = lastSourceFailure;
