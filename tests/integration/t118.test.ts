@@ -98,6 +98,7 @@ import {
   resetAidlcEnv,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -205,17 +206,13 @@ function eventCount(p: string, ev: string): number {
 
 describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated from t118-engine-differential.sh, plan 24)", () => {
   // A WITH-STATE jump is a MUTATION (mark intervening [S], emit STAGE_JUMPED,
-  // pivot Current Stage) the conductor commits, so `next --stage <fp>` emits a
-  // `print` naming `aidlc-jump.ts execute` carrying the resolved target +
-  // direction, NOT a run-stage (emitting run-stage directly produces ZERO state
-  // change). The corpus pins engine-vs-tool agreement on the resolved direction.
-  test("SP1: jump forward -> print naming execute(code-generation), resolve direction=forward", () => {
+  // pivot Current Stage) the person asked for, so `next --stage <fp>` runs
+  // `aidlc-jump.ts execute` with the resolved target + direction itself and
+  // returns the target's step. The corpus pins engine-vs-tool agreement on the
+  // resolved direction: resolve says forward, and the jump the engine made is
+  // the forward one.
+  test("SP1: jump forward -> the code-generation step, jumped forward as resolve says", () => {
     const p = projWithState("state-mid-ideation.md");
-    const out = directive(
-      run(ORCHESTRATE, ["next", "--stage", "code-generation", "--project-dir", p]),
-    );
-    expect(out.kind).toBe("print");
-    expect(out.message).toContain("execute --target code-generation --direction forward");
     const res = run(JUMP, [
       "resolve",
       "--stage",
@@ -227,6 +224,12 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ]);
     expect(res.status).toBe(0);
     expect(JSON.parse(res.stdout.trim()).direction).toBe("forward");
+    const out = directive(
+      run(ORCHESTRATE, ["next", "--stage", "code-generation", "--project-dir", p]),
+    );
+    expect(out.kind).not.toBe("print");
+    expect(out.stage).toBe("code-generation");
+    expect(readAllAuditShards(p)).toContain("**Direction**: FORWARD");
   });
 
   // SP1-exec: a forward `aidlc-jump.ts execute` does NOT auto-terminate the
