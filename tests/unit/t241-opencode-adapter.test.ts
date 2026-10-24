@@ -1536,7 +1536,7 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
     const { client } = fakeClient();
     const adapter = await createAdapter({ client, directory: root });
 
-    // chat.message forwards the first text part as the UserPromptSubmit prompt.
+    // chat.message forwards what the person typed as the UserPromptSubmit prompt.
     await adapter["chat.message"](
       { sessionID: "main" },
       { parts: [{ type: "text", text: "/aidlc config set summary-confirmation off" }] },
@@ -1727,6 +1727,77 @@ process.stdout.write(JSON.stringify({ decision: "block", reason: "continue" }) +
     const said = "[aidlc-forwarding-nudge] is that line from AI-DLC?";
     await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ id: "prt_p2", type: "text", text: said }] });
     expect(recorded()).toEqual(["start", said]);
+  });
+
+  // What the human-turn hook is handed for each message, in order.
+  function recordingProject(): { root: string; recorded: () => string[] } {
+    const { root } = nudgingProject();
+    const turns = join(root, "turns.jsonl");
+    writeHook(
+      root,
+      "aidlc-record-human-turn.ts",
+      `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(turns)}, (await Bun.stdin.text()) + "\\n");\n`,
+    );
+    const recorded = () =>
+      existsSync(turns)
+        ? readFileSync(turns, "utf-8").trim().split("\n").map((line) => (JSON.parse(line) as { prompt: string }).prompt)
+        : [];
+    return { root, recorded };
+  }
+
+  // Live on opencode 1.19.4 run with an editor connected (Zed's terminal, or
+  // VS Code's with the editor extension): a message sent after the open file
+  // changed came as opencode's own note, marked synthetic, then the typed
+  // words. The record kept the note as the person's words and lost theirs.
+  test("a message opencode starts with its note about the editor's open file records only what the person typed", async () => {
+    const { root, recorded } = recordingProject();
+    const { client } = fakeClient();
+    const adapter = await createTestAdapter(client, root);
+    const note = "<system-reminder>Note: The user opened the file \"/work/src/app.ts\". This may or may not be relevant " +
+      "to the current task.</system-reminder>\n";
+    const editor = { type: "text", text: note, synthetic: true, metadata: { kind: "editor_context", source: "websocket" } };
+    const typed: Array<Record<string, unknown>> = [editor, { type: "text", text: "approve" }];
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: typed });
+    // An editor file and nothing typed: nothing of theirs, and never the note.
+    const empty: Array<Record<string, unknown>> = [editor, { type: "text", text: "" }];
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: empty });
+    expect(recorded()).toEqual(["approve", ""]);
+  });
+
+  test("every text part the person sent is recorded, in order", async () => {
+    const { root, recorded } = recordingProject();
+    const { client } = fakeClient();
+    const adapter = await createTestAdapter(client, root);
+    const parts: Array<Record<string, unknown>> = [
+      { type: "text", text: "approve" },
+      { type: "file", mime: "text/plain", url: "file:///work/notes.md" },
+      { type: "text", text: "Called the Read tool with the following input: {\"filePath\":\"/work/notes.md\"}", synthetic: true },
+      { type: "text", text: "and rename the handler" },
+    ];
+    await adapter["chat.message"]({ sessionID: "main" }, { parts });
+    expect(recorded()).toEqual(["approve\nand rename the handler"]);
+  });
+
+  // opencode shows an ignored part and never sends it to the agent: not what
+  // the person typed (an MCP prompt's text for the user, for one).
+  test("a part opencode marks ignored is left out", async () => {
+    const { root, recorded } = recordingProject();
+    const { client } = fakeClient();
+    const adapter = await createTestAdapter(client, root);
+    await adapter["chat.message"]({ sessionID: "main" }, {
+      parts: [{ type: "text", text: "shown to the person only", ignored: true }, { type: "text", text: "go on" }],
+    });
+    expect(recorded()).toEqual(["go on"]);
+  });
+
+  test("a message with no typed text part forwards its first text part, as before", async () => {
+    const { root, recorded } = recordingProject();
+    const { client } = fakeClient();
+    const adapter = await createTestAdapter(client, root);
+    await adapter["chat.message"]({ sessionID: "main" }, {
+      parts: [{ type: "text", text: "The following tool was executed by the user", synthetic: true }],
+    });
+    expect(recorded()).toEqual(["The following tool was executed by the user"]);
   });
 
   test("after the person stops a turn with Esc, no nudge follows until they write again", async () => {
