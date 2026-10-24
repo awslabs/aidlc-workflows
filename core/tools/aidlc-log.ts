@@ -155,6 +155,7 @@ import {
   backgroundAgentOutSince,
   isRequestTurn,
   personsGateReply,
+  personRepliedSinceGateShown,
   windowMessageIds,
   personSpokeSinceReviewRequest,
   messageSinceReviewRequest,
@@ -3159,6 +3160,22 @@ function reviewVerdictStep(
       summary: true,
       brief,
     });
+  }
+  // The one recovery pass at an open gate the person already answered: the
+  // approval refused for the stale review stands on their reply, which nothing
+  // has used, so the agent records it rather than asking again. A NOT-READY
+  // pass brings its findings to them at the gate.
+  if (request.recovery && box === "awaiting-approval" && verdict === "READY" &&
+    personRepliedSinceGateShown(pd, { stage: flags.stage }) === true) {
+    const replies = personsGateReply(pd, resolveInvokingSessionId(pd), flags.stage).replies;
+    if (replies.length > 0) {
+      return reviewVerdictNote({
+        kind: "reply-stands",
+        replies,
+        report: stageGateReportCommand(flags.stage, "awaiting-approval"),
+        brief,
+      });
+    }
   }
   return reviewVerdictNote({
     kind: "gate",
