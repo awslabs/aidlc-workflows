@@ -28,7 +28,7 @@
 // with their reply gone. Here `next` names the recovery question's own
 // commands, the agent's record of the pick lands, and the pick is carried out,
 // under every Guard Policy; once a pick's own step has asked its question
-// (Confirm the summary again shows the summary), words are not read as a
+// (Confirm a summary shows the summary), words are not read as a
 // recovery pick.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -393,7 +393,8 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(marker?.remedies).toEqual(
       remedies.map(({ op, label, action }) => ({ op, label, action, interaction: "human-input" })),
     );
-    expect(remedies.map((remedy) => remedy.label)).toEqual(["Confirm the summary again", "Request Changes"]);
+    // No questions file: no summary was ever shown, so none is offered "again".
+    expect(remedies.map((remedy) => remedy.label)).toEqual(["Confirm a summary", "Request Changes"]);
 
     // The observer sees the same ask and publishes nothing.
     const before = readFileSync(p.markerPath, "utf-8");
@@ -756,7 +757,7 @@ describe("t329 a request typed at the open recovery question keeps the person's 
       expect(revised(p)).toMatch(/^- \[R\] functional-design/m);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-    test(`${policy}: once Confirm the summary again has asked its own question, words are not read as a recovery pick`, () => {
+    test(`${policy}: once Confirm a summary has asked its own question, words are not read as a recovery pick`, () => {
       const p = project(policy);
       expect(routeToAsk(p, []).ask_type).toBe("guard-recovery");
       expect(p.humanPrompt("1").code).toBe(0);
