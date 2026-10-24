@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:approve, function:pipelineAttemptStartedAt, function:unrecordedRevisionSinceGateOpen, function:producesArtifactFile
+// covers: subcommand:aidlc-state:approve, function:pipelineAttemptStartedAt, function:unrecordedRevisionSinceGateOpen, function:producesArtifactFile, function:summaryOwnedReviewInput
 //
 // t205 - approve-time gate-revision backstop (the reconciliation half of the
 // forwarding-reliability gap). Mechanism: cli. The subject is the deterministic
@@ -26,6 +26,9 @@
 //      FIRST post-anchor HUMAN_TURN and BEFORE the LAST one (the approving turn),
 //      which excludes a pre-response reviewer write and post-approval notes (the
 //      critical false-positive guard).
+// A write to the stage's own questions files (summaryOwnedReviewInput) is never
+// one of those writes: it notes the person's answers, so a stage's question
+// rounds are no revision, with or without a gate opened (scenarios 15 and 15b).
 // With the STAGE_STARTED fallback anchor, a produces write must ALSO precede the
 // first post-anchor HUMAN_TURN (mid-stage coaching before any production is not
 // a revision - scenario 10). Fail-open everywhere; codekb stages covered via
