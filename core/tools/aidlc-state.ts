@@ -254,6 +254,7 @@ import {
   currentStageSourceBaseline,
   discoverSiblingRepos,
   latestMainWorkflowStageRunFloorForProject,
+  latestSensorResults,
   resolveGuardPolicy,
   sourceChangedOutsideAidlc,
   SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS,
@@ -6857,10 +6858,10 @@ function latestGateBriefDigest(pd: string, stage: GateStage, unit: string | unde
 }
 
 // The latest terminal result of every applicable sensor for every declared
-// artifact on disk, from the audit shards; nothing is re-fired here. A failure
-// keeps what the gate row and the spoken line need (the findings count and the
-// detail file); a pass or a check that never ran is its `id@path` key with its
-// state, in the order the gate row spells them.
+// artifact on disk, from the audit shards (latestSensorResults); nothing is
+// re-fired here. A failure keeps what the gate row and the spoken line need
+// (the findings count and the detail file); a pass or a check that never ran
+// is its `id@path` key with its state, in the order the gate row spells them.
 type LatestCheckResults = {
   failed: Array<{ id: string; rel: string; findings: string; detail: string | null; failedOutputs: string | null }>;
   rest: string[];
@@ -6870,28 +6871,7 @@ function latestCheckResults(pd: string, stage: GateStage, unit: string | null = 
   const sensors = stage.sensors_applicable ?? [];
   const paths = declaredOutputsForGate(pd, stage, unit);
   if (sensors.length === 0 || paths.length === 0) return results;
-  const latest = new Map<string, { kind: "passed" | "failed"; ts: string; pos: number; findings: string; detail: string | null; failedOutputs: string | null }>();
-  for (const row of readAuditShardEvents(pd)) {
-    if (row.event !== "SENSOR_PASSED" && row.event !== "SENSOR_FAILED") continue;
-    if (auditBlockField(row.block, "Stage slug") !== stage.slug) continue;
-    const id = auditBlockField(row.block, "Sensor ID");
-    const output = auditBlockField(row.block, "Output path");
-    if (id === null || output === null) continue;
-    const key = `${id}@${output}`;
-    const seen = latest.get(key);
-    if (seen && (seen.ts > row.timestamp || (seen.ts === row.timestamp && seen.pos > row.pos))) continue;
-    // A pass that carries a note (the tool was unavailable, the script failed)
-    // evaluated nothing: it does not clear the failure recorded before it.
-    if (row.event === "SENSOR_PASSED" && seen?.kind === "failed" && auditBlockField(row.block, "Note") !== null) continue;
-    latest.set(key, {
-      kind: row.event === "SENSOR_PASSED" ? "passed" : "failed",
-      ts: row.timestamp,
-      pos: row.pos,
-      findings: auditBlockField(row.block, "Findings count") ?? "?",
-      detail: auditBlockField(row.block, "Detail path"),
-      failedOutputs: auditBlockField(row.block, "Failed outputs"),
-    });
-  }
+  const latest = latestSensorResults(readAuditShardEvents(pd), stage.slug);
   for (const sensor of sensors) {
     for (const { outputPath: path } of gateSensorOutputs(sensor, paths, stage.slug)) {
       const rel = relative(pd, path).split(sep).join("/");

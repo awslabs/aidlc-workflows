@@ -43,8 +43,10 @@ import {
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   BLOCKING_SENSOR_OVERRIDE_DECISION,
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
+  blockingSensorPicks,
   codekbDir,
   codekbRepoName,
+  readAuditShardEvents,
   setField,
   setGuardPolicyLine,
 } from "../../core/tools/aidlc-lib.ts";
@@ -616,6 +618,60 @@ describe("t311 gate-bound sensor enforcement", () => {
     const fixFirst = setupFixture("blocking");
     authorizeOverride(fixFirst, BLOCKING_SENSOR_OVERRIDE_OPTIONS.join(","), true, "1");
     expect(gate(fixFirst, overrideArgs()).out).toContain("no fresh authorization receipt");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Another question for the stage logged after the check's own takes its open
+  // place; an answer naming one of the check's labels still answers the check's
+  // question, after a person's turn, so a Fix findings answer there is a pick
+  // too. An answer by number reads only the open question's own options, and
+  // the look-back stops at the stage's last boundary.
+  test("an Override after a second question for the stage still authorizes", () => {
+    const ask = (fixture: Fixture, decision: string, options: string) =>
+      appendAuditEvent(fixture.project, "DECISION_RECORDED", { Stage: "probe", Decision: decision, Options: options });
+    const askCheck = (fixture: Fixture) =>
+      ask(fixture, BLOCKING_SENSOR_OVERRIDE_DECISION, BLOCKING_SENSOR_OVERRIDE_OPTIONS.join(","));
+    const askOther = (fixture: Fixture) =>
+      ask(fixture, "Override only the traceability finding, or every finding?", "Only traceability,Every finding");
+    const turn = (fixture: Fixture) => appendAuditEvent(fixture.project, "HUMAN_TURN");
+    const answer = (fixture: Fixture, details: string) =>
+      appendAuditEvent(fixture.project, "QUESTION_ANSWERED", { Stage: "probe", Details: details });
+    const shapes: Array<(fixture: Fixture) => void> = [
+      (f) => {
+        askCheck(f); askOther(f); turn(f);
+        answer(f, BLOCKING_SENSOR_OVERRIDE_CHOICE);
+      },
+      (f) => {
+        askCheck(f); turn(f); askOther(f); turn(f);
+        answer(f, "Every finding"); answer(f, BLOCKING_SENSOR_OVERRIDE_CHOICE);
+      },
+      (f) => {
+        askCheck(f); askOther(f); turn(f);
+        answer(f, "Every finding"); answer(f, BLOCKING_SENSOR_OVERRIDE_CHOICE);
+      },
+    ];
+    for (const shape of shapes) {
+      const fixture = setupFixture("blocking");
+      shape(fixture);
+      const overridden = gate(fixture, overrideArgs());
+      expect(overridden.status, overridden.out).toBe(0);
+    }
+
+    const byNumber = setupFixture("blocking");
+    askCheck(byNumber); askOther(byNumber); turn(byNumber);
+    answer(byNumber, "2");
+    expect(gate(byNumber, overrideArgs()).out).toContain("no fresh authorization receipt");
+
+    const fixAfter = setupFixture("blocking");
+    askCheck(fixAfter); askOther(fixAfter); turn(fixAfter);
+    answer(fixAfter, "Fix findings");
+    expect([...blockingSensorPicks(readAuditShardEvents(fixAfter.project), "probe").values()]).toEqual(["Fix findings"]);
+
+    const beforeBoundary = setupFixture("blocking");
+    askCheck(beforeBoundary); askOther(beforeBoundary);
+    appendAuditEvent(beforeBoundary.project, "STAGE_STARTED", { Stage: "probe" });
+    turn(beforeBoundary);
+    answer(beforeBoundary, BLOCKING_SENSOR_OVERRIDE_CHOICE);
+    expect(gate(beforeBoundary, overrideArgs()).out).toContain("no fresh authorization receipt");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("blocking dispatch exits, malformed verdicts, and dispatcher timeouts fail closed", () => {
