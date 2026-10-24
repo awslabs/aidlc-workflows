@@ -3169,12 +3169,16 @@ function scopeCommands(
   carried: string,
   projectDir: string,
   declaredType?: "greenfield" | "brownfield",
+  // The stage changes typed with the request: each plan carries those it can
+  // take (typedStageAnswers), and its count includes them.
+  stages?: StageAnswers,
 ): ScopeCommandRow[] {
   return [...validScopes()].map((scope) => {
-    const cost = effectiveScopeCostSummary(scope, projectDir, undefined, declaredType);
+    const changes = stages?.typed ? changesThatApply(scope, stages.typed) : undefined;
+    const cost = effectiveScopeCostSummary(scope, projectDir, changes, declaredType);
     return {
       scope,
-      command: `${prefix} --scope ${scopeArg(scope)} --request ${questionId}${carried}`,
+      command: `${prefix} --scope ${scopeArg(scope)} --request ${questionId}${carried}${planStageFlags(changes, stages?.planName)}`,
       ...(cost ? { stages: `${cost.shown} ${cost.shown === 1 ? "stage" : "stages"}` } : {}),
     };
   });
@@ -3436,15 +3440,7 @@ function scopeConfirmAskDirective(
   const stored = saveQuestion(projectDir, intentText, proposedScope, "front", undefined, newWork, derivedFrom, undefined, settings);
   const confirmCommand = `${tool} next --scope ${scopeArg(proposedScope)} --request ${stored.id}${carried}${stages.plan}`;
   const composeCommand = `${tool} next compose --request ${stored.id}${carried}${stages.tailored}`;
-  const planned = stages.changes ? effectiveScopeCostSummary(proposedScope, projectDir, stages.changes, declaredType) : null;
-  const scopes = scopeCommands(`${tool} next`, stored.id, carried, projectDir, declaredType).map((entry) =>
-    entry.scope === proposedScope
-      ? {
-          ...entry,
-          command: `${entry.command}${stages.plan}`,
-          ...(planned ? { stages: `${planned.shown} ${planned.shown === 1 ? "stage" : "stages"}` } : {}),
-        }
-      : entry);
+  const scopes = scopeCommands(`${tool} next`, stored.id, carried, projectDir, declaredType, stages);
   return {
     kind: "ask",
     ask_type: "scope-confirm",
@@ -3530,8 +3526,8 @@ function composeOfferAskDirective(
   // As above: the request an earlier question held these words for.
   derivedFrom?: string,
   settings?: QuestionSettings,
-  // The stage changes typed with the request, for the tailored plan.
-  tailored = "",
+  // The stage changes typed with the request (typedStageAnswers).
+  stages: StageAnswers = { plan: "", tailored: "" },
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
   const stored = saveQuestion(projectDir, intentText, "", "front", undefined, newWork, derivedFrom, undefined, settings);
@@ -3542,8 +3538,8 @@ function composeOfferAskDirective(
     response_route: "next",
     question,
     ...(document === null ? {} : { document_note: document }),
-    compose_command: `${tool} next compose --request ${stored.id}${carried}${tailored}`,
-    scope_commands: scopeCommands(`${tool} next`, stored.id, carried, projectDir, declaredType),
+    compose_command: `${tool} next compose --request ${stored.id}${carried}${stages.tailored}`,
+    scope_commands: scopeCommands(`${tool} next`, stored.id, carried, projectDir, declaredType, stages),
   };
 }
 
@@ -6302,10 +6298,6 @@ const NEW_WORK_HINT =
   "the human's yes run `next --new-intent --scope <scope> \"<text>\"` (see the " +
   "SKILL's new-work offer, never auto-create).";
 
-// The plan offer for new work that names no scope: a keyword hit proposes that
-// scope with its ceremony; anything else gets the compose offer. Shared by a
-// fresh workspace (Branch 8) and an explicit request for new work that named
-// no scope (`next --new-intent "<description>"`, Branch 4a).
 // The typed stage changes `plan` can take, each checked on its own; undefined
 // when none applies, or when together they do not apply.
 function changesThatApply(plan: string, typed: PlanChanges): PlanChanges | undefined {
@@ -6324,6 +6316,9 @@ interface StageAnswers {
   changes?: PlanChanges;
   /** The tailored plan's answer: every change, for its composer. */
   tailored: string;
+  /** What was typed, for each listed plan's row (`scopeCommands`). */
+  typed?: PlanChanges;
+  planName?: string;
 }
 
 // The stage changes typed with a request (`--skip`/`--add`) on its plan
@@ -6334,12 +6329,23 @@ function typedStageAnswers(plan: string, typed: PlanChanges | undefined, planNam
   if (typed === undefined) return { plan: "", tailored: "" };
   const changes = validScopes().has(plan) ? changesThatApply(plan, typed) : undefined;
   return {
-    plan: changes ? carriedRoutingFlags({ planChanges: changes, planName }).planChanges : "",
+    plan: planStageFlags(changes, planName),
     ...(changes ? { changes } : {}),
     tailored: carriedRoutingFlags({ planChanges: typed, planName }).planChanges,
+    typed,
+    ...(planName ? { planName } : {}),
   };
 }
 
+// The `--skip`/`--add` flags (and the plan's name) a plan's answer carries.
+function planStageFlags(changes: PlanChanges | undefined, planName?: string): string {
+  return changes ? carriedRoutingFlags({ planChanges: changes, planName }).planChanges : "";
+}
+
+// The plan offer for new work that names no scope: a keyword hit proposes that
+// scope with its ceremony; anything else gets the compose offer. Shared by a
+// fresh workspace (Branch 8) and an explicit request for new work that named
+// no scope (`next --new-intent "<description>"`, Branch 4a).
 function freshWorkOfferDirective(
   flags: ParsedFlags,
   pd: string,
@@ -6401,7 +6407,7 @@ function freshWorkOfferDirective(
     flags.projectType,
     derivedFrom,
     settings,
-    stages.tailored,
+    stages,
   );
 }
 

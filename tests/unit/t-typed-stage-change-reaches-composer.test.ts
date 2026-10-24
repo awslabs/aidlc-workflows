@@ -137,7 +137,6 @@ describe("a stage change typed with the request reaches the plan the person appr
     // "Use a different plan" lists the proposed plan with the same answer.
     const rows = ask.scope_commands as Array<{ scope: string; command: string }>;
     expect(rows.find((row) => row.scope === "bugfix")?.command).toContain(`--skip ${SKIPPED}`);
-    expect(rows.find((row) => row.scope === "feature")?.command).not.toContain("--skip");
   });
 
   test("a change the proposed plan already makes is left off its answer, so creation goes through as before", () => {
@@ -161,6 +160,12 @@ describe("a stage change typed with the request reaches the plan the person appr
     const compose = String(offer.compose_command);
     expect(compose).toContain("--add functional-design");
     expect(String(next(proj, argsOf(compose)).message)).toContain("With this request the person asked to add functional-design");
+    // Each plan it lists carries the add when it skips that stage.
+    const scopes = withEnvAndFreshCaches(POLICY_ENV, () => loadScopeMapping());
+    for (const row of offer.scope_commands as Array<{ scope: string; command: string }>) {
+      const skips = scopes[row.scope]?.stages["functional-design"] !== "EXECUTE";
+      expect(row.command.includes("--add functional-design"), row.scope).toBe(skips);
+    }
   });
 
   test("a stage list with any other compose is still refused", () => {
@@ -218,6 +223,21 @@ describe("a stage change typed with the request reaches the plan the person appr
     expect(confirm).not.toContain("market-research");
     expect(countOf(String(ask.question))).toBe(only);
     expect(creationOf(next(proj, argsOf(confirm)))).toContain(`--skip ${SKIPPED}`);
+  });
+
+  test("Use a different plan: every plan listed carries the typed change it can take, and creates with it", () => {
+    const proj = installedProject();
+    const ask = planQuestion(proj, ["--skip", SKIPPED]);
+    const scopes = withEnvAndFreshCaches(POLICY_ENV, () => loadScopeMapping());
+    const rows = ask.scope_commands as Array<{ scope: string; command: string }>;
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      const runs = scopes[row.scope]?.stages[SKIPPED] === "EXECUTE";
+      expect(row.command.includes(`--skip ${SKIPPED}`), row.scope).toBe(runs);
+    }
+    const feature = rows.find((row) => row.scope === "feature");
+    expect(feature?.command).toContain(`--skip ${SKIPPED}`);
+    expect(creationOf(next(proj, argsOf(feature!.command)))).toContain(`--skip ${SKIPPED}`);
   });
 
   test("the proposed plan's row in Use a different plan counts the plan its command creates", () => {
