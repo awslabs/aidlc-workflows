@@ -28,7 +28,7 @@ Load this module when the engine lists `summary` in `directive.protocol_modules`
 
   [Answer]:
   ```
-  This confirmation entry is the exception to ordinary file-backed A-E/X
+  This confirmation entry is the exception to ordinary file-backed {{OPTION_LETTERS}}/X
   labels. Fill its tag only after the user responds, storing exactly
   `[Answer]: Looks correct` or `[Answer]: Request changes`. Strip any source
   letter, chat number, punctuation, or option description before writing;

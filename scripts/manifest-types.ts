@@ -332,6 +332,15 @@ export type HarnessManifest = {
    */
   directiveMaxBytes?: number;
   /**
+   * How many options this host's structured-question box shows besides its own
+   * Other row, for a box that shows fewer than five. The questions file letters
+   * each question's options from A to that letter before `X. Other`, so the
+   * agent puts every question in the box whole: the packager writes the letters
+   * into core prose for `{{OPTION_LETTERS}}`. Absent: A-E, the method's own
+   * five. The number is the one the harness's question-rendering annex names.
+   */
+  questionOptions?: number;
+  /**
    * The host's status line setting that shows AI-DLC's progress, in the host's
    * own settings shape. Emitted into <harnessDir>/tools/data/harness.json, never
    * into a settings file the host reads: the engine writes it into the person's

@@ -24,9 +24,10 @@
 //   6. REFRESH generated stage/scope table regions in the assembled orchestrator
 //      skill from the just-compiled graph and scope grid.
 //
-// THE TOKENS: core/ prose carries {{HARNESS_DIR}}, {{INVOKE}}, {{TOOL_PREFIX}} and
-// {{TRUSTED_NAMESPACE}}; here they become the harness's own values (the dir is
-// `.claude`/`.kiro`/`.codex`/`.aidlc`/`.cursor`). Truthful carve-outs in core
+// THE TOKENS: core/ prose carries {{HARNESS_DIR}}, {{INVOKE}}, {{TOOL_PREFIX}},
+// {{TRUSTED_NAMESPACE}} and {{OPTION_LETTERS}}; here they become the harness's
+// own values (the dir is `.claude`/`.kiro`/`.codex`/`.aidlc`/`.cursor`; the
+// letters are optionLetters()). Truthful carve-outs in core
 // (workspace-detection's 3-dir list, the `$CLAUDE_PROJECT_DIR on Claude Code`
 // note) never carried the token, so they pass through untouched.
 //
@@ -171,6 +172,7 @@ const HARNESS_TOKEN = /\{\{HARNESS_DIR\}\}/g;
 const INVOKE_TOKEN = /\{\{INVOKE\}\}/g;
 const TOOL_PREFIX_TOKEN = /\{\{TOOL_PREFIX\}\}/g;
 const TRUSTED_NAMESPACE_TOKEN = /\{\{TRUSTED_NAMESPACE\}\}/g;
+const OPTION_LETTERS_TOKEN = /\{\{OPTION_LETTERS\}\}/g;
 // Matched by PREFIX (mirroring aidlc-init.ts's marker scan): the begin marker
 // embeds the harness-projected invocation, so its tail varies per channel.
 const GENERATED_SKILL_REGIONS = [
@@ -214,12 +216,27 @@ function substituteInvocationTokens(
     .replace(TRUSTED_NAMESPACE_TOKEN, TRUSTED_ROUTE_NAMESPACE);
 }
 
+// The letters a questions file gives a question's options before `X. Other`:
+// A to the last option the harness's question box shows besides its own Other
+// row (manifest questionOptions), A-E for a box that shows five or more.
+function optionLetters(m: HarnessManifest): string {
+  const shown = m.questionOptions ?? 5;
+  if (!Number.isInteger(shown) || shown < 2 || shown > 5) {
+    throw new Error(`[${m.name}] questionOptions must be a whole number from 2 to 5, got ${shown}`);
+  }
+  return `A-${String.fromCharCode(64 + shown)}`;
+}
+
+// The letters are substituted only where the caller passes them, so a path
+// that never does leaves the token for the leftover check instead of A-E.
 function substituteToken(
   s: string,
   harnessDir: string,
   invoke = `bun ${harnessDir}/tools/aidlc.ts`,
+  letters?: string,
 ): string {
-  return substituteInvocationTokens(s.replace(HARNESS_TOKEN, harnessDir), harnessDir, invoke);
+  const lettered = letters === undefined ? s : s.replace(OPTION_LETTERS_TOKEN, letters);
+  return substituteInvocationTokens(lettered.replace(HARNESS_TOKEN, harnessDir), harnessDir, invoke);
 }
 
 // Rewrite in-prose `<harnessDir>/rules/` → `<harnessDir>/<rulesRename>/` for a
@@ -379,6 +396,7 @@ function transform(
   rulesRename: string | null,
   harness?: Harness,
   invoke = `bun ${harnessDir}/tools/aidlc.ts`,
+  letters?: string,
 ): Buffer {
   if (srcPath.endsWith(".md")) {
     // Reviewer knowledge absorption runs FIRST (on the raw core text) so the
@@ -389,7 +407,7 @@ function transform(
       s = absorbReviewerKnowledge(s, agentName, CORE_ROOT);
       s = injectDelegatedKnowledgePreflight(s, agentName, harnessDir);
     }
-    s = substituteToken(s, harnessDir, invoke);
+    s = substituteToken(s, harnessDir, invoke, letters);
     s = applyRulesRename(s, harnessDir, rulesRename);
     if (harness) s = projectTierFrontmatter(s, srcPath, harness);
     // Cursor, opencode, and Copilot persona bodies read the method by path:
@@ -416,7 +434,7 @@ function transform(
   }
   if (/\.(?:hook|json|toml)$/.test(srcPath)) {
     return Buffer.from(
-      substituteToken(content.toString("utf-8"), harnessDir, invoke),
+      substituteToken(content.toString("utf-8"), harnessDir, invoke, letters),
       "utf-8",
     );
   }
@@ -841,6 +859,7 @@ function buildTree(
   // knows (Kiro CLI and Kiro IDE share the "kiro" flavor - identical model
   // dial). Declared per manifest, never inferred from the harness name.
   const harnessKind = m.tierFlavor;
+  const letters = optionLetters(m);
   // 1. Copy core dirs with token substitution + rules rename. Manifest-declared
   //    frontmatter additions (harness-native fields, e.g. the Kiro IDE's
   //    subagent `tools:` grant) are appended during this projection; every
@@ -864,6 +883,7 @@ function buildTree(
         m.rulesRename,
         harnessKind,
         invoke,
+        letters,
       );
       // Manifest keys are POSIX; normalize the platform separator so the
       // lookup works on Windows too.
@@ -922,6 +942,7 @@ function buildTree(
       m.rulesRename,
       harnessKind,
       invoke,
+      letters,
     );
     if (harnessKind === "kiro") {
       if (src.startsWith("agents/") && src.endsWith(".json")) {
@@ -1043,7 +1064,7 @@ function buildTree(
       distRoot: outRoot,
       harnessDir,
       trustedRouteNamespace: TRUSTED_ROUTE_NAMESPACE,
-      substituteToken: (s: string) => substituteToken(s, harnessDir, invoke),
+      substituteToken: (s: string) => substituteToken(s, harnessDir, invoke, letters),
       tierCap: TIER_CAP,
     });
   }
@@ -1597,7 +1618,7 @@ function rewriteNativeInvocations(
   for (const file of walk(outRoot)) {
     if (!/\.(?:md|mdc|json|toml|hook|ts)$/.test(file)) continue;
     const value = readFileSync(file, "utf-8");
-    for (const token of ["{{INVOKE}}", "{{TOOL_PREFIX}}"]) {
+    for (const token of ["{{INVOKE}}", "{{TOOL_PREFIX}}", "{{OPTION_LETTERS}}"]) {
       if (value.includes(token)) {
         leftovers.push(`${relative(outRoot, file)}: unexpanded ${token}`);
       }

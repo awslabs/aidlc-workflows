@@ -39,7 +39,7 @@ stage that does not apply reports
 
 ## Asking good questions
 
-- Ordinary questions go in markdown files using `[Answer]:` tags with A-E + X
+- Ordinary questions go in markdown files using `[Answer]:` tags with {{OPTION_LETTERS}} + X
   (Other); the consolidated-summary checkpoint is the unlettered exception
   options — the file is always the source of truth. Use a structured question for
   1-3 simple options where the structured UI is clearer (rendering per the harness question-rendering annex).

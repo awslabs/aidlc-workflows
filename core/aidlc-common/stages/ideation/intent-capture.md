@@ -142,7 +142,7 @@ never forces the user to select invented detail.
 The boundary question asks about the product (what is out of this first
 version), never about the workflow scope, which the person already chose. Use
 the [Answer]: tag format from
-stage-protocol.md. Include A-E options with X (Other) as final option. Leave
+stage-protocol.md. Include {{OPTION_LETTERS}} options with X (Other) as final option. Leave
 all [Answer]: tags blank. Follow-up questions continue the same `Q<n>`
 numbering so their source ids remain stable.
 

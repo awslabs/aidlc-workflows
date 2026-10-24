@@ -456,7 +456,7 @@ starts the questions afresh (`artifact_reuse`, or **Redo from scratch** under
 "Artifact Re-use").
 
 **Step 1: Create the questions file** in the appropriate `<record>/` directory with full [Answer]: tag format:
-- Include options A-E as appropriate for each question
+- Include options {{OPTION_LETTERS}} as appropriate for each question
 - EVERY ordinary question MUST end with `X. Other (please specify)` as the final
   option. The dedicated Consolidated Summary Confirmation added in Step 3a is
   the sole exception: its two semantic options are intentionally unlettered.
@@ -628,7 +628,7 @@ Construction, where the loop is meant to keep running without you.
 ### Error handling for invalid/missing answers
 When processing user answers from question files:
 - **Missing answers**: If any [Answer]: tag is still blank or contains only underscores, list the unanswered questions and ask the user to complete them before proceeding.
-- **Invalid answers**: If an answer does not match any provided option (A-E, X) and is not a clear free-text response for "Other", ask the user to clarify which option they intended.
+- **Invalid answers**: If an answer does not match any provided option ({{OPTION_LETTERS}}, X) and is not a clear free-text response for "Other", ask the user to clarify which option they intended.
 - **Ambiguous answers**: If an answer like "maybe B" or "either A or C" is given, ask the user to commit to a single choice and explain their reasoning.
 
 ### Contradiction detection (MANDATORY)
