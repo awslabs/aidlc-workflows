@@ -331,6 +331,8 @@ import {
   type PlanChanges,
   plannedStages,
   cursorPastStage,
+  addReachesPassedOver,
+  holdsAnyFile,
   planWithChanges,
   composedPlanLabel,
   PLAN_NAME_PATTERN,
@@ -11520,12 +11522,6 @@ export function constructionHasStarted(content: string, workRecordDir?: string |
   );
 }
 
-function holdsAnyFile(dir: string): boolean {
-  if (!existsSync(dir)) return false;
-  return readdirSync(dir, { withFileTypes: true })
-    .some((entry) => entry.isDirectory() ? holdsAnyFile(join(dir, entry.name)) : true);
-}
-
 // Reverse Engineering is on the plan and has not run, the workflow is past it,
 // and Construction has not started: it runs now and the workflow then returns
 // to the stage the person was on (`next` names that move; the jump says so).
@@ -12587,7 +12583,11 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
         (skipping || declaredProjectType(getField(content, "Project Type") ?? "") === "Brownfield") &&
         reverseEngineeringOwedBehindCursor(skipping ? content : setStageSuffix(content, slug, "EXECUTE"),
           recordDir(projectDir, flags.intent, flags.space));
-      if (!owedRe && currentIdx !== -1 && idx !== -1 && idx <= currentIdx) {
+      // A stage the work has just passed over, while nothing after it has
+      // started, is one `next` goes back to (addedStagesPassedOver): the add
+      // lands as it would have before the approval that moved past it.
+      const passedOver = !skipping && addReachesPassedOver(content, slug, recordDir(projectDir, flags.intent, flags.space));
+      if (!owedRe && !passedOver && currentIdx !== -1 && idx !== -1 && idx <= currentIdx) {
         const instead = idx === currentIdx
           ? (skipping ? movePast(slug) : runAlone(slug))
           : (skipping ? "The workflow does not go back to it, so there is nothing to skip." : runAlone(slug));

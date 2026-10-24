@@ -8,6 +8,7 @@ import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
 import { stageLabel } from "./aidlc-validity.ts";
 import {
+  addedStagesPassedOver,
   addPendingPersonLines,
   type CheckboxState,
   countCheckboxes,
@@ -28,6 +29,7 @@ import {
   parseStateStageSuffixes,
   readActiveDirectiveMarker,
   readStateFile,
+  recordDir,
   reviewArtifactEntries,
   resolveProjectDir,
   resolveStage,
@@ -688,6 +690,10 @@ function handleExecute(args: string[]): void {
   const cameFrom = graph.some((node) => node.slug === unitStage)
     ? unitStage
     : shownStage !== targetSlug && graph.some((node) => node.slug === shownStage) ? shownStage : currentSlug;
+  // Back to a stage the plan added after the work had just passed over it: the
+  // person never stood at the stage the work had just entered, and the add's
+  // own line said what changed, so the move says nothing.
+  const addedBack = direction === "backward" && addedStagesPassedOver(content, recordDir(pd)).includes(targetSlug);
   const moved = movedState(content, targetSlug, targetStage, direction, scope, suffixes, scopeMapping);
   content = moved.content;
   const { stagesSkipped, stagesReset, currentStageForPhase, crossesPhaseBoundary, completedCount, timestamp } = moved;
@@ -792,7 +798,7 @@ function handleExecute(args: string[]): void {
   let keptNotice: string | undefined;
   if (direction === "redo" && targetSlug === "reverse-engineering" && from && from.slug !== targetSlug) {
     keptNotice = reverseEngineeringRedoNotice(from);
-  } else if (direction === "backward" && from) {
+  } else if (direction === "backward" && from && !addedBack) {
     keptNotice = backwardJumpNotice(targetStage, from);
   }
   if (keptNotice !== undefined) {

@@ -41334,6 +41334,53 @@ export function cursorPastStage(stateContent: string, slug: string): boolean {
   return now >= 0 && now > at;
 }
 
+/** Whether `dir` holds a file anywhere under it. */
+export function holdsAnyFile(dir: string): boolean {
+  if (!existsSync(dir)) return false;
+  return readdirSync(dir, { withFileTypes: true })
+    .some((entry) => entry.isDirectory() ? holdsAnyFile(join(dir, entry.name)) : true);
+}
+
+// The stages the plan added (ones its scope skips, put on the plan) that the
+// work has just passed over: behind the current stage and never started, with
+// nothing after them started but the current stage, which an approval or a
+// jump only just entered (in progress, and nothing of it in the work's record:
+// for a Construction stage nothing under construction/, as
+// constructionHasStarted reads it). `next` goes back to the first, as the work
+// would have gone on to it had the add come before the approval, so recompose
+// takes such an add. Reverse Engineering behind the cursor has its own rule
+// (reverseEngineeringOwedBehindCursor). A scope change writes its stages from
+// the new scope, so none of them is one the plan added.
+export function addedStagesPassedOver(content: string, workRecordDir: string | null | undefined): string[] {
+  const scope = getField(content, "Scope")?.trim() ?? "";
+  const def = loadScopeMapping()[scope];
+  if (!def || !workRecordDir) return [];
+  const grid: Record<string, "EXECUTE" | "SKIP"> = {};
+  for (const [slug, action] of Object.entries(def.stages)) grid[slug] = action === "EXECUTE" ? "EXECUTE" : "SKIP";
+  const added = planChangesBetween(grid, Object.fromEntries(parseStateStageSuffixes(content))).add
+    .filter((slug) => slug !== "reverse-engineering");
+  if (added.length === 0) return [];
+  const current = getField(content, "Current Stage")?.trim() ?? "";
+  const graph = loadStageGraph();
+  const now = graph.findIndex((stage) => stage.slug === current);
+  const boxes = new Map(parseCheckboxes(content).map((c) => [c.slug, c.state]));
+  if (now < 0 || boxes.get(current) !== "in-progress") return [];
+  const entered = graph[now];
+  if (holdsAnyFile(entered.phase === "construction"
+    ? join(workRecordDir, "construction")
+    : join(workRecordDir, entered.phase, entered.slug))) return [];
+  return added.filter((slug) => {
+    const at = graph.findIndex((stage) => stage.slug === slug);
+    return at >= 0 && at < now && graph.slice(at).every((stage) =>
+      stage.slug === current || (boxes.get(stage.slug) ?? "pending") === "pending");
+  });
+}
+
+/** Whether an add of `slug` puts on the plan a stage the work has just passed over (addedStagesPassedOver). */
+export function addReachesPassedOver(content: string, slug: string, workRecordDir: string | null | undefined): boolean {
+  return addedStagesPassedOver(setStageSuffix(content, slug, "EXECUTE"), workRecordDir).includes(slug);
+}
+
 // A per-unit stage runs per Unit only once Units exist, and otherwise uses one
 // stage-level artifact set: when the plan skips Units Generation, and when the
 // work's cursor is already past a Units Generation that never ran (a switch

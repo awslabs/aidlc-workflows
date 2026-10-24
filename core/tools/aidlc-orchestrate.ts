@@ -209,6 +209,8 @@ import {
   constructionSkeletonOn,
   constructionCheckpointGaps,
   effectivePlanAction,
+  addedStagesPassedOver,
+  addReachesPassedOver,
   errorMessage,
   agentFileText,
   readRegularFileNoFollowOrThrow,
@@ -10502,6 +10504,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       stateContent,
       walk: planChanges ? planChangeWalk(pd, currentStateScope, stateContent) : null,
       together: planChanges ? openGateApprovesTogether(pd, (getField(stateContent, "Current Stage") ?? "").trim()) : [],
+      passedOver: planChanges ? planChanges.add.filter((slug) => addReachesPassedOver(stateContent, slug, recordDir(pd))) : [],
     };
     // Words typed with a differing scope may be new work or the reason for
     // the change: Branch 9c asks which, so they are never dropped.
@@ -11155,6 +11158,19 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       `Reverse Engineering is on the plan and has not run. Run \`${aidlcToolInvocation("jump")} execute --target reverse-engineering --direction redo --scope ${scopeArg(scope)}\` ` +
         `to run it now (finished stages stay finished, and the workflow returns to ${currentSlug} after it). ` +
         "When its output carries `notice`, tell the person that line once, as written. Then re-run `next` to continue.",
+    ));
+    return;
+  }
+  // A stage the plan added after the work had just passed over it (the
+  // approval came before the add): go back to it now with a backward jump,
+  // which resets only the stage the work had just entered, so it runs next as
+  // it would have had the add come first. The add's own line said so.
+  const passedOver = addedStagesPassedOver(stateContent, recordDir(pd))[0];
+  if (passedOver !== undefined) {
+    emit(printDirective(
+      `${nodeForSlug(passedOver)?.name || passedOver} is on the plan and has not run. Run ` +
+        `\`${aidlcToolInvocation("jump")} execute --target ${passedOver} --direction backward --scope ${scopeArg(scope)}\` ` +
+        "to start it now, and do not show its output. Then re-run `next` to continue.",
     ));
     return;
   }
@@ -14980,7 +14996,8 @@ function planChangeDirective(
   changes: PlanChanges,
   before: string | null,
   // `together`: the stages the open gate's one question named, when it named several.
-  plan: { scope: string; stateContent: string; walk?: PlanChangeWalk | null; together?: string[] } | null,
+  // `passedOver`: the added stages the work has just passed over, which `next` goes back to.
+  plan: { scope: string; stateContent: string; walk?: PlanChangeWalk | null; together?: string[]; passedOver?: string[] } | null,
   // The code plan's question is open: it stays the open step, so what the
   // person says next is kept as their answer to it.
   planWaits = false,
@@ -15213,6 +15230,14 @@ function planChangeDirective(
     return kept(stillParked === null
       ? printDirective(`${message} Then re-run \`next\` to carry on with the work.`)
       : turnEndingPrint(`${message}${end}${resume}`));
+  }
+  // An added stage the work has just passed over (the approval came first) is
+  // the one `next` goes back to, so the work carries on into it, as it does
+  // when the add comes before the approval.
+  if (add.some((slug) => plan?.passedOver?.includes(slug))) {
+    return kept(stillParked === null
+      ? printDirective(`${message} Then re-run \`next\` to carry on with the work. ${undo}`)
+      : turnEndingPrint(`${message}${end} ${undo}${resume}`));
   }
   if (gateOpen !== null) {
     return kept(turnEndingPrint(

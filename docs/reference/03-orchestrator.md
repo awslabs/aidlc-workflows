@@ -1253,6 +1253,8 @@ AskUserQuestion({
 })
 ```
 
+The pick runs `next --add <stage>`, whose step names the `recompose --add` and then the report that records the approval, so the added stage runs next. When the agent records the approval first, the approval has already moved the work past the skipped stage and started the next one; while nothing of that stage is in the work's record yet (and nothing else after the skipped stage has started), `recompose` still takes the add, the step carries on, and `next` names `aidlc-jump execute --target <stage> --direction backward`, which resets only the stage the work had just entered and says nothing, so the added stage runs next either way and the state is the one the add-first order leaves. Once anything after it has started, an add behind the current stage is refused with the isolated run, as any is.
+
 ### Revision Loop Escape Hatch
 
 The reply that shows the gate (`report --result awaiting-approval` or
