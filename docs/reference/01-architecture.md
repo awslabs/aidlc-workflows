@@ -630,7 +630,7 @@ judged by whether the live process started more than 2 s after the lock was
 written. Each recovery prints one line on stderr. Directory recovery also
 requires a matching host/boot identity; a directory stamp that never finished
 (no owner file, an empty one, or one that does not parse) is cleared once the
-folder is past the workflow locks' unstamped grace, and unknown, foreign, or
+folder is past the workflow locks' unstamped grace (5 s by default), and unknown, foreign, or
 invalid directory owners are retained for manual diagnosis.
 
 The coordination contract covers cooperating processes on one continuously

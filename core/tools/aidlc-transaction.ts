@@ -371,6 +371,7 @@ function clearStaleLock(lockPath: string): void {
   const ownerPath = directory ? join(lockPath, "owner.json") : lockPath;
   // Null: a directory lock with no owner.json at all.
   let raw: string | null;
+  let unfinished = false;
   try {
     if (directory && !lstatSync(ownerPath).isFile()) {
       throw new Error("directory owner is not a regular file");
@@ -383,6 +384,7 @@ function clearStaleLock(lockPath: string): void {
       throw new Error(`cannot verify transaction lock ${lockPath}`);
     }
     raw = null;
+    unfinished = true;
   }
   let lock: {
     schemaVersion?: unknown;
@@ -398,11 +400,13 @@ function clearStaleLock(lockPath: string): void {
   } catch {
     // An empty lock can survive only if its process exited between open and write.
   }
-  // A directory stamp that never finished (none, empty, or cut off before it
-  // parses) is what a command killed between making the folder and stamping
-  // it leaves. Past the grace no live holder is still stamping it, so it is
-  // cleared like a dead owner; a stamp that parses keeps every check below.
-  const unfinished = directory && !parsed && unstampedPastGrace(lockPath);
+  // A live holder stamps its folder under the local gate withTransactionLock
+  // holds around this call, so a directory stamp that never finished (none,
+  // empty, or cut off before it parses) is what a command killed between
+  // making the folder and stamping it leaves. Past the grace, which covers a
+  // writer outside that gate, it is cleared like a dead owner's; the move and
+  // verify below are the second look. A stamp that parses keeps every check.
+  unfinished ||= directory && !parsed && unstampedPastGrace(lockPath);
   if (
     directory &&
     !unfinished &&

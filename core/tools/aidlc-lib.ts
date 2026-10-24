@@ -35576,9 +35576,10 @@ function lockDirMtimeMs(lockDir: string): number | null {
   }
 }
 
-// A lock folder whose stamp never finished is past the grace and counts as a
-// leak. The transaction lock's directory form judges its own unfinished stamp
-// by this too (aidlc-transaction.ts clearStaleLock).
+// True when a lock folder whose stamp never finished is past the grace, so it
+// counts as a leak. The one reader of the grace: the workflow locks' reaper and
+// doctor, and the transaction lock's directory form (aidlc-transaction.ts
+// clearStaleLock).
 export function unstampedPastGrace(lockDir: string): boolean {
   const mtime = lockDirMtimeMs(lockDir);
   return mtime !== null && lockAcquireEpochMs() - mtime > unstampedGraceMs();
@@ -35872,8 +35873,7 @@ function acquireReapClaim(lockDir: string): OwnerStampedLockReceipt | null {
         if (state === "same" || state === "unknown") return null;
         if (!recoverReapClaim(lockDir, inspected.owner)) return null;
       } else if (inspected.status === "missing") {
-        const mtime = lockDirMtimeMs(claimDir);
-        if (mtime === null || lockAcquireEpochMs() - mtime <= unstampedGraceMs()) return null;
+        if (!unstampedPastGrace(claimDir)) return null;
         if (!retireReapClaim(claimDir)) return null;
       } else {
         // Invalid/unreadable claim ownership is ambiguous and remains fail-closed.
@@ -37085,8 +37085,7 @@ export function detectLeakedLocks(projectDir: string, clear = false): LeakedLock
       reason = "unreadable-owner";
     } else if (inspected.status === "missing") {
       // Unstamped (no finished stamp): only a leak once older than the grace.
-      const mtime = lockDirMtimeMs(lockDir);
-      if (mtime !== null && lockAcquireEpochMs() - mtime > unstampedGraceMs()) {
+      if (unstampedPastGrace(lockDir)) {
         reason = "unstamped";
       }
     } else if (inspected.status === "ok") {
@@ -37120,8 +37119,7 @@ export function detectLeakedLocks(projectDir: string, clear = false): LeakedLock
       } else if (inspected.status === "unreadable") {
         reason = "unreadable-owner";
       } else if (inspected.status === "missing") {
-        const mtime = lockDirMtimeMs(lockDir);
-        if (mtime !== null && lockAcquireEpochMs() - mtime > unstampedGraceMs()) reason = "unstamped";
+        if (unstampedPastGrace(lockDir)) reason = "unstamped";
       } else if (inspected.status === "ok") {
         const state = ownerProcessState(inspected.owner);
         if (state === "dead" || state === "different") {
