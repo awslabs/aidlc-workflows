@@ -55,7 +55,7 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 | `session-end.ts` | SessionEnd | Project-wide (settings.json) | (empty) | Emit `SESSION_ENDED` on graceful exit to the intent recorded for that exact session; fail closed instead of using the shared active cursor when a UUID-backed workflow has no session binding |
 | `aidlc-statusline.ts` | statusLine | Each person's own `.claude/settings.local.json`, once they choose it | -- | Show real-time progress in terminal |
 
-Copilot CLI reads `.claude/settings.json` as repository settings too: it refuses the whole file when a PreToolUse, PostToolUse or PreCompact group has an empty matcher (hence `*` above), and it runs the hooks registered there. In a repo with both installs, Copilot's own wiring (`.github/hooks/aidlc.json`) does the work, so `engine hook <name>` stands aside when Copilot CLI starts it for a Claude registration (`copilotRunsClaudeRegistration` in `core/tools/aidlc.ts`): it takes the payload, prints nothing and exits 0. Copilot also shows the file's `companyAnnouncements` at its start.
+Copilot CLI reads `.claude/settings.json` as repository settings too: it refuses the whole file when a PreToolUse, PostToolUse or PreCompact group has an empty matcher (hence `*` above), and it runs the hooks registered there. AI-DLC's work in Copilot is its Copilot install's own wiring (`.github/hooks/aidlc.json`), so `engine hook <name>` stands aside whenever Copilot CLI starts it for a Claude registration, with or without the Copilot install (`copilotRunsClaudeRegistration` in `core/tools/aidlc.ts`): it takes the payload, prints nothing and exits 0. Copilot also shows the file's `companyAnnouncements` at its start.
 
 Before a Code Generation plan exists, `engine log decision` and `engine log answer` for `--stage code-generation --checkpoint summary-confirmation` are admitted as planning prerequisites, like the Plan Approval checkpoint. The log owner still validates the questions file, Unit and human reply. Summary confirmation grants no Plan Approval; source changes and developer dispatch remain subject to the plan guard.
 
@@ -1315,7 +1315,7 @@ See [Runtime Graph](13-runtime-graph.md) for the compile lifecycle and the locke
 ### PreCompact: validate-state.ts
 
 **Source:** `.claude/hooks/aidlc-validate-state.ts`
-**Trigger:** Before Claude Code compacts the conversation context (matcher: empty = always)
+**Trigger:** Before Claude Code compacts the conversation context (matcher: `*` = always)
 **Purpose:** Section presence check (informational only, does not block compaction) and a `SESSION_COMPACTED` audit row
 
 **Processing steps:**
