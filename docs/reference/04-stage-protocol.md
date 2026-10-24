@@ -175,7 +175,8 @@ stage made), after the gate was first shown unless the conductor names the
 message it read the choice from (`report --message <id>`: an approval given at
 the learnings question just before the gate; the refusal and the step for
 their reply at an open gate list the ids). A message sent by the time the
-stage's outputs were last written on this clone (its questions file aside) is no
+outputs the gate shows were last written on this clone (every output of each
+stage it approves, optional ones included, the questions file aside) is no
 approval of them: it is neither listed nor taken. It records the person's words: every
 reply of theirs in that chat since then, except one an answer on record already
 names unless it is the latest, as the message record keeps them, on

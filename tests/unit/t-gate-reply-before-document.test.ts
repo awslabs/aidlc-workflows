@@ -10,7 +10,9 @@
 // gate now has the summary's rule, from the one check both share: a reply sent
 // before the document was last written (this clone's own record says when) is
 // neither offered for the gate nor taken as the message it stands on, so the
-// gate is shown and their next reply answers it. A message held while another
+// gate is shown and their next reply answers it. What the gate shows is every
+// output its stage's review reads, optional ones included (a combined gate's
+// stages are pinned in t-late-design-gates-one-approval). A message held while another
 // engine question was open is left out of that offer too. Still taken, under
 // Guard Policy off and strict: an approval given at the learnings question after
 // the document is written (offered, recorded on the agent's one retry), with the
@@ -153,6 +155,31 @@ describe("t-gate-reply-before-document: a reply sent before the stage's document
       expect(rows(proj, "GATE_APPROVED"), retried.stdout).toHaveLength(1);
       expect(auditBlockField(rows(proj, "GATE_APPROVED")[0].block, "Message Id")).toBe(approval);
     });
+
+    // An optional output counts as what the gate shows. Under strict a write
+    // after the review makes the review stale first (main's own check).
+    if (policy === "off") {
+      test("off: an optional output written after the approval leaves that approval for the next reply", async () => {
+        const proj = await at("learnings", policy);
+        await writeAndReview(proj);
+        sleep();
+        expect((await say(proj, "Nothing to add. Approve, and move on", "claude")).status).toBe(0);
+        const approval = latestMessageId(proj);
+        sleep();
+        const optional = findStageBySlug(STAGE)?.optional_produces?.[0] ?? "traceability";
+        const file = join(stageDir(proj), artifactFilename(optional));
+        writeFileSync(file, "{}\n", "utf-8");
+        recordArtifactWriteViaHook(proj, file);
+        expect((await log(proj, ["answer", "--details", "Nothing to add"])).status).toBe(0);
+        expect((await report(proj, ["--result", "awaiting-approval"])).status).toBe(0);
+        const named = await report(proj, ["--result", "approved", "--user-input", "Approve", "--message", approval]);
+        expect(rows(proj, "GATE_APPROVED"), named.stdout).toHaveLength(0);
+        expect(message(named)).toContain(`their message ${approval} came before`);
+        expect((await say(proj, "approve", "claude")).status).toBe(0);
+        const approved = await report(proj, ["--result", "approved", "--user-input", "Approve"]);
+        expect(rows(proj, "GATE_APPROVED"), approved.stdout).toHaveLength(1);
+      });
+    }
 
     test(`${policy}: a change asked for before the document was written is still offered and taken for the gate`, async () => {
       const proj = await at("stage-question", policy);

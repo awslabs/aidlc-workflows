@@ -22,6 +22,7 @@
 //   6. checkpoints on, stage-major, and a lone remaining stage keep today's flow;
 //   7. no shipped prose still describes the late per-stage cascade;
 //   8. a reply another question used, or a question put since, approves nothing;
+//  8b. a message sent before a listed stage's output was last written approves nothing;
 //   9. autonomous Construction and team-owned Units keep one turn, one gate;
 //  10. the learnings question surfaces each listed stage; any other stage is still refused;
 //  11. "skip Functional Design and approve the rest": the skip step names the approval of the
@@ -38,6 +39,7 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
+  recordArtifactWriteViaHook,
   REPO_ROOT,
   resetAidlcEnv,
   runOrchestrateNext,
@@ -544,6 +546,31 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
     const later = runReport(since, ["--stage", "nfr-design", "--result", "approved", "--user-input", "Approve"]);
     expect(later.kind).not.toBe("done");
     expect(rows(since, "GATE_APPROVED").length).toBe(2);
+  });
+
+  // The one approval stands on a reply sent after every listed stage's output
+  // was last written: a message from earlier in the walk did not see the later
+  // stages' work (the gate's rule; t-gate-reply-before-document pins the rest).
+  test("8b: a message sent before a listed stage's output was last written does not approve the one gate", () => {
+    const proj = seedBuiltProject({ checkpoints: "disabled" }, [["code-generation", "beta"]]);
+    Bun.sleepSync(1100);
+    says(proj, "use Purchase for the order entity");
+    const early = auditBlockField(rows(proj, "HUMAN_TURN").at(-1)?.block ?? "", "Message Id") as string;
+    Bun.sleepSync(1100);
+    // Beta's code, the last listed stage, is written after it (the write hook's row), then reviewed.
+    const code = join(seededRecordDir(proj), "construction", "beta", "code-generation");
+    for (const name of PRODUCES["code-generation"]) recordArtifactWriteViaHook(proj, join(code, artifactFilename(name)));
+    logReviewReady(proj, "code-generation", "beta");
+    openFirstGate(proj);
+    const refused = runReport(proj, [
+      "--stage", "functional-design", "--result", "approved", "--user-input", "Approve", "--message", early,
+    ]);
+    expect(rows(proj, "GATE_APPROVED").length, JSON.stringify(refused)).toBe(0);
+    expect(String(refused.message ?? "")).toContain(`their message ${early} came before`);
+    says(proj, "approve");
+    const done = runReport(proj, ["--stage", "functional-design", "--result", "approved", "--user-input", "Approve"]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    expect(rows(proj, "GATE_APPROVED").map((r) => r.stage)).toEqual(BLOCK);
   });
 
   test("9: autonomous Construction and team-owned Units keep one turn, one gate", () => {
