@@ -1630,8 +1630,9 @@ function openSwarmBatchState(projectDir: string, unit: string | null): string | 
 // A Unit of a parallel batch is built in its own worktree while its worker may
 // run in the main folder, so a relative record path can put the records where
 // nothing reads them: both folders are named absolute, the record folder at the
-// main folder's own record path inside the worktree. A brief before prepare
-// names no worktree.
+// main folder's own record path inside the worktree. The protocol takes the
+// brief before prepare and hands it on at fan-out, so a brief taken before the
+// worktree exists names the one prepare makes for this Unit's Bolt.
 function swarmWorktreeLine(projectDir: string, unit: string | null): string {
   if (!unit || openSwarmBatchState(projectDir, unit) === null) return "";
   let worktree: string;
@@ -1640,7 +1641,6 @@ function swarmWorktreeLine(projectDir: string, unit: string | null): string {
   } catch {
     return "";
   }
-  if (!existsSync(worktree)) return "";
   const records = join(worktree, relative(projectDir, codeGenerationRecordDir(projectDir, unit)));
   return `\nYour worktree is \`${toPosix(worktree)}\`: write this Unit's code there, and its records ` +
     `(code-summary.md, source-manifest.json, traceability.json) in \`${toPosix(records)}\`.\n`;
