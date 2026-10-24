@@ -12552,11 +12552,22 @@ export const BLOCKING_SENSOR_OVERRIDE_OPTIONS = [
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
 ] as const;
 
+// The stage's rows that start its gate over: an answer to the check's question
+// counts only after the latest of them (hasBlockingSensorOverrideAuthorization
+// in aidlc-state.ts), and a displaced question asked before one is not
+// answered after it.
+export const BLOCKING_SENSOR_BOUNDARY_EVENTS: ReadonlySet<string> = new Set([
+  "STAGE_STARTED",
+  "STAGE_AWAITING_APPROVAL",
+  "GATE_REJECTED",
+]);
+
 // The person's picks at a stage's blocking-sensor question: each answer that
 // closes an open "Blocking gate sensor failure" decision offering both choices
-// (the nextOpenDecision pairing, per shard), with a HUMAN_TURN in that shard
-// between the two, read as the option it names: its label, or its number on
-// the decision's own Options. The override's authorization and the review
+// (the nextOpenDecision pairing, per shard; for an answer naming one of its
+// labels, also the one a later question displaced), with a HUMAN_TURN in that
+// shard between the two, read as the option it names: its label, or its number
+// on the decision's own Options. The override's authorization and the review
 // attempt floor both read this one pairing.
 export function blockingSensorPicks(
   rows: ReadonlyArray<AuditShardEvent>,
@@ -12566,13 +12577,31 @@ export function blockingSensorPicks(
   // Each clone's shard keeps its own append order, so a teammate's question in
   // another shard never takes the place of the one this answer closes.
   const open = new Map<string, AuditShardEvent>();
+  // The check's question a later question took the open place of, per shard,
+  // until an answer takes it or the stage's next boundary: an answer naming one
+  // of the check's labels still answers it, so the person is not asked for
+  // their pick twice. A number reads only the open question's own Options.
+  const displaced = new Map<string, AuditShardEvent>();
+  const asksCheck = (row: AuditShardEvent | undefined): boolean =>
+    row !== undefined && auditBlockField(row.block, "Decision") === BLOCKING_SENSOR_OVERRIDE_DECISION;
   for (const row of sortAttemptEvents(rows.filter((row) =>
-    DECISION_PAIRING_EVENTS.has(row.event) && auditBlockField(row.block, "Stage") === slug &&
+    (DECISION_PAIRING_EVENTS.has(row.event) || BLOCKING_SENSOR_BOUNDARY_EVENTS.has(row.event)) &&
+    auditBlockField(row.block, "Stage") === slug &&
     !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")
   ))) {
-    const decision = open.get(row.shard);
-    if (row.event === "DECISION_RECORDED") open.set(row.shard, row);
-    else if (nextOpenDecision(decision?.block ?? null, row.event, row.block) === null) open.delete(row.shard);
+    if (BLOCKING_SENSOR_BOUNDARY_EVENTS.has(row.event)) displaced.clear();
+    if (!DECISION_PAIRING_EVENTS.has(row.event)) continue;
+    const latest = open.get(row.shard);
+    if (row.event === "DECISION_RECORDED") {
+      open.set(row.shard, row);
+      if (asksCheck(row)) displaced.delete(row.shard);
+      else if (latest !== undefined && asksCheck(latest)) displaced.set(row.shard, latest);
+    } else if (nextOpenDecision(latest?.block ?? null, row.event, row.block) === null) open.delete(row.shard);
+    const details = auditBlockField(row.block, "Details") ?? "";
+    const takesDisplaced = row.event === "QUESTION_ANSWERED" && !asksCheck(latest) &&
+      offeredChoiceLabel(details, BLOCKING_SENSOR_OVERRIDE_OPTIONS) !== null;
+    const decision = takesDisplaced ? displaced.get(row.shard) : latest;
+    if (takesDisplaced) displaced.delete(row.shard);
     if (
       decision === undefined || row.event !== "QUESTION_ANSWERED" ||
       auditBlockField(decision.block, "Decision") !== BLOCKING_SENSOR_OVERRIDE_DECISION
@@ -12582,7 +12611,6 @@ export function blockingSensorPicks(
     if (!rows.some((turn) =>
       turn.event === "HUMAN_TURN" && turn.shard === row.shard && turn.pos > decision.pos && turn.pos < row.pos
     )) continue;
-    const details = auditBlockField(row.block, "Details") ?? "";
     const numbered = /^(\d+)[.)]?$/.exec(details);
     const named = numbered
       ? offered[Number(numbered[1]) - 1]
@@ -12593,13 +12621,100 @@ export function blockingSensorPicks(
   return picks;
 }
 
-// The answers where the person picked Fix findings: each starts a new review
-// attempt for the stage, as a Request Changes does, because the fix rewrites
-// the reviewed document and the review before it no longer covers it.
-export function blockingSensorFixes(rows: ReadonlyArray<AuditShardEvent>, slug: string): Set<AuditShardEvent> {
-  return new Set([...blockingSensorPicks(rows, slug)].flatMap(([row, choice]) =>
-    choice === BLOCKING_SENSOR_OVERRIDE_OPTIONS[0] ? [row] : []
+// The latest terminal result of each of a stage's sensors on each output, by
+// `id@path` (the Output path its row records), from the SENSOR_PASSED and
+// SENSOR_FAILED rows given; nothing is re-fired. A pass that carries a note
+// (the tool was unavailable, the script failed) evaluated nothing: it does not
+// clear the failure recorded before it. The gate's own account of its checks
+// (aidlc-state.ts latestCheckResults) and the Units a Fix findings pick starts
+// again (blockingSensorFixes) read this one fold.
+export interface LatestSensorResult {
+  id: string;
+  output: string;
+  kind: "passed" | "failed";
+  ts: string;
+  pos: number;
+  findings: string;
+  detail: string | null;
+  failedOutputs: string | null;
+}
+export function latestSensorResults(rows: ReadonlyArray<AuditShardEvent>, slug: string): Map<string, LatestSensorResult> {
+  const latest = new Map<string, LatestSensorResult>();
+  for (const row of rows) {
+    if (row.event !== "SENSOR_PASSED" && row.event !== "SENSOR_FAILED") continue;
+    if (auditBlockField(row.block, "Stage slug") !== slug) continue;
+    const id = auditBlockField(row.block, "Sensor ID");
+    const output = auditBlockField(row.block, "Output path");
+    if (id === null || output === null) continue;
+    const key = `${id}@${output}`;
+    const seen = latest.get(key);
+    if (seen && (seen.ts > row.timestamp || (seen.ts === row.timestamp && seen.pos > row.pos))) continue;
+    if (row.event === "SENSOR_PASSED" && seen?.kind === "failed" && auditBlockField(row.block, "Note") !== null) continue;
+    latest.set(key, {
+      id,
+      output,
+      kind: row.event === "SENSOR_PASSED" ? "passed" : "failed",
+      ts: row.timestamp,
+      pos: row.pos,
+      findings: auditBlockField(row.block, "Findings count") ?? "?",
+      detail: auditBlockField(row.block, "Detail path"),
+      failedOutputs: auditBlockField(row.block, "Failed outputs"),
+    });
+  }
+  return latest;
+}
+
+type SensorFixStage = Parameters<typeof producesArtifactUnit>[0] & Pick<StageEntry, "sensors_applicable">;
+
+// The answers where the person picked Fix findings, each with the Units whose
+// review attempt it starts again, as a Request Changes does, because the fix
+// rewrites the reviewed document and the review before it no longer covers it.
+// A pick logged for a Unit names that Unit. A pick logged with no Unit (a solo
+// stage gate, where the check runs once over every Unit's outputs) names the
+// Units owning the outputs a blocking gate check (what fireGateSensors
+// enforces) failed on in its latest result before the pick. Null is every
+// Unit: the stage is done once for the whole project, or a failure names no
+// one Unit's output, or none is on record.
+export function blockingSensorFixes(
+  rows: ReadonlyArray<AuditShardEvent>,
+  stage: SensorFixStage,
+): Map<AuditShardEvent, ReadonlySet<string> | null> {
+  const blocking = new Set((stage.sensors_applicable ?? []).flatMap((sensor) =>
+    sensor.fire_on === "gate" && sensor.default_severity === "blocking" ? [sensor.id] : []
   ));
+  const failedUnits = (pick: AuditShardEvent): ReadonlySet<string> | null => {
+    const units = new Set<string>();
+    const before = rows.filter((row) => attemptEventDefinitelyBefore(row, pick));
+    for (const result of latestSensorResults(before, stage.slug).values()) {
+      if (result.kind !== "failed" || !blocking.has(result.id)) continue;
+      // The gate fires on every declared output, so the matcher over all of
+      // them names the owner; only a codekb stage reads the recorded
+      // repositories, and none is per Unit.
+      const unit = producesArtifactUnit(stage, result.output, new Set());
+      if (typeof unit !== "string") return null;
+      units.add(unit);
+    }
+    return units.size > 0 ? units : null;
+  };
+  const fixes = new Map<AuditShardEvent, ReadonlySet<string> | null>();
+  for (const [row, choice] of blockingSensorPicks(rows, stage.slug)) {
+    if (choice !== BLOCKING_SENSOR_OVERRIDE_OPTIONS[0]) continue;
+    const unit = auditBlockField(row.block, "Unit");
+    fixes.set(row, unit ? new Set([unit]) : failedUnits(row));
+  }
+  return fixes;
+}
+
+// The Units a gate rejection or a Fix findings pick starts a new attempt for,
+// or null for every Unit: the Unit it was logged for, else the Units a pick's
+// failing check named (blockingSensorFixes). Read only where floors are per
+// Unit (unitScopedLifecycleFloors); elsewhere either starts every Unit again.
+function rejectionUnits(
+  event: AuditShardEvent,
+  sensorFixes: ReadonlyMap<AuditShardEvent, ReadonlySet<string> | null>,
+): ReadonlySet<string> | null {
+  const unit = auditBlockField(event.block, "Unit");
+  return unit ? new Set([unit]) : sensorFixes.get(event) ?? null;
 }
 
 const GATE_RESOLUTION_EVENTS = new Set([
@@ -19811,8 +19926,9 @@ export interface AttemptView {
   allEvents: AuditShardEvent[];
   events: AuditShardEvent[];
   floorIdx: number;
-  // The person's Fix findings picks for this stage (blockingSensorFixes).
-  sensorFixes: ReadonlySet<AuditShardEvent>;
+  // The person's Fix findings picks for this stage, each with the Units it
+  // starts again, null for every Unit (blockingSensorFixes).
+  sensorFixes: ReadonlyMap<AuditShardEvent, ReadonlySet<string> | null>;
   mergedBoltUnits: Set<string>;
   openBoltUnits: Set<string>;
 }
@@ -19842,11 +19958,11 @@ function boltEventUnits(event: AuditShardEvent): string[] {
 export function reviewAttemptWindow(
   projectDir: string,
   stateContent: string,
-  stage: { slug: string; for_each?: string },
+  stage: SensorFixStage,
   auditRows?: AuditShardEvent[],
 ): AttemptView {
   const allEvents = auditRows ?? readAuditShardEvents(projectDir);
-  const sensorFixes = blockingSensorFixes(allEvents, stage.slug);
+  const sensorFixes = blockingSensorFixes(allEvents, stage);
   const events = sortAttemptEvents(
     allEvents.filter((row) => REVIEW_RECEIPT_EVENTS.has(row.event) || sensorFixes.has(row)),
   );
@@ -19863,8 +19979,9 @@ export function reviewAttemptWindow(
       getField(stateContent, "Construction Checkpoints") === "enabled");
   const teamOwnership = artifactPerUnit && (isTeamUnitOwnership(stateContent) ||
     getField(stateContent, "Construction Checkpoints") === "enabled");
-  // A Unit-tagged rejection starts a new attempt for that Unit only wherever
-  // lifecycle floors are per Unit, solo unit-major included (#1411).
+  // A rejection or Fix findings pick that names its Units (rejectionUnits)
+  // starts a new attempt for those Units only wherever lifecycle floors are
+  // per Unit, solo unit-major included (#1411).
   const unitScopedRejections =
     artifactPerUnit && unitScopedLifecycleFloors(stateContent);
   // A stage start recorded while unit-major flooring was in force is no
@@ -19878,7 +19995,7 @@ export function reviewAttemptWindow(
     if (!boundary && auditBlockField(event.block, "Stage") === stage.slug) {
       boundary =
         ((event.event === "GATE_REJECTED" || sensorFixes.has(event)) &&
-          !(unitScopedRejections && auditBlockField(event.block, "Unit"))) ||
+          !(unitScopedRejections && rejectionUnits(event, sensorFixes) !== null)) ||
         (event.event === "STAGE_STARTED" &&
           !unitMajor && !unitFloored?.has(event) &&
           !auditBlockField(event.block, "Workflow")?.startsWith(
@@ -20283,14 +20400,14 @@ export function reviewAttemptAccounting(
         .split(",")
         .map((value) => value.trim());
       if (!gateStages.includes(stage.slug)) continue;
-      const rejectedUnit = auditBlockField(entry.block, "Unit");
-      // A rejection with no Unit is a stage-wide Request Changes: outside team
-      // or checkpoint ownership it starts a new attempt for every Unit.
+      const rejectedUnits = rejectionUnits(entry, sensorFixes);
+      // A rejection that names no Unit is a stage-wide Request Changes: outside
+      // team or checkpoint ownership it starts a new attempt for every Unit.
       if (
-        unitScopedRejections && unit !== undefined && rejectedUnit !== unit &&
-        (teamOwnership || rejectedUnit !== null)
+        unitScopedRejections && unit !== undefined && !rejectedUnits?.has(unit) &&
+        (teamOwnership || rejectedUnits !== null)
       ) continue;
-      if (unitScopedRejections && unit === undefined && rejectedUnit !== null) continue;
+      if (unitScopedRejections && unit === undefined && rejectedUnits !== null) continue;
       const tied = tiedAcrossShards(i);
       ambiguity = tied
         ? `cross-shard gate boundary tie at ${entry.timestamp}`
@@ -21247,25 +21364,30 @@ export function freshReviewReceipts(
     ) {
       continue;
     }
-    // A Unit's Fix findings pick at a blocking gate check starts that Unit's
-    // new attempt the way its Request Changes does.
+    // A Fix findings pick at a blocking gate check starts a new attempt for the
+    // Units it names the way their Request Changes does.
     if (unitScopedRejections && (e.event === "GATE_REJECTED" || sensorFixes.has(e))) {
-      const rejectedUnit = auditBlockField(e.block, "Unit");
-      if (!rejectedUnit || !gateStagesFromBlock(e.block).includes(stage.slug)) {
+      const rejectedUnits = rejectionUnits(e, sensorFixes);
+      if (rejectedUnits === null || !gateStagesFromBlock(e.block).includes(stage.slug)) {
         continue;
       }
-      if (unitVerdicts.delete(rejectedUnit)) {
-        unitStale.add(rejectedUnit);
-        unitStaleProgress.set(rejectedUnit, {
-          nextIteration: (unitIterations.get(rejectedUnit) ?? 0) + 1,
-          recoverySpent: unitReceiptRecovery.get(rejectedUnit) ?? false,
-        });
-      }
-      unitIterations.delete(rejectedUnit);
-      unitReceiptRecovery.delete(rejectedUnit);
-      unitPending.delete(rejectedUnit);
-      for (const [key, request] of pendingRequests) {
-        if (request.unit === rejectedUnit) pendingRequests.delete(key);
+      for (const rejectedUnit of rejectedUnits) {
+        if (unitVerdicts.delete(rejectedUnit)) {
+          unitStale.add(rejectedUnit);
+          // The new attempt's review is its first pass, where its budget starts
+          // again (reviewAttemptAccounting), so the re-review named is one the
+          // review log takes.
+          unitStaleProgress.set(rejectedUnit, {
+            nextIteration: 1,
+            recoverySpent: unitReceiptRecovery.get(rejectedUnit) ?? false,
+          });
+        }
+        unitIterations.delete(rejectedUnit);
+        unitReceiptRecovery.delete(rejectedUnit);
+        unitPending.delete(rejectedUnit);
+        for (const [key, request] of pendingRequests) {
+          if (request.unit === rejectedUnit) pendingRequests.delete(key);
+        }
       }
       continue;
     }
