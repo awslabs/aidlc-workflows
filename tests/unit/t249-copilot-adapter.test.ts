@@ -693,7 +693,7 @@ function keptWords(dir: string): string {
 }
 
 // The text of every message record the human-turn hook kept.
-function messageTexts(dir: string): string[] {
+function messageRecordTexts(dir: string): string[] {
   const messages = join(dir, "aidlc", ".aidlc-sessions", "messages");
   return existsSync(messages)
     ? readdirSync(messages).map((name) => String((JSON.parse(readFileSync(join(messages, name), "utf-8")) as { text?: unknown }).text))
@@ -4558,7 +4558,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const note = blockedStop(dir, session);
     const sequence = humanSequence(dir);
     expect(typedPrompt(dir, session, note).code).toBe(0);
-    expect(messageTexts(dir)).toEqual([]);
+    expect(messageRecordTexts(dir)).toEqual([]);
     expect(humanTurnCount(dir)).toBe(0);
     const hostTurns = auditRows(dir, "HOST_TURN");
     expect(hostTurns).toHaveLength(1);
@@ -4582,7 +4582,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(humanTurnCount(dir)).toBe(1);
     expect(typedPrompt(dir, session, note).code).toBe(0);
     expect(humanTurnCount(dir)).toBe(2);
-    expect(messageTexts(dir).sort()).toEqual(["Keep going with the plan, please.", note].sort());
+    expect(messageRecordTexts(dir).sort()).toEqual(["Keep going with the plan, please.", note].sort());
     expect(auditRows(dir, "HOST_TURN")).toHaveLength(2);
   });
 
