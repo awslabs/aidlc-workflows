@@ -652,6 +652,30 @@ describe("a skip the person asks for at the walk's first stage, while a Unit is 
     expect(late.out).toContain("--stage nfr-requirements --single");
   });
 
+  // With every stage after it named too, the first step's own skip finishes
+  // the work in the same reply: no undo window is left, only the run on its own.
+  test("with every stage after it named too, for every Unit from here: the line names the run on its own", () => {
+    const proj = walk(["alpha", "beta"], false);
+    const rows = readFileSync(stateFile(proj), "utf-8").split("\n")
+      .map((line) => /^- \[ \] ([a-z0-9-]+) \u2014 EXECUTE$/.exec(line)?.[1])
+      .filter((slug): slug is string => slug !== undefined);
+    const step = next(proj, ["--skip", ["functional-design", ...rows].join(",")]);
+    const every = segment(String(step.message), EVERY_FROM);
+    expect(every.message, String(step.message)).toContain(
+      "Any of them can still be run on its own with `/aidlc --stage functional-design --single`",
+    );
+    expect(every.message).not.toContain("You can undo");
+    for (const command of named(every)) {
+      const ran = runNamed(proj, command);
+      expect(ran.status, ran.out).toBe(0);
+    }
+    expect(readFileSync(stateFile(proj), "utf-8")).toContain("- **Status**: Completed");
+    const undo = /If they later ask to undo skipping it for every Unit, run `([^`]*)`/.exec(String(step.message))?.[1] ?? "";
+    const late = runNamed(proj, undo);
+    expect(late.status).not.toBe(0);
+    expect(late.out).toContain("Completed");
+  });
+
   // Words that name another Unit are neither this Unit nor every Unit: that
   // Unit's step is skipped for it while it works on it.
   test("words naming another Unit skip nothing now, and the line says when that Unit's step can be skipped", () => {
