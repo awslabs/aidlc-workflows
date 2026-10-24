@@ -623,7 +623,9 @@ describe("t311 gate-bound sensor enforcement", () => {
   // Another question for the stage logged after the check's own takes its open
   // place; an answer naming one of the check's labels still answers the check's
   // question, after a person's turn, so a Fix findings answer there is a pick
-  // too. An answer by number reads only the open question's own options, and
+  // too. One reply recorded for both questions (stage-protocol.md's
+  // `Q1: ...; Q2: ...`) is read the same way, by the first label its parts
+  // name. An answer by number reads only the open question's own options, and
   // the look-back stops at the stage's last boundary.
   test("an Override after a second question for the stage still authorizes", () => {
     const ask = (fixture: Fixture, decision: string, options: string) =>
@@ -665,6 +667,28 @@ describe("t311 gate-bound sensor enforcement", () => {
     askCheck(fixAfter); askOther(fixAfter); turn(fixAfter);
     answer(fixAfter, "Fix findings");
     expect([...blockingSensorPicks(readAuditShardEvents(fixAfter.project), "probe").values()]).toEqual(["Fix findings"]);
+
+    const combined = setupFixture("blocking");
+    askCheck(combined); askOther(combined); turn(combined);
+    answer(combined, `Q1: ${BLOCKING_SENSOR_OVERRIDE_CHOICE}; Q2: Every finding`);
+    const accepted = gate(combined, overrideArgs());
+    expect(accepted.status, accepted.out).toBe(0);
+    const picksFor = (details: string, checkFirst = true): string[] => {
+      const fixture = setupFixture("blocking");
+      if (checkFirst) {
+        askCheck(fixture); askOther(fixture);
+      } else {
+        askOther(fixture); askCheck(fixture);
+      }
+      turn(fixture);
+      answer(fixture, details);
+      return [...blockingSensorPicks(readAuditShardEvents(fixture.project), "probe").values()];
+    };
+    expect(picksFor("Q1: Fix findings; Q2: Every finding")).toEqual(["Fix findings"]);
+    expect(picksFor(`Q1: Fix findings; Q2: ${BLOCKING_SENSOR_OVERRIDE_CHOICE}`)).toEqual(["Fix findings"]);
+    expect(picksFor(`Fix findings; ${BLOCKING_SENSOR_OVERRIDE_CHOICE}`, false)).toEqual(["Fix findings"]);
+    expect(picksFor(`Q1: Every finding; Q2: ${BLOCKING_SENSOR_OVERRIDE_CHOICE}`, false))
+      .toEqual([BLOCKING_SENSOR_OVERRIDE_CHOICE]);
 
     const beforeBoundary = setupFixture("blocking");
     askCheck(beforeBoundary); askOther(beforeBoundary);

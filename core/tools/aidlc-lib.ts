@@ -12708,9 +12708,10 @@ export const BLOCKING_SENSOR_BOUNDARY_EVENTS: ReadonlySet<string> = new Set([
 // closes an open "Blocking gate sensor failure" decision offering both choices
 // (the nextOpenDecision pairing, per shard; for an answer naming one of its
 // labels, also the one a later question displaced), with a HUMAN_TURN in that
-// shard between the two, read as the option it names: its label, or its number
-// on the decision's own Options. The override's authorization and the review
-// attempt floor both read this one pairing.
+// shard between the two, read as the option it names: its label (the first
+// label a reply recorded for several questions names), or its number on the
+// decision's own Options. The override's authorization and the review attempt
+// floor both read this one pairing.
 export function blockingSensorPicks(
   rows: ReadonlyArray<AuditShardEvent>,
   slug: string,
@@ -12726,6 +12727,17 @@ export function blockingSensorPicks(
   const displaced = new Map<string, AuditShardEvent>();
   const asksCheck = (row: AuditShardEvent | undefined): boolean =>
     row !== undefined && auditBlockField(row.block, "Decision") === BLOCKING_SENSOR_OVERRIDE_DECISION;
+  // The check's label an answer names. One reply to several questions is one
+  // record (stage-protocol.md's `Q1: <choice>; Q2: <choice>`), so each part is
+  // read on its own, past its slot, and the first part naming a label is the
+  // pick: a record that starts with a label reads as that label.
+  const checkLabel = (details: string): (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number] | undefined => {
+    for (const part of details.split(/[;,]/)) {
+      const choice = offeredChoiceLabel(part.trim().replace(/^Q\d+:\s*/, ""), BLOCKING_SENSOR_OVERRIDE_OPTIONS)?.choice;
+      if (choice !== undefined) return BLOCKING_SENSOR_OVERRIDE_OPTIONS.find((option) => option === choice);
+    }
+    return undefined;
+  };
   for (const row of sortAttemptEvents(rows.filter((row) =>
     (DECISION_PAIRING_EVENTS.has(row.event) || BLOCKING_SENSOR_BOUNDARY_EVENTS.has(row.event)) &&
     auditBlockField(row.block, "Stage") === slug &&
@@ -12741,7 +12753,7 @@ export function blockingSensorPicks(
     } else if (nextOpenDecision(latest?.block ?? null, row.event, row.block) === null) open.delete(row.shard);
     const details = auditBlockField(row.block, "Details") ?? "";
     const takesDisplaced = row.event === "QUESTION_ANSWERED" && !asksCheck(latest) &&
-      offeredChoiceLabel(details, BLOCKING_SENSOR_OVERRIDE_OPTIONS) !== null;
+      checkLabel(details) !== undefined;
     const decision = takesDisplaced ? displaced.get(row.shard) : latest;
     if (takesDisplaced) displaced.delete(row.shard);
     if (
@@ -12754,9 +12766,7 @@ export function blockingSensorPicks(
       turn.event === "HUMAN_TURN" && turn.shard === row.shard && turn.pos > decision.pos && turn.pos < row.pos
     )) continue;
     const numbered = /^(\d+)[.)]?$/.exec(details);
-    const named = numbered
-      ? offered[Number(numbered[1]) - 1]
-      : offeredChoiceLabel(details, BLOCKING_SENSOR_OVERRIDE_OPTIONS)?.choice;
+    const named = numbered ? offered[Number(numbered[1]) - 1] : checkLabel(details);
     const choice = BLOCKING_SENSOR_OVERRIDE_OPTIONS.find((option) => option === named);
     if (choice !== undefined) picks.set(row, choice);
   }
