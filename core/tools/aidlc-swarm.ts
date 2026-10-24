@@ -3252,7 +3252,7 @@ function handleFinalize(rest: string[]): void {
   const envelope = {
     batch,
     units: results.map((result) => {
-      const landingBranch = preparedLandingBranch(landingRows, batch, result.unit);
+      const landingBranch = result.status === "converged" ? preparedLandingBranch(landingRows, batch, result.unit) : null;
       return {
         ...result,
         bolt_slug: swarmBoltSlug(result.unit),

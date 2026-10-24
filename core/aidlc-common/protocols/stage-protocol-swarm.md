@@ -272,8 +272,8 @@ the human gate, run `bun {{HARNESS_DIR}}/tools/aidlc-worktree.ts merge --slug
 <that converged result row's bolt_slug> --target <that row's landing_branch>
 --strategy squash` for each result row whose status is `converged` and which is
 absent from `merge_failures`. `landing_branch` is the branch prepare found
-checked out in the main checkout, where the Units land whatever base they forked
-from; a row without it lands on the branch checked out there. The merge
+checked out in that repo's main checkout, where the Units land whatever base
+they forked from; a row without it lands on the branch checked out there. The merge
 recovers the creating repository from a unique durable source authority; its
 intent remains the selected workflow intent. Pass `--intent`/`--space` only
 when they name the session's active workflow; swarm refuses a mismatch before
