@@ -1267,9 +1267,11 @@ authority, not the intent: it uses the selected workflow intent. See
 for the selector refusal.
 
 New `SWARM_STARTED` resume rows use `Resume execution fingerprints` for the
-current executed content, which may not have been newly approved. Readers
-also accept the legacy `Resume approvals` field; neither field supplies a new
-human approval.
+content each Unit resumed with, which may not have been newly approved (older
+rows name it `Resume approvals`); neither field supplies a new human approval.
+A plan approved again after the resume is handed to the resumed build by
+`prepare --resume-existing`, as `prepare` hands it to a build prepared in the
+same attempt; the row keeps the content the Unit resumed with.
 
 | Event | Emitter | Trigger |
 |---|---|---|

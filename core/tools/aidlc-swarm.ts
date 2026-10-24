@@ -2265,20 +2265,40 @@ function validateSwarmResume(
   const childState = recovering && !existsSync(childStatePath) ? "" :
     readRegularFileNoFollowOrThrow(childStatePath, "preserved worktree state").toString("utf-8");
   if (getField(childState, "Merge-Held") === "true") throw new Error(`${unit}: resolve its held merge before resuming.`);
-  const resumedFingerprint = swarmStart
-    ? resumedRevision(swarmStart, unit, "Resume execution fingerprints") ??
-      resumedRevision(swarmStart, unit, "Resume approvals")
-    : null;
-  if (alreadyResumed && resumedFingerprint !== executionFingerprint) {
-    throw new Error(`${unit}: this revision was already resumed under a different plan; preserve the active work and request a new checkpoint revision.`);
-  }
-  const discardedSha256 = matchingJournal ? journal?.discardedSha256 : undefined;
+  // A plan approved again after this revision resumed is prepare's to hand to
+  // the resumed build, as for a build prepared in this attempt, and the journal
+  // of this revision still names the discard the build was recreated from.
+  const revisionJournal = !!creation && journal?.revision === revision && journal.creation === checkpointRevision(creation);
+  const discardedSha256 = matchingJournal || (alreadyResumed && revisionJournal) ? journal?.discardedSha256 : undefined;
   if (!alreadyResumed) validateCodeGenerationWorktreeApproval(pd, worktree, unit, discardedSha256);
   return {
     unit, worktree, recordPrefix, revision, alreadyResumed, recovering, recreate: false,
     creation: checkpointRevision(creation), approvalFingerprint: executionFingerprint,
     ...(discardedSha256 ? { discardedSha256 } : {}),
   };
+}
+
+// A plan revised and approved again since the build was prepared or resumed:
+// prepare hands it to the build, as the first prepare did, so the worker builds
+// the plan the person approved last. An unchanged approval leaves the build
+// exactly as it is.
+function buildHoldsEarlierPlan(projectDir: string, unit: string, worktree: string): boolean {
+  const parentFingerprint = evaluateCodeGenerationApproval(projectDir, { unit }).approvalFingerprint;
+  const childQuestions = join(codeGenerationRecordDir(worktree, unit), "code-generation-questions.md");
+  const childFingerprint = existsSync(childQuestions)
+    ? questionsFileApprovalFingerprint(readFileSync(childQuestions, "utf-8")) : null;
+  return !!parentFingerprint && parentFingerprint !== childFingerprint;
+}
+
+// The build's work has moved away from the main code the new approval
+// describes (a peer landed first, or main changed), so the new plan cannot be
+// handed to it in place. Nothing is changed; the person chooses between the
+// work it holds and the plan they approved.
+function planNotHandedOver(unit: string, error: unknown): string {
+  return `Unit ${unit}: the plan approved again could not be handed to its existing build, ` +
+    `whose work no longer lines up with the main code (${error instanceof Error ? error.message : String(error)}). ` +
+    "The build and its work are kept. To build the new plan, set this Unit's current work aside (abort and discard it) " +
+    "and run prepare again; to keep the current work instead, land it as it is.";
 }
 
 function archiveSwarmResume(resume: SwarmResume): string {
@@ -2630,35 +2650,15 @@ function handlePrepare(rest: string[]): void {
     const identity = identities.get(unit)!;
     const kept = retained.get(unit);
     if (kept !== undefined) {
-      // A plan revised and approved again since the worktree was prepared is
-      // transferred to it, as the first prepare did, so the worker builds the
-      // plan the person approved last. An unchanged approval leaves the
-      // worktree exactly as it is.
       let transferred = false;
-      if (requiresExecutionAllowance) {
-        const parentFingerprint = evaluateCodeGenerationApproval(projectDir, { unit }).approvalFingerprint;
-        const childQuestions = join(codeGenerationRecordDir(kept, unit), "code-generation-questions.md");
-        const childFingerprint = existsSync(childQuestions)
-          ? questionsFileApprovalFingerprint(readFileSync(childQuestions, "utf-8")) : null;
-        if (parentFingerprint && parentFingerprint !== childFingerprint) {
-          try {
-            swarmChangeNotices.push(...beginCodeGeneration(projectDir, { unit }));
-            bindCodeGenerationWorktreeApproval(projectDir, kept, unit);
-            transferred = true;
-          } catch (error) {
-            // Its work has moved away from the main code the new approval
-            // describes (a peer landed first, or main changed), so the new plan
-            // cannot be handed to this build in place. Nothing is changed; the
-            // person chooses between the work it holds and the plan they approved.
-            prepared.push({
-              unit, ok: false, worktree_path: kept, retained: true,
-              error: `Unit ${unit}: the plan approved again could not be handed to its existing build, ` +
-                `whose work no longer lines up with the main code (${error instanceof Error ? error.message : String(error)}). ` +
-                "The build and its work are kept. To build the new plan, set this Unit's current work aside (abort and discard it) " +
-                "and run prepare again; to keep the current work instead, land it as it is.",
-            });
-            continue;
-          }
+      if (requiresExecutionAllowance && buildHoldsEarlierPlan(projectDir, unit, kept)) {
+        try {
+          swarmChangeNotices.push(...beginCodeGeneration(projectDir, { unit }));
+          bindCodeGenerationWorktreeApproval(projectDir, kept, unit);
+          transferred = true;
+        } catch (error) {
+          prepared.push({ unit, ok: false, worktree_path: kept, retained: true, error: planNotHandedOver(unit, error) });
+          continue;
         }
       }
       prepared.push({ unit, ok: true, worktree_path: kept, retained: true, ...(transferred ? { approval_transferred: true } : {}) });
@@ -2666,6 +2666,20 @@ function handlePrepare(rest: string[]): void {
     }
     const resume = resumes.get(unit);
     const discarded = resume ?? discardedPreparations.get(unit);
+    if (resume && !resume.recreate && resume.alreadyResumed && requiresExecutionAllowance &&
+      buildHoldsEarlierPlan(projectDir, unit, resume.worktree)) {
+      // Its Code Generation start was published with the batch's above.
+      try {
+        bindCodeGenerationWorktreeApproval(projectDir, resume.worktree, unit, resume.discardedSha256);
+      } catch (error) {
+        prepared.push({ unit, ok: false, worktree_path: resume.worktree, resumed: true, error: planNotHandedOver(unit, error) });
+        continue;
+      }
+      prepared.push({
+        unit, ok: true, worktree_path: resume.worktree, resumed: true, revision: resume.revision, approval_transferred: true,
+      });
+      continue;
+    }
     if (resume && !resume.recreate) {
       let archive: string | undefined;
       try {
