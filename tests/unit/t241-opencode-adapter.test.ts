@@ -201,6 +201,15 @@ function createTestAdapter(
   });
 }
 
+// A file write through each of opencode's three file tools, and a to-do list
+// whose task in progress names its stage the way the stage protocol asks.
+const FILE_WRITES: Array<[string, Record<string, unknown>]> = [
+  ["write", { filePath: "aidlc/notes.md" }],
+  ["edit", { filePath: "aidlc/notes.md" }],
+  ["apply_patch", { patchText: "*** Begin Patch\n*** Update File: aidlc/notes.md\n*** End Patch" }],
+];
+const TODO_IN_PROGRESS = { todos: [{ content: "Running Requirements Analysis [requirements-analysis]", status: "in_progress" }] };
+
 describe("t241 OpenCode adapter command boundary and transition filter", () => {
   test("plan-approval guard calls carry the OpenCode session id", async () => {
     const root = freshProject();
@@ -278,12 +287,14 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
       "}",
     ].join("\n");
     // Every forward a child's event makes: the task dispatch, a bash call's
-    // record writes, the subagent completion and the compaction.
+    // record writes, a file write's audit and sensors, the to-do sync, the
+    // subagent completion and the compaction.
     const recorded = [
       "aidlc-deliver-stage-rules.ts",
       "aidlc-rebuild-stage-graph.ts",
       "aidlc-write-audit-log.ts",
       "aidlc-run-sensors.ts",
+      "aidlc-sync-workflow-state.ts",
       "aidlc-log-subagent.ts",
       "aidlc-validate-state.ts",
     ];
@@ -298,6 +309,8 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
       { args: { subagent_type: "aidlc-developer-agent", prompt: "AIDLC-UNIT: todo-core" } },
     );
     await adapter["tool.execute.after"]({ tool: "bash", sessionID: "S-OC-child", callID: "b", args: { command: "echo hi" } });
+    for (const [tool, args] of FILE_WRITES) await adapter["tool.execute.after"]({ tool, sessionID: "S-OC-child", callID: tool, args });
+    await adapter["tool.execute.after"]({ tool: "todowrite", sessionID: "S-OC-child", callID: "td", args: TODO_IN_PROGRESS });
     await adapter["tool.execute.after"]({ tool: "task", sessionID: "S-OC-child", callID: "t", args: { subagent_type: "aidlc-developer-agent" } });
     await adapter["experimental.session.compacting"]({ sessionID: "S-OC-child" });
     for (const hook of recorded) {
@@ -307,8 +320,35 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
         .map((line) => (JSON.parse(line) as { session_id?: unknown }).session_id);
       expect({ hook, sessions: [...new Set(sessions)] }).toEqual({ hook, sessions: ["S-OC"] });
     }
-    expect(existsSync(join(root, "aidlc-log-subagent.ts.jsonl"))).toBe(true);
-    expect(existsSync(join(root, "aidlc-validate-state.ts.jsonl"))).toBe(true);
+    for (const hook of ["aidlc-write-audit-log.ts", "aidlc-run-sensors.ts", "aidlc-sync-workflow-state.ts", "aidlc-log-subagent.ts", "aidlc-validate-state.ts"]) {
+      expect({ hook, ran: existsSync(join(root, `${hook}.jsonl`)) }).toEqual({ hook, ran: true });
+    }
+  });
+
+  test("a child whose owner cannot be confirmed still has its file writes and to-do update recorded, with no session", async () => {
+    const root = freshProject();
+    const recorder = (capture: string) => [
+      'import { appendFileSync } from "node:fs";',
+      "export async function run(input: string): Promise<number> {",
+      `  appendFileSync(${JSON.stringify(capture)}, input + "\\n");`,
+      "  return 0;",
+      "}",
+    ].join("\n");
+    const recorded = ["aidlc-write-audit-log.ts", "aidlc-run-sensors.ts", "aidlc-sync-workflow-state.ts"];
+    for (const hook of recorded) writeFileSync(join(root, ".aidlc", "hooks", hook), recorder(join(root, `${hook}.jsonl`)));
+    const { client } = fakeClient({ "S-OC-child": "S-OC" });
+    client.session.get = async () => {
+      throw new Error("transient");
+    };
+    const adapter = await createTestAdapter(client, root);
+    for (const [tool, args] of FILE_WRITES) await adapter["tool.execute.after"]({ tool, sessionID: "S-OC-child", callID: tool, args });
+    await adapter["tool.execute.after"]({ tool: "todowrite", sessionID: "S-OC-child", callID: "td", args: TODO_IN_PROGRESS });
+    for (const hook of recorded) {
+      const payloads = readFileSync(join(root, `${hook}.jsonl`), "utf-8").trim().split("\n")
+        .map((line) => JSON.parse(line) as { session_id?: unknown });
+      expect({ hook, sessions: [...new Set(payloads.map((payload) => "session_id" in payload ? payload.session_id : "absent"))] })
+        .toEqual({ hook, sessions: ["absent"] });
+    }
   });
 
   test("an owner lookup that fails refuses the call instead of guarding it under another session", async () => {
@@ -1445,6 +1485,69 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
     // A helper's commands are its owner's; opencode's own terminal names no chat.
     expect(await shellEnv("ses_a_helper")).toEqual({ AIDLC_SESSION_OVERRIDE: "ses_a", AIDLC_SESSION_OVERRIDE_SOURCE: "payload" });
     expect(await shellEnv(undefined)).toEqual({});
+  });
+
+  test("two chats in one opencode process: a file write and a to-do update are recorded on their own chat's work", async () => {
+    const root = freshInstalledProject();
+    const { client } = fakeClient();
+    const adapter = await createAdapter({ client, directory: root });
+    const engine = async (chat: string, ...args: string[]) => {
+      const output = { env: {} as Record<string, string> };
+      await adapter["shell.env"]({ cwd: root, sessionID: chat, callID: "call" }, output);
+      const run = Bun.spawnSync({
+        cmd: [process.execPath, join(root, ".aidlc", "tools", "aidlc.ts"), "--project-dir", root, "engine", ...args],
+        cwd: root,
+        env: { ...process.env, ...output.env },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(run.exitCode, run.stderr.toString()).toBe(0);
+      return run.stdout.toString();
+    };
+    const startWork = async (chat: string, scope: string, request: string, label: string) => {
+      const offer = await engine(chat, "orchestrate", "next", "--scope", scope, request);
+      const id = /--request ([0-9a-f]{8})/.exec(offer)?.[1];
+      expect(id, offer).toBeDefined();
+      await engine(chat, "intent", "create", "--scope", scope, "--request", id ?? "", "--label", label);
+    };
+    const stageStep = async (chat: string) => {
+      let step = JSON.parse(await engine(chat, "orchestrate", "next")) as { kind?: string; receipt?: string; stage?: string; produces?: string[] };
+      while (step.kind === "load-steering") step = JSON.parse(await engine(chat, "orchestrate", "continue", step.receipt ?? ""));
+      expect(step.kind).toBe("run-stage");
+      return step;
+    };
+    // B's session-start runs last, so the process names chat B.
+    await adapter["chat.message"]({ sessionID: "ses_a" }, { parts: [{ type: "text", text: "add a farewell command" }] });
+    await adapter["chat.message"]({ sessionID: "ses_b" }, { parts: [{ type: "text", text: "add a version flag" }] });
+    await startWork("ses_a", "poc", "add a farewell command", "farewell");
+    await startWork("ses_b", "bugfix", "add a version flag", "version");
+    const a = await stageStep("ses_a");
+    const b = await stageStep("ses_b");
+    expect(a.stage).not.toBe(b.stage);
+    const record = (chat: string) => join(root, "aidlc", "spaces", "default", "intents", readSessionBinding(root, chat)?.intent ?? "");
+    const currentStage = (chat: string) =>
+      /^- \*\*Current Stage\*\*: (.*)$/m.exec(readFileSync(join(record(chat), "aidlc-state.md"), "utf-8"))?.[1];
+    const artifactRows = (chat: string, file: string) => {
+      const audit = join(record(chat), "audit");
+      return readdirSync(audit).filter((name) => name.endsWith(".md"))
+        .map((name) => readFileSync(join(audit, name), "utf-8"))
+        .join("\n").split("\n## ").filter((row) => /^\*\*Event\*\*: ARTIFACT_(CREATED|UPDATED)$/m.test(row) && row.includes(file)).length;
+    };
+    // Chat A's agent writes its stage's first file and marks its stage in progress.
+    const file = a.produces?.[0] ?? "";
+    mkdirSync(dirname(join(root, file)), { recursive: true });
+    writeFileSync(join(root, file), "# Intent\n\nA farewell command.\n");
+    await adapter["tool.execute.after"]({ tool: "write", sessionID: "ses_a", callID: "w", args: { filePath: file } });
+    await adapter["tool.execute.after"]({
+      tool: "todowrite",
+      sessionID: "ses_a",
+      callID: "td",
+      args: { todos: [{ content: `Running ${a.stage} [${a.stage}]`, status: "in_progress" }] },
+    });
+    expect({
+      artifactRows: [artifactRows("ses_a", file), artifactRows("ses_b", file)],
+      currentStages: [currentStage("ses_a"), currentStage("ses_b")],
+    }).toEqual({ artifactRows: [1, 0], currentStages: [a.stage, b.stage] });
   });
 
   test("idle suppresses its nudge for an open logged question and restores it after the answer", async () => {
