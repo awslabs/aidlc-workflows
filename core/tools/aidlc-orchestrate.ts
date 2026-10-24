@@ -15227,9 +15227,12 @@ function planChangeDirective(
   // the work is finished. Live runs read "You can undo that any time." and met
   // the refusal two stages later (Codex) or after the last approval (Claude
   // Code on Windows). An add alone keeps it: a later skip of the stage works
-  // where it stands. A Unit walk's steps keep the walk's own line.
+  // where it stands. A Unit walk's own steps keep the walk's line; a stage after
+  // the walk (Build and Test) has the same window as off a walk, since Current
+  // Stage stays on the walk's first step until the walk is done.
   const undoHolds = (): string => {
-    if (planSkip.length === 0 || walk !== null) return "You can undo that any time.";
+    const onTheWalk = walk !== null && [...planSkip, ...add].some((slug) => walk.steps.includes(slug));
+    if (planSkip.length === 0 || onTheWalk) return "You can undo that any time.";
     const order = loadGraph().map((stage) => stage.slug);
     const first = [...planSkip, ...add].sort((a, b) => order.indexOf(a) - order.indexOf(b))[0];
     if (add.includes(first)) return `You can undo that until ${name(first)} starts.`;
