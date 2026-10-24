@@ -16968,12 +16968,6 @@ function handleResumeReport(
   flags: ReportFlags,
   projectDir: string | undefined,
 ): void {
-  if (flags.stage?.trim()) {
-    emit(errorDirective(
-      "A resume-choice report is not a stage transition; omit --stage.",
-    ));
-    return;
-  }
   // A correction to the agent's command is its next action, never an error
   // that ends the turn.
   if (flags.choice === undefined) {
@@ -17034,6 +17028,16 @@ function emitTypedResumeChoice(
   let choice = flags.choice?.trim().toLowerCase() ?? "";
   const scope = getField(stateContent, "Scope")?.trim() ?? "";
   let named = flags.target;
+  // The --stage of the agent's gate reports, kept on this one with no
+  // --target. A redo reads it as the stage named where the branches below find
+  // the step the work is on; anywhere else it would pick a move, so the agent
+  // names the stage with --target instead.
+  const kept = named === undefined ? flags.stage?.trim() || undefined : undefined;
+  if (choice === "redo" && kept !== undefined) named = kept;
+  const nameTheStage = (): PrintDirective => printDirective(
+    "A re-entry report names the stage the person asked for with `--target <stage>`, not `--stage`. If they named " +
+      "one, run it again with `--target` in place of `--stage`; otherwise run it again without `--stage`.",
+  );
   // The Unit step a "redo <stage>" named, kept so the redo is of that exact step.
   let unitStep: string | undefined;
   // The stage a "redo <stage>" named, so a redo for named Units reopens it.
@@ -17053,6 +17057,10 @@ function emitTypedResumeChoice(
       : null;
     const box = parseCheckboxes(stateContent).find((entry) => entry.slug === wanted)?.state;
     if (!forUnits && walkStep?.past) {
+      if (kept !== undefined) {
+        emit(nameTheStage());
+        return;
+      }
       // A step the Unit in flight already did, the block's first stage
       // included, is reopened for that Unit, as the jump back to it does.
       choice = "jump";
@@ -17065,6 +17073,9 @@ function emitTypedResumeChoice(
       named = undefined;
       unitStep = wanted;
       redoStage = wanted;
+    } else if (kept !== undefined) {
+      emit(nameTheStage());
+      return;
     } else if (forUnits && node !== undefined && isPerUnit(node) && (walkStep !== null || box !== "pending")) {
       // A redo for named Units is reopening that step for them, and the reopen
       // judges what each Unit has run: a Unit can finish a step while the
@@ -17175,7 +17186,7 @@ function emitTypedResumeChoice(
   if (choice === "jump") {
     const target = named?.trim() ?? "";
     if (!target) {
-      emit(printDirective(
+      emit(kept !== undefined ? nameTheStage() : printDirective(
         "Ask the person which stage they want, then report again with `--choice jump --target <stage>`.",
       ));
       return;
