@@ -131,7 +131,12 @@ function configure(project: string, env: Record<string, string | undefined>): Ru
 }
 
 function doctor(project: string, env: Record<string, string | undefined>): Run {
-  return run(join(project, ".aidlc", "tools", "aidlc.ts"), ["doctor", "--no-color"], project, env);
+  return run(join(project, ".aidlc", "tools", "aidlc.ts"), [
+    "doctor",
+    "--no-color",
+    "--project-dir",
+    project,
+  ], project, env);
 }
 
 const times = (out: string, text: string): number => out.split(text).length - 1;
@@ -159,7 +164,7 @@ describe("the line and the row come from one helper", () => {
       )
       .map((text) => ({
         slug: /^slug:\s*(\S+)/m.exec(text)?.[1] ?? "",
-        reviewer: /^reviewer:\s*(\S+)/m.exec(text)?.[1] ?? "null",
+        reviewer: /^reviewer:[ \t]*(\S+)/m.exec(text)?.[1] ?? "null",
       }))
       .filter((stage) => stage.slug !== "" && stage.reviewer !== "null");
     expect(reviewed.length).toBeGreaterThan(0);
@@ -208,27 +213,28 @@ describe("config and doctor in a project folder", () => {
     const env = machineEnv(false);
     const gitConfig = readFileSync(join(project, ".git", "config"), "utf-8");
     const setup = configure(project, env);
-    console.log(`config in a ${project.length}-character folder:\n${setup.out}`);
+    // A refresh is the same config run, and says it the same way.
+    const refresh = configure(project, env);
+    const checked = doctor(project, env);
+    console.log(`config in a ${project.length}-character folder:\n${setup.out}\nits refresh:\n${refresh.out}`);
+    console.log(`doctor in a ${project.length}-character folder:\n${checked.out}`);
     expect(setup.status, setup.out).toBe(0);
     expect(times(setup.out, SAID), setup.out).toBe(WINDOWS ? 1 : 0);
     if (WINDOWS) {
-      expect(setup.out).toContain(`Note: this project folder is ${project.length} ${SAID}`);
+      expect(setup.out).toContain(`Note: This project folder is ${project.length} ${SAID}`);
       expect(setup.out).toContain(`move the project to a shorter folder (for example C:\\src\\${basename(project)})`);
     }
-    // A refresh is the same config run, and says it the same way.
-    const refresh = configure(project, env);
     expect(refresh.status, refresh.out).toBe(0);
     expect(times(refresh.out, SAID), refresh.out).toBe(WINDOWS ? 1 : 0);
-
-    const checked = doctor(project, env);
-    console.log(`doctor in a ${project.length}-character folder:\n${checked.out}`);
     expect(times(checked.out, SAID), checked.out).toBe(WINDOWS ? 1 : 0);
     if (WINDOWS) {
       expect(checked.out).toContain(`warn  Project folder: ${project.length} ${SAID}`);
       expect(checked.out).toContain(`fix: move the project to a shorter folder (for example C:\\src\\${basename(project)})`);
     }
     // An advisory row: doctor's verdict is what the other checks make it.
-    const json = JSON.parse(run(join(project, ".aidlc", "tools", "aidlc.ts"), ["doctor", "--json"], project, env).out);
+    const json = JSON.parse(
+      run(join(project, ".aidlc", "tools", "aidlc.ts"), ["doctor", "--json", "--project-dir", project], project, env).out,
+    );
     const rows = (json.data.checks as Array<{ label: string; pass: boolean; severity?: string }>)
       .filter((check) => check.label.includes(SAID));
     expect(rows.map((row) => [row.pass, row.severity])).toEqual(WINDOWS ? [[false, "warn"]] : []);
@@ -247,8 +253,11 @@ describe("config and doctor in a project folder", () => {
     if (WINDOWS) expect(setup.out.indexOf(SAID)).toBeLessThan(setup.out.indexOf("Setup complete."));
   });
 
-  test("a short folder: neither config nor doctor says anything about it", () => {
+  test("a short folder: neither config nor doctor says anything about it", async () => {
+    const { RECORD_DEPTH } = await import(HELPER);
     const project = projectFolder(0);
+    // Short only because the temp folder is: a TEMP moved deep enough is the rig, not AI-DLC.
+    expect(project.length, project).toBeLessThanOrEqual(260 - 1 - RECORD_DEPTH);
     const env = machineEnv(false);
     const setup = configure(project, env);
     expect(setup.status, setup.out).toBe(0);
