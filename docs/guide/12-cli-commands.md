@@ -2775,7 +2775,10 @@ new knowledge into it cumulatively, so the stage checks first:
   content fingerprint over its analyzed paths. Verdicts: `NO_STORE` (first
   scan), `CURRENT` (analyzed paths unchanged - reuse is safe), `STALE`
   (analyzed paths changed), `UNVERIFIED` (no computable fingerprint - e.g.
-  not a git work tree), `UNKNOWN_SCOPE` (store predates scope tracking).
+  not a git work tree), `UNKNOWN_SCOPE` (store predates scope tracking),
+  `SCANNED` (this run of the stage already scanned the repo and published the
+  store: its whole link chain is on record since the stage last started, was
+  jumped to or was asked to change; nothing to reuse or rescan).
 - **Compare mode** (`--compare <incoming timestamp.md>`) answers whether the
   incoming run's scope covers the store's: `COVERS`, or `NARROWER` plus the
   exact paths and components no longer claimed as deep coverage. `COVERS` is

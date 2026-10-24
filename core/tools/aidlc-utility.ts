@@ -278,6 +278,10 @@ import {
   codekbSourceFingerprint,
   codekbStoreGeneration,
   parseReScope,
+  pipelineAttemptStartedAt,
+  pipelineLinkEvidence,
+  readIssuedDirectiveMarker,
+  singleStageAttemptIsOpen,
   relativeCodekbDir,
   RESERVED_RECORD_NAMES,
   scopePathCovered,
@@ -11267,6 +11271,32 @@ function comparedScopeDraft(
   return rel === `inception/reverse-engineering/${name}` ? { record, rel } : null;
 }
 
+// The store is the stage's own work in hand: the attempt in progress (the
+// isolated run's while one is open and the step in hand is it, the main
+// workflow's otherwise) recorded this repo's whole link chain since the stage
+// last started, was jumped to or was asked to change, under any Guard Policy.
+// Read again by a new chat, such a store was offered back for reuse, and Reuse
+// recorded a stage that ran as skipped. The final link is recorded only after
+// the nine files are published, so the chain is the whole fact; a file time
+// (rewritten by every clone and checkout) and the store's own `intent:` line
+// (checked by none) are not read.
+function scannedThisAttempt(projectDir: string, repo: string): boolean {
+  const stage = findStageBySlug("reverse-engineering");
+  if (!stage) return false;
+  try {
+    const singleRun = readIssuedDirectiveMarker(projectDir)?.single === true &&
+      singleStageAttemptIsOpen(projectDir, stage.slug);
+    const since = Date.parse(pipelineAttemptStartedAt(projectDir, stage.slug, { singleRun }));
+    if (Number.isNaN(since)) return false;
+    const chainRepo = intentRepos(projectDir).length > 0 ? repo : null;
+    const { links, receipts } = pipelineLinkEvidence(projectDir, stage, { singleRun });
+    return links.every((link) => receipts.some((receipt) =>
+      receipt.repo === chainRepo && receipt.link === link && Date.parse(receipt.timestamp) >= since));
+  } catch {
+    return false;
+  }
+}
+
 function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>): void {
   const asJson = flags.json === "true";
   const selection = resolveWorkflowSelection(projectDir);
@@ -11433,6 +11463,14 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
   }
 
   // Status mode.
+  if (scannedThisAttempt(projectDir, repo)) {
+    emit(
+      { verdict: "SCANNED", store_intent: store.intent, kind: store.kind, analyzed_paths: store.analyzedPaths },
+      `SCANNED: this run of Reverse Engineering already scanned ${repo} and published this store; there is ` +
+        "nothing to reuse or rescan.",
+    );
+    return;
+  }
   const currentFingerprint =
     store.analyzedPaths.length > 0
       ? codekbScopeFingerprint(repoDir, store.analyzedPaths, fingerprintExcludes)
