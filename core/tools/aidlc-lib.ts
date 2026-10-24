@@ -10283,6 +10283,32 @@ function crossActiveDirectiveBoundary(
   };
 }
 
+// A tracked `next --stage` that made the person's jump itself publishes a step
+// computed on the state that jump wrote, while its claim was issued on the
+// state before it. Only that exact move (the marker and the pending attempt
+// both at `from`, the state now at `to`) carries the claim over to `to`; any
+// other write between them leaves the claim as it was, so it fails closed. A
+// waiting or selected resume goes, as when any move of the digest crosses the
+// boundary (crossActiveDirectiveBoundary).
+function claimOverOwnJump(
+  marker: ActiveDirectiveMarker | null,
+  move: { from: string; to: string } | undefined,
+  stateSha256: string,
+): ActiveDirectiveMarker | null {
+  const attempt = marker?.active_attempt;
+  if (
+    move === undefined || marker?.version !== 2 || attempt?.status !== "pending" || move.to !== stateSha256 ||
+    marker.state_sha256 !== move.from || attempt.issued_state_sha256 !== move.from
+  ) return marker;
+  const supersedeResume = marker.resume?.status === "waiting" || marker.resume?.status === "selected";
+  return {
+    ...marker,
+    state_sha256: move.to,
+    active_attempt: { ...attempt, issued_state_sha256: move.to },
+    ...(supersedeResume && marker.resume ? { resume: { ...marker.resume, status: "superseded" } } : {}),
+  };
+}
+
 function codeGenerationSourceFloorForPublication(
   target: ActiveDirectiveTarget,
   base: ActiveDirectiveMarker,
@@ -10326,6 +10352,9 @@ export function writeActiveDirectiveMarker(
     legacyPlanApprovalOffer?: PlanApprovalLegacyOfferCandidate;
     legacyPlanApprovalSession?: string;
     resultSha256?: string;
+    // The state digests before and after the jump this command made itself
+    // (`next --stage` over running work): see claimOverOwnJump.
+    ownStateMove?: { from: string; to: string };
   },
 ): ActiveDirectiveWriteResult {
   if (!/^[a-z][a-z0-9-]*$/.test(marker.stage)) {
@@ -10527,23 +10556,24 @@ export function writeActiveDirectiveMarker(
       }
     }
     const cursorHarness = installedHarnessNameForTarget(target);
-    const copilotOwned = exactCopilotMarker(current, target, context);
-    const attempt = current?.version === 2 ? current.active_attempt : undefined;
+    const claimed = claimOverOwnJump(current, invocation?.ownStateMove, context.stateSha256);
+    const copilotOwned = exactCopilotMarker(claimed, target, context);
+    const attempt = claimed?.version === 2 ? claimed.active_attempt : undefined;
     const matchingAttempt = copilotOwned && attempt?.status === "pending" && invocation?.attemptId !== undefined &&
       attempt.id === invocation.attemptId && attempt.command_kind === (invocation.claimedKind ?? invocation.commandKind) &&
-      attempt.command_sha256 === invocation.commandSha256 && attempt.session_id === current.owner_session &&
-      attempt.owner_epoch === current.owner_epoch && attempt.context_epoch === current.context_epoch &&
-      attempt.issued_state_sha256 === context.stateSha256 && attempt.claim_revision === current.revision &&
+      attempt.command_sha256 === invocation.commandSha256 && attempt.session_id === claimed.owner_session &&
+      attempt.owner_epoch === claimed.owner_epoch && attempt.context_epoch === claimed.context_epoch &&
+      attempt.issued_state_sha256 === context.stateSha256 && attempt.claim_revision === claimed.revision &&
       attempt.result_sha256 === undefined && attempt.result_revision === undefined;
     const trackedFreshNext = invocation?.commandKind === "next" && invocation.attemptId !== undefined;
     if (copilotOwned && trackedFreshNext && !matchingAttempt) {
       return { marker: current, result: "stale-attempt" as const, preserve: true };
     }
-    if (copilotOwned && (current.resume?.status === "waiting" || current.resume?.status === "selected") && !matchingAttempt) {
+    if (copilotOwned && (claimed.resume?.status === "waiting" || claimed.resume?.status === "selected") && !matchingAttempt) {
       return { marker: current, result: "preserved" as const, preserve: true };
     }
-    const base = current?.version === 2 && current.project_sha256 === context.projectSha256 && current.intent_uuid === context.intentUuid
-      ? current
+    const base = claimed?.version === 2 && claimed.project_sha256 === context.projectSha256 && claimed.intent_uuid === context.intentUuid
+      ? claimed
       : freshActiveDirectiveMarker(target, stateContent, marker.stage);
     const token = marker.continue_token;
     const nextRevision = (base.revision ?? 0) + 1;
@@ -10789,6 +10819,23 @@ export function readActiveDirectiveMarker(
   } catch {
     return null;
   }
+}
+
+// Normalize a state-file stage value for comparison: the field usually holds
+// the slug (code-generation) but a display-cased value (Code Generation) must
+// compare equal rather than silently disable enforcement.
+export function normalizeStageName(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, "-");
+}
+
+// Code Generation is the step on record: the step the engine issued (read with
+// readActiveDirectiveMarker, so only while it matches the state) or Current
+// Stage. The plan-approval guard judges every write and every jump there, a
+// jump at its own `jump execute` door, so `next --stage` leaves the jump to
+// that command there and makes it itself everywhere else.
+export function codeGenerationIsTheStep(issuedStage: string, currentStage: string): boolean {
+  return normalizeStageName(issuedStage) === "code-generation" ||
+    normalizeStageName(currentStage) === "code-generation";
 }
 
 // The Code Generation step the engine issued last for this work, even when a

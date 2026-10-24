@@ -92,6 +92,7 @@ import {
   auditBlockField,
   auditFilePath,
   type ClaudeCodeHookInput,
+  codeGenerationIsTheStep,
   composerProposalPath,
   docsRoot,
   ENGINE_TEXT_DIRS,
@@ -102,6 +103,7 @@ import {
   loadScopeMapping,
   loadStageGraph,
   nextLineFlags,
+  normalizeStageName,
   parseCheckboxes,
   parseStateStageSuffixes,
   PLAN_APPROVAL_ASK_TYPE,
@@ -355,12 +357,7 @@ function approvalEvidenceIsCurrent(evidence: UnitEvidence | undefined): boolean 
   );
 }
 
-// Normalize a state-file stage value for comparison: the field usually holds
-// the slug (code-generation) but a display-cased value (Code Generation) must
-// compare equal rather than silently disable enforcement.
-export function normalizeStageName(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, "-");
-}
+export { normalizeStageName };
 
 const UNIT_MARKER_RE = /^[ \t]*AIDLC-UNIT[ \t]*:[ \t]*(.*?)[ \t]*$/;
 const STAGE_MARKER_RE = /^[ \t]*AIDLC-STAGE[ \t]*:[ \t]*(.*?)[ \t]*$/;
@@ -1552,7 +1549,8 @@ const NO_ENGINE_CONTEXT: EngineCommandContext = { jumpAdmitted: () => false };
 // reopen` to a stage that is an identifier, the `next --stage` its one
 // exception admits the jump after; else false. A superseded step waits for a
 // fresh `next`, with one exception: Copilot's settle supersedes the step after
-// every print, `next --stage`'s jump print included, so a `jump execute` to the
+// every print, the jump print `next --stage` gives at Code Generation included
+// (elsewhere it makes the jump itself), so a `jump execute` to the
 // stage the state-bound step's settled claim asked for with `next --stage`, on
 // the state as it is now, is the agent carrying that print out, and so is the
 // `jump reopen` it prints for a unit-major walk: one Unit's (with `--unit`,
@@ -2338,9 +2336,10 @@ async function evaluate(
       promptUnitMarkers(dispatchPrompt).length > 0 ||
       promptStageMarkers(dispatchPrompt).length > 0 ||
       promptTestingContractMarkers(dispatchPrompt).length > 0;
+    // The step on record is the engine's to read too: where it is Code
+    // Generation, `next --stage` leaves a jump to the `jump execute` judged here.
     const codeGenerationRelevant =
-      directiveStage === GUARDED_STAGE ||
-      durableStage === GUARDED_STAGE ||
+      codeGenerationIsTheStep(directiveStage, durableStage) ||
       (guardedDispatch && explicitPlanDispatch);
     if (!codeGenerationRelevant) return 0;
     const knownMutationTool =
