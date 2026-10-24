@@ -567,7 +567,8 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(d.message).not.toContain("next compose");
     const command = /`([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? "";
     expect(command.endsWith("engine recompose --skip team-formation --reason 'the person asked to skip it'"), d.message).toBe(true);
-    expect(d.message).toContain('"Skipped Team Formation. You can undo that any time."');
+    // The undo holds while the stage is still ahead (t-skip-undo-window).
+    expect(d.message).toContain('"Skipped Team Formation. You can undo that until the work moves past it."');
     expect(d.message).toContain("If they later ask to undo it, run `");
     expect(d.message.endsWith("recompose --add team-formation`."), d.message).toBe(true);
     // The one line is all the person hears: recompose's counts stay out of the reply.
@@ -701,7 +702,9 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     const d = nextDirective(proj, ["--skip", "deployment-pipeline,deployment-execution"]);
     expect(d.kind).toBe("print");
     expect(d.message).toContain("engine recompose --skip deployment-pipeline,deployment-execution --reason 'the person asked to skip it'`");
-    expect(d.message).toContain('"Skipped Deployment Pipeline and Deployment Execution. You can undo that any time."');
+    expect(d.message).toContain(
+      '"Skipped Deployment Pipeline and Deployment Execution. You can undo that until the work moves past Deployment Pipeline."',
+    );
     expect(d.message).toContain("the open Build and Test question");
     expect(d.message).toContain("report --stage build-and-test --result approved --user-input Approve");
     expect(d.message).toContain("re-run `next`");
