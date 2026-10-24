@@ -15961,9 +15961,15 @@ function planChangeDirective(
   // Code on Windows). An add alone keeps it: a later skip of the stage works
   // where it stands. On a Unit walk Current Stage stays on the walk's first
   // step until every Unit is through, so a walk step's undo holds until the
-  // first stage after the walk starts. The one stage recompose takes back
-  // behind the cursor, Reverse Engineering the work still owes, is owed until
-  // Construction starts.
+  // first stage after the walk starts. Reverse Engineering the work still
+  // owes, which recompose takes back behind the cursor on its own rule, is
+  // owed until Construction starts.
+  // The way back when no undo window holds: each stage named runs on its own.
+  const ownForm = (slugs: string[]): string => {
+    const own = slugs.map((slug) => `\`${entrySkillInvocation()} --stage ${slug} --single\``);
+    return `${slugs.length === 1 ? "It" : slugs.length === 2 ? "Either one" : "Any of them"} can still be run on its own with ${
+      own.length <= 1 ? own.join("") : `${own.slice(0, -1).join(", ")} or ${own.at(-1)}`}.`;
+  };
   const undoHolds = (skipped: string[] = planSkip, added: string[] = add, what = "that"): string => {
     if (skipped.length === 0) return `You can undo ${what} any time.`;
     const order = loadGraph().map((stage) => stage.slug);
@@ -15983,6 +15989,13 @@ function planChangeDirective(
       ...skipped.map((slug) => [slug, "SKIP"] as const),
       ...added.map((slug) => [slug, "EXECUTE"] as const),
     ].reduce((content, [slug, action]) => setStageSuffix(content, slug, action), plan.stateContent);
+    // The walk's first step skipped where it stands, with no Unit's work for
+    // it, moves the work on in the same request: a stage it passes is behind
+    // the work at once.
+    const movesTo = firstStep !== null && firstSkip !== null && unitStep !== null && !unitStep.worked
+      ? nextInScopeStage(firstStep, plan.scope, changed)?.slug ?? null
+      : null;
+    if (movesTo !== null && order.indexOf(first) < order.indexOf(movesTo)) return ownForm(skipped);
     const after = (from: string, passes: (slug: string) => boolean): ReturnType<typeof nextInScopeStage> => {
       let at = nextInScopeStage(from, plan.scope, changed);
       while (at !== null && passes(at.slug)) at = nextInScopeStage(at.slug, plan.scope, changed);
@@ -16003,9 +16016,7 @@ function planChangeDirective(
     // is when the stage that closes it has already started.
     if ((gateOpen !== null && nextInScopeStage(gateOpen, plan.scope, changed)?.slug === closes?.slug) ||
         (closes !== null && order.indexOf(closes.slug) <= order.indexOf(current))) {
-      const own = skipped.map((slug) => `\`${entrySkillInvocation()} --stage ${slug} --single\``);
-      return `${skipped.length === 1 ? "It" : skipped.length === 2 ? "Either one" : "Any of them"} can still be run on its own with ${
-        own.length <= 1 ? own.join("") : `${own.slice(0, -1).join(", ")} or ${own.at(-1)}`}.`;
+      return ownForm(skipped);
     }
     if (closes === null) return `You can undo ${what} until the work is finished.`;
     return owed || onTheWalk ? `You can undo ${what} until ${name(closes.slug)} starts.` : past;
@@ -16048,11 +16059,15 @@ function planChangeDirective(
         ? `It can still be run for the ${unitName} Unit with \`${entrySkillInvocation()} --stage ${firstStep} --unit ` +
           `${unitStep.unit}\`, and for each Unit after it the same way.`
         : `It can still be run on its own with \`${entrySkillInvocation()} --stage ${firstStep} --single\`.`;
+    const restBack = replanned ? undoHolds(planSkip, add, firstSkip === null ? "that" : "the rest") : "";
+    // The first step run on its own beside stages its skip moved the work past:
+    // one way back names them all.
+    const together = firstSkip !== null && !unitStep.worked && restBack === ownForm(planSkip);
     const everyLine = `Skipped ${unitStep.others ? "" : `${step} for the ${unitName} Unit, and `}` +
       `${listed(walkNamed.map(name))} for every Unit from here` +
       `${otherNamed.length > 0 ? `, and ${listed(otherNamed.map(name))}` : ""}${added}. ` +
       (unitStep.others
-        ? [firstBack, replanned ? undoHolds(planSkip, add, firstSkip === null ? "that" : "the rest") : ""].filter(Boolean).join(" ")
+        ? (together ? ownForm([firstStep!, ...planSkip]) : [firstBack, restBack].filter(Boolean).join(" "))
         : `${forTheUnit} ${undoHolds(planSkip, add, "the rest")}`);
     return kept(turnEndingPrint(
       `${before === null ? "" : `Run \`${before}\`${filled} and print its output verbatim. `}` +
@@ -16102,14 +16117,11 @@ function planChangeDirective(
   // that Unit is reopened for it. A way back after the person's own action is
   // a plain fact that names the command, never a line telling them to type it
   // (t-offers-are-plain-questions).
-  // Each command names its stage, so it can be typed as shown.
-  const onItsOwn = skip.map((slug) => `\`${entrySkillInvocation()} --stage ${slug} --single\``);
-  const anyOf = onItsOwn.length <= 1 ? onItsOwn.join("") : `${onItsOwn.slice(0, -1).join(", ")} or ${onItsOwn.at(-1)}`;
   const wayBack = unitStep !== null
     ? forTheUnit
     : started === null
       ? undoHolds()
-      : `${skip.length === 1 ? "It" : skip.length === 2 ? "Either one" : "Any of them"} can still be run on its own with ${anyOf}.`;
+      : ownForm(skip);
   const line = `"${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ${wayBack}${noted ? ` ${noted}` : ""}${parkedTail}"`;
   const undo = `If they later ask to undo it, run \`${undone}\`.`;
   // The question named the stages after the skipped one too, and the same
