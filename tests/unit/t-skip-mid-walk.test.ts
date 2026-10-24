@@ -512,6 +512,26 @@ describe("a skip the person asks for at the walk's first stage, while a Unit is 
     expect(`${at.kind} ${at.stage}/${at.unit}`, JSON.stringify(at)).toBe("run-stage nfr-requirements/beta");
   });
 
+  // A scope switch typed with the skip runs first; the walk's first stage is
+  // then skipped as the skip alone skips it, never sent to recompose.
+  test("with a scope switch in the same command: the switch runs first, then this Unit or every Unit from here", () => {
+    const proj = walk(["alpha", "beta"], false);
+    const step = next(proj, ["--scope", "refactor", "--skip", "functional-design"]);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    const message = String(step.message);
+    expect(message).toStartWith("Run `bun .claude/tools/aidlc.ts engine scope change --scope refactor`");
+    expect(message).not.toContain("engine recompose --skip functional-design");
+    expect(named(segment(message, "If their words mean the alpha Unit only", EVERY_FROM)), message).toEqual([FIRST_THIS_UNIT]);
+    expect(named(segment(message, EVERY_FROM)), message).toEqual([FIRST_EVERY_UNIT]);
+    const switched = runNamed(proj, "bun .claude/tools/aidlc.ts engine scope change --scope refactor");
+    expect(switched.status, switched.out).toBe(0);
+    const skipped = runNamed(proj, FIRST_EVERY_UNIT);
+    expect(skipped.status, skipped.out).toBe(0);
+    const state = readFileSync(stateFile(proj), "utf-8");
+    expect(state).toContain("- **Scope**: refactor");
+    expect(state).toContain("- [S] functional-design — EXECUTE");
+  });
+
   test("every Unit from here in the person's own words: the next stage's question is not handed them", () => {
     const proj = walk(["alpha", "beta"], false);
     says(proj, "skip functional design, we have the design already");

@@ -314,6 +314,7 @@ import {
   loadScopeMapping,
   scopeGuardPolicyDefault,
   nextInScopeStage,
+  scopeGridOnProject,
   stageReopenedByScopeChange,
   openPendingDecision,
   parseCheckboxes,
@@ -10292,7 +10293,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       ];
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
       const fill = unnamed ? messageFill(pd) : "";
-      emit(flags.planChanges ? planChangeDirective(flags.planChanges, command, null, false, null, fill) : turnEndingPrint(
+      // No Unit walk is read here: it needs the saved scope this install lacks.
+      const switching = {
+        scope,
+        stateContent,
+        together: openGateApprovesTogether(pd, (getField(stateContent, "Current Stage") ?? "").trim()),
+        switchedTo: flags.scope,
+      };
+      emit(flags.planChanges ? planChangeDirective(flags.planChanges, command, switching, false, null, fill) : turnEndingPrint(
         `Run \`${command}\` to change scope${fill}, then print its output verbatim and stop.`,
       ));
       return;
@@ -10573,7 +10581,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const switched = carriesOn
         ? printDirective(`Run \`${command}\` to change scope${fill}, then print its output verbatim and re-run next to carry on with the work.`)
         : turnEndingPrint(`Run \`${command}\` to change scope${fill}, then ${verbatimThenStop}`);
-      emit(planChanges ? planChangeDirective(planChanges, command, null, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
+      const switching = { ...plan, switchedTo: flags.scope, carriesOn };
+      emit(planChanges ? planChangeDirective(planChanges, command, switching, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
         !carriesOn && scopeSwitchKeepsPlace(pd, currentStateScope, stateContent, flags.scope)
           ? withWorkPicksUpLine(switched, pd, currentStateScope, stateContent)
           : switched,
@@ -15031,7 +15040,14 @@ function planChangeDirective(
   before: string | null,
   // `together`: the stages the open gate's one question named, when it named several.
   // `passedOver`: the added stages the work has just passed over, which `next` goes back to.
-  plan: { scope: string; stateContent: string; walk?: PlanChangeWalk | null; together?: string[]; passedOver?: string[] } | null,
+  // `switchedTo`: a scope change typed in the same command, which runs first; it
+  // rebuilds the plan from that scope's grid and keeps every checkbox, so
+  // `stateContent` says where the work stands and the grid what it runs.
+  // `carriesOn`: the switch alone goes on with the work rather than ending the turn.
+  plan: {
+    scope: string; stateContent: string; walk?: PlanChangeWalk | null; together?: string[]; passedOver?: string[];
+    switchedTo?: string; carriesOn?: boolean;
+  } | null,
   // The code plan's question is open: it stays the open step, so what the
   // person says next is kept as their answer to it.
   planWaits = false,
@@ -15053,9 +15069,19 @@ function planChangeDirective(
   };
   // A stage the plan already skips or runs is no change: it is said, not sent
   // to recompose, so the undo line names only what changed. After a scope
-  // change (plan null) the new plan is not known here, so every flip is sent.
+  // change it is the plan that change writes.
+  const switched = plan?.switchedTo;
+  const switchedGrid = plan === null || switched === undefined ? null
+    : scopeGridOnProject(loadScopeMapping()[switched] ?? { stages: {} }, plan.stateContent);
+  const actionOf = (slug: string): "EXECUTE" | "SKIP" | undefined =>
+    plan === null ? undefined
+      : switchedGrid !== null ? switchedGrid[slug] as "EXECUTE" | "SKIP" | undefined
+      : effectivePlanAction(slug, plan.scope, plan.stateContent);
+  // A stage already done is recompose's to name, as it is without a switch.
+  const done = (slug: string): boolean =>
+    switched !== undefined && parseCheckboxes(plan!.stateContent).some((c) => c.slug === slug && c.state === "completed");
   const already = (slug: string, action: "EXECUTE" | "SKIP"): boolean =>
-    plan !== null && effectivePlanAction(slug, plan.scope, plan.stateContent) === action;
+    actionOf(slug) === action && !(action === "SKIP" && done(slug));
   const skip = [...new Set(changes.skip)].filter((slug) => !already(slug, "SKIP"));
   const add = [...new Set(changes.add)].filter((slug) => !already(slug, "EXECUTE"));
   const unchanged = [
@@ -15066,13 +15092,18 @@ function planChangeDirective(
     ? `${unchanged.join("; ").charAt(0).toUpperCase()}${unchanged.join("; ").slice(1)}.`
     : "";
   if (skip.length === 0 && add.length === 0) {
-    return kept(turnEndingPrint(
-      `${before ? `Run \`${before}\`${filled} and print its output verbatim, then tell` : "Tell"} the person in one line: ` +
-        `"${noted} The plan is unchanged.${parkedTail}"${end}${resume}`,
-    ));
+    const said = `${before ? `Run \`${before}\`${filled} and print its output verbatim, then tell` : "Tell"} the person in one line: ` +
+      // The scope change's own output says the plan changed.
+      `"${noted}${switched === undefined ? " The plan is unchanged." : ""}${parkedTail}"`;
+    return kept(plan?.carriesOn === true
+      ? printDirective(`${said} Then re-run \`next\` to carry on with the work.`)
+      : turnEndingPrint(`${said}${end}${resume}`));
   }
   // Where the work stands: the current stage, started or waiting at its gate.
-  const current = plan === null ? "" : (getField(plan.stateContent, "Current Stage") ?? "").trim();
+  // One the new scope does not run is set aside by the change and the `next`
+  // after it, not here.
+  const atStage = plan === null ? "" : (getField(plan.stateContent, "Current Stage") ?? "").trim();
+  const current = switched !== undefined && actionOf(atStage) !== "EXECUTE" ? "" : atStage;
   const currentState = current === "" ? undefined : parseCheckboxes(plan!.stateContent).find((c) => c.slug === current)?.state;
   // On the Unit walk Current Stage stays on the walk's first step while a
   // Unit is on a later one: the step the Unit is working on is skipped for
@@ -15082,7 +15113,7 @@ function planChangeDirective(
   // plan change, which covers every Unit. On the walk's first step itself
   // every Unit from here is that stage's own skip, since a plan change only
   // reaches stages ahead.
-  const walk = plan?.walk ?? null;
+  const walk = current === atStage ? plan?.walk ?? null : null;
   const firstStep = walk?.at === "work" && walk.stage === current && skip.includes(current) ? current : null;
   const started = firstStep === null && (currentState === "in-progress" || currentState === "revising" ||
       currentState === "awaiting-approval") && skip.includes(current)
