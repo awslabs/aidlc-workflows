@@ -1018,10 +1018,12 @@ function protectedAuditTrailPath(path: unknown, cwd: string): boolean {
 // result is checked against the anchored audit-trail path, so a project's own
 // `src/audit/` stays writable. When a word still cannot be decided (an unknown
 // variable, a glob, a computed cd), it is refused if the command could be aiming
-// at the audit trail at all: the word or the command names an `audit` segment. A
+// at the audit trail at all: the word names an `audit` segment, or the command
+// names an `audit` directory (AUDIT_DIRECTORY_TEXT) or the AIDLC workspace. A
 // backslash `\audit\` spelling, which a PowerShell host resolves but the POSIX
-// parser does not, is refused outright. A false refusal only points at the
-// owning commands.
+// parser does not, is refused outright. The folders the shell stands in and
+// above are cut out first (withoutOwnFolders): a project under a folder named
+// audit is the person's path, not the trail.
 const AUDIT_SEGMENT = /(?:^|[\\/])audit(?:[\\/]|$)/i;
 // protectedShell replaces a command substitution it cannot evaluate with this
 // placeholder, so it marks a computed word as surely as `$` does.
@@ -1131,7 +1133,8 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
   shellWriteTargets(visible, cwd, words);
   shellWriteTargets(command, cwd, words);
   if (words.length === 0) return false;
-  if (/\\audit\\/i.test(command)) return true;
+  const outside = withoutOwnFolders(command, cwd);
+  if (/\\audit\\/i.test(outside)) return true;
   const values = literalAssignments(command, cwd);
   const roots = [cwd];
   let computedRoot = false;
@@ -1149,13 +1152,34 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
   // command substitution can assemble it (`$(printf au)dit`), which no text
   // test sees. An undecided word therefore also fails closed whenever the
   // command reaches into the AIDLC workspace or already runs inside it.
-  const plain = command.replace(/["'\\]/g, "");
-  const namesAudit = /audit/i.test(plain) || AIDLC_WORKSPACE.test(plain) || AIDLC_WORKSPACE.test(cwd);
+  const plain = outside.replace(/["'\\]/g, "");
+  const namesAudit = AUDIT_DIRECTORY_TEXT.test(plain) || AIDLC_WORKSPACE.test(plain) || AIDLC_WORKSPACE.test(cwd);
   return words.some((word) => expandWord(word, values).some((expanded) => {
-    if (expanded === null) return AUDIT_SEGMENT.test(word) || namesAudit;
+    if (expanded === null) return AUDIT_SEGMENT.test(withoutOwnFolders(word, cwd)) || namesAudit;
     if (roots.some((root) => protectedAuditTrailPath(resolve(root, expanded), cwd))) return true;
     return computedRoot && !isAbsolute(expanded) && AUDIT_SEGMENT.test(expanded);
   }));
+}
+
+// `audit` named as a directory in a command's text (`x/audit`, `audit/x`),
+// not as a word of its own (`npm audit`) or part of a longer name
+// (`audit-service`, `audit.md`).
+const AUDIT_DIRECTORY_TEXT = /(?:^|[^\w.-])audit[\\/]|[\\/]audit(?![\w.-])/i;
+
+// The folders the shell stands in and above are the person's own path, so an
+// `audit` in their names (a project under ~/audit/) is never the trail, which
+// lies inside the project under aidlc/spaces; a cwd inside that workspace
+// fails closed on its own. Each spelling is cut only as a whole folder where a
+// word starts, so `/audit` inside `$R/audit/` is never taken for `/audit`.
+function withoutOwnFolders(text: string, cwd: string): string {
+  let out = text;
+  for (let folder = cwd; folder && folder !== "." && dirname(folder) !== folder; folder = dirname(folder)) {
+    for (const spelling of new Set([folder, folder.replaceAll("\\", "/"), folder.replaceAll("/", "\\")])) {
+      const escaped = spelling.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      out = out.replace(new RegExp(`(?<=^|[\\s"'=;&|(<>])${escaped}(?=[\\\\/\\s"';&|)]|$)`, "gi"), () => ".");
+    }
+  }
+  return out;
 }
 
 // The shell walk answers one boolean through several recursive sites, so the
