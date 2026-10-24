@@ -223,7 +223,14 @@ reason is the one the engine's skip step names for a stage the person asked
 to skip, `the person asked to skip it`), equals `Current Stage`, and is
 Active or Revising, or AwaitingApproval when its plan row now says SKIP or
 the reason is that token (a gate the person's own decision made moot; under
-Unit-by-Unit Construction the Units' files for it stay as they are). It runs
+Unit-by-Unit Construction the Units' files for it stay as they are). A skip of
+a pipeline stage that rests on reuse alone (every repository kept on its
+current-attempt `ARTIFACT_REUSED` row, no scan receipt), other than the
+person's own skip and an unattended run, also needs the person's answer to the
+stage's question on record (`QUESTION_ANSWERED` since the stage started): while
+that question is open the step shows it and names the same skip report for after
+their answer, and with no answer on record the step says how to record one;
+nothing is skipped until then. It runs
 before
 artifact, per-unit, and ensemble-evidence guards because a justified skip owes
 no completion evidence. The engine invokes the internal skip transition with

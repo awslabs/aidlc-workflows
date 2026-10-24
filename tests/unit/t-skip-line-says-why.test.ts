@@ -115,6 +115,21 @@ describe("the line after a skip says why the stage was skipped", () => {
     const proj = startedProject();
     // The person picked "Reuse existing knowledge base"; the agent records it
     // and reports the skip as the stage's Step 1 says.
+    const asked = run(proj, "aidlc-log.ts", [
+      "decision", "--stage", "reverse-engineering", "--decision", "Reuse it, or rescan?",
+      "--options", "Reuse existing knowledge base,Full rescan,Focused scan",
+    ]);
+    expect(asked.status, asked.out).toBe(0);
+    const reply = spawnSync(process.execPath, [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env,
+      cwd: proj,
+      input: JSON.stringify({ session_id: env.AIDLC_SESSION_OVERRIDE, cwd: proj, hook_event_name: "UserPromptSubmit", prompt: "1" }),
+    });
+    expect(reply.status, `${reply.stdout}${reply.stderr}`).toBe(0);
+    const answered = run(proj, "aidlc-log.ts", ["answer", "--stage", "reverse-engineering", "--details", "Reuse existing knowledge base"]);
+    expect(answered.status, answered.out).toBe(0);
     const store = run(proj, "aidlc-utility.ts", ["codekb-path"]);
     expect(store.status, store.out).toBe(0);
     const kept = run(proj, "aidlc-state.ts", [
