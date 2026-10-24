@@ -252,7 +252,8 @@ function handleReopen(args: string[]): void {
   if (!targetSlug || units.length === 0) {
     error("Usage: reopen --target <slug> [--stages <slug[,slug...]>] --units <unit[,unit...]> [--via redo|change] [--scope <scope>]");
   }
-  // `--via redo`: the person asked to redo the step on re-entry, not a jump.
+  // `--via redo`: a redo of the step on re-entry, not a jump (the person's
+  // Redo, or the redo the engine hands the agent for a Unit's step).
   // `--via change`: the person asked for a change at the open gate, and it
   // belongs to these Units' step.
   if (flags.via !== undefined && flags.via !== "redo" && flags.via !== "change") {
@@ -282,18 +283,18 @@ function handleReopen(args: string[]): void {
       "Gate Stages": stages.join(", "),
       "Gate Scope": "unit-end",
       Unit: unit,
-      // Marks the row as the person's redo or jump, or the change they asked
+      // Marks the row as a redo or the person's jump, or the change they asked
       // for at the gate.
       Reopen: flags.via ?? "jump",
       ...(flags.via === "change" ? { "User Input": "Request Changes" } : {}),
       Feedback: flags.via === "redo"
-        ? `Redid ${stageName} for unit ${unit} at the person's request (redo on re-entry).`
+        ? `Redid ${stageName} for unit ${unit} (redo on re-entry).`
         : flags.via === "change"
           ? changeWords ?? `Reopened ${stageName} for unit ${unit} for a change.`
           : `Reopened ${stageName} for unit ${unit} (/aidlc --stage ${targetSlug}).`,
     });
-    // Redo is the person's answer to the re-use question for this Unit's step
-    // too: recorded here, so the reopened step redoes it without asking again.
+    // A redo answers the re-use question for this Unit's step too: recorded
+    // here, so the reopened step redoes it without asking again.
     if (flags.via === "redo") {
       emitAudit(pd, "ARTIFACT_REUSED", {
         Stage: targetSlug,
