@@ -501,6 +501,7 @@ import {
   unitPlainName,
   unitSkippedItsCode,
   waveEligible,
+  optionsList,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
@@ -3636,7 +3637,7 @@ function openGateReplyDirective(
 
 // The choices a question's row says it offered, in order.
 function questionOptions(block: string): string[] {
-  return (auditBlockField(block, "Options") ?? "").split(",").map((option) => option.trim()).filter(Boolean);
+  return optionsList(auditBlockField(block, "Options")).filter(Boolean);
 }
 
 // How the person's answer to the stage's open question is recorded, named

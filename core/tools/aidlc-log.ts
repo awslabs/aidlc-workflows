@@ -214,6 +214,7 @@ import {
   stripRecommendedDecorator,
   isSummaryConfirmationChoice,
   isSummaryConfirmationOptions,
+  optionsList,
   isLearningsNoteDecision,
   boxPicksAddANote,
   picksAddANote,
@@ -784,7 +785,7 @@ function handlePlanApprovalBatch(
   }
   const session = resolvePlanApprovalSession(pd, flags);
   const options = "Approve Plans,Request Changes";
-  if (flags.options !== undefined && flags.options.split(",").map((option) => option.trim()).join(",") !== options) {
+  if (flags.options !== undefined && optionsList(flags.options).join(",") !== options) {
     error(`Batch Plan Approval offers exactly "${options}".`);
   }
   const choice = flags.details === "Approve Plans" ? "Approve Plan" : flags.details;
@@ -1119,7 +1120,7 @@ function handleDecision(args: string[]): void {
     fields["Command SHA-256"] = verificationCommand.sha256;
     fields["Command Label"] = verificationCommand.label;
     fields.Session = verificationCommandSession(pd, flags);
-    const options = (flags.options ?? "").split(",").map((option) => option.trim().toLowerCase());
+    const options = optionsList(flags.options).map((option) => option.toLowerCase());
     if (options.length !== 2 || options[0] !== "approve" || options[1] !== "request changes") {
       error('Verification command decision requires --options "Approve,Request Changes". ' + verificationCommandRecovery(flags.stage));
     }
@@ -1127,7 +1128,7 @@ function handleDecision(args: string[]): void {
   const policyFields = flags.checkpoint === "construction-policy" ? constructionPolicyFields(pd, flags) : null;
   if (policyFields) {
     Object.assign(fields, policyFields);
-    const options = (flags.options ?? "").split(",").map((option) => option.trim());
+    const options = optionsList(flags.options);
     if (options.length !== 2 || options[0] !== "Approve" || options[1] !== "Request Changes") {
       error('Construction policy decision requires --options "Approve,Request Changes". ' + CONSTRUCTION_POLICY_RECOVERY);
     }
@@ -1138,7 +1139,7 @@ function handleDecision(args: string[]): void {
     // The labels are part of what the human answers, so the conductor does
     // not choose them. Legacy nonce labels are the only other offer.
     const legacyLabels = flags["hash-option-labels"] === "true" || flags["legacy-directive-options"] === "true";
-    const offered = (flags.options ?? "").split(",").map((option) => stripRecommendedDecorator(option.trim()));
+    const offered = optionsList(flags.options).map((option) => stripRecommendedDecorator(option));
     if (!legacyLabels && offered.join(",") !== "Approve Plan,Request Changes") {
       error('Plan Approval decision offers exactly "Approve Plan,Request Changes".');
     }
@@ -1182,10 +1183,7 @@ function handleDecision(args: string[]): void {
   let challenge: PlanApprovalRuntimeChallenge | null = null;
   if (planEvidence) {
     try {
-      const options = (flags.options ?? "")
-        .split(",")
-        .map((option) => option.trim())
-        .filter(Boolean);
+      const options = optionsList(flags.options).filter(Boolean);
       if (options.length !== 2) {
         error("Plan Approval decision requires exactly two offered options");
       }
@@ -1247,7 +1245,7 @@ function sameInteractionScope(a: AuditShardEvent, b: AuditShardEvent): boolean {
 function questionView(row: AuditShardEvent) {
   return {
     question: auditBlockField(row.block, "Decision") ?? "",
-    options: (auditBlockField(row.block, "Options") ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+    options: optionsList(auditBlockField(row.block, "Options")).filter(Boolean),
     ...interactionScope(row),
     askedAt: row.timestamp,
   };
@@ -4850,6 +4848,7 @@ function logUsage(subcommand: string | undefined): string {
     decision: [
       `${invoke("decision")} --stage <slug> --decision "<the question>" --options "<choice>,<choice>"`,
       "  Records a question before it is shown to the person. Required: --stage, --decision.",
+      "  Separate the choices with | instead of commas when a choice holds a comma.",
       `  --checkpoint: ${DECISION_CHECKPOINTS.join(", ")}. An ordinary question, the learnings one included, takes none.`,
       `  Options: ${flags(DECISION_OPTIONS)}`,
     ],

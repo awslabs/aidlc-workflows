@@ -12577,7 +12577,7 @@ export function blockingSensorPicks(
       decision === undefined || row.event !== "QUESTION_ANSWERED" ||
       auditBlockField(decision.block, "Decision") !== BLOCKING_SENSOR_OVERRIDE_DECISION
     ) continue;
-    const offered = (auditBlockField(decision.block, "Options") ?? "").split(",").map((option) => option.trim());
+    const offered = optionsList(auditBlockField(decision.block, "Options"));
     if (!BLOCKING_SENSOR_OVERRIDE_OPTIONS.every((option) => offered.includes(option))) continue;
     if (!rows.some((turn) =>
       turn.event === "HUMAN_TURN" && turn.shard === row.shard && turn.pos > decision.pos && turn.pos < row.pos
@@ -14486,9 +14486,21 @@ export function isSummaryConfirmationChoice(text: string | undefined): boolean {
 }
 
 /** A decision whose offered options are the summary's two choices. */
+/**
+ * The choices a question's Options field (or the `--options` it was logged
+ * with) lists, in order and trimmed: split on `|` when the text holds one, so
+ * a choice may hold a comma ("Refuse it, with a message|Save it as Untitled"),
+ * and on commas otherwise, as every list was written before. Empty pieces are
+ * kept for the callers that number them; the one owner of the grammar.
+ */
+export function optionsList(text: string | null | undefined): string[] {
+  const value = text ?? "";
+  return value.split(value.includes("|") ? "|" : ",").map((option) => option.trim());
+}
+
 export function isSummaryConfirmationOptions(options: string | undefined): boolean {
   if (options === undefined) return false;
-  const offered = options.split(",").map((option) => option.trim()).filter(Boolean);
+  const offered = optionsList(options).filter(Boolean);
   return offered.length === 2 && offered.every((option) => isSummaryConfirmationChoice(option));
 }
 
@@ -43012,7 +43024,7 @@ export function isAnswerModeDecision(block: string): boolean {
   const kind = auditBlockField(block, QUESTION_KIND_FIELD);
   if (kind !== null) return kind === ANSWER_MODE_QUESTION_KIND;
   const plain = (text: string) => text.trim().replace(/\u2019/g, "'").toLowerCase();
-  const offered = (auditBlockField(block, "Options") ?? "").split(",").map(plain).filter((option) => option !== "");
+  const offered = optionsList(auditBlockField(block, "Options")).map(plain).filter((option) => option !== "");
   const labels = Object.values(ANSWER_MODE_LABELS).map(plain);
   return offered.length === labels.length && labels.every((label) => offered.includes(label));
 }
@@ -43025,7 +43037,7 @@ export function isAnswerModeDecision(block: string): boolean {
 export function isLearningsNoteDecision(block: string): boolean {
   const kind = auditBlockField(block, QUESTION_KIND_FIELD);
   if (kind !== null) return kind === LEARNINGS_NOTE_QUESTION_KIND;
-  const offered = (auditBlockField(block, "Options") ?? "").split(",").map((option) => option.trim());
+  const offered = optionsList(auditBlockField(block, "Options"));
   return LEARNINGS_NOTE_CHOICES.every((choice) => offered.includes(choice));
 }
 /** Its value for Intent Capture's Assumption Confirmation, written by the command that stage names. */
@@ -43040,7 +43052,7 @@ export const ASSUMPTION_CONFIRMATION_CHOICES = ["Accept assumptions", "Convert t
 export function isAssumptionConfirmationDecision(block: string): boolean {
   const kind = auditBlockField(block, QUESTION_KIND_FIELD);
   if (kind !== null) return kind === ASSUMPTION_CONFIRMATION_QUESTION_KIND;
-  const offered = (auditBlockField(block, "Options") ?? "").split(",")
+  const offered = optionsList(auditBlockField(block, "Options"))
     .map((option) => offeredChoiceLabel(option, ASSUMPTION_CONFIRMATION_CHOICES)?.choice);
   return ASSUMPTION_CONFIRMATION_CHOICES.every((choice) => offered.includes(choice));
 }
