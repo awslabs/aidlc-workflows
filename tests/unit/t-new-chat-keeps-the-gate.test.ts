@@ -251,7 +251,8 @@ describe("t-new-chat-keeps-the-gate: what stays as it was", () => {
   test("the stage's rerun guard says what SCANNED means", () => {
     const stage = readFileSync(join(REPO_ROOT, "dist", "claude", ".claude", "aidlc-common", "stages", "inception",
       `${STAGE}.md`), "utf-8");
-    const guard = stage.slice(stage.indexOf("#### Rerun guard"), stage.indexOf("Reuse question (CURRENT"));
+    const guard = stage.slice(stage.indexOf("#### Rerun guard"), stage.indexOf("Reuse question (CURRENT"))
+      .replace(/\s+/g, " ");
     expect(guard).toContain("- **SCANNED** - ");
     expect(guard).toContain("go on to Step 4");
   });
