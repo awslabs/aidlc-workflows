@@ -65,22 +65,23 @@ async function ran(proj: string, command: string): Promise<Exec> {
   return result;
 }
 
-/** An express run at Build and Test's open gate, moved there by the jump the engine names. */
-async function expressAtBuildAndTestGate(): Promise<string> {
+/** A run on `scope` at `stage`'s open gate, moved there by the jump the engine names. */
+async function atGate(scope: string, stage: string): Promise<string> {
   const proj = createOrchestrationTestProject();
   projects.push(proj);
   removeWorkspaceRecord(proj);
-  const made = await exec([process.execPath, UTILITY, "intent-create", "--scope", "express", "--project-type", "greenfield",
+  const made = await exec([process.execPath, UTILITY, "intent-create", "--scope", scope, "--project-type", "greenfield",
     "--label", "due-dates", "--arguments", "add due dates to my todo app", "--project-dir", proj], { cwd: proj, env: env(proj) });
   expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
-  await say(proj, "/aidlc --stage build-and-test", "claude");
-  const jump = await next(proj, ["--stage", "build-and-test"]);
+  await say(proj, `/aidlc --stage ${stage}`, "claude");
+  const jump = await next(proj, ["--stage", stage]);
   for (const command of named(String(jump.directive?.message ?? ""), /aidlc-jump\.ts execute/)) await ran(proj, command);
-  expect((await next(proj, [])).directive?.stage).toBe("build-and-test");
-  await ran(proj, "bun .claude/tools/aidlc-orchestrate.ts report --stage build-and-test --result awaiting-approval");
-  expect(box(proj, "build-and-test")).toBe("? EXECUTE");
+  expect((await next(proj, [])).directive?.stage).toBe(stage);
+  await ran(proj, `bun .claude/tools/aidlc-orchestrate.ts report --stage ${stage} --result awaiting-approval`);
+  expect(box(proj, stage)).toBe("? EXECUTE");
   return proj;
 }
+const expressAtBuildAndTestGate = (): Promise<string> => atGate("express", "build-and-test");
 
 /** The person's reply through the host's hook, then the `next --scope poc` the agent runs for it. */
 async function switchStep(proj: string, reply = REPLY): Promise<string> {
@@ -146,6 +147,18 @@ describe("t-approve-and-switch-plan: an approval typed with a plan switch at an 
     const message = await switchStep(proj);
     expect(message).toContain("Your work is still paused.");
     expect(message).not.toContain("--result approved");
+  });
+
+  // Practices Discovery's approval waits for the practices to be saved (practices-promote), so a bare approval
+  // report there is refused in engine words: the switch names no answer step and ends the turn, as before.
+  test("at Practices Discovery's gate, whose approval waits for the saved practices, the switch names no gate report", async () => {
+    const proj = await atGate("feature", "practices-discovery");
+    await say(proj, "Approve, and switch to mvp", "claude");
+    const step = await next(proj, ["--scope", "mvp"]);
+    const message = String(step.directive?.message ?? "");
+    expect(message).toContain("to change scope, then print its output verbatim and stop.");
+    expect(message).not.toContain("--result approved");
+    expect(turnEndIsOpen(proj)).toBe(true);
   });
 
   test("a switch to a plan that does not run the waiting stage skips it with its own line and names no gate report", async () => {
