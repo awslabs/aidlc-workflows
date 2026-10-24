@@ -598,7 +598,8 @@ reviewed once more; a change nobody meant is undone; a path that
 is not source (a tool's cache written inside the repo, a build output, a nested
 repository that is not this project's code) is left out of the source checks by
 naming it under `exclude` in `.aidlc-source-paths.json` (the file in that repo's
-own folder for a recorded repo). The exclude works at once, with no further
+own folder for a recorded repo, and in the checkout's own folder for a checkout
+recorded with `intent add-checkout`). The exclude works at once, with no further
 review; remove the line to put the path back. A path the project's `.gitignore`
 already ignores is never counted. Under Guard Policy relaxed or off the change
 is kept and said once instead.
