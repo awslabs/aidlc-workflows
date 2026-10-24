@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { auditBlockField, boltSlugForUnit, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
-  ISOLATED_GIT_ENV, cleanupCheckpointFixtures, fixture, git, prepare, reviewRevisedSource, swarm, writeUnitSource,
+  ISOLATED_GIT_ENV, approvePlan, cleanupCheckpointFixtures, fixture, git, prepare, reviewRevisedSource, swarm, writeUnitSource,
 } from "../harness/swarm-checkpoint.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
@@ -87,8 +87,10 @@ function built(pd: string): void {
   expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
 }
 
-function batchOut(): string {
+// `planned` is a file alpha's approved plan names.
+function batchOut(planned: string | null = null): string {
   const pd = fixture(["alpha", "beta"]);
+  if (planned !== null) approvePlan(pd, "alpha", planned);
   const prepared = prepare(pd, ["alpha", "beta"]);
   expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
   return pd;
@@ -134,7 +136,7 @@ describe("a change the person asks for in the main checkout while the Units are 
     expect(guard(pd, "Write", write(readme)).code).toBe(0);
     expect(guard(pd, "Edit", { file_path: readme, old_string: "seed", new_string: "seed, typo fixed" }).code).toBe(0);
     writeFileSync(readme, FIXED);
-    // Another file, and a file a listed Unit's plan builds, still wait for the landings.
+    // Another file, and a Unit's own file, still wait for the landings.
     expect(guard(pd, "Write", write(join(pd, "NOTES.md"))).code).toBe(2);
     expect(guard(pd, "Write", write(join(pd, "src", "alpha.ts"))).code).toBe(2);
 
@@ -191,10 +193,15 @@ describe("a change the person asks for in the main checkout while the Units are 
   });
 
   test("the step takes only the person's own message, and a file outside the Units' plans", () => {
-    const pd = batchOut();
+    const pd = batchOut("alpha.ts");
     const unproved = allowChange(pd, ["README.md", "--message", "0badc0de"]);
     expect(unproved.code).toBe(1);
     const asked = says(pd, ASKED);
+    // A file the plan names is never offered the step.
+    const held = guard(pd, "Write", write(join(pd, "src", "alpha.ts")));
+    expect(held.code).toBe(2);
+    expect(held.err).toContain(LATER);
+    expect(held.err).not.toContain("allow-change");
     const planned = allowChange(pd, ["src/alpha.ts", "--message", asked]);
     expect(planned.code).toBe(1);
     expect((JSON.parse(planned.err) as { error: string }).error).toBe(
@@ -213,6 +220,23 @@ describe("a change the person asks for in the main checkout while the Units are 
     writeFileSync(join(pd, "README.md"), FIXED);
     // Worktrees are made from committed source, under every Guard Policy.
     git(pd, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qam", "fix the typo"]);
+    const prepared = prepare(pd, ["alpha", "beta"]);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    built(pd);
+    for (const unit of ["alpha", "beta"]) {
+      const landed = land(pd, unit);
+      expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
+    }
+    expect(readFileSync(join(pd, "README.md"), "utf-8")).toBe(FIXED);
+  });
+
+  // Seen live on Kiro CLI: the person's change, not committed, stopped prepare,
+  // and the agent asked them to commit it before the Units could be built.
+  test("a change allowed before the worktrees are made, not committed: prepare goes on and the landings keep it", () => {
+    const pd = fixture(["alpha", "beta"]);
+    const asked = says(pd, ASKED);
+    expect(allowChange(pd, ["README.md", "--message", asked]).code).toBe(0);
+    writeFileSync(join(pd, "README.md"), FIXED);
     const prepared = prepare(pd, ["alpha", "beta"]);
     expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
     built(pd);

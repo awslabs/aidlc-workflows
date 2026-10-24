@@ -120,7 +120,11 @@ import {
   isClaudeCodeHookInput,
   isoTimestamp,
   CEREMONY_ENV,
+  mainCheckoutChangeAllowed,
+  mainCheckoutChangeRefusal,
+  mainCheckoutPathKey,
   personAskedSinceGate,
+  plansNamePath,
   readActiveDirectiveMarker,
   readIssuedDirectiveMarker,
   spacesRoot,
@@ -155,7 +159,7 @@ import {
   LOCK_FOLDER_HELD_SAID_KEY,
   lockFolderHeldGoesOnStep,
 } from "../tools/aidlc-lock-line.ts";
-import { personTurnStands } from "../tools/aidlc-message-store.ts";
+import { mainCheckoutChangeStep, personTurnStands } from "../tools/aidlc-message-store.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
@@ -313,9 +317,11 @@ const ENGINE_QUESTION_OPEN =
   "the engine is waiting for the person's answer to its recovery question";
 // Under strict every landing of the stage checks the main checkout against the
 // stage's start (assertAggregateSourceBeforeMerge), so nothing else changes it
-// while a parallel batch is out.
+// while a parallel batch is out but the files the person asked to change
+// (mainCheckoutChangeAllowed), which the landings keep.
 const SWARM_MAIN_CHECKOUT_HELD =
   "While the Units are built in parallel, the main checkout changes only by their landings, so each landing can check it";
+const SWARM_MAIN_CHECKOUT_LATER = "A change the person asks for in the main checkout can be made once Code Generation is over.";
 
 // --- The decision -------------------------------------------------------------
 
@@ -741,10 +747,11 @@ function authorityBlockReason(
   asked: ReturnType<typeof planApprovalAskState> = null,
   editingReply: string | null = null,
   wayOn: EngineInvocation | null = null,
+  // For a write held while the Units are built: the step the person's own request takes.
+  heldWayOn: string | null = null,
 ): string {
   if (reason === SWARM_MAIN_CHECKOUT_HELD) {
-    return `${authorityRemedy(reason, standing)} A change the person asks for in the main checkout can be made once ` +
-      "Code Generation is over.";
+    return `${authorityRemedy(reason, standing)} ${heldWayOn ?? SWARM_MAIN_CHECKOUT_LATER}`;
   }
   if (reason === ENGINE_QUESTION_OPEN || reason === PLAN_APPROVAL_ASK_OPEN) {
     return authorityRemedy(reason, standing, asked, editingReply);
@@ -943,12 +950,7 @@ function isPlanWaitSideWrite(projectDir: string, target: string, planPaths: stri
     return false;
   }
   if (planPaths === null || planPaths.length === 0) return DOCUMENT_EXTENSIONS.has(extname(target).toLowerCase());
-  const fold = (path: string): string => process.platform === "win32" ? path.toLowerCase() : path;
-  const rel = fold(relative(resolve(projectDir), resolve(target)).split(sep).join("/"));
-  return !planPaths.some((named) => {
-    const path = fold(named.replace(/\/+$/, ""));
-    return rel === path || rel.startsWith(`${path}/`) || (!path.includes("/") && rel.split("/").at(-1) === path);
-  });
+  return !plansNamePath(relative(resolve(projectDir), resolve(target)).split(sep).join("/"), planPaths);
 }
 
 // A path into the project spelled another way than the project is (a Windows
@@ -2322,6 +2324,8 @@ async function evaluate(
   // admits: the refusal stands with the fence on, and a lowered fence stands
   // aside for it as for any other write of an approved plan.
   let swarmBatchOut = false;
+  // For a write held while the Units are built: the step the person's own request takes.
+  let swarmHeldWayOn: string | null = null;
   // The build step set aside since it was issued, when the fence is lowered and
   // the person's approval for it still stands (setAsideBuildUnderOff): the last
   // instruction on record, so its work goes on as it did before.
@@ -2693,7 +2697,6 @@ async function evaluate(
           (seen.length === 0 || preparedBoltWorktreeUnit(projectDir, seen, listed) !== null) &&
           gatherUnitEvidence(projectDir, listed).every(approvalEvidenceIsCurrent)
         ) return 0;
-        swarmBatchOut = true;
         // A write seen only in the main checkout, at a step still current,
         // waits for the landings; one that reaches under the worktrees folder
         // (a Unit's own worktree whose approval no longer holds included), or a
@@ -2707,10 +2710,24 @@ async function evaluate(
             const inside = relative(worktrees, resolve(candidate));
             return inside.startsWith("..") || isAbsolute(inside);
           });
+        // Files the person asked to change there while the Units are built
+        // (swarm allow-change) go in: the landings keep them.
+        const keys = mainCheckoutOnly && !mutation.opaqueShell
+          ? seen.map((candidate) => mainCheckoutPathKey(projectDir, candidate))
+          : [];
+        const theirs = keys.length > 0 && keys.every((key) => key !== null) ? keys as string[] : null;
+        if (theirs !== null && mainCheckoutChangeAllowed(projectDir, theirs) !== null) return 0;
+        swarmBatchOut = true;
         authorityFailure = mainCheckoutOnly
           ? SWARM_MAIN_CHECKOUT_HELD
           : `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +
             outOfDate;
+        if (
+          theirs !== null &&
+          mainCheckoutChangeRefusal(projectDir, theirs, listed, (unit) => planApprovalPlanNamedPaths(projectDir, unit)) === null
+        ) {
+          swarmHeldWayOn = mainCheckoutChangeStep(projectDir, theirs, SWARM_MAIN_CHECKOUT_LATER, "make the change");
+        }
         standing = planStanding(projectDir, activeDirective);
         verdict = { block: true, mentioned: listed };
         blockedMutation = {
@@ -2796,7 +2813,7 @@ async function evaluate(
   }
   const refusalProse = (detail: string | null): string =>
     authorityFailure
-      ? authorityBlockReason(authorityFailure, standing, asked, editingReply, jumpWayOn)
+      ? authorityBlockReason(authorityFailure, standing, asked, editingReply, jumpWayOn, swarmHeldWayOn)
       : blockedMutation
       ? mutationBlockReason(
           blockedMutation.unit,
