@@ -14,6 +14,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { findStageBySlug, hooksHealthDir, readAuditShardEvents, stateFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { codeGenerationRecordDir } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 import { ISOLATED_GIT_ENV, cleanupCheckpointFixtures, fixture, prepare, wt } from "../harness/swarm-checkpoint.ts";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -102,12 +103,18 @@ describe("a conductor command run in a Unit's worktree goes back to the project 
   test("a worker's own command in its worktree is not sent back", () => {
     const { alpha } = preparedBuild();
     const reviewer = findStageBySlug("code-generation")?.reviewer ?? "";
+    // The Unit's source manifest, as the worker leaves it before asking for its review.
+    writeFileSync(
+      join(codeGenerationRecordDir(alpha, "alpha"), "source-manifest.json"),
+      `${JSON.stringify({ stage: "code-generation", unit: "alpha", version: 1, writes: [] }, null, 2)}\n`,
+    );
     const ran = run(alpha, "aidlc-log.ts", [
       "review", "--stage", "code-generation", "--reviewer", reviewer, "--unit", "alpha", "--iteration", "1",
       "--project-dir", alpha,
     ]);
-    // The worker's own answer, whatever it is, never the conductor's step.
-    expect(directive(ran.out).kind, ran.out).not.toBe("print");
+    // The worker's own review request goes through, never the conductor's step.
+    expect(ran.code, ran.out).toBe(0);
+    expect(ran.out).toContain('"emitted":"REVIEW_REQUESTED"');
     expect(ran.out).not.toMatch(/project folder/i);
   });
 });
