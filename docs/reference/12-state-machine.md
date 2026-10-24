@@ -1704,8 +1704,10 @@ The `lower-fence` operation renders the setter, the command its remedy
 carries; `PreToolUse` admits the same exact shape, and the setter still requires
 a person's turn on record.
 
-A stage restart first resolves its destination and returns the exact
-`jump execute` continuation. During unapproved Code Generation, that
+A stage restart first resolves its destination. Where Code Generation is the
+step on record it returns the exact `jump execute` continuation; elsewhere
+its `next --stage` makes the jump itself and returns the step it lands on.
+During unapproved Code Generation, that
 continuation (native, or `bun <harness-dir>/tools/aidlc-jump.ts execute ...` in a
 source install) is admitted only for the current recovery ask's recorded human
 selection. Its target and Scope must match the selected operation and current

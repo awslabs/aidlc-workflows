@@ -1954,10 +1954,12 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     const p = fixture({ iteration: "stage-major" });
     for (const unit of ["alpha", "beta"]) cover(p, unit, stages.slice(0, 1));
     const said = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "functional-design", "--every-unit"]).stdout);
-    expect(said.kind, JSON.stringify(said)).toBe("print");
-    expect(said.message).toContain("jump.ts execute --target functional-design --direction redo");
-    expect(said.message).toContain('"Reopened Functional Design for every unit."');
-    expect(said.message).not.toContain("/aidlc --");
+    // The same `next` makes the redo and returns the step, saying what it reopened.
+    expect(said.kind, JSON.stringify(said)).not.toBe("print");
+    expect(said.stage).toBe("functional-design");
+    expect(said.change_notices).toContain("Reopened Functional Design for every unit.");
+    expect(JSON.stringify(said)).not.toContain("/aidlc --");
+    expect(jumped(p)).toBe(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("with Construction Checkpoints off, a stage approved for every unit is reopened for every unit only", () => {
@@ -1973,12 +1975,11 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
     expect(jumped(p)).toBe(0);
     const every = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--every-unit"]).stdout);
-    expect(every.kind, JSON.stringify(every)).toBe("print");
-    expect(every.message).toContain('"Reopened NFR Design and the steps after it for every unit."');
-    const command = /`[^`]*aidlc-jump\.ts (execute [^`]+)`/.exec(every.message)?.[1];
-    expect(command, every.message).toBe("execute --target nfr-design --direction backward --scope feature");
-    const ran = tool(p, "jump", command!.split(" "));
-    expect(ran.status, ran.out).toBe(0);
+    // The same `next` makes the backward jump and returns the step, saying what
+    // it reopened.
+    expect(every.kind, JSON.stringify(every)).not.toBe("print");
+    expect(every.stage).toBe("nfr-design");
+    expect(every.change_notices).toContain("Reopened NFR Design and the steps after it for every unit.");
     expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Current Stage**: nfr-design");
     expect(jumped(p)).toBe(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
