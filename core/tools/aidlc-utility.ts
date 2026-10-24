@@ -334,7 +334,6 @@ import {
   addedStagesPassedOver,
   addReachesPassedOver,
   constructionHasStarted,
-  holdsAnyFile,
   reverseEngineeringOwedBehindCursor,
   planWithChanges,
   composedPlanLabel,
