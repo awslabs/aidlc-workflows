@@ -1574,8 +1574,11 @@ a variable, and relative words are resolved against every directory a literal
 `cd` could leave the shell in; each result is checked against the anchored
 path, so a project's own `src/audit/` stays writable. A word that still cannot
 be decided (a computed assignment or a command substitution such as
-`$(printf au)dit`) is refused when the command names `audit` in any quoting,
-or reaches into `aidlc/spaces/`, or already runs inside that tree. Any other
+`$(printf au)dit`) is refused when the command names an `audit` folder in any
+quoting (`x/audit`, `audit/x`; not `npm audit` or `audit-service`), or reaches
+into `aidlc/spaces/`, or already runs inside that tree. The folders the shell
+stands in and above are the person's own path, so a project under a folder
+named audit does not count. Any other
 unresolvable write keeps the fail-open treatment the runtime-record check gives
 such targets. This is a guardrail against prose-driven and casual writes, not a
 boundary against a model that runs arbitrary code: evidence the hooks can
