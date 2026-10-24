@@ -2342,12 +2342,14 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(resumed.narration).toBe("Picking up beta's code at step 3 of 4 (1-2 done).");
   }
 
-  // beta does its Code Generation again from the start: its plan is redone and
-  // comes back for approval, and the old build is not picked up.
+  // beta does its Code Generation again from the start: its plan comes back
+  // for approval as it stands, and once approved the old build is not picked up.
   function redoneFromStart(p: string, label: string) {
+    expect(next(p), label).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit: "beta" });
+    approveCurrentPlan(p);
     const beat = next(p);
     expect(beat, label).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta" });
-    expect(beat.plan_approval?.status, label).not.toBe("approved");
+    expect(beat.plan_approval, label).toEqual({ status: "approved" });
     expect(beat.narration ?? "", label).not.toContain("Picking up");
     return beat;
   }
