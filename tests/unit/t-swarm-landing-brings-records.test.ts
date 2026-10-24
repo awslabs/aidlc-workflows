@@ -16,12 +16,14 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, wr
 import { dirname, join, relative } from "node:path";
 import { boltSlugForUnit, recordDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codeGenerationRecordDir } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
-import { seededStateFile } from "../harness/fixtures.ts";
+import { AIDLC_SRC, seededStateFile } from "../harness/fixtures.ts";
 import {
-  cleanupCheckpointFixtures, fixture, git, nextDirective, prepare, publish, reviewRevisedSource, runCheckpointTool,
-  swarm, wt, writeUnitSource,
+  ISOLATED_GIT_ENV, cleanupCheckpointFixtures, fixture, git, nextDirective, prepare, publish, reviewRevisedSource,
+  runCheckpointTool, swarm, wt, writeUnitSource,
 } from "../harness/swarm-checkpoint.ts";
-import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupCheckpointFixtures);
@@ -51,9 +53,20 @@ function commitRecords(pd: string, files: Record<string, string>, also: string[]
   git(pd, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "design records"]);
 }
 
+function finalize(pd: string, units: string[], env: Record<string, string> = {}) {
+  const r = Bun.spawnSync([process.execPath, join(AIDLC_SRC, "tools", "aidlc-swarm.ts"), "finalize", "--batch", "1",
+    "--units", units.join(","), "--claimed", units.join(","), "--project-dir", pd], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    cwd: pd, env: { ...ISOLATED_GIT_ENV, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd, ...env },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const out = r.stdout.toString();
+  return { code: r.exitCode, out, err: r.stderr.toString(), envelope: JSON.parse(out) as Finalized };
+}
+
 // Each Unit's worker builds its code and edits its worktree's records, then the
 // Units are checked, reviewed and finalized together.
-function build(pd: string, units: string[], edit: (unit: string, child: string) => void) {
+function build(pd: string, units: string[], edit: (unit: string, child: string) => void, env: Record<string, string> = {}) {
   units.forEach((unit, index) => {
     writeUnitSource(pd, unit, index + 2);
     edit(unit, wt(pd, unit));
@@ -61,8 +74,7 @@ function build(pd: string, units: string[], edit: (unit: string, child: string) 
     expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
     reviewRevisedSource(pd, unit);
   });
-  const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", units.join(","), "--claimed", units.join(",")]);
-  return { ...finalized, envelope: JSON.parse(finalized.out) as Finalized };
+  return finalize(pd, units, env);
 }
 
 function land(pd: string, unit: string): void {
@@ -232,6 +244,31 @@ describe("a side-by-side Unit's record edits come home when it lands", () => {
     ]);
     expect(read(pd, CONTRACTS)).toBe("# Contracts\n\n- C1: one\n- C2: two\n");
     expect(read(pd, RULES)).toBe("# Business rules\n\n- BR-1: one, as the person put it\n");
+    expect(read(pd, saved("alpha", RULES))).toBe("# Business rules\n\n- BR-1: one, as the Unit put it\n");
+  });
+
+  test("a landing whose record write fails changes nothing, and finalize run again lands the edits and says the clash", () => {
+    const pd = fixture(["alpha"]);
+    commitRecords(pd, { [CONTRACTS]: "# Contracts\n\n- C1: one\n", [RULES]: "# Business rules\n\n- BR-1: one\n" });
+    prepared(pd);
+    write(pd, RULES, "# Business rules\n\n- BR-1: one, as the person put it\n");
+    // The saved copy is written before the contracts merge, so both are undone.
+    const failed = build(pd, ["alpha"], (_unit, child) => {
+      appendFileSync(record(child, CONTRACTS), "- C2: two\n");
+      write(child, RULES, "# Business rules\n\n- BR-1: one, as the Unit put it\n");
+    }, { AIDLC_TEST: "1", AIDLC_TEST_RECORD_VERIFY_FAIL: CONTRACTS });
+    expect(failed.code, `${failed.out}\n${failed.err}`).toBe(2);
+    expect(failed.envelope.merge_failures.map((failure) => failure.detail).join("\n")).toContain("injected verification failure");
+    expect(read(pd, CONTRACTS)).toBe("# Contracts\n\n- C1: one\n");
+    expect(existsSync(record(pd, saved("alpha", RULES)))).toBe(false);
+    expect(notices(failed.envelope, "alpha")).toEqual([]);
+    const again = finalize(pd, ["alpha"]);
+    expect(again.code, `${again.out}\n${again.err}`).toBe(0);
+    expect(notices(again.envelope, "alpha")).toEqual([
+      `The alpha Unit's version of ${shown(pd, RULES)} could not be merged into your project's copy, so your copy ` +
+        `is unchanged; the Unit's version is saved at ${shown(pd, saved("alpha", RULES))}.`,
+    ]);
+    expect(read(pd, CONTRACTS)).toBe("# Contracts\n\n- C1: one\n- C2: two\n");
     expect(read(pd, saved("alpha", RULES))).toBe("# Business rules\n\n- BR-1: one, as the Unit put it\n");
   });
 });

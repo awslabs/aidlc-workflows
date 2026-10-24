@@ -1040,18 +1040,15 @@ function workerRecordEdits(projectDir: string, wt: string, stageSlug: string): R
       segments.some((segment) => segment.startsWith(".aidlc-")) ||
       (segments[0] === "construction" && segments.length > 3 && segments[2] === stageSlug)
     ) continue;
-    let baseBytes: Buffer | null = null;
-    if (git(["cat-file", "-e", `${base}:./${path}`]).status === 0) {
-      // As a checkout writes it, so a CRLF checkout compares and merges as on disk.
-      const shown = git(["cat-file", "--filters", `${base}:./${path}`]);
-      if (shown.status !== 0) return null;
-      baseBytes = shown.stdout;
-    }
+    // As a checkout writes it, so a CRLF checkout compares and merges as on
+    // disk; none when the base has no file there (a folder counts as none).
+    const shown = git(["cat-file", "--filters", `${base}:./${path}`]);
+    const baseBytes: Buffer | null = shown.status === 0 ? shown.stdout : null;
     let unitBytes: Buffer | null;
     try {
       unitBytes = presentRecordBytes(assertNoSymlinkInChainOrThrow(anchor, path), path);
     } catch {
-      continue; // A link or folder in the record is no edit to carry.
+      continue; // A link, a folder or a file that cannot be read is no edit to carry.
     }
     if (sameRecordBytes(baseBytes, unitBytes)) continue;
     edits.push({ logicalPath: path, base: baseBytes, unit: unitBytes });
