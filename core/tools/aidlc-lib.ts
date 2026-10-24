@@ -7074,6 +7074,11 @@ export function markPersonLineHeardThisTurn(projectDir: string, sessionId: strin
 // must run, or one waiting at its own question, is skipped as they asked.
 export const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
 
+// The reason the same step hands the agent for the undo it names after the
+// person's skip: recompose puts the stage back over its strict check, as the
+// skip took it off.
+export const PERSON_ASKED_UNDO_SKIP_REASON = "the person asked to undo skipping it";
+
 // What the person asked to leave out of a build (#1342): the `Deferred` items
 // in these traceability.json files, at most ten by id and then a count, or
 // null when there are none or a file cannot be read.
@@ -12578,7 +12583,7 @@ export function blockingSensorPicks(
       decision === undefined || row.event !== "QUESTION_ANSWERED" ||
       auditBlockField(decision.block, "Decision") !== BLOCKING_SENSOR_OVERRIDE_DECISION
     ) continue;
-    const offered = (auditBlockField(decision.block, "Options") ?? "").split(",").map((option) => option.trim());
+    const offered = optionsList(auditBlockField(decision.block, "Options"));
     if (!BLOCKING_SENSOR_OVERRIDE_OPTIONS.every((option) => offered.includes(option))) continue;
     if (!rows.some((turn) =>
       turn.event === "HUMAN_TURN" && turn.shard === row.shard && turn.pos > decision.pos && turn.pos < row.pos
@@ -14487,9 +14492,23 @@ export function isSummaryConfirmationChoice(text: string | undefined): boolean {
 }
 
 /** A decision whose offered options are the summary's two choices. */
+/**
+ * The choices a question's Options field (or the `--options` it was logged
+ * with) lists, in order and trimmed. A list that starts with `|` separates
+ * its choices with `|`, so a choice may hold a comma ("|Refuse it, with a
+ * message|Save it as Untitled"); any other list is split on commas, as every
+ * list was written before, and a `|` inside it is part of its choice ("Use
+ * string | null"). Empty pieces are kept for the callers that number them; the
+ * one owner of the grammar.
+ */
+export function optionsList(text: string | null | undefined): string[] {
+  const value = (text ?? "").trimStart();
+  return (value.startsWith("|") ? value.slice(1).split("|") : value.split(",")).map((option) => option.trim());
+}
+
 export function isSummaryConfirmationOptions(options: string | undefined): boolean {
   if (options === undefined) return false;
-  const offered = options.split(",").map((option) => option.trim()).filter(Boolean);
+  const offered = optionsList(options).filter(Boolean);
   return offered.length === 2 && offered.every((option) => isSummaryConfirmationChoice(option));
 }
 
@@ -16488,8 +16507,10 @@ export interface ReviewFingerprintStage {
 
 // Summary questions are mutable human inputs. Re-presenting their confirmation
 // answer does not change the reviewed input, but all substantive content does.
-// A plugin explicitly reviewing questions retains ordinary byte binding.
-function summaryOwnedReviewInput(
+// A plugin explicitly reviewing questions retains ordinary byte binding. The
+// gate-revision backstop (aidlc-state.ts) reads the same rule: a write to them
+// is the person's answers, not a revision of what the gate shows.
+export function summaryOwnedReviewInput(
   stage: Pick<ReviewFingerprintStage, "summary_confirmation" | "review_artifact">,
   artifact: string,
 ): boolean {
@@ -43090,7 +43111,7 @@ export function isAnswerModeDecision(block: string): boolean {
   const kind = auditBlockField(block, QUESTION_KIND_FIELD);
   if (kind !== null) return kind === ANSWER_MODE_QUESTION_KIND;
   const plain = (text: string) => text.trim().replace(/\u2019/g, "'").toLowerCase();
-  const offered = (auditBlockField(block, "Options") ?? "").split(",").map(plain).filter((option) => option !== "");
+  const offered = optionsList(auditBlockField(block, "Options")).map(plain).filter((option) => option !== "");
   const labels = Object.values(ANSWER_MODE_LABELS).map(plain);
   return offered.length === labels.length && labels.every((label) => offered.includes(label));
 }
@@ -43103,7 +43124,7 @@ export function isAnswerModeDecision(block: string): boolean {
 export function isLearningsNoteDecision(block: string): boolean {
   const kind = auditBlockField(block, QUESTION_KIND_FIELD);
   if (kind !== null) return kind === LEARNINGS_NOTE_QUESTION_KIND;
-  const offered = (auditBlockField(block, "Options") ?? "").split(",").map((option) => option.trim());
+  const offered = optionsList(auditBlockField(block, "Options"));
   return LEARNINGS_NOTE_CHOICES.every((choice) => offered.includes(choice));
 }
 /** Its value for Intent Capture's Assumption Confirmation, written by the command that stage names. */
@@ -43118,7 +43139,7 @@ export const ASSUMPTION_CONFIRMATION_CHOICES = ["Accept assumptions", "Convert t
 export function isAssumptionConfirmationDecision(block: string): boolean {
   const kind = auditBlockField(block, QUESTION_KIND_FIELD);
   if (kind !== null) return kind === ASSUMPTION_CONFIRMATION_QUESTION_KIND;
-  const offered = (auditBlockField(block, "Options") ?? "").split(",")
+  const offered = optionsList(auditBlockField(block, "Options"))
     .map((option) => offeredChoiceLabel(option, ASSUMPTION_CONFIRMATION_CHOICES)?.choice);
   return ASSUMPTION_CONFIRMATION_CHOICES.every((choice) => offered.includes(choice));
 }

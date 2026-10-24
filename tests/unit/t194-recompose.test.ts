@@ -351,6 +351,23 @@ describe("t194 recompose - rejections", () => {
     expect(auditText(proj)).toContain("**Reason**: jump to user-stories");
   });
 
+  // The undo the skip step names carries the engine's own reason for it, so
+  // it puts the stage back as the skip took it off, even where the plan leaves
+  // out what the stage reads (bugfix's Deployment Pipeline); any other reason
+  // is checked.
+  test("the undo the skip step names puts a stage back over the strict check; another reason is checked", () => {
+    const proj = createdProject("bugfix");
+    const skip = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "deployment-pipeline", "--reason", "the person asked to skip it"]);
+    expect(skip.status, skip.out).toBe(0);
+    const jump = run(proj, "aidlc-utility.ts", ["recompose", "--add", "deployment-pipeline", "--reason", "jump to deployment-pipeline"]);
+    expect(jump.status).not.toBe(0);
+    expect(jump.out).toContain("Recompose rejected by the strict validator");
+    const undo = run(proj, "aidlc-utility.ts", ["recompose", "--add", "deployment-pipeline", "--reason", "the person asked to undo skipping it"]);
+    expect(undo.status, undo.out).toBe(0);
+    expect(readState(proj)).toMatch(/- \[ \] deployment-pipeline \u2014 EXECUTE/);
+    expect(auditText(proj)).toContain("**Reason**: the person asked to undo skipping it");
+  });
+
   // Under "Continue automatically" the person's own plan change goes through,
   // as their scope change does; a change nobody asked for is refused, naming
   // the setter that lets it through. A created feature project has no

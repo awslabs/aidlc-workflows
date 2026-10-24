@@ -996,7 +996,7 @@ Jump directly to a specific stage by slug or number.
 /aidlc --stage 2.3
 ```
 
-**Behavior:** If a workflow is active, jumps to the target stage (skipping intervening stages with warnings). If no workflow exists, you can combine with `--scope`:
+**Behavior:** If a workflow is active, jumps to the target stage (skipping intervening stages with warnings); a `--scope`, `--depth`, `--test-strategy` or `--guard-policy` typed with the jump is applied first, then the jump is made in the work as changed (set `--review` and the ceremony switches such as `--sensors` on their own first). If no workflow exists, you can combine with `--scope` to start one there:
 
 ```
 /aidlc --stage code-generation --scope bugfix
@@ -2990,6 +2990,8 @@ Completed: 4/22
 ```
 
 Runs under the audit lock, rejects flips that would starve a remaining stage of a required input, other than a skip you named with `/aidlc --skip`, after which the stages that read it run from what there is (and flips of completed/in-progress stages, behind-cursor stages (Reverse Engineering before Construction starts is the exception: while `next` would still go back to run it you can skip it, and on existing code you can put it back; so is a stage the plan skips that the work has just passed over while nothing after it has started, such as User Stories right after Requirements Analysis is approved: you can put it back, and `next` goes back to run it), any flip that would move the first EXECUTE stage of Construction - the protected stage-routing anchor - in either direction, any recompose against a workflow whose Status is not Running, and, under autonomous Construction, a recompose with no request of yours on record, or one run with `AIDLC_UNATTENDED=1`: that refusal names `aidlc-bolt.ts set-autonomy --mode gated`, which switches to stopping for approval at each Bolt), rebuilds the derived state fields, and emits `RECOMPOSED`. Each refusal of a stage names what you can do instead: jump to or past the stage, run it on its own with `/aidlc --stage <slug> --single`, add or skip the stages a missing input involves, or change to a scope that runs or skips it. Reached through `/aidlc --skip <slug>`, `/aidlc --add <slug>`, a jump to a skipped stage, and `/aidlc compose` mid-workflow, not typed directly. For a change you approved at a `/aidlc compose` question (its marker `aidlc/.aidlc-compose-pending` still on disk and fresh), the output ends with one more line for the agent: delete the marker and run `next`, so your work carries on in the same turn.
+
+The undo AI-DLC names after a skip you named puts the stage back the same way, so it is not refused either.
 
 ### `aidlc engine scope save` - keep a plan as a scope
 

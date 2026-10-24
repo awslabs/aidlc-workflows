@@ -2561,6 +2561,8 @@ function handlePrepare(rest: string[]): void {
       });
     }
   }
+  // The commit each Unit forks from, as the preflight below decides it.
+  const forkBases = new Map<string, string>();
   if (requiresExecutionAllowance) {
     try {
       // Validate the entire batch before the first fork or generation receipt.
@@ -2569,10 +2571,10 @@ function handlePrepare(rest: string[]): void {
         if (identityErrors.has(unit) || retained.has(unit)) continue;
         if (!resumes.has(unit) || resumes.get(unit)!.recreate) {
           const resume = resumes.get(unit) ?? discardedPreparations.get(unit);
-          validateCodeGenerationForkApproval(
+          forkBases.set(unit, validateCodeGenerationForkApproval(
             projectDir, unit, repoCwd, repoName,
             resume?.approvedBaseCommit ?? base, resume?.discardedSha256,
-          );
+          ));
         }
       }
     } catch (error) {
@@ -2605,6 +2607,7 @@ function handlePrepare(rest: string[]): void {
     unit: string;
     ok: boolean;
     worktree_path?: string;
+    base_commit?: string;
     resumed?: boolean;
     retained?: boolean;
     approval_transferred?: boolean;
@@ -2743,7 +2746,7 @@ function handlePrepare(rest: string[]): void {
         "--slug",
         boltSlug,
         "--base",
-        discarded?.approvedBaseCommit ?? base,
+        forkBases.get(unit) ?? discarded?.approvedBaseCommit ?? base,
         "--swarm-unit",
         unit,
         "--swarm-batch",
@@ -2766,8 +2769,9 @@ function handlePrepare(rest: string[]): void {
       continue;
     }
     let worktreeDir: string;
+    let baseCommit: string | undefined;
     try {
-      worktreeDir = JSON.parse(created.stdout).worktree_path;
+      ({ worktree_path: worktreeDir, base_commit: baseCommit } = JSON.parse(created.stdout));
     } catch {
       prepared.push({
         unit,
@@ -2823,7 +2827,7 @@ function handlePrepare(rest: string[]): void {
       }
     }
     prepared.push({
-      unit, ok: true, worktree_path: worktreeDir,
+      unit, ok: true, worktree_path: worktreeDir, base_commit: baseCommit,
       ...(resume ? { resumed: true, revision: resume.revision } : {}),
     });
   }

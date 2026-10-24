@@ -4921,11 +4921,16 @@ function approvedWorktreeSource(
  * commit is changed. The selected repository's committed source must reproduce
  * the selected execution source. A lowered fence permits current content after
  * approval; the selected source must still be reproducible in the child.
+ * Returns the commit the Unit's worktree forks from: the selected base when it
+ * already holds the approved source, else the parent's HEAD it is an ancestor
+ * of. Forked on the older base, the child would be fast-forwarded there after
+ * the Bolt fork rewrote its records, which Git refuses when that history
+ * commits the same record files (a branch that commits its records).
  */
 export function validateCodeGenerationForkApproval(
   parentDir: string, unit: string, repoCwd: string, repoName: string | null, baseCommit: string,
   discardedSha256?: string,
-): void {
+): string {
   const parent = realpathSync(parentDir);
   const approved = parentWorktreeApproval(parent, unit);
   const repo = resolveConstructionRepo(parent, repoName ?? undefined);
@@ -4940,7 +4945,7 @@ export function validateCodeGenerationForkApproval(
     if (base !== discarded.commit) {
       throw new Error("Discard recovery must fork from the recorded Approval Source Commit.");
     }
-    return;
+    return baseCommit;
   }
   const parentHead = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "HEAD^{commit}"]);
   const committed = gitCommitSourceListing(repo.cwd, parentHead, repo.repo === null);
@@ -4950,12 +4955,13 @@ export function validateCodeGenerationForkApproval(
   const base = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "--end-of-options", `${baseCommit}^{commit}`]);
   const baseSource = gitCommitSourceListing(repo.cwd, base, repo.repo === null);
   if (!baseSource) throw new Error("Selected worktree base source cannot be reproduced. Choose a committed base before prepare.");
-  if (theirs(baseSource) === expectedBytes) return;
+  if (theirs(baseSource) === expectedBytes) return baseCommit;
   try {
     worktreeApprovalGit(repo.cwd, ["merge-base", "--is-ancestor", base, parentHead]);
   } catch {
     throw new Error("Selected worktree base cannot fast-forward to the approved parent source. Choose an ancestor of the approved parent commit before prepare.");
   }
+  return parentHead;
 }
 
 function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: string, discardedSha256?: string) {

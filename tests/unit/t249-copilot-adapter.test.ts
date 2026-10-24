@@ -5,9 +5,9 @@
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
 // (field-verbatim captures off Copilot CLI 1.0.74, plus a task launch off 1.0.74
-// and 1.0.96, sanitized for publication) into the generated Copilot adapter
-// inside a scratch project carrying an active workflow state, then asserts the
-// observable core-hook effect:
+// and 1.0.96 and a question box off 1.0.103, sanitized for publication) into
+// the generated Copilot adapter inside a scratch project carrying an active
+// workflow state, then asserts the observable core-hook effect:
 //   continue-workflow → block fields at top level for CLI and under
 //                    hookSpecificOutput for VS Code; silent with no state.
 //   session-start  → additionalContext at top level for CLI and under
@@ -876,6 +876,16 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(r.stdout).toContain("numbered prose");
   });
 
+  // Copilot CLI 1.0.103 hands the PascalCase hooks AI-DLC registers its own
+  // question box under the Claude Code name (the recorded payload).
+  test("4a2: Copilot CLI's own question box, as its hooks name it, is denied while workflow state is active", () => {
+    const dir = scratchProject(true);
+    const r = runAdapter(dir, "guard-tool-call", withCwd(FIXTURES.preToolUse_askUserQuestion, dir));
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('"permissionDecision":"deny"');
+    expect(r.stdout).toContain("numbered prose");
+  });
+
   test("4b: VS Code vscode/askQuestions camel payload is denied with active state", () => {
     const dir = scratchProject(true);
     const r = runAdapter(dir, "guard-tool-call", {
@@ -896,6 +906,13 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       tool_name: "ask_user",
       tool_input: { question: "Continue?" },
     });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+
+  test("4c2: Copilot CLI's own question box fails open without workflow state", () => {
+    const dir = scratchProject(false);
+    const r = runAdapter(dir, "guard-tool-call", withCwd(FIXTURES.preToolUse_askUserQuestion, dir));
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("");
   });

@@ -433,7 +433,7 @@ describe("t-carry-on-continues-the-work: work here but none selected in this cha
 
     // Only a bare --resume picks the one piece up: anything typed with it keeps
     // its own route, so a stage target jumps there as it always did, and a
-    // setting gets the pick question, as before.
+    // setting is kept for the work picked, then gets the pick question, as before.
     test(`${harness}: one piece, none selected: --resume with a stage target jumps there`, () => {
       proj = cloneWithWork(tools, ["auth"]);
       const jump = next(tools, proj, ["--resume", "--stage", "code-generation"]);
@@ -441,9 +441,13 @@ describe("t-carry-on-continues-the-work: work here but none selected in this cha
       expect(jump.stage).toBe("code-generation");
     });
 
-    test(`${harness}: one piece, none selected: --resume with a setting asks which work, as before`, () => {
+    test(`${harness}: one piece, none selected: --resume with a setting keeps it, then asks which work, as before`, () => {
       proj = cloneWithWork(tools, ["auth"]);
-      const ask = next(tools, proj, ["--resume", "--guard-policy", "relaxed"]);
+      const kept = next(tools, proj, ["--resume", "--guard-policy", "relaxed"]);
+      expect(kept.kind, JSON.stringify(kept).slice(0, 300)).toBe("print");
+      expect(String(kept.message)).toContain("engine config set guard-policy relaxed");
+      expect(String(kept.message)).toMatch(/aidlc-orchestrate\.ts next` and follow what it returns\.$/);
+      const ask = next(tools, proj, []);
       expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("intent-pick");
     });
   }

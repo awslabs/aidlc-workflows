@@ -148,6 +148,12 @@ function suffixOf(state: string, slug: string): string | undefined {
   return new RegExp(`^- \\[.\\] ${slug} \u2014 (EXECUTE|SKIP)`, "m").exec(state)?.[1];
 }
 
+/** A named command, word for word, from `engine` on. */
+function engine(command: string): string[] {
+  const words = (command.match(/'[^']*'|\S+/g) ?? []).map((word) => word.replace(/^'(.*)'$/, "$1"));
+  return words.slice(words.indexOf("engine"));
+}
+
 function nextDirective(proj: string, args: string[]): { kind: string; message: string } {
   const res = runOrchestrateNext(ORCH, proj, args, { cwd: proj, env: process.env });
   const line = res.out.split("\n").find((entry) => entry.trim().startsWith("{"));
@@ -569,7 +575,8 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(command.endsWith("engine recompose --skip team-formation --reason 'the person asked to skip it'"), d.message).toBe(true);
     expect(d.message).toContain('"Skipped Team Formation. You can undo that any time."');
     expect(d.message).toContain("If they later ask to undo it, run `");
-    expect(d.message.endsWith("recompose --add team-formation`."), d.message).toBe(true);
+    expect(d.message.endsWith("recompose --add team-formation --reason 'the person asked to undo skipping it'`."), d.message)
+      .toBe(true);
     // The one line is all the person hears: recompose's counts stay out of the reply.
     expect(d.message).toContain("do not show its output");
     expect(d.message).not.toContain("print its output verbatim");
@@ -616,11 +623,6 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     const d = nextDirective(proj, ["--add", "ci-pipeline"]);
     expect(d.kind).toBe("print");
     expect(d.message).toContain('"Added CI Pipeline. You can undo that any time."');
-    // Each named command, word for word, from `engine` on.
-    const engine = (command: string): string[] => {
-      const words = (command.match(/'[^']*'|\S+/g) ?? []).map((word) => word.replace(/^'(.*)'$/, "$1"));
-      return words.slice(words.indexOf("engine"));
-    };
     const add = runTool(proj, "aidlc.ts", engine(/Run `([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? ""));
     expect(add.status, add.out).toBe(0);
     expect(suffixOf(stateOf(proj), "ci-pipeline")).toBe("EXECUTE");
@@ -628,6 +630,45 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(undo.status, undo.out).toBe(0);
     expect(suffixOf(stateOf(proj), "ci-pipeline")).toBe("SKIP");
     expect(auditOf(proj)).toContain("**Reason**: the person asked to skip it");
+  });
+
+  // A live run on Claude Code: on a bugfix plan, "skip the Deployment Pipeline
+  // stage", then "actually, undo that". The undo the skip's step named carried
+  // no reason, so recompose's strict check refused to put the stage back
+  // (bugfix leaves out the stages that make its inputs) right after the person
+  // read "You can undo that any time".
+  test("a skipped stage's undo, run as named, goes through when it needs what the plan leaves out", () => {
+    const proj = installedProject();
+    expect(runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix"]).status).toBe(0);
+    expect(suffixOf(stateOf(proj), "deployment-pipeline")).toBe("EXECUTE");
+    const d = nextDirective(proj, ["--skip", "deployment-pipeline"]);
+    expect(d.kind).toBe("print");
+    expect(d.message).toContain('"Skipped Deployment Pipeline. You can undo that any time."');
+    const skip = runTool(proj, "aidlc.ts", engine(/Run `([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? ""));
+    expect(skip.status, skip.out).toBe(0);
+    expect(suffixOf(stateOf(proj), "deployment-pipeline")).toBe("SKIP");
+    const undo = runTool(proj, "aidlc.ts", engine(/If they later ask to undo it, run `([^`]*)`/.exec(d.message)?.[1] ?? ""));
+    expect(undo.status, undo.out).toBe(0);
+    expect(suffixOf(stateOf(proj), "deployment-pipeline")).toBe("EXECUTE");
+    expect(auditOf(proj)).toContain("**Reason**: the person asked to undo skipping it");
+  });
+
+  // Only the undo the step names carries its reason: an add of the person's
+  // own, a stage the plan leaves out or a skipped one put back by a fresh add,
+  // is checked as before.
+  test("a person's own add carries no reason and is still checked", () => {
+    const proj = installedProject();
+    expect(runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix"]).status).toBe(0);
+    const d = nextDirective(proj, ["--skip", "deployment-pipeline"]);
+    expect(runTool(proj, "aidlc.ts", engine(/Run `([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? "")).status).toBe(0);
+    const back = /Run `([^`]*engine recompose [^`]*)`/.exec(nextDirective(proj, ["--add", "deployment-pipeline"]).message)?.[1] ?? "";
+    expect(back.endsWith("engine recompose --add deployment-pipeline"), back).toBe(true);
+    const own = /Run `([^`]*engine recompose [^`]*)`/.exec(nextDirective(proj, ["--add", "observability-setup"]).message)?.[1] ?? "";
+    expect(own.endsWith("engine recompose --add observability-setup"), own).toBe(true);
+    const add = runTool(proj, "aidlc.ts", engine(own));
+    expect(add.status).not.toBe(0);
+    expect(add.out).toContain("Recompose rejected by the strict validator");
+    expect(suffixOf(stateOf(proj), "observability-setup")).toBe("SKIP");
   });
 
   // A live run on Claude Code: "approve build and test. and skip the deployment

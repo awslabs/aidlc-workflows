@@ -174,6 +174,7 @@ import {
   owedPipelineLinks,
   effectiveSupportAgentsForProject,
   producesArtifactFile,
+  summaryOwnedReviewInput,
   readAllAuditShards,
   readApplicableTeamUnitScopeStamp,
   readAuditShardEvents,
@@ -630,6 +631,10 @@ function auditTailHasFields(
 //   4. at least one ARTIFACT_CREATED/ARTIFACT_UPDATED to a declared produces file
 //      AFTER the FIRST post-anchor HUMAN_TURN and BEFORE the LAST one.
 //
+// A declared produces file here is never one of the stage's own questions files
+// (summaryOwnedReviewInput): a write there notes the person's answers, so a
+// stage's question rounds never read as a revision of what the gate shows.
+//
 // The HUMAN_TURN pivot in conjunct 4 is load-bearing: the reviewer appends its
 // `## Review` section to the stage's review_artifact BEFORE the human responds at the
 // gate (stage-protocol-reviewer.md §12a), firing an ARTIFACT_UPDATED on a produces file.
@@ -664,11 +669,22 @@ function auditTailHasFields(
 // with Revision Count 0 and no GATE_REJECTED row.
 function unrecordedRevisionSinceGateOpen(
   pd: string,
-  stage: { slug: string; produces?: string[] }
+  stage: {
+    slug: string;
+    produces?: string[];
+    summary_confirmation?: "required" | "if-present";
+    review_artifact?: string;
+  }
 ): boolean {
   const audit = readAllAuditShards(pd);
   if (audit.length === 0) return false; // no ledger -> nothing to reconcile
   const recordedRepos = new Set(intentRepos(pd));
+  // The stage's own questions files hold the person's answers, not the output
+  // the gate shows: their writes are question rounds, never a revision.
+  const shown = {
+    slug: stage.slug,
+    produces: stage.produces?.filter((name) => !summaryOwnedReviewInput(stage, name)),
+  };
   const RELEVANT = new Set([
     "STAGE_AWAITING_APPROVAL",
     "STAGE_STARTED",
@@ -744,7 +760,7 @@ function unrecordedRevisionSinceGateOpen(
       firstHuman === -1 &&
       (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") &&
       e.file !== null &&
-      producesArtifactFile(stage, e.file, recordedRepos)
+      producesArtifactFile(shown, e.file, recordedRepos)
     ) {
       wroteBeforeHuman = true;
     }
@@ -758,7 +774,7 @@ function unrecordedRevisionSinceGateOpen(
     if (
       (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") &&
       e.file !== null &&
-      producesArtifactFile(stage, e.file, recordedRepos)
+      producesArtifactFile(shown, e.file, recordedRepos)
     ) {
       return true;
     }

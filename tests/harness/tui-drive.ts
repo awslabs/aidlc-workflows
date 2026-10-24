@@ -829,12 +829,15 @@ const KIRO_V3_OFFER_TITLE_RE = /You're using Kiro CLI V2\.\s+Switch to V3 today\
 const KIRO_V3_OFFER_OPTIONS = ["Switch to V3 and upgrade my configs", "Remind me later", "Don't ask again"];
 const KIRO_V3_REMIND_LATER = 1;
 
-/** The key that moves Kiro CLI's V3 offer (2.33.1, at launch) to "Remind me later", or takes it. */
+/**
+ * The key that moves Kiro CLI's V3 offer (2.33.1, at launch) to "Remind me later", or takes it.
+ * Its caret is U+276F, or an ASCII `>` on Windows Server.
+ */
 export function kiroV3OfferNavigation(screen: string): "Up" | "Down" | "Enter" | null {
   // The offer paints before the chat; an agent's reply quoting it sits above the input footer.
   if (!KIRO_V3_OFFER_TITLE_RE.test(screen) || /ask a question or describe a task/.test(screen)) return null;
   const options = screen.split(/\r?\n/).flatMap((line) => {
-    const match = /^\s*(❯\s*)?(Switch to V3 and upgrade my configs|Remind me later|Don't ask again)\s*$/.exec(line);
+    const match = /^\s*([❯>]\s*)?(Switch to V3 and upgrade my configs|Remind me later|Don't ask again)\s*$/.exec(line);
     return match ? [{ selected: !!match[1], label: match[2] }] : [];
   });
   if (

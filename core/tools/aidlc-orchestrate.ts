@@ -500,11 +500,13 @@ import {
   findStageBySlug,
   withPersonsWordsFirst,
   PERSON_ASKED_SKIP_REASON,
+  PERSON_ASKED_UNDO_SKIP_REASON,
   readUnitSourceManifest,
   readIntentRegistry,
   unitPlainName,
   unitSkippedItsCode,
   waveEligible,
+  optionsList,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
@@ -3107,6 +3109,20 @@ function resumeAgain(flags: ParsedFlags): string {
   return ["next --resume", ...typedSettingModifiers(flags).map((modifier) => `--${modifier}`)].join(" ");
 }
 
+// The jump a scope or setting was typed with, named after the change so the
+// jump runs in the work as changed (the guide's `/aidlc --scope enterprise
+// --stage code-generation`), with the Units it was typed for.
+function jumpAfterChange(flags: ParsedFlags): string {
+  return [
+    `${aidlcToolInvocation("orchestrate")} next`,
+    flags.stage ? `--stage ${shellArg(flags.stage)}` : `--phase ${shellArg(flags.phase ?? "")}`,
+    ...(flags.jumpUnit !== undefined ? [`--unit ${shellArg(flags.jumpUnit)}`] : []),
+    ...(flags.everyUnit ? ["--every-unit"] : []),
+    ...(flags.change ? ["--change"] : []),
+    ...(flags.resume ? ["--resume"] : []),
+  ].join(" ");
+}
+
 function configSetCommand(modifiers: string[], personWords = false): string {
   return [
     aidlcDispatcherInvocation(`config set ${modifiers[0]}`),
@@ -3642,7 +3658,7 @@ function openGateReplyDirective(
 
 // The choices a question's row says it offered, in order.
 function questionOptions(block: string): string[] {
-  return (auditBlockField(block, "Options") ?? "").split(",").map((option) => option.trim()).filter(Boolean);
+  return optionsList(auditBlockField(block, "Options")).filter(Boolean);
 }
 
 // How the person's answer to the stage's open question is recorded, named
@@ -10525,9 +10541,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
 
   // Branch 5 — scope or configuration changes against an existing workflow.
   // Changing scope or config is a MUTATION, so `next` names the move (print) and the conductor
-  // runs the tool; it never mutates here. Fires only when a modifier is present
-  // WITHOUT an explicit --stage/--phase jump (those take the jump path below).
-  if (stateContent && !flags.stage && !flags.phase) {
+  // runs the tool; it never mutates here. Fires only when a modifier is present.
+  // A --stage/--phase jump typed with it is named after the change, so neither
+  // is dropped; a jump with nothing to change takes the jump path below.
+  if (stateContent) {
+    const jump = flags.stage || flags.phase ? jumpAfterChange(flags) : null;
     // Named stage changes to a running plan land through recompose at once:
     // the person named the stages, so no approval re-asks it. Any scope or
     // setting change in the same command runs first.
@@ -10566,6 +10584,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       if (unnamed) parts.push(`--message '${MESSAGE_SLOT}'`);
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
       const fill = unnamed ? messageFill(pd) : "";
+      // The jump's own line says where the work goes, so no line says where it
+      // picks up before the jump moves it.
+      if (jump !== null) {
+        emit(printDirective(
+          `Run \`${command}\` to change scope${fill}, print its output verbatim, then run \`${jump}\` and follow what it returns.`,
+        ));
+        return;
+      }
       // On finished work the change starts the first stage the new scope adds
       // after the last one (the tool reads the same predicate), so nothing
       // waits on the person and the agent carries on into it (#2261). Over
@@ -10605,6 +10631,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const teamKeeps = modifiers.length > 0 && !describedWork && !planChanges ? teamKeepsTyped(flags, pd) : null;
     if (teamKeeps !== null) {
       const said = `Run nothing. Tell the person in one line: "${teamKeeps}"`;
+      if (jump !== null) {
+        emit(printDirective(`${said} Then run \`${jump}\` and follow what it returns.`));
+        return;
+      }
       emit(keptWhilePlanWaits(
         pickedUpIfTurnEnds(settingPrint(
           stillParked === null ? `${said} Then stop.` : `${said}, followed by "${stillParked}", and stop.${resumeOnYes()}`,
@@ -10620,6 +10650,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const unnamed = settingNeedsTheirWords(pd, modifiers);
       const command = configSetCommand(modifiers, unnamed);
       const fill = unnamed ? messageFill(pd) : "";
+      if (jump !== null) {
+        emit(printDirective(
+          `Run \`${command}\` to update the configuration${fill}, then print its output verbatim and run \`${jump}\` ` +
+            "and follow what it returns.",
+        ));
+        return;
+      }
       emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
         pickedUpIfTurnEnds(
           settingPrint(
@@ -10829,10 +10866,15 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // anything else, so it is never lost behind the question of which work to
     // pick up. A step, not an error. Where work is here to pick from, the agent
     // asks the engine again and the person gets that question in the same turn.
+    // A --resume asks to pick work up, so its setting is kept the same way when
+    // there is work here to pick; with none, it keeps the error below that
+    // nothing is here to resume.
     const typedBeforeWork = typedSettingModifiers(flags);
-    const settingBeforeWork = typedBeforeWork.length > 0 && !flags.intent && !flags.resume;
-    const pickFollows = settingBeforeWork && unselectedRecords(pd) !== null;
-    const thenWait = pickFollows ? "re-run next and follow what it returns." : "wait for them to say what to build.";
+    const pickFollows = typedBeforeWork.length > 0 && !flags.intent && unselectedRecords(pd) !== null;
+    const settingBeforeWork = typedBeforeWork.length > 0 && !flags.intent && (!flags.resume || pickFollows);
+    const thenWait = pickFollows
+      ? `run \`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns.`
+      : "wait for them to say what to build.";
     const teamKeepsBeforeWork = settingBeforeWork ? teamKeepsTyped(flags, pd) : null;
     if (teamKeepsBeforeWork !== null) {
       const said = `Run nothing. Tell the person in one line: "${teamKeepsBeforeWork}" Then ${thenWait}`;
@@ -15233,11 +15275,14 @@ function planChangeDirective(
   ].join(" ");
   // The person's own skip, in their change or in the undo of their add:
   // recompose carries it out over its check that later stages keep what they
-  // read, as a stage skipped where it stands is.
-  const recomposed = (skipped: string[], added: string[]): string =>
+  // read, as a stage skipped where it stands is. The undo of their skip puts
+  // the stage back the same way; an add of their own is checked.
+  const recomposed = (skipped: string[], added: string[], undo = false): string =>
     `${aidlcDispatcherInvocation("recompose")} ${flips(skipped, added)}` +
-    (skipped.length > 0 ? ` --reason ${shellArg(PERSON_ASKED_SKIP_REASON)}` : "");
+    (skipped.length > 0 ? ` --reason ${shellArg(PERSON_ASKED_SKIP_REASON)}`
+      : undo ? ` --reason ${shellArg(PERSON_ASKED_UNDO_SKIP_REASON)}` : "");
   const replan = (skipped: string[]): string => recomposed(skipped, add);
+  const undone = recomposed(add, planSkip, true);
   const skipName = (slug: string): string =>
     unitStep !== null && !unitStep.others && slug === unitStep.stage
       ? `${name(slug)} for the ${unitName} Unit`
@@ -15318,7 +15363,7 @@ function planChangeDirective(
         "Do not show a command's output. If a command refuses, tell the person in plain " +
         "words why it could not, and the way it names to do it instead, then stop." +
         (replanned
-          ? ` If they later ask to undo skipping it for every Unit, run \`${recomposed(add, planSkip)}\`.`
+          ? ` If they later ask to undo skipping it for every Unit, run \`${undone}\`.`
           : "") +
         resume,
     ));
@@ -15361,7 +15406,7 @@ function planChangeDirective(
       ? "You can undo that any time."
       : `${skip.length === 1 ? "It" : skip.length === 2 ? "Either one" : "Any of them"} can still be run on its own with ${anyOf}.`;
   const line = `"${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ${wayBack}${noted ? ` ${noted}` : ""}${parkedTail}"`;
-  const undo = `If they later ask to undo it, run \`${recomposed(add, planSkip)}\`.`;
+  const undo = `If they later ask to undo it, run \`${undone}\`.`;
   // The question named the stages after the skipped one too, and the same
   // reply can approve them: "skip Functional Design and approve the rest".
   const rest = started !== null && currentState === "awaiting-approval"

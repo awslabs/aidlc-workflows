@@ -379,7 +379,7 @@ export function writeUnitSource(pd: string, unit: string, value: number): void {
   writeFileSync(join(wt(pd, unit), "src", `${unit}.ts`), `export const ${unit} = ${value};\n`);
 }
 
-export function checkReviewFinalizeAndLand(pd: string, values: Record<string, number>): void {
+export function checkReviewFinalizeAndLand(pd: string, values: Record<string, number>, target = "main"): void {
   const units = Object.keys(values);
   for (const unit of units) {
     const checked = swarm(pd, ["check", unit]);
@@ -391,7 +391,7 @@ export function checkReviewFinalizeAndLand(pd: string, values: Record<string, nu
   expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
   for (const unit of units) {
     const merged = runCheckpointTool(pd, "tools/aidlc-worktree.ts", [
-      "merge", "--slug", boltSlugForUnit(unit), "--target", "main", "--strategy", "squash", "--project-dir", pd,
+      "merge", "--slug", boltSlugForUnit(unit), "--target", target, "--strategy", "squash", "--project-dir", pd,
     ]);
     expect(merged.code, `${merged.out}\n${merged.err}`).toBe(0);
     expect(existsSync(wt(pd, unit))).toBe(false);
