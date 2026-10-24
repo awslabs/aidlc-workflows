@@ -8043,7 +8043,9 @@ function conversationHasNotJoined(workflow: ReturnType<typeof enterHookWorkflow>
 
 // The selected record's own Status. Completed and Archived are finished work:
 // the conversation may still be the one that did it, and the record stays
-// selected, but a later chat event is not part of that work.
+// selected, but a later chat event is not part of that work. A stage the person
+// runs on its own there (`--single`) is: while that run is open, the record is
+// live work, as it is for the same run on running work.
 export function selectedRecordIsFinished(
   projectDir: string,
   selection: WorkflowSelection | null,
@@ -8056,14 +8058,16 @@ export function selectedRecordIsFinished(
     return false;
   }
   const status = getField(content, "Status");
-  return status === "Completed" || status === "Archived";
+  if (status !== "Completed" && status !== "Archived") return false;
+  return !isolatedRunIsOpen(projectDir, selection);
 }
 
 // A hook stands outside when its selection names a record this conversation has
 // not joined, when participation cannot be decided, or when that record is
-// finished (Completed or Archived). Hooks that only write into the record skip
-// on it. A selection with no record (a cold workspace) is not "outside": there
-// is nothing to protect, and hooks keep their pre-workflow behaviour.
+// finished (Completed or Archived, with no isolated run open on it). Hooks that
+// only write into the record skip on it. A selection with no record (a cold
+// workspace) is not "outside": there is nothing to protect, and hooks keep their
+// pre-workflow behaviour.
 export function hookStandsOutside(workflow: ReturnType<typeof enterHookWorkflow>): boolean {
   if (conversationHasNotJoined(workflow)) return true;
   return selectedRecordIsFinished(workflow.projectDir, workflow.selection);
@@ -37382,8 +37386,10 @@ type OrderedPipelineEvidenceEvent = AuditShardEvent;
 
 function orderedPipelineEvidenceEvents(
   projectDir: string,
+  intent?: string,
+  space?: string,
 ): OrderedPipelineEvidenceEvent[] {
-  return readAuditShardEvents(projectDir).sort((a, b) => {
+  return readAuditShardEvents(projectDir, intent, space).sort((a, b) => {
     if (a.timestamp !== b.timestamp) {
       return a.timestamp < b.timestamp ? -1 : 1;
     }
@@ -37509,8 +37515,34 @@ export function singleStageAttemptIsOpen(
   projectDir: string,
   stageSlug: string,
 ): boolean {
+  return singleStageAttemptOpenIn(orderedPipelineEvidenceEvents(projectDir), stageSlug);
+}
+
+// An isolated run of any stage started on the selection's own record and not
+// completed. selectedRecordIsFinished asks only for a finished record, so a
+// running one never reads its audit here; an audit that cannot be read answers
+// no, which leaves the record finished.
+export function isolatedRunIsOpen(projectDir: string, selection: WorkflowSelection): boolean {
+  let events: OrderedPipelineEvidenceEvent[];
+  try {
+    events = orderedPipelineEvidenceEvents(projectDir, selection.intent ?? undefined, selection.space);
+  } catch {
+    return false;
+  }
+  const stages = new Set<string>();
+  for (const entry of events) {
+    if (entry.event !== "STAGE_STARTED") continue;
+    const stage = auditBlockField(entry.block, "Stage");
+    if (stage && auditBlockField(entry.block, "Workflow") === `single-stage:${stage}`) stages.add(stage);
+  }
+  return [...stages].some((stage) => singleStageAttemptOpenIn(events, stage));
+}
+
+function singleStageAttemptOpenIn(
+  events: OrderedPipelineEvidenceEvent[],
+  stageSlug: string,
+): boolean {
   const workflow = `single-stage:${stageSlug}`;
-  const events = orderedPipelineEvidenceEvents(projectDir);
   const floor = pipelineAttemptFloor(events, stageSlug, true);
   if (floor === null) return false;
   const floorShards = new Set(floor.rows.map((row) => row.shard));
