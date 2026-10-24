@@ -1251,9 +1251,12 @@ function canonicalTool(
 }
 
 // The shell a Bash call ran in, for the readers that take it: `execute_pwsh`
-// runs PowerShell, as the Kiro IDE adapter marks it.
+// runs PowerShell, as the Kiro IDE adapter marks it, and on Windows Kiro CLI
+// runs its shell tool in PowerShell under every name the call carries.
 function shellReading(name: string): { aidlc_shell?: "powershell" } {
-  return name === "execute_pwsh" ? { aidlc_shell: "powershell" } : {};
+  return canonicalTool(name) === "Bash" && (name === "execute_pwsh" || process.platform === "win32")
+    ? { aidlc_shell: "powershell" }
+    : {};
 }
 
 type Forward = {
