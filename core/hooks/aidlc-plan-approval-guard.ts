@@ -2575,12 +2575,18 @@ async function evaluate(
         ) return 0;
         swarmBatchOut = true;
         // A write seen only in the main checkout, at a step still current,
-        // waits for the landings; one that reaches into a worktree too, or a
+        // waits for the landings; one that reaches under the worktrees folder
+        // (a Unit's own worktree whose approval no longer holds included), or a
         // step that lists no Unit or is out of date, is refused as any other.
+        // Where a target lies decides it, never what its approval says.
         const outOfDate = outOfDateClause(activeDirective);
+        const worktrees = resolve(worktreesDir(projectDir));
         const mainCheckoutOnly = listed.length > 0 && outOfDate === "" && seen.length > 0 &&
           seen.length === mutation.targets.length &&
-          seen.every((candidate) => preparedBoltWorktreeUnit(projectDir, [candidate], listed) === null);
+          seen.every((candidate) => {
+            const inside = relative(worktrees, resolve(candidate));
+            return inside.startsWith("..") || isAbsolute(inside);
+          });
         authorityFailure = mainCheckoutOnly
           ? SWARM_MAIN_CHECKOUT_HELD
           : `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +

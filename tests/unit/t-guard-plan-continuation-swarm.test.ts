@@ -850,7 +850,7 @@ describe("a parallel batch's writes judged from the parent", () => {
     mkdirSync(join(stray, "src"), { recursive: true });
     const strayWrite = write(pd, join(stray, "src", `${UNIT}.ts`));
     expect(strayWrite.code, `${strayWrite.out}\n${strayWrite.err}`).toBe(2);
-    expect(strayWrite.err).toContain(HELD);
+    expect(strayWrite.err).toContain(REFUSAL);
     expect(blocked(pd)).toBe(before + (win32 ? 3 : 2));
   });
 
