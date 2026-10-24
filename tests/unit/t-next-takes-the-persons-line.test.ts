@@ -31,6 +31,7 @@ import {
   createOrchestrationTestProject,
   FIXTURES_DIR,
   proposalFollowUp,
+  removeWorkspaceRecord,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -73,6 +74,13 @@ afterEach(() => {
 function fresh(): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
+  return proj;
+}
+
+/** A project where no work was ever created: no record, no registry row. */
+function newProject(): string {
+  const proj = fresh();
+  removeWorkspaceRecord(proj);
   return proj;
 }
 
@@ -258,7 +266,7 @@ describe("next takes the person's own /aidlc line when the agent's command carri
   });
 
   test("kiro-ide: a line with no words leaves today's answer", async () => {
-    const proj = fresh();
+    const proj = newProject();
     await say(proj, "/aidlc --status", "kiro-ide");
     const { directive, out } = await next(proj, "kiro-ide", []);
     expect(directive.kind, out).toBe("print");
@@ -266,7 +274,7 @@ describe("next takes the person's own /aidlc line when the agent's command carri
   });
 
   test("kiro-ide: a reply in plain words (no entry word) leaves today's answer", async () => {
-    const proj = fresh();
+    const proj = newProject();
     await say(proj, "yes", "kiro-ide");
     const { directive, out } = await next(proj, "kiro-ide", []);
     expect(directive.kind, out).toBe("print");
@@ -274,7 +282,7 @@ describe("next takes the person's own /aidlc line when the agent's command carri
   });
 
   test("kiro-ide: another chat's line is not taken", async () => {
-    const proj = fresh();
+    const proj = newProject();
     // This chat's own turn (so the hooks are known to run), then a record of another chat's line, later.
     await say(proj, "/aidlc --status", "kiro-ide");
     saveMessage(proj, recordOf(SECOND_SESSION));
@@ -284,7 +292,7 @@ describe("next takes the person's own /aidlc line when the agent's command carri
   });
 
   test("kiro-ide: the Stop hook's read-only probe learns the directive and asks nothing", async () => {
-    const proj = fresh();
+    const proj = newProject();
     await say(proj, LINE, "kiro-ide");
     const { directive, out } = await next(proj, "kiro-ide", [], { env: { AIDLC_STOP_HOOK_PROBE: "1" } });
     expect(directive.kind, out).toBe("print");
@@ -307,7 +315,7 @@ describe("next takes the person's own /aidlc line when the agent's command carri
   });
 
   test("copilot: a wrapper that is not our skill file byte for byte is recorded as delivered, and leaves today's answer", async () => {
-    const proj = fresh();
+    const proj = newProject();
     const said = await say(proj, copilotSkillPrompt(proj, WORDS).replace("## Welcome", "## Welcome!"), "copilot");
     expect(said.status, `${said.stdout}${said.stderr}`).toBe(0);
     const { directive, out } = await next(proj, "copilot", []);
@@ -325,7 +333,7 @@ describe("next takes the person's own /aidlc line when the agent's command carri
   });
 
   test("claude: with no chat identity no record is read", async () => {
-    const proj = fresh();
+    const proj = newProject();
     await say(proj, LINE, "claude");
     // The hook ran (so the hooks are known to run); its session pid map is gone, and the agent's shell names no chat.
     rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
@@ -549,7 +557,7 @@ describe("the entry word alone over work in hand picks the work back up, whichev
   });
 
   test("claude: \"/aidlc\" alone with no work yet leaves today's answer", async () => {
-    const proj = fresh();
+    const proj = newProject();
     await say(proj, "/aidlc", "claude");
     const { directive, out } = await next(proj, "claude", []);
     expect(directive.kind, out).toBe("print");

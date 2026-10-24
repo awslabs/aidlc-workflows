@@ -497,6 +497,22 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       expect(r.directive.message ?? "").not.toContain("No workflow state found");
     });
 
+    // (3b) Work created here whose state file is gone is not a new project: it
+    // keeps the error, which the Kiro IDE Plan Approval recovery reads as
+    // failing closed (t218).
+    test("no-state bare next over a registered record with no state file -> error", () => {
+      const proj = createTestProject();
+      tempDirs.push(proj);
+      const res = spawnSync(BUN, [TOOL, "next", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: cleanEnv(),
+      });
+      const directive = parseDirective(res.stdout ?? "");
+      expect(directive.kind, `${res.stdout}${res.stderr}`).toBe("error");
+      expect(directive.message ?? "").toContain("No workflow state found");
+    });
+
     // (4) Conflicting explicit namings: `next bugfix --scope mvp` names TWO
     // scopes at once. The precedence ladder's top rung is the explicit --scope
     // flag, so the creation must name the FLAG's scope - a positional that silently
