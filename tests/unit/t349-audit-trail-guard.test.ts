@@ -288,11 +288,13 @@ describe("t349 audit trail guard: shell commands", () => {
       [`npm audit --json > npm-audit-$(date +%F).json`, CWD],
       [`cd C:\\work\\audit\\proj && npm test > "$TEST_LOG"`, "C:\\work\\audit\\proj"],
       [`echo x > C:/work/audit/proj/build/$(date +%s).log`, "C:\\work\\audit\\proj"],
+      [`npm test > "${underAudit}/build/$(date +%s).log"`, underAudit],
+      [`npm test > '${underAudit}/build/'$(date +%s).log`, underAudit],
     ]) {
       expect(bash(command, cwd), command).toBeNull();
     }
     // The trail itself stays refused from there, and a folder is cut only
-    // where its own spelling starts: `/audit` inside `$R/audit/` is not it.
+    // where a word starts: `/audit` inside `$R/audit/` or `"$R"/audit` is not it.
     for (const [command, cwd] of [
       [`cd ${underAudit} && echo x >> "$R/audit/host.md"`, underAudit],
       [`echo x >> ${underAudit}/${AUDIT}/$(hostname).md`, underAudit],
@@ -301,6 +303,8 @@ describe("t349 audit trail guard: shell commands", () => {
       [`cd "$R/audit" && echo x >> "$F"`, underAudit],
       [`echo x >> $R/audit/host.md`, "/audit/proj"],
       [`cd /audit/proj && echo x >> "$R/audit/host.md"`, "/audit/proj"],
+      [`cd "$R"/audit && echo x >> "$F"`, "/audit/proj"],
+      [`echo x >> "$R"\\audit\\host.md`, "/audit/proj"],
       ["echo x >> C:\\work\\audit\\proj\\aidlc\\spaces\\default\\intents\\260925-login\\audit\\host.md", "C:\\work\\audit\\proj"],
     ]) {
       expect(bash(command, cwd), command).toBe("audit");
