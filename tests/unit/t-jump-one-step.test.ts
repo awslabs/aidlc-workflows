@@ -10,7 +10,7 @@
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -21,6 +21,7 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedAuditFile,
+  seededRecordDir,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
@@ -119,6 +120,23 @@ describe("t-jump-one-step: the jump is made by the `next` the person's request r
     expect(step.stage).toBe("intent-capture");
     const line = "Moved back to Intent Capture & Framing. You can return to Functional Design any time.";
     expect(notices(step).filter((notice) => notice === line)).toHaveLength(1);
+  });
+
+  test("in a chat, the backward line rides the step's narration, said once", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, CONSTRUCTION);
+    const chat = { AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-0000000000a5", AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
+    // This chat's hooks are running.
+    const health = join(seededRecordDir(proj), ".aidlc-engine", "hooks-health");
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "pre-tool-use.last"), new Date().toISOString());
+    const res = runOrchestrateNext(TOOL, proj, ["--phase", "ideation"], { cwd: proj, env: cleanEnv(chat) });
+    const step = res.directive as Record<string, unknown>;
+    expect(step.kind, res.out).toBe("run-stage");
+    expect(step.stage).toBe("intent-capture");
+    const line = "Moved back to Intent Capture & Framing. You can return to Functional Design any time.";
+    expect(String(step.narration)).toStartWith(line);
+    expect(notices(step)).not.toContain(line);
   });
 
   test("a forward stage jump returns that stage's step with the line naming what it skipped", () => {

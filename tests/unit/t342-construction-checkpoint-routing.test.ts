@@ -2106,15 +2106,19 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a forward jump that drops no Unit's work, and a stage-major forward jump, still jump", () => {
+    // With nothing to say or run around it, the `next` makes the jump itself
+    // and returns the step it lands on.
     const fresh = fixture();
     const clear = JSON.parse(tool(fresh, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
-    expect(clear.kind, JSON.stringify(clear)).toBe("print");
-    expect(clear.message).toContain("--target code-generation --direction forward");
+    expect(clear.kind, JSON.stringify(clear)).not.toBe("print");
+    expect(clear.stage).toBe("code-generation");
+    expect(jumped(fresh)).toBe(1);
     const stageMajor = fixture({ iteration: "stage-major" });
     cover(stageMajor, "alpha", stages.slice(0, 4));
     const jump = JSON.parse(tool(stageMajor, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
-    expect(jump.kind, JSON.stringify(jump)).toBe("print");
-    expect(jump.message).toContain("--target code-generation --direction forward");
+    expect(jump.kind, JSON.stringify(jump)).not.toBe("print");
+    expect(jump.stage).toBe("code-generation");
+    expect(jumped(stageMajor)).toBe(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit start records the Unit's stage and a new chat names it", () => {
