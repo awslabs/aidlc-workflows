@@ -629,10 +629,8 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     const id = /--request ([0-9a-f]{8})/.exec(String(read.message))?.[1];
     expect(id).toBeDefined();
     const ask = directiveOf(runNext(proj, ["--request", id!]).out);
-    const confirm = String(ask.confirm_command);
-    const next = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
-    expect(next.kind).toBe("ask");
-    expect(next.ask_type).toBe("new-work-routing");
+    expect(ask.kind).toBe("ask");
+    expect(ask.ask_type).toBe("new-work-routing");
   });
 
   // Settings typed with a new description beside other work go with the work

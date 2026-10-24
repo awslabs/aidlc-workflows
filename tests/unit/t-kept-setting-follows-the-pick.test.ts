@@ -274,15 +274,21 @@ describe("t-kept-setting-follows-the-pick: what is not carried to the picked wor
 
   test("typed while a new-work question was open: it is for that work, not the work picked instead", () => {
     const [, picked] = workNoneSelected();
-    // The person describes new work; the agent proposes a plan, and the plan
-    // question is in front of them when they type the setting.
+    // The person describes new work and says it is separate new work, with no
+    // plan named yet; the agent proposes one, and the plan question for that new
+    // work is in front of them when they type the setting.
     reply("add a CSV export");
     const reading = next(["add", "a", "CSV", "export"]);
     const request = /--request ([0-9a-f]{8})/.exec(String(reading.message))?.[1];
     expect(request, JSON.stringify(reading).slice(0, 300)).toBeDefined();
-    const offer = String(reading.message).includes("--propose <plan> --request")
-      ? next(["--propose", "bugfix", "--request", request!])
-      : next(["--request", request!, "--propose", "bugfix"]);
+    const routing = next(["--request", request!]);
+    expect(routing.ask_type, JSON.stringify(routing).slice(0, 300)).toBe("new-work-routing");
+    const separate = String(routing.new_intent_command);
+    reply("2");
+    const step = next(separate.slice(separate.indexOf(" next ") + 6).split(" "));
+    const planStep = /--request ([0-9a-f]{8})/.exec(String(step.message))?.[1];
+    expect(planStep, JSON.stringify(step).slice(0, 300)).toBeDefined();
+    const offer = next(["--propose", "bugfix", "--request", planStep!]);
     expect(offer.ask_type, JSON.stringify(offer).slice(0, 300)).toBe("scope-confirm");
     const kept = typeSetting("/aidlc --guard.review-freeze off", (line) => line);
     expect(kept).toContain("for the piece of work you start now (set by you)");

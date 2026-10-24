@@ -98,12 +98,13 @@ function expectEveryPlan(message: string): void {
 }
 
 /**
- * The creation the plan question's yes names, run as the agent runs it (where
- * work exists but none is selected, the yes meets the question of which piece
- * this is first; it is a separate new piece): the new work exists and is selected.
+ * The creation the question's yes names, run as the agent runs it: the plan
+ * question's yes, or, where work exists but none is selected, the question of
+ * which piece this is, answered as a separate new piece. The new work exists
+ * and is selected.
  */
 function createFromConfirm(proj: string, ask: Directive, env: NodeJS.ProcessEnv = { ...process.env }): string {
-  let created = next(CLAUDE_TOOLS, proj, answerArgs(ask.confirm_command), env);
+  let created = next(CLAUDE_TOOLS, proj, answerArgs(ask.confirm_command ?? ask.new_intent_command), env);
   if (created.kind === "ask" && created.new_intent_command !== undefined) created = next(CLAUDE_TOOLS, proj, answerArgs(created.new_intent_command), env);
   expect(created.kind, JSON.stringify(created).slice(0, 300)).toBe("print");
   const id = REQUEST.exec(String(created.message))![1];
@@ -416,27 +417,76 @@ describe("t-plan-proposed-by-the-agent: finished work and new work beside active
   });
 });
 
+// Every tool asks which work the request belongs to first, naming the plan the
+// agent proposed, so the person answers one question; before, every tool but
+// Kiro asked for the plan first and which work only after the yes.
 describe("t-plan-proposed-by-the-agent: work here but none selected", () => {
   for (const [harness, tools] of [["claude", CLAUDE_TOOLS], ["kiro", KIRO_TOOLS]] as const) {
-    test(`${harness}: the none-selected reading, the agent's plan, then one question, within three calls`, () => {
+    test(`${harness}: the none-selected reading, the agent's plan, then one question naming it, within three calls`, () => {
       proj = cloneWithWork(tools);
       const chain = follow(tools, proj, ["fix the login"], "bugfix");
       const note = JSON.stringify(chain.last).slice(0, 400);
       expect(chain.last.kind, note).toBe("ask");
       expect(chain.calls).toBeLessThanOrEqual(3);
-      if (harness === "kiro") {
-        // Kiro's routing harness asks which work it belongs to first, naming the plan.
-        expect(chain.last.ask_type, note).toBe("new-work-routing");
-        expect(chain.last.proposed_scope).toBe("bugfix");
-        const option = `as "bugfix" work (${creationSize(tools, proj, chain.last.new_intent_command)}) without changing it`;
-        expect(String(chain.last.question)).toContain(option);
-        expect(chain.last.choices?.[1]?.detail).toContain(option);
-      } else {
-        expect(chain.last.ask_type, note).toBe("scope-confirm");
-        expect(chain.last.proposed_scope).toBe("bugfix");
+      expect(chain.last.ask_type, note).toBe("new-work-routing");
+      expect(chain.last.proposed_scope).toBe("bugfix");
+      const option = `as "bugfix" work (${creationSize(tools, proj, chain.last.new_intent_command)}) without changing it`;
+      expect(String(chain.last.question)).toContain(option);
+      expect(chain.last.choices?.[1]?.detail).toContain(option);
+    });
+
+    // With no plan proposed, the separate-work answer reaches the new work's
+    // plan step; once that work exists, the words' own request answered again
+    // (the agent re-running the reading step's command) carries on with it, so
+    // nothing asks where work already built belongs.
+    test(`${harness}: no plan proposed: the separate-work answer reaches the plan step, the work starts once, and the request answered again carries on with it`, () => {
+      proj = cloneWithWork(tools);
+      const read = next(tools, proj, ["fix the login"]);
+      const root = REQUEST.exec(String(read.message))![1];
+      const ask = next(tools, proj, ["--request", root]);
+      expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
+      const step = next(tools, proj, answerArgs(ask.new_intent_command));
+      expect(String(step.message), JSON.stringify(step).slice(0, 300)).toContain(PROPOSAL);
+      const plan = next(tools, proj, ["--propose", "bugfix", "--request", REQUEST.exec(String(step.message))![1]]);
+      expect(plan.ask_type, JSON.stringify(plan).slice(0, 300)).toBe("scope-confirm");
+      const creation = next(tools, proj, answerArgs(plan.confirm_command));
+      const id = /intent create --scope bugfix --request ([0-9a-f]{8})/.exec(String(creation.message))?.[1];
+      expect(id, JSON.stringify(creation).slice(0, 300)).toBeDefined();
+      const made = spawnSync(process.execPath, [join(tools, "aidlc-utility.ts"), "intent-create", "--scope", "bugfix", "--request", id!, "--label", "login-fix", "--project-dir", proj], {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+      });
+      expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+      for (const args of [["--request", root], ["--request", root, "--propose", "bugfix"]]) {
+        const again = next(tools, proj, args);
+        expect(again.kind, JSON.stringify(again).slice(0, 300)).toBe("print");
+        expect(String(again.message)).toContain("Already started");
       }
+      expect(readdirSync(join(proj, "aidlc", "spaces", "default", "intents")).filter((name) => /^\d{6}-/.test(name))).toHaveLength(3);
     });
   }
+
+  // Finished work beside unfinished work, none selected: the words may ask to go
+  // back to a stage of the finished work, and the reading step, which the agent
+  // reads before any question, says so with the command that selects it.
+  test("finished work beside unfinished work: the reading step names the finished work and the way back to a stage", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    const r = spawnSync(process.execPath, [join(CLAUDE_TOOLS, "aidlc-utility.ts"), "intent-create", "--scope", "bugfix", "--label", "auth", "--project-dir", proj], {
+      cwd: proj,
+      encoding: "utf-8",
+      env: { ...process.env },
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    rmSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), { force: true });
+    const read = next(CLAUDE_TOOLS, proj, ["go back to code generation on the finished work"]);
+    expect(read.kind, JSON.stringify(read).slice(0, 300)).toBe("print");
+    const message = String(read.message);
+    expect(message).toStartWith("Work is in progress here (");
+    expect(message).toContain("is finished, and it is not selected in this chat.");
+    expect(message).toContain("next --stage <stage slug>`");
+  });
 
   test("kiro: without a proposed plan the pick question says the plan comes next", () => {
     proj = cloneWithWork(KIRO_TOOLS);
@@ -673,11 +723,13 @@ describe("t-plan-proposed-by-the-agent: creation retires the request's whole cha
     const bare = next(CLAUDE_TOOLS, proj, [], chat);
     expect(bare.ask_type, JSON.stringify(bare).slice(0, 300)).toBe("intent-pick");
     expect(String(bare.question ?? ""), JSON.stringify(bare).slice(0, 300)).not.toContain("fix the login");
-    // Work exists but none is selected here: the reading print, the agent's plan, the plan question.
+    // Work exists but none is selected here: the reading print, the agent's plan,
+    // and the question of which work it belongs to, naming the plan.
     const offer = follow(CLAUDE_TOOLS, proj, ["add", "a", "CSV", "export"], "feature", chat).last;
-    expect(offer.ask_type, JSON.stringify(offer).slice(0, 300)).toBe("scope-confirm");
-    // The person goes ahead with the plan.
-    reply(proj, "1", OTHER_CHAT);
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 300)).toBe("new-work-routing");
+    expect(offer.proposed_scope).toBe("feature");
+    // The person says it is separate new work, on that plan.
+    reply(proj, "2", OTHER_CHAT);
     createFromConfirm(proj, offer, chat);
     const record = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim();
     const state = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", record, "aidlc-state.md"), "utf-8");

@@ -2720,27 +2720,6 @@ function emit(requested: Directive): void {
 const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 const IS_COMPILED = isCompiledExecutable();
 
-function isKiroRoutingHarness(): boolean {
-  if (IS_COMPILED) {
-    const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
-    return explicit === "kiro" || explicit === "kiro-ide";
-  }
-  const invokedScript = (process.argv[1] ?? "").replaceAll("\\", "/");
-  if (/(^|\/)\.kiro\/tools\/aidlc-orchestrate\.ts$/.test(invokedScript)) {
-    return true;
-  }
-  try {
-    const parsed = JSON.parse(
-      readFileSync(join(TOOLS_DIR, "data", "harness.json"), "utf-8"),
-    ) as { name?: unknown };
-    return parsed.name === "kiro" || parsed.name === "kiro-ide";
-  } catch {
-    // Authored core and compiled binaries can lack generated metadata.
-    const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
-    return explicit === "kiro" || explicit === "kiro-ide";
-  }
-}
-
 function toolPath(file: string): string {
   return join(TOOLS_DIR, file);
 }
@@ -4024,15 +4003,23 @@ function teamWordsReplyDirective(requestId: string, pd: string): PrintDirective 
 // name one piece and ask for it to go on (the pick question's own one-step
 // answer selects it and carries on), only name one piece, or describe new
 // work. The engine kept the words.
-function unselectedWordsReplyDirective(requestId: string, pd: string, work: string[]): PrintDirective {
+function unselectedWordsReplyDirective(
+  requestId: string,
+  pd: string,
+  work: string[],
+  // Finished work here too: the words may ask to go back to one of its stages,
+  // read here because the question of which work comes before any plan step.
+  finished?: FinishedWorkHere,
+): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
+  const backToFinished = finished === undefined ? "" : ` ${finishedWorkReading(finished, "")}`;
   return printDirective(
     `Work is in progress here (${work.join(", ")}), and none is selected in this chat. Read the person's words. If ` +
       "they only ask for the work to go on (such as \"carry on\" or \"proceed\"), run " +
       `\`${orchestrate} next\` with nothing after it: it asks them which piece to pick up. If their words name exactly ` +
       `one of the pieces and ask for it to go on, run \`${orchestrate} next --pick <name>\`: it selects that piece and ` +
       `carries on with it. If their words only name exactly one of the pieces, run ` +
-      `\`${aidlcDispatcherInvocation("intent")} switch <name>\`, say the line it prints, then stop. Otherwise (new work, ` +
+      `\`${aidlcDispatcherInvocation("intent")} switch <name>\`, say the line it prints, then stop.${backToFinished} Otherwise (new work, ` +
       `or you cannot tell which), run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the ` +
       "engine kept their words. When their words describe new work, add `--propose <plan>` to that command, the plan " +
       `below that fits the work, so the question can name it. Plans: ${planChoicesLine(pd)}`,
@@ -6064,9 +6051,10 @@ function finishedWorkReading({ records, selected }: FinishedWorkHere, settings: 
 // Branch 9 (explicit --scope flag) so the explicit-naming shapes emit identical
 // directives. The harness dir is resolved through harnessDir() so the directive
 // names the right tree on every harness (.claude/.kiro/.codex).
-// Branch 8's answer to prose that names no scope and continues nothing: on
-// Kiro a cursor-less space first asks which existing record it belongs to,
-// otherwise the plan offer for new work.
+// Branch 8's answer to prose that names no scope and continues nothing: where
+// work is here and none is selected, which of it the request belongs to is
+// asked first, naming the plan the agent proposed, so the person answers one
+// question; otherwise the plan offer for new work.
 function freshWorkRoute(
   flags: ParsedFlags,
   description: string,
@@ -6080,17 +6068,15 @@ function freshWorkRoute(
   // The plan the agent proposed with the request, when it did; none means the
   // proposal step first.
   const plan = flags.propose !== undefined && flags.propose !== "" ? flags.propose : null;
-  if (isKiroRoutingHarness()) {
-    // A tailored plan (`compose`) is no plan's name: the separate-work answer
-    // picks the plan next, as the routing question over selected work does.
-    const pick = intentPickPromptIfRecordsExist(pd, {
-      description,
-      proposedScope: plan === null || plan === "compose" ? "" : plan,
-      carried: carriedRoutingFlags(flags),
-      ...(derivedFrom === undefined ? {} : { derivedFrom }),
-    });
-    if (pick) return pick;
-  }
+  // A tailored plan (`compose`) is no plan's name: the separate-work answer
+  // picks the plan next, as the routing question over selected work does.
+  const pick = intentPickPromptIfRecordsExist(pd, {
+    description,
+    proposedScope: plan === null || plan === "compose" ? "" : plan,
+    carried: carriedRoutingFlags(flags),
+    ...(derivedFrom === undefined ? {} : { derivedFrom }),
+  });
+  if (pick) return pick;
   if (plan !== null) return freshWorkOfferDirective(flags, pd, plan, derivedFrom);
   return planProposalDirective(flags, description, pd, derivedFrom, finished);
 }
@@ -10811,7 +10797,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         targets: here.selectable.map(({ intent, selector }) => ({ intent: selector, uuid: intent.uuid ?? "" })),
         pick: true,
       });
-      emit(unselectedWordsReplyDirective(words.id, pd, here.selectable.map(({ selector }) => selector)));
+      emit(unselectedWordsReplyDirective(words.id, pd, here.selectable.map(({ selector }) => selector), finishedUnselectedWork(pd)));
       return;
     }
   }

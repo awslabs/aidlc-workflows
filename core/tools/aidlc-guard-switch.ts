@@ -1204,8 +1204,12 @@ function grantCovers(
   request: string | null,
 ): boolean {
   if (request === null) return false;
+  // Where work is here and none is selected, the words' first question is
+  // which work they belong to (a routing question), and its new-work answer
+  // creates with no plan question in between: that request is the one.
   const answered = grant.request ??
-    firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: grant.withDescription === true });
+    firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: grant.withDescription === true }) ??
+    firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: true });
   if (answered === null) return false;
   const rootOf = (id: string): string => readQuestion(projectDir, id)?.composedFrom ?? id;
   return answered === request || rootOf(request) === rootOf(answered);
