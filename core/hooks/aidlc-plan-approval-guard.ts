@@ -117,6 +117,7 @@ import {
   writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
+  CEREMONY_ENV,
   personAskedSinceGate,
   readActiveDirectiveMarker,
   readIssuedDirectiveMarker,
@@ -1222,6 +1223,9 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
   if (args[0] !== "config" || args[1] !== "flags") return false;
   let changes = false;
   let lowers = false;
+  // Plan approval's own switch stands only on what can turn plan approval off
+  // while a plan question waits (planApprovalOffStands).
+  let planApprovalOff = false;
   for (let index = 2; index < args.length; index++) {
     const arg = args[index];
     if (arg === "--bypass" || arg === "--clear-bypass") {
@@ -1229,6 +1233,7 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
       if (!(RECORDABLE_PROJECT_BYPASSES as readonly string[]).includes(name)) return false;
       changes = true;
       lowers ||= arg === "--bypass";
+      planApprovalOff ||= arg === "--bypass" && name === CEREMONY_ENV.plan_approval;
     } else if (arg === "--message") {
       // The message the person asked in, which the setter itself proves.
       if (args[++index] === undefined) return false;
@@ -1241,7 +1246,7 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
       return false;
     }
   }
-  return changes && (!lowers || personAskedSinceGate(projectDir));
+  return changes && (!lowers || personAskedSinceGate(projectDir, { planApprovalOff }));
 }
 
 // How a shell command line is read. Every harness keeps the POSIX reading

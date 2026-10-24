@@ -6256,7 +6256,7 @@ function typedSettingsFirst(flags: ParsedFlags, pd: string): string {
   const typed = typedSettingModifiers(flags);
   if (typed.length === 0) return "";
   const unnamed = settingNeedsTheirWords(pd, typed);
-  return `\`${configSetCommand(typed, unnamed)}\`${unnamed ? messageFill(pd) : ""} and say the line it prints, then `;
+  return `\`${configSetCommand(typed, unnamed)}\`${unnamed ? messageFill(pd, typed) : ""} and say the line it prints, then `;
 }
 
 // The way back to a stage of finished work, beside the plan step; `settings`
@@ -10650,7 +10650,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         ...(unnamed ? [`--message '${MESSAGE_SLOT}'`] : []),
       ];
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
-      const fill = unnamed ? messageFill(pd) : "";
+      const fill = unnamed ? messageFill(pd, typed) : "";
       // No Unit walk is read here: it needs the saved scope this install lacks.
       const switching = {
         scope,
@@ -10699,7 +10699,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const unnamed = settingNeedsTheirWords(pd, reshapeSettings);
       emit(printDirective(
         `Run \`${configSetCommand(reshapeSettings, unnamed)}\` to apply the settings typed with this request to the work being reshaped` +
-          `${unnamed ? messageFill(pd) : ""}, ` +
+          `${unnamed ? messageFill(pd, reshapeSettings) : ""}, ` +
           `then run \`${aidlcToolInvocation("orchestrate")} next compose --request ${question.id}${reshapeReplyArgument()}\` and follow what it returns.`,
       ));
       return;
@@ -10935,7 +10935,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const unnamed = settingNeedsTheirWords(pd, modifiers);
       if (unnamed) parts.push(`--message '${MESSAGE_SLOT}'`);
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
-      const fill = unnamed ? messageFill(pd) : "";
+      const fill = unnamed ? messageFill(pd, modifiers) : "";
       // The jump's own line says where the work goes, so no line says where it
       // picks up before the jump moves it.
       if (jump !== null) {
@@ -11036,7 +11036,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       // their words for the setter as this one does.
       const unnamed = settingNeedsTheirWords(pd, modifiers);
       const command = configSetCommand(modifiers, unnamed);
-      const fill = unnamed ? messageFill(pd) : "";
+      const fill = unnamed ? messageFill(pd, modifiers) : "";
       if (jump !== null) {
         emit(printDirective(
           `Run \`${command}\` to update the configuration${fill}, then print its output verbatim and run \`${jump}\` ` +

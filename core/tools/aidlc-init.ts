@@ -138,6 +138,7 @@ import {
   _resetStageGraphForTests,
   activeSpace,
   activeWorkflowDescriptions,
+  CEREMONY_ENV,
   commandAtPersonsTerminal,
   composedPluginBase,
   DEFAULT_SPACE,
@@ -3518,7 +3519,8 @@ function validateChoiceArgs(
     }
     if (chat !== null) {
       const named = valuesAfter(argv, "--message").at(-1);
-      const proof = named === undefined ? null : proveMessage(projectDir, named, "setting", { request: true });
+      const planApprovalOff = valuesAfter(argv, "--bypass").includes(CEREMONY_ENV.plan_approval);
+      const proof = named === undefined ? null : proveMessage(projectDir, named, "setting", { request: true, planApprovalOff });
       if (proof !== null && "refusal" in proof) return proof.refusal;
       if (!personAskedForThisLowering(proof?.message) && !fenceKeyBypassed(projectDir, chat)) {
         return guardSwitchRefusal(bypassedCheck(lowered), projectDir);

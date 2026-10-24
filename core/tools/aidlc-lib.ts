@@ -3070,11 +3070,17 @@ function isTerminalUtilityNext(invocation: { command: string; args: string[] }):
 export const MESSAGE_SLOT = "<id>";
 export const MESSAGE_FILL = `, with ${MESSAGE_SLOT} the id of the person's message that asked for it`;
 
-// The fill with the ids of their messages a request can stand on, oldest
-// first, with their times (requestMessages); never their words.
-export function messageFill(projectDir: string): string {
+// The fill with the ids of their messages a setting can stand on, oldest
+// first, with their times (requestMessages); never their words. `settings` are
+// the step's own (`plan-approval off`), so turning plan approval off names only
+// the messages that can stand for it.
+export function messageFill(projectDir: string, settings: readonly string[] = []): string {
   const { requestMessages } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
-  const named = requestMessages(projectDir, true);
+  const off = settings.some((setting) => {
+    const [key, value] = setting.split(" ");
+    return turnsPlanApprovalOff(key, value);
+  });
+  const named = requestMessages(projectDir, off ? "plan-approval-off" : "setting");
   return named.length === 0
     ? MESSAGE_FILL
     : `${MESSAGE_FILL} (${named.map((message) => `${message.id}, sent ${message.at}`).join("; ")})`;
@@ -13249,6 +13255,24 @@ export function personRepliedAfter(projectDir: string, mark: AuditMark): boolean
   }
 }
 
+// Which rows (as readAuditShardEvents reads them) come after the mark: this
+// clone's shard, from the block the mark stood at. Null when the mark is
+// another shard's, or the trail cannot be read: no place on this record orders
+// rows against it.
+export function rowsAfterMark(projectDir: string, mark: AuditMark): ((row: AuditShardEvent) => boolean) | null {
+  try {
+    const shardPath = auditFilePath(projectDir);
+    const own = projectRelativePath(projectDir, shardPath);
+    if (own !== mark.shard) return null;
+    const content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard");
+    const from = auditShardBlocks(content.toString("utf-8")).length -
+      auditShardBlocks(content.subarray(mark.offset).toString("utf-8")).length;
+    return (row) => row.pos >= from && projectRelativePath(projectDir, row.shard) === own;
+  } catch {
+    return null;
+  }
+}
+
 // Their latest reply after the mark, as personRepliedAfter counts one, by the
 // message its turn names: that message and its words as the store keeps them,
 // for a decision's row. Null when there is none, or its message is not on record.
@@ -13541,7 +13565,10 @@ export function commandTurnHint(projectDir: string): string {
 // through read this, and so does a change to the plan or the scope while
 // Construction carries on by itself; a setter the command runs then proves
 // the message it names (--message).
-export function personAskedSinceGate(projectDir: string, work: { intent?: string; space?: string } = {}): boolean {
+export function personAskedSinceGate(
+  projectDir: string,
+  work: { intent?: string; space?: string; planApprovalOff?: boolean } = {},
+): boolean {
   if (process.env.AIDLC_UNATTENDED === "1") return false;
   const { personTurnStands } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
   return personTurnStands(projectDir, "request", { requests: true, ...work });
@@ -13571,6 +13598,11 @@ const PERSON_CHECK_SWITCH_VALUES: Readonly<Record<string, { on: readonly string[
 /** Whether `config set <key> <value>` turns one of the person's checks off. */
 export function turnsPersonCheckOff(key: string, value: string): boolean {
   return Object.hasOwn(PERSON_CHECK_SWITCH_VALUES, key) && PERSON_CHECK_SWITCH_VALUES[key].off.includes(value.toLowerCase());
+}
+
+// The setter's two names for plan approval, and the value that turns it off.
+export function turnsPlanApprovalOff(key: string, value: string | undefined): boolean {
+  return (key === "plan-approval" || key === "guard.plan-approval") && value?.trim().toLowerCase() === "off";
 }
 
 // Whether `config set <key> <value>` switches one of the person's checks with
@@ -44960,9 +44992,13 @@ export function guardSwitchRefusal(
   // The setter carries a lowering out on the message the person asked in
   // (--message). With a message of theirs on record that it can stand on, the
   // refusal leads with that retry, naming ids and times and never their words.
-  const { requestMessageStep } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  const { planApprovalOffStands, planApprovalOffWaitsStep, requestMessageStep } =
+    require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  const planApproval = !("check" in wanted) && wanted.key === "plan-approval";
   const step = (otherwise: string): string =>
-    projectDir === undefined || !humanTurnMintAllowed() ? otherwise : requestMessageStep(projectDir, otherwise, true);
+    projectDir === undefined || !humanTurnMintAllowed()
+      ? otherwise
+      : requestMessageStep(projectDir, otherwise, planApproval ? "plan-approval-off" : "setting");
   // A terminal their own tool runs (Copilot in VS Code, Kiro IDE, Cursor): the
   // person is working in its chat, so the one line they read says to ask there.
   // Their tool is named as they know it, with no environment variable in sight.
@@ -44986,7 +45022,12 @@ export function guardSwitchRefusal(
   // Lowering a check is the person's call: the setter carries it out on the
   // message they asked in, so this refusal means the command named none (or
   // an unattended driver is running).
-  const wait = ownTerminal ? "" : ` ${step(`Run it with --message ${MESSAGE_SLOT}, the message they asked in, when they ask for it.`)}`;
+  // While the code plan question waits, only a message since it was shown can
+  // turn plan approval off (planApprovalOffStands): the plan question is the way on.
+  const waitsForPlan = planApproval && projectDir !== undefined && !planApprovalOffStands(projectDir, null);
+  const wait = ownTerminal
+    ? ""
+    : ` ${step(waitsForPlan ? planApprovalOffWaitsStep() : `Run it with --message ${MESSAGE_SLOT}, the message they asked in, when they ask for it.`)}`;
   if ("check" in wanted) return `Turning the ${wanted.check} check off is the person's call.${wait}${hint}`;
   if (wanted.key === "plan-approval") {
     return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call.${wait}${hint}`;

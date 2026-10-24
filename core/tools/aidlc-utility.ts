@@ -479,6 +479,7 @@ import {
   OWN_TERMINAL_PRESENCE_STEP,
   personAtOwnTerminal,
   personAskedForThisLowering,
+  turnsPlanApprovalOff,
   personAskedSinceGate,
   personSaidProjectType,
   CONDUCTOR_SUMMARY_FIELD,
@@ -12996,7 +12997,8 @@ function setterMessage(
   const words = flags["person-words"];
   const agentText = words === undefined || words === "true" ? undefined : words.replace(/\s+/g, " ").trim() || undefined;
   if (flags.message === undefined) return { agentText };
-  const proof = proveMessage(projectDir, flags.message, "setting", { request: true });
+  const planApprovalOff = Object.entries(flags).some(([key, value]) => turnsPlanApprovalOff(key, value));
+  const proof = proveMessage(projectDir, flags.message, "setting", { request: true, planApprovalOff });
   if ("refusal" in proof) die(proof.refusal);
   return { message: proof.message, agentText };
 }

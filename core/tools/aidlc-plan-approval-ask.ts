@@ -1299,9 +1299,13 @@ function currentPlanApprovalAsk(
   return same ? { marker, record } : null;
 }
 
-/** When the Plan Approval question was last shown, while it is the open step with no answer yet; else null. */
-export function planQuestionShownAt(projectDir: string): string | null {
-  return currentPlanApprovalAsk(projectDir)?.record.issuedAt ?? null;
+/**
+ * Where the record stood when the Plan Approval question was shown (the mark its
+ * answer reads, personRepliedAfter), while it is the open step with a plan still
+ * unanswered; else null.
+ */
+export function planQuestionShown(projectDir: string): AuditMark | null {
+  return currentPlanApprovalAsk(projectDir, "some")?.record.repliesFrom ?? null;
 }
 
 /**
@@ -2015,7 +2019,7 @@ export function recordPlanApprovalAnswer(
         "The person has not answered the plan question since it was shown: their message since then was a " +
           "question or a command to AIDLC, not an answer. Answer them and end the turn. If they want plan approval " +
           `off for this work, run \`${aidlcDispatcherInvocation("config set guard.plan-approval off")} --message ` +
-          `'${MESSAGE_SLOT}'\`${messageFill(projectDir)}, and say so in one line. Then record the choice they make.`,
+          `'${MESSAGE_SLOT}'\`${messageFill(projectDir, ["plan-approval off"])}, and say so in one line. Then record the choice they make.`,
       );
     }
     // Their words, whole: what to change when they asked for changes.
