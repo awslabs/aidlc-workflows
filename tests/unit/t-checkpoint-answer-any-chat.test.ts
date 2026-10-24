@@ -469,7 +469,8 @@ function bare(p: string, session: string) {
   const result = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, [], { env });
   expect(result.directive, result.out).not.toBeNull();
   return result.directive as {
-    kind: string; stage?: string; message?: string; narration?: string; construction_checkpoint?: { unit: string };
+    kind: string; stage?: string; message?: string; narration?: string; change_notices?: string[];
+    construction_checkpoint?: { unit: string };
   };
 }
 
