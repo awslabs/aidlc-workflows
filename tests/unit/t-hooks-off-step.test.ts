@@ -1388,6 +1388,14 @@ describe("a chat started in a folder inside the project is told to start the too
     }
   });
 
+  test("codex: a first line longer than one read is read whole, and one with no end within 1 MB names no folder", () => {
+    const { proj, src } = withSrc(CODEX);
+    const long = next(proj, CODEX, codexChat(src, { base_instructions: "x".repeat(200 * 1024) })).message;
+    expect(long).toBe(`${RULES} ${show(CODEX, proj, "$aidlc")}`);
+    const endless = next(proj, CODEX, codexChat(src, { base_instructions: "x".repeat(1024 * 1024) })).message ?? "";
+    expect(endless).toContain(`"${CODEX.lines(proj)[0]}"`);
+  });
+
   test("codex: with CODEX_HOME unset the record is read from the home folder's .codex, and with no record the step is the usual one", () => {
     const { proj, src } = withSrc(CODEX);
     expect(next(proj, CODEX, codexChat(src, {}, { home: scratch("aidlc-home-") })).message).toBe(

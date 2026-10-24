@@ -2131,15 +2131,22 @@ function tailText(path: string, maxBytes: number): string | null {
   }
 }
 
-// A file's first line, read no further than `maxBytes`; null when no line ends within them.
+// A file's first line, read in pieces only until its newline and no further
+// than `maxBytes`; null when no line ends within them.
 function firstLine(path: string, maxBytes: number): string | null {
   let fd: number | null = null;
   try {
     fd = openSync(path, "r");
     const buffer = Buffer.alloc(maxBytes);
-    const text = buffer.subarray(0, readSync(fd, buffer, 0, maxBytes, 0)).toString("utf-8");
-    const newline = text.indexOf("\n");
-    return newline < 0 ? null : text.slice(0, newline);
+    let filled = 0;
+    while (filled < maxBytes) {
+      const read = readSync(fd, buffer, filled, Math.min(64 * 1024, maxBytes - filled), filled);
+      if (read === 0) return null;
+      const newline = buffer.subarray(filled, filled + read).indexOf(0x0a);
+      if (newline >= 0) return buffer.subarray(0, filled + newline).toString("utf-8");
+      filled += read;
+    }
+    return null;
   } catch {
     return null;
   } finally {
@@ -7865,7 +7872,7 @@ function claudeNamedChat(): { pid: number; session: string } | null {
 // session record's `payload.cwd`). Both stay the folder the tool started in
 // when the agent's shell moves (measured on Claude Code 2.1.278 and 2.1.310,
 // Codex 0.164.0). A Codex thread resumed in another folder still names the
-// folder it first started in, since nothing past that first line is read. Null
+// folder it first started in, since nothing past that first line is parsed. Null
 // for every other host and on any doubt, which keeps the caller's usual line.
 function hostChatStartFolder(projectDir: string): string | null {
   const absolute = (value: unknown): string | null => typeof value === "string" && isAbsolute(value) ? value : null;
@@ -28884,10 +28891,16 @@ export function hookExecutionRecoveryText(projectDir?: string): string {
  * setting brings the hooks back there, so doctor's steps give this line first.
  */
 export function startedInsideProjectStep(projectDir?: string): string | null {
-  const line = hookActivation()?.startedInsideProject;
-  if (line === undefined) return null;
   const project = resolveProjectDir(projectDir);
-  return chatStartedInsideProject(project) ? fillHookActivationText(line, project) : null;
+  const line = startedInsideProjectLine(project);
+  return line === null ? null : fillHookActivationText(line, project);
+}
+
+// The harness's line, unfilled, when it declares one and the host started
+// this chat in a folder inside the project; else null.
+function startedInsideProjectLine(project: string): string | null {
+  const line = hookActivation()?.startedInsideProject;
+  return line !== undefined && chatStartedInsideProject(project) ? line : null;
 }
 
 // A harness's hook-activation text names the person's own entry command and
@@ -28930,12 +28943,12 @@ export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () 
   const project = resolveProjectDir(projectDir);
   // Started in a folder inside the project, no file or setting brings the
   // hooks back: the one step is to start the tool in the project folder.
-  const startedInside = activation.startedInsideProject !== undefined && chatStartedInsideProject(project);
+  const startedInside = startedInsideProjectLine(project);
   const registration = activation.registration;
-  const fault = !startedInside && registration ? registrationFault(join(project, registration.file)) : null;
+  const fault = startedInside === null && registration ? registrationFault(join(project, registration.file)) : null;
   let step: string;
-  if (startedInside) {
-    step = `Show the person this line and end your turn: "${activation.startedInsideProject}"`;
+  if (startedInside !== null) {
+    step = `Show the person this line and end your turn: "${startedInside}"`;
   } else if (registration && fault) {
     const line = registration[fault].replaceAll("<repair>", projectSettingsRepair(runtimeHarnessName(project, harnessDir())));
     step = `Show the person this line and end your turn: "${line}"`;
@@ -28952,7 +28965,7 @@ export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () 
   }
   const kept = keep && step.includes("<entry>") ? keep() : null;
   const entry = kept === null ? undefined : `${entrySkillInvocation()} --request ${kept}`;
-  return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(step, startedInside ? project : projectDir, next, entry)}`;
+  return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(step, startedInside !== null ? project : projectDir, next, entry)}`;
 }
 
 /**

@@ -113,7 +113,14 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   AI-DLC's hook registrations from: while it is missing or is not valid JSON
   no setting brings those hooks back, so the step is the line `missing` (its
   `<repair>` is doctor's command that puts the file back) or `invalid` for the
-  person instead; Claude Code declares it for `.claude/settings.json`. Set
+  person instead; Claude Code declares it for `.claude/settings.json`.
+  `startedInsideProject` is the line for a chat the host started in a folder
+  inside the project, where no setting brings the hooks back: the person is
+  shown it instead of `agentStep`, and doctor gives it instead of `recovery`
+  and `notRunYet`. The engine knows that folder only from the host's own
+  record of the running chat, which `hostChatStartFolder` in `aidlc-lib.ts`
+  reads for Claude Code and Codex CLI, the two that declare it; a new host
+  needs its record read there too. Set
   `notRunYet` only when the harness's hooks leave a heartbeat on every chat
   message, the first one before
   any workflow included (the human-turn hook does, and so do the Copilot and
