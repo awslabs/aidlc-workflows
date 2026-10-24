@@ -11186,6 +11186,7 @@ const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerPhases 
   "finish-unit-step": null,
   "dispatch-pipeline-links": null,
   "produce-stage-output": null,
+  "ask-stage-questions": null,
   "repair-source-boundary": { afterPick: reviewRoute },
   // Present the summary (its prompt checkpoint) on the pick; record the
   // confirmation once the person gave it.
@@ -31661,6 +31662,24 @@ export function stageDir(projectDir: string, phase: string, slug: string, intent
   return join(docsRoot(projectDir, intent, space), phase, slug);
 }
 
+// The literal token used in the per-unit path shape when no concrete Unit of
+// Work is supplied at emit time. The unit value comes from active Bolt context
+// (a later engine increment threads it in); when absent, the faithful emission
+// is the documented `{unit-name}` placeholder shape, matching
+// 16-artifact-vocabulary.md, "Filesystem mapping".
+export const UNIT_NAME_PLACEHOLDER = "{unit-name}";
+
+// Where a stage's `<slug>-questions.md` lives: a Construction stage run for a
+// Unit keeps it in that Unit's folder, any other stage (or the placeholder
+// Unit) in the stage's own folder. The run step looks there for answers
+// already given, and a guard's way on names it for questions never asked.
+export function stageQuestionsFile(projectDir: string, phase: string, slug: string, unit: string | null): string {
+  const dir = phase === "construction" && unit !== null && unit !== UNIT_NAME_PLACEHOLDER
+    ? join(docsRoot(projectDir), "construction", unit, slug)
+    : stageDir(projectDir, phase, slug);
+  return join(dir, `${slug}-questions.md`);
+}
+
 // Relative diary path recorded on a runtime-graph row — forward slashes
 // regardless of host OS so the schema stays portable across worktrees. Mirrors
 // the engine's memoryPathFor. `recordPrefix` is the relative per-intent record
@@ -32793,6 +32812,9 @@ export const GUARD_REMEDY_OPS = [
   "dispatch-pipeline-links",
   // Write the outputs or the code a stage was reported without.
   "produce-stage-output",
+  // Ask the person the questions a stage wrote its outputs without, then
+  // confirm the summary of their answers.
+  "ask-stage-questions",
   "repair-source-boundary",
   "reconfirm-summary",
   // Lower ONE fence for this piece of work. It reaches the human in whichever
@@ -33480,6 +33502,24 @@ export function reviewRequestAction(lead: string, request: string | undefined): 
     "pass it). When its verdict is back, record it with the `recordVerdict` command the request returns.";
 }
 
+// Where the questions a stage was never asked go, from the project: where its
+// run step keeps them, so a per-unit stage the plan runs with no Units keeps
+// them at stage level. Null when it cannot be said (an isolated run keeps its
+// own copy of the record; an unknown stage).
+function unaskedQuestionsFile(input: GuardRefusalInput): string | null {
+  if (input.projectDir === undefined || input.summary?.isolated === true) return null;
+  let phase: string | undefined;
+  try {
+    phase = (input.summary?.stage ?? findStageBySlug(input.stage))?.phase;
+  } catch {
+    return null;
+  }
+  if (phase === undefined) return null;
+  const stageLevel = usesStageLevelPerUnitArtifacts(getField(input.stateContent, "Scope"), input.stateContent);
+  const path = stageQuestionsFile(input.projectDir, phase, input.stage, stageLevel ? null : input.unit ?? null);
+  return toPosix(relative(input.projectDir, path));
+}
+
 // Pure: reads nothing from disk. The same input always yields the same refusal,
 // which is what lets the enforcing tool and the router agree.
 export function evaluateGuardRefusal(
@@ -33572,6 +33612,23 @@ export function evaluateGuardRefusal(
       remedies.push({
         op: "produce-stage-output",
         action: input.userMessage,
+        requiresHuman: false,
+        executableNow: openForWork || state === "revising",
+      });
+    }
+    // The stage wrote its outputs before the person was asked its questions
+    // (a wave's builders cannot ask them): asking them, then confirming the
+    // summary of their answers, is the conductor's own step. Only when the same
+    // refusal comes back are the person's ways on put to them.
+    const unaskedQuestions = input.code === "SUMMARY_QUESTIONS_MISSING";
+    const unaskedQuestionsPath = unaskedQuestions ? unaskedQuestionsFile(input) : null;
+    const askTheQuestions = "Ask the person the stage's questions through its question flow" +
+      (unaskedQuestionsPath ? `, in \`${unaskedQuestionsPath}\`` : "");
+    if (unaskedQuestions) {
+      remedies.push({
+        op: "ask-stage-questions",
+        action: `${askTheQuestions}, confirm their summary with them, then save each of its documents again ` +
+          "from the confirmed answers.",
         requiresHuman: false,
         executableNow: openForWork || state === "revising",
       });
@@ -33770,19 +33827,20 @@ export function evaluateGuardRefusal(
       const commands = summaryConfirmationCommands({
         stage: input.stage,
         unit: input.unit ?? null,
-        questionsFile: input.summary && input.projectDir !== undefined
+        questionsFile: (input.summary && input.projectDir !== undefined
           ? summaryQuestionFileRelative(
             input.projectDir,
             input.summary.stage,
             input.summary.isolated ? null : input.stateContent,
             input.unit ?? null,
           )
-          : null,
+          : null) ?? unaskedQuestionsPath,
         single: input.summary?.isolated === true,
       });
       remedies.push({
         op: "reconfirm-summary",
         action:
+          (unaskedQuestions ? `${askTheQuestions} first. ` : "") +
           "Present the current consolidated summary and record it with the checkpoint flags " +
           `(a plain decision or answer never counts): \`${commands.decision}\`, with exactly one ` +
           "blank `[Answer]:` line in the summary section; end the turn; after the human's fresh " +
