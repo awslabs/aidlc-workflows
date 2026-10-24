@@ -15952,6 +15952,64 @@ function planChangeDirective(
       `--reason ${shellArg(PERSON_ASKED_SKIP_REASON)}`;
   const forTheUnit = unitStep === null ? ""
     : `It can still be run for that Unit with \`${entrySkillInvocation()} --stage ${unitStep.stage} --unit ${unitStep.unit}\`.`;
+  // How long the opposite flip holds: recompose takes it only while the work
+  // runs and only for stages ahead of where it stands. So a skip's undo holds
+  // until the work moves past the earliest stage the change flips (an added
+  // one: until it starts), or, with nothing after that stage on the plan, until
+  // the work is finished. Live runs read "You can undo that any time." and met
+  // the refusal two stages later (Codex) or after the last approval (Claude
+  // Code on Windows). An add alone keeps it: a later skip of the stage works
+  // where it stands. On a Unit walk Current Stage stays on the walk's first
+  // step until every Unit is through, so a walk step's undo holds until the
+  // first stage after the walk starts. The one stage recompose takes back
+  // behind the cursor, Reverse Engineering the work still owes, is owed until
+  // Construction starts.
+  const undoHolds = (skipped: string[] = planSkip, added: string[] = add, what = "that"): string => {
+    if (skipped.length === 0) return `You can undo ${what} any time.`;
+    const order = loadGraph().map((stage) => stage.slug);
+    const first = [...skipped, ...added].sort((a, b) => order.indexOf(a) - order.indexOf(b))[0];
+    const onTheWalk = walk?.steps.includes(first) === true;
+    // A walk step added in the same change has no plain window of its own.
+    if (onTheWalk && added.some((slug) => walk.steps.includes(slug))) return `You can undo ${what} any time.`;
+    if (added.includes(first)) return `You can undo ${what} until ${name(first)} starts.`;
+    const past = `You can undo ${what} until the work moves past ${
+      what === "that" && skipped.length === 1 && added.length === 0 ? "it" : name(first)}.`;
+    if (plan === null) return past;
+    const owed = first === "reverse-engineering" && order.indexOf(first) < order.indexOf(current);
+    // Another stage behind the cursor (an add the work had just passed over,
+    // skipped again before `next` went back to it) has no plain window.
+    if (!owed && order.indexOf(first) <= order.indexOf(current)) return `You can undo ${what} any time.`;
+    const changed = [
+      ...skipped.map((slug) => [slug, "SKIP"] as const),
+      ...added.map((slug) => [slug, "EXECUTE"] as const),
+    ].reduce((content, [slug, action]) => setStageSuffix(content, slug, action), plan.stateContent);
+    const after = (from: string, passes: (slug: string) => boolean): ReturnType<typeof nextInScopeStage> => {
+      let at = nextInScopeStage(from, plan.scope, changed);
+      while (at !== null && passes(at.slug)) at = nextInScopeStage(at.slug, plan.scope, changed);
+      return at;
+    };
+    const closes = owed
+      ? after(first, (slug) => !["construction", "operation"].includes(nodeForSlug(slug)?.phase ?? ""))
+      : onTheWalk
+        ? after(walk.steps[walk.steps.length - 1], (slug) => {
+          const node = nodeForSlug(slug);
+          return node !== undefined && isPerUnit(node);
+        })
+        : nextInScopeStage(first, plan.scope, changed);
+    // At the open gate of the stage before it, the reply usually approves
+    // that gate too ("approve, and skip requirements analysis"), and the
+    // approval starts the stage that closes the window: a live Codex run was
+    // refused on the very next line. The way that still holds is said; so it
+    // is when the stage that closes it has already started.
+    if ((gateOpen !== null && nextInScopeStage(gateOpen, plan.scope, changed)?.slug === closes?.slug) ||
+        (closes !== null && order.indexOf(closes.slug) <= order.indexOf(current))) {
+      const own = skipped.map((slug) => `\`${entrySkillInvocation()} --stage ${slug} --single\``);
+      return `${skipped.length === 1 ? "It" : skipped.length === 2 ? "Either one" : "Any of them"} can still be run on its own with ${
+        own.length <= 1 ? own.join("") : `${own.slice(0, -1).join(", ")} or ${own.at(-1)}`}.`;
+    }
+    if (closes === null) return `You can undo ${what} until the work is finished.`;
+    return owed || onTheWalk ? `You can undo ${what} until ${name(closes.slug)} starts.` : past;
+  };
   // The Unit's own step named while another Unit still owes it, or with
   // another walk step: the agent reads from the person's words whether they
   // mean that Unit only or every Unit from here; words that name no Unit mean
@@ -15976,7 +16034,7 @@ function planChangeDirective(
       ? `; the other Units still get ${rest.length > 0 || add.length > 0 ? step : "it"}`
       : "";
     const onlyLine = `Skipped ${listed([`${step} for the ${unitName} Unit`, ...restOther.map(name)])}${added}${stillGet}. ` +
-      `${forTheUnit}${restOther.length > 0 || add.length > 0 ? " You can undo the rest any time." : ""}` +
+      `${forTheUnit}${restOther.length > 0 || add.length > 0 ? ` ${undoHolds(restOther, add, "the rest")}` : ""}` +
       (restWalk.length > 0
         ? ` ${oneUnitOnly(restWalk)}.`
         : "");
@@ -15994,8 +16052,8 @@ function planChangeDirective(
       `${listed(walkNamed.map(name))} for every Unit from here` +
       `${otherNamed.length > 0 ? `, and ${listed(otherNamed.map(name))}` : ""}${added}. ` +
       (unitStep.others
-        ? [firstBack, replanned ? `You can undo ${firstSkip === null ? "that" : "the rest"} any time.` : ""].filter(Boolean).join(" ")
-        : `${forTheUnit} You can undo the rest any time.`);
+        ? [firstBack, replanned ? undoHolds(planSkip, add, firstSkip === null ? "that" : "the rest") : ""].filter(Boolean).join(" ")
+        : `${forTheUnit} ${undoHolds(planSkip, add, "the rest")}`);
     return kept(turnEndingPrint(
       `${before === null ? "" : `Run \`${before}\`${filled} and print its output verbatim. `}` +
         `The person asked to skip ${listed(skip.map(name))}, and the ${unitName} Unit is on ${step} now. ` +
@@ -16047,41 +16105,6 @@ function planChangeDirective(
   // Each command names its stage, so it can be typed as shown.
   const onItsOwn = skip.map((slug) => `\`${entrySkillInvocation()} --stage ${slug} --single\``);
   const anyOf = onItsOwn.length <= 1 ? onItsOwn.join("") : `${onItsOwn.slice(0, -1).join(", ")} or ${onItsOwn.at(-1)}`;
-  // How long that opposite flip holds: recompose takes it only while the work
-  // runs and only for stages ahead of where it stands. So a skip's undo holds
-  // until the work moves past the earliest stage the change flips (an added
-  // one: until it starts), or, with nothing after that stage on the plan, until
-  // the work is finished. Live runs read "You can undo that any time." and met
-  // the refusal two stages later (Codex) or after the last approval (Claude
-  // Code on Windows). An add alone keeps it: a later skip of the stage works
-  // where it stands. A Unit walk's own steps keep the walk's line; a stage after
-  // the walk (Build and Test) has the same window as off a walk, since Current
-  // Stage stays on the walk's first step until the walk is done.
-  const undoHolds = (): string => {
-    const onTheWalk = walk !== null && [...planSkip, ...add].some((slug) => walk.steps.includes(slug));
-    if (planSkip.length === 0 || onTheWalk) return "You can undo that any time.";
-    const order = loadGraph().map((stage) => stage.slug);
-    const first = [...planSkip, ...add].sort((a, b) => order.indexOf(a) - order.indexOf(b))[0];
-    if (add.includes(first)) return `You can undo that until ${name(first)} starts.`;
-    if (plan !== null) {
-      // Reverse Engineering owed behind the cursor has a window of its own.
-      if (order.indexOf(first) <= order.indexOf(current)) return "You can undo that any time.";
-      const changed = [
-        ...planSkip.map((slug) => [slug, "SKIP"] as const),
-        ...add.map((slug) => [slug, "EXECUTE"] as const),
-      ].reduce((content, [slug, action]) => setStageSuffix(content, slug, action), plan.stateContent);
-      const closes = nextInScopeStage(first, plan.scope, changed);
-      // At the open gate of the stage before it, the reply usually approves
-      // that gate too ("approve, and skip requirements analysis"), and the
-      // approval starts the stage that closes the window: a live Codex run was
-      // refused on the very next line. The way that still holds is said.
-      if (gateOpen !== null && nextInScopeStage(gateOpen, plan.scope, changed)?.slug === closes?.slug) {
-        return `${planSkip.length === 1 ? "It" : planSkip.length === 2 ? "Either one" : "Any of them"} can still be run on its own with ${anyOf}.`;
-      }
-      if (closes === null) return "You can undo that until the work is finished.";
-    }
-    return `You can undo that until the work moves past ${planSkip.length === 1 && add.length === 0 ? "it" : name(first)}.`;
-  };
   const wayBack = unitStep !== null
     ? forTheUnit
     : started === null
