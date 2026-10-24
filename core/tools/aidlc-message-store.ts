@@ -404,7 +404,10 @@ export function requestMessages(pd: string): Array<{ id: string; at: string }> {
     const spentAt = latestSpendingTimestamp(rows);
     const chat = windowChat(pd, rows, spentAt, true);
     if (chat === null) return [];
-    const { planQuestionShownAt } = require("./aidlc-plan-approval-ask.ts") as typeof import("./aidlc-plan-approval-ask.ts");
+    // Typed by hand: a type import of the plan question module from here takes the tests' typecheck past its heap.
+    const { planQuestionShownAt } = require("./aidlc-plan-approval-ask.ts") as {
+      planQuestionShownAt(projectDir: string): string | null;
+    };
     const shown = planQuestionShownAt(pd);
     const from = shown === null ? null : Math.floor(Date.parse(shown) / 1000) * 1000;
     const offered = (message: StoredMessage): boolean =>
