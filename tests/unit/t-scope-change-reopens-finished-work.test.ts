@@ -420,7 +420,10 @@ describe("t-scope-change-reopens-finished-work: a scope switch over running work
   test("at the stage's open gate the switch ends the turn and says where the work picks up", () => {
     const proj = featureAtFeasibility("awaiting-approval");
     const print = next(proj, ["--scope", "mvp"]);
-    expect(print.message).toContain(`to change scope, then ${STOP}`);
+    // An answer to the gate typed with the switch is recorded after it (t-approve-and-switch-plan); otherwise it stops.
+    expect(print.message).toContain("to change scope, then print its output verbatim. If their message also answered the " +
+      "open Feasibility & Constraints question");
+    expect(print.message).toContain("otherwise stop: the question still waits.");
     expect(print.narration).toBe("The work picks up at Feasibility & Constraints.");
     expect(actOnScopeChangePrint(proj, print)).toContain("Switched to mvp");
     expect(box(state(proj), "feasibility")).toBe("?");
