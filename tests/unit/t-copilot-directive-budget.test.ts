@@ -33,9 +33,16 @@
 // (AIDLC_ROUTE_CHECK=1) and reads the answer off its pipe. That `next` skips
 // the rules delivery, so it prints the whole step: the conductor persona on the
 // workflow's opening stage, and a lead persona the agent's step lists as a file
-// once a team has grown it. No host shows that print, so the last cases pin
+// once a team has grown it. No host shows that print, so the next cases pin
 // that a step the agent was handed whole starts its Unit, on Copilot and past
 // the common limit on Claude.
+//
+// Building the Units in parallel (swarm) hands a wave of them out on one step,
+// as many as the step can hold. The conductor persona goes ahead of that step
+// when it does not fit beside it, and the step lists the lead's persona as a
+// file, so neither takes room from the Units: on the opening stage the wave
+// holds both of the fixture's Units, and a step too long for even one is the
+// size error that says what to change.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -102,6 +109,7 @@ type Printed = {
   conductor_persona?: string;
   inline_context_paths?: string[];
   message?: string;
+  wave?: { entries: Array<{ unit: string }> };
 };
 type Delivery = {
   stage: string;
@@ -984,11 +992,17 @@ describe("t-copilot-directive-budget: Code Generation's rules in parts keep Plan
   }
 });
 
-// A feature at Construction with two Units, built one at a time, Functional
-// Design for alpha next. "opening": no stage before it has finished, so its step
-// carries the conductor persona; "after-inception": Units Generation is done,
-// as in a run that got here.
-function unitProject(root: string, harnessDir: string, shape: "opening" | "after-inception", policy = "off"): string {
+// A feature at Construction with two Units, built one at a time (or, with
+// "swarm", stage by stage and in parallel), Functional Design for alpha next.
+// "opening": no stage before it has finished, so its step carries the conductor
+// persona; "after-inception": Units Generation is done, as in a run that got here.
+function unitProject(
+  root: string,
+  harnessDir: string,
+  shape: "opening" | "after-inception",
+  policy = "off",
+  execution: "serial" | "swarm" = "serial",
+): string {
   const proj = createTestProject();
   projects.push(proj);
   cpSync(join(root, harnessDir), join(proj, harnessDir), { recursive: true });
@@ -1005,10 +1019,10 @@ function unitProject(root: string, harnessDir: string, shape: "opening" | "after
     "## Runtime State",
     "- **Revision Count**: 0",
     "- **Skeleton Stance**: off",
-    "- **Construction Iteration**: unit-major",
+    `- **Construction Iteration**: ${execution === "swarm" ? "stage-major" : "unit-major"}`,
     "- **Unit Ownership**: solo",
     "- **Construction Checkpoints**: enabled",
-    "- **Construction Execution**: serial",
+    `- **Construction Execution**: ${execution}`,
     "- **Construction Autonomy Mode**: gated",
     "- **Review Override**: none",
     `- **Guard Policy**: ${policy}`,
@@ -1086,5 +1100,31 @@ describe("t-copilot-directive-budget: a Unit whose step is longer than one comma
     const proj = unitProject(CLAUDE_ROOT, ".claude", "after-inception");
     growPersona(proj, ".claude", "aidlc-architect-agent", 300);
     await startAlpha(proj, ".claude", 28 * 1024);
+  });
+});
+
+describe("t-copilot-directive-budget: building the Units in parallel hands them out within the budget", () => {
+  test("the workflow's opening stage lists both Units in its wave, and every part fits", async () => {
+    const proj = unitProject(COPILOT_ROOT, ".aidlc", "opening", "off", "swarm");
+    const delivery = await deliverIn(proj, ".aidlc", "functional-design");
+    expectWholeDeliveries([delivery]);
+    expect(delivery.final.wave?.entries.map(({ unit }) => unit)).toEqual(["alpha", "beta"]);
+    // On a part of its own or on the step itself, whichever fits, and once.
+    const personas = delivery.results.flatMap(({ directive }) => directive.conductor_persona ?? []);
+    expect(personas.length).toBe(1);
+    expect(personas[0]).toContain("conductor");
+  });
+
+  test("a wave step too long for even one Unit is the size error that says what to change", async () => {
+    const own = 9_000;
+    const proj = unitProject(COPILOT_ROOT, ".aidlc", "opening", "off", "swarm");
+    addKnowledge(proj, ".aidlc", "aidlc-architect-agent", 110);
+    const path = join(proj, ".aidlc", "tools", "data", "harness.json");
+    writeFileSync(path, `${JSON.stringify({ ...shippedHarnessData(join(proj, ".aidlc")), directiveMaxBytes: own }, null, 2)}\n`);
+    const { results, final } = await deliverIn(proj, ".aidlc", "functional-design");
+    expect(results.map(({ directive }) => directive.kind)).toEqual(["error"]);
+    for (const { stdout } of results) expect(Buffer.byteLength(stdout, "utf-8")).toBeLessThanOrEqual(own);
+    expect(final.message).toContain(`GitHub Copilot shows at most ${own} bytes`);
+    expect(final.message).toContain("knowledge files");
   });
 });
