@@ -907,6 +907,19 @@ function isPlanWaitSideWrite(projectDir: string, target: string, planPaths: stri
   });
 }
 
+// A path into the project spelled another way than the project is (a Windows
+// 8.3 short name, a linked parent folder), spelled from the project folder, so
+// every check reads it as the project's own. The folder is found by identity
+// and what lies under it stays as written, so a link inside is still seen.
+function inProjectSpelling(projectDir: string, target: string): string {
+  const projectLexical = resolve(projectDir);
+  if (isWithinDir(target, projectLexical)) return target;
+  for (let folder = target; dirname(folder) !== folder; folder = dirname(folder)) {
+    if (sameDirectoryIdentity(folder, projectLexical)) return join(projectLexical, relative(folder, target));
+  }
+  return target;
+}
+
 // A real path with any Windows 8.3 short name expanded: Bun's realpathSync
 // keeps the short name, realpathSync.native expands it. Where native cannot
 // answer (some volumes, such as a RAM disk or a network share), the
@@ -1936,7 +1949,7 @@ async function mutationIntent(
   }
   return {
     targets: targets.map((target) =>
-      isAbsolute(target) ? resolve(target) : resolve(cwd, target)
+      inProjectSpelling(projectDir, isAbsolute(target) ? resolve(target) : resolve(cwd, target))
     ),
     opaqueShell,
     shellCommand,
