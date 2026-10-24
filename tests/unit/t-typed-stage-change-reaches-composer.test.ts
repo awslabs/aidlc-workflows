@@ -186,6 +186,69 @@ describe("a stage change typed with the request reaches the plan the person appr
     expect(dispatch).not.toContain("RUNNING workflow");
   });
 
+  test("Tailor, Reject, then Go ahead: nothing is created from the rejected plan, and the typed skip stays", () => {
+    const proj = installedProject();
+    const ask = planQuestion(proj, ["--skip", SKIPPED]);
+    next(proj, argsOf(String(ask.compose_command)));
+    // The composer's tailored plan, with one change of its own beside the person's.
+    const grid = withEnvAndFreshCaches(POLICY_ENV, () => ({ ...loadScopeMapping().bugfix.stages }));
+    grid[SKIPPED] = "SKIP";
+    grid["intent-capture"] = "EXECUTE";
+    const engine = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-engine");
+    mkdirSync(engine, { recursive: true });
+    const settings = withEnvAndFreshCaches(POLICY_ENV, () => scopeSettingsOf("bugfix")!);
+    writeFileSync(join(engine, "composer-proposal.json"), JSON.stringify({ stages: grid, scopeSettings: settings, guardPolicy: "off", depth: "minimal" }));
+    expect(runTool(proj, "aidlc-graph.ts", ["validate-grid", "--custom"]).status).toBe(0);
+    // They reject it and go ahead with the plan the question proposed.
+    const confirm = String(ask.confirm_command);
+    expect(confirm).toContain(`--skip ${SKIPPED}`);
+    const step = next(proj, argsOf(confirm));
+    expect(step.kind, String(step.message)).toBe("print");
+    expect(String(step.message)).not.toContain("intent create");
+    expect(String(step.message)).toContain(`the stage changes typed here (skip ${SKIPPED})`);
+  });
+
+  test("each typed change is checked on its own: one the plan already makes is left off, the rest ride", () => {
+    const proj = installedProject();
+    const only = countOf(String(planQuestion(installedProject(), ["--skip", SKIPPED]).question));
+    // bugfix already skips Market Research.
+    const ask = planQuestion(proj, ["--skip", `market-research,${SKIPPED}`]);
+    const confirm = String(ask.confirm_command);
+    expect(confirm).toContain(`--skip ${SKIPPED}`);
+    expect(confirm).not.toContain("market-research");
+    expect(countOf(String(ask.question))).toBe(only);
+    expect(creationOf(next(proj, argsOf(confirm)))).toContain(`--skip ${SKIPPED}`);
+  });
+
+  test("the proposed plan's row in Use a different plan counts the plan its command creates", () => {
+    const proj = installedProject();
+    const ask = planQuestion(proj, ["--skip", SKIPPED]);
+    const shown = Number(/(\d+) stages?, /.exec(String(ask.question))?.[1]);
+    const rows = ask.scope_commands as Array<{ scope: string; command: string; stages?: string }>;
+    expect(rows.find((row) => row.scope === "bugfix")?.stages).toBe(`${shown} stages`);
+  });
+
+  test("new work beside running work: Go ahead creates it with the typed skip once", () => {
+    // Typed with words while work runs and no --new-intent, `--skip` is a change
+    // to the running work (Branch 5), so new work carries it only this way.
+    const proj = installedProject();
+    expect(runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix", "--arguments=fix the date parser", "--label", "date parser"]).status).toBe(0);
+    const ask = planQuestion(proj, ["--skip", SKIPPED], "bugfix", ["--new-intent"]);
+    const confirm = String(ask.confirm_command);
+    expect(confirm.split(`--skip ${SKIPPED}`).length).toBe(2);
+    const creation = creationOf(next(proj, argsOf(confirm)));
+    expect(creation.split(`--skip ${SKIPPED}`).length).toBe(2);
+  });
+
+  test("a reply in plain words at the plan question is handed its answers with the typed change", () => {
+    const proj = installedProject();
+    const ask = planQuestion(proj, ["--skip", `market-research,${SKIPPED}`]);
+    const message = String(next(proj, ["go ahead"]).message);
+    expect(message).toContain("has not answered the plan question");
+    expect(message).toContain(String(ask.confirm_command));
+    expect(message).toContain(String(ask.compose_command));
+  });
+
   test("the composer keeps the person's change out of a stock grid until they change it at the gate", () => {
     const persona = readFileSync(join(REPO_ROOT, "core", "agents", "aidlc-composer-agent.md"), "utf-8");
     expect(persona).toContain("Stage changes the dispatch names as the person's own");
