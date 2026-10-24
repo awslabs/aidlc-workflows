@@ -190,6 +190,12 @@ const SHELL_INTERPRETERS = new Set([
 // heredoc is a program the person can see.
 const INLINE_CODE_RUNTIMES = new Set(["bun", "deno", "node", "perl", "php", "python", "python2", "python3", "ruby"]);
 const INLINE_CODE_FLAGS = new Set(["-c", "-e", "-E", "-p", "-r", "--eval", "--print", "eval"]);
+// AI-DLC's command as a word of a dynamic command, where a variable or
+// substitution may hide its invocation: the launcher (`aidlc`, `.exe`, `.cmd`,
+// `.ps1`) or a tools script (`aidlc.ts`, `aidlc-<route>.ts`), the shapes the
+// literal check in mutationIntent reads. The record folder `aidlc/` and its
+// files (`aidlc-state.md`) are not that command.
+const ENGINE_WORD = /(?:^|[\s;|&()<>'"`=:/\\])aidlc(?:(?:\.exe|\.cmd|\.ps1)?|(?:-[A-Za-z0-9._-]+)?\.ts)(?=$|[\s;|&()<>'"`])/i;
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const SAFE_READ_TOOLS = new Set([
   "Read",
@@ -1961,7 +1967,7 @@ async function mutationIntent(
     const looksLikeEngine = invocations.some((invocation) =>
       normalizedCommandName(invocation.executable ?? invocation.name).replace(/\.(?:cmd|ps1)$/, "") === "aidlc" ||
       invocation.args.some((arg) => /^aidlc(?:-[A-Za-z0-9._-]+)?\.ts$/.test(basename(arg)))) ||
-      (dynamic && /\baidlc\b/i.test(analysed));
+      (dynamic && ENGINE_WORD.test(analysed));
     engineRefused = looksLikeEngine && opaqueShell;
     // An escaped operator (`\>`, `\&`) is read as the lexer decodes it, which
     // is not trusted here; a variable, substitution or backtick (`dynamic`) can
