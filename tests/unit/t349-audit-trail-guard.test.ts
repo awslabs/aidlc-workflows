@@ -321,7 +321,7 @@ describe("t349 audit trail guard: shell commands", () => {
     for (const command of [
       "npm test > ~/audit/proj/build/test-$(date +%s).log",
       "npm test > $HOME/audit/proj/build/test-$(date +%s).log",
-      "npm test > ${HOME}/audit/proj/build/test-$(date +%s).log",
+      `npm test > \${HOME}/audit/proj/build/test-$(date +%s).log`,
       'cd ~/audit/proj && npm test > "$TEST_LOG"',
     ]) {
       expect(bash(command, proj), command).toBeNull();

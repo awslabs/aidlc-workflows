@@ -1189,7 +1189,7 @@ function withoutOwnFolders(text: string, cwd: string): string {
     for (const home of homes) {
       if (fold(forward) !== home && !fold(forward).startsWith(`${home}/`)) continue;
       const rest = forward.slice(home.length);
-      for (const prefix of ["~", "$HOME", "${HOME}"]) spellings.add(`${prefix}${rest}`);
+      for (const prefix of ["~", "$HOME", `\${HOME}`]) spellings.add(`${prefix}${rest}`);
     }
     for (const spelling of spellings) {
       const escaped = spelling.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
