@@ -764,6 +764,29 @@ describe("t-plan-proposed-by-the-agent: a reply naming another plan at the which
     expect(String(started.message)).toContain("--scope classic");
   });
 
+  // A plan typed with the request asks the question at once, with what was
+  // typed: a setting kept for the new work rides every plan's command, a change
+  // to the typed plan's stages that plan's alone, as the question's own rows.
+  test.each([
+    ["kiro, work here and none selected, a setting and a skip typed", KIRO_TOOLS, () => cloneWithWork(KIRO_TOOLS),
+      ["--scope", "bugfix", "--learnings", "on", "--skip", "reverse-engineering", "fix the logout bug"], "bugfix"],
+    ["claude code, work in progress, another plan typed", CLAUDE_TOOLS, activeProject, ["--scope", "classic", "fix the logout bug"], "classic"],
+  ])("%s: each other plan's command in the step is the question's own row", (_where, tools, make, typed, plan) => {
+    proj = make();
+    const open = next(tools, proj, typed);
+    expect(open.ask_type, JSON.stringify(open).slice(0, 300)).toBe("new-work-routing");
+    expect(open.proposed_scope).toBe(plan);
+    const step = String(next(tools, proj, [WORDS]).message);
+    expect(step).toContain(`"Separate new piece of work": \`${open.new_intent_command}\``);
+    const others = step.slice(step.indexOf(OTHER_PLAN));
+    const named = [...others.slice(0, others.search(/; "|\. If they are asking/)).matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+    expect(named).toEqual(open.scope_commands!.filter((row) => row.scope !== plan).map((row) => row.command));
+    if (typed.includes("--skip")) {
+      for (const command of named) expect(command).toContain("--learnings on");
+      for (const command of named) expect(command).not.toContain("--skip");
+    }
+  });
+
   test("claude code, work in progress, no plan proposed: the step names no plan's command beside the plan step", () => {
     proj = activeProject();
     const open = asked(CLAUDE_TOOLS, proj, []);
