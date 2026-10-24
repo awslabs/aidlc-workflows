@@ -1008,11 +1008,17 @@ A stage your plan skips is not a dead end. When it comes after the current stage
 
 ### `/aidlc --stage <slug> --single` — Run one stage in isolation
 
-Add `--single` to run a single stage on its own without touching your main
-workflow. The stage runs, writes its artifact, and stops; your workflow's
-`Current Stage` is never advanced — the isolation is enforced by the engine, not
-by convention. Use it to apply one piece of methodology (a requirements
-analysis, a reverse-engineering scan) without committing to a full lifecycle.
+Add `--single` to run a single stage on its own without moving your main
+workflow. The stage runs, writes its documents where your work keeps that
+stage's, and stops; your workflow's `Current Stage` is never advanced (the engine
+enforces this, not convention). Use it to apply one piece of methodology (a
+requirements analysis, a reverse-engineering scan) without committing to a full
+lifecycle.
+When your work already holds files for that stage (a stage it approved, or a
+Unit's step), the run first keeps a copy of them in the work's record, under
+`archive/<time>-<stage>/`, and one line says so with the folder: your work goes
+on from what the run writes, and the copy is the way back. Each run keeps its
+own copy.
 A stage your scope skips runs too: one line says it is not part of the plan, and
 the plan stays as it is.
 The isolated run still uses the stage's configured agents and reviewer, but it

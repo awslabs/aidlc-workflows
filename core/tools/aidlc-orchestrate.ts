@@ -27,7 +27,8 @@
 //   next   — resolve scope (state > flag > env > default), find the workflow's
 //            position, refresh only the exact-team derived projection, and emit
 //            one directive. Ordinary routing is otherwise read-only; `--single`
-//            records its isolated audit start before dispatch. LIVE.
+//            records its isolated audit start, and keeps a copy of the stage's
+//            files the work's record already holds, before dispatch. LIVE.
 //   report — commit a transition after the conductor acted on a directive.
 //            LIVE. A stage-aware dispatcher: it shells out to aidlc-state.ts
 //            transitions so the next `next` reads fresh state. Explicit
@@ -82,6 +83,7 @@ import {
   closeSync,
   constants as fsConstants,
   copyFileSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -268,6 +270,7 @@ import {
   codekbStoreIsCurrent,
   inspectContinuationCursor,
   isPerUnitStage,
+  isoTimestamp,
   isReadOnlyEngineProbe,
   noteProjectTypeAsked,
   constructionStaffingPassedOver,
@@ -6905,9 +6908,10 @@ type SteeringTokenPayload = {
   // limit is never continued with parts cut under another.
   l?: string;
   // The lines for the person that the gate reports this `next` settled itself
-  // printed (settledNotices): `continue` rebuilds the run-stage in a new process,
-  // and these ride the payload so the rebuilt step says them and keeps the
-  // directive identity the parts were cut for.
+  // printed, and an isolated run's start lines (settledNotices): `continue`
+  // rebuilds the run-stage in a new process, and these ride the payload so the
+  // rebuilt step says them and keeps the directive identity the parts were cut
+  // for.
   N?: string[];
 };
 
@@ -8930,8 +8934,9 @@ function routingEvidenceFor(projectDir: string, stateContent: string | null): Co
 let routingArgs: string[] | null = null;
 let settledGates = 0;
 // The lines for the person the reports of those settled gates printed (a
-// change their Guard Policy accepted), said with the step this `next` hands
-// over (prepareEmission). A run-stage delivered in parts carries them on its
+// change their Guard Policy accepted), and an isolated run's start lines
+// (emitSingleRunStage), said with the step this `next` hands over
+// (prepareEmission). A run-stage delivered in parts carries them on its
 // steering payload, and `continue` restores them here (handleContinue).
 let settledNotices: string[] = [];
 
@@ -14837,17 +14842,110 @@ function applySingleRunSettings(directive: RunStageDirective, settings: SingleRu
   if (settings["Test Strategy"]) directive.test_strategy = settings["Test Strategy"];
 }
 
-// The start's refusal, or the settings the attempt runs with. An open attempt
-// keeps the ones it started with; a setting typed differently starts a new
-// attempt with it (restarted), since that is what the person asked for.
+// An isolated run writes where the work keeps the stage's documents (#2897),
+// so its start keeps a copy of the files already there and records the folder
+// under the field below on its STAGE_STARTED. KeptCopy is that folder, or why
+// none could be kept.
+const SINGLE_RUN_KEPT_FIELD = "Kept Copy";
+type KeptCopy = { path: string } | { error: string };
+
+function holdsFiles(dir: string): boolean {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .some((entry) => entry.isFile() || (entry.isDirectory() && holdsFiles(join(dir, entry.name))));
+  } catch {
+    return false;
+  }
+}
+
+// The folders in the work's record where <node>'s run writes that already hold
+// files, each with the name its copy takes: the Unit's for a per-Unit stage,
+// "" for the stage's own folder. The produces are the run-stage's own
+// (buildRunStageDirective's Unit rule with no state); Reverse Engineering's
+// resolve to the code knowledge base, outside the record, and are left out.
+function stageFoldersWithFiles(
+  projectDir: string,
+  node: GraphStage,
+  scope: string,
+  recordPrefix: string,
+  codekbCtx: CodekbCtx,
+): Array<{ from: string; as: string }> {
+  const unit = usesStageLevelPerUnitArtifacts(scope, null) ? null : UNIT_NAME_PLACEHOLDER;
+  const dirs = new Set(
+    resolveProduces(node, unit, recordPrefix, codekbCtx)
+      .filter((path) => path.startsWith(`${recordPrefix}/`))
+      .map((path) => path.slice(0, path.lastIndexOf("/"))),
+  );
+  const found: Array<{ from: string; as: string }> = [];
+  for (const dir of dirs) {
+    const at = dir.indexOf(`/${UNIT_NAME_PLACEHOLDER}/`);
+    if (at < 0) {
+      if (holdsFiles(join(projectDir, dir))) found.push({ from: join(projectDir, dir), as: "" });
+      continue;
+    }
+    const parent = join(projectDir, dir.slice(0, at));
+    const rest = dir.slice(at + UNIT_NAME_PLACEHOLDER.length + 2);
+    let units: string[] = [];
+    try {
+      units = readdirSync(parent, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+    } catch {
+      units = [];
+    }
+    for (const name of units.sort()) {
+      if (holdsFiles(join(parent, name, rest))) found.push({ from: join(parent, name, rest), as: name });
+    }
+  }
+  return found;
+}
+
+// Copy the stage's files a work's record already holds before its isolated
+// run writes over them. The folder shape, <record>/archive/<date>-<stage>/, is
+// stage-protocol-recovery.md's "Archive before change"; the copy is made at
+// the start, before the stage asks Keep, Modify or Redo, since that is the
+// one point every run passes. Null with no work or nothing to keep.
+function keepStageFiles(
+  projectDir: string,
+  node: GraphStage,
+  scope: string,
+  recordPrefix: string | null,
+  codekbCtx: CodekbCtx,
+): KeptCopy | null {
+  if (recordPrefix === null || loadStateFileIfPresent(projectDir) === null) return null;
+  const folders = stageFoldersWithFiles(projectDir, node, scope, recordPrefix, codekbCtx);
+  if (folders.length === 0) return null;
+  // A file-safe time: Windows refuses a colon in a folder name.
+  const stamp = isoTimestamp().replace(/:/g, "-");
+  let path = `${recordPrefix}/archive/${stamp}-${node.slug}`;
+  for (let n = 2; existsSync(join(projectDir, path)); n++) path = `${recordPrefix}/archive/${stamp}-${n}-${node.slug}`;
+  try {
+    for (const { from, as } of folders) cpSync(from, join(projectDir, path, as), { recursive: true });
+    return { path };
+  } catch (error) {
+    return { error: errorMessage(error) };
+  }
+}
+
+// The one line an isolated run over the work's own files says.
+function keptCopyNotice(node: GraphStage, kept: KeptCopy): string {
+  return `This run writes its documents where your work keeps ${node.name || node.slug}'s, so your work goes on ` +
+    "from what it writes; " +
+    ("path" in kept ? `a copy of them as they were is in ${kept.path}/.` : `no copy of them could be kept (${kept.error}).`);
+}
+
+// The start's refusal, or the settings the attempt runs with and the copy it
+// kept. An open attempt keeps the ones it started with; a setting typed
+// differently starts a new attempt with it (restarted), since that is what the
+// person asked for, and the new attempt names the copy the first one kept.
 function ensureSingleStageStarted(
   projectDir: string,
   node: GraphStage,
   scope: string,
-  typed: SingleRunSettings = {},
-): { error: string } | { settings: SingleRunSettings; restarted: boolean } {
+  typed: SingleRunSettings,
+  record: { prefix: string | null; codekbCtx: CodekbCtx },
+): { error: string } | { settings: SingleRunSettings; restarted: boolean; kept: KeptCopy | null } {
   let settings = typed;
   let restarted = false;
+  let kept: KeptCopy | null = null;
   if (singleStageAttemptIsOpen(projectDir, node.slug)) {
     const recordedScope = singleStageAttemptScope(projectDir, node.slug);
     if (recordedScope !== null && recordedScope !== scope) {
@@ -14859,18 +14957,21 @@ function ensureSingleStageStarted(
           (named ? `, or re-run with \`--scope ${scopeArg(recordedScope)}\`.` : "."),
       };
     }
-    const kept = recordedSingleRunSettings(projectDir, node.slug);
+    const recorded = recordedSingleRunSettings(projectDir, node.slug);
+    const keptPath = singleStageAttemptField(projectDir, node.slug, SINGLE_RUN_KEPT_FIELD);
+    kept = keptPath === null ? null : { path: keptPath };
     const changed = SINGLE_RUN_SETTING_FIELDS
-      .some((field) => typed[field] !== undefined && typed[field] !== kept[field]);
-    if (!changed) return { settings: kept, restarted: false };
+      .some((field) => typed[field] !== undefined && typed[field] !== recorded[field]);
+    if (!changed) return { settings: recorded, restarted: false, kept };
     // A new STAGE_STARTED is the new attempt's floor: the unfinished one's
     // receipts stop counting, and nothing records it as completed.
-    settings = { ...kept, ...Object.fromEntries(Object.entries(typed).filter(([, value]) => value !== undefined)) };
+    settings = { ...recorded, ...Object.fromEntries(Object.entries(typed).filter(([, value]) => value !== undefined)) };
     restarted = true;
   }
-  // A query never appends a lifecycle event: an observer that opened a
-  // single-stage attempt would move the run floor it came to read.
-  if (isReadOnlyEngineProbe()) return { settings, restarted };
+  // A query never appends a lifecycle event or copies a file: an observer that
+  // opened a single-stage attempt would move the run floor it came to read.
+  if (isReadOnlyEngineProbe()) return { settings, restarted, kept };
+  kept ??= keepStageFiles(projectDir, node, scope, record.prefix, record.codekbCtx);
   const error = appendSingleStageAuditEvents(projectDir, [{
     eventType: "STAGE_STARTED",
     fields: {
@@ -14879,10 +14980,11 @@ function ensureSingleStageStarted(
       Workflow: syntheticWorkflowId(node.slug),
       Scope: scope,
       ...Object.fromEntries(Object.entries(settings).filter(([, value]) => value !== undefined)),
+      ...(kept !== null && "path" in kept ? { [SINGLE_RUN_KEPT_FIELD]: kept.path } : {}),
     },
   }]);
   routingEvidence = null;
-  return error === null ? { settings, restarted } : { error };
+  return error === null ? { settings, restarted, kept } : { error };
 }
 
 function emitSingleRunStage(
@@ -14908,7 +15010,7 @@ function emitSingleRunStage(
   // An isolated run never touches the plan or the cursor, so a stage the
   // scope skips runs too when the person asks for it, with one line saying so.
   const notInPlan = !new Set(subgraphForScope(scope).map((s) => s.slug)).has(node.slug);
-  const started = ensureSingleStageStarted(projectDir, node, scope, settings);
+  const started = ensureSingleStageStarted(projectDir, node, scope, settings, { prefix: recordPrefix, codekbCtx });
   if ("error" in started) {
     emit(errorDirective(
       `Cannot start isolated stage "${node.slug}": ${started.error}`,
@@ -14937,7 +15039,9 @@ function emitSingleRunStage(
   directive.gate = false;
   directive.next_stage = null;
   applySingleRunSettings(directive, started.settings);
-  const notices = [
+  // These lines ride settledNotices, so a step delivered in parts says them on
+  // the run-stage `continue` rebuilds too.
+  settledNotices.push(
     ...(notInPlan
       ? [`"${node.slug}" is not part of the ${scope} plan. It runs on its own because you asked for it; ` +
         "the plan and your workflow stay as they are."]
@@ -14945,10 +15049,9 @@ function emitSingleRunStage(
     ...(started.restarted
       ? [`"${node.slug}" starts over with the settings you gave; its unfinished run is set aside, not completed.`]
       : []),
-  ];
-  emit(notices.length > 0
-    ? withChangeNotices(directive, [...((directive as Directive).change_notices ?? []), ...notices])
-    : directive);
+    ...(started.kept === null ? [] : [keptCopyNotice(node, started.kept)]),
+  );
+  emit(directive);
 }
 
 // A change the person asked for while the code plan's question is open: the

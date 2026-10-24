@@ -41,7 +41,7 @@
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { setDefaultTimeout, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
@@ -1068,5 +1068,185 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       expect(directive?.depth).toBe("Minimal");
       expect(directive?.test_strategy).toBe("Comprehensive");
     }
+  });
+});
+
+// ===========================================================================
+// #2897: an isolated run writes its documents where the work keeps that
+// stage's, so when the work's record already holds files for the stage (an
+// approved stage, a Unit's step), the run's start copies them first, into the
+// record's archive/ folder that the stage protocol's "Archive before change"
+// names, and one line says so with the folder. A stage with no files yet, and
+// a run with no work, get neither.
+// ===========================================================================
+describe("t127 an isolated run over the work's own files keeps a copy of them (#2897)", () => {
+  type Step = { kind?: string; change_notices?: string[]; depth?: string };
+
+  const keepsLine = (name: string) =>
+    `This run writes its documents where your work keeps ${name}'s, so your work goes on from what it writes; ` +
+    "a copy of them as they were is in ";
+
+  function workProject(fixture = STATE_FIXTURE): string {
+    const proj = freshProject();
+    seedStateFile(proj, fixture);
+    seedAuditFile(proj);
+    return proj;
+  }
+
+  function writeFiles(proj: string, files: Record<string, string>): void {
+    for (const [rel, body] of Object.entries(files)) {
+      const path = join(seededRecordDir(proj), rel);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, body, "utf-8");
+    }
+  }
+
+  function copies(proj: string, slug: string): string[] {
+    const archive = join(seededRecordDir(proj), "archive");
+    return existsSync(archive)
+      ? readdirSync(archive).filter((name) => name.endsWith(`-${slug}`)).map((name) => join(archive, name))
+      : [];
+  }
+
+  function projectPath(proj: string, path: string): string {
+    return relative(proj, path).split("\\").join("/");
+  }
+
+  function single(proj: string, stage: string, extra: string[] = []) {
+    const r = runOrchestrateNext(TOOL, proj, ["--stage", stage, "--single", ...extra]);
+    expect(r.status, r.out).toBe(0);
+    return { step: (r.directive ?? {}) as Step, steering: r.steering.length, out: r.out };
+  }
+
+  function latestStart(proj: string, slug: string): string {
+    const blocks = readFileSync(seededAuditShard(proj), "utf-8")
+      .split("\n---")
+      .filter((block) =>
+        block.includes("**Event**: STAGE_STARTED") && block.includes(`**Workflow**: single-stage:${slug}`)
+      );
+    return blocks.at(-1) ?? "";
+  }
+
+  const MARKET = {
+    "ideation/market-research/competitive-analysis.md": "# Competitive Analysis\n\nAPPROVED\n",
+    "ideation/market-research/market-research-questions.md": "# Questions\n\nQ1 answered: A\n",
+  };
+
+  test("an approved stage's files are copied at the start, and one line names the copy", () => {
+    const proj = workProject();
+    writeFiles(proj, MARKET);
+    const { step } = single(proj, "market-research");
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    const kept = copies(proj, "market-research");
+    expect(kept).toHaveLength(1);
+    for (const [rel, body] of Object.entries(MARKET)) {
+      expect(readFileSync(join(kept[0], rel.split("/").at(-1)!), "utf-8")).toBe(body);
+      expect(readFileSync(join(seededRecordDir(proj), rel), "utf-8")).toBe(body);
+    }
+    expect(step.change_notices).toContain(`${keepsLine("Market Research")}${projectPath(proj, kept[0])}/.`);
+    expect(latestStart(proj, "market-research")).toContain(`**Kept Copy**: ${projectPath(proj, kept[0])}`);
+    expect(currentStage(proj)).toBe("feasibility");
+  });
+
+  test("the copy's folder name has no colon, so it is a valid Windows name", () => {
+    const proj = workProject();
+    writeFiles(proj, MARKET);
+    single(proj, "market-research");
+    const kept = copies(proj, "market-research");
+    expect(kept).toHaveLength(1);
+    expect(kept[0].split(/[\\/]/).at(-1)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z-market-research$/);
+  });
+
+  test("the open attempt's next names the same copy and makes no other", () => {
+    const proj = workProject();
+    writeFiles(proj, MARKET);
+    single(proj, "market-research");
+    const again = single(proj, "market-research").step;
+    const kept = copies(proj, "market-research");
+    expect(kept).toHaveLength(1);
+    expect(again.change_notices).toContain(`${keepsLine("Market Research")}${projectPath(proj, kept[0])}/.`);
+  });
+
+  test("a different depth starts the attempt over and keeps its first copy", () => {
+    const proj = workProject();
+    writeFiles(proj, MARKET);
+    single(proj, "market-research");
+    // The set-aside attempt had already written over the stage's files.
+    writeFiles(proj, { "ideation/market-research/competitive-analysis.md": "# Competitive Analysis\n\nHALF REDONE\n" });
+    const over = single(proj, "market-research", ["--depth", "minimal"]).step;
+    expect(over.depth).toBe("Minimal");
+    expect(over.change_notices?.join("\n")).toContain("starts over with the settings you gave");
+    const kept = copies(proj, "market-research");
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(kept[0], "competitive-analysis.md"), "utf-8")).toBe(MARKET["ideation/market-research/competitive-analysis.md"]);
+    expect(over.change_notices).toContain(`${keepsLine("Market Research")}${projectPath(proj, kept[0])}/.`);
+    expect(latestStart(proj, "market-research")).toContain("**Depth**: Minimal");
+    expect(latestStart(proj, "market-research")).toContain(`**Kept Copy**: ${projectPath(proj, kept[0])}`);
+  });
+
+  test("a per-Unit stage keeps every Unit's folder", () => {
+    // functional-design is [x] for widget-cart and [-] for widget-checkout.
+    const proj = workProject("state-construction.md");
+    writeFiles(proj, {
+      "construction/widget-cart/functional-design/entities.md": "# Entities\n\nCART APPROVED\n",
+      "construction/widget-checkout/functional-design/entities.md": "# Entities\n\nCHECKOUT IN PROGRESS\n",
+    });
+    const { step } = single(proj, "functional-design");
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    const kept = copies(proj, "functional-design");
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(kept[0], "widget-cart", "entities.md"), "utf-8")).toBe("# Entities\n\nCART APPROVED\n");
+    expect(readFileSync(join(kept[0], "widget-checkout", "entities.md"), "utf-8")).toBe("# Entities\n\nCHECKOUT IN PROGRESS\n");
+    expect(step.change_notices).toContain(`${keepsLine("Functional Design")}${projectPath(proj, kept[0])}/.`);
+  });
+
+  test("a step delivered in parts still says the line, and keeps the team's rules", () => {
+    const proj = workProject();
+    // Rules too large for one message make the step arrive in parts, so the
+    // final run-stage is the one `continue` rebuilds.
+    writeFileSync(join(proj, "aidlc/spaces/default/memory/org.md"),
+      Array.from({ length: 180 }, (_, i) => `## Rule ${i}\n\n${"x".repeat(320)}\n`).join("\n"));
+    writeFiles(proj, MARKET);
+    const { step, steering, out } = single(proj, "market-research");
+    expect(steering, out).toBeGreaterThan(1);
+    expect(step.kind, out).toBe("run-stage");
+    const kept = copies(proj, "market-research");
+    expect(kept).toHaveLength(1);
+    expect(step.change_notices).toContain(`${keepsLine("Market Research")}${projectPath(proj, kept[0])}/.`);
+    // The not-in-plan line takes the same path: the step still arrives in
+    // parts with the team's rules, and the rebuilt run-stage says it.
+    const offPlan = freshProject();
+    writeFileSync(join(offPlan, "aidlc/spaces/default/memory/org.md"),
+      Array.from({ length: 180 }, (_, i) => `## Rule ${i}\n\n${"x".repeat(320)}\n`).join("\n"));
+    const skipped = runOrchestrateNext(TOOL, offPlan, ["--stage", "user-stories", "--single", "--scope", "bugfix"]);
+    expect(skipped.steering.length, skipped.out).toBeGreaterThan(1);
+    expect((skipped.directive as Step | null)?.change_notices).toContain(
+      "\"user-stories\" is not part of the bugfix plan. It runs on its own because you asked for it; " +
+        "the plan and your workflow stay as they are.",
+    );
+  });
+
+  test("a stage with no files in the work, and a run with no work, get no copy and no line", () => {
+    const ahead = workProject();
+    const aheadStep = single(ahead, "requirements-analysis").step;
+    expect(aheadStep.kind, JSON.stringify(aheadStep)).toBe("run-stage");
+    expect(existsSync(join(seededRecordDir(ahead), "archive"))).toBe(false);
+    expect((aheadStep.change_notices ?? []).join("\n")).not.toContain("This run writes its documents");
+
+    // With no workflow (as 17d) files already where the run writes are no
+    // work's, so nothing is copied or said.
+    const first = freshProject();
+    const produces = (runOrchestrateNext(TOOL, first, ["--stage", "market-research", "--single", "--scope", "feature"])
+      .directive as { produces?: string[] } | null)?.produces ?? [];
+    expect(produces.length).toBeGreaterThan(0);
+    const bare = freshProject();
+    for (const rel of produces) {
+      mkdirSync(dirname(join(bare, rel)), { recursive: true });
+      writeFileSync(join(bare, rel), "# Earlier\n", "utf-8");
+    }
+    const noWork = runOrchestrateNext(TOOL, bare, ["--stage", "market-research", "--single", "--scope", "feature"]);
+    expect((noWork.directive as Step | null)?.kind, noWork.out).toBe("run-stage");
+    expect(((noWork.directive as Step | null)?.change_notices ?? []).join("\n")).not.toContain("This run writes its documents");
+    expect(readdirSync(join(bare, "aidlc"), { recursive: true }).some((entry) => String(entry).split(/[\\/]/).includes("archive"))).toBe(false);
   });
 });
