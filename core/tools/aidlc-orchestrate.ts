@@ -576,9 +576,9 @@ import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
 import {
   isPlanApprovalBeat,
+  keepRoutedPlanApprovalReply,
   legacyPlanApprovalOffNotice,
   noteOpenEngineQuestion,
-  notePlanApprovalAskReply,
   openPlanApprovalQuestion,
   planApprovalKeptReplyWaits,
   planApprovalOverrideOffers,
@@ -2620,7 +2620,7 @@ function emit(requested: Directive): void {
         // the open step again, and the words it kept as their reply answer it.
         // Words typed while the work was parked never reached the question
         // (parked, it was not the open step): now that it is, they are its
-        // reply, kept once, as the latest.
+        // reply, kept once, in the order they sent them.
         if (
           routingAnsweredAsActiveWork &&
           prepared.transported.kind === "ask" &&
@@ -2629,8 +2629,7 @@ function emit(requested: Directive): void {
         ) {
           if (routingAnswered !== null && !isReadOnlyEngineProbe()) {
             const { text, messageId } = routingAnswered;
-            if (messageId !== undefined) withdrawPlanApprovalReplies(projectDir, { messageId });
-            notePlanApprovalAskReply(projectDir, engineSessionId ?? "", text, undefined, messageId);
+            keepRoutedPlanApprovalReply(projectDir, engineSessionId ?? "", text, messageId);
           }
           if (planApprovalKeptReplyWaits(projectDir)) {
             writePrepared(prepareEmission(planQuestionAnsweredByWordsDirective()));

@@ -97,6 +97,7 @@ import {
   type CodeGenerationIssuance,
   type PlanApprovalPickerQuestion,
 } from "./aidlc-testing-posture.ts";
+import { readMessage } from "./aidlc-message-store.ts";
 import { exactOptionPick, isNonAnswer, pickerOffersChoices } from "./aidlc-reply-reader.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
@@ -1542,6 +1543,37 @@ export function notePlanApprovalAskReply(
       }
     }
     return true;
+  });
+}
+
+/**
+ * Asked where their words belong, the person said the work in progress, which
+ * waits on its code plan question: the words they were asked about are its
+ * reply. An answer stands on the latest reply the question keeps, so the words
+ * are kept once and in the order sent: a copy the question already keeps stays
+ * where it is, and once it keeps a reply sent since (or in the same second, as
+ * records keep whole seconds) they are no longer the latest and are not kept
+ * again. The same routing answer can run again after the person answered the
+ * question in a later message.
+ */
+export function keepRoutedPlanApprovalReply(
+  projectDir: string,
+  session: string,
+  text: string,
+  messageId?: string,
+): void {
+  withAuditLock(projectDir, () => {
+    if (messageId !== undefined) {
+      const kept = currentPlanApprovalAsk(projectDir, "all")?.record.replies ?? [];
+      if (kept.some((reply) => reply.messageId === messageId)) return;
+      const sent = readMessage(projectDir, messageId)?.at;
+      const sentLater = (reply: PlanApprovalAskReply): boolean => {
+        const at = reply.messageId === undefined ? undefined : readMessage(projectDir, reply.messageId)?.at;
+        return sent !== undefined && at !== undefined && at >= sent;
+      };
+      if (kept.some(sentLater)) return;
+    }
+    notePlanApprovalAskReply(projectDir, session, text, undefined, messageId);
   });
 }
 
