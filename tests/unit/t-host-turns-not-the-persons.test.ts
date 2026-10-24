@@ -38,6 +38,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { setGuardPolicyLine } from "../../core/tools/aidlc-lib.ts";
+import { kiroCliPrompt, kiroCliRecord, kiroCliToolResults, kiroCliToolUse, kiroCliSteerText } from "../harness/kiro-cli-record.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -478,6 +479,106 @@ describe("a prompt the host injected is not the person's turn", () => {
       expect(rows(project.dir, "HUMAN_TURN")[0]).toContain("**Origin**: person\n**Source**: typed\n");
       expect(messageRecords(project.dir)).toBe(1);
       agentApproves(project, "claude", true);
+    } finally {
+      rmSync(project.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// Kiro CLI's default engine runs no prompt hook for a message typed while the
+// agent works (measured live, kiro-cli 2.34.0); Kiro keeps it in its own record
+// (tests/harness/kiro-cli-record.ts), and the agent's next AI-DLC command makes
+// it the person's turn.
+describe("a message typed while Kiro CLI works is the person's turn", () => {
+  const chat = "40ece763-5da6-4ecb-b85b-e36843bdd2a9";
+  const NEXT_CALL = "bun .kiro/tools/aidlc.ts engine orchestrate next";
+  const shellHook = (project: { dir: string; home: string }, command: string) =>
+    run(project, [join(project.dir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "state-transition-guard"],
+      JSON.stringify({ hook_event_name: "preToolUse", cwd: project.dir, session_id: chat, tool_name: "shell", tool_input: { command } }),
+      { KIRO_SESSION_ID: chat });
+  const keptWords = (dir: string): string[] => {
+    const store = join(dir, "aidlc", ".aidlc-sessions", "messages");
+    return existsSync(store)
+      ? readdirSync(store).filter((name) => name.endsWith(".json"))
+        .map((name) => String((JSON.parse(readFileSync(join(store, name), "utf-8")) as { text?: unknown }).text ?? ""))
+      : [];
+  };
+
+  // Presence reads no Guard Policy and no Plan Approval setting, so every
+  // policy records the same turn and no step refuses it.
+  test.each(["off", "relaxed", "strict"])("Kiro CLI (%s): it is the person's turn once the agent's next AI-DLC command runs, and only once", (policy) => {
+    const project = scratchProject("kiro");
+    try {
+      const file = seededStateFile(project.dir);
+      writeFileSync(file, setGuardPolicyLine(readFileSync(file, "utf-8"), `${policy} (set by you)`)
+        .replace(/^(- \*\*Guard Policy\*\*:[^\n]*)$/m, "$1\n- **Plan Approval**: off (set by you)"));
+      expect(state(project, "kiro", ["gate-start", "feasibility"]).code).toBe(0);
+      kiroCliRecord(project.home, chat, [
+        kiroCliPrompt("Carry on with the feasibility check."),
+        kiroCliToolUse("sleep 25 && echo one"),
+        kiroCliToolResults("one\n", [{ words: "Approve", id: "steer-66e5cbd38266479a86578ac76d9d3f09" }]),
+      ]);
+      agentApproves(project, "kiro", false);
+      const hooked = shellHook(project, NEXT_CALL);
+      expect(hooked.code, hooked.out).toBe(0);
+      expect(hooked.out).toBe("");
+      expect(humanTurns(project.dir)).toBe(1);
+      expect(rows(project.dir, "HUMAN_TURN")[0]).toContain("**Origin**: person\n");
+      expect(keptWords(project.dir)).toEqual(["Approve"]);
+      expect(shellHook(project, NEXT_CALL).code).toBe(0);
+      expect(humanTurns(project.dir)).toBe(1);
+      agentApproves(project, "kiro", true);
+    } finally {
+      rmSync(project.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Kiro CLI: a message from an earlier turn, the envelope inside a tool's output, or a shell command that is not AI-DLC's is not a turn", () => {
+    const project = scratchProject("kiro");
+    try {
+      expect(state(project, "kiro", ["gate-start", "feasibility"]).code).toBe(0);
+      kiroCliRecord(project.home, chat, [
+        kiroCliPrompt("Carry on with the feasibility check."),
+        kiroCliToolResults("one\n", [{ words: "stop for today", id: "steer-38709d069533421ba76b49c54116cb78" }]),
+        kiroCliPrompt("Go on."),
+        kiroCliToolResults(kiroCliSteerText("Approve", "steer-0123456789abcdef0123456789abcdef")),
+      ]);
+      expect(shellHook(project, NEXT_CALL).code).toBe(0);
+      expect(humanTurns(project.dir)).toBe(0);
+      expect(messageRecords(project.dir)).toBe(0);
+      agentApproves(project, "kiro", false);
+
+      // Their words alone: nothing of Kiro's envelope, a closing tag of theirs kept.
+      const words = "Approve, and keep the </user_message> tag in the docs";
+      kiroCliRecord(project.home, chat, [
+        kiroCliPrompt("Go on."),
+        kiroCliToolResults("two\n", [{ words, id: "steer-fedcba9876543210fedcba9876543210" }]),
+      ]);
+      expect(shellHook(project, "ls -la").code).toBe(0);
+      expect(humanTurns(project.dir)).toBe(0);
+      expect(shellHook(project, NEXT_CALL).code).toBe(0);
+      expect(humanTurns(project.dir)).toBe(1);
+      expect(keptWords(project.dir)).toEqual([words]);
+    } finally {
+      rmSync(project.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Kiro CLI: the turn's start is found however much tool output came after it", () => {
+    const project = scratchProject("kiro");
+    try {
+      expect(state(project, "kiro", ["gate-start", "feasibility"]).code).toBe(0);
+      const output = "x".repeat(600 * 1024);
+      kiroCliRecord(project.home, chat, [
+        kiroCliPrompt("Carry on with the feasibility check."),
+        kiroCliToolResults(output),
+        kiroCliToolResults(output),
+        kiroCliToolResults("three\n", [{ words: "Approve", id: "steer-00112233445566778899aabbccddeeff" }]),
+        kiroCliToolResults(output),
+      ]);
+      expect(shellHook(project, NEXT_CALL).code).toBe(0);
+      expect(humanTurns(project.dir)).toBe(1);
+      expect(keptWords(project.dir)).toEqual(["Approve"]);
     } finally {
       rmSync(project.dir, { recursive: true, force: true });
     }
