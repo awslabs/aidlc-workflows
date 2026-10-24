@@ -304,7 +304,9 @@ recovery protocol's Session resume says, never as Request Changes.
   "approved", "looks good", or a typo all name a choice: you know which.
 - **They approved and asked for something** ("looks fine but rename the
   handler"): record the approval, do what they asked, and say in one line what
-  you changed. No second question.
+  you changed. At Plan Approval the change comes first: make it in the plan,
+  then record "Approve Plan", so the approval covers the plan as it stands then.
+  No second question.
 - **They asked for something with no approval in it** ("from here on, build
   one unit at a time; I'll approve the design after"): it is not the gate's
   answer. Do the request, say in one line what you did, and keep the gate open
