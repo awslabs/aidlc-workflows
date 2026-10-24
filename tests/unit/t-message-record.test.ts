@@ -432,6 +432,44 @@ describe("the human-turn hook keeps one record of each message", () => {
     pickMany(proj, ["Keep which notes?", "Anything to add?"], {});
     expect(records(proj)).toEqual([]);
   });
+
+  // Claude Code lets the person press Submit answers on a box of several
+  // questions, or a multi-select one, with nothing picked; its result echoes the
+  // questions beside the empty answers (live on 2.1.310). The box's question was
+  // kept as their words and joined their approval's Person Reply.
+  const asked = [
+    { question: "Which capabilities should the first version include?", multiSelect: true,
+      options: [{ label: "Core task CRUD" }, { label: "Due dates" }] },
+    { question: "Where should tasks be stored?", multiSelect: false,
+      options: [{ label: "Browser local storage" }, { label: "SQLite" }] },
+  ];
+  const unanswered: Array<[string, typeof asked, Record<string, unknown>]> = [
+    ["submitted with nothing picked", asked, { questions: asked, answers: {}, annotations: {} }],
+    ["answered with blank text", asked.slice(1), { questions: asked.slice(1), answers: { [asked[1].question]: "  \t " } }],
+  ];
+  for (const [shape, questions, response] of unanswered) {
+    test(`claude: a box ${shape} keeps none of its own words as the person's, and their next reply stands alone`, () => {
+      const proj = withWork();
+      run(proj, [DISPATCHER, "engine", "hook", "record-human-turn"], JSON.stringify({
+        hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: SESSION, cwd: proj,
+        tool_input: { questions }, tool_response: response,
+      }));
+      const [record] = records(proj);
+      expect(record.source).toBe("picker");
+      expect(record.text).toBe("");
+      expect(record.words).toBeNull();
+      expect(record.picker?.map((entry) => entry.reply)).toEqual(questions.map(() => null));
+      say(proj, "Nothing to add, approve");
+      const log = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+      const chat = { AIDLC_SESSION_OVERRIDE: SESSION, AIDLC_SESSION_OVERRIDE_SOURCE: undefined };
+      run(proj, [log, "decision", "--stage", "requirements-analysis", "--decision", "Q1, Q2", "--options", "A,B",
+        "--project-dir", proj], "", chat);
+      run(proj, [log, "answer", "--stage", "requirements-analysis", "--details", "Q1: A; Q2: A", "--project-dir", proj],
+        "", chat);
+      const answered = readAuditShardEvents(proj).filter((row) => row.event === "QUESTION_ANSWERED").at(-1);
+      expect(auditBlockField(answered?.block ?? "", "Person Reply")).toBe("Nothing to add, approve");
+    });
+  }
 });
 
 // A choice the person left to the agent names the message that left it (log
