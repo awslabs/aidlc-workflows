@@ -47,7 +47,10 @@ run's own: `next --single` records it on the synthetic `STAGE_STARTED` (`Depth`,
 leaving the workflow's settings unchanged; the typed depth also picks the
 knowledge roster. A re-run of the open attempt keeps the recorded values; a
 different one starts a new attempt (a new `STAGE_STARTED`), and the unfinished
-one is set aside, never recorded as completed. In an isolated Code Generation run the
+one is set aside, never recorded as completed. When the work's record already
+holds files for the stage, the start copies them to `<record>/archive/<time>-<slug>/`
+first and records that folder as `Kept Copy`; the run-stage's `change_notices`
+names it, and a restarted attempt keeps the first copy. In an isolated Code Generation run the
 Testing Contract follows the run's recorded Test Strategy too, while the
 workflow's own contract and plan approval keep the workflow's (see
 [Hooks and Tools](06-hooks-and-tools.md)).

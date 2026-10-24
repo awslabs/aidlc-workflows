@@ -702,7 +702,14 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect(behind.message).toContain("comes before the current stage, User Stories");
     expect(behind.message).toContain("next --stage intent-capture --single`");
     const before = readState(proj);
-    const alone = directive(["--stage", "intent-capture", "--single"]) as { kind?: string; stage?: string; change_notices?: string[] };
+    // The isolated step arrives in parts with the team's rules, as any
+    // stage's does; the run-stage is what the last part's `continue` returns.
+    const aloneEnv: Record<string, string | undefined> = { ...process.env };
+    delete aloneEnv.AIDLC_SCOPE_MAPPING;
+    const alone = (runOrchestrateNext(toolIn(proj, "aidlc-orchestrate.ts"), proj, ["--stage", "intent-capture", "--single"], {
+      cwd: proj,
+      env: aloneEnv,
+    }).directive ?? {}) as { kind?: string; stage?: string; change_notices?: string[] };
     expect(alone.kind).toBe("run-stage");
     expect(alone.stage).toBe("intent-capture");
     expect(alone.change_notices).toContain(

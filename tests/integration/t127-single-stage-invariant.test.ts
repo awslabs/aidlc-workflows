@@ -64,6 +64,7 @@ import {
 import {
   artifactFilename,
   loadStageGraphAll,
+  STOP_HOOK_PROBE_ENV,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
   summaryConfirmationContentHash,
   stateDigest,
@@ -1224,6 +1225,38 @@ describe("t127 an isolated run over the work's own files keeps a copy of them (#
       "\"user-stories\" is not part of the bugfix plan. It runs on its own because you asked for it; " +
         "the plan and your workflow stay as they are.",
     );
+  });
+
+  test("a run after a finished one keeps its own copy of what that run wrote", () => {
+    const proj = workProject();
+    writeFiles(proj, MARKET);
+    single(proj, "market-research");
+    writeFiles(proj, { "ideation/market-research/competitive-analysis.md": "# Competitive Analysis\n\nREDONE\n" });
+    appendAuditEntry("STAGE_COMPLETED", {
+      Stage: "market-research",
+      Details: "Single-stage run of market-research completed",
+      Workflow: "single-stage:market-research",
+    }, proj);
+    const second = single(proj, "market-research").step;
+    const kept = copies(proj, "market-research").sort();
+    expect(kept).toHaveLength(2);
+    const bodies = kept.map((dir) => readFileSync(join(dir, "competitive-analysis.md"), "utf-8"));
+    expect(bodies).toContain(MARKET["ideation/market-research/competitive-analysis.md"]);
+    expect(bodies).toContain("# Competitive Analysis\n\nREDONE\n");
+    const named = kept.find((dir) => readFileSync(join(dir, "competitive-analysis.md"), "utf-8").includes("REDONE"))!;
+    expect(second.change_notices).toContain(`${keepsLine("Market Research")}${projectPath(proj, named)}/.`);
+  });
+
+  test("a read-only probe copies nothing and starts nothing", () => {
+    const proj = workProject();
+    writeFiles(proj, MARKET);
+    const probe = runOrchestrateNext(TOOL, proj, ["--stage", "market-research", "--single"], {
+      env: { ...process.env, [STOP_HOOK_PROBE_ENV]: "1" },
+    });
+    expect((probe.directive as Step | null)?.kind, probe.out).toBe("run-stage");
+    expect(existsSync(join(seededRecordDir(proj), "archive"))).toBe(false);
+    expect(latestStart(proj, "market-research")).toBe("");
+    expect(((probe.directive as Step | null)?.change_notices ?? []).join("\n")).not.toContain("This run writes its documents");
   });
 
   test("a stage with no files in the work, and a run with no work, get no copy and no line", () => {
