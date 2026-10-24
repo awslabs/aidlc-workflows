@@ -64,6 +64,7 @@ import { fileURLToPath } from "node:url";
 import {
   acquireAuditLock,
   auditBlockField,
+  auditLockDir,
   engineDir,
   humanTurnMarkerPath,
   humanTurnState,
@@ -3811,6 +3812,66 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     recordPlanAnswer(dir);
     expect(recorded()).toHaveLength(1);
   }
+
+  // A folder's long and 8.3 short spellings. The scratch path may already be
+  // short (TEMP is C:\Users\ADMINI~1\... or RUNNER~1 for a long user name, and
+  // Bun's realpathSync keeps it), so both come from the native real path.
+  function shortAndLong(dir: string): { short: string; long: string } {
+    const long = realpathSync.native(dir);
+    const spelled = spawnSync(
+      process.env.ComSpec ?? "cmd.exe",
+      ["/d", "/c", `for %I in ("${long}") do @echo %~sI`],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
+    );
+    expect(spelled.status, spelled.stderr).toBe(0);
+    const short = spelled.stdout.trim();
+    // A volume without 8.3 names cannot show the defect; say so, not pass.
+    expect(short.toLowerCase(), `no 8.3 short name for ${long}; see fsutil 8dot3name query`).not.toBe(long.toLowerCase());
+    expect(short).toContain("~");
+    return { short, long };
+  }
+
+  // Copilot on Windows hands its hooks a project under %TEMP% in the 8.3
+  // spelling while the engine in the terminal resolves the long one. Hashed
+  // apart, every command after `next` ran untracked, the person's turn replaced
+  // the engine's Plan Approval question, and recording their approval was
+  // refused.
+  test.skipIf(process.platform !== "win32")("27b: a short-name hook cwd and the long-name terminal folder share one coordination identity", () => {
+    const { short, long } = shortAndLong(orchestrationProject());
+    inflateRules(long);
+    const { recorded } = planWritten(long);
+    const session = "copilot-short-name";
+    const ask = runLifecycle(short, session, "direct", ["next"], "short-ask", long);
+    expect(ask.directive).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    // The identity the previous release wrote for the long spelling: a record
+    // written before an update still matches after it.
+    expect(marker(long).project_sha256)
+      .toBe(createHash("sha256").update(normalizeDriveLetter(realpathSync(long)), "utf-8").digest("hex"));
+    const turn = runAdapter(short, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit, cwd: short, session_id: session, prompt: "1",
+    });
+    expect(turn.code, turn.stderr).toBe(0);
+    recordPlanAnswer(long);
+    expect(recorded()).toHaveLength(1);
+    let result = runLifecycle(short, session, "direct", ["next"], "short-build", long);
+    for (let part = 0; result.directive.kind === "load-steering"; part++) {
+      result = runLifecycle(short, session, part % 2 ? "direct" : "source", ["continue", String(result.directive.receipt)], `short-build-${part}`, long);
+      if (part > 20) throw new Error("steering did not converge");
+    }
+    expect(result.directive).toMatchObject({
+      kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
+    });
+    expect(marker(long)).toMatchObject({ delivery: "delivered", active_attempt: { status: "settled" } });
+    expect(readAudit(long)).not.toContain("COORDINATION_STOOD_ASIDE");
+  });
+
+  // The hook's audit rows and the engine's are serialized by one lock only when
+  // both spellings name one lock folder.
+  test.skipIf(process.platform !== "win32")("27c: both spellings of a project take one audit lock", () => {
+    const { short, long } = shortAndLong(orchestrationProject());
+    expect(auditLockDir(short)).toBe(auditLockDir(long));
+    expect(auditLockDir(short, DEFAULT_RECORD_DIR, DEFAULT_SPACE)).toBe(auditLockDir(long, DEFAULT_RECORD_DIR, DEFAULT_SPACE));
+  });
 
   // Code Generation's rules often need several parts on Copilot. The person
   // approves the plan once; every part then leads on to the build, never back
