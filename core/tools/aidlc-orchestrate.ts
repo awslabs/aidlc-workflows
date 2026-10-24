@@ -6209,9 +6209,10 @@ function planNamedBesideWorkStep(plan: string, flags: ParsedFlags, stateContent:
   const settings = typedSettingModifiers(flags).map((modifier) => ` --${modifier}`).join("");
   const current = (getField(stateContent, "Scope") ?? "").trim();
   return printDirective(
-    `The person typed the name of the \`${plan}\` plan with nothing else, and work is in progress on ` +
+    `The person typed the name of the \`${plan}\` plan with no words about the work, beside the work on ` +
       `"${activeWorkLabel(stateContent)}" on the \`${current}\` plan. Read what they meant. For new work on the \`${plan}\` ` +
-      `plan, run \`${next} --new-intent${settings}\`: it asks them what the new work is for. For this work to move to the ` +
+      `plan, run \`${next} --new-intent${settings}\`: it asks them what the new work is for (once they have said, add ` +
+      "` -- <their words>` with their words as one shell-safe argument, which starts it). For this work to move to the " +
       `\`${plan}\` plan, run \`${next}${settings}\` and follow what it returns. If you cannot tell which they meant, ask ` +
       "them once in plain words, then run the command for their answer.",
   );

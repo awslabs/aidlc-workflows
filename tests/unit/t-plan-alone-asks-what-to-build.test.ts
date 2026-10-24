@@ -247,6 +247,12 @@ describe("a plan typed alone beside work on another plan is read, not dropped", 
     expect(moved.kind, JSON.stringify(moved).slice(0, 400)).toBe("print");
     expect(String(moved.message)).toContain("scope change --scope workshop");
     expect(getField(state(proj), "Scope")).toBe("bugfix");
+    // Their answer may already say what the new work is for: the step names
+    // where their words go, so they are not asked for them a second time.
+    expect(String(d.message)).toContain(`\` -- ${THEIR_WORDS}\``);
+    const starts = next(proj, [...command(d.message, "new"), "--", WORDS]);
+    expect(starts.kind, JSON.stringify(starts).slice(0, 400)).toBe("print");
+    expect(String(starts.message)).toMatch(/intent create --scope workshop --request [0-9a-f]{8}/);
   });
 
   test("settings typed with the plan ride both commands and are not applied to the bugfix work", () => {
