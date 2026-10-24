@@ -874,6 +874,19 @@ describe("a parallel batch's writes judged from the parent", () => {
     }
   });
 
+  // A write in a Unit's own worktree is never the main checkout's, whatever its approval says.
+  test("a worker's write in its worktree after its plan changed is not told the main checkout waits", () => {
+    const pd = fixture();
+    succeeded(prepare(pd));
+    publish(pd);
+    const worker = child(pd);
+    revise(worker, false);
+    const changed = write(pd, join(worker, "src", `${UNIT}.ts`));
+    expect(changed.code, `${changed.out}\n${changed.err}`).toBe(2);
+    expect(changed.err).not.toContain("main checkout");
+    expect(changed.err).toContain(REFUSAL);
+  });
+
   test("each listed Unit's worker writes in its own worktree and in no other", () => {
     const pd = fixture(true);
     succeeded(prepare(pd, false, GROUP_UNITS));
