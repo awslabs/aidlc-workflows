@@ -37596,6 +37596,7 @@ function pipelineReceiptArtifactIsCurrent(
   projectDir: string,
   stage: Pick<StageEntry, "slug" | "lead_agent">,
   receipt: PipelineLinkReceipt,
+  acceptsChanges: () => boolean,
 ): boolean {
   if (
     stage.slug !== "reverse-engineering" ||
@@ -37629,7 +37630,7 @@ function pipelineReceiptArtifactIsCurrent(
     );
     // Under Guard Policy relaxed or off, an edited, copied or cloned handoff
     // still records the scan the developer agent did.
-    if (guardPolicyAcceptsChanges(projectDir)) return true;
+    if (acceptsChanges()) return true;
     if (
       Math.abs(snapshot.mtimeMs - receipt.artifactMtimeMs) > 0.01
     ) {
@@ -37710,13 +37711,17 @@ export function pipelineLinkEvidence(
   const fitsChain = (receipt: PipelineLinkReceipt, index: number): boolean =>
     index < links.length - 1 || receipt.position === null ||
     receipt.position === `${links.length}/${links.length}`;
+  // One Guard Policy read for every repository's handoff: each read parses the
+  // memory files, so a read per receipt would grow the gate with the repositories.
+  let accepting: boolean | null = null;
+  const acceptsChanges = (): boolean => (accepting ??= guardPolicyAcceptsChanges(projectDir));
   for (const repo of chainRepos) {
     const chain: PipelineLinkReceipt[] = [];
     for (const receipt of rawReceipts) {
       if (receipt.repo !== repo) continue;
       if (receipt.link === links[0]) {
         chain.length = 0;
-        if (pipelineReceiptArtifactIsCurrent(projectDir, stage, receipt) && fitsChain(receipt, 0)) {
+        if (pipelineReceiptArtifactIsCurrent(projectDir, stage, receipt, acceptsChanges) && fitsChain(receipt, 0)) {
           chain.push(receipt);
         }
         continue;
@@ -37876,12 +37881,13 @@ export const GATE_NOTE_SECONDS = 10;
 
 // About how many seconds the report that opens a codekb stage's approval gate
 // takes over `repos` repositories, rounded up: a fixed part plus a second for
-// every ten repositories, fitted with a margin to the gate measured on
-// live-shaped projects on Windows Server, the slower box (6.0 s at 50
-// repositories, 18.9 s at 190, the report with its hooks). An estimate the
-// agent says as "about", never a promise.
-const GATE_FIXED_SECONDS = 2;
-const GATE_REPOS_PER_SECOND = 10;
+// every 150 repositories, fitted with a margin to the gate measured on
+// live-shaped projects on Linux, the report with its hooks (1.4 s at 190
+// repositories, 3 to 4 s at 1000, 7 to 11 s at 2000), times 1.6 for Windows
+// Server, the slower box (its bun process start against Linux's). An estimate
+// the agent says as "about", never a promise.
+const GATE_FIXED_SECONDS = 3;
+const GATE_REPOS_PER_SECOND = 150;
 export function gateEstimateSeconds(repos: number): number {
   return Math.ceil(GATE_FIXED_SECONDS + repos / GATE_REPOS_PER_SECOND);
 }

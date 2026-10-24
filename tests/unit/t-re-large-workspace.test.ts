@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, function:resolveArtifactPaths, function:splitConsumesByPresence, function:producedLine, function:commonFolder, function:owedPipelineLinks, function:pipelineLinkWayOn, function:fitPipelineRecord, function:reposNote, function:withinProduceRoots
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, function:resolveArtifactPaths, function:splitConsumesByPresence, function:producedLine, function:commonFolder, function:owedPipelineLinks, function:pipelineLinkWayOn, function:fitPipelineRecord, function:reposNote, function:withinProduceRoots, function:pipelineLinkEvidence, function:gateEstimateSeconds
 //
 // #2874: a workspace of very many sibling repositories. Reverse Engineering
 // writes nine files per repository, and the step used to list each of them,
@@ -20,7 +20,14 @@ import { join } from "node:path";
 import { cleanupTestProject, createTestProject, FIXTURES_DIR, REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  auditBlockField,
+  GATE_NOTE_SECONDS,
+  gateEstimateSeconds,
+  guardPolicyAcceptsChanges,
+  pipelineLinkEvidence,
+  readAuditShardEvents,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { withinProduceRoots } from "../../dist/claude/.claude/tools/aidlc-state.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 4);
@@ -325,6 +332,37 @@ describe("the gate's produce folders at hundreds of repositories", () => {
   });
 });
 
+// The link check confirms each repository's developer handoff, and it read the
+// Guard Policy (the org, team and project memory, as Markdown) once for every
+// repository: 760 reads at a 190-repository gate, most of its 10 s, and the same
+// at each `next` and link receipt there. It reads it once a check now. Timed
+// against one read on the same box, so a slow or loaded runner moves both sides.
+describe("the link check over hundreds of repositories", () => {
+  test("a longer team.md costs the check one read of it, not one per repository", () => {
+    const { proj, repos } = workspace(TREES[0], { repos: 190, stage: RE, stores: true, scope: "enterprise" });
+    recordEveryLink(proj, repos, [LEAD, FINAL]);
+    const node = { slug: RE, lead_agent: LEAD, support_agents: [FINAL] };
+    const fastest = (run: () => unknown): number => {
+      let best = Number.POSITIVE_INFINITY;
+      for (let round = 0; round < 3; round++) {
+        const started = performance.now();
+        run();
+        best = Math.min(best, performance.now() - started);
+      }
+      return best;
+    };
+    const stock = fastest(() => pipelineLinkEvidence(proj, node));
+    const practice = "- A practice the team affirmed at a retrospective, with the reason it holds and where it applies.\n";
+    appendFileSync(join(proj, "aidlc", "spaces", "default", "memory", "team.md"), `\n## Affirmed Practices\n\n${practice.repeat(600)}`);
+    const read = fastest(() => guardPolicyAcceptsChanges(proj));
+    let evidence = pipelineLinkEvidence(proj, node);
+    const grown = fastest(() => (evidence = pipelineLinkEvidence(proj, node)));
+    expect(evidence.missing).toEqual([]);
+    expect(evidence.completed).toHaveLength(repos.length * 2);
+    expect(grown - stock).toBeLessThan(read * 20);
+  });
+});
+
 // The gate used to fire each check once per file (1,900 fires at 190
 // repositories, seven minutes on Windows); it now reads every repository's
 // files in one fire per check, and a failing file is named with its repository,
@@ -488,19 +526,34 @@ describe("the running count of a long analysis", () => {
     expect(statusLine(proj)).toContain("> Reverse Engineering 5/15");
   });
 
-  test("the receipt that completes every chain says once how long the gate's report takes", () => {
+  test("the receipt that completes 190 repositories says no wait: their gate is short", () => {
     const { proj, repos } = workspace(tree, { repos: 190, stage: RE, stores: true, scope: "enterprise" });
     recordEveryLink(proj, repos.slice(0, 189), [LEAD, FINAL]);
-    expect("gate_wait_note" in link(proj, "service-189", LEAD)).toBe(false);
+    link(proj, "service-189", LEAD);
     const last = link(proj, "service-189", FINAL);
     expect(last.analysed).toEqual({ done: 190, total: 190 });
     expect(last.analysed_note).toBeUndefined();
-    expect(last.gate_wait_note).toBe(
-      "Every repository is analysed. The report that opens the approval gate checks the files of all 190 " +
-        "repositories and takes about 21 seconds: before you run it, tell the person so in one line of your own.",
-    );
-    expect("gate_wait_note" in link(proj, "service-189", FINAL)).toBe(false);
+    expect("gate_wait_note" in last).toBe(false);
     expect(statusLine(proj)).toContain("> Reverse Engineering --");
+  });
+
+  test("the receipt that completes a thousand says once how long the gate's report takes", () => {
+    const { proj, repos } = workspace(tree, { repos: 1000, stage: RE, scope: "enterprise" });
+    recordEveryLink(proj, repos.slice(0, 999), [LEAD, FINAL]);
+    expect("gate_wait_note" in link(proj, "service-999", LEAD)).toBe(false);
+    const last = link(proj, "service-999", FINAL);
+    expect(last.analysed).toEqual({ done: 1000, total: 1000 });
+    expect(last.gate_wait_note).toBe(
+      "Every repository is analysed. The report that opens the approval gate checks the files of all 1000 " +
+        "repositories and takes about 10 seconds: before you run it, tell the person so in one line of your own.",
+    );
+    expect("gate_wait_note" in link(proj, "service-999", FINAL)).toBe(false);
+  });
+
+  test("the wait is said from where the estimate reaches ten seconds", () => {
+    expect(gateEstimateSeconds(190)).toBe(5);
+    expect(gateEstimateSeconds(900)).toBeLessThan(GATE_NOTE_SECONDS);
+    expect(gateEstimateSeconds(901)).toBe(GATE_NOTE_SECONDS);
   });
 
   test("a short gate is not said, and under ten repositories a receipt carries no count", () => {
