@@ -14,11 +14,12 @@
 // question, "Approve" at Reverse Engineering. Kiro starts on the aidlc agent
 // with its shipped tool permissions; a permission prompt gets the answer a
 // person gives by pressing Enter, and the report counts them. Every line the
-// person types must have a message record (Kiro ran AI-DLC's hooks), and doctor
-// must no longer say the hooks never ran. Pass/fail reads only what AI-DLC
-// recorded and doctor, never the agent's prose. The report (seconds per turn,
-// Kiro credits, permission prompts) lands in the test's log folder and its
-// one line is printed.
+// person types must have a message record (Kiro ran AI-DLC's hooks), their
+// files must stay as they were until "1" starts the work, and doctor must no
+// longer say the hooks never ran. Pass/fail reads only what AI-DLC recorded,
+// doctor and the person's files, never the agent's prose. The report (seconds
+// per turn, Kiro credits, permission prompts) lands in the test's log folder
+// and its one line is printed.
 //
 // On Linux the person's Kiro home is a scratch HOME, so ~/.kiro is never read
 // or written; XDG_DATA_HOME stays the machine's, so the existing sign-in is
@@ -172,7 +173,7 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
               }
               if (!ended) report.problems.push(`"${line}" was still running when the journey's time ran out`);
               report.turns.push({ line, seconds: Math.round((Date.now() - started) / 1000) });
-              if (ended) checkReleaseJourneyTurn(report, project.proj, index + 1, line);
+              if (ended) checkReleaseJourneyTurn(report, project, index + 1, line);
               if (report.problems.length) break;
             }
             if (!report.problems.length) {

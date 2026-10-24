@@ -9,9 +9,11 @@
 // plan question, "Approve" at Reverse Engineering's approval.
 //
 // Pass/fail reads only what AI-DLC recorded (the person's message records, the
-// plan question's request record, the work record, the audit) and doctor,
-// never the agent's prose. A message record for every line the person typed is
-// the proof that the tool ran AI-DLC's hooks: the human-turn hook writes it.
+// plan question's request record, the work record, the audit), doctor, and the
+// person's files, which stay as they were until their pick of a plan starts the
+// work (the golden journeys' own check), never the agent's prose. A message
+// record for every line the person typed is the proof that the tool ran
+// AI-DLC's hooks: the human-turn hook writes it.
 
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -20,6 +22,7 @@ import { join } from "node:path";
 import { copyChannelOmits, projectionFiles } from "../../core/tools/aidlc-distribution.ts";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { REPO_ROOT } from "./fixtures.ts";
+import { auditRows, filesBeforePlanProblems, type GoldenRun, sourceListing } from "./golden-journey.ts";
 import { expectPersonFirst } from "./person-turns.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
@@ -48,6 +51,9 @@ export interface ReleaseJourneyProject {
   runtime: string;
   proj: string;
 }
+
+/** The project as the person's first line finds it: their files and the audit's length, as a golden journey keeps them. */
+export type ReleaseJourneyStart = Pick<ReleaseJourneyProject, "proj"> & Pick<GoldenRun, "files" | "start">;
 
 function git(proj: string, args: string[]): void {
   const result = spawnSync("git", ["-c", "user.name=Person", "-c", "user.email=person@example.com", ...args], {
@@ -91,10 +97,11 @@ export function seedGreeter(proj: string): void {
  * The person's project with AI-DLC installed through the copy channel: the
  * runtime is dist/<harness> without the files a copy leaves out, copied over
  * the project, then `config --from` and doctor, as the install guide says.
+ * Its files and audit are read last, as the person's first line finds them.
  */
 export function setupReleaseJourneyProject(
   harness: ReleaseJourneyHarness, env: NodeJS.ProcessEnv = process.env,
-): ReleaseJourneyProject & { setup: string } {
+): ReleaseJourneyProject & ReleaseJourneyStart & { setup: string } {
   const root = realpathSync(mkdtempSync(join(tmpdir(), `release-journey-${harness}-`)));
   const runtime = join(root, "runtime");
   const shipped = join(REPO_ROOT, "dist", harness);
@@ -112,7 +119,7 @@ export function setupReleaseJourneyProject(
   if (doctor.status !== 0) throw new Error(`doctor failed after setup (${doctor.status}):\n${doctor.out.slice(-3000)}`);
   git(proj, ["add", "-A"]);
   git(proj, ["commit", "-qm", "AI-DLC install"]);
-  return { ...project, setup: `${config.out}\n${doctor.out}` };
+  return { ...project, files: sourceListing(proj), start: auditRows(proj).length, setup: `${config.out}\n${doctor.out}` };
 }
 
 interface DoctorCheck { pass: boolean; severity?: string; label: string; fix?: string }
@@ -167,9 +174,9 @@ function ranAhead(proj: string, turn: number): boolean {
 }
 
 /** Check the journey after the person's turn `turn` (1-based), typed `line`, and add what is wrong to the report. */
-export function checkReleaseJourneyTurn(report: ReleaseJourneyReport, proj: string, turn: number, line: string): void {
-  if (ranAhead(proj, turn)) report.ranAhead = true;
-  report.problems.push(...releaseJourneyProblems(proj, turn).map((problem) => `after "${line}": ${problem}`));
+export function checkReleaseJourneyTurn(report: ReleaseJourneyReport, project: ReleaseJourneyStart, turn: number, line: string): void {
+  if (ranAhead(project.proj, turn)) report.ranAhead = true;
+  report.problems.push(...releaseJourneyProblems(project, turn).map((problem) => `after "${line}": ${problem}`));
 }
 
 /** A journey where AI-DLC ran ahead of the person fails as a PersonTurnError, which is never retried. */
@@ -180,14 +187,17 @@ export function expectPersonFirstInJourney(report: ReleaseJourneyReport): void {
 /**
  * What is wrong after the person's turn `turn` (1-based), in plain words; empty
  * when the journey is where it should be. Every turn checks that each line
- * typed so far was recorded as the person's (the hooks ran).
+ * typed so far was recorded as the person's (the hooks ran), and that their
+ * files are as they were until their pick started the work.
  */
-export function releaseJourneyProblems(proj: string, turn: number): string[] {
+export function releaseJourneyProblems(project: ReleaseJourneyStart, turn: number): string[] {
+  const { proj } = project;
   const problems: string[] = [];
   const recorded = recordedPersonLines(proj);
   for (const line of RELEASE_JOURNEY_TURNS.slice(0, turn)) {
     if (!recorded.includes(line)) problems.push(`"${line}" has no message record: the tool did not run AI-DLC's hooks for it`);
   }
+  problems.push(...filesBeforePlanProblems(proj, project));
   if (turn === 1) {
     if (!requestRecords(proj).some((record) => record.text === RELEASE_JOURNEY_REQUEST)) {
       problems.push("AI-DLC has no request for the person's words, so no plan question was asked for them");

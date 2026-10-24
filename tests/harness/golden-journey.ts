@@ -152,7 +152,7 @@ export function auditRows(proj: string): Row[] {
   }
 }
 
-function sourceListing(proj: string): ReadonlyMap<string, string> | null {
+export function sourceListing(proj: string): ReadonlyMap<string, string> | null {
   try {
     return workspaceSourceListing(proj);
   } catch {
@@ -592,7 +592,7 @@ export function goldenPathProblems(j: GoldenJourney, run: GoldenRun): string[] {
  * reader, as Plan Approval reads it: AI-DLC's record, its install, the root
  * files it shares (whole) and the host's own folder are not.
  */
-export function filesBeforePlanProblems(proj: string, run: GoldenRun): string[] {
+export function filesBeforePlanProblems(proj: string, run: Pick<GoldenRun, "files" | "start">): string[] {
   if (run.files === null) return ["the journey could not list the person's files before its first line, so it cannot tell whether they changed before a plan was picked"];
   const rows = auditRows(proj);
   // A plan picked before the journey began (a seeded leg) leaves nothing to check.
