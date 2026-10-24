@@ -3611,8 +3611,8 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
 
   // A team member's Request Changes at a team Unit's gate is a new attempt for
   // that Unit too.
-  function teamUnits(): string {
-    const p = checkpointsOff("strict");
+  function teamUnits(policy = "strict"): string {
+    const p = checkpointsOff(policy);
     writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
       .replace("- **Unit Ownership**: solo", "- **Unit Ownership**: team\n- **Unit Gate Rhythm**: unit-end"));
     return p;
@@ -3646,6 +3646,81 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(again.status).not.toBe(0);
     expect(again.out).toContain(SPENT);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Under relaxed and off a change after the review is accepted and no further
+  // review is owed (stage-protocol-reviewer.md 12a). A review the agent starts
+  // on its own past the one recovery is still refused, to the agent alone, and
+  // the step it names takes the Unit on to its approval: never a question for
+  // the person, a redo of the Unit or a restart of the stage. The change line
+  // the refused request recorded rides on the refusal, so it is said once.
+  function carriesOn(refused: { status: number | null; out: string }) {
+    expect(refused.status, refused.out).not.toBe(0);
+    for (const strictWayOn of [
+      '"ask_type":"guard-recovery"', "reopen --target", "Restart the stage", "changed again afterward", "on the human's behalf",
+    ]) expect(refused.out).not.toContain(strictWayOn);
+    expect(refused.out).toContain("the change is accepted");
+    expect(refused.out).toMatch(/`[^`]*orchestrate next`/);
+    const line = refused.out.split(/\r?\n/).find((entry) => entry.startsWith('{"error"'));
+    expect(JSON.parse(line ?? "{}").change_notices, refused.out).toEqual([ALPHA_EDIT_LINE]);
+  }
+
+  for (const policy of ["off", "relaxed"]) {
+    test(`${policy}, checkpoints off: after a redo of a Unit's Code Generation, a change and the agent's own review carry on`, () => {
+      const p = checkpointsOff(policy);
+      buildReviewed(p, "alpha", alphaAt(p, 1));
+      reopenCodeGeneration(p, "alpha", 2);
+      expect(reviewThroughLog(p, codeReview("alpha", 1)).request?.recovery).toBe("stale-receipt");
+      alphaAt(p, 3)();
+      carriesOn(tool(p, "log", codeReview("alpha", 2)));
+      expect(next(p)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha" });
+      cover(p, "alpha", ["code-generation"]);
+      expect(next(p)).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "beta" });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`${policy}, team: after a team Unit is sent back and rebuilt, a change and the agent's own review carry on to its gate`, () => {
+      const p = teamUnits(policy);
+      buildReviewed(p, "alpha", alphaAt(p, 1));
+      teamSendBack(p, "alpha", "Return a clear error for an empty name");
+      expect(buildReviewed(p, "alpha", alphaAt(p, 2)).request?.recovery).toBe("stale-receipt");
+      alphaAt(p, 3)();
+      carriesOn(tool(p, "log", codeReview("alpha", 2)));
+      expect(next(p)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha", gate: true });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`${policy}: on a Unit's first build, a second change and the agent's own review carry on to the Unit's completion`, () => {
+      const p = checkpointsOff(policy);
+      for (const slug of stages.slice(0, 4)) {
+        cover(p, "alpha", [slug], false);
+        expect(reviewThroughLog(p, [
+          "review", "--stage", slug, "--reviewer", findStageBySlug(slug)!.reviewer!, "--unit", "alpha", "--iteration", "1",
+        ]).status).toBe(0);
+        appendAuditEntry("UNIT_COMPLETED", {
+          Stage: slug, Unit: "alpha", Mode: "wave", "Run floor": latestMainWorkflowStageRunFloorForProject(p, slug, true, "alpha"),
+          "Artifact Fingerprint": reviewArtifactFingerprint(p, findStageBySlug(slug)!, "alpha", { requireRequiredArtifacts: true })!,
+        }, p);
+      }
+      const started = tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "alpha"]);
+      expect(started.status, started.out).toBe(0);
+      const plan = planApproved(p, "alpha");
+      writeFileSync(plan, readFileSync(plan, "utf-8").replaceAll("- [ ] Step", "- [x] Step"));
+      const built = join(seededRecordDir(p), "construction", "alpha", "code-generation");
+      for (const name of ["code-summary", "traceability"]) writeFileSync(join(built, artifactFilename(name)), `# alpha ${name}\n`);
+      writeFileSync(join(built, "source-manifest.json"), JSON.stringify({
+        stage: "code-generation", unit: "alpha", version: 1, writes: [{ path: "src/alpha.ts" }],
+      }));
+      alphaAt(p, 1)();
+      expect(reviewThroughLog(p, codeReview("alpha", 1)).status).toBe(0);
+      alphaAt(p, 2)();
+      expect(reviewThroughLog(p, codeReview("alpha", 2)).request?.recovery).toBe("stale-receipt");
+      alphaAt(p, 3)();
+      const refused = tool(p, "log", codeReview("alpha", 3));
+      carriesOn(refused);
+      expect(refused.out).toContain("state unit complete --stage code-generation --unit alpha");
+      const completed = tool(p, "state", ["unit", "complete", "--stage", "code-generation", "--unit", "alpha"]);
+      expect(completed.status, completed.out).toBe(0);
+      expect(next(p)).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "beta" });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 });
 
 // The walking skeleton gates the per-unit stages. Once they are all done or
