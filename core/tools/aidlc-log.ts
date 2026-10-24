@@ -1888,8 +1888,9 @@ function handleAnswer(args: string[]): void {
       }
       error(errorMessage(e));
     }
-    // Request Changes names the exact report, so the agent never guesses its
-    // flags: a solo walk reports the stage, a team-owned Unit gate its Unit.
+    // Request Changes names the exact step, so the agent never guesses its
+    // flags: a solo walk reports the stage, or sends back the one Unit's step the
+    // refusal named (requestChangesReportCommand), a team-owned Unit gate its Unit.
     const report = picked.op === "request-changes"
       ? `run \`${requestChangesReportCommand(pd, picked.stage, picked.unit)}\`: their messages go on the record ` +
         "as what should change."
