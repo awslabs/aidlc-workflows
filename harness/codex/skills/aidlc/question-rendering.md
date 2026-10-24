@@ -202,7 +202,7 @@ Rules (both tracks):
   `select_commands[].selector` and execute that entry's complete `command`
   verbatim; never interpolate a selector. `new-work-routing` carries its routes
   as fields: `new_intent_command` (or a `scope_commands` entry for a corrected
-  scope), `compose_command`, and `continue_command` for the active workflow or,
+  scope; there is none when no plan is proposed), `compose_command`, and `continue_command` for the active workflow or,
   with `available_intents`, per-record `select_commands` and `reshape_commands`. Run them verbatim and
   retain the `--request` id through selection or composition. Existing intents with no selected cursor and
   pending work receive this ask on every harness, including after scope
