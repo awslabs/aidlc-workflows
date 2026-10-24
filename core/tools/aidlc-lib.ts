@@ -27017,7 +27017,7 @@ function symlinkedParentComponent(
   return null;
 }
 
-function sourcePathIsRegistered(
+export function sourcePathIsRegistered(
   sourceRepoDir: string,
   carriesWorkspaceShell: boolean,
   path: string,
