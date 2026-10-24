@@ -33,7 +33,7 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -210,7 +210,9 @@ function coverUnit(proj: string, unit: string, slug: string): void {
   }
 }
 
-function logReviewReady(proj: string, stage: string, unit: string): void {
+// With `finding`, the review is READY with that one Minor finding, written to
+// the record slot the request names.
+function logReviewReady(proj: string, stage: string, unit: string, finding?: string): void {
   const reviewer = "aidlc-architecture-reviewer-agent";
   const artifact = join(
     seededRecordDir(proj),
@@ -235,12 +237,26 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
   if ((request.status ?? -1) !== 0) {
     throw new Error(`review request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
   }
-  appendFileSync(
-    artifact,
-    "\n## Review\n\n**Verdict:** READY\n" +
-      `**Reviewer:** ${reviewer}\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`,
-    "utf-8",
-  );
+  if (finding === undefined) {
+    appendFileSync(
+      artifact,
+      "\n## Review\n\n**Verdict:** READY\n" +
+        `**Reviewer:** ${reviewer}\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`,
+      "utf-8",
+    );
+  } else {
+    const { reviewFile } = JSON.parse(request.stdout) as { reviewFile: string };
+    const draft = join(proj, reviewFile);
+    mkdirSync(dirname(draft), { recursive: true });
+    writeFileSync(
+      draft,
+      `## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Iteration:** 1\n\n### Findings\n\n` +
+        "**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n" +
+        `| Minor | ${relative(proj, artifact).replaceAll("\\", "/")} > section | ${finding} | Say how |\n` +
+        "\n### Summary\n\nReady.\n",
+      "utf-8",
+    );
+  }
   const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], opts);
   if ((verdict.status ?? -1) !== 0) {
     throw new Error(`review verdict failed: ${verdict.stdout ?? ""}${verdict.stderr ?? ""}`);
@@ -465,6 +481,45 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
       expect(auditBlockField(row.block, "Message Id"), row.stage ?? "").toBe(id);
     }
   });
+
+  // "Approve, but make sure R-01 gets handled": the question showed the first
+  // stage's review, so the fix asked is its finding. A stage approved with it
+  // keeps its own R-01 (a different finding) as the approval records it, and
+  // is never refused midway for an id only the first stage's review carries.
+  test.each(["R-01", "functional-spec#R-01"])(
+    "3c: --fix-finding %s is the first stage's; every stage approved with it approves and records no fix of its own",
+    (selector) => {
+      const proj = seedBuiltProject({ checkpoints: "disabled" }, [
+        ["functional-design", "alpha"],
+        ["nfr-requirements", "alpha"],
+      ]);
+      logReviewReady(proj, "functional-design", "alpha", "An empty cart is not covered");
+      logReviewReady(proj, "nfr-requirements", "alpha", "No rate limit is said");
+      openFirstGate(proj);
+      personReplies(proj);
+      const done = runReport(proj, [
+        "--stage", "functional-design", "--result", "approved", "--user-input", "Approve",
+        "--fix-finding", selector,
+      ]);
+      expect(done.kind, JSON.stringify(done).slice(0, 400)).toBe("done");
+      const approved = rows(proj, "GATE_APPROVED");
+      expect(approved.map((r) => r.stage)).toEqual(BLOCK);
+      const recorded = (stage: string) => {
+        const block = approved.find((r) => r.stage === stage)?.block ?? "";
+        const field = auditBlockField(block, "Review Finding Dispositions");
+        const envelope = JSON.parse(field ?? '{"dispositions":[]}') as {
+          dispositions: { artifact: string; id: string; status: string }[];
+        };
+        return envelope.dispositions.map((d) => [d.artifact.split("/").slice(-3).join("/"), d.id, d.status]);
+      };
+      expect(recorded("functional-design")).toEqual([
+        ["alpha/functional-design/functional-spec.md", "R-01", "Fix requested"],
+      ]);
+      expect(recorded("nfr-requirements")).toEqual([
+        ["alpha/nfr-requirements/security-requirements.md", "R-01", "Accepted risk"],
+      ]);
+    },
+  );
 
   test("4: a change request approves nothing", () => {
     const proj = seedBuiltProject({ checkpoints: "disabled" });

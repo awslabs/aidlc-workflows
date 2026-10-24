@@ -7343,6 +7343,7 @@ function approvesTogetherFlag(args: string[], content: string, slug: string): st
 }
 
 // approve <slug> [--user-input <the choice as read>] [--message <id>]
+//   [--fix-finding <review-artifact>#R-NN]...
 // Transition: [?] → [x] AND auto-advance to the next in-scope stage (or
 // complete the workflow if this was the final stage). Human judgment ends
 // at the gate response; everything after is deterministic bookkeeping, so
@@ -7446,9 +7447,14 @@ function openQuestionRetry(pd: string, slug: string, why: string): string | null
 }
 
 function handleApprove(args: string[]): void {
-  if (args.length < 1) error("Usage: aidlc-state.ts approve <slug> [--user-input <text>] [--message <id>]");
+  if (args.length < 1) {
+    error(
+      "Usage: aidlc-state.ts approve <slug> [--user-input <text>] [--message <id>] " +
+        "[--fix-finding <review-artifact>#R-NN]...",
+    );
+  }
   const slug = args[0];
-  const { userInput, message } = parseApproveFlags(args.slice(1));
+  const { userInput, message, fixFindings } = parseApproveFlags(args.slice(1));
 
   const pd = resolveProjectDir(projectDir);
   const preflightContent = readStateFile(pd);
@@ -7550,6 +7556,7 @@ function handleApprove(args: string[]): void {
       teamGate.stages,
       teamGate.unit,
       "person",
+      fixFindings,
     );
     const status = unitGateStatus(
       pd,
@@ -7723,6 +7730,7 @@ function handleApprove(args: string[]): void {
     stage,
     undefined,
     autonomousDecision ? "nobody" : "person",
+    fixFindings,
   );
 
   // Scope is required for next-stage derivation. Validate it before persisting
@@ -7864,11 +7872,13 @@ function getFlagValues(args: string[], flag: string): string[] {
   return values;
 }
 
-// Flag parser for approve: handles --user-input and --message (values).
-function parseApproveFlags(args: string[]): { userInput?: string; message?: string } {
+// Flag parser for approve: --user-input and --message (values), and each
+// --fix-finding (an open finding the person asked to have fixed).
+function parseApproveFlags(args: string[]): { userInput?: string; message?: string; fixFindings: string[] } {
   return {
     userInput: getFlagValue(args, "--user-input"),
     message: getFlagValue(args, "--message"),
+    fixFindings: getFlagValues(args, "--fix-finding"),
   };
 }
 

@@ -15916,6 +15916,7 @@ interface ReportFlags {
   reason?: string;
   rejectFindings?: string[];
   reopenFindings?: string[];
+  fixFindings?: string[]; // --fix-finding: an open finding the person asked to have fixed as they approved
   skeletonStance?: string; // the classify round-trip's classified stance
   single?: boolean; // --single: complete the synthetic attempt opened by next --single, never the main pointer
   stage?: string; // --stage <slug>: the acted stage (required under --single; preferred for main workflow reports)
@@ -15942,6 +15943,7 @@ const REPORT_FLAGS = [
   "--reason",
   "--reject-finding",
   "--reopen-finding",
+  "--fix-finding",
   "--skeleton-stance",
   "--single",
   "--override-blocking-sensors",
@@ -15996,6 +15998,10 @@ function parseReportFlags(args: string[]): ReportFlags {
       flags.reopenFindings ??= [];
       flags.reopenFindings.push(args[i + 1]);
       i++;
+    } else if (a === "--fix-finding" && i + 1 < args.length) {
+      flags.fixFindings ??= [];
+      flags.fixFindings.push(args[i + 1]);
+      i++;
     } else if (a === "--skeleton-stance" && i + 1 < args.length) {
       flags.skeletonStance = args[i + 1];
       i++;
@@ -16032,6 +16038,8 @@ function parseReportFlags(args: string[]): ReportFlags {
       missingValue(a, "a finding id");
     } else if (a === "--reopen-finding") {
       missingValue(a, "a finding id and reason");
+    } else if (a === "--fix-finding") {
+      missingValue(a, "a finding id");
     } else if (a === "--skeleton-stance") {
       missingValue(a, "<on|off|scope-dependent>");
     } else if (a === "--stage") {
@@ -17182,11 +17190,17 @@ function approvesTogetherFromToolOutput(stdout: string): string[] {
   }
 }
 
-function approveArgs(slug: string, flags: ReportFlags): string[] {
+// A stage approved together with the first carries no --fix-finding: the gate
+// showed the first stage's review, and a follower's own R-02 is a different
+// finding.
+function approveArgs(slug: string, flags: ReportFlags, follower = false): string[] {
   const args = ["approve", slug];
   if (flags.userInput) args.push("--user-input", flags.userInput);
   if (flags.message) args.push("--message", flags.message);
   if (flags.unit) args.push("--unit", flags.unit);
+  if (!follower) {
+    for (const finding of flags.fixFindings ?? []) args.push("--fix-finding", finding);
+  }
   return args;
 }
 
@@ -18638,8 +18652,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
     const steps = boxState === "in-progress"
-      ? [["gate-start", follower], approveArgs(follower, flags)]
-      : [approveArgs(follower, flags)];
+      ? [["gate-start", follower], approveArgs(follower, flags, true)]
+      : [approveArgs(follower, flags, true)];
     const followerPreflight = preflightSequenceDirective(pd, live, followerNode, steps);
     if (followerPreflight !== null) {
       emit(withChangeNotices(followerPreflight, [...changeNotices, ...said()]));

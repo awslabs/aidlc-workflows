@@ -296,7 +296,11 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
 
    Gate dispositions are receipt-safe audit data, never artifact edits:
    - **Approve** records every current `New` or `Unresolved` finding on the
-     tool-owned `GATE_APPROVED` row.
+     tool-owned `GATE_APPROVED` row. When the human asks, as they approve, for
+     an open finding to be fixed (for example
+     `approve, but make sure R-03 gets handled`), append
+     `--fix-finding "<review-artifact>#R-03"` to the approved report for each
+     one: it is recorded as `Fix requested` and stays open for the next review.
    - **Request Changes** leaves open findings unresolved. When the human
      explicitly rejects a finding as inapplicable, append
      `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` to the

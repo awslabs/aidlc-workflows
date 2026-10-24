@@ -1380,8 +1380,10 @@ back to the decision made before it was fixed. A Redo row resets the list of
 each Unit whose artifacts it names, or every Unit when it names none. `GATE_APPROVED` atomically records `Accepted risk` for each
 current open finding the person approved, `Approved autonomously` for one
 Construction approved on its own, or `Changed after review` for one whose
-reviewed work changed after that review with no finished review since; the
-last two are no decision, so the finding stays open and the next review
+reviewed work changed after that review with no finished review since. One
+the approval names with `--fix-finding <review-artifact>#R-NN` (the person
+asked for it to be fixed) records `Fix requested` instead. All but
+`Accepted risk` are no decision, so the finding stays open and the next review
 re-checks it. A Unit's checkpoint and a swarm batch's approval record their
 Units' findings, and a stage's approval nobody gave records none that a Unit's
 own approval recorded. A Request Changes report records `Rejected: <reason>`

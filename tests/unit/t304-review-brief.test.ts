@@ -1669,6 +1669,95 @@ describe("t304 executable review brief scenarios", () => {
       .toEqual(["New"]);
   });
 
+  // "Approve, but make sure R-03 gets handled": the record says they asked for
+  // a fix, never that they accepted the risk, and the next review re-checks it.
+  test("Approve with --fix-finding records Fix requested for that finding, Accepted risk for the rest, and the next review re-checks it", () => {
+    const project = engineOwnedFindingProject(["Minor", "Minor", "Minor"]);
+    const approved = run(
+      ORCHESTRATE,
+      [
+        "report", "--stage", "requirements-analysis", "--result", "approved",
+        "--user-input", "Approve", "--fix-finding", "R-03",
+      ],
+      project.proj,
+    );
+    expect(approved.status, approved.out).toBe(0);
+    expect(recordedDispositions(project.proj, "requirements-analysis")).toEqual([
+      { id: "R-01", status: "Accepted risk", decided_at_severity: "Minor" },
+      { id: "R-02", status: "Accepted risk", decided_at_severity: "Minor" },
+      { id: "R-03", status: "Fix requested", decided_at_severity: "Minor" },
+    ]);
+
+    const stage = findStageBySlug("requirements-analysis")!;
+    const contexts = readReviewArtifactContexts(project.proj, stage);
+    expect(contexts[0].findings.map((finding) => [finding.id, finding.status])).toEqual([
+      ["R-01", "Accepted risk"],
+      ["R-02", "Accepted risk"],
+      ["R-03", "New"],
+    ]);
+    const hydrated = hydrateReviewArtifactContexts(
+      contexts,
+      readReviewFindingDispositions(project.proj, stage.slug),
+    );
+    expect(hydrated[0].findings.map((finding) => finding.status)).toEqual([
+      "Accepted risk",
+      "Accepted risk",
+      "New",
+    ]);
+    const reviewer = renderFindingsContext(contexts, "reviewer");
+    const settled = reviewer.indexOf("**Decided findings (settled, read-only)**");
+    const recheck = reviewer.slice(reviewer.indexOf("**Open findings to re-check**"), settled);
+    expect(recheck).toContain("| R-03 | Minor |");
+    expect(recheck).not.toContain("| R-01 |");
+    expect(reviewer.slice(settled)).toContain("| R-01 | Minor |");
+    expect(reviewer.slice(settled)).not.toContain("| R-03 |");
+  });
+
+  test("--fix-finding naming no open finding of the gate is refused before anything is recorded, naming the open ones", () => {
+    const project = engineOwnedFindingProject(["Minor", "Major"]);
+    const rel = project.relativeArtifact;
+    const refused = run(
+      STATE,
+      ["approve", "requirements-analysis", "--user-input", "Approve", "--fix-finding", "R-09"],
+      project.proj,
+    );
+    expect(refused.status, refused.out).not.toBe(0);
+    expect(refused.out).toContain(
+      "Cannot ask a fix for R-09: it is not a current review finding for this gate. " +
+        `Current open findings: ${rel}#R-01, ${rel}#R-02.`,
+    );
+    expect(readAuditShardEvents(project.proj).some((row) => row.event === "GATE_APPROVED")).toBe(false);
+    expect(readFileSync(seededStateFile(project.proj), "utf-8")).toMatch(/^- \[\?\] requirements-analysis /m);
+    // An approval nobody gave carries no fix a person asked for.
+    expect(() =>
+      approvalDispositionField(
+        project.proj,
+        findStageBySlug("requirements-analysis")!,
+        undefined,
+        "nobody",
+        ["R-01"],
+      )
+    ).toThrow("--fix-finding");
+  });
+
+  test("Approve with --fix-finding over work changed after its review records Fix requested for that finding and Changed after review for the rest", () => {
+    const { proj } = fixedAfterReviewProject("off");
+    expect(readAuditShardEvents(proj).some((row) => row.event === "CHANGE_ACCEPTED")).toBe(true);
+    const approved = run(
+      ORCHESTRATE,
+      [
+        "report", "--stage", "requirements-analysis", "--result", "approved",
+        "--user-input", "Approve", "--fix-finding", "requirements#R-01",
+      ],
+      proj,
+    );
+    expect(approved.status, approved.out).toBe(0);
+    expect(recordedDispositions(proj, "requirements-analysis")).toEqual([
+      { id: "R-01", status: "Fix requested", decided_at_severity: "Critical" },
+      { id: "R-02", status: "Changed after review", decided_at_severity: "Minor" },
+    ]);
+  });
+
   test("Request Changes records only explicitly rejected findings with the exact reason", () => {
     const { proj, artifact, relativeArtifact } = requirementProject([ROW_NEW]);
     recordReviewAndOpenGate(proj, artifact);
@@ -3461,6 +3550,47 @@ describe("t304 engine-owned report replay and compatibility", () => {
     ]);
   });
 
+  test("an envelope with Fix requested stays readable by an older release, which keeps every other entry", () => {
+    const project = engineOwnedFindingProject(["Minor", "Major"]);
+    const approved = run(
+      ORCHESTRATE,
+      [
+        "report", "--stage", "requirements-analysis", "--result", "approved",
+        "--user-input", "Approve", "--fix-finding", "R-02",
+      ],
+      project.proj,
+    );
+    expect(approved.status, approved.out).toBe(0);
+    const gate = readAuditShardEvents(project.proj)
+      .findLast((event) => event.event === "GATE_APPROVED")!;
+    const envelope = JSON.parse(
+      auditBlockField(gate.block, REVIEW_FINDING_DISPOSITIONS_FIELD)!,
+    ) as {
+      version: number;
+      dispositions: Array<{ artifact: string; id: string; fingerprint: string; status: string }>;
+    };
+    expect(envelope.version).toBe(1);
+    expect(envelope.dispositions.map((row) => [row.id, row.status])).toEqual([
+      ["R-01", "Accepted risk"],
+      ["R-02", "Fix requested"],
+    ]);
+    // The filter the release before this one applies: it keeps the acceptance
+    // and skips only the value it does not know, so R-02 stays open for it.
+    const olderReader = envelope.dispositions.filter((row) =>
+      typeof row.artifact === "string" &&
+      /^R-[0-9]+$/.test(row.id) &&
+      /^sha256:[0-9a-f]{64}$/.test(row.fingerprint) &&
+      (
+        row.status === "Accepted risk" ||
+        row.status === "Changed after review" ||
+        row.status === "Approved autonomously" ||
+        /^Rejected: \S[\s\S]*$/.test(row.status) ||
+        /^Reopened: \S[\s\S]*$/.test(row.status)
+      )
+    );
+    expect(olderReader.map((row) => row.id)).toEqual(["R-01"]);
+  });
+
   test("--single runs keep today's behavior: the record holds the review's own findings, not the stage list", () => {
     const project = engineOwnedFindingProject(["Minor"]);
     const rel = project.relativeArtifact;
@@ -4128,6 +4258,7 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     expect(reviewerProtocol).toContain("aidlc-review-brief.ts context");
     expect(reviewerProtocol).toContain("aidlc-review-brief.ts review");
     expect(reviewerProtocol).toContain("--reject-finding");
+    expect(reviewerProtocol).toContain('--fix-finding "<review-artifact>#R-');
   });
 
   test("the findings table contract the dispatch passes is the one the logger reads", () => {

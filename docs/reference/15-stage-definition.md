@@ -541,7 +541,7 @@ compile validates the value against the discovered agent roster the same way
 Every reviewer-bearing stage must also declare `review_artifact`, naming one
 required Markdown entry from `produces[]`: the artifact the review is about.
 The review record is keyed to it, the gate names it, and
-`--reject-finding` / `--reopen-finding <artifact>#R-NN` address its findings; the reviewer never
+`--reject-finding` / `--reopen-finding` / `--fix-finding <artifact>#R-NN` address its findings; the reviewer never
 writes to it. List ordering and plugin-added outputs cannot change it. On a per-Unit stage the target must remain applicable for every Unit
 kind on which any required output is applicable, otherwise graph compilation
 fails. Structured outputs such as `traceability.json` cannot be review targets.
