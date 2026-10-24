@@ -455,8 +455,9 @@ post-review-mutation boundary on all four completion routes. The receipt also
 names the listing the reviewer saw (`Source Listing`), so when only AI-DLC's own
 files moved since then (an AI-DLC update; the set `aidlcOwnedSourceKey` names)
 the review still holds and nothing is said, and a relaxed or off line names
-only the files outside that set. A path the repo root's `.aidlc-source-paths.json`
-`exclude` list now leaves out of the walk is left out of that compare as it is
+only the files outside that set. A path the `exclude` list of the
+`.aidlc-source-paths.json` its walk reads (the repo root's, or a recorded
+checkout's own) now leaves out of the walk is left out of that compare as it is
 from the baseline compare below, so a cache excluded after the review is no
 change either, before or after the one recovery review; a strict refusal names
 the paths that did move. A receipt without the field, or whose listing is not on

@@ -228,6 +228,7 @@ import {
   teamUnitGateStatus,
   unclaimableIgnoredSourceKeys,
   registryExcludedSourceKeys,
+  sourceKeyRegistryFiles,
   renderChangedPaths,
   renderSourcePathKeys,
   unitCompletedReceipts,
@@ -5412,7 +5413,7 @@ function verifyReviewerPrecondition(
       const claimedByNoUnit = baselineUnclaimed.filter((pathKey) =>
         !manifests.some((manifest) => manifest.ok && sourceClaimCovers(pathKey, manifest))
       );
-      if (claimedByNoUnit.length > 0) unclaimedSourcePreconditionError(stage, claimedByNoUnit);
+      if (claimedByNoUnit.length > 0) unclaimedSourcePreconditionError(pd, stage, claimedByNoUnit);
     }
     staleSourcePreconditionError(
       pd,
@@ -5658,7 +5659,7 @@ function verifyReviewerPrecondition(
         });
         return;
       }
-      unclaimedSourcePreconditionError(stage, unclaimed);
+      unclaimedSourcePreconditionError(pd, stage, unclaimed);
     }
   }
 }
@@ -5674,6 +5675,7 @@ function renderUnclaimedSource(unclaimed: string[]): { rendered: string[]; more:
 }
 
 function unclaimedSourcePreconditionError(
+  pd: string,
   stage: { slug: string; name: string },
   unclaimed: string[],
 ): never {
@@ -5684,19 +5686,16 @@ function unclaimedSourcePreconditionError(
   error(
     `Refusing to complete "${stage.slug}": ${unclaimed.length} change${unclaimed.length === 1 ? "" : "s"} made during ${stage.name} ` +
       `that no Unit's review covers (${rendered.join(", ")}${more}). A Unit that made one of them lists the path ` +
-      `in its source manifest and is reviewed once more; a change nobody meant is undone; ${notSourceWayThrough(unclaimed)}.`,
+      `in its source manifest and is reviewed once more; a change nobody meant is undone; ${notSourceWayThrough(pd, unclaimed)}.`,
   );
 }
 
 // The way through for a changed path that is not source, the same on every
 // refusal that names changed paths. The registry that reaches a path is the
-// one in its own repo folder (the walk reads each repo root's file), so a
-// recorded repo's path names it.
-function notSourceWayThrough(keys: readonly string[]): string {
-  const registries = [...new Set(keys.map((key) => {
-    const repo = key.slice(0, key.indexOf("\0"));
-    return repo ? `${inertPath(repo)}/.aidlc-source-paths.json` : ".aidlc-source-paths.json";
-  }))].sort();
+// one its walk reads (a recorded repo's or a recorded checkout's own folder),
+// so such a path names that file.
+function notSourceWayThrough(pd: string, keys: readonly string[]): string {
+  const registries = sourceKeyRegistryFiles(pd, keys);
   const where = registries.length === 1 && registries[0] === ".aidlc-source-paths.json"
     ? ".aidlc-source-paths.json"
     : `the .aidlc-source-paths.json of the path's own folder (${registries.join(", ")})`;
@@ -5764,7 +5763,7 @@ function staleSourcePreconditionError(
   // cache) is left out by the exclude, and the review then still holds.
   const changed = receipts.sourceChangedKeys;
   const whatChanged = changed !== null && changed.length > 0
-    ? ` What changed: ${renderChangedPaths(renderSourcePathKeys(changed))}; ${notSourceWayThrough(changed)}.`
+    ? ` What changed: ${renderChangedPaths(renderSourcePathKeys(changed))}; ${notSourceWayThrough(pd, changed)}.`
     : "";
   if (recoverySpent) {
     const message =
