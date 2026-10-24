@@ -907,6 +907,18 @@ function isPlanWaitSideWrite(projectDir: string, target: string, planPaths: stri
   });
 }
 
+// A real path with any Windows 8.3 short name expanded: Bun's realpathSync
+// keeps the short name, realpathSync.native expands it. Where native cannot
+// answer (some volumes, such as a RAM disk or a network share), the
+// realpathSync answer stands; no test can make native fail.
+function expandedRealPath(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return realpathSync(path);
+  }
+}
+
 // A write outside the project is never the plan's business: the path as
 // written lies outside the project, and so does the real path of its deepest
 // existing ancestor, so a link from outside into the project counts as inside
@@ -914,7 +926,7 @@ function isPlanWaitSideWrite(projectDir: string, target: string, planPaths: stri
 function isOutsideProject(projectDir: string, target: string): boolean {
   try {
     const projectLexical = resolve(projectDir);
-    const projectReal = realpathSync(projectLexical);
+    const projectReal = expandedRealPath(projectLexical);
     const targetAbs = resolve(target);
     if (isWithinDir(targetAbs, projectLexical) || isWithinDir(targetAbs, projectReal)) return false;
     const suffix: string[] = [];
@@ -925,7 +937,7 @@ function isOutsideProject(projectDir: string, target: string): boolean {
       suffix.unshift(basename(cursor));
       cursor = parent;
     }
-    const real = join(realpathSync(cursor), ...suffix);
+    const real = join(expandedRealPath(cursor), ...suffix);
     return !isWithinDir(real, projectLexical) && !isWithinDir(real, projectReal);
   } catch {
     return false;
