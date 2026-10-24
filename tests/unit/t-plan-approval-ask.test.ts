@@ -2745,6 +2745,7 @@ describe("an isolated Code Generation run's plan steps name that run's own next"
     const asked = own(proj);
     expect(asked, JSON.stringify(asked)).toMatchObject({ kind: "ask", ask_type: "plan-approval", stage: "code-generation", plan_approval: { next: OWN } });
     expect(String(asked.question_note)).toEndWith(`, then run \`${OWN}\`.`);
+    expect(String(asked.question_note)).not.toContain(`\`${WORKFLOW_NEXT}\``);
     replyAndRecord(proj, "approve", "Approve Plan");
     expect(own(proj)).toMatchObject({ kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" } });
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(state);
@@ -2764,6 +2765,20 @@ describe("an isolated Code Generation run's plan steps name that run's own next"
     );
   });
 
+  test("the person edits the files: the reply's step names it", () => {
+    const proj = isolated();
+    next(proj, SINGLE);
+    writePlan(proj);
+    expect(own(proj).ask_type).toBe("plan-approval");
+    replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
+    expect(own(proj).plan_approval.editing).toBe(true);
+    reply(proj, "you finish it");
+    const editing = own(proj);
+    expect(editing, JSON.stringify(editing)).toMatchObject({ kind: "ask", plan_approval: { editing: true, next: OWN } });
+    expect(String(editing.plan_approval.note)).toEndWith(`Then run \`${OWN}\`.`);
+    expect(String(editing.question_note)).not.toContain(`\`${WORKFLOW_NEXT}\``);
+  });
+
   test("the workflow's own plan steps keep the bare next and carry no command of their own", () => {
     const proj = project();
     const planning = next(proj);
@@ -2773,7 +2788,12 @@ describe("an isolated Code Generation run's plan steps name that run's own next"
     const asked = next(proj);
     expect(asked.ask_type).toBe("plan-approval");
     expect(asked.plan_approval).not.toHaveProperty("next");
+    expect(String(asked.question_note)).toContain(`or run \`${WORKFLOW_NEXT}\` when it returns none.`);
     expect(String(asked.question_note)).toEndWith(`, then run \`${WORKFLOW_NEXT}\`.`);
+    replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
+    next(proj);
+    reply(proj, "you finish it");
+    expect(String(next(proj).plan_approval.note)).toEndWith(". Then run next.");
   });
 });
 
