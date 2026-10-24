@@ -46,8 +46,10 @@ import {
   type RunOptions,
   say,
   SECOND_SESSION,
+  SESSION,
 } from "../harness/aidlc-input-corpus.ts";
 import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { sessionPidMapDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 type Record = Parameters<typeof saveMessage>[1];
@@ -409,6 +411,19 @@ describe("with work open, the agent's first step after `/aidlc <words>` reads th
   // The recorded miss (t176 run 8 on main b9c3e9000f), replayed: the widget
   // feature at Feasibility, the line exactly as Claude Code delivered it, the
   // agent's `next --resume`, then the step the reading names for new work.
+  // Copilot CLI writes the chat's session rows beside the prompt hook in no
+  // fixed order: they can follow the person's line, and are not the agent's.
+  test("copilot shape: the chat's SESSION_ENDED and SESSION_STARTED after the line do not stop a bare next reading it", async () => {
+    const proj = await workOpen();
+    await say(proj, NEW_LINE, "claude");
+    appendAuditEntry("SESSION_ENDED", { Session: SECOND_SESSION }, proj);
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: SESSION }, proj);
+    const { directive, out } = await next(proj, "claude", []);
+    expect(directive.kind, out).toBe("print");
+    expect(directive.message ?? "", out).toContain(READING);
+    expect(questionTexts(proj)).toEqual([NEW_WORK]);
+  });
+
   test("claude: the t176 miss replayed: next --resume, then the reading's own step, asks where the new work belongs", async () => {
     const proj = fresh();
     writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8"), "utf-8");

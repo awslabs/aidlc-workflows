@@ -460,9 +460,11 @@ function namedSetters(message: string | undefined): string[] {
   return [...(message ?? "").matchAll(/`[^`]*aidlc-state\.ts (set-[^`]*)`/g)].map((match) => match[1]);
 }
 
-// The person types a bare `/aidlc` in `session`, and the agent runs `next` there.
-function bare(p: string, session: string) {
+// The person types a bare `/aidlc` in `session`, the host may write rows of
+// its own after it (`after`), and the agent runs `next` there.
+function bare(p: string, session: string, after: () => void = () => {}) {
   person(p, "/aidlc", session);
+  after();
   const env: Record<string, string | undefined> = {
     ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p, AIDLC_SESSION_OVERRIDE: session, AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
   };
@@ -557,6 +559,52 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
     const set = readAuditShardEvents(p).filter((row) => row.event === "CONSTRUCTION_POLICY_SET");
     expect(set.map((row) => auditBlockField(row.block, "Field"))).toEqual(["Construction Iteration", "Construction Execution"]);
     expect(auditBlockField(set[0].block, "Message Id")).toBe(id);
+  });
+
+  // Copilot CLI runs its session-start hook beside the prompt hook in no fixed
+  // order, so the chat's own session rows can land after the person's line.
+  const HOST_ROWS: Array<[string, Array<[string, Record<string, string>]>]> = [
+    ["a new chat's SESSION_ENDED for the last chat and its SESSION_STARTED", [
+      ["SESSION_ENDED", { Session: OLD }], ["SESSION_STARTED", { Source: "startup", Session: NEW }],
+    ]],
+    ["SESSION_RESUMED and SESSION_COMPACTED", [
+      ["SESSION_RESUMED", { Source: "resume", Session: NEW }], ["SESSION_COMPACTED", { Session: NEW }],
+    ]],
+  ];
+  for (const [what, rows] of HOST_ROWS) {
+    test(`the open question still comes back when the host writes ${what} after the line`, () => {
+      const p = askedInOldChat("Construction policy");
+      const shown = bare(p, NEW, () => {
+        for (const [event, fields] of rows) appendAuditEntry(event, fields, p);
+      });
+      expect(shown.kind, JSON.stringify(shown)).toBe("print");
+      expect(shown.message).toContain('"Build the Units in parallel?"');
+    });
+  }
+
+  test("a row the agent wrote after the line still means the line was acted on", () => {
+    const p = askedInOldChat("Construction policy");
+    const resumed = bare(p, NEW, () => appendAuditEntry("ARTIFACT_UPDATED", {
+      Tool: "Write", File: `${p}/notes.md`, Context: "notes.md",
+    }, p));
+    expect(resumed.kind, JSON.stringify(resumed)).toBe("run-stage");
+  });
+
+  // Each chat reads only its own line (takePersonsOwnLine reads the invoking
+  // chat's latest message, and turnIsLatestRow matches that message's turn).
+  test("another chat opened after the line never reads that line as its own", () => {
+    const p = askedInOldChat("Construction policy");
+    const other = "t-any-chat-other";
+    person(p, "/aidlc", NEW);
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: other }, p);
+    const nextIn = (session: string) => runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, [], {
+      env: { ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p, AIDLC_SESSION_OVERRIDE: session, AIDLC_SESSION_OVERRIDE_SOURCE: undefined },
+    }).directive as { kind: string };
+    const there = nextIn(other);
+    expect(there.kind, JSON.stringify(there)).toBe("run-stage");
+    // The chat that typed it still reads it, past the other chat's session row.
+    const here = nextIn(NEW);
+    expect(here.kind, JSON.stringify(here)).toBe("print");
   });
 
   test("a question its stage's questions file still holds is asked again by the stage's own step, from the file", () => {
