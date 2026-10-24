@@ -49,6 +49,40 @@ For the full architecture, see [reference/01-architecture.md](01-architecture.md
 5. **Test** -- Run `bun tests/run-tests.ts` before submitting
 6. **Submit** -- Open a PR against `main`
 
+### Orienting on one piece of the framework
+
+Before editing a stage, hook, tool, or agent, ask what already applies to it:
+
+```bash
+aidlc engine dev-context stage requirements-analysis
+aidlc engine dev-context hook aidlc-run-sensors
+aidlc engine dev-context tool aidlc-graph
+aidlc engine dev-context agent aidlc-architect-agent
+aidlc engine dev-context test t243-install-mechanism.test.ts   # reverse lookup
+```
+
+The runtime never walks prose to decide what applies to a stage -- `aidlc engine
+graph compile` resolves it once and the orchestrator reads the answer off the node
+(see [Plane Architecture](02-plane-architecture.md)). `dev-context` gives the
+*editor* the same service: for a stage it emits the resolved graph node, the
+protocol modules that actually apply, the lead and support persona paths plus the
+lead's knowledge directory, the compile-resolved sensors and rules, which scopes
+execute it, the covering tests, and the doc chapters that name it. It is read-only,
+needs no configured project, and derives almost everything from artefacts the build
+already produces, so a stale bundle means a stale `bun scripts/package.ts`. Two
+values are mirrored rather than derived and are labelled in the output: the protocol
+module rule is duplicated from the engine (a test enumerates the engine's modules and
+fails if this tool stops accounting for one), and the review class is the stage's
+declared value, which a scope ceremony policy or state override can lower.
+
+Paths are emitted against `core/` in a source checkout and against the harness
+directory in an installed project, because those are the files you would actually
+edit in each case. `--json` gives the machine-readable form. The kind is the route's verb, so
+`<kind> <id>` is the spelling the dispatcher accepts; invoking the tool file
+directly also accepts `--for <kind>:<id>`. The covering-test and
+doc sections need a source checkout; in an installed project they are reported as
+unavailable rather than omitted silently.
+
 Release binary artifacts are not part of `dist/` and are not produced by the
 packager. After `bun scripts/package.ts --check` is clean, run
 `bun scripts/build-binaries.ts` for the native artifact or add `--all-targets`
