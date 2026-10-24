@@ -51,6 +51,10 @@ function reads(state: BuiltState): string[] {
     `git show --stat HEAD; R=${r}; cat "$R/aidlc-state.md"`,
     `R=${r}; cat $R/aidlc-state.md; ls -R $R | grep -v audit | head -50`,
     `cat "$(cat aidlc/spaces/default/intents/active-intent)" 2>/dev/null; cat ${r}/aidlc-state.md`,
+    // The record folder alone, held in a variable or named beside one.
+    `R=aidlc; cat "$R/${r.slice("aidlc/".length)}/aidlc-state.md"`,
+    `R="$(pwd)/aidlc"; cat "$R/${r.slice("aidlc/".length)}/aidlc-state.md"`,
+    `ls aidlc; R=${r}; cat $R/aidlc-state.md`,
   ];
 }
 
@@ -82,6 +86,12 @@ describe("a read through a variable while the plan waits", () => {
       "T=.claude/tools/aidlc.ts; bun $T engine orchestrate report --stage code-generation --result approved",
       "x=$(echo bun); $x .claude/tools/aidlc-orchestrate.ts report --stage code-generation --result approved",
       'A=aidlc; "$A" engine orchestrate report --stage code-generation --result approved',
+      `"\${cmd:-aidlc}" jump execute --target requirements-analysis --direction backward`,
+      'A=aidlc; eval "$A engine orchestrate report --stage code-generation --result approved"',
+      'A=aidlc; echo "$A engine orchestrate report --stage code-generation --result approved" | sh',
+      'echo "$(aidlc engine orchestrate report --stage code-generation --result approved)"',
+      // The launcher by a Windows path, unquoted: the POSIX reading drops its backslashes.
+      "C:\\Users\\me\\.aidlc\\bin\\aidlc.cmd jump execute --target requirements-analysis --direction backward $t",
     ];
     const admitted: string[] = [];
     for (const shape of SHAPES) {
@@ -93,6 +103,14 @@ describe("a read through a variable while the plan waits", () => {
       }
     }
     expect(admitted).toEqual([]);
+  });
+
+  // A program run from a variable is judged as AI-DLC's command when the line
+  // names aidlc, as before this change; a read that way waits.
+  test("S3: a read whose program is itself a variable still waits", async () => {
+    const state = build("S3");
+    const verdict = await SHAPES[0].call(state.proj, state.session, { tool: "Bash", command: `c=cat; $c ${record(state)}/aidlc-state.md` });
+    expect(verdict.code).toBe(2);
   });
 
   test("S1: before the plan is asked, a read through a variable waits with every command whose writes cannot be seen", async () => {
