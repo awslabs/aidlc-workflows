@@ -599,11 +599,15 @@ ask targeted follow-up. Do NOT proceed until resolved.
   once per piece of work: "Approvals are still yours: I'll stop at each stage
   for you to approve." A checkpoint or an approval is never left to the agent.
   Outside an isolated `--single` run, a message that leaves the questions to the
-  agent and also says not to ask anything waives the summary confirmation for
-  the piece of work: the agent runs `config set summary-confirmation off
-  --message <id>` on that message, says in one line that it is off and can be
-  turned back on, and generates. An isolated run reads only its own scope's
-  summary setting, so it still asks when its scope asks.
+  agent and also says not to ask anything waives the summary confirmation and
+  the learnings step for the piece of work: the agent runs `config set
+  summary-confirmation off --learnings off --message <id>` on that message,
+  says in one line that both are off and either can be turned back on, and
+  generates. With learnings off the work keeps no stage diary and asks nothing
+  about what to keep for next time, and while both stay off as the person's the
+  work's own switch lines ask nothing either (no "whole project instead?"
+  offer). An isolated run reads only its own scope's summary setting, so it
+  still asks when its scope asks.
 
 ### Plan and Question File Location
 

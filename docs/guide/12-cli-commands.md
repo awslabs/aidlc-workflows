@@ -1789,7 +1789,10 @@ want it off for this whole machine instead?" after this project. Asking for a
 check that is already off there says so, with the same offer. This machine, a
 check with no project switch, and the Guard Policy have nowhere wider to go, so
 nothing is asked, and nothing is asked of a command you run at your own
-terminal.
+terminal. Nothing is asked after a switch for this piece of work either while
+you keep its summary confirmation and its learnings step off yourself, which is
+how the agent records "do not ask me anything"; turn either back on and the
+offer comes back.
 
 When the engine cannot tie it to a message of yours in the chat, the line says
 only that the check is off and since when. Every new chat opens with the

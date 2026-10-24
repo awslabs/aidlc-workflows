@@ -146,6 +146,32 @@ describe("t-switch-offers-wider-place: the switch's own line carries the one wid
     expect(lastLine(summary)).toEndWith(PROJECT_OFFER);
   });
 
+  // "Do not ask me anything" beside questions left to the agent is recorded as
+  // the summary confirmation and the learnings step off for this piece of work,
+  // on their message (stage-protocol.md). While both stay off as theirs the
+  // work's switch lines ask them nothing; the project's own switches still offer
+  // the machine, and either one back on brings the work's offer back. The
+  // runner keeps one machine install for the whole file, where earlier cases
+  // leave the review freeze check off, so this case uses other checks.
+  test("asked not to be asked: with the summary confirmation and the learnings step off as theirs, nothing more is offered for the piece of work", () => {
+    const { run, said } = workspace();
+    const m1 = said("Use the recommended answer for every question and finish the stage now. Do not ask me anything.");
+    const waiver = run(["engine", "config", "set", "summary-confirmation", "off", "--learnings", "off", "--message", m1]);
+    expect(waiver).toContain("is off for this piece of work");
+    expect(waiver).not.toContain("?");
+    const m2 = said("turn the reviewer read scope check off");
+    const fence = run(["engine", "config", "set", "guard.reviewer-scope", "off", "--message", m2]);
+    expect(fence).toContain("is off for this piece of work");
+    expect(fence).not.toContain("?");
+    const m3 = said("turn the reviewer read scope check off for this project");
+    const project = run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEWER_SCOPE_HOOK", "--local", "--yes", "--message", m3]);
+    expect(lastLine(project)).toEndWith(MACHINE_OFFER);
+    const m4 = said("ask me what to keep for next time again");
+    run(["engine", "config", "set", "learnings", "on", "--message", m4]);
+    const m5 = said("stop asking me to approve the code plan");
+    expect(lastLine(run(["engine", "config", "set", "plan-approval", "off", "--message", m5]))).toEndWith(PROJECT_OFFER);
+  });
+
   test("a scope change that turns a check off asks nothing: nobody asked to turn that check off", () => {
     const { proj, run, said } = workspace();
     const file = seededStateFile(proj);

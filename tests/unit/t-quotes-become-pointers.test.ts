@@ -17,8 +17,8 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { join } from "node:path";
 import {
-  auditBlockField, checkSummaryConfirmationEvidence, findStageBySlug, formatGuardPolicy, getField, readAuditShardEvents,
-  setGuardPolicyLine,
+  auditBlockField, ceremonyPolicyValues, checkSummaryConfirmationEvidence, findStageBySlug, formatGuardPolicy, getField,
+  learningsRitualRuns, readAuditShardEvents, setGuardPolicyLine,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, seedAidlcMemory, seededStateFile, seedStateFile,
@@ -176,8 +176,10 @@ describe.each(POLICIES)("Guard Policy %s: a choice left to the agent names the m
 
   // The stage protocol's waiver: questions left to the agent by someone who
   // also said not to ask them anything. The setter on that same message turns
-  // the summary confirmation off for this work, and the stage owes none.
-  test("left to the agent and not to be asked: the summary confirmation goes off on that message, and none is owed", () => {
+  // the summary confirmation and the learnings step off for this work: the
+  // stage owes no summary, the learnings question is not run, and the line
+  // that says so asks nothing.
+  test("left to the agent and not to be asked: the summary confirmation and the learnings step go off on that message, and nothing more is asked", () => {
     const proj = project();
     const words = "Use the recommended answer for every question and finish the stage now. Do not ask me anything.";
     const id = said(proj, words);
@@ -198,16 +200,28 @@ describe.each(POLICIES)("Guard Policy %s: a choice left to the agent names the m
       }
     };
     expect(owed()).toMatchObject({ ok: false });
-    const off = run(proj, [DISPATCHER, "engine", "config", "set", "summary-confirmation", "off", "--message", id,
-      "--project-dir", proj]);
+    // Whether the stage's run lists the learnings step, read as the directive reads it.
+    const learningsRuns = () => {
+      const state = readFileSync(seededStateFile(proj), "utf-8");
+      return learningsRitualRuns(ceremonyPolicyValues(getField(state, "Scope"), state).learnings, state, STAGE);
+    };
+    expect(learningsRuns()).toBe(true);
+    const off = run(proj, [DISPATCHER, "engine", "config", "set", "summary-confirmation", "off", "--learnings", "off",
+      "--message", id, "--project-dir", proj]);
     expect(off.status, off.out).toBe(0);
     expect(off.out).toContain(`is off for this piece of work, because you said: "${words}"`);
-    const row = rows(proj, "CEREMONY_SET").at(-1);
-    expect(field(row, "Key")).toBe("summary_confirmation");
-    expect(field(row, "Source")).toBe("you");
-    expect(field(row, "Message Id")).toBe(id);
-    expect(getField(readFileSync(seededStateFile(proj), "utf-8"), "Summary Confirmation")).toBe("off (set by you)");
+    expect(off.out).not.toContain("Do you want");
+    for (const key of ["summary_confirmation", "learnings"]) {
+      const row = rows(proj, "CEREMONY_SET").find((entry) => field(entry, "Key") === key);
+      expect(field(row, "New")).toBe("off");
+      expect(field(row, "Source")).toBe("you");
+      expect(field(row, "Message Id")).toBe(id);
+    }
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    expect(getField(state, "Summary Confirmation")).toBe("off (set by you)");
+    expect(getField(state, "Learnings")).toBe("off (set by you)");
     expect(owed()).toMatchObject({ ok: true, required: false });
+    expect(learningsRuns()).toBe(false);
   });
 
   test("the old value form is the agent's own text: recorded, no claim, no refusal", () => {

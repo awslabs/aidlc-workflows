@@ -14,8 +14,10 @@ import { basename, join, relative, resolve } from "node:path";
 import {
   assertNoSymlinkInChainOrThrow,
   CEREMONY_ENV,
+  CEREMONY_FIELDS,
   getField,
   GUARD_FENCE_ENV,
+  parseCeremonyStateLine,
   readStateFile,
   resolveCeremony,
   resolveFences,
@@ -226,14 +228,16 @@ export type SwitchWayBack = "offer" | "statement" | "command";
  * change something: the whole project after this piece of work, this whole
  * machine after this project. None for a check with no switch of that kind,
  * where the environment decides, where a settings file already keeps it off
- * there (any file, for the project; the machine's, for the machine), or for a
- * command run at the person's own terminal, where no chat is there to answer.
+ * there (any file, for the project; the machine's, for the machine), for a
+ * command run at the person's own terminal, where no chat is there to answer,
+ * or after a piece of work's switch while that work asks nothing more
+ * (workAsksNothing), its state given as `from.work`.
  * The agent relays it as written and, on a yes, sets it there.
  */
 export function widerPlaceOffer(
   projectDir: string,
   name: string | undefined,
-  from: "work" | "project",
+  from: { work: string } | "project",
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
   if (name === undefined || !(PERSON_CHECK_SWITCHES as readonly string[]).includes(name)) return null;
@@ -245,12 +249,25 @@ export function widerPlaceOffer(
       return false;
     }
   };
-  if (from === "work") {
-    return (["local", "project", "global"] as const).some(recordedIn)
+  if (from !== "project") {
+    return workAsksNothing(from.work) || (["local", "project", "global"] as const).some(recordedIn)
       ? null
       : "Do you want it off for the whole project instead?";
   }
   return recordedIn("global") ? null : "Do you want it off for this whole machine instead?";
+}
+
+// True while the person keeps both of a piece of work's own questions off as
+// theirs, the summary confirmation and the learnings step: how the agent
+// records "do not ask me anything" (stage-protocol.md, a choice left to you).
+// Two separate requests that turned both off leave the same record, so they
+// count too. Either one back on, or set by anything but the person, and the
+// work's offers come back.
+function workAsksNothing(stateContent: string): boolean {
+  return (["summary_confirmation", "learnings"] as const).every((key) => {
+    const saved = parseCeremonyStateLine(getField(stateContent, CEREMONY_FIELDS[key]));
+    return saved?.value === "off" && saved.source === "you";
+  });
 }
 
 /**

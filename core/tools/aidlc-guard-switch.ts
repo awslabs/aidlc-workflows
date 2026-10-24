@@ -897,7 +897,7 @@ export function applyIntentSettings(
         }
         const already = `The ${checkLabel(request.fence)} is already ${after.value}`;
         const offer = request.value === "off" && after.value === "off" && !atTheirTerminal
-          ? widerPlaceOffer(projectDir, projectSwitchOf(`guard.${request.fence}`), "work")
+          ? widerPlaceOffer(projectDir, projectSwitchOf(`guard.${request.fence}`), { work: content })
           : null;
         lines.push(offer ? `${already}. ${offer}` : already);
         continue;
@@ -949,7 +949,9 @@ export function applyIntentSettings(
         lines.push(held);
       } else if (!scopeDefault(flag)) {
         const already = `${field} is already ${previous}`;
-        const offer = value === "off" && !atTheirTerminal ? widerPlaceOffer(projectDir, CEREMONY_ENV[key], "work") : null;
+        const offer = value === "off" && !atTheirTerminal
+          ? widerPlaceOffer(projectDir, CEREMONY_ENV[key], { work: content })
+          : null;
         lines.push(offer ? `${already}. ${offer}` : already);
       }
       continue;
@@ -982,14 +984,14 @@ export function applyIntentSettings(
     // they asked carries it below instead). A value the scope set is nobody's
     // request to turn the check off, so it offers nothing.
     if (value === "off" && !scopeDefault(flag) && !saidAsAsked(flag) && !atTheirTerminal && lines.length > 0) {
-      const offer = widerPlaceOffer(projectDir, CEREMONY_ENV[key], "work");
+      const offer = widerPlaceOffer(projectDir, CEREMONY_ENV[key], { work: content });
       if (offer) lines[lines.length - 1] = `${lines[lines.length - 1]} ${offer}`;
     }
   }
   for (const item of lowering) {
     if (!saidAsAsked(item.key)) continue;
     const line = askedSwitchLine(item, askedIn, cc.value, !atTheirTerminal);
-    const offer = atTheirTerminal ? null : widerPlaceOffer(projectDir, projectSwitchOf(item.key), "work");
+    const offer = atTheirTerminal ? null : widerPlaceOffer(projectDir, projectSwitchOf(item.key), { work: content });
     lines.push(offer ? `${line} ${offer}` : line);
   }
   return { content, audit, lines };
