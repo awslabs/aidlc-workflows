@@ -6068,9 +6068,13 @@ function freshWorkRoute(
   // The plan the agent proposed with the request, when it did; none means the
   // proposal step first.
   const plan = flags.propose !== undefined && flags.propose !== "" ? flags.propose : null;
+  // Finished work here too, and the words reached no reading step (a setting
+  // typed with them, or the delimiter's re-run): the plan step comes first, as
+  // it names that work and the way back to one of its stages.
+  const readFirst = finished !== undefined && plan === null && derivedFrom === undefined;
   // A tailored plan (`compose`) is no plan's name: the separate-work answer
   // picks the plan next, as the routing question over selected work does.
-  const pick = intentPickPromptIfRecordsExist(pd, {
+  const pick = readFirst ? null : intentPickPromptIfRecordsExist(pd, {
     description,
     proposedScope: plan === null || plan === "compose" ? "" : plan,
     carried: carriedRoutingFlags(flags),

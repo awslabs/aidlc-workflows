@@ -467,6 +467,32 @@ describe("t-plan-proposed-by-the-agent: work here but none selected", () => {
     });
   }
 
+  // Words that skip the reading step (a setting typed with them, or the
+  // delimiter's re-run of words that answer nothing) reach the plan step first
+  // where finished work is here, so its way back is named before any question.
+  for (const [harness, tools, args] of [
+    ["claude", CLAUDE_TOOLS, ["--depth", "minimal", "go back to code generation on the finished work"]],
+    ["claude", CLAUDE_TOOLS, ["--", "go back to code generation on the finished work"]],
+    ["kiro", KIRO_TOOLS, ["--depth", "minimal", "go back to code generation on the finished work"]],
+  ] as const) {
+    test(`${harness}: finished work beside unfinished work, words with no reading step (${args[0]}): the plan step names the finished work and the way back`, () => {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, COMPLETED);
+      const r = spawnSync(process.execPath, [join(tools, "aidlc-utility.ts"), "intent-create", "--scope", "bugfix", "--label", "auth", "--project-dir", proj], {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env },
+      });
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+      rmSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), { force: true });
+      const step = next(tools, proj, [...args]);
+      expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
+      expect(String(step.message)).toContain("is finished, and it is not selected in this chat.");
+      expect(String(step.message)).toContain("next --stage <stage slug>`");
+      expect(String(step.message)).toContain(PROPOSAL);
+    });
+  }
+
   // Finished work beside unfinished work, none selected: the words may ask to go
   // back to a stage of the finished work, and the reading step, which the agent
   // reads before any question, says so with the command that selects it.
