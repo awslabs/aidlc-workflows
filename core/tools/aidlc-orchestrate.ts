@@ -10966,7 +10966,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           ? `Run \`${command}\` to change scope${fill}, then print its output verbatim. ` +
             openGateAnswerStep(current, practicesApprovalHeld(pd, current, stateContent))
           : `Run \`${command}\` to change scope${fill}, then ${verbatimThenStop}`);
-      emit(planChanges ? planChangeDirective(planChanges, command, { ...plan, switchedTo: flags.scope }, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
+      const switching = { ...plan, switchedTo: flags.scope, carriesOn };
+      emit(planChanges ? planChangeDirective(planChanges, command, switching, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
         keepsPlace ? withWorkPicksUpLine(switched, pd, currentStateScope, stateContent) : switched,
         planApprovalAskIsOpen(pd),
       ));
@@ -15790,9 +15791,10 @@ function planChangeDirective(
   // `switchedTo`: a scope change typed in the same command, which runs first; it
   // rebuilds the plan from that scope's grid and keeps every checkbox, so
   // `stateContent` says where the work stands and the grid what it runs.
+  // `carriesOn`: the switch alone goes on with the work rather than ending the turn.
   plan: {
     scope: string; stateContent: string; walk?: PlanChangeWalk | null; together?: string[]; passedOver?: string[];
-    switchedTo?: string;
+    switchedTo?: string; carriesOn?: boolean;
   } | null,
   // The code plan's question is open: it stays the open step, so what the
   // person says next is kept as their answer to it.
@@ -15823,8 +15825,11 @@ function planChangeDirective(
     plan === null ? undefined
       : effectivePlanAction(slug, switched ?? plan.scope, switched === undefined ? plan.stateContent : null);
   const skippedWhereItStood = (slug: string): boolean => plan !== null && stageSkippedWhereItStood(plan.stateContent, slug);
+  // A stage already done is recompose's to name, as it is without a switch.
+  const done = (slug: string): boolean =>
+    switched !== undefined && parseCheckboxes(plan!.stateContent).some((c) => c.slug === slug && c.state === "completed");
   const already = (slug: string, action: "EXECUTE" | "SKIP"): boolean =>
-    actionOf(slug) === action && !(action === "EXECUTE" && skippedWhereItStood(slug));
+    actionOf(slug) === action && !(action === "SKIP" && done(slug)) && !(action === "EXECUTE" && skippedWhereItStood(slug));
   const skip = [...new Set(changes.skip)].filter((slug) => !already(slug, "SKIP"));
   const add = [...new Set(changes.add)].filter((slug) => !already(slug, "EXECUTE"));
   const unchanged = [
@@ -15835,11 +15840,12 @@ function planChangeDirective(
     ? `${unchanged.join("; ").charAt(0).toUpperCase()}${unchanged.join("; ").slice(1)}.`
     : "";
   if (skip.length === 0 && add.length === 0) {
-    return kept(turnEndingPrint(
-      `${before ? `Run \`${before}\`${filled} and print its output verbatim, then tell` : "Tell"} the person in one line: ` +
-        // The scope change's own output says the plan changed.
-        `"${noted}${switched === undefined ? " The plan is unchanged." : ""}${parkedTail}"${end}${resume}`,
-    ));
+    const said = `${before ? `Run \`${before}\`${filled} and print its output verbatim, then tell` : "Tell"} the person in one line: ` +
+      // The scope change's own output says the plan changed.
+      `"${noted}${switched === undefined ? " The plan is unchanged." : ""}${parkedTail}"`;
+    return kept(plan?.carriesOn === true
+      ? printDirective(`${said} Then re-run \`next\` to carry on with the work.`)
+      : turnEndingPrint(`${said}${end}${resume}`));
   }
   // Where the work stands: the current stage, started or waiting at its gate.
   // One the new scope does not run is set aside by the change and the `next`
