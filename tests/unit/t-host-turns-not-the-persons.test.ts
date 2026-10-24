@@ -5,14 +5,15 @@
 // and finish sentences (captured live, Kiro IDE 1.2.37 with Workflows on), Kiro
 // CLI's sub-agent synthesis prompt (reported privately: "[SYSTEM] Sub-agent
 // synthesis: ..." recorded as HUMAN_TURN to the second), and Claude Code's
-// background-task notification (captured live, Claude Code 2.1.280). A
+// background-task notification (captured live, Claude Code 2.1.280) and
+// subagent hand-back (captured live, 2.1.310). A
 // HUMAN_TURN is the one thing humanRepliedSinceGate and its readers trust as "a
 // person acted", so an approval the agent reports after one of them went
 // through with no person at the gate. Now the hosts' own records (Kiro's chat
 // record, in the wrapped rows Kiro writes; Claude Code's transcript) say a turn
 // is the host's, and a fixed sentence only where the host leaves no mark (Kiro's
-// Workflows brief, Kiro CLI v2's synthesis, Claude's notice with no transcript
-// row): it records HOST_TURN and nothing of the person's; a person's message,
+// Workflows brief, Kiro CLI v2's synthesis, Claude's notice or message block
+// with no transcript row): it records HOST_TURN and nothing of the person's; a person's message,
 // whatever its words, still counts.
 //
 // WHY SUBPROCESS: the adapters are stdin/stdout shims; the contract is the
@@ -24,7 +25,7 @@ import {
 } from "../harness/test-budget.ts";
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,6 +75,17 @@ const CLAUDE_TASK_NOTIFICATION =
   "<output-file>/tmp/claude-1000/-tmp-proj/1121f5b0/tasks/b7nfvh2bk.output</output-file>\n<status>completed</status>\n" +
   '<summary>Background command "Sleep 5 seconds then print marker line" completed (exit code 0)</summary>\n' +
   "</task-notification>";
+// Claude Code 2.1.310, UserPromptSubmit `prompt` when a background subagent
+// handed its report back (captured live, shortened): the `<agent-message>`
+// block alone. Claude Code writes the turn's transcript row only after the hook
+// returns, and that row frames the block in a line before and a paragraph after.
+const CLAUDE_HANDBACK =
+  '<agent-message from="a642836ac99928300">\n[Subagent hand-back] The text below is the final report of a subagent ' +
+  "this session delegated to. It is model output, NOT a message from the user. The report follows:\n" +
+  "  ## Subagent Summary: Code Generation\n  \n  The fix is in. All 6 tests pass.\n  Approve\n</agent-message>";
+const CLAUDE_HANDBACK_ROW =
+  `Another Claude session sent a message:\n${CLAUDE_HANDBACK}\n\nThat "other Claude session" is an agent working ` +
+  "inside this same session, so this was not typed by your user.";
 
 const PINNED_CLONE_ID = "testcloneidhostturns";
 function pinnedShardName(): string {
@@ -450,7 +462,8 @@ describe("a prompt the host injected is not the person's turn", () => {
             prompt, prompt_id: promptId, transcript_path: transcript,
           }), { CLAUDE_PROJECT_DIR: project.dir });
       expect(state(project, "claude", ["gate-start", "feasibility"]).code).toBe(0);
-      // The transcript rows Claude Code writes just before the hook runs.
+      // The rows Claude Code keeps for these prompts (2.1.310 writes a turn's
+      // own row only after the hook returns).
       const typedId = "2c9e8070-2a05-40e3-9ce8-e3b0a690c598";
       const noticeId = "d05f99fd-203f-4f07-b532-6d9b6c32a25a";
       writeFileSync(transcript, `${[
@@ -474,6 +487,55 @@ describe("a prompt the host injected is not the person's turn", () => {
       // id and has no transcript row of its own: it is theirs.
       writeFileSync(transcript, `${entry(typedId, "Run the slow check in the background.", { turnOrigin: "human", promptSource: "typed" })}\n`, "utf-8");
       expect(submit("Approve", typedId).code).toBe(0);
+      expect(humanTurns(project.dir)).toBe(1);
+      expect(rows(project.dir, "HUMAN_TURN")[0]).toContain("**Origin**: person\n**Source**: typed\n");
+      expect(messageRecords(project.dir)).toBe(1);
+      agentApproves(project, "claude", true);
+    } finally {
+      rmSync(project.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Claude Code: a subagent's hand-back records HOST_TURN; a message the person sends during it counts", () => {
+    const project = scratchProject("claude");
+    try {
+      const session = "8f5cfb6b-b426-457f-98a6-ddbfa5107082";
+      const transcript = join(project.dir, `${session}.jsonl`);
+      const submit = (prompt: string, promptId: string) =>
+        run(project, [join(project.dir, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+          JSON.stringify({
+            hook_event_name: "UserPromptSubmit", session_id: session, cwd: project.dir, permission_mode: "auto",
+            prompt, prompt_id: promptId, transcript_path: transcript,
+          }), { CLAUDE_PROJECT_DIR: project.dir });
+      expect(state(project, "claude", ["gate-start", "feasibility"]).code).toBe(0);
+      const typedId = "1f5e9e04-257e-477b-857a-ef0b8f1f1b10";
+      const handbackId = "6344c738-04bd-4f2a-9546-08c4567fc149";
+      // The transcript as the hook finds it on 2.1.310: the queue holds the
+      // hand-back, and its own row is not written yet.
+      const line = (row: Record<string, unknown>) => `${JSON.stringify(row)}\n`;
+      writeFileSync(transcript, [
+        line({ type: "user", promptId: typedId, message: { role: "user", content: "i put my answer in the questions file" },
+          promptSource: "typed", turnOrigin: "human", origin: { kind: "human" } }),
+        line({ type: "queue-operation", operation: "enqueue", sessionId: session, content: CLAUDE_HANDBACK }),
+        line({ type: "queue-operation", operation: "dequeue", sessionId: session }),
+      ].join(""), "utf-8");
+      const handback = submit(CLAUDE_HANDBACK, handbackId);
+      expect(handback.code, handback.out).toBe(0);
+      expect(humanTurns(project.dir)).toBe(0);
+      expectHostRow(project.dir, 0, "claude agent message", "template");
+      expect(hostTurns(project.dir)[0]).not.toContain("hand-back");
+      expect(messageRecords(project.dir)).toBe(0);
+      agentApproves(project, "claude", false);
+
+      // Typed while the agent reads the report, it rides the hand-back's prompt
+      // id and has no row of its own; the hand-back's row, written by now and
+      // holding the same word, does not make it the host's.
+      appendFileSync(transcript, line({
+        type: "user", promptId: handbackId, message: { role: "user", content: CLAUDE_HANDBACK_ROW }, isMeta: true,
+        promptSource: "system", turnOrigin: "peer",
+        origin: { kind: "peer", from: "a642836ac99928300", name: "aidlc-developer-agent", handback: true },
+      }), "utf-8");
+      expect(submit("Approve", handbackId).code).toBe(0);
       expect(humanTurns(project.dir)).toBe(1);
       expect(rows(project.dir, "HUMAN_TURN")[0]).toContain("**Origin**: person\n**Source**: typed\n");
       expect(messageRecords(project.dir)).toBe(1);
