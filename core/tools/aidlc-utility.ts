@@ -258,6 +258,7 @@ import {
   acquireAuditLock,
   releaseAuditLock,
   hooksHealthReadDir,
+  readHostHookCall,
   isAutonomousMode,
   isPlainObject,
   isPerUnitStage,
@@ -450,6 +451,8 @@ import {
   hookActivation,
   hookExecutionRecoveryText,
   projectSettingsRepair,
+  heartbeatAt,
+  type HookLiveness,
   hookLiveness,
   workspaceSourceState,
   hasRealGitEntry,
@@ -3643,10 +3646,7 @@ export function firingHooksLastFired(projectDir: string, now = Date.now()): stri
     projectDir,
     readAuditShardEvents(projectDir, selection.intent ?? undefined, selection.space),
   );
-  const beat = (hook: string): number => {
-    const entry = liveness.heartbeatEntries.find((line) => line.startsWith(`${hook} `));
-    return entry === undefined ? Number.NaN : Date.parse(entry.slice(hook.length + 1));
-  };
+  const beat = (hook: string): number => heartbeatAt(liveness, hook);
   // A session-end newer than every session-start: the launch that wrote these
   // heartbeats has closed, and no later launch has started its hooks.
   const launchClosed = Number.isFinite(beat("session-end")) && !(beat("session-start") >= beat("session-end"));
@@ -3654,6 +3654,39 @@ export function firingHooksLastFired(projectDir: string, now = Date.now()): stri
   return newest !== null && !liveness.stale && !launchClosed && now - newest.timestampMs <= RUNTIME_HOOK_EVIDENCE_MS
     ? newest.timestampRaw
     : undefined;
+}
+
+// Beats that land without the person's prompt (a chat opening or closing, a
+// compaction) or that the prompt hook writes itself.
+const NON_TOOL_HEARTBEATS = new Set(["session-start", "session-end", "record-human-turn", "validate-state"]);
+
+// A prompt stamped up to this long before the chat-start stamp still belongs
+// to that chat: nothing promises the host calls sessionStart first.
+const HOST_PROMPT_BEFORE_START_MS = 60 * 1000;
+
+// #976: Cursor can open a chat and run its tools without ever calling the
+// prompt hook, so none of the person's replies there is recorded while every
+// other heartbeat stays fresh. The host's own calls to the adapter
+// (recordHostHookCall) show it: a chat started, tools ran after it, and no
+// prompt came. Without a chat-start stamp (an older install) it says nothing.
+export function hostPromptHookChecks(projectDir: string, liveness: HookLiveness): DoctorCheck[] {
+  const started = readHostHookCall(projectDir, "chat-start");
+  if (started === null) return [];
+  const prompted = readHostHookCall(projectDir, "prompt");
+  if (prompted !== null && prompted >= started - HOST_PROMPT_BEFORE_START_MS) return [];
+  const toolsRan = liveness.heartbeatEntries.some((entry) => {
+    const hook = entry.slice(0, entry.indexOf(" "));
+    return !NON_TOOL_HEARTBEATS.has(hook) && heartbeatAt(liveness, hook) > started;
+  });
+  if (!toolsRan) return [];
+  return [{
+    pass: false,
+    severity: "warn",
+    label: "Your replies in the latest Cursor chat are not reaching AI-DLC: the chat ran tools, but Cursor never passed it your messages",
+    fix:
+      "fully quit and reopen Cursor, trust the folder, check that Customize > Hooks lists .cursor/hooks.json, " +
+      "then start a new chat; a headless `agent -p` run never passes messages, so after one this is expected",
+  }];
 }
 
 // A hook failure this recent is a doctor warning; an older one is history.
@@ -5365,6 +5398,8 @@ export async function collectDoctorReport(
       fix: hookExecutionRecovery,
     });
   }
+
+  if (harness === ".cursor") results.push(...hostPromptHookChecks(projectDir, liveness));
 
   // 6b. Hook drop records. A hook that hit a non-fatal failure appends a line
   // to `<hook>.drops` in the health dir (recordHookDrop: ISO timestamp, TAB,
