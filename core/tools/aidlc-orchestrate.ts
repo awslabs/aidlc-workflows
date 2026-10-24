@@ -15991,11 +15991,10 @@ function planChangeDirective(
     ].reduce((content, [slug, action]) => setStageSuffix(content, slug, action), plan.stateContent);
     // The walk's first step skipped where it stands, with no Unit's work for
     // it, moves the work on in the same request: a stage it passes is behind
-    // the work at once.
-    const movesTo = firstStep !== null && firstSkip !== null && unitStep !== null && !unitStep.worked
-      ? nextInScopeStage(firstStep, plan.scope, changed)?.slug ?? null
-      : null;
-    if (movesTo !== null && order.indexOf(first) < order.indexOf(movesTo)) return ownForm(skipped);
+    // the work at once, and with nothing left after it the work is finished.
+    const movesOn = firstSkip !== null && unitStep !== null && !unitStep.worked;
+    const movesTo = movesOn ? nextInScopeStage(firstStep!, plan.scope, changed)?.slug ?? null : null;
+    if (movesOn && (movesTo === null || order.indexOf(first) < order.indexOf(movesTo))) return ownForm(skipped);
     const after = (from: string, passes: (slug: string) => boolean): ReturnType<typeof nextInScopeStage> => {
       let at = nextInScopeStage(from, plan.scope, changed);
       while (at !== null && passes(at.slug)) at = nextInScopeStage(at.slug, plan.scope, changed);
