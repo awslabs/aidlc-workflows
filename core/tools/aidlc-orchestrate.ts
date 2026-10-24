@@ -342,6 +342,16 @@ import {
   recordDir,
   renderReviewRequestCommand,
   type FreshReviewReceipts,
+  type ReviewClass,
+  isLearningsNoteDecision,
+  LEARNINGS_KEEP_NONE,
+  LEARNINGS_KEEP_QUESTION,
+  LEARNINGS_NOTE_CHOICES,
+  LEARNINGS_NOTE_QUESTION,
+  boxPicksAddANote,
+  DECISION_PAIRING_EVENTS,
+  nextOpenDecision,
+  offeredChoiceLabel,
   engineDir,
   isPlainObject,
   parseCeremonySetting,
@@ -506,7 +516,7 @@ import {
   unitSkippedItsCode,
   waveEligible,
 } from "./aidlc-lib.ts";
-import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
+import { reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
   checkpointPolicyEnabled,
@@ -12379,15 +12389,16 @@ function approvalOverReview(
 // A stage that works on the whole project (not once per Unit) and whose review
 // is open: the step that gets it finished, in place of the stage body. Its
 // documents are written, since a request was made on them, so the body has
-// nothing left for the lead to write. Repairs the reviewer asked for are the
-// lead's own work, so that state, and a stage whose review was never asked
-// for, keep the body. Null leaves the route as it was.
+// nothing left for the lead to write. A review that has finished before the
+// gate opened gets the step after it (finishedReviewStep). Repairs the
+// reviewer asked for are the lead's own work, so that state, and a stage whose
+// review was never asked for, keep the body. Null leaves the route as it was.
 function stageReviewStep(
   projectDir: string,
   node: GraphStage,
   scope: string,
   stateContent: string | null,
-): { text: string; personFirst: boolean } | null {
+): { text: string; endsTurn: boolean; finished: boolean } | null {
   if (stateContent === null || !node.reviewer || isReadOnlyEngineProbe()) return null;
   if (isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, stateContent)) {
     // Per Unit with a Unit DAG, the Unit routes own the review. Team ownership
@@ -12398,7 +12409,9 @@ function stageReviewStep(
   if (reviewClass === "none") return null;
   const review = freshReviewReceipts(projectDir, stateContent, node, { reviewClass });
   const pending = review.stagePending;
-  if (pending === null || pending === undefined) return null;
+  if (pending === null || pending === undefined) {
+    return finishedReviewStep(projectDir, node, stateContent, review, reviewClass);
+  }
   const { attempt } = guardAttemptState(projectDir, stateContent, node, { receipts: review });
   const step = nextReviewStepFor({
     attempt,
@@ -12414,8 +12427,98 @@ function stageReviewStep(
   if (step === null || step.kind === "repairs") return null;
   // A step that puts the person's words first ends the turn once they are done.
   return step.personFirst === true
-    ? { text: step.text, personFirst: true }
-    : { text: `${step.text} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`, personFirst: false };
+    ? { text: step.text, endsTurn: true, finished: false }
+    : { text: `${step.text} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`, endsTurn: false, finished: false };
+}
+
+// A whole-project stage whose review has a fresh terminal verdict in this
+// attempt while its gate has not opened (in progress, or being revised): the
+// step that verdict named when it was recorded (reviewVerdictStep), so `next`
+// or a new chat between the review and the gate goes on to the learnings
+// question or to the gate's own report, not into the stage again. A stage that
+// repeats per Unit, on stage-level files too, keeps its own route after the
+// review (its code plan question, its settled gate). So does a stage with a
+// question still open (a re-entry shows the question again), and one with a
+// note the person picked at the learnings question not written yet (the ritual
+// can run again there). Past that, a learnings question asked since the stage
+// started has its answer, so the step goes on to the gate and never asks it
+// twice.
+function finishedReviewStep(
+  projectDir: string,
+  node: GraphStage,
+  stateContent: string,
+  review: FreshReviewReceipts,
+  reviewClass: ReviewClass,
+): { text: string; endsTurn: boolean; finished: boolean } | null {
+  if (isPerUnit(node)) return null;
+  const box = parseCheckboxes(stateContent).find((row) => row.slug === node.slug)?.state;
+  if (review.stageVerdict === null || (box !== "in-progress" && box !== "revising")) return null;
+  if (openDecisionMenu(projectDir, node.slug, "STAGE_STARTED").length > 0) return null;
+  const learnings = learningsSinceStageStart(projectDir, node.slug);
+  if (!learnings.settled) return null;
+  const fromNext = { learningsAnswered: learnings.asked, endsTurn: false };
+  const text = reviewVerdictStep(
+    projectDir,
+    { stage: node.slug, reviewer: node.reviewer as string },
+    review.stageVerdict,
+    review.stageIteration ?? 1,
+    { state: stateContent, node, reviewClass, autonomousCandidate: false, attempt: { boltStarted: false } },
+    engineSelection(projectDir),
+    { personAsked: false, recovery: review.stageRecovery === true },
+    fromNext,
+  );
+  return text === null ? null : { text, endsTurn: fromNext.endsTurn, finished: true };
+}
+
+// The stage's learnings question since the stage last started (the boundary
+// openStageQuestion reads its open questions from): whether it was logged, and
+// whether what the person picked there is done. It is done when every answer
+// to it, and to its question of which notes to keep, picks nothing to add and
+// keeps no note, or when a note was written after the last answer (a
+// RULE_LEARNED or SENSOR_PROPOSED row for the stage). Read are the exact labels
+// the agent recorded and the replies the question box carried back, never the
+// person's words; anything else reads as not done.
+function learningsSinceStageStart(projectDir: string, slug: string): { asked: boolean; settled: boolean } {
+  const rows = sortAttemptEvents(readAuditShardEvents(projectDir));
+  const start = rows.findLastIndex((row) =>
+    row.event === "STAGE_STARTED" && auditBlockField(row.block, "Stage") === slug &&
+    auditBlockField(row.block, "Workflow")?.startsWith("single-stage:") !== true);
+  const nothing = (picks: string[]) => picks.every((pick) =>
+    offeredChoiceLabel(pick.replace(/^\s*Q\d+:\s*/, ""), [LEARNINGS_NOTE_CHOICES[0], LEARNINGS_KEEP_NONE])?.rest === "");
+  let asked = false;
+  let picked = false;
+  let answered = -1;
+  let written = -1;
+  let menu: string[] = [];
+  for (let index = start + 1; start >= 0 && index < rows.length; index++) {
+    const { event, block } = rows[index];
+    if (event === "QUESTION_REPLIED") {
+      const question = auditBlockField(block, "Question");
+      if (question !== LEARNINGS_NOTE_QUESTION && question !== LEARNINGS_KEEP_QUESTION) continue;
+      answered = index;
+      if (!nothing((auditBlockField(block, "Reply") ?? "").split(", "))) picked = true;
+      continue;
+    }
+    if (auditBlockField(block, "Stage") !== slug) continue;
+    if (event === "RULE_LEARNED" || event === "SENSOR_PROPOSED") written = index;
+    if (!DECISION_PAIRING_EVENTS.has(event)) continue;
+    if (event === "DECISION_RECORDED") {
+      if (isLearningsNoteDecision(block)) asked = true;
+      menu = [...menu, block];
+      continue;
+    }
+    if (nextOpenDecision(menu.at(-1) ?? null, event, block) !== null) continue;
+    if (menu.some((open) => isLearningsNoteDecision(open) || auditBlockField(open, "Decision") === LEARNINGS_KEEP_QUESTION)) {
+      answered = index;
+      const messageId = auditBlockField(block, "Message Id");
+      if (
+        !nothing((auditBlockField(block, "Details") ?? "").split(/[;,]/)) ||
+        (messageId !== null && boxPicksAddANote(projectDir, messageId) === true)
+      ) picked = true;
+    }
+    menu = [];
+  }
+  return { asked, settled: !picked || written > answered };
 }
 
 // True when the Unit's receipts for this stage are read against the first
@@ -14812,7 +14915,14 @@ function emitForSlug(
   const node = nodeForSlug(slug);
   const reviewStep = node ? stageReviewStep(projectDir, node, scope, stateContent) : null;
   if (reviewStep !== null) {
-    emit(reviewStep.personFirst ? turnEndingPrint(reviewStep.text) : printDirective(reviewStep.text));
+    const step = reviewStep.endsTurn ? turnEndingPrint(reviewStep.text) : printDirective(reviewStep.text);
+    if (reviewStep.finished) {
+      // The agent speaks from this step (the completion summary first), so a
+      // chat picking the work up says where it picks up with it.
+      pickUpStage = slug;
+      leadsToSpeech.add(step);
+    }
+    emit(step);
     return;
   }
   if (node && isPerUnit(node)) {

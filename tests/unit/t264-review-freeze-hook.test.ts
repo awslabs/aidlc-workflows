@@ -1572,6 +1572,7 @@ function logTool(p: string, args: string[]): void {
 const sentenceAroundTarget = (stderr: string) => stderr.replace(/review-freeze: "[^"]*"/, 'review-freeze: "<file>"');
 
 const opsOf = (directive: Record<string, unknown>) => (directive.remedies as { op: string }[]).map((remedy) => remedy.op);
+const AFTER_THE_REVIEW = { kind: "print", message: expect.stringContaining("No further review pass follows") };
 
 describe("t264 (d) the refusal names next; next asks the recovery question", () => {
   test("the refusal says what was refused and the step to take, with no JSON line", () => {
@@ -1597,7 +1598,8 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
       reason_codes: ["REVIEW_FREEZE_ACTIVE"],
     });
     expect(opsOf(own)).toEqual(["present-findings-at-gate"]);
-    expect(nextDirective(p)).toMatchObject({ kind: "run-stage", stage: "requirements-analysis" });
+    // The review is final, so the step after it is the one its verdict named: on to the gate.
+    expect(nextDirective(p)).toMatchObject(AFTER_THE_REVIEW);
     refusedWrite(p);
     const asked = nextDirective(p);
     expect(asked).toMatchObject({
@@ -1609,7 +1611,7 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
     });
     expect(asked.agent_work).toBeUndefined();
     expect(opsOf(asked)).toEqual(["request-changes", "lower-fence"]);
-    expect(nextDirective(p)).toMatchObject({ kind: "run-stage", stage: "requirements-analysis" });
+    expect(nextDirective(p)).toMatchObject(AFTER_THE_REVIEW);
   });
 
   // The person spoke since the last decision, or answered the agent's question
