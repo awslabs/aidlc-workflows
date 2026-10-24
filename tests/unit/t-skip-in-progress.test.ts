@@ -414,6 +414,28 @@ describe("a stage the person asks to skip with a scope switch in the same comman
     ]);
   });
 
+  // A new project's plan skips Reverse Engineering whatever the scope's grid
+  // says, and the switch writes it so: an add of it after the switch is a
+  // change for recompose to carry out, never said to be on the plan already.
+  test("on a new project, Reverse Engineering added with the switch is added after it", () => {
+    const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
+    tempDirs.push(proj);
+    const created = run(proj, "aidlc-utility.ts", ["intent-create", "--scope", "feature"]);
+    expect(created.status, created.out).toBe(0);
+    expect(readFileSync(stateFile(proj), "utf-8")).toContain("- **Project Type**: Greenfield");
+    const res = runOrchestrateNext(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), proj,
+      ["--scope", "bugfix", "--add", "reverse-engineering"], { cwd: proj, env: { ...env, CLAUDE_PROJECT_DIR: proj } });
+    const message = String((res.directive as { message?: string } | null)?.message);
+    expect(message, res.out).not.toContain("already on the plan");
+    const commands = namedCommands(message);
+    expect(commands).toEqual([SWITCH, "bun .claude/tools/aidlc.ts engine recompose --add reverse-engineering"]);
+    for (const command of commands) {
+      const ran = runNamed(proj, command);
+      expect(ran.status, ran.out).toBe(0);
+    }
+    expect(readFileSync(stateFile(proj), "utf-8")).toContain("- [ ] reverse-engineering — EXECUTE");
+  });
+
   // The open question stays the person's to answer: the step names its report
   // after the switch and the change, as the skip alone does at an open gate.
   test("at the open question, a stage ahead skipped with the switch: the step names the question's report after both", () => {
