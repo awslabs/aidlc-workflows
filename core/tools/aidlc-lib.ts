@@ -30963,7 +30963,7 @@ function turnSinceGateShown(
 // Shards are per clone and committed, and a concatenated read lists them in
 // filename order, which is not causal order (see AuditShardEvent); the person's
 // turns in this chat are written here, so one shard orders them exactly.
-function ownShardRows(projectDir: string): { mine: AuditShardEvent[]; others: AuditShardEvent[] } {
+export function ownShardRows(projectDir: string): { mine: AuditShardEvent[]; others: AuditShardEvent[] } {
   const own = projectRelativePath(projectDir, auditFilePath(projectDir));
   const rows = readAuditShardEvents(projectDir);
   return {
@@ -31057,12 +31057,12 @@ export function stageStartFloorRefusal(
 // already names (its Message Id or Message Ids) was said for that question and
 // is left to it, unless it is their latest, which may answer this one too: an
 // answer spends no reply, but its words are not this decision's. With
-// `asked`, an answer's own question row, their latest is that question's too
-// only when the question came before it on the record (by place in the same
-// shard, else by time): one reply answers every question asked before it,
-// never one the agent logged after it had answered another (a live opencode
-// run recorded the person's "postgres" as their answer to a question they were
-// never shown). `words` is their words as the message record
+// `asked`, an answer's own question row on this clone's shard, their latest is
+// that question's too only when the question came before it there: one reply
+// answers every question asked before it, never one the agent logged after it
+// had answered another (a live opencode run recorded the person's "postgres"
+// as their answer to a question they were never shown). A row of another
+// shard is not ordered against these turns, so it keeps none. `words` is their words as the message record
 // keeps them, joined by line breaks, left out when one of those messages is no
 // longer readable or was cut (the words kept would not be everything they
 // said); `messageId` names the latest; `replies` lists every one with its time,
@@ -31145,8 +31145,7 @@ export function personsGateReply(
       for (const id of ids) if (id) answered.add(id);
     }
     const latestAnswers = (row: AuditShardEvent): boolean =>
-      asked === undefined ||
-      (asked.shard === row.shard ? asked.pos < row.pos : Date.parse(asked.timestamp) <= Date.parse(row.timestamp));
+      asked === undefined || (asked.shard === row.shard && asked.pos < row.pos);
     turns = turns.filter((row, at) =>
       (at === turns.length - 1 && latestAnswers(row)) || !answered.has(auditBlockField(row.block, "Message Id") ?? ""));
     const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
