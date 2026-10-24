@@ -498,6 +498,22 @@ function onlyItsOwnDecisionAfter(
   return decisions.size <= 1;
 }
 
+// Whether the only decision recorded after `message` is one reopen (the rows of
+// one redo or jump back over its Units, reopenOf) naming no other message: the
+// message asked for it, so a change asked for beside it still answers the
+// question that reopen brought up. Ids, times and the engine's own rows only.
+function onlyItsReopenAfter(rows: readonly AuditShardEvent[], message: Pick<StoredMessage, "id" | "at">): boolean {
+  let reopen: string | null = null;
+  for (const row of rows) {
+    if (row.timestamp <= message.at || !MESSAGE_SPENDING_EVENTS.has(row.event)) continue;
+    const key = reopenOf(row);
+    const named = auditBlockField(row.block, "Message Id");
+    if (key === null || (reopen !== null && key !== reopen) || (named !== null && named !== message.id)) return false;
+    reopen = key;
+  }
+  return reopen !== null;
+}
+
 // The jump a GATE_REJECTED row belongs to, null for any other row: a jump over
 // several Units writes one row per Unit, one after another, for the same target.
 function reopenOf(row: AuditShardEvent): string | null {
@@ -516,12 +532,14 @@ function reopenOf(row: AuditShardEvent): string | null {
 // the message: one message can give an approval and the answers beside it. With
 // `request`, the message backs what it asks for beside a decision
 // (onlyItsOwnDecisionAfter): a setting, a lowering, a cap lifted, a grant, or a
-// choice it left to the agent.
+// choice it left to the agent. With `reopened`, a message whose only decision
+// since is the reopen it asked for (onlyItsReopenAfter) still answers the
+// question that reopen brought up.
 export function proveMessage(
   pd: string,
   id: string,
   what: "answer" | "decision" | "approval" | "change request" | "setting" | "request",
-  options: { request?: boolean } = {},
+  options: { request?: boolean; reopened?: boolean } = {},
 ): { message: StoredMessage } | { refusal: string } {
   const proof = messageProof(pd, id, what, options);
   // A request's refusal leads with the messages that can stand behind it: the
@@ -535,7 +553,7 @@ function messageProof(
   pd: string,
   id: string,
   what: "answer" | "decision" | "approval" | "change request" | "setting" | "request",
-  options: { request?: boolean },
+  options: { request?: boolean; reopened?: boolean },
 ): { message: StoredMessage } | { refusal: string } {
   const message = isMessageId(id) ? readMessage(pd, id) : null;
   if (message === null) {
@@ -574,7 +592,7 @@ function messageProof(
   }
   const spent = options.request === true
     ? !onlyItsOwnDecisionAfter(pd, rows, message)
-    : spentAt !== null && message.at < spentAt;
+    : !(options.reopened === true && onlyItsReopenAfter(rows, message)) && spentAt !== null && message.at < spentAt;
   if (spent) {
     return {
       refusal: `Cannot record this ${what}: message ${id} arrived before the last approval or decision` +

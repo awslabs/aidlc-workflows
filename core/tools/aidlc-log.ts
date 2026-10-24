@@ -1745,7 +1745,8 @@ function answerEnginePlanApproval(
   const units = (flags.units ?? flags.unit ?? "").split(",").map((unit) => unit.trim()).filter(Boolean);
   const feedback = flags.reason ?? (choice === "request-changes" && picked.rest ? picked.rest : undefined);
   // A change asked for in the message the question opened for: the one the
-  // agent names, or this chat's latest with words, proved as any answer's is.
+  // agent names, or this chat's latest with words, proved as any answer's is,
+  // the reopen it asked for (a Unit's redo) not counting as spending it.
   // Records keep whole seconds, so two in the latest second cannot be told
   // apart: neither is taken unless the agent names one.
   let opening: { words: string; at: string } | undefined;
@@ -1755,7 +1756,7 @@ function answerEnginePlanApproval(
     const latestAt = said.reduce((at, m) => (m.at > at ? m.at : at), "");
     const newest = said.filter((m) => m.at === latestAt);
     const id = flags.message ?? (newest.length === 1 ? newest[0].id : undefined);
-    const proof = id === undefined ? null : proveMessage(pd, id, "answer");
+    const proof = id === undefined ? null : proveMessage(pd, id, "answer", { reopened: true });
     if (proof !== null && "refusal" in proof && flags.message !== undefined) error(proof.refusal);
     if (proof !== null && "message" in proof && proof.message.words) {
       opening = { words: personsWordsText(proof.message.words), at: proof.message.at };
