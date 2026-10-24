@@ -22,6 +22,7 @@ import {
 import { delegatedLifecycleCommand } from "../../core/hooks/aidlc-state-transition-guard.ts";
 import { CONFIG_SECTIONS } from "../../core/tools/aidlc-command.ts";
 import { copyChannelDispatcherCommands, ROUTES } from "../../core/tools/aidlc.ts";
+import kiroManifest from "../../harness/kiro/manifest.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO = join(REPO_ROOT, "dist", "kiro");
@@ -1213,8 +1214,8 @@ describe("t148 dist/kiro file structure", () => {
       .map((h) => h.command)
       .sort();
     expect(subagentCommands).toEqual([
-      "bun .kiro/tools/aidlc.ts engine adapter kiro deliver-stage-rules",
-      "bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard",
+      `bun .kiro/tools/aidlc.ts engine adapter kiro deliver-stage-rules${kiroManifest.hookCommandSuffix}`,
+      `bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard${kiroManifest.hookCommandSuffix}`,
     ]);
     const matchers = (hooks.postToolUse ?? []).map((h) => h.matcher).sort();
     expect(matchers).toEqual(["execute_bash", "fs_write", "subagent", "todo_list"]);

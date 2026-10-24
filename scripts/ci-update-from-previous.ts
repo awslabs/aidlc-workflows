@@ -33,6 +33,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { KIRO_HOOK_GROUPS } from "../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
+import kiro from "../harness/kiro/manifest.ts";
 import type { WorkResult } from "../tests/harness/work-open.ts";
 
 export const HARNESSES = ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"] as const;
@@ -60,6 +61,12 @@ const COPY_TOOL_DIRS: Record<(typeof HARNESSES)[number], string> = {
 // (Copilot and Cursor).
 const DISPATCHED = /^(?:aidlc|bun (?:"\$CLAUDE_PROJECT_DIR\/)?\.[a-z]+\/tools\/aidlc\.ts"?) engine (?:hook|adapter) [a-z0-9-]+(?: [a-z0-9-]+)*$/;
 const ADAPTER_FILE = /^bun \.[a-z]+\/hooks\/aidlc-[a-z]+-adapter\.ts [a-z0-9-]+$/;
+// A Kiro CLI hook line ends with its row's exit shape; the command is what comes before it.
+const KIRO_HOOK_SUFFIX = kiro.hookCommandSuffix ?? "";
+function hookCommandOf(line: string): string {
+  const trimmed = line.trim();
+  return KIRO_HOOK_SUFFIX !== "" && trimmed.endsWith(KIRO_HOOK_SUFFIX) ? trimmed.slice(0, -KIRO_HOOK_SUFFIX.length) : trimmed;
+}
 const WINDOWS = process.platform === "win32";
 const REPOSITORY = process.env.GITHUB_REPOSITORY || "awslabs/aidlc-workflows";
 const STEP_TIMEOUT_MS = 10 * 60_000;
@@ -92,7 +99,7 @@ export function hookCommands(treeDir: string): string[] {
   const found = new Set<string>();
   const visit = (value: unknown) => {
     if (typeof value === "string") {
-      if (DISPATCHED.test(value.trim()) || ADAPTER_FILE.test(value.trim())) found.add(value.trim());
+      if (DISPATCHED.test(hookCommandOf(value)) || ADAPTER_FILE.test(value.trim())) found.add(value.trim());
     } else if (Array.isArray(value)) {
       for (const item of value) visit(item);
     } else if (value && typeof value === "object") {
@@ -144,7 +151,7 @@ export function opencodeHookCommands(pluginFile: string): string[] {
  * file itself, which writes none, so their exit code is what shows.
  */
 export function dispatched(command: string): boolean {
-  return DISPATCHED.test(command.trim());
+  return DISPATCHED.test(hookCommandOf(command));
 }
 
 /**

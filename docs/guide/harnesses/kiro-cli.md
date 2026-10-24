@@ -355,6 +355,10 @@ authored Kiro surfaces live in `harness/kiro/`: the orchestrator skill
 (`hooks/aidlc-kiro-adapter.ts`), `settings/cli.json`, `settings/mcp.json`, and `onboarding.fills.ts` — edit
 those (or `core/`), never hand-edit the generated `dist/kiro`. See
 [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-harness.md).
+The build appends `; exit $LASTEXITCODE` to every hook command of those agent
+JSONs (the manifest's `hookCommandSuffix`): Kiro CLI starts a hook in
+PowerShell on Windows and in bash elsewhere, and that shape hands a hook's exit
+2 back to Kiro in both, so a refusal stops the tool call on Windows too.
 
 A live TUI journey test exists alongside the Claude twins:
 `tests/e2e/t-tui-kiro-intent-capture.serial.test.ts` drives `kiro-cli chat`
