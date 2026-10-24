@@ -1231,15 +1231,18 @@ const NEXT_OWN_COMMAND_WORDS: ReadonlySet<string> = new Set([
  */
 export function requestWordsBeginAt(rawArgs: readonly string[]): number {
   if (rawArgs[0] !== "next") return Number.POSITIVE_INFINITY;
+  // After a flag that takes no value the next word is theirs, whatever it is.
+  let theirsNext = false;
   for (let i = 1; i < rawArgs.length; i++) {
     const token = rawArgs[i];
     if (token === "--") return Number.POSITIVE_INFINITY;
     if (token.startsWith("-")) {
       // A flag's value is never a word of theirs; a flag that takes none takes no word.
       if (nextFlagTakesFollowing(token, rawArgs[i + 1])) i++;
+      else if (NEXT_VALUELESS_FLAGS.has(token)) theirsNext = true;
       continue;
     }
-    return NEXT_OWN_COMMAND_WORDS.has(token) ? Number.POSITIVE_INFINITY : i;
+    return !theirsNext && NEXT_OWN_COMMAND_WORDS.has(token) ? Number.POSITIVE_INFINITY : i;
   }
   return Number.POSITIVE_INFINITY;
 }
