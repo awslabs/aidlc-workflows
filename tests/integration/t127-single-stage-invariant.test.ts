@@ -1048,4 +1048,25 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     expect(directive.test_strategy).toBeUndefined();
     expect(startedBlocks(proj)).toHaveLength(1);
   });
+
+  test("17h: a workflow's own step carries the workflow's depth and test strategy, after its rules arrive in parts too", () => {
+    for (const steered of [false, true]) {
+      const proj = seededSingleProject();
+      const file = seededStateFile(proj);
+      writeFileSync(file, readFileSync(file, "utf-8")
+        .replace("- **Depth**: Standard", "- **Depth**: Minimal")
+        .replace("- **Test Strategy**: Standard", "- **Test Strategy**: Comprehensive"));
+      if (steered) {
+        writeFileSync(join(proj, "aidlc/spaces/default/memory/org.md"),
+          Array.from({ length: 180 }, (_, i) => `## Rule ${i}\n\n${"x".repeat(320)}\n`).join("\n"));
+      }
+      const r = runOrchestrateNext(TOOL, proj);
+      if (steered) expect(r.steering.length, r.out).toBeGreaterThan(1);
+      const directive = r.directive as SingleDirective | null;
+      expect(directive?.kind, r.out).toBe("run-stage");
+      expect(directive?.single).toBeUndefined();
+      expect(directive?.depth).toBe("Minimal");
+      expect(directive?.test_strategy).toBe("Comprehensive");
+    }
+  });
 });

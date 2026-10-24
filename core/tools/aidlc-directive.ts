@@ -275,9 +275,9 @@ export interface RunStageDirective {
   // on this before gate handling, reports with `report --single`, and treats
   // the returned `done` as terminal.
   single?: boolean;
-  // The depth and test strategy typed with an isolated run, recorded on its
-  // start: the stage works to these instead of the workflow's, which the run
-  // never changes. Absent when none was typed.
+  // The depth and test strategy the stage works to: on a workflow step the
+  // workflow's own; on an isolated run only the ones typed with it, recorded
+  // on its start (the run never changes the workflow's). Absent when none.
   depth?: string;
   test_strategy?: string;
   // Exact persona + knowledge files the conductor must read for work it owns

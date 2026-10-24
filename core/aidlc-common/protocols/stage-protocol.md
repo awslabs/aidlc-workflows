@@ -407,9 +407,9 @@ Structured bullet-point summary of what was produced:
   | requirements.md | 6 FR groups (18 sub-requirements), 4 NFRs |
   | requirements-analysis-questions.md | 5 questions, all answered |
   ```
-- For the FIRST completion message of a session (typically Requirements Analysis or Workspace Detection), include:
-  "**Project depth**: [Minimal/Standard/Comprehensive]: how much detail I write into each document.
-  **Test strategy**: [Minimal/Standard/Comprehensive]: how many tests I write.
+- For the FIRST completion message of a session (typically Requirements Analysis or Workspace Detection), include these lines with the levels the run-stage carries as `depth` and `test_strategy`, leaving out a line whose level it does not carry:
+  "**Project depth**: [depth]: how much detail I write into each document.
+  **Test strategy**: [test_strategy]: how many tests I write.
   Ask me to change either one at any approval gate."
 
 ### Part 3: Review + Approval (mandatory)

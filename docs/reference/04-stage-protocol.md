@@ -344,9 +344,11 @@ Structured bullet-point summary of what was produced:
   | requirements.md | 6 FR groups (18 sub-requirements), 4 NFRs |
   | requirements-analysis-questions.md | 5 questions, all answered |
   ```
-- **First completion of a session** must include:
-  `**Project depth**: [Minimal/Standard/Comprehensive]: how much detail I write into each document.`
-  `**Test strategy**: [Minimal/Standard/Comprehensive]: how many tests I write.`
+- **First completion of a session** must include, with the levels the run-stage carries as `depth` and
+  `test_strategy` (the workflow's, which the engine reads from the state; a line whose level the step does
+  not carry is left out):
+  `**Project depth**: [depth]: how much detail I write into each document.`
+  `**Test strategy**: [test_strategy]: how many tests I write.`
   `Ask me to change either one at any approval gate.`
 
 ### Part 3: Review + Approval

@@ -7847,6 +7847,17 @@ function buildRunStageDirective(
       : (node.sensors_applicable ?? []).map((s) => s.id),
     stage_file: stageFileFor(node.phase, node.slug),
   };
+  // The levels the work runs at, which its first completion message says. An
+  // isolated run carries only the ones typed with it (applySingleRunSettings).
+  if (!singleRun && stateContent) {
+    for (const [field, key, levels] of [
+      ["Depth", "depth", VALID_DEPTHS],
+      ["Test Strategy", "test_strategy", VALID_TEST_STRATEGIES],
+    ] as const) {
+      const word = getField(stateContent, field)?.toLowerCase() ?? "";
+      if (Object.hasOwn(levels, word)) directive[key] = levels[word];
+    }
+  }
   if (
     !singleRun && node.phase === "construction" && stateContent && codekbCtx &&
     checkpointPolicyEnabled(stateContent) &&
