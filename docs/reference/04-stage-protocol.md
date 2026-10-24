@@ -175,7 +175,8 @@ stage made), after the gate was first shown unless the conductor names the
 message it read the choice from (`report --message <id>`: an approval given at
 the learnings question just before the gate; the refusal and the step for
 their reply at an open gate list the ids). It records the person's words: every
-reply of theirs in that chat since then, as the message record keeps them, on
+reply of theirs in that chat since then, except one an answer on record already
+names unless it is the latest, as the message record keeps them, on
 `GATE_APPROVED` as `Person Reply` and on `GATE_REJECTED` as the feedback, with
 `Message Id` naming the latest and `Message Ids` every one of them, oldest
 first, when there are several, or the named message alone. A message too long to

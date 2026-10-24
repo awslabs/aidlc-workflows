@@ -980,7 +980,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${AUDIT}#tapAuditMetric`]: { use: "keeps", why: "the audit writer: the row's metric", from: [`${AUDIT}#appendAuditEntryUnlocked`] },
   [`${LOG}#emitAudit`]: { use: "keeps", why: "the audit writer", from: [`${LOG}#handleAnswer`, `${LOG}#handleReview`] },
   [`${STATE}#personsWordsFields`]: { use: "keeps", why: "the audit writer: a gate row's Person Reply and Message Id from S1's window" },
-  [`${LIB}#personsGateReply`]: { use: "keeps", why: "the audit writer: S1's window, every unspent reply since the stage's floor, blank ones left out" },
+  [`${LIB}#personsGateReply`]: { use: "keeps", why: "the audit writer: S1's window, every unspent reply since the stage's floor, blank ones and ones an earlier answer recorded (but the latest) left out" },
   [`${STATE}#approvedTogetherWordsFields`]: { use: "keeps", why: "the audit writer: copies the together gate's Person Reply onto the stages it approved" },
   [`${STATE}#personsFeedbackOutput`]: { use: "keeps", why: "the reject's output to the agent names whether their words were kept", from: [`${STATE}#handleReject`] },
   [`${STATE}#refuseForAgent`]: { use: "keeps", why: "a reject's refusal shows a blank reply as received (formatReceivedReply)", from: [`${STATE}#handleReject`] },
@@ -991,7 +991,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${LOG}#answerEnginePlanApproval`]: { use: "keeps", why: "the audit writer: the plan answer's Person Reply" },
   [`${LOG}#handleReview`]: { use: "keeps", why: "the audit writer: the review request's Person Reply" },
   [`${LOG}#handleAnswers`]: { use: "keeps", why: "the audit writer: a batch of answers, blank details left out" },
-  [`${LOG}#handleAnswer`]: { use: "keeps", why: "the audit writer: an answer's Person Reply, the message named or every unspent reply of this chat" },
+  [`${LOG}#handleAnswer`]: { use: "keeps", why: "the audit writer: an answer's Person Reply, the message named or every unspent reply of this chat an earlier answer did not record" },
   "core/tools/aidlc-jump.ts#handleReopen": { use: "keeps", why: "the audit writer: a reopen for a change keeps their words as Feedback" },
   [`${STATE}#parkedWords`]: { use: "keeps", why: "the audit writer: the park row's Person Reply" },
   // The recorded answer's Details is the choice the agent recorded, never the file's [Answer]: line (S2a's R31).

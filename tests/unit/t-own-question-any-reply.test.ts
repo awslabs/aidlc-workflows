@@ -11,7 +11,10 @@
 // typed before the learnings question was logged was asked about again. The
 // record keeps every unspent reply of theirs whole (the window, one owner:
 // personsGateReply), never another chat's words, and the engine says nothing
-// back for the agent to read out. The verification command and a Construction
+// back for the agent to read out. A reply an earlier answer recorded is that
+// answer's: on Claude Code the summary confirmation kept "Guide me", the
+// questions' answers and "Looks correct" as one reply. It stays in only as
+// their latest. The verification command and a Construction
 // policy question the agent shows before it logs take the same reply. The one
 // refusal left is presence: no reply since the last decision. Text typed into a
 // question box is kept as their words, whatever it reads like. Every case runs
@@ -105,6 +108,34 @@ function saysNothingBack(out: string): void {
   expect(printed.agent_note).toBeUndefined();
 }
 
+// The stage's summary confirmation, asked after its questions: the question recorded, their reply, then the answer
+// the agent read in it, with the summary's own check on as the agent meets it.
+function summaryConfirmed(proj: string, reply: string) {
+  const dir = join(seededRecordDir(proj), "inception", STAGE);
+  mkdirSync(dir, { recursive: true });
+  const questions = join(dir, `${STAGE}-questions.md`);
+  writeFileSync(questions, [
+    "# Requirements Questions", "", "## Q1", "Where does the blank title come from?", "", "A) The form", "B) The API",
+    "", "[Answer]: A", "", "## Consolidated Summary Confirmation", "", "Blank titles from the form are refused.", "",
+    "- Looks correct", "- Request changes", "", "[Answer]:", "",
+  ].join("\n"));
+  const summary = (args: string[]) => {
+    const environment = env(proj, CHAT);
+    delete environment.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+    const result = Bun.spawnSync({
+      cmd: [process.execPath, LOG, ...args, "--checkpoint", "summary-confirmation", "--stage", STAGE, "--questions-file",
+        questions, "--project-dir", proj],
+      env: environment, stdout: "pipe", stderr: "pipe", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return { status: result.exitCode, out: `${result.stdout.toString()}${result.stderr.toString()}` };
+  };
+  const asked = summary(["decision", "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes"]);
+  expect(asked.status, asked.out).toBe(0);
+  says(proj, reply);
+  writeFileSync(questions, readFileSync(questions, "utf-8").replace(/\[Answer\]:\n$/, "[Answer]: Looks correct\n"));
+  return summary(["answer", "--details", "Looks correct"]);
+}
+
 for (const policy of POLICIES) {
   describe(`t-own-question-any-reply (Guard Policy ${policy})`, () => {
     test("five answers given one per turn, then the question logged: one answer records them, with every word", () => {
@@ -130,6 +161,43 @@ for (const policy of POLICIES) {
       expect(answered.status, answered.out).toBe(0);
       saysNothingBack(answered.out);
       expect(field(proj, "QUESTION_ANSWERED", "Person Reply")).toBe("Nothing to add. Approve, and move on");
+    });
+
+    // Live on Claude Code the answer-mode pick, the questions' answers and "Looks correct" each came as their own
+    // message, and every row after the first kept the earlier ones as its reply too.
+    test("two questions answered one per turn, then the summary confirmed: each row keeps the reply given for it", () => {
+      const proj = inception(policy);
+      expect(log(proj, ["decision", "--stage", STAGE, "--decision", "How would you like to answer the questions?",
+        "--options", "Guide me,I'll edit the file,Chat"]).status).toBe(0);
+      says(proj, "Guide me");
+      expect(log(proj, ["answer", "--stage", STAGE, "--details", "Guide me"]).status).toBe(0);
+      expect(log(proj, ["decision", "--stage", STAGE, "--decision", "Where does the blank title come from?",
+        "--options", "The form,The API"]).status).toBe(0);
+      says(proj, "The form");
+      const answered = log(proj, ["answer", "--stage", STAGE, "--details", "Q1: A"]);
+      expect(answered.status, answered.out).toBe(0);
+      expect(field(proj, "QUESTION_ANSWERED", "Person Reply")).toBe("The form");
+      expect(field(proj, "QUESTION_ANSWERED", "Message Id")).toBe(latestMessageId(proj));
+      expect(field(proj, "QUESTION_ANSWERED", "Message Ids")).toBeNull();
+      const confirmed = summaryConfirmed(proj, "Looks correct");
+      expect(confirmed.status, confirmed.out).toBe(0);
+      expect(field(proj, "SUMMARY_CONFIRMATION_RECORDED", "Person Reply")).toBe("Looks correct");
+      expect(field(proj, "SUMMARY_CONFIRMATION_RECORDED", "Message Id")).toBe(latestMessageId(proj));
+      expect(field(proj, "SUMMARY_CONFIRMATION_RECORDED", "Message Ids")).toBeNull();
+    });
+
+    test("a remark no answer recorded stays beside the summary's reply, with both its messages", () => {
+      const proj = inception(policy);
+      expect(log(proj, ["decision", "--stage", STAGE, "--decision", "How would you like to answer the questions?",
+        "--options", "Guide me,I'll edit the file,Chat"]).status).toBe(0);
+      says(proj, "Guide me");
+      expect(log(proj, ["answer", "--stage", STAGE, "--details", "Guide me"]).status).toBe(0);
+      says(proj, "wait, keep the old flag");
+      const remark = latestMessageId(proj);
+      const confirmed = summaryConfirmed(proj, "Looks correct");
+      expect(confirmed.status, confirmed.out).toBe(0);
+      expect(field(proj, "SUMMARY_CONFIRMATION_RECORDED", "Person Reply")).toBe("wait, keep the old flag\\nLooks correct");
+      expect(field(proj, "SUMMARY_CONFIRMATION_RECORDED", "Message Ids")).toBe(`${remark},${latestMessageId(proj)}`);
     });
 
     test("another chat's words never land on this chat's answer; with no chat named and two chats, none do", () => {

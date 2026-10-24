@@ -29947,7 +29947,10 @@ export function stageStartFloorRefusal(
 // What the person said to a stage gate, for its record: every reply turn of
 // theirs in `session` on this clone's shard after the later of the last
 // decision that spent a reply (MESSAGE_SPENDING_EVENTS) and the stage's latest
-// start (stageReplyFloor), in the order they came. `words` is their words as the message record
+// start (stageReplyFloor), in the order they came. A reply an answer on record
+// already names (its Message Id or Message Ids) was said for that question and
+// is left to it, unless it is their latest, which may answer this one too: an
+// answer spends no reply, but its words are not this decision's. `words` is their words as the message record
 // keeps them, joined by line breaks, left out when one of those messages is no
 // longer readable or was cut (the words kept would not be everything they
 // said); `messageId` names the latest; `replies` lists every one with its time,
@@ -29988,6 +29991,14 @@ export function personsGateReply(projectDir: string, session: string | null, sta
     } else if (new Set([...turns, ...held].map(chatOf)).size > 1) {
       return none;
     }
+    const answered = new Set<string>();
+    for (const row of mine.slice(from + 1)) {
+      if (row.event !== "QUESTION_ANSWERED") continue;
+      const ids = [auditBlockField(row.block, "Message Id"), ...(auditBlockField(row.block, "Message Ids") ?? "").split(",")];
+      for (const id of ids) if (id) answered.add(id);
+    }
+    turns = turns.filter((row, at) =>
+      at === turns.length - 1 || !answered.has(auditBlockField(row.block, "Message Id") ?? ""));
     const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
     const elsewhere = held.map((row) => {
       const id = auditBlockField(row.block, "Message Id") as string;

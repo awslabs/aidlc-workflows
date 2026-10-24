@@ -134,7 +134,8 @@ same thing twice:
 AI-DLC records gate, Plan Approval, checkpoint, verification-command, and
 Construction setting changes with your words beside them (`Person Reply` in
 the audit trail), as your harness passed them and trimmed. At a stage gate that
-is every message since the last decision and since the stage started: if one of
+is every message since the last decision and since the stage started, except one
+already recorded as your answer to another question, unless it is your latest: if one of
 them is over 8000 characters or no longer on record, none of them is attached
 and the row names the latest message instead, and a change request records the
 agent's `--reason`; at Plan Approval, your latest 8
@@ -149,8 +150,9 @@ answer for you.
 
 When you ask for changes at a stage gate, the audit trail records, as the
 revision feedback, the words your harness passed to the human-turn hook for
-your chat since the last decision, exactly as they arrived, and the agent
-revises from what you asked for. If you picked Request Changes and then
+your chat since the last decision, exactly as they arrived (except a message
+already recorded as your answer to another question, unless it is your latest),
+and the agent revises from what you asked for. If you picked Request Changes and then
 answered "What should change?", both are the feedback. When the agent's own summary of your request
 differs, it is kept beside your words as the `Conductor Summary`. This needs a
 harness that passes your typed prompt and chat session to the human-turn hook;

@@ -12,8 +12,9 @@
 // any, is refused to the agent with this chat's replies named for the retry,
 // while this chat's own messages prove as they are. A decision whose words come
 // from several replies names every one of them, oldest first, so the record's
-// words and its ids match. Every case runs under Guard Policy off, relaxed and
-// strict.
+// words and its ids match; a reply an earlier answer recorded is left to that
+// answer unless it is their latest. Every case runs under Guard Policy off,
+// relaxed and strict.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -205,6 +206,38 @@ for (const policy of POLICIES) {
       expect(report(proj, ["--result", "approved", "--user-input", "Approve"], CHAT).status).toBe(0);
       expect(field(proj, "GATE_APPROVED", "Message Id")).toBe(id);
       expect(field(proj, "GATE_APPROVED", "Message Ids")).toBeNull();
+    });
+
+    // The learnings question's answer is that answer's: live, the approval after it kept both as one reply.
+    const learnings = (proj: string) => expect(log(proj, ["decision", "--stage", "feasibility", "--decision",
+      "Anything to add for next time?", "--options", "Nothing to add,Add a note", "--question-kind", "learnings-note"], CHAT)
+      .status).toBe(0);
+
+    test("the gate after the learnings answer keeps the approval, not the learnings reply", () => {
+      const proj = gate(policy);
+      learnings(proj);
+      says(proj, "Nothing to add");
+      const answered = log(proj, ["answer", "--stage", "feasibility", "--details", "Nothing to add"], CHAT);
+      expect(answered.status, answered.out).toBe(0);
+      const id = says(proj, "Approve");
+      const approved = report(proj, ["--result", "approved", "--user-input", "Approve"], CHAT);
+      expect(approved.status, approved.out).toBe(0);
+      expect(field(proj, "GATE_APPROVED", "Person Reply")).toBe("Approve");
+      expect(field(proj, "GATE_APPROVED", "Message Id")).toBe(id);
+      expect(field(proj, "GATE_APPROVED", "Message Ids")).toBeNull();
+    });
+
+    test("one message that answered the learnings question and approved backs both rows whole", () => {
+      const proj = gate(policy);
+      learnings(proj);
+      const id = says(proj, "Nothing to add, approve");
+      const answered = log(proj, ["answer", "--stage", "feasibility", "--details", "Nothing to add"], CHAT);
+      expect(answered.status, answered.out).toBe(0);
+      expect(field(proj, "QUESTION_ANSWERED", "Message Id")).toBe(id);
+      const approved = report(proj, ["--result", "approved", "--user-input", "Approve"], CHAT);
+      expect(approved.status, approved.out).toBe(0);
+      expect(field(proj, "GATE_APPROVED", "Person Reply")).toBe("Nothing to add, approve");
+      expect(field(proj, "GATE_APPROVED", "Message Id")).toBe(id);
     });
   });
 }

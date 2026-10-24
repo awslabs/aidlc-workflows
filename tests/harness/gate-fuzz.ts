@@ -1571,7 +1571,8 @@ export function checkRun(run: Run): Failure[] {
       const joined = named?.every((m) => m !== null)
         ? named.map((m) => m!.words ?? "").filter((words) => !isBlank(words)).join("\n") : null;
       // Since S1 a decision's words are every unspent reply of theirs in this chat, in order, ending with the message
-      // the row names: a remark and the answer are both kept. The order is the record's, the HUMAN_TURN row that names
+      // the row names: a remark and the answer are both kept, and a reply an earlier answer recorded only as the latest
+      // (Message Ids then names the gaps). The order is the record's, the HUMAN_TURN row that names
       // each message, as the engine reads it: the store lists messages by the second they came in and then by their
       // random id, so two replies in one second can list backwards.
       const turnAt = new Map<string, number>();
