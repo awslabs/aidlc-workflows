@@ -71,7 +71,7 @@ message, or on the one the conductor named with `--message`, carries
 | ✓ `PHASE_STARTED` | Phase begins (first in-scope stage about to run) | Timestamp, Phase, Stage count, Scope | `tools/aidlc-utility.ts intent-create` (Init phase), `tools/aidlc-state.ts advance` (phase boundary) |
 | ✓ `PHASE_COMPLETED` | Crossed a phase boundary | Timestamp, From phase, To phase, Stages completed | `tools/aidlc-state.ts advance`, `tools/aidlc-state.ts complete-workflow` |
 | `PHASE_VERIFIED` | Traceability check at boundary | Timestamp, Phase boundary, Pass/fail, Issues | `tools/aidlc-state.ts advance`, `tools/aidlc-state.ts complete-workflow` |
-| `PHASE_SKIPPED` | Scope excludes phase | Timestamp, Phase, Scope, Reason | `tools/aidlc-utility.ts intent-create` (per-phase scope eval) |
+| `PHASE_SKIPPED` | Scope excludes phase, or a forward jump passes over it | Timestamp, Phase, Scope, Reason | `tools/aidlc-utility.ts intent-create` (per-phase scope eval), `tools/aidlc-jump.ts execute` (forward jump) |
 
 ### Stage Lifecycle (8 events)
 

@@ -764,7 +764,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `PHASE_STARTED` | `tools/aidlc-utility.ts`, `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` | First fire in init; subsequent fires at stage-tool phase boundaries |
 | `PHASE_COMPLETED` | `tools/aidlc-utility.ts`, `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` | Paired with `PHASE_VERIFIED` at every forward boundary; a backward jump writes only `PHASE_STARTED` |
 | `PHASE_VERIFIED` | `tools/aidlc-utility.ts`, `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` | Always paired with `PHASE_COMPLETED` |
-| `PHASE_SKIPPED` | `tools/aidlc-utility.ts` | One per scope-excluded phase, emitted at intent creation |
+| `PHASE_SKIPPED` | `tools/aidlc-utility.ts`, `tools/aidlc-jump.ts` | One per scope-excluded phase, emitted at intent creation; one per phase the plan runs that a forward jump passes over |
 
 ### Stage lifecycle
 

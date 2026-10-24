@@ -469,6 +469,7 @@ function movedState(
   currentSlug: string;
   currentStageForPhase: StageEntry | undefined;
   crossesPhaseBoundary: boolean;
+  phasesJumpedOver: string[];
   completedCount: number;
   timestamp: string;
 } {
@@ -582,14 +583,23 @@ function movedState(
   // Phase Progress rows track the boundary crossing handleExecute records in
   // the audit. Forward: the source phase's remaining work was force-[S]'d and
   // PHASE_VERIFIED is emitted, so its row reads Verified; any phase jumped
-  // over entirely reads Skipped. Backward (or a caller-mis-specified redo
-  // that crosses a boundary): every phase after the target just had its
-  // EXECUTE stages reset to pending above, so those rows return to Pending,
-  // leaving zero-EXECUTE phases in their initial Skipped state. Either way the
-  // target's phase is now the active one.
+  // over entirely reads Skipped, and each such phase the plan runs is the
+  // jump's to record as skipped (phasesJumpedOver; one the plan leaves out
+  // already has its row from intent creation). Backward (or a
+  // caller-mis-specified redo that crosses a boundary): every phase after the
+  // target just had its EXECUTE stages reset to pending above, so those rows
+  // return to Pending, leaving zero-EXECUTE phases in their initial Skipped
+  // state. Either way the target's phase is now the active one.
+  const phasesJumpedOver: string[] = [];
   if (crossesPhaseBoundary && currentStageForPhase) {
     const phaseIdx = (p: string): number =>
       (PHASES as readonly string[]).indexOf(p);
+    const runsOnPlan = (p: string): boolean =>
+      graph.some(
+        (s) =>
+          s.phase === p &&
+          effectiveAction(suffixes, scopeMapping, s.slug) === "EXECUTE"
+      );
     if (direction === "forward") {
       content = setPhaseProgress(content, currentStageForPhase.phase, "Verified");
       for (
@@ -598,16 +608,12 @@ function movedState(
         i++
       ) {
         content = setPhaseProgress(content, PHASES[i], "Skipped");
+        if (runsOnPlan(PHASES[i])) phasesJumpedOver.push(PHASES[i]);
       }
     } else {
       for (let i = phaseIdx(targetStage.phase) + 1; i < PHASES.length; i++) {
         const p = PHASES[i];
-        const hasExecute = graph.some(
-          (s) =>
-            s.phase === p &&
-            effectiveAction(suffixes, scopeMapping, s.slug) === "EXECUTE"
-        );
-        if (hasExecute) content = setPhaseProgress(content, p, "Pending");
+        if (runsOnPlan(p)) content = setPhaseProgress(content, p, "Pending");
       }
     }
     content = setPhaseProgress(content, targetStage.phase, "Active");
@@ -625,7 +631,7 @@ function movedState(
   content = setField(content, "Last Completed Stage", lastCompleted);
   return {
     content, stagesSkipped, stagesReset, currentSlug, currentStageForPhase,
-    crossesPhaseBoundary, completedCount, timestamp,
+    crossesPhaseBoundary, phasesJumpedOver, completedCount, timestamp,
   };
 }
 
@@ -690,7 +696,7 @@ function handleExecute(args: string[]): void {
     : shownStage !== targetSlug && graph.some((node) => node.slug === shownStage) ? shownStage : currentSlug;
   const moved = movedState(content, targetSlug, targetStage, direction, scope, suffixes, scopeMapping);
   content = moved.content;
-  const { stagesSkipped, stagesReset, currentStageForPhase, crossesPhaseBoundary, completedCount, timestamp } = moved;
+  const { stagesSkipped, stagesReset, currentStageForPhase, crossesPhaseBoundary, phasesJumpedOver, completedCount, timestamp } = moved;
 
   // One content-addressed snapshot is shared by both rows in the jump
   // transition. The companion STAGE_STARTED repeats the SAME authority rather
@@ -729,8 +735,9 @@ function handleExecute(args: string[]): void {
     }
 
     // Phase boundary events. Only a forward jump completes the phase it
-    // leaves (advance's contract); going back leaves that phase unfinished, so
-    // the record only starts the earlier phase again.
+    // leaves (advance's contract) and records each whole phase it passes over
+    // as skipped, as the Phase Progress rows say; going back leaves that phase
+    // unfinished, so the record only starts the earlier phase again.
     if (crossesPhaseBoundary && currentStageForPhase) {
       if (direction === "forward") {
         emitAudit(pd, "PHASE_COMPLETED", {
@@ -743,6 +750,13 @@ function handleExecute(args: string[]): void {
           "Phase boundary": `${currentStageForPhase.phase} → ${targetStage.phase}`,
           Details: "Traceability verification on jump",
         });
+        for (const phase of phasesJumpedOver) {
+          emitAudit(pd, "PHASE_SKIPPED", {
+            Phase: phase,
+            Scope: scope,
+            Reason: `Skipped by jump to ${targetSlug} (forward)`,
+          });
+        }
       }
       emitAudit(pd, "PHASE_STARTED", {
         Phase: targetStage.phase,
