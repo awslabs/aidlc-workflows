@@ -33,6 +33,7 @@ const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const POSTURE = join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts");
 const CHAT = "01995000-7a11-7000-8000-00000000d5d5";
 // The runner's fixture profile carries a presence bypass that would let a
 // command lower a switch; clear it so only the person's message can.
@@ -206,6 +207,20 @@ describe("while the code plan question waits, the message an earlier approval wa
     expect(refused.out).not.toContain(approve);
     expect(planApprovalOff(proj, asked).rc).toBe(0);
     expect(stateField(proj, "Plan Approval")).toBe("off (set by you)");
+  });
+});
+
+describe("a request that is not a setting is offered as before while the plan question waits", () => {
+  test("going back to the approved plan still names the message an approval was given in", () => {
+    const proj = bugfixAtRequirements();
+    const approve = said(proj, "Approve");
+    tick();
+    approveRequirements(proj, approve);
+    tick();
+    planQuestionShown(proj);
+    const refused = run(proj, POSTURE, ["restore", "--stage-level"]);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain(`If their message ${approve} (sent `);
   });
 });
 
