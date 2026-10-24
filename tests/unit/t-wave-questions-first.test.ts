@@ -222,7 +222,7 @@ describe("t-wave-questions-first: a wave's Units are asked their questions in th
     const before = readAuditShardEvents(proj).length;
     const start = tool(STATE, ["unit", "start", "--stage", STAGE, "--unit", "alpha"], proj);
     expect(start.status).not.toBe(0);
-    expect(`${start.stdout}${start.stderr}`).toContain("This step asks alpha's questions before the wave builds it");
+    expect(`${start.stdout}${start.stderr}`).toContain("this step asks alpha's questions before the stage's wave builds it");
     expect(readAuditShardEvents(proj).length).toBe(before);
     confirmSummary(proj, "alpha");
     confirmSummary(proj, "beta");

@@ -2731,6 +2731,13 @@ function handleUnit(args: string[]): void {
       routed.stage === slug &&
       (routed.wave || routed.questions_only === true)
     ) {
+      if (!routed.wave) {
+        throw new UnitWaveRouteRefusalError(
+          `Refusing unit ${action} for "${unit}" of "${slug}": this step asks ` +
+            `${typeof routed.unit === "string" ? routed.unit : unit}'s questions before the stage's wave builds it, ` +
+            "and a serial Unit receipt here would drop that wave. Ask them, then run `next`.",
+        );
+      }
       throw new UnitWaveRouteRefusalError(
         `Refusing unit ${action} for "${unit}" of "${slug}": a wave is active for this stage ` +
           "(the orchestration engine currently routes it as a batch). " +
@@ -2738,10 +2745,7 @@ function handleUnit(args: string[]): void {
           `\`aidlc-state.ts unit complete --wave --stage ${slug} --unit <name>\`. A bare ` +
           `\`${action}\` would append a serial receipt and ` +
           "drop the deterministic batch path for every remaining unit of the stage. " +
-          (routed.wave
-            ? "Use `unit complete --wave` instead."
-            : `This step asks ${typeof routed.unit === "string" ? routed.unit : unit}'s questions before ` +
-              "the wave builds it: ask them, then run `next`."),
+          "Use `unit complete --wave` instead.",
       );
     }
 
