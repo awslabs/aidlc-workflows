@@ -181,7 +181,12 @@ export function addSubmodule(pd: string): void {
 
 // With `repo`, a workspace of several repositories: its roof holds the records
 // and is no repository, and the Units' code is in that one recorded sibling.
-export function fixture(units = ["alpha"], command: string | null = CHECK, withSubmodule = false, repo: string | null = null): string {
+// `addSource` writes more of the person's code there, before the source
+// baseline, so the approved plan covers it.
+export function fixture(
+  units = ["alpha"], command: string | null = CHECK, withSubmodule = false, repo: string | null = null,
+  addSource: ((code: string) => void) | null = null,
+): string {
   const pd = setupWorktreeFixture();
   projects.push(pd);
   const code = repo === null ? pd : join(pd, repo);
@@ -246,6 +251,7 @@ export function fixture(units = ["alpha"], command: string | null = CHECK, withS
   mkdirSync(join(code, "src"), { recursive: true });
   for (const unit of units) writeFileSync(join(code, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
   if (withSubmodule) addSubmodule(pd);
+  addSource?.(code);
   const baseline = writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!);
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
   appendAuditEntry("STAGE_STARTED", { Stage: STAGE, "Source Baseline": baseline }, pd);
