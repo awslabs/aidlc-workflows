@@ -4767,6 +4767,32 @@ export function captureCodeGenerationDiscardApproval(
   }
 }
 
+// A listing without the paths Git ignores and does not track in the selected
+// repository (a .env, a log): no commit holds them and no checkout of a Unit
+// gets them, so a worktree is never asked to reproduce them. check-ignore
+// without --no-index never reports a tracked path, and the person's own ignore
+// rules are read as Git reads them. When Git cannot answer, nothing is left out.
+function withoutGitIgnored(repoDir: string): (listing: ReadonlyMap<string, string>) => Map<string, string> {
+  const ignored = new Map<string, boolean>();
+  const pathOf = (key: string): string => key.slice(key.indexOf("\0") + 1);
+  return (listing) => {
+    const unknown = [...new Set([...listing.keys()].map(pathOf))].filter((path) => !ignored.has(path));
+    if (unknown.length > 0) {
+      const checked = spawnSync("git", ["-C", repoDir, "check-ignore", "-z", "--stdin"], {
+        input: `${unknown.join("\0")}\0`,
+        encoding: "utf-8",
+        maxBuffer: 512 * 1024 * 1024,
+        timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+      });
+      if (checked.status === 0 || checked.status === 1) {
+        const hits = new Set(checked.stdout.split("\0").filter(Boolean));
+        for (const path of unknown) ignored.set(path, hits.has(path));
+      }
+    }
+    return new Map([...listing].filter(([key]) => ignored.get(pathOf(key)) !== true));
+  };
+}
+
 interface DiscardedWorktreeApproval {
   commit: string;
   listingSha256: string;
@@ -4908,11 +4934,12 @@ function approvedWorktreeSource(
   discarded: DiscardedWorktreeApproval | null = null,
 ) {
   const parentSource = workspaceSourceState(parent);
+  const withoutIgnored = withoutGitIgnored(repo.cwd);
   if (discarded) {
     if (!parentSource || hashObject(approved.receipt) !== discarded.parentReceiptSha256) {
       throw new Error("Discarded worktree Plan Approval changed or current parent source cannot be bound.");
     }
-    return { parentSource, expectedBytes: discarded.expectedBytes, theirs: serializeSourceListing };
+    return { parentSource, expectedBytes: discarded.expectedBytes, theirs: serializeSourceListing, withoutIgnored };
   }
   // Worktrees are made from the parent's files, so they must be readable even
   // when a single-checkout build could go ahead without that record.
@@ -4935,16 +4962,17 @@ function approvedWorktreeSource(
   // AI-DLC's own files are no Unit's source: a worktree need not reproduce
   // them, so an update the person took need not be committed first. Nor is
   // what a link leads to outside the project, or to nothing: no commit holds
-  // it, and the link itself is still compared.
+  // it, and the link itself is still compared. Nor are the files Git ignores
+  // and does not track.
   const owned = aidlcOwnedSourceKey(parent);
   const theirs = (listing: ReadonlyMap<string, string>): string => serializeSourceListing(
-    new Map([...listing].filter(([key]) => !owned(`${repo.repo ?? ""}${key}`) && !isLinkTargetListingKey(listing, key))),
+    new Map([...withoutIgnored(listing)].filter(([key]) => !owned(`${repo.repo ?? ""}${key}`) && !isLinkTargetListingKey(listing, key))),
   );
   const prefix = `${repo.repo ?? ""}\0`;
   const expected = new Map([...parentSource.listing]
     .filter(([key]) => key.startsWith(prefix))
     .map(([key, value]) => [key.slice(prefix.length - 1), value]));
-  return { parentSource, expectedBytes: theirs(expected), theirs };
+  return { parentSource, expectedBytes: theirs(expected), theirs, withoutIgnored };
 }
 
 /**
@@ -5001,7 +5029,8 @@ function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: str
   const discarded = discardedSha256 === undefined ? null : discardedWorktreeApproval(
     provenance.parent, unit, provenance.repo.cwd, provenance.repo.repo, discardedSha256,
   );
-  const { parentSource, expectedBytes, theirs } = approvedWorktreeSource(provenance.parent, approved, provenance.repo, discarded);
+  const { parentSource, expectedBytes, theirs, withoutIgnored } =
+    approvedWorktreeSource(provenance.parent, approved, provenance.repo, discarded);
   const childSource = workspaceSourceState(provenance.child);
   if (!childSource) throw new Error("Worktree source cannot be bound. Repair its source boundary before retrying.");
   let syncCommit: string | null = null;
@@ -5012,8 +5041,9 @@ function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: str
     const childHead = worktreeApprovalGit(provenance.child, ["rev-parse", "HEAD"]);
     const base = gitCommitSourceListing(provenance.child, childHead, provenance.repo.repo === null);
     // The commit holds a link, never what it leads to outside the worktree.
-    const live = new Map([...childSource.listing].filter(([key]) => !isLinkTargetListingKey(childSource.listing, key)));
-    if (!base || serializeSourceListing(base) !== serializeSourceListing(live)) {
+    // A worker's own ignored log is no dirty source either.
+    const live = new Map([...withoutIgnored(childSource.listing)].filter(([key]) => !isLinkTargetListingKey(childSource.listing, key)));
+    if (!base || serializeSourceListing(withoutIgnored(base)) !== serializeSourceListing(live)) {
       throw new Error("Preserved worktree source differs from the approved parent baseline and contains dirty or untracked source. Nothing was changed. Preserve that work, reconcile/review it on the parent, and obtain fresh Plan Approval before retrying.");
     }
     const parentHead = worktreeApprovalGit(provenance.repo.cwd, ["rev-parse", "HEAD"]);
