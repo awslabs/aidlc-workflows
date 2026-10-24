@@ -3855,7 +3855,8 @@ function handleAllowChange(rest: string[]): void {
   const why = words ? `because you said: "${quoted(words)}"` : "as you asked in the chat";
   console.log(JSON.stringify({
     allowed: paths,
-    notice: `${renderChangedPaths(paths)} can change while the Units are built, ${why}. It is kept when they land.`,
+    // Said once, while a batch is out or after the last landing: the landings or stage completion keep it.
+    notice: `${renderChangedPaths(paths)} can change during this Code Generation, ${why}. It is kept.`,
   }));
 }
 
