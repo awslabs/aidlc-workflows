@@ -131,6 +131,23 @@ describe("t-skip-undo-window: a skip says how long its undo holds", () => {
     expect(`${late.stdout}${late.stderr}`).toContain("Completed");
   });
 
+  // At the open gate of the stage before it, the same reply usually approves that gate too ("approve, and skip
+  // requirements analysis"), and the approval moves the work past the skipped stage at once: a live Codex run was
+  // refused on the very next line. So no window is offered there, only the way that still holds.
+  test("a skip typed at the open gate of the stage before it names the run on its own, never a window that closes at once", async () => {
+    const proj = await expressAtReverseEngineering();
+    await jumpTo(proj, "build-and-test");
+    await ran(proj, "bun .claude/tools/aidlc-orchestrate.ts report --stage build-and-test --result awaiting-approval");
+    const { said, undo } = await skipped(proj, "approve, and skip the deployment pipeline", ["--skip", "deployment-pipeline"]);
+    expect(said).toBe("Skipped Deployment Pipeline. It can still be run on its own with `/aidlc --stage deployment-pipeline --single`.");
+    // The person approves in that reply: the work is past it, and the plan undo no longer holds.
+    await ran(proj, "bun .claude/tools/aidlc-orchestrate.ts report --stage build-and-test --result approved --user-input Approve");
+    expect(getField(state(proj), "Current Stage")).toBe("deployment-execution");
+    const late = await runNamed(proj, undo);
+    expect(late.status).not.toBe(0);
+    expect(`${late.stdout}${late.stderr}`).toContain("--stage deployment-pipeline --single");
+  });
+
   test("a skip and an earlier add: the add names the window", async () => {
     const proj = await expressAtReverseEngineering();
     const message = await step(proj, "add user stories and skip observability setup",
