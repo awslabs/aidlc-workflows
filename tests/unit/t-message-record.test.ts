@@ -425,7 +425,50 @@ describe("the human-turn hook keeps one record of each message", () => {
     const [record] = records(proj);
     expect(record.picker?.map((entry) => entry.question)).toEqual(questions);
     expect(record.picker?.map((entry) => entry.reply)).toEqual(["A", "B", "C", "D"]);
+    // Their words are every pick they made, in the order the box showed them.
+    expect(record.words).toBe("A\nB\nC\nD");
   });
+
+  // One box often asks the learnings pair at once; each answer the agent then
+  // records carried the box's first pick as the person's reply, so "Nothing to
+  // add" was recorded beside "Keep none of these".
+  for (const harness of ["claude", "codex"] as const) {
+    test(`${harness}: a box of several questions keeps every pick as their words, and no answer carries another question's pick alone`, () => {
+      const proj = withWork();
+      const keep = "Which notes do you want to keep?";
+      const add = "Anything to add for next time?";
+      if (harness === "claude") {
+        pickMany(proj, [keep, add], { [add]: "Nothing to add", [keep]: "Keep none of these" });
+      } else {
+        const tree = hostTree(proj, "codex");
+        writeSessionPidEntry(proj, process.pid, SESSION);
+        run(proj, [join(proj, tree, "hooks", "aidlc-codex-adapter.ts"), "record-human-turn"], JSON.stringify({
+          hook_event_name: "PostToolUse", tool_name: "request_user_input", session_id: SESSION, turn_id: "t1", cwd: proj,
+          tool_input: { questions: [
+            { id: "keep", question: keep, options: ["Keep none of these", "Prefer small diffs"] },
+            { id: "add", question: add, options: ["Nothing to add", "Add a note"] },
+          ] },
+          tool_response: JSON.stringify({ answers: { keep: { answers: ["Keep none of these"] }, add: { answers: ["Nothing to add"] } } }),
+        }), { ...UNSET, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined });
+      }
+      const [record] = records(proj);
+      expect(record.words).toBe("Keep none of these\nNothing to add");
+      const log = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+      const chat = { AIDLC_SESSION_OVERRIDE: SESSION, AIDLC_SESSION_OVERRIDE_SOURCE: undefined };
+      for (const question of [keep, add]) {
+        run(proj, [log, "decision", "--stage", "requirements-analysis", "--decision", question, "--options", "A,B",
+          "--project-dir", proj], "", chat);
+      }
+      for (const details of ["Keep none of these", "Nothing to add", "Q1: Keep none of these; Q2: Nothing to add"]) {
+        run(proj, [log, "answer", "--stage", "requirements-analysis", "--details", details, "--project-dir", proj], "", chat);
+      }
+      const answered = readAuditShardEvents(proj).filter((row) => row.event === "QUESTION_ANSWERED");
+      expect(answered).toHaveLength(3);
+      for (const row of answered) {
+        expect(auditBlockField(row.block, "Person Reply")).toBe("Keep none of these\\nNothing to add");
+      }
+    });
+  }
 
   test("a box that came back with nothing picked writes no record", () => {
     const proj = withWork();

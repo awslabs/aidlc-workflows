@@ -65,7 +65,10 @@ export interface StoredMessage {
    * person left a question blank. A pick the box reported for a question it did not list follows them.
    */
   picker: Array<{ question: string; reply: PersonsWords | null }> | null;
-  /** The person's own words: the text after the entry word and after any flags. Null for a command with no words. */
+  /**
+   * The person's own words: the text after the entry word and after any flags. Null for a command with no words. A
+   * question box answered for several questions keeps every pick, one per line in the order shown.
+   */
   words: PersonsWords | null;
   /** The settings typed as flags, as the config setter names them ("depth" "minimal", "guard.review-freeze" "off"). */
   settings: Array<{ key: string; value: string }>;

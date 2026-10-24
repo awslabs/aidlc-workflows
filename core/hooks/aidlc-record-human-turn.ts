@@ -726,10 +726,15 @@ try {
       // Every stored string is cut (#2107: uncut words once put a record past the
       // reader's cap).
       const picker = promptSubmitted ? null : pickerReplies(input, MESSAGE_PICKER_MAX_CHARS);
-      const words = parsed.words !== null && parsed.words.length > MESSAGE_TEXT_MAX_CHARS
-        ? parsed.words.slice(0, MESSAGE_TEXT_MAX_CHARS)
-        : parsed.words;
-      const cut = full.length > MESSAGE_TEXT_MAX_CHARS || words !== parsed.words || picker?.cut === true;
+      // A box that came back with several questions answered: their words are
+      // every pick, one per line in the order shown. Its first value alone was
+      // kept as their reply to each question the box asked.
+      const picks = picker?.entries.flatMap(({ reply }) => (reply === null ? [] : [reply])) ?? [];
+      const said = picks.length > 1 ? picks.join("\n") : parsed.words;
+      const words = said !== null && said.length > MESSAGE_TEXT_MAX_CHARS
+        ? said.slice(0, MESSAGE_TEXT_MAX_CHARS)
+        : said;
+      const cut = full.length > MESSAGE_TEXT_MAX_CHARS || words !== said || picker?.cut === true;
       return saveMessage(projectDir, {
         session: sessionId || null,
         at: isoTimestamp(),
