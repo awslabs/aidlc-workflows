@@ -997,6 +997,7 @@ if (target === "plan-approval-guard") {
       tool_name: "Bash",
       tool_input: { command: (ti.command as string) ?? "" },
       cwd: projectDir,
+      ...shellReading(tool),
     };
   } else if (canonical === "Write" || canonical === "Edit" || tool === "delete_file") {
     const paths = inputPaths(ti);
@@ -1132,6 +1133,7 @@ if (target === "review-freeze") {
         tool_name: shell ? "Bash" : canonical === "Write" ? "Write" : "Edit",
         tool_input: coreInput,
         cwd: projectDir,
+        ...(shell ? shellReading(tool) : {}),
       }),
       "utf-8",
     ),
@@ -1246,6 +1248,15 @@ function canonicalTool(
   // did not recognise failed open there instead of being guarded.
   if (name === "shell" || name === "execute_bash" || name === "execute_pwsh") return "Bash";
   return name;
+}
+
+// The shell a Bash call ran in, for the readers that take it: `execute_pwsh`
+// runs PowerShell, as the Kiro IDE adapter marks it, and on Windows Kiro CLI
+// runs its shell tool in PowerShell under every name the call carries.
+function shellReading(name: string): { aidlc_shell?: "powershell" } {
+  return canonicalTool(name) === "Bash" && (name === "execute_pwsh" || process.platform === "win32")
+    ? { aidlc_shell: "powershell" }
+    : {};
 }
 
 type Forward = {

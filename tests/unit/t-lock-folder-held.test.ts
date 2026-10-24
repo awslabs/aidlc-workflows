@@ -144,13 +144,16 @@ const GUARD_WENT_THROUGH = lockFolderHeldLine("went-through", 300, "win32");
 // sent (Code Generation's developer), left running and runs the command again;
 // the person hears the line only when neither started one, or when the step
 // stops again in the same turn.
+// The stop on Windows, in each shell's own spelling, as lines the guard reads.
+const POWERSHELL_FIND_NODE = "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Select-Object ProcessId,CommandLine";
+const WINDOWS_STOP =
+  "(on Windows, stopping an npx or npm parent leaves the server running: stop the whole process tree by its Windows " +
+  "process id, for example `taskkill //T //F //PID <pid>` in Git Bash or `taskkill /T /F /PID <pid>` in PowerShell, " +
+  `or the node process whose command line names the server, which PowerShell lists with \`${POWERSHELL_FIND_NODE}\`)`;
 const STOP_YOURS =
   "A program is holding the project folder, so this step stopped. If you, or an agent you sent, started a dev " +
   "server, a file watcher or another long-running program over the project in this conversation, and the person did " +
-  "not ask to keep it running, stop it and everything it started (on Windows, stopping an npx or npm parent leaves " +
-  "the server running: stop the whole process tree by its Windows process id, for example " +
-  "`taskkill //T //F //PID <pid>` in Git Bash, or the node process whose command line names the server), then run " +
-  "the same command again.";
+  `not ask to keep it running, stop it and everything it started ${WINDOWS_STOP}, then run the same command again.`;
 const AGENT_STEP = `${STOP_YOURS} If neither of you started one, show the person this line and end your turn: "${WINDOWS_HELD}"`;
 // Where no chat reaches the engine to count the turn's stops, the words bound the retry.
 const AGENT_STEP_UNCOUNTED = `${STOP_YOURS} If neither of you started one, or the step stops again after it was stopped, ` +
@@ -162,9 +165,7 @@ const GOES_ON_STOP =
   "A program is holding the project folder, so AI-DLC cannot update its record of this work and each step waits on " +
   "it; this call goes ahead. If you, or an agent you sent, started a dev server, a file watcher or another " +
   "long-running program over the project in this conversation, and the person did not ask to keep it running, stop " +
-  "it and everything it started (on Windows, stopping an npx or npm parent leaves the server running: stop the whole " +
-  "process tree by its Windows process id, for example `taskkill //T //F //PID <pid>` in Git Bash, or the node " +
-  "process whose command line names the server), then carry on.";
+  `it and everything it started ${WINDOWS_STOP}, then carry on.`;
 const goesOnStep = (line: string | null) =>
   `${GOES_ON_STOP} If neither of you started one, tell the person this line once and carry on: "${line}"`;
 // On Claude Code the agent reads a PreToolUse hook's additionalContext on a call
@@ -439,6 +440,7 @@ function guard(
   platform: NodeJS.Platform = "win32",
   command?: string,
   harness?: string,
+  shell?: "powershell",
 ): { code: number; stdout: string; stderr: string } {
   // Outside the project: a file there would count as source changed since approval.
   const preload = join(tmpdir(), `aidlc-lfh-faults-${randomUUID()}.ts`);
@@ -461,7 +463,7 @@ function guard(
       hook_event_name: "PreToolUse", session_id: SESSION, cwd: proj,
       ...(command === undefined
         ? { tool_name: "Write", tool_input: { file_path: join(proj, "src", file), content: "x\n" } }
-        : { tool_name: "Bash", tool_input: { command } }),
+        : { tool_name: "Bash", tool_input: { command }, ...(shell ? { aidlc_shell: shell } : {}) }),
     }),
     timeout: remainingOperationTimeoutMs(120_000),
   });
@@ -547,6 +549,13 @@ describe("the plan-approval guard meets a held lock folder", () => {
     for (const command of ["taskkill //T //F //PID 1", "taskkill /T /F /PID 1"]) {
       const stop = guard(proj, "", "held", "win32", command);
       expect(stop.code, stop.stderr).toBe(0);
+      expect(`${stop.stdout}${stop.stderr}`).toBe("");
+    }
+    // In PowerShell (marked by the adapter that ran it) the spellings the step
+    // names: the listing that finds the node process, then the stop.
+    for (const command of [POWERSHELL_FIND_NODE, "taskkill /T /F /PID 1", "Stop-Process -Id 1 -Force"]) {
+      const stop = guard(proj, "", "held", "win32", command, undefined, "powershell");
+      expect(stop.code, `${command}\n${stop.stderr}`).toBe(0);
       expect(`${stop.stdout}${stop.stderr}`).toBe("");
     }
     expect(rows()).toBe(before);

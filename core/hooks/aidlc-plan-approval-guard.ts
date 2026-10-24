@@ -272,6 +272,7 @@ const READ_ONLY_POWERSHELL_CMDLETS = new Set([
   "get-content",
   "get-item",
   "measure-object",
+  "out-null",
   "out-string",
   "resolve-path",
   "select-object",
@@ -1235,12 +1236,15 @@ interface ShellDialect {
   // aidlc.cmd and absolute paths to the installed launcher or active
   // executable name the engine, as they do on Windows.
   enginePaths: boolean;
+  // A PowerShell cmdlet whose written paths the reader binds exactly.
+  pathBoundWriter: (name: string) => boolean;
 }
 
 const POSIX_DIALECT: ShellDialect = {
   powerShell: false,
   pathsAsWritten: false,
   enginePaths: false,
+  pathBoundWriter: () => false,
 };
 
 // A PowerShell stream redirect that writes no file: to $null, or into output.
@@ -1258,19 +1262,26 @@ const POWERSHELL_NULL_REDIRECT = /^(?:[1-6*]?>>?[ ]*\$null|[2-6*]>&1)(?=[ ;|]|$)
 // this reading admits only lines it can render exactly.
 function plainPowerShell(
   command: string,
-): { commands: string[][]; rendering: string } | null {
+  pathBoundWriter: (name: string) => boolean = () => false,
+): { commands: string[][]; starts: number[]; rendering: string } | null {
   // Controls, whitespace other than a space, and the typographic dashes and
   // quotes PowerShell reads as - and as quotes.
   // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this refuses.
   if (/[\x00-\x1f\x7f-\x9f\u2013-\u2015\u2018-\u201f]|[^\S ]/u.test(command)) return null;
+  // A cmdlet is handed its words as written, never through a native command
+  // line, so only a native program meets 5.1's splitting.
+  const cmdlet = (name: string): boolean =>
+    READ_ONLY_POWERSHELL_CMDLETS.has(name.toLowerCase()) || pathBoundWriter(name);
   const commands: string[][] = [];
   const joins: string[] = [];
+  // Where each command starts in the line as written.
+  const starts: number[] = [0];
   let words: string[] = [];
   let call = false;
   const finish = (): boolean => {
     if (words.length === 0) return false;
     if (
-      !READ_ONLY_POWERSHELL_CMDLETS.has(words[0].toLowerCase()) &&
+      !cmdlet(words[0]) &&
       words.slice(1).some((word) => word === "" || word.includes('"') || word.endsWith("\\"))
     ) return false;
     commands.push(words);
@@ -1289,6 +1300,7 @@ function plainPowerShell(
       if (command[i + 1] === "|" || !finish()) return null;
       joins.push(ch);
       i++;
+      starts.push(i);
       continue;
     }
     const redirect = POWERSHELL_NULL_REDIRECT.exec(command.slice(i));
@@ -1314,7 +1326,9 @@ function plainPowerShell(
     } else {
       word = /^[^ ;|&'"]+/.exec(command.slice(i))?.[0] ?? "";
       if (
-        /[`$@(){}#<>,%^![\]]/.test(word) ||
+        /[`$@(){}#<>%^![\]]/.test(word) ||
+        // A read-only cmdlet's list (Select-Object Name,Length) writes nothing.
+        (word.includes(",") && (first || !READ_ONLY_POWERSHELL_CMDLETS.has(words[0].toLowerCase()))) ||
         /\\(?![A-Za-z0-9._-])/.test(word) ||
         /^-[^-].*\./.test(word) ||
         (first && !call && !/^[A-Za-z][A-Za-z0-9._:\\/-]*$/.test(word))
@@ -1331,6 +1345,7 @@ function plainPowerShell(
     /^[A-Za-z0-9._/:+,@%-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
   return {
     commands,
+    starts,
     rendering: commands
       .map((command, index) =>
         `${index > 0 ? ` ${joins[index - 1]} ` : ""}${command.map(posixWord).join(" ")}`
@@ -1349,8 +1364,9 @@ function powerShellReading(
     args: string[]; executable?: string; launchers?: string[];
     dataDriven?: boolean; executableResolutionChanged?: boolean; ambiguous?: boolean;
   }>,
-): string | null {
-  const plain = plainPowerShell(command);
+  pathBoundWriter: (name: string) => boolean,
+): { rendering: string; starts: number[] } | null {
+  const plain = plainPowerShell(command, pathBoundWriter);
   if (!plain) return null;
   const invocations = invocationsOf(plain.rendering);
   const faithful = invocations.length === plain.commands.length &&
@@ -1361,7 +1377,7 @@ function powerShellReading(
         invocation.args.length === args.length &&
         invocation.args.every((arg, at) => arg === args[at]);
     });
-  return faithful ? plain.rendering : null;
+  return faithful ? { rendering: plain.rendering, starts: plain.starts } : null;
 }
 
 function sameFileIdentity(left: string, right: string): boolean {
@@ -1836,6 +1852,11 @@ function shellInvocationNeedsApproval(
     // A path, extension or wrapper would name some other program.
     return executable.toLowerCase() !== name || !unwrapped;
   }
+  // A cmdlet whose written paths are bound as PowerShell binds them writes
+  // only what the targets show, as a tracked mutator does.
+  if (dialect.powerShell && dialect.pathBoundWriter(name)) {
+    return executable.toLowerCase() !== name || !unwrapped || !hasConcreteTargets;
+  }
   if (name === "sort" || name === "uniq") return writesThroughOption(name, invocation.args);
   if (READ_ONLY_SHELL_COMMANDS.has(name)) return false;
   if (name === "git") {
@@ -1917,6 +1938,7 @@ async function mutationIntent(
       leadingDirectoryChange,
       shellCommandAltersExecutableResolution,
       shellCommandInvocationDetails,
+      powerShellPathBoundWriter,
       shellWriteTargets,
     } = await import("./aidlc-review-freeze.ts");
     // A command the adapter ran in PowerShell is read as PowerShell when it is
@@ -1924,13 +1946,15 @@ async function mutationIntent(
     // reading: Bash drops the backslashes a Windows path is written with.
     // An unhinted shell may not be PowerShell, so it never gets the cmdlets
     // or Set-Location.
-    const powerShellCommand = powerShellHint
-      ? powerShellReading(command, shellCommandInvocationDetails)
+    const powerShellLine = powerShellHint
+      ? powerShellReading(command, shellCommandInvocationDetails, powerShellPathBoundWriter)
       : null;
+    const powerShellCommand = powerShellLine?.rendering ?? null;
     const dialect: ShellDialect = {
       powerShell: powerShellCommand !== null,
       pathsAsWritten: powerShellCommand !== null,
       enginePaths: powerShellCommand !== null || process.platform === "win32",
+      pathBoundWriter: powerShellCommand !== null ? powerShellPathBoundWriter : () => false,
     };
     // `cd <folder> && <command>` runs <command> from <folder>, so it is read
     // from there, each time the line starts by moving to a folder the reader
@@ -1938,11 +1962,23 @@ async function mutationIntent(
     let analysed = powerShellCommand ?? command;
     let from = cwd;
     const shell = dialect.powerShell ? "powershell" : "posix";
+    let moves = 0;
     for (let move = leadingDirectoryChange(analysed, from, shell); move !== null;
       move = leadingDirectoryChange(analysed, from, shell)) {
       ({ dir: from, rest: analysed } = move);
+      moves++;
     }
-    targets = shellWriteTargets(analysed, from);
+    // A line read as PowerShell writes what PowerShell binds: a cmdlet's named
+    // values (New-Item -ItemType Directory) are not paths, and a \ separates
+    // a path on every host. Each move above was one of its commands.
+    const targetWords: string[] = [];
+    targets = powerShellLine
+      ? shellWriteTargets(command.slice(powerShellLine.starts[moves]), from, targetWords, "powershell")
+      : shellWriteTargets(analysed, from);
+    // A PowerShell wildcard in a bound path names files the reading cannot
+    // list, and the reading drops it from the targets.
+    const wildcardTargets = targetWords.some((word) => /[*?[\]]/.test(word));
+    const concreteTargets = targets.length > 0 && !wildcardTargets;
     const invocations = shellCommandInvocationDetails(analysed);
     const dynamic =
       shellUsesDynamicEvaluation(analysed) ||
@@ -1950,7 +1986,7 @@ async function mutationIntent(
     opaqueShell =
       dynamic ||
       invocations.some((invocation) =>
-        shellInvocationNeedsApproval(projectDir, from, invocation, targets.length > 0, analysed, dialect, context)
+        shellInvocationNeedsApproval(projectDir, from, invocation, concreteTargets, analysed, dialect, context)
       );
     // A command that names AI-DLC and that the shell reading refused: an
     // untrusted spelling (a retained version, a copy of the tools outside the
@@ -1968,7 +2004,7 @@ async function mutationIntent(
     // hide a command or a write target, and a shell script run by name hides
     // commands the lexer never sees.
     readable = !dynamic && !/[^\S \t\n]/u.test(command) && !command.includes("\\\n") && !/\\[<>&|;]/.test(command) &&
-      !(powerShellHint && powerShellCommand === null) &&
+      !(powerShellHint && powerShellCommand === null) && !wildcardTargets &&
       !invocations.some((invocation) => {
         const program = normalizedCommandName(invocation.executable ?? invocation.name);
         return SHELL_INTERPRETERS.has(program) || writesThroughOption(program, invocation.args) ||

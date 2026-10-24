@@ -741,6 +741,46 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  // Kiro CLI on Windows runs its shell tool in PowerShell, whatever name the
+  // call carries (`execute_pwsh`, or `execute_bash` and `shell`, the names its
+  // agent hooks match); elsewhere only `execute_pwsh` is PowerShell's.
+  test("1bd: a Kiro shell command reaches the plan-approval guard and the review freeze read as PowerShell where it runs in PowerShell", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const rec = relative(dir, join(seededRecordDir(dir), "construction", "todo-core", "code-generation")).replaceAll("/", "\\");
+      const command = `New-Item -ItemType File -Force -Path '${rec}\\code-generation-plan.md' | Out-Null`;
+      const call = (target: string, toolName: string) =>
+        runAdapter(dir, target, {
+          hook_event_name: "preToolUse",
+          cwd: dir,
+          tool_name: toolName,
+          tool_input: { command },
+        }, [], { AIDLC_COMPILED_EXECUTABLE: "" });
+      // The plan's own file before any plan: PowerShell's reading puts it in
+      // the stage's record; the POSIX reading drops the backslashes.
+      const windows = process.platform === "win32";
+      expect(call("plan-approval-guard", "execute_pwsh").code).toBe(0);
+      expect(call("plan-approval-guard", "execute_bash").code).toBe(windows ? 0 : 2);
+      for (const [target, file] of [
+        ["plan-approval-guard", "aidlc-plan-approval-guard.ts"],
+        ["review-freeze", "aidlc-review-freeze.ts"],
+      ] as const) {
+        const capture = join(dir, `${target}.jsonl`);
+        writeFileSync(join(dir, ".kiro", "hooks", file), recordingGuard(capture), "utf-8");
+        for (const toolName of ["execute_pwsh", "execute_bash", "shell"]) {
+          expect(call(target, toolName).code, `${target} ${toolName}`).toBe(0);
+        }
+        const shells = readFileSync(capture, "utf-8").trim().split("\n")
+          .map((line) => (JSON.parse(line) as { aidlc_shell?: unknown }).aidlc_shell);
+        const posix = windows ? "powershell" : undefined;
+        expect({ target, shells }).toEqual({ target, shells: ["powershell", posix, posix] });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("1c: plan-approval guard normalizes defensive direct dispatch shapes", () => {
     const dir = scratchProject(true);
     try {

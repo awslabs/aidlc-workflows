@@ -542,13 +542,16 @@ export async function run(
   const PLAIN_WORD = `(?:[A-Za-z0-9_./:=,+-]+${PLAIN_QUOTED}?|${PLAIN_QUOTED})`;
   const PLAIN_COMMAND = new RegExp(`^ *${PLAIN_WORD}(?: +${PLAIN_WORD})* *$`);
   // The shell the command runs in. A shell the call names wins, so Git Bash
-  // or WSL on Windows keeps the POSIX reading; a tool named for its shell
-  // (`powershell`, `bash`) is that shell; VS Code's terminal tool runs the
-  // terminal's default shell, PowerShell or cmd on Windows.
+  // or WSL on Windows keeps the POSIX reading; a tool named `powershell` is
+  // that shell; VS Code's terminal tool runs the terminal's default shell,
+  // PowerShell or cmd on Windows; and the CLI hands its shell tool to these
+  // hooks as `Bash` on every host, which on Windows is PowerShell (the CLI's
+  // own record names that tool `powershell`).
   const terminalShell = typeof nativeToolInput?.shell === "string" ? nativeToolInput.shell.trim() : "";
   const windowsTerminal = terminalShell
     ? /(?:^|[\\/])(?:pwsh|powershell|cmd)(?:\.exe)?$/i.test(terminalShell)
-    : /^(?:pwsh|powershell)$/i.test(rawToolName) || (VSCODE_SHELL_TOOLS.has(rawToolName) && platform() === "win32");
+    : /^(?:pwsh|powershell)$/i.test(rawToolName) ||
+      ((VSCODE_SHELL_TOOLS.has(rawToolName) || /^bash$/i.test(rawToolName)) && platform() === "win32");
   // PowerShell itself: cmd never splits a command line at `;`.
   const powerShellTerminal = windowsTerminal && !/(?:^|[\\/])cmd(?:\.exe)?$/i.test(terminalShell);
   // The plan-approval guard reads a PowerShell command the way PowerShell runs
