@@ -2119,11 +2119,11 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     expect(gate.out).toContain("app.ts changed after the Code Generation review; carrying on.");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  // #2244: when the approved plan uses stage-level artifacts the guard returns
-  // after the stage review and the unclaimed check never runs, so excluding a
-  // cache after the review costs what any source change after a review costs:
-  // the one recovery review. Not a loop: the approve after it completes.
-  test("with stage-level artifacts, excluding a cache after the review costs one recovery review, then completes", () => {
+  // #2244: when the approved plan uses stage-level artifacts the guard compares
+  // the stage review's own listing, and a cache the registry's exclude list now
+  // leaves out of the walk is nobody's change there too, so the exclude works at
+  // once, as on the per-Unit path, even after the one recovery review.
+  function skipUnitsGeneration(): void {
     writeFileSync(
       seededStateFile(proj),
       readFileSync(seededStateFile(proj), "utf-8").replace(
@@ -2131,19 +2131,67 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
         "- [S] units-generation $1 SKIP",
       ),
     );
+  }
+
+  test("with stage-level artifacts, the refusal names the cache, and excluding it completes with no further review", () => {
+    skipUnitsGeneration();
     const cache = seedInTreeCache(proj);
     recordReview(proj);
     churnInTreeCache(cache);
     const stale = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(stale.rc).toBe(1);
     expect(stale.out).toContain("project source changed after");
+    expect(stale.out).toContain("apps/web/.jest-cache/haste-map-abc");
+    expect(stale.out).toContain('naming it under \\"exclude\\" in .aidlc-source-paths.json');
+    const requests = reviewRequestCount(proj);
     sourceRegistry(proj, { exclude: ["apps/web/.jest-cache"] });
-    const still = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
-    expect(still.rc).toBe(1);
-    expect(still.out).toContain("project source changed after");
-    recordReview(proj);
     const done = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(done.rc, done.out).toBe(0);
+    expect(reviewRequestCount(proj)).toBe(requests);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("with stage-level artifacts, a cache that changes again after the one recovery review completes once it is excluded", () => {
+    skipUnitsGeneration();
+    const cache = seedInTreeCache(proj);
+    recordReview(proj);
+    churnInTreeCache(cache);
+    expect(guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]).rc).toBe(1);
+    recordReview(proj);
+    writeFileSync(join(cache, "haste-map-abc"), "\u0000haste-v3", "utf-8");
+    const spent = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(spent.rc).toBe(1);
+    expect(spent.out).toContain("SOURCE_RECOVERY_SPENT");
+    expect(spent.out).toContain("apps/web/.jest-cache/haste-map-abc");
+    expect(spent.out).toContain('naming it under \\"exclude\\" in .aidlc-source-paths.json');
+    sourceRegistry(proj, { exclude: ["apps/web/.jest-cache"] });
+    const done = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(done.rc, done.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("with stage-level artifacts, excluding a cache still leaves a real source change refused", () => {
+    skipUnitsGeneration();
+    const cache = seedInTreeCache(proj);
+    recordReview(proj);
+    churnInTreeCache(cache);
+    writeFileSync(src, "export const answer = 1337; // edited after review\n", "utf-8");
+    sourceRegistry(proj, { exclude: ["apps/web/.jest-cache"] });
+    const stale = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(stale.rc).toBe(1);
+    expect(stale.out).toContain("What changed: app.ts; a path that is not source");
+    expect(stale.out).not.toContain(".jest-cache/");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under relaxed, with stage-level artifacts, a cache excluded after the review is not said as a change", () => {
+    setGuardPolicy("relaxed (set by you)");
+    skipUnitsGeneration();
+    const cache = seedInTreeCache(proj);
+    recordReview(proj);
+    churnInTreeCache(cache);
+    sourceRegistry(proj, { exclude: ["apps/web/.jest-cache"] });
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).not.toContain("changed after the Code Generation review");
+    expect(readAllAuditShards(proj)).not.toMatch(/\*\*Event\*\*: CHANGE_ACCEPTED\n(?:\*\*[^\n]*\n)*?\*\*Checkpoint\*\*: review-receipt/);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test.each([
