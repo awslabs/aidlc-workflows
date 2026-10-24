@@ -5648,6 +5648,11 @@ describe("t249 a jump the person asks for starts its step in the claimed next", 
     // No command handed back to type: the claimed `next` made the jump itself.
     expect(String(routed.directive.message ?? ""), JSON.stringify(routed.directive)).not.toContain("to perform the jump");
     expect(readFileSync(seededStateFile(dir), "utf-8")).toContain("- **Current Stage**: intent-capture");
+    // The claim made on the state before the jump carries over to the state the
+    // jump wrote, so the step it returns is the claim's own, delivered at once.
+    const claimed = marker(dir);
+    expect(claimed).toMatchObject({ stage: "intent-capture", delivery: "delivered", needs_rehydrate: false });
+    expect(claimed.active_attempt).toMatchObject({ id: `${session}-jump`, status: "settled" });
     for (let part = 0; routed.directive.kind === "load-steering"; part++) {
       routed = runLifecycle(dir, session, "direct", ["continue", String(routed.directive.receipt)], `${session}-jump-${part}`);
       if (part > 20) throw new Error("steering did not converge");
