@@ -5957,11 +5957,17 @@ export const PLAN_APPROVAL_ASK_TYPE = "plan-approval";
 export const PLAN_APPROVAL_ASKED_BY_ENGINE =
   "Plan Approval is asked by the engine now. Run next, show the person the question it returns, and end the turn.";
 
-// The engine's Plan Approval question while it is open for the selected work:
-// its step marker, which names the Unit or Units it asks about; null otherwise.
-export function openPlanApprovalAsk(projectDir: string): ActiveDirectiveMarker | null {
+// The engine's Plan Approval question while it is open for the selected work
+// (or the work named): its step marker, which names the Unit or Units it asks
+// about; null otherwise.
+export function openPlanApprovalAsk(projectDir: string, intent?: string, space?: string): ActiveDirectiveMarker | null {
   try {
-    const marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
+    const marker = readActiveDirectiveMarker(
+      projectDir,
+      readFileSync(stateFilePath(projectDir, intent, space), "utf-8"),
+      intent,
+      space,
+    );
     return marker?.version === 2 && marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE ? marker : null;
   } catch {
     return null;
@@ -10782,9 +10788,11 @@ export function refreshActiveDirectiveMarker(
 export function readActiveDirectiveMarker(
   projectDir: string,
   stateContent: string,
+  intent?: string,
+  space?: string,
 ): ActiveDirectiveMarker | null {
   try {
-    const marker = readActiveDirectiveMarkerRaw(activeDirectiveMarkerPath(projectDir));
+    const marker = readActiveDirectiveMarkerRaw(activeDirectiveMarkerPath(projectDir, intent, space));
     return marker?.state_sha256 === stateDigest(stateContent) ? marker : null;
   } catch {
     return null;
