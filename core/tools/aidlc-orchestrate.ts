@@ -10567,13 +10567,25 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       // agent asked the person to say go on.
       const carriesOn = stageReopenedByScopeChange(stateContent, flags.scope) !== null ||
         (stillParked === null && !settingEndsTurn(pd, currentStateScope, stateContent));
+      const keepsPlace = !carriesOn && scopeSwitchKeepsPlace(pd, currentStateScope, stateContent, flags.scope);
+      // At the open gate of a stage the new scope still runs, the same reply
+      // can answer it ("approve, and switch back to the poc plan"): the switch
+      // runs first, then the gate's report, as a plan change typed there does,
+      // so the approval lands on the new plan. Approving first would start the
+      // old plan's next stage, which the switch then drops. A live Codex run
+      // stopped after the switch, and the approval waited for the person's
+      // next line.
+      const current = (getField(stateContent, "Current Stage") ?? "").trim();
+      const gateWaits = keepsPlace && stillParked === null &&
+        parseCheckboxes(stateContent).find((c) => c.slug === current)?.state === "awaiting-approval" &&
+        !practicesApprovalHeld(pd, current, stateContent);
       const switched = carriesOn
         ? printDirective(`Run \`${command}\` to change scope${fill}, then print its output verbatim and re-run next to carry on with the work.`)
-        : turnEndingPrint(`Run \`${command}\` to change scope${fill}, then ${verbatimThenStop}`);
+        : turnEndingPrint(gateWaits
+          ? `Run \`${command}\` to change scope${fill}, then print its output verbatim. ${openGateAnswerStep(current)}`
+          : `Run \`${command}\` to change scope${fill}, then ${verbatimThenStop}`);
       emit(planChanges ? planChangeDirective(planChanges, command, null, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
-        !carriesOn && scopeSwitchKeepsPlace(pd, currentStateScope, stateContent, flags.scope)
-          ? withWorkPicksUpLine(switched, pd, currentStateScope, stateContent)
-          : switched,
+        keepsPlace ? withWorkPicksUpLine(switched, pd, currentStateScope, stateContent) : switched,
         planApprovalAskIsOpen(pd),
       ));
       return;
@@ -14993,6 +15005,16 @@ function keptWhilePlanWaits<T extends Directive>(directive: T, planWaits: boolea
   return directive;
 }
 
+// The answer to the open gate that the person's message may also give, for a
+// change made at that gate (a plan change, a scope switch): recorded after the
+// change, so the change and the answer each happen once.
+function openGateAnswerStep(slug: string): string {
+  return `If their message also answered the open ${nodeForSlug(slug)?.name || slug} question, record it now with ` +
+    `\`${aidlcToolInvocation("orchestrate")} report --stage ${slug} --result approved --user-input Approve\` ` +
+    `(a change request: \`--result rejected --user-input "Request Changes"\`) and re-run \`next\`; ` +
+    "otherwise stop: the question still waits.";
+}
+
 // A typed `--skip`/`--add` on a running workflow. The person named the
 // stages, so recompose applies them straight away (after any scope or setting
 // command typed with them), and one line says what changed and the way back;
@@ -15249,12 +15271,7 @@ function planChangeDirective(
       : turnEndingPrint(`${message}${end}${resume}`));
   }
   if (gateOpen !== null) {
-    return kept(turnEndingPrint(
-      `${message} If their message also answered the open ${name(gateOpen)} question, record it now with ` +
-        `\`${aidlcToolInvocation("orchestrate")} report --stage ${gateOpen} --result approved --user-input Approve\` ` +
-        `(a change request: \`--result rejected --user-input "Request Changes"\`) and re-run \`next\`; ` +
-        `otherwise stop: the question still waits. ${undo}${resume}`,
-    ));
+    return kept(turnEndingPrint(`${message} ${openGateAnswerStep(gateOpen)} ${undo}${resume}`));
   }
   return kept(turnEndingPrint(`${message}${end} ${undo}${resume}`));
 }
@@ -15651,6 +15668,18 @@ function isConcreteIsoInstant(value: string | null): boolean {
   const isoInstant =
     /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
   return isoInstant.test(value) && !Number.isNaN(Date.parse(value));
+}
+
+// Practices Discovery holds its human approval until practices-promote has
+// committed both memory targets and a fresh two-part receipt for this stage
+// attempt. Gate opening deliberately precedes promotion, so the receipt is
+// required only on a forward approval of an unfinished stage. The approval
+// report refuses while this holds, and a step that hands the agent that report
+// (the gate's answer after a scope switch) leaves it out.
+function practicesApprovalHeld(projectDir: string, slug: string, stateContent: string): boolean {
+  return slug === "practices-discovery" &&
+    checkboxForSlug(stateContent, slug)?.state !== "completed" &&
+    !hasFreshPracticesAffirmationReceipt(projectDir, stateContent);
 }
 
 // Promotion owns a two-part receipt: the concrete state timestamp and a
@@ -18255,15 +18284,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     }
   }
 
-  // Practices Discovery holds its human approval until practices-promote has
-  // committed both memory targets and a fresh two-part receipt for this stage
-  // attempt. Gate opening deliberately precedes promotion, so enforce the
-  // receipt only on a forward approval of an unfinished stage.
-  if (
-    slug === "practices-discovery" &&
-    stageCheckbox.state !== "completed" &&
-    !hasFreshPracticesAffirmationReceipt(pd, stateContent)
-  ) {
+  if (practicesApprovalHeld(pd, slug, stateContent)) {
     emit(errorDirective(
       'Cannot approve "practices-discovery" because the approved practices have not been saved yet. ' +
         "Run aidlc-state.ts practices-promote after the human approves, then report " +

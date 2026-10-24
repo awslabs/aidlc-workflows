@@ -356,7 +356,9 @@ describe("t259 the engine's last word ended the turn", () => {
       const running = readFileSync(statePath, "utf-8");
       for (const [args, said, feasibility] of [
         [["--status"], "print its output verbatim, then stop", "- [-] feasibility"],
-        [["--scope", "mvp"], "to change scope, then print its output verbatim and stop", "- [?] feasibility"],
+        // At the open gate the switch also hands over the gate's answer, if the reply gave one; the turn still ends.
+        [["--scope", "mvp"], "to change scope, then print its output verbatim. If their message also answered the open " +
+          "Feasibility & Constraints question", "- [?] feasibility"],
       ] as const) {
         writeFileSync(statePath, running.replace("- [-] feasibility", feasibility));
         markHumanTurn(proj);
