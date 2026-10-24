@@ -447,6 +447,29 @@ describe("t-plan-proposed-by-the-agent: work here but none selected", () => {
     expect(String(ask.question)).toContain("you pick its plan next");
     expect(String(ask.new_intent_command)).not.toContain("--scope");
   });
+
+  // A tailored plan is no plan's name: the question names none, and the
+  // separate-work answer reaches the new work's plan step, where the agent's
+  // tailored-plan reading gets the compose offer. Before, the answer ran
+  // `--scope compose` and met "Unknown scope".
+  test("kiro: a tailored plan proposed names no plan, and the separate-work answer reaches the plan step", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const read = next(KIRO_TOOLS, proj, ["build a notes app"]);
+    const id = REQUEST.exec(String(read.message))![1];
+    const ask = next(KIRO_TOOLS, proj, ["--request", id, "--propose", "compose"]);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
+    expect(ask.proposed_scope).toBe("");
+    expect(String(ask.question)).toContain("you pick its plan next");
+    expect(String(ask.question)).not.toContain("compose");
+    expect(ask.choices?.[1]?.detail ?? "").not.toContain("compose");
+    expect(String(ask.new_intent_command)).not.toContain("--scope");
+    const step = next(KIRO_TOOLS, proj, answerArgs(ask.new_intent_command));
+    expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
+    expect(String(step.message)).toContain(PROPOSAL);
+    const stepId = REQUEST.exec(String(step.message))![1];
+    const offer = next(KIRO_TOOLS, proj, ["--propose", "compose", "--request", stepId]);
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 300)).toBe("compose-offer");
+  });
 });
 
 // #2359 F1 and F4: a line that opens with a plan's name and goes on in words

@@ -6046,9 +6046,11 @@ function freshWorkRoute(
   // proposal step first.
   const plan = flags.propose !== undefined && flags.propose !== "" ? flags.propose : null;
   if (isKiroRoutingHarness()) {
+    // A tailored plan (`compose`) is no plan's name: the separate-work answer
+    // picks the plan next, as the routing question over selected work does.
     const pick = intentPickPromptIfRecordsExist(pd, {
       description,
-      proposedScope: plan ?? "",
+      proposedScope: plan === null || plan === "compose" ? "" : plan,
       carried: carriedRoutingFlags(flags),
       ...(derivedFrom === undefined ? {} : { derivedFrom }),
     });
