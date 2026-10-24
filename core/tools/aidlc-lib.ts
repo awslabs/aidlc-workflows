@@ -2284,6 +2284,101 @@ export function kiroContextPressure(sessionId: string | undefined, since: number
   return null;
 }
 
+// What the person typed while Kiro CLI's default engine was working ("Type to
+// steer"). Kiro hands such a message to the agent but runs no prompt hook for
+// it (measured live on 2.34.0), so no hook ever saw it. Kiro keeps it in the
+// chat's ~/.kiro/sessions/cli/<session id>.jsonl as a `text` item beside the
+// `toolResult` of the `ToolResults` row after the running tool, inside an
+// envelope of its own around `<user_message id="steer-...">`, and writes that
+// row before the next tool call's PreToolUse runs. Only this turn's messages
+// (after its latest `Prompt` row) and only those sibling items count: a tool's
+// own output stays inside its `toolResult`, so text it prints that looks like
+// the envelope is never read as the person's. Read only; none when the record
+// cannot be read.
+export interface KiroCliSteer {
+  id: string;
+  words: string;
+}
+const KIRO_CLI_STEER_ENVELOPE = "[LIVE STEERING - New message from user]";
+const KIRO_CLI_STEER_OPEN = /<user_message id="(steer-[A-Za-z0-9]{1,64})">/;
+const KIRO_CLI_STEER_CLOSE = "</user_message>";
+// A turn's tool output can push its `Prompt` row past any fixed tail, so the
+// read widens until the row is in view, up to this much of the record.
+const KIRO_CLI_STEER_READ_MAX_BYTES = 64 << 20;
+function kiroCliSteers(sessionId: string): KiroCliSteer[] {
+  if (!KIRO_SESSION_DIR_RE.test(sessionId)) return [];
+  const path = join(homedir(), ".kiro", "sessions", "cli", `${sessionId}.jsonl`);
+  let size: number;
+  try {
+    size = statSync(path).size;
+  } catch {
+    return [];
+  }
+  const field = (value: unknown, key: string): unknown =>
+    value !== null && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined;
+  for (let bytes = 1 << 20; ; bytes *= 4) {
+    const lines = tailText(path, bytes)?.split("\n");
+    if (lines === undefined) return [];
+    const steers: KiroCliSteer[] = [];
+    let turnStart = false;
+    for (let i = lines.length - 1; i >= 0 && !turnStart; i--) {
+      let row: unknown;
+      try {
+        row = JSON.parse(lines[i]);
+      } catch {
+        continue;
+      }
+      const kind = field(row, "kind");
+      if (kind === "Prompt") turnStart = true;
+      if (kind !== "ToolResults") continue;
+      const content = field(field(row, "data"), "content");
+      const items = Array.isArray(content) ? content : [];
+      for (let j = items.length - 1; j >= 0; j--) {
+        const text = field(items[j], "data");
+        if (field(items[j], "kind") !== "text" || typeof text !== "string" || !text.startsWith(KIRO_CLI_STEER_ENVELOPE)) continue;
+        const open = KIRO_CLI_STEER_OPEN.exec(text);
+        const close = text.lastIndexOf(KIRO_CLI_STEER_CLOSE);
+        if (open === null || close < open.index + open[0].length) continue;
+        const words = text.slice(open.index + open[0].length, close).trim();
+        if (words) steers.push({ id: open[1], words });
+      }
+    }
+    if (turnStart) return steers.reverse();
+    if (bytes >= size || bytes >= KIRO_CLI_STEER_READ_MAX_BYTES) return [];
+  }
+}
+
+// Which of a chat's messages typed while Kiro CLI worked are its turns already,
+// by Kiro's own id, so each is recorded once however many commands follow it.
+function kiroCliSteersRecordedPath(projectDir: string, sessionId: string): string {
+  const segment = runtimeSessionSegment(sessionId);
+  return segment ? join(sessionsDir(projectDir), `.kiro-cli-steers-${segment}.json`) : "";
+}
+
+function kiroCliSteersRecorded(projectDir: string, sessionId: string): string[] {
+  try {
+    const ids: unknown = JSON.parse(readFileSync(kiroCliSteersRecordedPath(projectDir, sessionId), "utf-8"));
+    return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** This turn's messages typed while Kiro CLI worked that are not yet the chat's turns. */
+export function unrecordedKiroCliSteers(projectDir: string, sessionId: string): KiroCliSteer[] {
+  const recorded = kiroCliSteersRecorded(projectDir, sessionId);
+  return kiroCliSteers(sessionId).filter((steer) => !recorded.includes(steer.id));
+}
+
+export function noteKiroCliSteerRecorded(projectDir: string, sessionId: string, id: string): void {
+  const path = kiroCliSteersRecordedPath(projectDir, sessionId);
+  if (!path) return;
+  const dir = sessionsDir(projectDir);
+  assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+  mkdirSync(dir, { recursive: true });
+  writeFileAtomic(path, `${JSON.stringify([...kiroCliSteersRecorded(projectDir, sessionId), id].slice(-200))}\n`);
+}
+
 // Who sent a prompt on a Kiro host. `sessionId` is the payload's; `chatSessionId`
 // is the chat Kiro names in the hook's environment (KIRO_SESSION_ID), used only
 // to find the record when the payload names no session. Kiro's record for the

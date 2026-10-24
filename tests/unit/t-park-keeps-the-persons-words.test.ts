@@ -15,7 +15,8 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -40,6 +41,7 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { personTurnStands } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
+import { kiroCliPrompt, kiroCliRecord, kiroCliToolResults, kiroCliToolUse } from "../harness/kiro-cli-record.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -288,6 +290,81 @@ describe("the park row keeps the words that stopped the work", () => {
     const r = state(proj, ["park", "--person-asked"]);
     expect(r.rc, r.out).toBe(0);
     expect(parkedWords(proj), rowOrder(proj)).toBe("B, and let's stop here for today");
+  });
+});
+
+// On Kiro CLI a stop typed while the agent works runs no prompt hook (measured
+// live, kiro-cli 2.34.0); the park row then named the message that opened the
+// turn as the stop's words. Kiro's own record keeps the stop, and the agent's
+// park command records it as the person's turn first.
+describe("Kiro CLI: a stop typed while the agent works is on the park row", () => {
+  let proj: string;
+  let home: string;
+  const KIRO = join(AIDLC_SRC, "..", "..", "kiro", ".kiro");
+  const OPENING = "/aidlc carry on with the greeter fix";
+  const STOP = "stop for today";
+  const PARK = "bun .kiro/tools/aidlc.ts engine orchestrate park --person-asked";
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createOrchestrationTestProject();
+    seedStage(proj);
+    cpSync(KIRO, join(proj, ".kiro"), { recursive: true });
+    home = mkdtempSync(join(tmpdir(), "t-park-kiro-home-"));
+  });
+  afterEach(() => {
+    cleanupTestProject(proj);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const kiroEnv = () => ({ ...env(SESSION), HOME: home, USERPROFILE: home, CLAUDE_PROJECT_DIR: proj, KIRO_SESSION_ID: SESSION });
+  function adapter(target: string, payload: Record<string, unknown>): void {
+    const r = spawnSync(BUN, [join(proj, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target], {
+      cwd: proj,
+      input: JSON.stringify({ cwd: proj, session_id: SESSION, ...payload }),
+      env: kiroEnv(),
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+  }
+  // The turn: their opening message through Kiro's prompt hook, the agent at
+  // work, the stop typed meanwhile, then the agent's park command.
+  function stopWhileWorking(): { rc: number; out: string } {
+    adapter("verb-intercept", { hook_event_name: "userPromptSubmit", prompt: OPENING });
+    kiroCliRecord(home, SESSION, [
+      kiroCliPrompt(OPENING),
+      kiroCliToolUse("bun .kiro/tools/aidlc.ts engine orchestrate next"),
+      kiroCliToolResults("{}\n", [{ words: STOP, id: "steer-38709d069533421ba76b49c54116cb78" }]),
+    ]);
+    adapter("state-transition-guard", { hook_event_name: "preToolUse", tool_name: "shell", tool_input: { command: PARK } });
+    const r = spawnSync(BUN, [join(proj, ".kiro", "tools", "aidlc-state.ts"), "park", "--person-asked", "--project-dir", proj], {
+      cwd: proj,
+      env: { ...kiroEnv(), AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  }
+
+  test("the park row carries the stop and names its message, not the message that opened the turn", () => {
+    const r = stopWhileWorking();
+    expect(r.rc, r.out).toBe(0);
+    expect(parkedWords(proj), rowOrder(proj)).toContain(STOP);
+    const turn = events(proj, "HUMAN_TURN").at(-1)!;
+    expect(auditBlockField(events(proj, "WORKFLOW_PARKED")[0].block, "Message Id"))
+      .toBe(auditBlockField(turn.block, "Message Id"));
+  });
+
+  test("under autonomous Construction the stop is theirs on record, with no line that a reply was missed", () => {
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8").replace(
+      "- **Change Control**: strict (from scope feature)",
+      "- **Change Control**: strict (from scope feature)\n- **Construction Autonomy Mode**: autonomous",
+    ));
+    const r = stopWhileWorking();
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).not.toContain("this host can miss one");
+    expect(parkedWords(proj), rowOrder(proj)).toContain(STOP);
   });
 });
 
