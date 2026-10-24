@@ -17,6 +17,7 @@ import {
   isEngineEngagementSegment,
   isReadOnlyNextArgv,
   readNextLine,
+  readOrchestratorLauncherOptions,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { parseNextFlags } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
 import { REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
@@ -128,5 +129,15 @@ describe("the launcher's options are taken the one way the engine takes them", (
 
   test("`--project-dir` never takes the mark as its folder, so the words behind it keep the line engaged", () => {
     expect(isEngineEngagementSegment("aidlc engine orchestrate next add --project-dir -- --config")).toBe(true);
+  });
+
+  test("a leading `compose` is the engine's verb: its folder is the launcher's in front of their words, and theirs among them", () => {
+    const dir = join(process.env.TMPDIR || tmpdir(), "aidlc-next-reading-compose");
+    const marked = readOrchestratorLauncherOptions(["next", "compose", "--request", "1234abcd", "--project-dir", dir, "--", "make it a docs update"]);
+    expect(marked.projectDir).toBe(dir);
+    expect(marked.args).toEqual(["next", "compose", "--request", "1234abcd", "--", "make it a docs update"]);
+    const among = readOrchestratorLauncherOptions(["next", "compose", "fix", "--project-dir", dir]);
+    expect(among.projectDir).toBeUndefined();
+    expect(among.args).toEqual(["next", "compose", "fix", "--project-dir", dir]);
   });
 });

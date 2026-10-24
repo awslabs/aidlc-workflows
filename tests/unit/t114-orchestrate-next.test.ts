@@ -1798,6 +1798,28 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     expect(routingStepCommand(d.message, "Separate new piece of work")).toBe(ask.new_intent_command!);
   });
 
+  // A Kiro agent runs the printed command through the dispatcher's route, which
+  // pins the project folder ahead of the `--` mark on a line with their words.
+  test("the reshape answer run through the dispatcher reaches the composer, not a step about its folder", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    routingAsk();
+    const words = shellWords(routingStepCommand(directive([OTHER_ANSWER]).message, "Reshape the active work"));
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of ["AIDLC_PROJECT_DIR", "CLAUDE_PROJECT_DIR", "KIRO_PROJECT_DIR"]) delete env[key];
+    const r = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "orchestrate", ...words.slice(words.indexOf("next"))], {
+      cwd: proj,
+      encoding: "utf-8",
+      env,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(r.status, r.stderr).toBe(0);
+    const dispatch = JSON.parse(r.stdout.trim()) as Directive;
+    expect(dispatch.message).not.toContain("does not take `--project-dir");
+    expect(dispatch.message).toContain("RUNNING workflow");
+    expect(dispatch.message).toContain(`Asked where that request belongs, the person answered: "${OTHER_ANSWER}"`);
+  });
+
   test("the step names no road as the only one that keeps their words", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
