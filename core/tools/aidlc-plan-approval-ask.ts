@@ -50,6 +50,7 @@ import {
   readWorkspaceSourceSnapshot,
   recordedSourceListingUnderCurrentBoundary,
   rejectionAtRunFloor,
+  rejectionIsFreshAttempt,
   removePlanApprovalRuntimeRecord,
   renderChangedPaths,
   sourceChangedOutsideAidlc,
@@ -727,10 +728,9 @@ export function isPlanApprovalBeat(directive: Directive): directive is RunStageD
  * person's rejection is the change to make: the plan is revised first, and the
  * engine asks about the revised plan, never about the one they just sent back.
  *
- * A stage jump (`Reopen: jump`) keeps the plan available for approval as it
- * stands. Its reopen notice is not a change request, and an unchanged plan
- * would otherwise be sent back on every round. Redo (`Reopen: redo`) instead
- * starts planning again before the new plan comes back for approval.
+ * A stage jump or a Redo (`rejectionIsFreshAttempt`) keeps the plan available
+ * for approval as it stands. Its reopen notice is not a change request, and an
+ * unchanged plan would otherwise be sent back on every round.
  */
 function rejectionRevision(projectDir: string, unit: string | null, intentId: string): { feedback?: string } | null {
   // Read from the audit trail, not the active directive: `next` routes before
@@ -754,7 +754,7 @@ function rejectionRevision(projectDir: string, unit: string | null, intentId: st
   const rejection = rejectionAtRunFloor(
     readAuditShardEvents(projectDir), STAGE, unit ?? undefined, runFloor,
   );
-  if (rejection !== undefined && auditBlockField(rejection.block, "Reopen") === "jump") return null;
+  if (rejection !== undefined && rejectionIsFreshAttempt(rejection.block)) return null;
   const dir = codeGenerationRecordDir(projectDir, unit);
   const plan = readText(join(dir, PLAN_FILE));
   const instructions = readText(join(dir, INSTRUCTIONS_FILE));

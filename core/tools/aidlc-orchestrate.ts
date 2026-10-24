@@ -14186,7 +14186,7 @@ function unitMajorRedo(
   }
   const reopen = `${aidlcToolInvocation("jump")} reopen --target ${shellArg(redone)} ` +
     `--stages ${shellArg(blockSlugs.slice(blockSlugs.indexOf(redone)).join(","))} --units ${shellArg(unit)} --via redo --scope ${shellArg(scope)}`;
-  // Code Generation is redone plan included, so a new plan is approved again
+  // Code Generation is redone plan included, so its plan is approved again
   // unless plan approval is off.
   const name = walk.block.find((stage) => stage.slug === redone)?.name || redone;
   const line = redone !== "code-generation"
@@ -14194,7 +14194,7 @@ function unitMajorRedo(
     : `Redoing ${name} for unit ${unit} from the start, plan included.` +
       (resolvePlanApprovalSetting(projectDir, stateContent).value === "off"
         ? ""
-        : " Its new plan comes back to you for approval.");
+        : " Its plan comes back to you for approval.");
   return `Redo accepted at "${redone}" for unit "${unit}". ${only} step is redone: run ` +
     `${unpark}\`${reopen}\`, then tell the person in one line: "${line}" Then re-run \`next\` and do "${redone}" ` +
     `for unit "${unit}" again from the start. ${OTHER_UNITS_KEPT}`;
