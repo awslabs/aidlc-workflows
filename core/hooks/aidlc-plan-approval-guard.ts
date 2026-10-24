@@ -125,6 +125,7 @@ import {
   resolveBoltDag,
   resolveProjectFlag,
   resolveProjectDirFromHook,
+  jumpClaimSha256,
   nextStageClaimSha256,
   nextStageInvocation,
   type NextStageUnits,
@@ -1539,13 +1540,15 @@ interface EngineCommandContext {
   jumpAdmitted: (jump: JumpCommand) => boolean;
 }
 
-// The jump tool's verb (`execute` or `reopen`), its `--target`, and a reopen's `--units` and `--via`.
+// The jump tool's verb (`execute` or `reopen`), its `--target`, a reopen's
+// `--units` and `--via`, and every argument after `jump`, verb first.
 interface JumpCommand {
   verb: string;
   target: string | undefined;
   units: string | undefined;
   via: string | undefined;
   direction: string | undefined;
+  args: readonly string[];
 }
 
 const NO_ENGINE_CONTEXT: EngineCommandContext = { jumpAdmitted: () => false };
@@ -1555,10 +1558,12 @@ const NO_ENGINE_CONTEXT: EngineCommandContext = { jumpAdmitted: () => false };
 // reopen` to a stage that is an identifier, the `next --stage` its one
 // exception admits the jump after; else false. A superseded step waits for a
 // fresh `next`, with one exception: Copilot's settle supersedes the step after
-// every print, `next --stage`'s jump print included, so a `jump execute` to the
-// stage the state-bound step's settled claim asked for with `next --stage`, on
-// the state as it is now, is the agent carrying that print out, and so is the
-// `jump reopen` it prints for a unit-major walk: one Unit's (with `--unit`,
+// every print, `next --stage`'s jump print included, so the agent carrying a
+// print out goes through. That is the jump a settled print named as its step
+// (noteNamedJump), run as named on the state it was named on; a `jump execute`
+// to the stage the state-bound step's settled claim asked for with `next
+// --stage`, on the state as it is now; and the `jump reopen` that `next
+// --stage` prints for a unit-major walk: one Unit's (with `--unit`,
 // that Unit's only), every reached Unit's after `--every-unit`, and the
 // person's change (`--via change`) only after `--change`. A picked restart's own `next` is not (its claim carries the
 // pick, and the settle keeps the question only for its exact print); a
@@ -1587,6 +1592,12 @@ function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand): bool
     if (marker === null) return true;
     if (marker.delivery === "superseded") {
       const attempt = current?.active_attempt;
+      if (
+        attempt?.status === "settled" && current?.kind === "print" &&
+        attempt.named_jump_sha256 === jumpClaimSha256(jump.args) &&
+        attempt.named_jump_state_sha256 === stateDigest(state) &&
+        attempt.guard_recovery_selection_sha256 === undefined
+      ) return true;
       const target = jump.target;
       // The `next --stage` forms that print this reopen: for one Unit, plain
       // or naming it; for any number, for every Unit; each with `--change`
@@ -1723,7 +1734,7 @@ function engineCommandAdmitted(
   const configArgs = configToolArgs(engineArgs);
   if (configArgs !== null && !configToolAdmitted(projectDir, configArgs)) return false;
   const args = configArgs !== null ? ["config", ...configArgs] : engineArgs[0] === "engine" ? engineArgs.slice(1) : engineArgs;
-  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted({ verb: args[1], target: lastFlag(args, "--target"), units: lastFlag(args, "--units"), via: lastFlag(args, "--via"), direction: lastFlag(args, "--direction") })) return false;
+  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted({ verb: args[1], target: lastFlag(args, "--target"), units: lastFlag(args, "--units"), via: lastFlag(args, "--via"), direction: lastFlag(args, "--direction"), args: args.slice(1) })) return false;
   // `next` takes no `--bypass`: on its line the token is one of the person's
   // words ("add a --bypass option"), never a check turned off, as the engine's
   // own reading says (nextLineFlags). Every other command is read whole, as its
