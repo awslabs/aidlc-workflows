@@ -4,7 +4,9 @@
 // prepared build still holds the earlier plan, so its own check refuses. The refusal names the step that hands the
 // build the approved plan (prepare again for that Unit, which transfers it to the existing build), and before the
 // approval, the question that collects it first; with plan approval off, that the plan is built without asking. The
-// steps it names, run as written, let the build go on, under every Guard Policy.
+// steps it names, run as written, let the build go on under every Guard Policy, or, in a batch rebuilt after a
+// checkpoint send-back, say why not yet. The same plan approved again names no prepare step: prepare hands nothing
+// over for it.
 
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -12,7 +14,8 @@ import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { codeGenerationRecordDir } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
-  cleanupCheckpointFixtures, fixture, nextDirective, plan, prepare, runCheckpointTool, swarm, wt,
+  approvePlan, cleanupCheckpointFixtures, fixture, nativeCheckpointRevision, nextDirective, plan, prepare,
+  runCheckpointTool, swarm, wt,
 } from "../harness/swarm-checkpoint.ts";
 import { seededStateFile } from "../harness/fixtures.ts";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -69,6 +72,7 @@ test("a plan approved again mid-build: the build's check names prepare for that 
   expect(refused.ok).toBe(false);
   expect(refused.reason).toContain("The plan for alpha was approved again after its build was prepared");
   expect(refused.reason).toContain("prepare --batch 1 --units alpha`");
+  expect(refused.reason).toContain("which hands this build the approved plan or says why it cannot yet");
   expect(refused.reason).not.toContain("orchestrate");
   expect(verifyInBuild(pd, "beta").ok).toBe(true);
   const handed = runNamedPrepare(pd, refused.reason);
@@ -133,4 +137,34 @@ test.each(["relaxed", "off"])("Guard Policy %s: the steps a plan changed mid-bui
   const handed = runNamedPrepare(pd, verifyInBuild(pd, "alpha").reason);
   expect(handed.code, `${handed.out}\n${handed.err}`).toBe(0);
   expect(verifyInBuild(pd, "alpha").ok).toBe(true);
+});
+
+// After a checkpoint send-back the build was resumed; a plan approved again in that build is not one prepare can hand
+// over, and prepare says why it cannot yet. The line promises only that, and every refusal after it names a step.
+test("a plan approved again in a resumed checkpoint revision: each step names the next, none promises the hand-over", () => {
+  const pd = nativeCheckpointRevision(UNITS, false);
+  plan(pd, "alpha", "third");
+  expect(nextDirective(pd)).toMatchObject({ kind: "ask", stage: "code-generation" });
+  approveAgain(pd);
+  const refused = verifyInBuild(pd, "alpha");
+  expect(refused.reason).toContain("which hands this build the approved plan or says why it cannot yet");
+  const named = runNamedPrepare(pd, refused.reason);
+  expect(named.code).not.toBe(0);
+  expect(`${named.out}\n${named.err}`).toContain("Re-run prepare with --resume-existing");
+  const resumed = swarm(pd, ["prepare", "--batch", "1", "--units", "alpha", "--resume-existing"]);
+  expect(resumed.code).not.toBe(0);
+  expect(`${resumed.out}\n${resumed.err}`).toContain("request a new checkpoint revision");
+});
+
+// The same plan approved again (only the source it was planned against moved) is no plan prepare hands over, so the
+// check names no prepare step there: it keeps the sentence it always had, rather than a step that changes nothing.
+test("the same plan approved again after the main folder's code moved names no prepare step", () => {
+  const pd = fixture(UNITS);
+  const prepared = prepare(pd, UNITS);
+  expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+  writeFileSync(join(pd, "src", "peer.ts"), "export const peer = 1;\n");
+  approvePlan(pd, "alpha");
+  const refused = verifyInBuild(pd, "alpha");
+  expect(refused.code).toBe(2);
+  expect(refused.reason).toBe("Protected parent Plan Approval or the delegated worktree baseline is no longer current.");
 });

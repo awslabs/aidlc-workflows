@@ -5097,13 +5097,13 @@ function worktreeDelegationParent(
     .update(`${parentQuestions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
     .digest("hex");
   const { delegation: _delegation, ...copiedReceipt } = receipt;
-  if (parentPrompt !== receipt.promptSha256 || questionsFileApprovalFingerprint(parentQuestions) !== receipt.fingerprint) {
+  if (questionsFileApprovalFingerprint(parentQuestions) !== receipt.fingerprint) {
     throw new Error(delegatedPlanChangedReason(provenance, origin.unit));
   }
   if (provenance.hash !== origin.provenanceSha256 ||
       provenance.intentUuid !== authority.intentId || provenance.intentUuid !== receipt.intentId ||
     parentAuthority.intentId !== receipt.intentId || parentAuthority.runFloor !== receipt.runFloor ||
-    parentAuthority.targetId !== receipt.targetId ||
+    parentAuthority.targetId !== receipt.targetId || parentPrompt !== receipt.promptSha256 ||
     hashObject(parentReceipt) !== origin.parentReceiptSha256 ||
     hashObject(copiedReceipt) !== hashObject(parentReceipt) ||
     parentReceipt?.status !== "generation" || receipt.status !== "generation" ||
@@ -5115,8 +5115,10 @@ function worktreeDelegationParent(
 
 // The parent's plan for this Unit is no longer the one its build was handed: a
 // revision after prepare, approved again or waiting for that approval. Prepare
-// run again for the Unit hands an approved plan to the existing build (or says
-// why it cannot), so that is the step, after the question when it is open.
+// run again for the Unit hands an approved plan to the existing build, or says
+// why it cannot yet (a resumed checkpoint revision, work the build already
+// holds), so that is the step, after the question when it is open. The same
+// plan approved again is no revision: prepare hands nothing over for it.
 // Approved means the person's approval, not a lowered fence letting the parent
 // go on without one, and a plan built without asking (plan approval off) is
 // said as that. Worded as the conductor's: a worker meets it through the
@@ -5130,15 +5132,17 @@ function delegatedPlanChangedReason(
   const approval = evaluateCodeGenerationApproval(provenance.parent, { unit });
   if (approval.ok && approval.skipped) {
     return `The plan for ${unit} changed after its build was prepared, and plan approval is off for this work, so ` +
-      `this build still holds the earlier plan. To hand it the current plan, the conductor runs ${prepare} from ${folder}.`;
+      `this build still holds the earlier plan. From ${folder}, the conductor runs ${prepare}, which hands this build ` +
+      "the current plan or says why it cannot yet.";
   }
   if (approval.ok) {
     return `The plan for ${unit} was approved again after its build was prepared, so this build still holds the ` +
-      `earlier plan. To hand it the approved plan, the conductor runs ${prepare} from ${folder}.`;
+      `earlier plan. From ${folder}, the conductor runs ${prepare}, which hands this build the approved plan or says ` +
+      "why it cannot yet.";
   }
   return `The plan for ${unit} changed after its build was prepared and is not approved yet. From ${folder}, the ` +
-    `conductor runs \`${aidlcToolInvocation("orchestrate")} next\` and follows the step it prints, then ${prepare} to ` +
-    "hand the approved plan to this build.";
+    `conductor runs \`${aidlcToolInvocation("orchestrate")} next\` and follows the step it prints, then ${prepare}, ` +
+    "which hands this build the approved plan or says why it cannot yet.";
 }
 
 function validateWorktreeDelegation(
