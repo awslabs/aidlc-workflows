@@ -323,6 +323,29 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(problems).toEqual([]);
   });
 
+  test("every shipped conductor SKILL switches a named plan at once, through next --scope", () => {
+    // "switch this to the express plan" at a gate went to the composer on Kiro
+    // CLI and opencode: the rule had a case for named stages only, and the
+    // composer keeps the running plan, so the person heard the switch could not
+    // be done mid-run. The engine's own mid-run switch does it in place. With
+    // their other words beside `--scope`, `next` asks whether those words are
+    // new work, so the name goes alone.
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const tok of [
+        "UNLESS the request names the stages to skip or add, or the plan to switch to,",
+        '(see "Named stage changes are done at once" and "A named plan is switched at once" below)',
+        "**A named plan is switched at once.**",
+        "run `{{INVOKE}} engine orchestrate next --scope <plan>` with that plan's name and none of their other words",
+        "The composer is not run for it.",
+      ]) {
+        if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
   test("every shipped conductor SKILL sends --help through the loop's first step, not the command-line help", () => {
     // A live agent sometimes answered /aidlc --help with `aidlc --help`, the
     // terminal tool's help. The clause sits on step 1 itself, so a harness's
