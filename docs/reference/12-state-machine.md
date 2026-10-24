@@ -1583,7 +1583,10 @@ approval, the same approval runs again, so they are not asked twice); a stage
 reported before its outputs or its code exist (`REQUIRED_ARTIFACTS_MISSING`,
 `REQUIRED_SOURCE_WORK_MISSING`) offers `produce-stage-output`, the refusal's own
 sentence, which ends with the same report again (for missing code, the second
-report puts the approval question to the person with where AI-DLC looked); a stage whose outputs came
+report puts the approval question to the person with where AI-DLC looked); an output saved before the
+person's current summary confirmation (`SUMMARY_ARTIFACT_UNAUTHORIZED`, under strict, or with no recorded
+write under any policy) while no review covers it or is under way offers `produce-stage-output` too, the
+refusal's own sentence naming every such output, and only a repeat asks the person; a stage whose outputs came
 before the person was asked its questions (`SUMMARY_QUESTIONS_MISSING`, as a parallel wave's builders
 leave it) offers `ask-stage-questions`: ask the person the stage's questions through its question flow, in
 the questions file it names, confirm their summary with them, then save each document again (when the
