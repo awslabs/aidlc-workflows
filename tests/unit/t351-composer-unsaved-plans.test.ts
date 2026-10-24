@@ -37,7 +37,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { delegatedLifecycleCommand } from "../../core/hooks/aidlc-state-transition-guard.ts";
 import { customPlanBase, customPlanStart, nearestStockScopes, scopeSettingsOf } from "../../core/tools/aidlc-graph.ts";
-import { recordCeremoniesAtCreation, recordPlanApprovalCreationGrant } from "../../core/tools/aidlc-guard-switch.ts";
+import { grantGuardPolicyAtCreation, recordCeremoniesAtCreation, recordPlanApprovalCreationGrant } from "../../core/tools/aidlc-guard-switch.ts";
 import {
   auditFilePath,
   composedPlanLabel,
@@ -1820,6 +1820,22 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
     expect(state).toMatch(/^- \*\*Plan Approval\*\*: off\b/m);
     expect(state).toMatch(/^- \*\*Learnings\*\*: off\b/m);
     expect(state).toMatch(/^- \*\*Sensors\*\*: on\b/m);
+
+    // The plan raises Guard Policy to relaxed on its off base; the person asked
+    // for it off before the work existed, so their off stands.
+    const policy = installedProject();
+    const policyId = compose(policy);
+    const raised = validate(policy, { stages: plannedGrid(), scopeSettings: SETTINGS, guardPolicy: "relaxed", depth: "standard" }, ["--custom"]);
+    expect(withEnvAndFreshCaches(POLICY_ENV, () => scopeGuardPolicyDefault(raised.base_scope as string))).toBe("off");
+    expect(grantGuardPolicyAtCreation(policy, CHAT, null, "off").applied).toBe(true);
+    const policyPrinted = nextInChat(policy, [
+      "--scope", raised.base_scope as string, ...lists(raised.plan_changes as { skip: string[]; add: string[] }), "--request", policyId,
+    ]);
+    expect(creationOf(policyPrinted)).not.toContain("--guard-policy");
+    expect(creationOf(policyPrinted)).toContain("--depth standard");
+    const policyCreated = runCreation(policy, policyPrinted);
+    expect(policyCreated.status, policyCreated.out).toBe(0);
+    expect(stateOf(policy)).toMatch(/^- \*\*Guard Policy\*\*: off\b/m);
   });
 
   test("a matched plan, the plain base after a Reject, and a kept value outside its words fill nothing", () => {

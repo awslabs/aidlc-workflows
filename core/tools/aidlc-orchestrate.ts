@@ -6525,7 +6525,7 @@ function createPrintDirective(
 // the person's own word at Approve, and a typed lowering still meets intent
 // create's own check. So does a setting the person asked for in this chat
 // before the work existed, which intent create applies from their words. A
-// lowering filled here names their message, as a typed one does.
+// setting filled here names their message, as a typed one does.
 function fillApprovedPlanSettings(flags: ParsedFlags, plan: ApprovedComposerPlan, projectDir: string): void {
   let session: string | null = null;
   try {
