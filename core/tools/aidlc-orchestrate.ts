@@ -15372,8 +15372,7 @@ function emitJumpDirective(
   projectDir: string,
   projectType: "brownfield" | "greenfield" | null = null,
 ): "route" | undefined {
-  // --phase initialization is rejected up front, a phase before resolve picks
-  // its stage (applies with or without state).
+  // --phase initialization is rejected up front (applies with or without state).
   if (flags.phase && canonicalisePhase(flags.phase) === "initialization") {
     emit(initStageDirective(INIT_JUMP_ERROR, projectDir));
     return;
