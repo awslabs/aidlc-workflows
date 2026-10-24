@@ -604,8 +604,12 @@ repository that is not this project's code) is left out of the source checks by
 naming it under `exclude` in `.aidlc-source-paths.json` (the file in that repo's
 own folder for a recorded repo). The exclude works at once, with no further
 review; remove the line to put the path back. A path the project's `.gitignore`
-already ignores is never counted. Under Guard Policy relaxed or off the change
-is kept and said once instead.
+already ignores is never counted, and neither is a file another open piece of
+work in this folder lists in its own Units' source manifests (a second chat
+building its own work here), or anything under a folder it lists: that is the
+other work's change, and its own checks cover it. Archiving a piece of work you
+will not finish (`/aidlc intent archive <name>`) ends its claims. Under Guard
+Policy relaxed or off the change is kept and said once instead.
 
 ### Plan Approval asked twice for the same plan
 

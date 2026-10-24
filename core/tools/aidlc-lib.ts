@@ -27389,6 +27389,79 @@ export function readUnitSourceManifest(
   return validateUnitSourceManifestBytes(projectDir, stageSlug, unit, rawBytes, options);
 }
 
+// Two chats, each on its own piece of work, can build in this one folder: a
+// file another open work's Units claim is that work's change, never this
+// work's. Every space's records but this one (resolved as
+// readUnitSourceManifest resolves it), less complete and archived ones (an
+// unregistered record is live, as activeIntent reads it). A manifest is read by
+// this work's own validator, so its keys are this listing's; one that does not
+// read whole is read write by write. A Bolt worktree is one Unit's own folder.
+// `work` and `paths` are inert. The completion check, the Code Generation step
+// and its review request all read this one set.
+export function otherOpenWorkClaims(
+  projectDir: string,
+  stageSlug: string,
+): { work: string; record: string; claims: SourceClaimModel; paths: string[] }[] {
+  if (!/^[a-z][a-z0-9-]*$/.test(stageSlug) || existsSync(join(projectDir, ".aidlc", "worktree-meta.json"))) return [];
+  const own = recordDir(projectDir);
+  if (own === null) return [];
+  const works: ReturnType<typeof otherOpenWorkClaims> = [];
+  for (const { name: space } of listSpaces(projectDir)) {
+    const dirNames = listIntentDirs(projectDir, space);
+    if (dirNames.length === 0) continue;
+    const registry = readIntentRegistry(projectDir, space);
+    for (const dirName of dirNames) {
+      const record = join(intentsDir(projectDir, space), dirName);
+      if (record === own) continue;
+      const row = registry.find((entry) => recordDirMatches(entry, dirName));
+      if (typeof row?.status === "string" && (isCompletedIntent(row) || isArchivedIntent(row))) continue;
+      const claims: SourceClaimModel = { claims: new Set(), prefixes: [] };
+      const paths = new Set<string>();
+      let units: string[];
+      try {
+        units = readdirSync(join(record, "construction"));
+      } catch {
+        continue;
+      }
+      for (const unit of units.sort()) {
+        if (validateUnitName(unit) !== null) continue;
+        let raw: Buffer;
+        try {
+          raw = readFileSync(join(record, "construction", unit, stageSlug, "source-manifest.json"));
+        } catch {
+          continue;
+        }
+        type Read = Extract<ReadUnitSourceManifestResult, { ok: true }>;
+        const whole = validateUnitSourceManifestBytes(projectDir, stageSlug, unit, raw, {});
+        let value: unknown = null;
+        if (!whole.ok) {
+          try {
+            value = JSON.parse(agentFileText(raw));
+          } catch {}
+        }
+        const read: Read[] = whole.ok ? [whole] : isPlainObject(value) && Array.isArray(value.writes)
+          ? value.writes.map((write) => validateUnitSourceManifestBytes(projectDir, stageSlug, unit,
+            Buffer.from(JSON.stringify({ ...value, writes: [write] })), {})).filter((one): one is Read => one.ok)
+          : [];
+        for (const one of read) {
+          for (const key of one.claims) claims.claims.add(key);
+          claims.prefixes.push(...one.prefixes);
+          for (const write of one.manifest.writes) paths.add(inertPath(write.repo ? `${write.repo}/${write.path}` : write.path));
+        }
+      }
+      if (paths.size === 0) continue;
+      claims.prefixes.sort();
+      works.push({
+        work: inertPath(typeof row?.slug === "string" ? row.slug : displaySlugFromDirName(dirName)),
+        record: `aidlc/spaces/${space}/intents/${dirName}`,
+        claims,
+        paths: [...paths],
+      });
+    }
+  }
+  return works;
+}
+
 function validateUnitSourceManifestBytes(
   projectDir: string,
   stageSlug: string,

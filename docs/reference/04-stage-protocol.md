@@ -1245,7 +1245,11 @@ change. See
    as a refused completion. It returns `reviewed_at` too, the UTC time this
    review is dated: the dispatch brief carries it as `Date for this review:`
    and the reviewer writes its `**Date:**` line from the brief, so no reviewer
-   runs a command of its own for the time. The directive's `review_artifact` field
+   runs a command of its own for the time. On a stage that builds in the
+   workspace, when another open piece of work in this checkout claims files in
+   its Units' source manifests, its `agent_note` gives the line the brief
+   carries word for word: those files are that work's, not this work's to
+   review (the same set `other_work_note` names to the build). The directive's `review_artifact` field
    names the required Markdown output the review is about: the record is
    keyed to it, the gate names it, and finding selectors address it; output
    ordering and plugin additions cannot change it, and nothing writes to it

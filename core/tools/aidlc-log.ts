@@ -6,7 +6,7 @@
 // (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
 // because they fire per-question / per-review, not per state transition.
 
-import { reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
+import { otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
@@ -239,6 +239,7 @@ import {
   writeBaselineSourceSnapshot,
   writeUnitSourceSnapshot,
   writeWorkspaceSourceSnapshot,
+  otherOpenWorkClaims,
   PLAN_APPROVAL_ASKED_BY_ENGINE,
   planApprovalAskIsOpen,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
@@ -3563,6 +3564,7 @@ function handleReview(args: string[]): void {
     let replaces: string | null = null;
     let requestId: string | null = null;
     let reviewFile: string | null = null;
+    let workspaceStage = false;
     const requestChangeNotices: string[] = [];
     // Open the reviewer's slot for this request: any draft an earlier dispatch of
     // the same iteration left behind is not this dispatch's review.
@@ -3603,6 +3605,7 @@ function handleReview(args: string[]): void {
           unitResolution,
           mergedBoltUnits,
         } = context;
+        workspaceStage = node.workspace_requires === true;
         const { pendingStatus, teamGate } = admitReviewSummary(context, "review-request", requestChangeNotices);
         const expected = attempt.requestCount + 1;
         const sameSourceRecoveryScope =
@@ -4135,6 +4138,9 @@ function handleReview(args: string[]): void {
     });
     const dispatchAgent = copy !== null && "dispatchAgent" in copy ? copy.dispatchAgent : null;
     if (copy !== null && "notice" in copy) requestChangeNotices.push(copy.notice);
+    // The reviewer is told which files another open piece of work in this
+    // folder claims, as the build was, so it raises no finding about them.
+    const otherWork = workspaceStage ? otherOpenWorkClaims(pd, flags.stage) : [];
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
@@ -4149,6 +4155,7 @@ function handleReview(args: string[]): void {
         reviewFile ?? "the review file this request opened",
         recordVerdict,
         dispatchAgent,
+        otherWork.length > 0 ? otherWorkNote(otherWork, "review") : undefined,
       ),
       ...(retried ? { retry: "pending-request" } : {}),
       ...(upgraded ? { upgrade: "legacy-request" } : {}),

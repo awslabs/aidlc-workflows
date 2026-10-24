@@ -184,6 +184,7 @@ import {
   readUnitMergeTransaction,
   readUnitGateRhythm,
   readUnitScopeStamp,
+  otherOpenWorkClaims,
   recordDir,
   recoveryGuidance,
   requestChangesResetIsExecutable,
@@ -5335,9 +5336,15 @@ function verifyReviewerPrecondition(
     // the walk (a cache excluded after the stage started: its baseline entries
     // are nobody's change).
     const aidlcOwned = aidlcOwnedSourceKey(pd);
-    const outsideClaims = [...baselineChanged].filter((pathKey) =>
+    let outsideClaims = [...baselineChanged].filter((pathKey) =>
       !aidlcOwned(pathKey) && !claimModels.some((claims) => sourceClaimCovers(pathKey, claims))
     );
+    // Nor is a file another open piece of work in this folder claims: a second
+    // chat building its own work here made it, so it is that work's change.
+    if (outsideClaims.length > 0) {
+      const otherWork = otherOpenWorkClaims(pd, stage.slug);
+      outsideClaims = outsideClaims.filter((pathKey) => !otherWork.some((work) => sourceClaimCovers(pathKey, work.claims)));
+    }
     const unclaimable = unclaimableIgnoredSourceKeys(pd, outsideClaims);
     for (const key of registryExcludedSourceKeys(pd, outsideClaims)) unclaimable.add(key);
     baselineUnclaimed = outsideClaims

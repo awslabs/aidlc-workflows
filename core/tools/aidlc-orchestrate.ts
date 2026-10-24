@@ -147,6 +147,7 @@ import {
   type StageValidityAdvisory,
   bodyRuns,
   numberedProseQuestion,
+  otherWorkNote,
   PLAN_CHANGE_DETAILS,
   REPO_PLACEHOLDER,
   showsGateAgain,
@@ -502,6 +503,7 @@ import {
   PERSON_ASKED_SKIP_REASON,
   PERSON_ASKED_UNDO_SKIP_REASON,
   readUnitSourceManifest,
+  otherOpenWorkClaims,
   readIntentRegistry,
   unitPlainName,
   unitSkippedItsCode,
@@ -1573,6 +1575,16 @@ function prepareEmission(directive: Directive): PreparedEmission {
     const state = projectDir ? loadStateFileIfPresent(projectDir) : null;
     const count = state ? stageOfPlan("code-generation", getField(state, "Scope")?.trim() ?? "", state) : "";
     directive.narration = `Writing the code plan for Code Generation${unit}${count} first; the developer builds from it.`;
+  }
+  // A step that builds in the workspace names the files another open piece of
+  // work in this folder claims, so this build leaves them as they are. Before
+  // the notes, so a dispatched brief carries it and transport measures it.
+  if (
+    directive.kind === "run-stage" && route?.node.workspace_requires === true &&
+    bodyRuns(directive as unknown as Record<string, unknown>)
+  ) {
+    const works = otherOpenWorkClaims(route.codekbCtx.projectDir, directive.stage);
+    if (works.length > 0) directive.other_work_note = otherWorkNote(works);
   }
   // A refusal does not carry on: it says why, and the kept words (below); a
   // warning that the mark could not be written stays.
