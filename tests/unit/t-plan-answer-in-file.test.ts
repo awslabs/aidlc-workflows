@@ -132,6 +132,11 @@ function auditText(proj: string): string {
     .map((name) => readFileSync(join(dir, name), "utf-8")).join("\n");
 }
 
+/** The audit rows of one event, newest last. */
+function rows(proj: string, event: string): string[] {
+  return auditText(proj).split(/\n---\n/).filter((block) => block.includes(`**Event**: ${event}\n`));
+}
+
 function questionsPath(proj: string): string {
   return join(stageDir(proj), "code-generation-questions.md");
 }
@@ -266,6 +271,8 @@ describe("an answer written in the Plan Approval questions file", () => {
     expect(auditText(proj)).not.toContain("**Details**: Request Changes");
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
     expect(answer(proj, "Request Changes").code).toBe(0);
+    // The record keeps the file's line as it was found, beside the choice read from chat.
+    expect(rows(proj, "QUESTION_ANSWERED").at(-1)).toContain("**Answer Line In File**: Approve Plan");
     expect(next(proj).plan_approval?.status).toBe("revise");
   });
 
@@ -281,6 +288,44 @@ describe("an answer written in the Plan Approval questions file", () => {
     reply(proj, "done");
     expect(auditText(proj).match(/\*\*Event\*\*: PLAN_APPROVAL_RECORDED/g)?.length ?? 0).toBe(1);
     expect(next(proj).kind).toBe("ask");
+  });
+
+  // The file invites an answer after `[Answer]:`; the engine then writes its own
+  // mark over that line, so the record is where what they wrote is kept.
+  test("the line they wrote is kept on the approval's record when the engine writes its own mark over it", () => {
+    const proj = project();
+    askFor(proj);
+    writeAnswer(proj, "yes, build it");
+    reply(proj, "done, I answered in the file");
+    expect(answer(proj, "Approve Plan").code).toBe(0);
+    expect(answerLine(proj)).toBe("[Answer]: A. Approve Plan");
+    const row = rows(proj, "PLAN_APPROVAL_RECORDED").at(-1)!;
+    expect(row).toContain("**Answer Line In File**: yes, build it");
+    expect(row).toContain("**Person Reply**: done, I answered in the file");
+  });
+
+  test("the line they wrote is kept on a Request Changes record", () => {
+    const proj = project();
+    askFor(proj);
+    writeAnswer(proj, "use a lookup table");
+    reply(proj, "done");
+    expect(answer(proj, "Request Changes", ["--reason", "use a lookup table"]).code).toBe(0);
+    expect(answerLine(proj)).toBe("[Answer]: B. Request Changes");
+    expect(rows(proj, "QUESTION_ANSWERED").at(-1)).toContain("**Answer Line In File**: use a lookup table");
+  });
+
+  test("an answer given in chat, or the engine's own mark on the line, keeps no line as theirs", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "1");
+    expect(answer(proj, "Approve Plan").code).toBe(0);
+    expect(answer(proj, "Review the plan").code).toBe(0);
+    expect(next(proj).kind).toBe("ask");
+    reply(proj, "approve it");
+    expect(answer(proj, "Approve Plan").code).toBe(0);
+    const approvals = rows(proj, "PLAN_APPROVAL_RECORDED");
+    expect(approvals).toHaveLength(2);
+    for (const row of approvals) expect(row).not.toContain("Answer Line In File");
   });
 
   test("edit mode is unchanged: done leaves the record to the agent, which reads the files", () => {

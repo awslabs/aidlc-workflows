@@ -676,6 +676,15 @@ function answerWrittenInFile(questions: string): string {
   return line === undefined || line === null ? "" : line[1].trim();
 }
 
+// The line as the person left it, kept on the answer's record before the
+// engine writes its own mark over it: empty when it is blank or one of the
+// engine's own marks, which are never read back as theirs.
+function answerLineAsFound(questions: string): string {
+  const line = answerWrittenInFile(questions);
+  const engineMarks: readonly string[] = [APPROVED_ANSWER, CHANGES_ANSWER, PLAN_APPROVAL_OFF_ANSWER];
+  return engineMarks.includes(line) ? "" : line;
+}
+
 // The same question, with only the person's written answer differing from what
 // the engine would write now: the question stands, so their words stay.
 function onlyTheirAnswerDiffers(onDisk: string, template: string): boolean {
@@ -1356,6 +1365,7 @@ function approveTarget(
     : approvalFingerprint(planAsFound, instructions, read.contract.contract_sha256, authority);
   const asked = record.targets.find((target) => target.unit === unit)?.fingerprint;
   const questionsPath = join(dir, QUESTIONS_FILE);
+  const theirLine = answerLineAsFound(readText(questionsPath));
   const questions = questionsFileContent(
     record.question, view, record.choices, fingerprint, sourceFingerprint, APPROVED_ANSWER,
   );
@@ -1405,6 +1415,7 @@ function approveTarget(
     Session: session,
     "Asked By": "engine",
     ...(words ? { "Person Reply": words } : {}),
+    ...(theirLine ? { "Answer Line In File": theirLine } : {}),
     ...(words && messageId ? { "Message Id": messageId } : {}),
     ...(unit !== null ? { Unit: unit, ...claimAttemptFields(projectDir, unit) } : {}),
   }, projectDir);
@@ -1433,6 +1444,7 @@ function requestChangesFor(
   const view = targetView(projectDir, unit, changedBeforeApprovalLine(projectDir));
   const asked = record.targets.find((target) => target.unit === unit);
   const existing = readText(questionsPath);
+  const theirLine = answerLineAsFound(existing);
   const fingerprintLine = /^\[Approval Fingerprint\]:[ \t]*(\S+)/m.exec(existing)?.[1] ?? asked?.fingerprint ?? "";
   const sourceLine = /^\[Planned Source\]:[ \t]*(\S+)/m.exec(existing)?.[1] ?? "unbindable";
   writeFileAtomic(
@@ -1459,6 +1471,7 @@ function requestChangesFor(
     "Asked By": "engine",
     ...(feedback ? { "User Input": feedback } : {}),
     ...(words && words !== feedback ? { "Person Reply": words } : {}),
+    ...(theirLine ? { "Answer Line In File": theirLine } : {}),
     ...(words && messageId ? { "Message Id": messageId } : {}),
     ...(unit !== null ? { Unit: unit } : {}),
   }, projectDir);
