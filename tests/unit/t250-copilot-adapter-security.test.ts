@@ -2168,7 +2168,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           expect(decision("aidlc engine log answers --stage a\\b", shell), String(shell)).toBe("allow");
           expect(decision('aidlc engine log answers --stage "a\\"; calc; \\"b"', shell), String(shell)).toBe("deny");
         }
-        // A tool named for its shell is that shell, wherever the hook runs.
+        // The Copilot CLI's `Bash` gets no allow decision on any host: its own
+        // --allow-tool rules decide.
         const named = (command: string, toolName: string) =>
           shellDecision(runAdapter(s, "guard-tool-call", shellCall(command, "S-ALLOW", toolName))).hookSpecificOutput?.permissionDecision;
         expect(named("aidlc engine knowledge summarize --text-file docs\\notes.txt", "Bash")).toBeUndefined();
@@ -2246,10 +2247,52 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           expect(call(`cd ${root}; aidlc engine orchestrate next`, shell, "run_in_terminal", { aidlc_shell: "powershell" }), String(shell)).toEqual({});
           expect(guardShell(), String(shell)).toBeUndefined();
         }
-        expect(call(`cd ${root}; aidlc engine orchestrate next`, undefined, "Bash")).toEqual({});
-        expect(guardShell()).toBeUndefined();
+        // The Copilot CLI names its shell tool `Bash` on every host; on Windows
+        // that tool is PowerShell, so there the cd-led command runs like the
+        // bare one (the rewrite, no permission decision), elsewhere it keeps
+        // today's answer.
+        const cli = call(`cd ${root}; aidlc engine orchestrate next`, undefined, "Bash");
+        if (process.platform === "win32") {
+          expect(cli.hookSpecificOutput?.permissionDecision).toBeUndefined();
+          expect(cli.hookSpecificOutput?.updatedInput?.command).toBe(`cd ${root}; aidlc engine orchestrate next ${STUB_ATTEMPT}`);
+          expect(guardShell()).toBe("powershell");
+        } else {
+          expect(cli).toEqual({});
+          expect(guardShell()).toBeUndefined();
+        }
       } finally {
         rmSync(outside, { recursive: true, force: true });
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("27m: the Copilot CLI's shell call reaches the plan-approval guard read as PowerShell on Windows, and as POSIX elsewhere", () => {
+    // The CLI hands its shell tool to the PascalCase hooks as `Bash` with the
+    // model's own arguments and no shell field (its own record names the tool
+    // `powershell` on Windows Server, 1.0.103), and on Windows that tool runs
+    // PowerShell. A shell the call names still wins.
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const guardShell = () => capturedInputs(s.captureDir, "aidlc-plan-approval-guard.ts").at(-1)?.aidlc_shell;
+      const command = "New-Item -ItemType Directory -Force aidlc\\spaces\\default\\intents\\x\\construction\\code-generation | Out-Null";
+      for (const toolName of ["Bash", "bash"]) {
+        runAdapter(s, "guard-tool-call", {
+          hook_event_name: "PreToolUse",
+          session_id: "S-ALLOW",
+          tool_name: toolName,
+          tool_input: { command, description: "Create the code generation folder", mode: "sync", initial_wait: 30 },
+        });
+        expect(guardShell(), toolName).toBe(process.platform === "win32" ? "powershell" : undefined);
+        runAdapter(s, "guard-tool-call", {
+          hook_event_name: "PreToolUse",
+          session_id: "S-ALLOW",
+          tool_name: toolName,
+          tool_input: { command, shell: "C:\\Program Files\\Git\\bin\\bash.exe" },
+        });
+        expect(guardShell(), `${toolName} in Git Bash`).toBeUndefined();
       }
     } finally {
       s.cleanup();
