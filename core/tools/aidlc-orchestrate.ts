@@ -14276,6 +14276,33 @@ function redoChosenForUnitStep(projectDir: string, slug: string, unit: string): 
   return chosen !== -1 && !attemptEventIsCrossShardTied(rows, chosen);
 }
 
+// The solo unit-major walk a jump to a per-unit step is judged in. Past the
+// block, only a named Unit is reopened: for every Unit the backward jump
+// redoes the target and keeps the steps before it.
+function unitJumpWalk(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  namesUnit: boolean,
+): { step: UnitMajorWalkStep; block: GraphStage[]; context: UnitWorkContext } | null {
+  const currentSlug = getField(stateContent, "Current Stage")?.trim() ?? "";
+  return unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug) ??
+    (namesUnit ? unitMajorFinishedWalk(projectDir, scope, stateContent, currentSlug) : null);
+}
+
+// The one check of a Unit named for a jump to one of the walk's steps, asked
+// by `next --stage --unit` and by the re-entry report before it accepts: what
+// is wrong when the Unit is not one of this work's Units, else null.
+function unitOutsideWork(
+  walk: { block: GraphStage[]; context: UnitWorkContext } | null,
+  targetSlug: string,
+  unit: string,
+): string | null {
+  if (!walk?.block.some((stage) => stage.slug === targetSlug)) return null;
+  const units = walk.context.units;
+  return units.includes(unit) ? null : `${unit} is not one of this work's units (${units.join(", ")}).`;
+}
+
 // A jump back to a per-unit stage a Unit already finished, in a solo unit-major
 // walk (#1411). Current Stage stays on the first per-unit stage there, or has
 // moved on to a later per-unit stage's gate (or, for a named Unit, past the
@@ -14295,11 +14322,7 @@ function unitMajorReopen(
   targetSlug: string,
   flags: ParsedFlags,
 ): PrintDirective | { kind: "error"; message: string } | "route" | null {
-  const currentSlug = getField(stateContent, "Current Stage")?.trim() ?? "";
-  // Past the block, only a named Unit is reopened here: for every Unit the
-  // backward jump redoes the target and keeps the steps before it.
-  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug) ??
-    (flags.jumpUnit !== undefined ? unitMajorFinishedWalk(projectDir, scope, stateContent, currentSlug) : null);
+  const walk = unitJumpWalk(projectDir, scope, stateContent, flags.jumpUnit !== undefined);
   if (!walk) return null;
   const blockSlugs = walk.block.map((stage) => stage.slug);
   const targetIndex = blockSlugs.indexOf(targetSlug);
@@ -14358,11 +14381,11 @@ function unitMajorReopen(
   let reopened: string[];
   if (flags.jumpUnit !== undefined) {
     const named = flags.jumpUnit;
-    if (!units.includes(named)) {
+    const outside = unitOutsideWork(walk, targetSlug, named);
+    if (outside !== null) {
       return {
         kind: "error",
-        message: `"${named}" is not one of this work's units (${units.join(", ")}). ` +
-          `Name one of them with \`${entrySkillInvocation()} --stage ${targetSlug} --unit <name>\`.`,
+        message: `${outside} Name one of them with \`${entrySkillInvocation()} --stage ${targetSlug} --unit <name>\`.`,
       };
     }
     // The Unit in flight on the target itself: that is where the walk already is.
@@ -15464,12 +15487,10 @@ function skippedJumpDirective(target: string, direction: string, current: string
 // direct graph lookup that names the requested target (the prose's "or 0.3 if
 // freshly initialized" degenerate case) and emits a plain run-stage — it is NOT
 // a commit, so it does not route through `execute`.
-// SKILL.md step 5 (Initialization guard) verbatim: jumping to an initialization
-// stage — or `--phase initialization` — is rejected. Init stages have bootstrap
-// behavior (create the state file, scaffold dirs) that doesn't fit the jump
-// model; the user must run `/aidlc --init`. The guard is prose-only in SKILL.md
-// (`aidlc-jump.ts resolve` treats init stages as valid targets, returning
-// valid:true), so the engine enforces it here rather than relaying a tool error.
+// Jumping to an initialization stage, or `--phase initialization`, is rejected.
+// Init stages have bootstrap behavior (create the state file, scaffold dirs)
+// that doesn't fit the jump model. `aidlc-jump.ts resolve` treats init stages as
+// valid targets, so the engine enforces it (initJumpRefusal for a stage).
 const INIT_JUMP_ERROR =
   `Cannot jump to initialization stages. The Initialization phase runs automatically when you start a workflow (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service").`;
 // With work already under way, asking for an initialization stage is asking to
@@ -15481,6 +15502,14 @@ function initStageDirective(base: string, projectDir: string): Directive {
       `If they want that, run \`${aidlcToolInvocation("orchestrate")} next --project-type brownfield\` ` +
       "(`--project-type greenfield` when it is a new project).",
   );
+}
+
+// The one check of an initialization stage as a jump target, asked by `next
+// --stage` and by the re-entry report's jump before it says the jump is
+// accepted, so the report never accepts an initialization stage the jump then
+// refuses.
+function initJumpRefusal(slug: string, projectDir: string): Directive | null {
+  return nodeForSlug(slug)?.phase === "initialization" ? initStageDirective(INIT_JUMP_ERROR, projectDir) : null;
 }
 
 // Why a jump cannot reopen its target for the unit the person named, said
@@ -15542,9 +15571,9 @@ function emitJumpDirective(
     const { targetSlug, direction } = resolved;
     // resolve validates SKIP/unknown but NOT the init-stage guard — enforce it
     // on the resolved target (covers --stage <init> against existing state).
-    const targetNode = nodeForSlug(targetSlug);
-    if (targetNode && targetNode.phase === "initialization") {
-      emit(initStageDirective(INIT_JUMP_ERROR, projectDir));
+    const initRefusal = initJumpRefusal(targetSlug, projectDir);
+    if (initRefusal) {
+      emit(initRefusal);
       return;
     }
     if (resolved.targetSkipped) {
@@ -15630,9 +15659,10 @@ function emitJumpDirective(
     ));
     return;
   }
-  // Init-stage guard applies on the no-state path too (SKILL.md step 5).
-  if (node.phase === "initialization") {
-    emit(errorDirective(INIT_JUMP_ERROR));
+  // Init-stage guard applies on the no-state path too.
+  const initRefusal = initJumpRefusal(node.slug, projectDir);
+  if (initRefusal) {
+    emit(initRefusal);
     return;
   }
   // Scope membership. resolve REQUIRES a state file, so this no-state branch
@@ -17397,6 +17427,18 @@ function emitTypedResumeChoice(
   const units = flags.unit !== undefined
     ? ` --unit ${flags.unit}`
     : flags.everyUnit ? " --every-unit" : "";
+  // A Unit this work does not have is asked about once, before anything is
+  // accepted, by the check `next --stage --unit` refuses it with. Nothing
+  // moves, so the print ends the turn and never goes through `move()`.
+  const unitNotInWork = (step: string): PrintDirective | null => {
+    const outside = flags.unit !== undefined && validScopes().has(scope)
+      ? unitOutsideWork(unitJumpWalk(pd, scope, stateContent, true), step, flags.unit)
+      : null;
+    return outside === null ? null : turnEndingPrint(
+      `Run nothing. Tell the person in one line: "${outside} Which one did you mean?" When they say, run this ` +
+        `report again with \`--unit <the unit they name>\` in place of \`--unit ${flags.unit}\`.`,
+    );
+  };
   if (choice === "redo" && units !== "") {
     // Redoing a step for named Units is reopening that step for them: the
     // stage the person named, else the step the walk is on, as a jump back to
@@ -17406,6 +17448,11 @@ function emitTypedResumeChoice(
       emit(errorDirective(
         `This workflow's current stage is not one AI-DLC knows, so it cannot be redone from here. Run \`${entrySkillInvocation()} --status\` to see where it stands.`,
       ));
+      return;
+    }
+    const unknownUnit = unitNotInWork(step);
+    if (unknownUnit !== null) {
+      emit(unknownUnit);
       return;
     }
     // Naming the Unit the walk is on, at the step it is on, is that Unit's
@@ -17454,6 +17501,19 @@ function emitTypedResumeChoice(
         `Run nothing. Tell the person in one line: "No stage is named ${target}. Which stage did you mean?" ` +
           "When they say, report again with `--choice jump --target <stage>`.",
       ));
+      return;
+    }
+    // An initialization target gets the refusal `next --stage` gives, as it
+    // is: nothing moves, so there is nothing to park after, and `move()` would
+    // rebuild the print without its turn-ending mark.
+    const initRefusal = initJumpRefusal(node.slug, pd);
+    if (initRefusal) {
+      emit(initRefusal);
+      return;
+    }
+    const unknownUnit = unitNotInWork(node.slug);
+    if (unknownUnit !== null) {
+      emit(unknownUnit);
       return;
     }
     emit(move(printDirective(
