@@ -1091,6 +1091,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#parkedDirective`]: { use: "keeps", why: "a step's narration, which may carry their words", from: [`${ORCH}#parkAfterApproval`] },
   [`${ORCH}#parkAfterApproval`]: { use: "keeps", why: "as above" },
   [`${ORCH}#nextArgsAreOnlyWords`]: { use: "keeps", why: "the presence shape: next carries only words" },
+  [`${ORCH}#planTypedAloneBesideWork`]: { use: "keeps", why: "the presence shape: a plan's name with no words after it" },
   [`${ORCH}#freshWorkOfferDirective`]: { use: "decides", why: "as above (the plan offer)" },
   [`${ORCH}#createPrintDirective`]: { use: "decides", why: "a question that shows their request back and keeps it in the question store" },
   [`${ORCH}#planNamedAloneStep`]: { use: "keeps", why: "as above" },
