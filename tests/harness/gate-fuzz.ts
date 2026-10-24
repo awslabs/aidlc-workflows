@@ -1660,6 +1660,9 @@ export function checkRun(run: Run): Failure[] {
         if (t.step >= s.i) continue;
         // A quote may be cut short, so the first 30 characters are enough to show it.
         const words = t.text.trim().slice(0, 30);
+        // A pick in a question box is one of the choices the engine offered (turnText), whatever its shape: a step
+        // that names the open question's choices names the engine's own labels, not the person's words.
+        if (t.channel === "box-pick") continue;
         if (words.length >= 12 && !["label", "label-variant", "engine-string", "digit", "command-bare", "blank"].includes(t.shape) && op.out.includes(words)) {
           // Where in the step the words sit, when it is a JSON step: the field that hands them to the agent.
           const path = jsonPathHolding(op.out, words);
