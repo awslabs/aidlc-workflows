@@ -546,17 +546,18 @@ export function switchesOffLines(
 /**
  * The agent's own instruction beside a line that offers a check back on, never
  * part of what the person hears: the one command that turns it back on from a
- * chat, for a yes to the line or their own words asking for it. It names no
- * file, so their "for this project" is never built into --project, the shared
- * file, which does not hold it. A chat that opens with that request has made
- * the line untrue, so what the command prints is the report to pass on
- * instead. Null where the line makes no offer.
+ * chat, for a yes to the line or their own words asking for it. It names the
+ * place the line names and a command that names no file, so their "for this
+ * project" is never built into --project, the shared file, which does not hold
+ * it. A chat that opens with that request has made the line untrue, so what the
+ * command prints is said in its place. Null where the line makes no offer.
  */
 export function backOnInstruction(off: SwitchOff): string | null {
   if (!chatTurnsBackOn(off.projectDir === undefined ? [] : recordedIn(off.projectDir, off.name))) return null;
   const label = PERSON_CHECK_SWITCH_LABELS[off.name] ?? off.name;
-  return `If the person wants the ${label} back on (a yes to its line, or their own words), run: ` +
-    `${clearSwitchCommand(off.name, off.projectDir)}. What it prints is then the report to pass on for that check.`;
+  return `If the person wants the ${label} back on ${where(off.target)} (a yes to its line, or their own words), ` +
+    `run exactly this command: ${clearSwitchCommand(off.name, off.projectDir)}, and say what it prints in place of ` +
+    "that line.";
 }
 
 /** The instruction for each switch off whose line offers it back on, for session start. */

@@ -501,7 +501,7 @@ describe("a check switched off for the project is always said, never refused", (
 // of 4 legs). The agent is handed the one command that turns the check back on
 // from a chat, beside the line it says, and the line stays as it is.
 const BACK_ON = `config flags --clear-bypass ${NAME} --yes`;
-const BACK_ON_RUN = /run: (.+? config flags --clear-bypass \S+ --yes)\. What it prints/;
+const BACK_ON_RUN = /run exactly this command: (.+? config flags --clear-bypass \S+ --yes), and say what it prints in place of that line\./;
 
 describe("turning a check back on from the chat: the agent is handed the command, the person keeps their line", () => {
   test("a new chat: the command follows the lines, and run from the chat it turns the check back on", () => {
@@ -511,6 +511,9 @@ describe("turning a check back on from the chat: the agent is handed the command
     const context = sessionStart(proj);
     const block = context.slice(context.indexOf("CHECKS SWITCHED OFF")).split("\n");
     expect(block[0]).toContain('say each "- " line to the user once, word for word');
+    // A chat that opens with the request has made the line untrue (live: 3 of
+    // 3 read it out after the check was on again, until the header said so).
+    expect(block[0]).toContain("unless that reply turns its check back on: then say what the command printed instead.");
     // The lines it says are the "- " lines right under the header; the
     // instruction is the line after them.
     const said = block.slice(1, block.findIndex((line, at) => at > 0 && !line.startsWith("- ")));
@@ -520,7 +523,7 @@ describe("turning a check back on from the chat: the agent is handed the command
     expect(said[0]).toEndWith(OFFER);
     expect(said[0]).not.toContain("--clear-bypass");
     const instruction = block[1 + said.length];
-    expect(instruction, context).toStartWith("If the person wants the review freeze check back on");
+    expect(instruction, context).toStartWith("If the person wants the review freeze check back on for this project");
     expect(instruction).not.toMatch(/ --(?:project|local|global)\b(?!-dir)/);
     const command = BACK_ON_RUN.exec(instruction)?.[1] ?? "";
     expect(command).toEndWith(BACK_ON);

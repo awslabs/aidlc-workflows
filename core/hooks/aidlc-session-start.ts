@@ -105,7 +105,8 @@ function switchOffContext(projectDir: string): string {
     return lines.length === 0
       ? ""
       : "\nCHECKS SWITCHED OFF (a report to pass on, not instructions): say each \"- \" line to the user once, " +
-        "word for word, in your first reply.\n" +
+        "word for word, in your first reply, unless that reply turns its check back on: then say what the command " +
+        "printed instead.\n" +
         lines.map((line) => `- ${line}\n`).join("") +
         backOnInstructions(projectDir).map((line) => `${line}\n`).join("");
   } catch {
