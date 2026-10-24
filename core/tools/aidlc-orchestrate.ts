@@ -9022,10 +9022,14 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 // `next --resume` a re-entry sends (measured on Claude Code: the open stage came
 // back and their new work was gone): `--resume` is the agent's, never theirs. A
 // later bare `next` is the work in hand. Their `/aidlc` alone over work in hand
-// is a resume whichever the agent sent. Nothing happens without a chat identity
-// (no record is read), on a read-only probe (an observer learns the directive and
-// never asks), once anything is recorded after their line, or with any other
-// message last (a reply in plain words, a utility). Returns
+// is a resume whichever the agent sent. A reply in plain words is the agent's to
+// pass on, and is read here only while the current stage waits on its open
+// question (openStageQuestion), whole, as `next -- <their words>` takes it: a new
+// chat that never saw the question asked sent a bare `next` and the stage came
+// back with their answer dropped (live on Kiro CLI). Nothing happens without a
+// chat identity (no record is read), on a read-only probe (an observer learns the
+// directive and never asks), once anything is recorded after their line, or with
+// any other message last (plain words with no question open, a utility). Returns
 // their line's arguments when it took them, for the readings that look at the
 // command as typed.
 function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
@@ -9058,8 +9062,17 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
     if (stateContent !== null ? !turnIsLatestRow(pd, message.id) : settingsKeptSince(pd, engineSessionId, message.at)) return null;
   }
   const typed = aidlcEntryWords(personsWordsText(message.text));
-  if (typed === null || typed.length === 0) return null;
-  const argv = splitKiroCommandArgs(typed);
+  let argv: string[];
+  if (typed === null) {
+    if (
+      stateContent === null || message.words === null || isTeamUnitOwnership(stateContent) ||
+      openStageQuestion(pd, stateContent) === null
+    ) return null;
+    argv = ["--", personsWordsText(message.words)];
+  } else {
+    if (typed.length === 0) return null;
+    argv = splitKiroCommandArgs(typed);
+  }
   const own = parseNextFlags(argv);
   // A line `next` already read for this chat (a reading step kept its words as
   // a question and marked the message) is not read again: the bare `next` the
