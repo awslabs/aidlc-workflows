@@ -489,9 +489,20 @@ for the piece of work is named "the plan you approved" in the creation line and
 "the approved plan" in the first stage's line, which a teammate picking the work
 up also hears, never by the scope it was built on. The engine
 keeps such lines for the chat (`aidlc/.aidlc-sessions/<session>.person-lines`)
-and puts them, in order and once, in front of the `narration` of the next
-directive the agent speaks from: an `ask`, `present-gate`, `parked`, `error`
-or a final `done`, or any other directive that carries its own `narration`.
+and puts them, in order and once, in the `change_notices` of the next
+directive the agent speaks from (ahead of its own): an `ask`, `present-gate`,
+`parked`, `error` or a final `done`, or any other directive that carries its own
+`narration` or `change_notices`. Where the work picks up on `next --resume`
+(`withPickUpLine`) and the framework phase rules put back in a space
+(`withPhaseRulesAddedLine`) ride the same field of the step they come with.
+`change_notices` is the one field for a line the person must hear, and its
+`change_notices_note` the one order: once, as written, in the last message the
+agent writes before the person replies. That is the message every host shows:
+Copilot CLI headless writes one message in most turns and `claude -p` prints
+only the last, so a line said as its step came was lost there. Kiro CLI's
+hand-over of a step it ran itself gives its notices the same order. A line true
+only before the work it describes keeps its own order in the step
+(`plan_note` with plan approval off, `inputs_note`).
 A rules part (`load-steering`) never takes them; its `run-stage` does. They
 belong to the person's current turn: a newer prompt on the work, or fifteen
 minutes with no prompt hook, drops them, so a line never surfaces later or in
@@ -500,9 +511,8 @@ another chat. A line a tool gives inside a stage (`document-input`'s
 it, on a **SAY:** line in the stage file, next to the untrusted-path notice. Without a chat to keep them for, a line
 stays on its own step.
 A line that would push a step over its size limit waits for the next one.
-Every skill says a `print`'s or a `run-stage`'s `narration` first (on a
-`run-stage`, in the same message as the stage's context reads), so the lines
-they carry are heard before the step's own work starts.
+The step's own `narration` stays its own line, said as it comes (on a
+`run-stage`, in the same message as the stage's context reads).
 When the reclassify reply names a finished stage that ran before the code was
 there, the chat counts that stage's out-of-date warning as heard on that work
 (in the same file), and the `stage_validity` advisory with that warning is

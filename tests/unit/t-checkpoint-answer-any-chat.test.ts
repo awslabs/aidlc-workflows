@@ -502,7 +502,7 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
     expect(shown.message).toContain('"core", "main"');
     expect(shown.message).toContain("end your turn");
     expect(shown.message).toContain("answer --stage functional-design --details");
-    expect(shown.narration).toContain("Picking up where we left off");
+    expect(String(shown.change_notices)).toContain("Picking up where we left off");
   });
 
   // Under "Continue automatically" the person who is there still answers the

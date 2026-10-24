@@ -54,7 +54,7 @@ describe("t-skill-body-carriers: the /aidlc skill keeps what only it carries", (
   test("the engine's own notes carry the cut step branches", () => {
     expect(stageValidityNote("aidlc", "requirements-analysis")).toContain("word for word");
     expect(stageValidityNote("aidlc", "requirements-analysis")).toContain("never say who made it");
-    expect(CHANGE_NOTICES_NOTE).toContain("once, word for word");
+    expect(CHANGE_NOTICES_NOTE).toContain("once, as written");
     expect(planApprovalQuestionNote("aidlc", "aidlc-log")).toContain("--checkpoint plan-approval");
     expect(unresolvedGateNote("aidlc")).toContain("--skeleton-stance");
     expect(unitStepNote("aidlc")).toContain("has no gate of its own");

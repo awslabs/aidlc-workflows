@@ -1641,15 +1641,15 @@ describe("t248 deterministic steering delivery", () => {
     writeFileSync(join(teamMemory, "phases", "inception.md"), "# Inception rules\n\n- Own rule\n", "utf-8");
 
     const first = invoke(proj, "next", ["--scope", "mvp", "--stage", "intent-capture"]).directive as
-      WireDirective & { narration?: string };
+      WireDirective & { narration?: string; change_notices?: string[] };
     expect(first.kind).toBe("run-stage");
-    expect(first.narration).toContain(
+    expect(String(first.change_notices)).toContain(
       "Space team-a had no rules for the ideation, construction and operation phases, so I added the " +
         "framework's to aidlc/spaces/team-a/memory/phases/; edit those files to change them.",
     );
     const again = invoke(proj, "next", ["--scope", "mvp", "--stage", "intent-capture"]).directive as
-      WireDirective & { narration?: string };
-    expect(again.narration ?? "").not.toContain("had no rules");
+      WireDirective & { narration?: string; change_notices?: string[] };
+    expect(`${again.narration ?? ""} ${again.change_notices ?? ""}`).not.toContain("had no rules");
   });
 
   test("the Stop hook's look at the step starts the stage too, and writes nothing", () => {

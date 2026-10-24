@@ -1373,7 +1373,7 @@ const carriesNarration = new WeakSet<Directive>();
 const leadsToSpeech = new WeakSet<Directive>();
 
 // A step the agent speaks from: one that ends its turn, or one with its own
-// line. A rules part never is; its run-stage is.
+// line or a line for the person. A rules part never is; its run-stage is.
 function speaksToPerson(directive: Directive): boolean {
   if (directive.kind === "load-steering") return false;
   if (directive.kind === "done") return directive.workflow_continues !== true;
@@ -1381,12 +1381,22 @@ function speaksToPerson(directive: Directive): boolean {
     directive.kind === "ask" || directive.kind === "present-gate" ||
     directive.kind === "parked" || directive.kind === "error"
   ) return true;
+  if ((directive.change_notices?.length ?? 0) > 0) return true;
   return typeof directive.narration === "string" && directive.narration.length > 0;
 }
 
+// A line the person must hear rides the step's change_notices, whose note says
+// when: before they reply. Narration is the step's own line, said as it comes,
+// which is where these lines were lost (say-once-lands' measure). Null when
+// the step has no room; the caller keeps the line for the next step.
+function withPersonLines(transported: Directive, lines: readonly string[]): Directive | null {
+  const carried = withChangeNotices(transported, [...new Set([...lines, ...(transported.change_notices ?? [])])]);
+  return Buffer.byteLength(JSON.stringify(carried), "utf-8") <= directiveMaxBytes() ? carried : null;
+}
+
 // A chat picking the work back up (`next --resume`) hears where it picks up and
-// what else it can ask for, once, with the first step it speaks from. The line
-// rides the engine's own narration: left to the protocol, it went unsaid.
+// what else it can ask for, once, with the first step it speaks from. The
+// engine says it: left to the protocol, it went unsaid.
 let pickingUp = false;
 // The stage a step with none of its own picks up at (an open question shown
 // again on a bare re-entry).
@@ -1410,12 +1420,14 @@ function withPickUpLine(transported: Directive): Directive {
   pickingUp = false;
   const line = pickUpLine(transported);
   if (line === null || personLineHeard(projectDir, sessionId, line)) return transported;
-  if (transported.kind === "run-stage" || transported.kind === "ask") {
-    transported.narration = transported.narration ? `${line} ${transported.narration}` : line;
+  const carried = transported.kind === "run-stage" || transported.kind === "ask"
+    ? withPersonLines(transported, [line])
+    : null;
+  if (carried !== null) {
     markPersonLinesHeard(projectDir, sessionId, [line]);
-  } else if (addPendingPersonLines(projectDir, sessionId, [line])) {
-    markPersonLinesHeard(projectDir, sessionId, [line]);
+    return carried;
   }
+  if (addPendingPersonLines(projectDir, sessionId, [line])) markPersonLinesHeard(projectDir, sessionId, [line]);
   return transported;
 }
 
@@ -1459,48 +1471,49 @@ function withRecordConflictLine(transported: Directive): Directive {
 // speaks from.
 function withPersonLine(transported: Directive, line: string | null): Directive {
   if (line === null) return transported;
-  const own = transported.narration;
-  if (transported.kind === "run-stage" || transported.kind === "ask") {
-    transported.narration = own ? `${line} ${own}` : line;
-    if (Buffer.byteLength(JSON.stringify(transported), "utf-8") <= directiveMaxBytes()) return transported;
-    if (own) transported.narration = own;
-    else delete transported.narration;
-  }
+  const carried = transported.kind === "run-stage" || transported.kind === "ask"
+    ? withPersonLines(transported, [line])
+    : null;
+  if (carried !== null) return carried;
   // A rules part, or a step with no room: the next step the agent speaks from.
   if (engineProjectDir && engineSessionId) addPendingPersonLines(engineProjectDir, engineSessionId, [line]);
   return transported;
 }
 
 // Person lines kept from steps the agent passed through this turn are said,
-// in order and once, with the step it speaks from. One that would push the
-// step over its size limit waits for the next one. They count as said only
-// once that step is written (the returned callback), so a step replaced by an
-// error leaves them for the error, or for the next step.
-function sayPendingPersonLines(requested: Directive, transported: Directive): (() => void) | undefined {
+// in order and once, with the step it speaks from, in its change_notices and
+// under their note (`withAgentNotes` again). One that would push the step over
+// its size limit waits for the next one. They count as said only once that
+// step is written (the returned callback), so a step replaced by an error
+// leaves them for the error, or for the next step.
+function sayPendingPersonLines(
+  requested: Directive,
+  transported: Directive,
+): { directive: Directive; said?: () => void } {
   const projectDir = engineProjectDir;
   const sessionId = engineSessionId;
-  if (!projectDir || !sessionId || isReadOnlyEngineProbe() || retainedIssuedDirective) return undefined;
+  if (!projectDir || !sessionId || isReadOnlyEngineProbe() || retainedIssuedDirective) return { directive: transported };
   if (carriesNarration.has(requested)) {
     if (transported.narration && addPendingPersonLines(projectDir, sessionId, [transported.narration])) {
       delete transported.narration;
     }
-    return undefined;
+    return { directive: transported };
   }
   const pending = pendingPersonLines(projectDir, sessionId);
-  if (pending.lines.length === 0) return undefined;
+  if (pending.lines.length === 0) return { directive: transported };
   // A kept pick-up line makes the stage or question step it reaches speak,
   // even one with no line of its own (a waiting Unit checkpoint).
   const pickUp = (transported.kind === "run-stage" || transported.kind === "ask") &&
     pending.lines.some((line) => line.startsWith(PICK_UP_LEAD));
-  if (!pickUp && !leadsToSpeech.has(requested) && !speaksToPerson(transported)) return undefined;
-  const own = transported.narration;
-  transported.narration = [...pending.lines, ...(own ? [own] : [])].join(" ");
-  if (Buffer.byteLength(JSON.stringify(transported), "utf-8") > directiveMaxBytes()) {
-    if (own) transported.narration = own;
-    else delete transported.narration;
-    return undefined;
-  }
-  return pending.said;
+  if (!pickUp && !leadsToSpeech.has(requested) && !speaksToPerson(transported)) return { directive: transported };
+  const carried = withPersonLines(transported, pending.lines);
+  if (carried === null) return { directive: transported };
+  const noted = withAgentNotes(
+    carried, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
+    switchBackOnFollowUps(carried),
+  );
+  if (Buffer.byteLength(JSON.stringify(noted), "utf-8") > directiveMaxBytes()) return { directive: transported };
+  return { directive: noted, said: pending.said };
 }
 
 // A Unit's review reads the per-Unit review rules. Many routes set the Unit
@@ -1774,7 +1787,9 @@ function prepareEmission(directive: Directive): PreparedEmission {
     transported, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
     switchBackOnFollowUps(transported),
   );
-  const personLinesSaid = sayPendingPersonLines(requested, transported);
+  const personLines = sayPendingPersonLines(requested, transported);
+  transported = personLines.directive;
+  const personLinesSaid = personLines.said;
   // The bytes the host's tool panel shows first are the person's words.
   transported = withPersonsWordsFirst(transported);
   const result = validateDirective(transported);
