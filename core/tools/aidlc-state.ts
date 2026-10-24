@@ -2735,7 +2735,8 @@ function handleUnit(args: string[]): void {
         throw new UnitWaveRouteRefusalError(
           `Refusing unit ${action} for "${unit}" of "${slug}": this step asks ` +
             `${typeof routed.unit === "string" ? routed.unit : unit}'s questions before the stage's wave builds it, ` +
-            "and a serial Unit receipt here would drop that wave. Ask them, then run `next`.",
+            "and a serial Unit receipt here would drop that wave. Ask them, then run " +
+            `\`${aidlcToolInvocation("orchestrate")} next\`.`,
         );
       }
       throw new UnitWaveRouteRefusalError(

@@ -43,6 +43,7 @@ import {
   cleanupTestProject,
   createOrchestrationTestProject,
   runOrchestrateNext,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seededAuditDir,
   seededAuditShard,
@@ -1059,6 +1060,7 @@ describe("t260 finished Units keep their receipts across a Construction policy c
 
   test("a Unit reopened before the switch back still owes its redo", () => {
     policyProject("unit-major");
+    seedAnsweredUnitQuestions(proj, SLUG, ["unit-b"]);
     writeUnitArtifacts(proj, "unit-a");
     appendFileSync(
       seededAuditShard(proj),

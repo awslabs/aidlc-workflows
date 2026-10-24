@@ -1155,6 +1155,12 @@ export class AgentStandIn {
     const listed = produces.find((p) => p.endsWith(`${stage}-questions.md`));
     const summaryStage = sourceStage(stage)?.summaryConfirmation === true;
     const questions = listed ?? (summaryStage && produces[0] ? `${dirname(produces[0])}/${stage}-questions.md` : undefined);
+    if (d.questions_only === true) {
+      // A Unit's questions before the stage's wave builds it: asked here; the
+      // wave writes its documents.
+      if (questions) this.askQuestions(d, questions);
+      return;
+    }
     const work = () => {
       if (stage === "code-generation") this.writeCode(d);
       for (const p of produces) {
