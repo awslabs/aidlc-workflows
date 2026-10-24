@@ -2445,12 +2445,12 @@ function buildHoldsEarlierPlan(projectDir: string, unit: string, worktree: strin
 }
 
 // The build's work has moved away from the main code the new approval
-// describes (a peer landed first, or main changed), so the new plan cannot be
-// handed to it in place. Nothing is changed; the person chooses between the
-// work it holds and the plan they approved. Keeping the work is offered only
-// where its landing runs: work that converged in this attempt lands by the same
-// merge run again, and any other work only through the build's own check, which
-// refuses while the build holds the earlier plan.
+// describes (its worker wrote code, a peer landed first, or main changed), so
+// the new plan cannot be handed to it in place. Nothing is changed; the person
+// chooses between the work it holds and the plan they approved. Keeping it is
+// offered only where its landing runs: work that converged in this attempt
+// lands by the same merge run again, and any other work only through the
+// build's own check, which refuses while the build holds the earlier plan.
 function planNotHandedOver(
   projectDir: string, batch: string, unit: string, worktree: string, attempt: SwarmAttemptStamp, error: unknown,
 ): string {
