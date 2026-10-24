@@ -531,10 +531,19 @@ function movedState(
     ];
     for (let i = targetIdx; i < graph.length; i++) {
       const slug = graph[i].slug;
+      const state = checkboxMap.get(slug);
       // Effective plan again: a recompose-ADDed stage's [x] is reset by a
       // backward jump like any on-plan stage (ADD-then-jump consistency).
-      if (effectiveAction(suffixes, scopeMapping, slug) !== "EXECUTE") continue;
-      const state = checkboxMap.get(slug);
+      if (effectiveAction(suffixes, scopeMapping, slug) !== "EXECUTE") {
+        // A stage the plan skips that the work never finished (a scope switch
+        // dropped it where the work stood, or after a jump past it) reads not
+        // started, as intent creation writes it: adding it back, returning to
+        // it or a scope that runs it then finds it ahead. Nothing of it reruns.
+        if (state && state !== "completed" && RESETTABLE.includes(state)) {
+          content = setCheckbox(content, slug, "pending");
+        }
+        continue;
+      }
       if (state && RESETTABLE.includes(state)) {
         content = setCheckbox(content, slug, "pending");
         stagesReset.push(slug);
