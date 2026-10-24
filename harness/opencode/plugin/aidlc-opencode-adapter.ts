@@ -108,6 +108,9 @@ function runCoreHook(
       child.on("close", (code: number | null) =>
         resolve({ stdout: out, stderr: err, code: code ?? 0 })
       );
+      // A hook that exits before it reads its input breaks this pipe; its exit
+      // still answers through "close".
+      child.stdin.on("error", () => {});
       child.stdin.write(JSON.stringify(input));
       child.stdin.end();
     } catch {
