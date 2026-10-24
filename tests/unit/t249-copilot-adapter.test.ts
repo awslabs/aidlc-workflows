@@ -3815,19 +3815,44 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   // A folder's long and 8.3 short spellings. The scratch path may already be
   // short (TEMP is C:\Users\ADMINI~1\... or RUNNER~1 for a long user name, and
-  // Bun's realpathSync keeps it), so both come from the native real path.
+  // Bun's realpathSync keeps it), so both come from the native real path. A
+  // TEMP whose folders carry no 8.3 name (one created with 8.3 names off) gets
+  // one on the project's own folder. The path goes through the environment:
+  // Bun's quoting for `cmd /c` reaches a for-loop with its quotes still on.
   function shortAndLong(dir: string): { short: string; long: string } {
     const long = realpathSync.native(dir);
-    const spelled = spawnSync(
-      process.env.ComSpec ?? "cmd.exe",
-      ["/d", "/c", `for %I in ("${long}") do @echo %~sI`],
-      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
-    );
-    expect(spelled.status, spelled.stderr).toBe(0);
-    const short = spelled.stdout.trim();
+    const shortPath = (): string => {
+      const spelled = spawnSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:AIDLC_T249_FOLDER).ShortPath",
+        ],
+        {
+          env: { ...process.env, AIDLC_T249_FOLDER: long },
+          encoding: "utf-8",
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        },
+      );
+      expect(spelled.status, `${spelled.stdout}${spelled.stderr}`).toBe(0);
+      return spelled.stdout.trim();
+    };
+    let short = shortPath();
+    let named = "";
+    if (!short.includes("~")) {
+      const set = spawnSync(
+        "fsutil.exe",
+        ["file", "setshortname", long, `S${Math.random().toString(16).slice(2, 7).toUpperCase()}~1`],
+        { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) },
+      );
+      named = `${set.stdout}${set.stderr}`.trim();
+      short = shortPath();
+    }
     // A volume without 8.3 names cannot show the defect; say so, not pass.
-    expect(short.toLowerCase(), `no 8.3 short name for ${long}; see fsutil 8dot3name query`).not.toBe(long.toLowerCase());
-    expect(short).toContain("~");
+    expect(short, `no 8.3 short name for ${long}; fsutil file setshortname said: ${named}`).toContain("~");
+    expect(short.toLowerCase()).not.toBe(long.toLowerCase());
     return { short, long };
   }
 
