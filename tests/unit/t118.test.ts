@@ -485,24 +485,16 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
     });
 
     // (3) Bare `next`, no state and NO explicitly named scope (env/default
-    // resolution is not a creation signal): the engine cannot read a position to
-    // advance from and creating one is intent create's (mutating) job, so it emits
-    // the no-state error rather than guessing. The wording names the two explicit
-    // moves that DO start a workflow — it must never be the circular "Start a
-    // workflow with /aidlc <scope>" clause.
-    test("no-state bare next -> error directive (no position to advance from)", () => {
+    // resolution is not a creation signal): nothing is created, and this is the
+    // normal first step in a new project, so the person is asked what to build,
+    // never shown an error (on Claude Code an error is relayed as "The workflow
+    // stopped with this error").
+    test("no-state bare next -> asks what to build, never an error", () => {
       const r = emitNextNoState();
-      expect(r.directive.kind).toBe("error");
-      // Pin the no-state wording so a regression emitting an error of a DIFFERENT
-      // cause reds.
-      expect(r.directive.message ?? "").toContain("No workflow state found");
-      // Pin the guidance wording exactly: describe-what-to-build or
-      // describe-what-to-build and name-a-scope both create intents; there is no
-      // --init. A regression back to the
-      // circular clause (or a re-introduced --init) reds here.
-      expect(r.directive.message ?? "").toContain(
-        'Start one by describing what to build (/aidlc "build the auth service") or by naming a scope (/aidlc --scope <scope>).',
-      );
+      expect(r.directive.kind, r.raw).toBe("print");
+      expect(r.directive.narration).toBe("Tell me what to build and I'll start it.");
+      expect(r.directive.message ?? "").toContain('when they say what to build, run that as their request (/aidlc "<their words>")');
+      expect(r.directive.message ?? "").not.toContain("No workflow state found");
     });
 
     // (4) Conflicting explicit namings: `next bugfix --scope mvp` names TWO

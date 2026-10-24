@@ -141,9 +141,9 @@ describe("t-dotenv-guard: a host declaration survives a .env that names it", () 
     });
     const captured = `${next.stdout ?? ""}${next.stderr ?? ""}`;
     expect(next.stdout, captured).not.toBe("");
-    const directive = JSON.parse(next.stdout ?? "{}") as { kind?: string; message?: string };
+    const directive = JSON.parse(next.stdout ?? "{}") as { kind?: string; narration?: string };
     // Unattended: no person to stop for, so the first `next` goes straight to the engine's answer about the workflow.
-    expect(directive.kind, captured).toBe("error");
-    expect(directive.message, captured).toContain("No workflow state found");
+    expect(directive.kind, captured).toBe("print");
+    expect(directive.narration, captured).toBe("Tell me what to build and I'll start it.");
   });
 });

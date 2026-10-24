@@ -2,7 +2,7 @@
 
 ## Phase Overview
 
-The Initialization phase is the first of five phases in the AI-DLC workflow. It runs stages 0.1 through 0.3, **creating the intent**, minting its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (written `<record>/` below) with state files, one directory per in-scope phase, workspace classification, and routing configuration. There is no separate scaffold command: the workspace shell ships pre-built in the installed or versioned `runtime/<harness>/` projection, and the engine creates the intent once the person describes what to build and picks the plan it proposes, or names a scope with a description (`/aidlc --scope <name> "<description>"` or `/aidlc <name> "<description>"`). A bare `/aidlc` in a project with no work says so and names both ways to start.
+The Initialization phase is the first of five phases in the AI-DLC workflow. It runs stages 0.1 through 0.3, **creating the intent**, minting its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (written `<record>/` below) with state files, one directory per in-scope phase, workspace classification, and routing configuration. There is no separate scaffold command: the workspace shell ships pre-built in the installed or versioned `runtime/<harness>/` projection, and the engine creates the intent once the person describes what to build and picks the plan it proposes, or names a scope with a description (`/aidlc --scope <name> "<description>"` or `/aidlc <name> "<description>"`). A bare `/aidlc` in a project with no work asks what to build.
 
 All 3 stages in this phase execute for EVERY scope — there are no conditional stages. All stages auto-proceed with no approval gates.
 
