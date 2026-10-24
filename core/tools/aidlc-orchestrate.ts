@@ -14843,9 +14843,11 @@ function applySingleRunSettings(directive: RunStageDirective, settings: SingleRu
 
 // An isolated run writes where the work keeps the stage's documents (#2897),
 // so its start keeps a copy of the files already there and records the folder
-// under the field below on its STAGE_STARTED. KeptCopy is that folder, or why
-// none could be kept.
+// under the field below on its STAGE_STARTED, or "none" when there was nothing
+// to keep. A start with no such field came before the copy existed, or its
+// copy failed. KeptCopy is the folder, or why none could be kept.
 const SINGLE_RUN_KEPT_FIELD = "Kept Copy";
+const SINGLE_RUN_NOTHING_KEPT = "none";
 type KeptCopy = { path: string } | { error: string };
 
 function holdsFiles(dir: string): boolean {
@@ -14901,20 +14903,24 @@ function stageFoldersWithFiles(
 // run writes over them. The folder shape, <record>/archive/<date>-<stage>/, is
 // stage-protocol-recovery.md's "Archive before change"; the copy is made at
 // the start, before the stage asks Keep, Modify or Redo, since that is the
-// one point every run passes. Null with no work or nothing to keep.
+// one point every run passes. Null with no work or nothing to keep. An open
+// attempt whose start recorded no copy passes its start's time (`startedAt`):
+// its folder is named for that start, so its later steps name the same copy.
 function keepStageFiles(
   projectDir: string,
   node: GraphStage,
   scope: string,
   recordPrefix: string | null,
   codekbCtx: CodekbCtx,
+  startedAt: string | null = null,
 ): KeptCopy | null {
   if (recordPrefix === null || loadStateFileIfPresent(projectDir) === null) return null;
+  // A file-safe time: Windows refuses a colon in a folder name.
+  const stamp = (startedAt ?? isoTimestamp()).replace(/:/g, "-");
+  let path = `${recordPrefix}/archive/${stamp}-${node.slug}`;
+  if (startedAt !== null && existsSync(join(projectDir, path))) return { path };
   const folders = stageFoldersWithFiles(projectDir, node, scope, recordPrefix, codekbCtx);
   if (folders.length === 0) return null;
-  // A file-safe time: Windows refuses a colon in a folder name.
-  const stamp = isoTimestamp().replace(/:/g, "-");
-  let path = `${recordPrefix}/archive/${stamp}-${node.slug}`;
   for (let n = 2; existsSync(join(projectDir, path)); n++) path = `${recordPrefix}/archive/${stamp}-${n}-${node.slug}`;
   try {
     for (const { from, as } of folders) cpSync(from, join(projectDir, path, as), { recursive: true });
@@ -14958,10 +14964,19 @@ function ensureSingleStageStarted(
     }
     const recorded = recordedSingleRunSettings(projectDir, node.slug);
     const keptPath = singleStageAttemptField(projectDir, node.slug, SINGLE_RUN_KEPT_FIELD);
-    kept = keptPath === null ? null : { path: keptPath };
+    kept = keptPath === null || keptPath === SINGLE_RUN_NOTHING_KEPT ? null : { path: keptPath };
     const changed = SINGLE_RUN_SETTING_FIELDS
       .some((field) => typed[field] !== undefined && typed[field] !== recorded[field]);
-    if (!changed) return { settings: recorded, restarted: false, kept };
+    if (!changed) {
+      // A start with no Kept Copy keeps its copy now, so an attempt opened
+      // before an upgrade does not write over the work's files with no way
+      // back. The attempt and its receipts go on: nothing is appended.
+      if (keptPath === null && !isReadOnlyEngineProbe()) {
+        kept = keepStageFiles(projectDir, node, scope, record.prefix, record.codekbCtx,
+          singleStageAttemptField(projectDir, node.slug, "Timestamp"));
+      }
+      return { settings: recorded, restarted: false, kept };
+    }
     // A new STAGE_STARTED is the new attempt's floor: the unfinished one's
     // receipts stop counting, and nothing records it as completed.
     settings = { ...recorded, ...Object.fromEntries(Object.entries(typed).filter(([, value]) => value !== undefined)) };
@@ -14979,7 +14994,9 @@ function ensureSingleStageStarted(
       Workflow: syntheticWorkflowId(node.slug),
       Scope: scope,
       ...Object.fromEntries(Object.entries(settings).filter(([, value]) => value !== undefined)),
-      ...(kept !== null && "path" in kept ? { [SINGLE_RUN_KEPT_FIELD]: kept.path } : {}),
+      ...(kept === null
+        ? { [SINGLE_RUN_KEPT_FIELD]: SINGLE_RUN_NOTHING_KEPT }
+        : "path" in kept ? { [SINGLE_RUN_KEPT_FIELD]: kept.path } : {}),
     },
   }]);
   routingEvidence = null;

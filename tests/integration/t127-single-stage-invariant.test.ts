@@ -1247,6 +1247,42 @@ describe("t127 an isolated run over the work's own files keeps a copy of them (#
     expect(second.change_notices).toContain(`${keepsLine("Market Research")}${projectPath(proj, named)}/.`);
   });
 
+  test("an open attempt started before the copy existed keeps one at its next step, once", () => {
+    // An earlier version's isolated start records no Kept Copy; the person
+    // upgrades and types the same runner while the attempt is still open.
+    const proj = workProject();
+    writeFiles(proj, MARKET);
+    appendAuditEntry("STAGE_STARTED", {
+      Stage: "market-research",
+      Agent: "aidlc-product-agent",
+      Workflow: "single-stage:market-research",
+      Scope: "feature",
+    }, proj);
+    const started = latestStart(proj, "market-research");
+    const resumed = single(proj, "market-research").step;
+    expect(resumed.kind, JSON.stringify(resumed)).toBe("run-stage");
+    const kept = copies(proj, "market-research");
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(kept[0], "competitive-analysis.md"), "utf-8")).toBe(MARKET["ideation/market-research/competitive-analysis.md"]);
+    expect(resumed.change_notices).toContain(`${keepsLine("Market Research")}${projectPath(proj, kept[0])}/.`);
+    // The same attempt goes on: no new start, so its receipts still count.
+    expect(latestStart(proj, "market-research")).toBe(started);
+    const again = single(proj, "market-research").step;
+    expect(copies(proj, "market-research")).toHaveLength(1);
+    expect(again.change_notices).toContain(`${keepsLine("Market Research")}${projectPath(proj, kept[0])}/.`);
+  });
+
+  test("a start with nothing to keep says so on its row, and its next step copies nothing", () => {
+    const proj = workProject();
+    single(proj, "market-research");
+    expect(latestStart(proj, "market-research")).toContain("**Kept Copy**: none");
+    // The run's own first files are not the work's earlier ones.
+    writeFiles(proj, { "ideation/market-research/competitive-analysis.md": "# Competitive Analysis\n\nDRAFT\n" });
+    const again = single(proj, "market-research").step;
+    expect(existsSync(join(seededRecordDir(proj), "archive"))).toBe(false);
+    expect((again.change_notices ?? []).join("\n")).not.toContain("This run writes its documents");
+  });
+
   test("a read-only probe copies nothing and starts nothing", () => {
     const proj = workProject();
     writeFiles(proj, MARKET);
