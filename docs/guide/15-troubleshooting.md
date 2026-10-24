@@ -608,7 +608,9 @@ already ignores is never counted, and neither is a file another open piece of
 work in this folder lists in its own Units' source manifests (a second chat
 building its own work here), or anything under a folder it lists: that is the
 other work's change, and its own checks cover it. Archiving a piece of work you
-will not finish (`/aidlc intent archive <name>`) ends its claims. Under Guard
+will not finish (`/aidlc intent archive <name>`) ends its claims. A claim the
+other work makes in a repository this work does not record, or without naming
+the repository when this work records several, is not read here. Under Guard
 Policy relaxed or off the change is kept and said once instead.
 
 ### Plan Approval asked twice for the same plan

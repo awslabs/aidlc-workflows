@@ -282,6 +282,23 @@ describe("what is still this work's to account for", () => {
     expect(refused.out).not.toContain("source-manifest.json");
   });
 
+  test("a record no registry row names is live work, named by its folder", () => {
+    const setup = project("strict");
+    otherBuilds(setup);
+    const registry = join(setup.project, "aidlc", "spaces", "default", "intents", "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8")) as { dirName: string }[];
+    writeFileSync(registry, `${JSON.stringify(rows.filter((row) => row.dirName !== "other-work"))}\n`);
+    expect(otherOpenWorkClaims(setup.project, "code-generation").map((work) => work.paths)).toEqual([["version.ts"]]);
+  });
+
+  test("in a Bolt worktree, one Unit's own folder, there is no other work", () => {
+    const setup = project("strict");
+    otherBuilds(setup);
+    mkdirSync(join(setup.project, ".aidlc"), { recursive: true });
+    writeFileSync(join(setup.project, ".aidlc", "worktree-meta.json"), "{}\n");
+    expect(otherOpenWorkClaims(setup.project, "code-generation")).toEqual([]);
+  });
+
   test("a write of the other work that does not read here drops only that write", () => {
     const setup = project("strict");
     writeFileSync(join(setup.project, "version.ts"), "export const version = 2;\n");
@@ -326,6 +343,14 @@ describe("this work's Code Generation step", () => {
     const note = String(directive.other_work_note ?? "");
     expect(note).toContain("export-fix (`version.ts`)");
     expect(note).toContain("Leave them as they are unless this work's plan changes one of them.");
+  });
+
+  test("a gate shown again, whose body does not run, carries no such note", () => {
+    const setup = project("off");
+    otherBuilds(setup);
+    const directive = step(setup.project);
+    expect(directive.gate_only).toBe(true);
+    expect(directive.other_work_note).toBeUndefined();
   });
 
   test("with no other open work, or only a complete one, it carries no such note", () => {
@@ -379,6 +404,13 @@ describe("the note's words", () => {
     const inline = withAgentNotes(runStage({ mode: "inline", other_work_note: note }), "bun x.ts") as Record<string, unknown>;
     expect(inline.brief_note).toBeUndefined();
     expect(inline.other_work_note).toBe(note);
+  });
+
+  test("names at most five pieces of work, then how many more and where their files are listed", () => {
+    const many = Array.from({ length: 7 }, (_, i) => ({ work: `w${i}`, record: `aidlc/spaces/default/intents/w${i}`, paths: [`f${i}.ts`] }));
+    const note = otherWorkNote(many);
+    expect(note).toContain("w4 (`f4.ts`); and 2 more, each listing its files in its Units' source manifests");
+    expect(note).not.toContain("w5");
   });
 
   test("names no field, and caps a long list with where the rest are", () => {

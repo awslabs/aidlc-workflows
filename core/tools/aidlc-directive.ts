@@ -1516,6 +1516,7 @@ export function planNote(
 }
 
 const OTHER_WORK_PATHS_SHOWN = 20;
+const OTHER_WORKS_SHOWN = 5;
 
 // Another piece of work under way in this same folder (a second chat on its own
 // work) claims these files in its Units' source manifests: this build leaves
@@ -1525,13 +1526,18 @@ export function otherWorkNote(
   works: ReadonlyArray<{ work: string; record: string; paths: readonly string[] }>,
   reader: "build" | "review" = "build",
 ): string {
-  const listed = works.map(({ work, record, paths }) => {
+  const listed = works.slice(0, OTHER_WORKS_SHOWN).map(({ work, record, paths }) => {
     const shown = paths.slice(0, OTHER_WORK_PATHS_SHOWN).map((path) => `\`${path}\``).join(", ");
     const more = paths.length > OTHER_WORK_PATHS_SHOWN
       ? `, and ${paths.length - OTHER_WORK_PATHS_SHOWN} more, listed in its Units' source manifests under \`${record}/construction/\``
       : "";
     return `${work} (${shown}${more})`;
   });
+  // A step stays under the transport cap however many pieces of work there are.
+  if (works.length > OTHER_WORKS_SHOWN) {
+    listed.push(`and ${works.length - OTHER_WORKS_SHOWN} more, each listing its files in its Units' source manifests ` +
+      "under its record's `construction/` folder");
+  }
   return `${works.length === 1 ? "Another piece of work is" : "Other pieces of work are"} under way in this same folder, ` +
     `and these files are ${works.length === 1 ? "its" : "their"} own: ${listed.join("; ")}. ` +
     (reader === "build"
