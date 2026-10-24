@@ -390,7 +390,10 @@ again is refused, and the hook tells the agent to ask the same question again
 in its reply rather than in the box. A box that comes back with an answer, on
 Codex or Claude Code, also records one `QUESTION_REPLIED` row per question,
 with the question as shown and the reply as given. That row decides nothing
-and spends no turn. An answer the agent records with `log answer` carries the
+and spends no turn. A Codex box the person submits with a question left
+unanswered (Codex returns that question as an empty list) is still their reply
+when another question carries a pick: those picks are recorded, and the blank
+question gets no row. An answer the agent records with `log answer` carries the
 person's latest kept words as `Person Reply`.
 A setter that lowers one of the person's checks quotes their words, and records
 them as `Person Reply`, unless the command carrying it out is one they ran
