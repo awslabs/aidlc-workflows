@@ -30223,16 +30223,19 @@ export function shownLastWrittenAt(projectDir: string, shown: ShownWriting): str
 }
 
 // A stage gate shows the stage's outputs, its produces[] files, as last written.
+// Its questions file is not one (summaryOwnedReviewInput): the answers written
+// back there after a reply are the person's, not a new version of the output.
 export function gateOutputWriting(projectDir: string, slug: string): ShownWriting | undefined {
   const stage = findStageBySlug(slug);
   if (stage === undefined) return undefined;
+  const shown = { ...stage, produces: stage.produces?.filter((name) => !summaryOwnedReviewInput(stage, name)) };
   const repos = new Set(intentRepos(projectDir));
   return {
     what: "the stage's output",
     writes: (row) => {
       if (row.event !== "ARTIFACT_CREATED" && row.event !== "ARTIFACT_UPDATED") return false;
       const file = auditBlockField(row.block, "File");
-      return file !== null && producesArtifactFile(stage, file, repos);
+      return file !== null && producesArtifactFile(shown, file, repos);
     },
   };
 }

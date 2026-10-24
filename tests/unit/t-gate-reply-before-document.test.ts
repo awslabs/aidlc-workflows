@@ -13,7 +13,8 @@
 // gate is shown and their next reply answers it. A message held while another
 // engine question was open is left out of that offer too. Still taken, under
 // Guard Policy off and strict: an approval given at the learnings question after
-// the document is written (offered, recorded on the agent's one retry); a
+// the document is written (offered, recorded on the agent's one retry), with the
+// answers written back to the questions file after it (the person's); a
 // change request, which keeps today's offer (Arden's choice covers approvals);
 // and a reply followed only by a write to another stage's output or by a
 // teammate's write on another clone. A reply in the same second as the write
@@ -134,6 +135,15 @@ describe("t-gate-reply-before-document: a reply sent before the stage's document
       sleep();
       expect((await say(proj, "Nothing to add. Approve, and move on", "claude")).status).toBe(0);
       const approval = latestMessageId(proj);
+      // The answers written back to the questions file after it are the person's,
+      // not a new output. Under strict a write after the review makes the review
+      // stale (main's own check, before this one), so that half runs under off.
+      if (policy === "off") {
+        sleep();
+        const questions = join(stageDir(proj), `${STAGE}-questions.md`);
+        writeFileSync(questions, `${readFileSync(questions, "utf-8")}\n## Q2\n\nAnything else?\n\n[Answer]: No\n`, "utf-8");
+        recordArtifactWriteViaHook(proj, questions, "Edit");
+      }
       expect((await log(proj, ["answer", "--details", "Nothing to add"])).status).toBe(0);
       expect((await report(proj, ["--result", "awaiting-approval"])).status).toBe(0);
       const first = await report(proj, ["--result", "approved", "--user-input", "Approve"]);

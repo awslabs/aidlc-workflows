@@ -145,8 +145,8 @@ Construction setting you asked to change, the message that asked. The summary co
 choice the agent read and, for a change request, what you asked to change. A
 decision needs a reply from you after the question was shown (at a stage gate,
 one since the stage started that the agent names as your answer counts too,
-such as an approval you gave at the learnings question). The agent cannot
-answer for you.
+such as an approval you gave at the learnings question, when you sent it after
+the stage's output was last written). The agent cannot answer for you.
 
 When you ask for changes at a stage gate, the audit trail records, as the
 revision feedback, the words your harness passed to the human-turn hook for
