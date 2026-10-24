@@ -407,6 +407,7 @@ import {
   recentWorkspaceRecordNames,
   resolveWorkflowSelection,
   delegatedWorktreeIntent,
+  swarmWorkerWorktreeMeta,
   scopeCostSummary,
   singleStageAttemptField,
   singleStageAttemptIsOpen,
@@ -19164,6 +19165,22 @@ export function main(argv: string[]): void {
   let subArgs = filteredArgs.slice(1);
   if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
   const resolvedProjectDir = resolveProjectDir(projectDir);
+  const commandKind = (["next", "continue", "report", "park"] as const).find((kind) => kind === subcommand);
+  // The conductor's workflow commands run in a Unit's worktree (a shell left
+  // there after a `cd`, which Claude Code keeps) would read the copy of the
+  // record that checkout was made with, and none of the hooks' heartbeats,
+  // which land in the project folder: the hooks would look off, or an approved
+  // plan not yet approved. Before anything is read or spent, the agent goes back.
+  const workerWorktree = commandKind === undefined ? null : swarmWorkerWorktreeMeta(resolvedProjectDir);
+  if (workerWorktree !== null) {
+    emit(printDirective(
+      `This ran in the folder AI-DLC made for Unit ${workerWorktree.swarmUnit}'s build, whose copy of the work's ` +
+        `record cannot say where the work stands. Go back to the project folder, ${workerWorktree.parent}, then run ` +
+        `the same \`${subcommand}\` again from there (with \`--project-dir\` naming that folder if you passed one) ` +
+        "and follow what it returns.",
+    ));
+    return;
+  }
   let spendRequestFile = (): void => {};
   let restoreRequestFile = (): void => {};
   if (subcommand === "next") {
@@ -19182,7 +19199,6 @@ export function main(argv: string[]): void {
   engineSessionId = resolvedSelection.sessionId ?? undefined;
   engineSelections.clear();
   engineSelections.set(resolvedProjectDir, resolvedSelection);
-  const commandKind = (["next", "continue", "report", "park"] as const).find((kind) => kind === subcommand);
   // Resolving a record is not joining it. For a conversation that has not
   // joined the selected workflow, `next` sees a workspace with no active
   // intent (so it asks which intent to work on), and the commands that advance a
