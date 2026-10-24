@@ -603,6 +603,12 @@ review; remove the line to put the path back. A path the project's `.gitignore`
 already ignores is never counted. Under Guard Policy relaxed or off the change
 is kept and said once instead.
 
+On a plan with no Units the same change answers with "the project source
+changed after <reviewer> reviewed it" (or, once the one recovery review is used,
+"changed again after the one recovery review"), followed by what changed and the
+same way through for a path that is not source. The exclude works there at
+once too, with no further review.
+
 ### Plan Approval asked twice for the same plan
 
 **Symptom**: Code Generation presents the Plan Approval question again for a plan
