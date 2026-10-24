@@ -484,19 +484,28 @@ describe("the guard judges only the build: records and engine commands pass, the
       shape.install(state.proj);
       const refused = await shape.call(state.proj, state.session, { tool: "Write", path: planPath });
       expect(refused.code, `[${shape.name}] the plan file passed while the person's edit mode is open`).toBe(2);
-      const handBack = namedCommands(refused.said).find((command) => command.includes('--details "Request Changes"'));
+      const handBack = namedCommands(refused.said)
+        .find((command) => command.includes("--details") && command.includes("Request Changes: <what they asked of the plan>"))
+        ?.replace("<what they asked of the plan>", "finish the plan");
       expect(handBack, `[${shape.name}] the refusal names no answer: ${refused.said}`).toBeDefined();
-      const admitted = await shape.call(state.proj, state.session, { tool: "Bash", command: respell(handBack as string, ".claude") });
-      expect(admitted.code, `[${shape.name}] ${handBack} -> ${admitted.said}`).toBe(0);
+      // As the agent types it: opencode's shell on Windows is cmd.exe unless its settings name another, and in
+      // cmd.exe the skill puts the person's words in double quotes.
+      const typed = shape.name === "opencode" && process.platform === "win32" ? inCmd(handBack as string) : (handBack as string);
+      const admitted = await shape.call(state.proj, state.session, { tool: "Bash", command: respell(typed, ".claude") });
+      expect(admitted.code, `[${shape.name}] ${typed} -> ${admitted.said}`).toBe(0);
+      if (shape.name === "opencode") {
+        expect(await openCodeUnderCmd(state.proj, state.session, respell(inCmd(handBack as string), ".aidlc"))).toBe("");
+      }
     }
-    // The answer, the write, next: the plan is the agent's, with their words, and no second edit-mode question.
-    const recorded = runNamed(state.proj, 'bun .claude/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --details "Request Changes"');
+    // The answer, the write, next: the plan is the agent's, with what they asked as the agent read it, and no
+    // second edit-mode question.
+    const recorded = runNamed(state.proj, "bun .claude/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --details 'Request Changes: finish the plan'");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     const write = await claude.call(state.proj, state.session, { tool: "Write", path: planPath });
     expect(write.code, write.said).toBe(0);
     const step = next(state.proj);
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
-    expect(step.plan_approval, JSON.stringify(step)).toEqual({ status: "revise", feedback: "you finish it" });
+    expect(step.plan_approval, JSON.stringify(step)).toEqual({ status: "revise", feedback: "finish the plan" });
   });
 
   test("S6: while the person edits the plan files, the agent's write to them is refused with that sentence", async () => {
@@ -512,6 +521,27 @@ describe("the guard judges only the build: records and engine commands pass, the
     expect(notes.code, notes.said).toBe(0);
   });
 });
+
+// A command as the skills say to type it in cmd.exe, which does not group single quotes: the person's words in
+// double quotes instead.
+const inCmd = (command: string): string => command.replace(/'([^']*)'/g, '"$1"');
+
+// The shipped opencode plugin with cmd.exe as its shell: "" when it lets the command run, else its refusal.
+async function openCodeUnderCmd(proj: string, session: string, command: string): Promise<string> {
+  const { default: createAdapter } = await import("../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts");
+  const client = {
+    session: { get: async () => ({ data: {} }), prompt: async () => {} },
+    config: { get: async () => ({ data: { shell: "cmd.exe" } }) },
+  };
+  const adapter = await createAdapter({ client: client as never, directory: proj } as never);
+  const before = (adapter as Record<string, (a: unknown, b: unknown) => Promise<void>>)["tool.execute.before"];
+  try {
+    await before({ tool: "bash", sessionID: session, callID: "cmd-hand-back" }, { args: { command } });
+    return "";
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
 
 describe("the six plan-answer cases from the hook's gate, at the open question", () => {
   const cases: Array<{ words: string; followUp?: string; builds: boolean }> = [

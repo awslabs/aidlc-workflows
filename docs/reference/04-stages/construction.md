@@ -867,6 +867,15 @@ Code is written to the workspace root, never to
   finishes that step
 - Brownfield: modify files in-place. NEVER create duplicates like
   `ClassName_modified.java`
+- Files already in the project that this work did not create (a README,
+  LICENSE, docs, configs) are the person's, on a new project too: leave them
+  as they are and build the code around them; this work's own notes on what it
+  built with and how to run it go in `code-summary.md`, and its test command
+  is already in `unit-test-instructions.md`. Change one of them only when the
+  person asks for it or the work cannot be built without it (on brownfield,
+  the code the work changes): name the change in the plan and say it once at
+  the gate, naming the file and what changed in it, and the way back only when
+  there is one
 - Add `data-testid` attributes to interactive UI elements for test automation
 - Work in this order: plan (Step 2), Step 3 (the person's Plan Approval; with
   plan approval off, only its one-line notice), generation (Step 4), the Step 5

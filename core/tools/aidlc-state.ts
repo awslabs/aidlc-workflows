@@ -52,7 +52,6 @@ import {
   verificationCommandRecovery,
   constructionPolicyChangeAuthority,
   CONSTRUCTION_POLICY_RECOVERY,
-  latestPersonTurn,
   leftOutLine,
   PERSON_ASKED_SKIP_REASON,
   auditShardName,
@@ -62,6 +61,7 @@ import {
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   BLOCKING_SENSOR_OVERRIDE_DECISION,
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
+  blockingSensorPicks,
   BoltIdentityError,
   type CheckboxState,
   checkSummaryConfirmationEvidence,
@@ -104,12 +104,14 @@ import {
   guardRecoveryAskSelected,
   SKELETON_STANCES,
   guardRecoveryFeedbackStatus,
+  CONDUCTOR_SUMMARY_FIELD,
   selectedGuardRecoveryRemedyAction,
-  normalizeGuardRecoveryText,
   answeredBeforeShownStep,
   messageRetryStep,
   personRepliedSinceGateShown,
   personsGateReply,
+  windowMessageIds,
+  personsWordsText,
   repliedSinceStageStart,
   stageStartFloorRefusal,
   resolveInvokingSessionId,
@@ -128,7 +130,6 @@ import {
   humanTurnMintAllowed,
   hookActivation,
   hookChildEnv,
-  personSpokeSinceGate,
   fenceSwitchSentence,
   decideFence,
   ENGINE_OWNED_STATE_TRANSITIONS,
@@ -153,6 +154,8 @@ import {
   isRegularFile,
   isoTimestamp,
   KNOWN_CODEKB_STAGES,
+  codekbStageRepos,
+  missingCodekbArtifacts,
   unitLifecycleRunFloorForProject,
   unitScopedLifecycleFloors,
   loadScopeMapping,
@@ -255,8 +258,10 @@ import {
   sourceBoundaryRepairStep,
   sourceWalkReach,
 } from "./aidlc-lib.js";
-import { proveMessage, readMessage } from "./aidlc-message-store.ts";
-import { memoryDirFor, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
+import {
+  personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn, type StoredMessage,
+} from "./aidlc-message-store.ts";
+import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
@@ -364,10 +369,6 @@ function emitAudit(
   return timestamp;
 }
 
-// The GATE_REJECTED field that keeps the conductor's own feedback text when the
-// person's recorded words became the Feedback and the two differ. Declared at
-// module top: the command dispatch below runs before later consts initialise.
-const CONDUCTOR_SUMMARY_FIELD = "Conductor Summary";
 // The person's own words at a gate they answered, kept whole by the human-turn
 // hook, and the message that holds them; the agent read them and reported the
 // choice, and the receipt carries both. Without `message`, every reply of theirs
@@ -376,12 +377,15 @@ const CONDUCTOR_SUMMARY_FIELD = "Conductor Summary";
 const PERSONS_WORDS_FIELD = "Person Reply";
 // The same field the log tool pairs with their words on a decision row.
 const PERSONS_MESSAGE_FIELD = "Message Id";
+// Every message the window's words come from, oldest first, when there are several (windowMessageIds).
+const PERSONS_MESSAGES_FIELD = "Message Ids";
 function personsWordsFields(pd: string, slug: string, message?: string): Record<string, string> {
   try {
     if (message !== undefined) {
       const named = readMessage(pd, message);
+      const words = named?.words ? personsWordsText(named.words) : "";
       return {
-        ...(named?.words && !isNonAnswer(named.words) ? { [PERSONS_WORDS_FIELD]: named.words } : {}),
+        ...(!isNonAnswer(words) ? { [PERSONS_WORDS_FIELD]: words } : {}),
         [PERSONS_MESSAGE_FIELD]: message,
       };
     }
@@ -389,6 +393,7 @@ function personsWordsFields(pd: string, slug: string, message?: string): Record<
     return {
       ...(reply.words ? { [PERSONS_WORDS_FIELD]: reply.words } : {}),
       ...(reply.messageId ? { [PERSONS_MESSAGE_FIELD]: reply.messageId } : {}),
+      ...windowMessageIds(reply),
     };
   } catch {
     return {};
@@ -400,7 +405,11 @@ function personsWordsFields(pd: string, slug: string, message?: string): Record<
 function approvedTogetherWordsFields(row: AuditShardEvent): Record<string, string> {
   const words = auditBlockField(row.block, PERSONS_WORDS_FIELD);
   const id = auditBlockField(row.block, PERSONS_MESSAGE_FIELD);
-  return { ...(words ? { [PERSONS_WORDS_FIELD]: words } : {}), ...(id ? { [PERSONS_MESSAGE_FIELD]: id } : {}) };
+  const ids = auditBlockField(row.block, PERSONS_MESSAGES_FIELD);
+  return {
+    ...(words ? { [PERSONS_WORDS_FIELD]: words } : {}), ...(id ? { [PERSONS_MESSAGE_FIELD]: id } : {}),
+    ...(ids ? { [PERSONS_MESSAGES_FIELD]: ids } : {}),
+  };
 }
 
 // Per-stage token/cost rollup fields for STAGE_COMPLETED / WORKFLOW_COMPLETED.
@@ -1267,15 +1276,16 @@ function setConstructionPolicyField(content: string, field: string, value: strin
 
 // These typed setters change runtime preferences, like the existing iteration
 // setter; they cannot mutate lifecycle fields or grant autonomy.
-function handleSetConstructionPolicy(field: string, args: string[]): void {
+function handleSetConstructionPolicy(field: string, given: string[]): void {
+  const { values: args, message } = withMessageArg(given);
   if (args.length !== 1) error(`${field} requires exactly one value.`);
   const pd = resolveProjectDir(projectDir);
   withAuditLock(pd, () => {
     const content = readStateFile(pd);
     const updated = setConstructionPolicyField(content, field, args[0]);
     if (updated !== content) {
-      const words = requireHumanConstructionPolicyChange(pd, content, field, args[0]);
-      emitConstructionPolicySet(pd, content, updated, field, args[0], words);
+      const asked = requireHumanConstructionPolicyChange(pd, content, field, args[0], message);
+      emitConstructionPolicySet(pd, content, updated, field, args[0], asked);
       if (field === "Construction Execution" && args[0] === "serial") closePreparedBolts(pd, updated);
     }
     writeStateFile(pd, updated);
@@ -1355,7 +1365,7 @@ function constructionPolicyNotice(before: string, after: string, field: string):
 // on keeps the Units already finished: a stage start recorded while stage
 // starts were attempt boundaries stays the boundary it was.
 function emitConstructionPolicySet(
-  pd: string, before: string, after: string, field: string, value: string, words: string | null = null,
+  pd: string, before: string, after: string, field: string, value: string, asked: PolicyAsk | null = null,
 ): void {
   const current = (content: string, name: string): string => getField(content, name)?.trim() || "unset";
   emitAudit(pd, "CONSTRUCTION_POLICY_SET", {
@@ -1364,30 +1374,54 @@ function emitConstructionPolicySet(
     "Previous Value": current(before, field),
     "Construction Iteration": current(after, "Construction Iteration"),
     "Construction Checkpoints": current(after, "Construction Checkpoints"),
-    ...(words ? { [PERSONS_WORDS_FIELD]: words } : {}),
+    ...(asked?.words ? { [PERSONS_WORDS_FIELD]: asked.words } : {}),
+    ...(asked ? { [PERSONS_MESSAGE_FIELD]: asked.message } : {}),
   });
 }
 
-// During Construction a policy change is the person's: they asked for it in
-// their own words since the last decision (the conductor read it), or chose it
-// at an older policy question. Returns the words of the turn that asked, for
-// the record, or null.
-function requireHumanConstructionPolicyChange(pd: string, content: string, field: string, value: string): string | null {
+// The message that asked for a Construction policy change, for its row.
+interface PolicyAsk {
+  words: string | null;
+  message: string;
+}
+
+// A setter's own values, and the message the person asked in (--message <id>)
+// that makes the change theirs.
+function withMessageArg(args: string[]): { values: string[]; message?: string } {
+  const at = args.indexOf("--message");
+  if (at === -1) return { values: args };
+  const message = args[at + 1];
+  if (message === undefined || message.startsWith("--")) error("--message needs the id of the person's message.");
+  return { values: [...args.slice(0, at), ...args.slice(at + 2)], message };
+}
+
+// During Construction a policy change is the person's: the agent names the
+// message they asked for it in (--message, proved), or they chose it at an
+// older policy question. Returns that message, for the record, or null.
+function requireHumanConstructionPolicyChange(
+  pd: string, content: string, field: string, value: string, message: string | undefined,
+): PolicyAsk | null {
   if (getField(content, "Lifecycle Phase")?.toLowerCase() !== "construction") return null;
   // An unattended run never changes it on its own, whatever presence bypass is
   // in force: only a choice the person recorded earlier counts there.
-  if (process.env.AIDLC_UNATTENDED === "1" && constructionPolicyChangeAuthority(pd, content, field, value) !== "receipt") {
+  if (process.env.AIDLC_UNATTENDED === "1" && constructionPolicyChangeAuthority(pd, content, field, value, false) !== "receipt") {
     error(`An unattended run does not change ${field}: it changes when the person asks for it. ` + CONSTRUCTION_POLICY_RECOVERY);
   }
   if (humanPresenceGuardDisabled()) return null;
-  const authority = constructionPolicyChangeAuthority(pd, content, field, value);
+  let named: StoredMessage | undefined;
+  if (message !== undefined) {
+    const proof = proveMessage(pd, message, "setting", { request: true });
+    if ("refusal" in proof) error(proof.refusal);
+    named = proof.message;
+  }
+  const authority = constructionPolicyChangeAuthority(pd, content, field, value, named !== undefined);
   if (authority === null) {
     error(
-      `No message from the person since the last decision asks to change ${field}. Change it only when they ask ` +
-        "for it, never to clear a refusal or on your own. " + CONSTRUCTION_POLICY_RECOVERY,
+      requestMessageStep(pd, `No message of the person's that asks to change ${field} is named. Change it only ` +
+        "when they ask for it, never to clear a refusal or on your own.") + ` ${CONSTRUCTION_POLICY_RECOVERY}`,
     );
   }
-  return authority === "asked" ? latestPersonTurn(pd)?.words ?? null : null;
+  return authority === "asked" && named !== undefined ? { words: personsWordsText(named.words ?? named.text), message: named.id } : null;
 }
 
 // set-skeleton-stance <on|off|scope-dependent> — record the conductor's
@@ -1442,7 +1476,8 @@ function handleSetSkeletonStance(args: string[]): void {
 // as CONSTRUCTION_POLICY_SET so finished Units keep their receipts across it.
 // The classify round-trip is initiated by the delivery-planning stage prose (or
 // set directly by a human); the engine writes nothing itself.
-function handleSetConstructionIteration(args: string[]): void {
+function handleSetConstructionIteration(given: string[]): void {
+  const { values: args, message } = withMessageArg(given);
   // Declared inside the handler for the same TDZ reason as skeleton stance:
   // main() runs at module load before a module-level const would initialise.
   const constructionIterationValues = ["unit-major", "stage-major"];
@@ -1481,8 +1516,8 @@ function handleSetConstructionIteration(args: string[]): void {
     value,
   );
   if (updated !== content) {
-    const words = requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value);
-    emitConstructionPolicySet(pd, content, updated, "Construction Iteration", value, words);
+    const asked = requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value, message);
+    emitConstructionPolicySet(pd, content, updated, "Construction Iteration", value, asked);
   }
   writeStateFile(pd, updated);
   keepPlanQuestionOver(pd, content, updated);
@@ -1594,7 +1629,8 @@ function hasCurrentTeamUnitActivity(
   return false;
 }
 
-function handleSetUnitOwnership(args: string[]): void {
+function handleSetUnitOwnership(given: string[]): void {
+  const { values: args, message } = withMessageArg(given);
   const values = ["team", "solo"];
   if (args.length < 1) {
     error(`Usage: aidlc-state.ts set-unit-ownership <${values.join("|")}>`);
@@ -1639,10 +1675,10 @@ function handleSetUnitOwnership(args: string[]): void {
     // teams is their request for one Unit at a time: a stage-by-stage plan
     // switches here by the two setters' own rules and records, after every
     // refusal and before any write.
-    const switches: Array<{ from: string; to: string; field: string; value: string; words: string | null }> = [];
+    const switches: Array<{ from: string; to: string; field: string; value: string; asked: PolicyAsk | null }> = [];
     const switchTo = (field: string, next: string, updated: string): void => {
-      const words = requireHumanConstructionPolicyChange(pd, content, field, next);
-      switches.push({ from: content, to: updated, field, value: next, words });
+      const asked = requireHumanConstructionPolicyChange(pd, content, field, next, message);
+      switches.push({ from: content, to: updated, field, value: next, asked });
       content = updated;
     };
     if (value === "team" && getField(content, "Construction Iteration")?.trim() !== "unit-major") {
@@ -1659,7 +1695,7 @@ function handleSetUnitOwnership(args: string[]): void {
       );
     }
     for (const change of switches) {
-      emitConstructionPolicySet(pd, change.from, change.to, change.field, change.value, change.words);
+      emitConstructionPolicySet(pd, change.from, change.to, change.field, change.value, change.asked);
     }
     content = setOrInsertField(
       content,
@@ -2352,7 +2388,7 @@ export interface ParkResult {
 
 // A park the person asked for, in their own words, is theirs. Who asked is the
 // conductor's reading of those words (--person-asked); the tool proves only that
-// a reply of theirs is on record since the last gate resolution. Their stop wins
+// a turn of theirs in this chat stands behind it (personTurnStands). Their stop wins
 // over the autonomous grant and is recorded as theirs. On a host whose hooks can
 // miss a reply (its hookActivation says so), a stop they asked for in an
 // attended session under the autonomous grant is theirs too, with a note that no
@@ -2373,8 +2409,9 @@ function handlePark(args: string[]): void {
       `\`${aidlcToolInvocation("orchestrate")} next\` and carry on.`;
     exitWithError({ message, auditMessage: message, agentGuidance: "person-decided" });
   }
-  // Their stop outlives the run's own approvals after it (personSpokeSinceGate).
-  const replied = asked && attendedSession && personSpokeSinceGate(pd, { outlivesApproval: true });
+  // Their stop outlives the run's own approvals after it and the one decision
+  // the same message gave (personTurnStands).
+  const replied = asked && attendedSession && personTurnStands(pd, "request");
   const activation = hookActivation();
   const missedReply = asked && attendedSession && !replied &&
     (activation?.missedReply !== undefined || activation?.missesReplies === true) && autonomous();
@@ -2391,10 +2428,11 @@ function handlePark(args: string[]): void {
 // The person's words that stop the work here, and the message that holds them,
 // kept on the park row as the approval row keeps them: every reply of theirs
 // in this chat that no decision has used yet (personsGateReply) when a reply of
-// theirs stands behind this park (the reading handlePark uses), else the words
-// of the approval that same reply gave (after "approve, and stop here" the
-// approval used it, so the row is where they are). None when none were kept (a
-// slash line, a no-text turn), when they are a non-answer, or when no reply of
+// theirs stands behind this park (the reading handlePark uses), else the
+// message of that standing reply (a decision it gave, or the run's own
+// approvals, came after it), else the words of the approval that same reply
+// gave (its message gone with the day). None when none were kept (a slash
+// line, a no-text turn), when they are a non-answer, or when no reply of
 // theirs is behind the park. Nothing here reads meaning into them: the step that resumes
 // at the parked stage hands them to the agent, who does.
 function parkedWords(pd: string, stage: string): Record<string, string> {
@@ -2403,9 +2441,15 @@ function parkedWords(pd: string, stage: string): Record<string, string> {
       ? { [PERSONS_WORDS_FIELD]: words, ...(id ? { [PERSONS_MESSAGE_FIELD]: id } : {}) }
       : {};
   try {
-    if (!personSpokeSinceGate(pd, { replies: true, outlivesApproval: true })) return {};
+    const standing = standingPersonTurn(pd, "request", { replies: true });
+    if (standing === null) return {};
     const reply = personsGateReply(pd, resolveInvokingSessionId(pd), stage);
-    if (reply.words && !isNonAnswer(reply.words)) return fields(reply.words, reply.messageId);
+    if (reply.words && !isNonAnswer(reply.words)) return { ...fields(reply.words, reply.messageId), ...windowMessageIds(reply) };
+    const standingId = auditBlockField(standing.block, PERSONS_MESSAGE_FIELD);
+    const standingMessage = standingId === null ? null : readMessage(pd, standingId);
+    if (standingMessage !== null && standingMessage.words !== null) {
+      return fields(personsWordsText(standingMessage.words), standingId);
+    }
     const rows = sortAttemptEvents(readAuditShardEvents(pd));
     let turnAt = -1;
     for (let i = 0; i < rows.length; i++) if (rows[i].event === "HUMAN_TURN") turnAt = i;
@@ -2420,8 +2464,9 @@ function parkedWords(pd: string, stage: string): Record<string, string> {
       // An approval row that kept no words of theirs (a Plan Approval receipt)
       // stood on that same turn, whose message holds them.
       const turnId = auditBlockField(rows[turnAt].block, PERSONS_MESSAGE_FIELD);
+      const kept = turnId === null ? null : readMessage(pd, turnId);
       const words = auditBlockField(row.block, PERSONS_WORDS_FIELD) ??
-        (turnId === null ? null : readMessage(pd, turnId)?.words ?? null);
+        (kept && kept.words !== null ? personsWordsText(kept.words) : null);
       return fields(words, auditBlockField(row.block, PERSONS_MESSAGE_FIELD) ?? turnId);
     }
     return {};
@@ -2564,7 +2609,7 @@ function handleUnit(args: string[]): void {
   const VALID_UNIT_ACTIONS = new Set(["start", "pause", "resume", "complete"]);
   if (!action || !VALID_UNIT_ACTIONS.has(action)) {
     error(
-      `Usage: aidlc-state.ts unit <start|pause|resume|complete> --stage <slug> --unit <name> [--reason <text>] [--next-action <text>] [--set-aside-for <unit>] [--wave]`,
+      `Usage: aidlc-state.ts unit <start|pause|resume|complete> --stage <slug> --unit <name> [--reason <text>] [--next-action <text>] [--set-aside-for <unit>] [--wave] [--message <id>]`,
     );
   }
   const rest = args.slice(1);
@@ -2574,6 +2619,8 @@ function handleUnit(args: string[]): void {
   const rawNextAction = getFlagValue(rest, "--next-action");
   const waveMode = rest.includes("--wave");
   const setAsideFor = getFlagValue(rest, "--set-aside-for")?.trim();
+  // The message the person said to go on without the Unit's review in.
+  const namedMessage = getFlagValue(rest, "--message");
   const reason = rawReason?.trim();
   const nextAction = rawNextAction?.trim();
   if (!slug) error("Missing --stage <slug>");
@@ -2780,14 +2827,21 @@ function handleUnit(args: string[]): void {
     if (action === "complete" && !waveMode && !completionPicked) {
       const owed = openUnitReview(pd, content, stage, unit);
       const theirsMayWin = owed !== null && personMayApproveOverUnfinishedReview(pd, content);
-      if (owed !== null && !(theirsMayWin && personSpokeSinceGate(pd, { requests: true }))) {
+      // Their words are the message the agent names (--message), proved.
+      let theirsSaid = false;
+      if (theirsMayWin && namedMessage !== undefined) {
+        const proof = proveMessage(pd, namedMessage, "request", { request: true });
+        if ("refusal" in proof) error(proof.refusal);
+        theirsSaid = true;
+      }
+      if (owed !== null && !(theirsMayWin && theirsSaid)) {
         const request =
           `${aidlcToolInvocation("log")} review --stage ${slug} --reviewer ${owed.reviewer} ` +
           `--unit ${unit} --iteration ${owed.iteration}`;
         const theirs = theirsMayWin
-          ? " If the person said to go on without this review, run this completion again: their words let it " +
-            "record, and their approval (the Unit checkpoint's `verify --over-unfinished-review`, or the stage gate) " +
-            "goes over the review."
+          ? ` ${requestMessageStep(pd, "If the person says to go on without this review, run this completion again " +
+            "with --message <id>, the message they said it in.")} Their approval (the Unit checkpoint's ` +
+            "`verify --over-unfinished-review`, or the stage gate) goes over the review."
           : " Finish it first, without asking the person: your team set Guard Policy to strict for everyone on " +
             "this repo, so their words do not go over this review.";
         error(
@@ -3544,9 +3598,7 @@ function producesDirsForStage(
   stage: { slug: string; phase: string; for_each?: string }
 ): string[] {
   if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
-    const repos = intentRepos(pd);
-    const resolved = repos.length > 0 ? repos : [codekbRepoName(pd)];
-    return resolved.map((repo) => codekbDir(pd, repo));
+    return codekbStageRepos(pd).map((repo) => codekbDir(pd, repo));
   }
   const rec = recordDir(pd);
   if (rec === null) return [];
@@ -3604,14 +3656,8 @@ function producesArtifactsExist(
       }
     }
   }
+  if (KNOWN_CODEKB_STAGES.has(stage.slug)) return missingCodekbArtifacts(pd, stage).length === 0;
   const dirs = producesDirsForStage(pd, stage);
-  if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
-    return dirs.length > 0 && dirs.every((dir) =>
-      produces.every((name) =>
-        isRegularFile(join(dir, artifactFilename(name)))
-      )
-    );
-  }
   for (const dir of dirs) {
     for (const name of produces) {
       if (isRegularFile(join(dir, artifactFilename(name)))) return true;
@@ -3646,6 +3692,16 @@ function pathIsWithin(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === "" ||
     (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+// Whether a canonical path lies inside one of a stage's canonical produce
+// folders. A stage's files sit directly in their folder, so that folder is
+// looked up first and every folder is compared only on a miss: a codekb stage
+// has one folder per repository, and comparing each of its files with every
+// folder grew with the square of their count.
+export function withinProduceRoots(roots: readonly string[]): (canonical: string) => boolean {
+  const own = new Set(roots);
+  return (canonical) => own.has(dirname(canonical)) || roots.some((root) => pathIsWithin(root, canonical));
 }
 
 // Resolve every existing declared deliverable, reusing the same stage directory
@@ -3687,6 +3743,7 @@ function existingDeclaredArtifactPaths(
     }
     return [canonical];
   });
+  const withinRoots = withinProduceRoots(roots);
   const found = new Set<string>();
   const addIfDeclaredFile = (candidate: string): void => {
     if (!declaredFilenames.has(basename(candidate)) || !existsSync(candidate)) {
@@ -3699,7 +3756,7 @@ function existingDeclaredArtifactPaths(
     } catch {
       return;
     }
-    if (!roots.some((root) => pathIsWithin(root, canonical))) {
+    if (!withinRoots(canonical)) {
       error(
         `Refusing gate sensor artifact "${candidate}" for "${stage.slug}": ` +
           "the canonical path is outside the stage's resolved produce directories.",
@@ -3783,25 +3840,49 @@ function gateSensorMatchesOutput(
     new Bun.Glob(sensor.matches).match(outputPath.replace(/\\/g, "/"));
 }
 
-// The deliverables the gate fires a sensor on. A stage-wide sensor evaluates
-// every deliverable in the folder of the file it is given, so it fires once per
-// folder (each Unit's folder at a per-Unit stage), on the folder's first
-// markdown deliverable that is not a questions or timestamp file; any other
-// sensor fires on each deliverable its matches glob accepts.
+// One fire of a gate sensor: the output it is fired on, and every output its
+// evaluation reads (a blocking binding fingerprints that set). A path-set fire
+// hands its covered outputs to the dispatcher on stdin.
+interface GateSensorFire {
+  outputPath: string;
+  covered: string[];
+  pathSet: boolean;
+}
+
+// The fires the gate makes for a sensor. At a codekb stage the outputs span one
+// folder per repository, so a sensor that takes a path set (PATH_SET_SENSOR_IDS)
+// fires once for the stage over every repository's files. Otherwise a
+// stage-wide sensor evaluates every deliverable in the folder of the file it is
+// given, so it fires once per folder (each Unit's folder at a per-Unit stage);
+// any other sensor fires on each deliverable its matches glob accepts. A
+// grouped fire is made on its first markdown deliverable that is not a
+// questions or timestamp file.
 function gateSensorOutputs(
   sensor: NonNullable<
     NonNullable<ReturnType<typeof findStageBySlug>>["sensors_applicable"]
   >[number],
   paths: string[],
-): string[] {
+  stageSlug: string,
+): GateSensorFire[] {
   const matching = paths.filter((path) => gateSensorMatchesOutput(sensor, path));
-  if (!STAGE_WIDE_SENSOR_IDS.has(sensor.id)) return matching;
   const isDocument = (path: string): boolean =>
     path.endsWith(".md") && templateEligibleArtifacts([basename(path, ".md")]).length === 1;
-  const byFolder = new Map<string, string>();
+  if (KNOWN_CODEKB_STAGES.has(stageSlug) && PATH_SET_SENSOR_IDS.has(sensor.id)) {
+    if (matching.length === 0) return [];
+    return [{ outputPath: matching.find(isDocument) ?? matching[0], covered: matching, pathSet: true }];
+  }
+  if (!STAGE_WIDE_SENSOR_IDS.has(sensor.id)) {
+    return matching.map((path) => ({ outputPath: path, covered: [path], pathSet: false }));
+  }
+  const byFolder = new Map<string, GateSensorFire>();
   for (const path of matching) {
-    const chosen = byFolder.get(dirname(path));
-    if (chosen === undefined || (!isDocument(chosen) && isDocument(path))) byFolder.set(dirname(path), path);
+    const fire = byFolder.get(dirname(path));
+    if (fire === undefined) {
+      byFolder.set(dirname(path), { outputPath: path, covered: [path], pathSet: false });
+      continue;
+    }
+    fire.covered.push(path);
+    if (!isDocument(fire.outputPath) && isDocument(path)) fire.outputPath = path;
   }
   return [...byFolder.values()];
 }
@@ -3869,19 +3950,21 @@ function fireGateSensors(
 
   const executable = compiledExecutable();
   const sensorTool = fileURLToPath(new URL("./aidlc-sensor.ts", import.meta.url));
+  // A blocking binding holds every output its fire reads to the bytes
+  // fingerprinted above, before and after the fire; the first that differs is named.
+  const changedOutput = (covered: string[]): string | null =>
+    covered.find((path) => {
+      const expected = fingerprints.get(path);
+      return expected === undefined || artifactFingerprint(path) !== expected;
+    }) ?? null;
   for (const sensor of sensors) {
-    for (const outputPath of gateSensorOutputs(sensor, paths)) {
-      const expectedFingerprint = fingerprints.get(outputPath);
-      if (
-        sensor.default_severity === "blocking" &&
-        (
-          expectedFingerprint === undefined ||
-          artifactFingerprint(outputPath) !== expectedFingerprint
-        )
-      ) {
+    for (const fire of gateSensorOutputs(sensor, paths, stage.slug)) {
+      const { outputPath } = fire;
+      const changedBefore = sensor.default_severity === "blocking" ? changedOutput(fire.covered) : null;
+      if (changedBefore !== null) {
         issues.push({
           sensorId: sensor.id,
-          outputPath,
+          outputPath: changedBefore,
           detailPath: null,
           reason: "artifact changed before sensor dispatch",
         });
@@ -3894,6 +3977,7 @@ function fireGateSensors(
         stage.slug,
         "--output-path",
         outputPath,
+        ...(fire.pathSet ? ["--paths-stdin", "json"] : []),
       ];
       const command = executable
         ? [executable, "engine", "sensor", ...args]
@@ -3907,12 +3991,14 @@ function fireGateSensors(
           AIDLC_PROJECT_DIR: pd,
           CLAUDE_PROJECT_DIR: pd,
         },
+        ...(fire.pathSet ? { input: JSON.stringify(fire.covered) } : {}),
       });
       if (sensor.default_severity !== "blocking") continue;
-      if (artifactFingerprint(outputPath) !== expectedFingerprint) {
+      const changedDuring = changedOutput(fire.covered);
+      if (changedDuring !== null) {
         issues.push({
           sensorId: sensor.id,
-          outputPath,
+          outputPath: changedDuring,
           detailPath: null,
           reason: "artifact changed during sensor evaluation",
         });
@@ -4045,46 +4131,18 @@ function hasBlockingSensorOverrideAuthorization(
     row.event === "DECISION_RECORDED" ||
     row.event === "QUESTION_ANSWERED"
   );
-  const answers = interactions.filter((row) =>
-    row.event === "QUESTION_ANSWERED" &&
-    auditField(row.block, "Details") === BLOCKING_SENSOR_OVERRIDE_CHOICE
-  );
-
-  for (const answer of answers) {
+  for (const [answer, choice] of blockingSensorPicks(rows, slug)) {
+    if (choice !== BLOCKING_SENSOR_OVERRIDE_CHOICE) continue;
     if (!boundaries.every((boundary) => auditEventIsAfter(answer, boundary))) {
       continue;
     }
     if (
-      !interactions.every((row) =>
+      interactions.every((row) =>
         row === answer || auditEventIsAfter(answer, row)
       )
     ) {
-      continue;
+      return true;
     }
-    const decision = interactions.findLast((row) => {
-      if (
-        row.event !== "DECISION_RECORDED" ||
-        row.shard !== answer.shard ||
-        row.pos >= answer.pos ||
-        auditField(row.block, "Decision") !== BLOCKING_SENSOR_OVERRIDE_DECISION
-      ) {
-        return false;
-      }
-      const options = (auditField(row.block, "Options") ?? "")
-        .split(",")
-        .map((option) => option.trim());
-      return BLOCKING_SENSOR_OVERRIDE_OPTIONS.every((option) =>
-        options.includes(option)
-      );
-    });
-    if (!decision) continue;
-    const humanTurn = rows.some((row) =>
-      row.event === "HUMAN_TURN" &&
-      row.shard === answer.shard &&
-      row.pos > decision.pos &&
-      row.pos < answer.pos
-    );
-    if (humanTurn) return true;
   }
   return false;
 }
@@ -4818,8 +4876,10 @@ function verifyStageArtifacts(
   if (settledSwarm) return;
 
   if (!producesArtifactsExist(pd, stage)) {
-    const message =
-      `${reviewerPreconditionPrefix(stage.slug, action)}: none of its declared artifacts exist ` +
+    const message = KNOWN_CODEKB_STAGES.has(stage.slug)
+      ? `${reviewerPreconditionPrefix(stage.slug, action)}: required artifacts are missing ` +
+        `(${missingCodekbList(pd, stage)}). Write them, then run the same report again.`
+      : `${reviewerPreconditionPrefix(stage.slug, action)}: none of its declared artifacts exist ` +
         `under the intent's record directory. The stage protocol requires ${stage.name} ` +
         `to produce output before the gate. Produce the artifacts ` +
         `(declared: ${(stage.produces ?? []).join(", ") || "none"}), then run the same report again.`;
@@ -4945,6 +5005,19 @@ type ReviewerPreconditionAction = "complete" | "present-approval-gate";
 // Unit the walk happens to be on.
 function spentUnit(units: string[]): { unit?: string } {
   return units.length === 1 ? { unit: units[0] } : {};
+}
+
+// What a codekb stage's refusal names: per repository its missing files ("all
+// 9 files" when none is there), the first five repositories, then a count.
+function missingCodekbList(pd: string, stage: { produces?: string[] }): string {
+  const NAMED = 5;
+  const declared = (stage.produces ?? []).length;
+  const missing = missingCodekbArtifacts(pd, stage);
+  const named = missing.slice(0, NAMED).map(({ repo, files }) =>
+    `${repo}: ${files.length === declared && declared > 1 ? `all ${declared} files` : files.join(", ")}`
+  );
+  const more = missing.length - named.length;
+  return `${named.join("; ")}${more > 0 ? `; and ${more} more ${more === 1 ? "repository" : "repositories"}` : ""}`;
 }
 
 function reviewerPreconditionPrefix(
@@ -6797,7 +6870,7 @@ function latestGateBriefDigest(pd: string, stage: GateStage, unit: string | unde
 // detail file); a pass or a check that never ran is its `id@path` key with its
 // state, in the order the gate row spells them.
 type LatestCheckResults = {
-  failed: Array<{ id: string; rel: string; findings: string; detail: string | null }>;
+  failed: Array<{ id: string; rel: string; findings: string; detail: string | null; failedOutputs: string | null }>;
   rest: string[];
 };
 function latestCheckResults(pd: string, stage: GateStage, unit: string | null = null): LatestCheckResults {
@@ -6805,7 +6878,7 @@ function latestCheckResults(pd: string, stage: GateStage, unit: string | null = 
   const sensors = stage.sensors_applicable ?? [];
   const paths = declaredOutputsForGate(pd, stage, unit);
   if (sensors.length === 0 || paths.length === 0) return results;
-  const latest = new Map<string, { kind: "passed" | "failed"; ts: string; pos: number; findings: string; detail: string | null }>();
+  const latest = new Map<string, { kind: "passed" | "failed"; ts: string; pos: number; findings: string; detail: string | null; failedOutputs: string | null }>();
   for (const row of readAuditShardEvents(pd)) {
     if (row.event !== "SENSOR_PASSED" && row.event !== "SENSOR_FAILED") continue;
     if (auditBlockField(row.block, "Stage slug") !== stage.slug) continue;
@@ -6824,15 +6897,16 @@ function latestCheckResults(pd: string, stage: GateStage, unit: string | null = 
       pos: row.pos,
       findings: auditBlockField(row.block, "Findings count") ?? "?",
       detail: auditBlockField(row.block, "Detail path"),
+      failedOutputs: auditBlockField(row.block, "Failed outputs"),
     });
   }
   for (const sensor of sensors) {
-    for (const path of gateSensorOutputs(sensor, paths)) {
+    for (const { outputPath: path } of gateSensorOutputs(sensor, paths, stage.slug)) {
       const rel = relative(pd, path).split(sep).join("/");
       const result = latest.get(`${sensor.id}@${rel}`);
       if (result === undefined) results.rest.push(`${sensor.id}@${rel}=not-run`);
       else if (result.kind === "passed") results.rest.push(`${sensor.id}@${rel}=passed`);
-      else results.failed.push({ id: sensor.id, rel, findings: result.findings, detail: result.detail });
+      else results.failed.push({ id: sensor.id, rel, findings: result.findings, detail: result.detail, failedOutputs: result.failedOutputs });
     }
   }
   return results;
@@ -6873,6 +6947,23 @@ function sensorStateAtGate(pd: string, stage: GateStage): string {
   return `${shown.join("; ")}${more > 0 ? `; +${more} more` : ""}`;
 }
 
+// Where a failing check's findings are, said to the person: the file's name,
+// or at a codekb stage, whose files share their names across repositories,
+// `<repo>/<file>` for the first file the fire's row names (its `Failed outputs`,
+// written by the sensor dispatcher as "a, b and N more") and how many more.
+function failedCheckWhere(stage: GateStage, rel: string, failedOutputs: string | null): string {
+  if (!KNOWN_CODEKB_STAGES.has(stage.slug)) return basename(rel);
+  const repoFile = (path: string): string => path.split("/").slice(-2).join("/");
+  if (failedOutputs === null) return repoFile(rel);
+  const tail = / and (\d+) more$/.exec(failedOutputs);
+  const listed = (tail ? failedOutputs.slice(0, tail.index) : failedOutputs).split(", ").filter((p) => p !== "");
+  const others = listed.length - 1 + (tail ? Number(tail[1]) : 0);
+  if (listed.length === 0) return repoFile(rel);
+  return others > 0
+    ? `${repoFile(listed[0])} and ${others} other file${others === 1 ? "" : "s"}`
+    : repoFile(listed[0]);
+}
+
 // What the person hears when a gate opens, or is shown again, while a check
 // still fails on a declared output (#2201): one line per failing check, in
 // plain words (the agent corrects from the detail file the sensors protocol
@@ -6897,10 +6988,10 @@ export function failedCheckNotices(pd: string, stage: GateStage, unit: string | 
   } catch {
     return [];
   }
-  const lines = failed.slice(0, FAILED_CHECK_LINES).map(({ id, rel, findings }) => {
+  const lines = failed.slice(0, FAILED_CHECK_LINES).map(({ id, rel, findings, failedOutputs }) => {
     const check = id.endsWith("check") ? id : `${id} check`;
     const count = /^\d+$/.test(findings) ? `${findings} finding${findings === "1" ? "" : "s"}` : "findings";
-    return `The ${check} reports ${count} in ${basename(rel)}.`;
+    return `The ${check} reports ${count} in ${failedCheckWhere(stage, rel, failedOutputs)}.`;
   });
   const more = failed.length - lines.length;
   if (more > 0) lines.push(`${more} more check${more === 1 ? " reports" : "s report"} findings on this stage's outputs.`);
@@ -7800,13 +7891,7 @@ function handleReject(args: string[]): void {
   if (!teamGate) {
     validateSlugInState(content, slug, ["awaiting-approval", "in-progress"]);
   }
-  const feedbackStatus = guardRecoveryFeedbackStatus(
-    pd,
-    content,
-    slug,
-    teamGate?.unit,
-    feedback ?? "",
-  );
+  const feedbackStatus = guardRecoveryFeedbackStatus(pd, content, slug, teamGate?.unit);
   if (feedbackStatus === "other-remedy") {
     const selectedAction = selectedGuardRecoveryRemedyAction(
       pd,
@@ -7843,15 +7928,15 @@ function handleReject(args: string[]): void {
     isAutonomousConstructionGate(content, stage, pd);
   // The person's own words. Their replies since the last decision and since
   // the stage started (or the one message the agent named), kept whole by the
-  // human-turn hook, are the feedback, and the conductor's text, when it says
-  // something else, is kept beside them as the Conductor Summary. A
-  // guard-recovery ask binds its own feedback above, and autonomous
-  // Construction has no person at the gate. With no recorded words the
-  // conductor's text is the feedback.
+  // human-turn hook, are the feedback, and the conductor's text is kept beside
+  // them as the Conductor Summary: at a gate and after a guard-recovery Request
+  // Changes alike. Autonomous Construction has no person at the gate. With no
+  // recorded words the conductor's text is the feedback.
   const conductorFeedback = feedback;
   let personsWords: string | null = null;
   let personsMessage: string | null = null;
-  if (!autonomousDecision && feedbackStatus === "not-applicable") {
+  let personsMessages: Record<string, string> = {};
+  if (!autonomousDecision && (feedbackStatus === "not-applicable" || feedbackStatus === "ready")) {
     if (message !== undefined && !humanPresenceGuardDisabled()) {
       const proof = proveMessage(pd, message, "change request");
       if ("refusal" in proof) refuseForAgent(proof.refusal);
@@ -7859,22 +7944,22 @@ function handleReject(args: string[]): void {
     try {
       if (message !== undefined) {
         const named = readMessage(pd, message);
-        personsWords = named?.words && !isNonAnswer(named.words) ? named.words : null;
+        const words = named?.words ? personsWordsText(named.words) : null;
+        personsWords = words && !isNonAnswer(words) ? words : null;
         personsMessage = message;
       } else {
         const reply = personsGateReply(pd, resolveInvokingSessionId(pd), slug);
         personsWords = reply.words;
         personsMessage = reply.messageId;
+        personsMessages = windowMessageIds(reply);
       }
     } catch {
       personsWords = null;
     }
   }
-  const conductorSummary =
-    personsWords !== null && conductorFeedback &&
-      normalizeGuardRecoveryText(conductorFeedback) !== normalizeGuardRecoveryText(personsWords)
-      ? conductorFeedback
-      : undefined;
+  // Beside their words the agent's text is its own, kept whole: nothing
+  // compares the two.
+  const conductorSummary = personsWords !== null && conductorFeedback ? conductorFeedback : undefined;
   if (personsWords !== null) feedback = personsWords;
   if (!feedback) {
     refuseForAgent(
@@ -7888,13 +7973,6 @@ function handleReject(args: string[]): void {
       `Refusing to reject "${slug}": revision feedback ${formatReceivedReply(feedback)} is ` +
         "cancellation boilerplate. Re-present the original held gate with every offered choice " +
         "and wait for the human to choose one.",
-    );
-  }
-  if (feedbackStatus === "mismatch") {
-    refuseForAgent(
-      `Refusing to reject "${slug}": --feedback does not exactly match the ` +
-        "human's separate guard-recovery response. Pass their text unchanged.",
-      { personDecided: true },
     );
   }
 
@@ -7986,6 +8064,7 @@ function handleReject(args: string[]): void {
         Feedback: feedback,
         ...(conductorSummary ? { [CONDUCTOR_SUMMARY_FIELD]: conductorSummary } : {}),
         ...(personsMessage ? { [PERSONS_MESSAGE_FIELD]: personsMessage } : {}),
+        ...personsMessages,
         ...(reviewFindingDispositions
           ? {
               [REVIEW_FINDING_DISPOSITIONS_FIELD]:
@@ -8031,6 +8110,7 @@ function handleReject(args: string[]): void {
       Feedback: feedback,
       ...(conductorSummary ? { [CONDUCTOR_SUMMARY_FIELD]: conductorSummary } : {}),
       ...(personsMessage ? { [PERSONS_MESSAGE_FIELD]: personsMessage } : {}),
+      ...personsMessages,
       ...priorAcceptedSourceFields(pd, stage),
     };
     if (reviewFindingDispositions) {

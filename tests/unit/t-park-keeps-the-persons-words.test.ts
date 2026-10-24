@@ -34,11 +34,11 @@ import {
 import {
   auditBlockField,
   humanTurnState,
-  personSpokeSinceGate,
   readAuditShardEvents,
   SUMMARY_CONFIRMATION_CHECKPOINT,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { personTurnStands } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -117,7 +117,7 @@ function rowOrder(proj: string): string {
     .map((row) => `${row.event} ${row.timestamp} ${row.shard.split("/").pop()}:${row.pos}` +
       (row.event === "HUMAN_TURN" ? ` Reply=${auditBlockField(row.block, "Reply") ?? "-"}` : ""));
   const read = `humanTurnState=${humanTurnState(proj, { replies: true })} ` +
-    `personSpokeSinceGate=${personSpokeSinceGate(proj, { replies: true, outlivesApproval: true })}`;
+    `personTurnStands=${personTurnStands(proj, "request", { replies: true })}`;
   return [read, ...rows].join("\n");
 }
 
@@ -253,16 +253,30 @@ describe("the park row keeps the words that stopped the work", () => {
 
   // Stale words: a reply one of the engine's own questions already used up
   // (here the summary confirmation) stands behind nothing later.
-  test("an older reply the summary checkpoint used, then a park: the row carries no words", () => {
+  // One message backs one decision and a stop beside it ("looks correct, and
+  // stop here for today"); a second decision on record after it uses it up.
+  test("an older reply two decisions used, then a park: the row carries no words", () => {
     state(proj, ["gate-start", STAGE]);
     says(proj, "looks correct, and rename the handler");
-    // The row the summary confirmation writes: a decision, so it spends the reply.
+    // The row the summary confirmation writes: a decision.
+    appendAuditEntry("SUMMARY_CONFIRMATION_RECORDED", {
+      Stage: STAGE, Checkpoint: SUMMARY_CONFIRMATION_CHECKPOINT, Details: "Looks correct",
+    }, proj);
+    appendAuditEntry("GATE_APPROVED", { Stage: STAGE, "User Input": "Approve" }, proj);
+    const r = state(proj, ["park", "--person-asked"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(parkedWords(proj), rowOrder(proj)).toBeNull();
+  });
+
+  test("a reply the summary confirmation used and that asked to stop keeps its words", () => {
+    state(proj, ["gate-start", STAGE]);
+    says(proj, "looks correct, and stop here for today");
     appendAuditEntry("SUMMARY_CONFIRMATION_RECORDED", {
       Stage: STAGE, Checkpoint: SUMMARY_CONFIRMATION_CHECKPOINT, Details: "Looks correct",
     }, proj);
     const r = state(proj, ["park", "--person-asked"]);
     expect(r.rc, r.out).toBe(0);
-    expect(parkedWords(proj), rowOrder(proj)).toBeNull();
+    expect(parkedWords(proj), rowOrder(proj)).toBe("looks correct, and stop here for today");
   });
 
   // The answer they gave the agent's own question in that same message leaves

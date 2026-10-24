@@ -10,10 +10,11 @@
 //
 //   - every reply of theirs in this chat since the last decision is the
 //     Feedback, word for word and in order, quotes and punctuation kept: a
-//     bare pick ("2", "Request Changes"), a question, a remark before the gate
-//     and an answer to another question included, since nothing they said is
-//     dropped for what it means; the conductor's --reason is kept beside them
-//     as the Conductor Summary, and the row names the latest message;
+//     bare pick ("2", "Request Changes"), a question and a remark before the
+//     gate included, since nothing they said is dropped for what it means; a
+//     reply an answer on record already names is that answer's, unless it is
+//     the latest; the conductor's --reason is kept beside them as the
+//     Conductor Summary, and the row names the latest message;
 //   - the report's step says their words are on the record, never repeating them;
 //   - with no recorded words (no prompt text, no session, a slash command or
 //     guard switch, another chat's words, a message over the bound) the row is
@@ -203,11 +204,14 @@ describe("Request Changes records the person's own words", () => {
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("2\\nRename the list command to todo ls.\\nAnd keep done as it is.");
   });
 
-  test("a conductor that passes the same words adds no Conductor Summary", () => {
+  // Nothing compares the agent's text with their words: the record keeps both,
+  // whatever the agent's text says.
+  test("a conductor that passes the same words: their words are the Feedback, its text the Conductor Summary", () => {
     says(proj, TYPED);
-    rejectWith(proj, slug, ["--reason", `  ${TYPED.replace(/ /g, "  ")} `]);
+    const passed = `  ${TYPED.replace(/ /g, "  ")} `;
+    rejectWith(proj, slug, ["--reason", passed]);
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(TYPED);
-    expect(field(proj, "GATE_REJECTED", "Conductor Summary")).toBeNull();
+    expect(field(proj, "GATE_REJECTED", "Conductor Summary")).not.toBeNull();
   });
 
   test("with no recorded words the row is the conductor's text, beside the message it stands on", () => {
@@ -421,8 +425,8 @@ describe("Request Changes records the person's own words", () => {
     expect(auditBlockField(stageRows[0].block, "Feedback")).toBe(TYPED);
   });
 
-  // An answer uses no reply up: it rides along, and the agent revises from what they asked for.
-  test("an answer logged to a clarifying question rides along with the gate's feedback", () => {
+  // An answer uses no reply up, but its words stay on its own row: the change request keeps what they said for it.
+  test("an answer logged to a clarifying question stays on its own row, not the gate's feedback", () => {
     const log = (args: string[]) => run(LOG, [...args, "--project-dir", proj], SESSION);
     expect(log(["decision", "--stage", slug, "--decision", "Which output name?", "--options", "todo.json,out.json"]).rc).toBe(0);
     says(proj, "use todo.json for the name");
@@ -430,7 +434,9 @@ describe("Request Changes records the person's own words", () => {
     expect(answered.rc, answered.out).toBe(0);
     says(proj, TYPED);
     rejectWith(proj, slug, ["--reason", PARAPHRASE]);
-    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(`use todo.json for the name\\n${TYPED}`);
+    expect(field(proj, "QUESTION_ANSWERED", "Person Reply")).toBe("use todo.json for the name");
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(TYPED);
+    expect(field(proj, "GATE_REJECTED", "Message Ids")).toBeNull();
   });
 
   // Every open question keeps a reply as typed; the agent reads which one it answers.

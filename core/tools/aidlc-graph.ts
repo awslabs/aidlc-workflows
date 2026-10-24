@@ -255,6 +255,12 @@ export interface GraphStage extends StageEntry {
   summary_confirmation?: "required" | "if-present";
 }
 
+/** A stage a custom plan skips and the stages it keeps that use what it makes. */
+export interface SkippedInput {
+  stage: string;
+  used_by: string[];
+}
+
 export interface ScopeValidation {
   valid: boolean;
   errors: string[];
@@ -262,7 +268,9 @@ export interface ScopeValidation {
   // The deterministic ceremony count of the validated grid (stage/gate/per-unit
   // counts). The composer copies this into its proposal verbatim so the gate the
   // human sees leads with numbers the validator computed, not an LLM recount.
-  summary?: ScopeCostSummary;
+  // A passing --custom run adds skipped_inputs when the plan's own skips leave a
+  // kept stage without what it uses: the offer says it once, in one line.
+  summary?: ScopeCostSummary & { skipped_inputs?: SkippedInput[] };
   // Graph/plugin-authored stock scopes ranked by grid distance from the
   // validated proposal; composer-authored entries are excluded. A front/report
   // matched-vs-custom verdict routes on nearest_stock[0].diff (match when <= 2
@@ -1430,6 +1438,13 @@ export function consumedArtifactProducerCollisions(): {
  *  stage's verdict. The dispatcher and the gate both read this set. */
 export const STAGE_WIDE_SENSOR_IDS: ReadonlySet<string> = new Set(["upstream-coverage", "claim-sources"]);
 
+/** The sensors whose script evaluates a set of output paths handed on stdin
+ *  (`--paths-stdin json`), each path as it would evaluate it alone. At a codekb
+ *  stage, whose outputs span one folder per repository, the gate fires each of
+ *  these once for the stage over every repository's files instead of once per
+ *  file or folder; every other stage keeps its fires. */
+export const PATH_SET_SENSOR_IDS: ReadonlySet<string> = new Set(["required-sections", "upstream-coverage"]);
+
 export function templateEligibleArtifacts(produces: string[]): string[] {
   return (produces ?? []).filter(
     (a) =>
@@ -1747,49 +1762,24 @@ export function validateGrid(
     );
   }
 
-  const onPath = new Set(
-    Object.entries(grid)
-      .filter(([slug, action]) => action === "EXECUTE" && knownSlugs.has(slug))
-      .map(([slug]) => slug)
-  );
-  const subgraph = graph
-    .filter((s) => onPath.has(s.slug))
-    .sort((a, b) => numericStageOrder(a.number, b.number));
-
-  for (const stage of subgraph) {
-    for (const consume of stage.consumes ?? []) {
-      // required: false -> silent
-      if (!consume.required) continue;
-      // projectType filter for conditional consumes
-      if (
-        consume.conditional_on &&
-        opts?.projectType &&
-        consume.conditional_on !== opts.projectType
-      ) {
-        continue;
-      }
-      const producers = producersOf(consume.artifact);
-      if (producers.length === 0) {
-        errors.push(
-          `Stage "${stage.slug}" requires artifact "${consume.artifact}" ` +
-            `but no stage in the graph produces it.`
-        );
-        continue;
-      }
-      const onPathProducers = producers.filter((p) => onPath.has(p.slug));
-      if (onPathProducers.length === 0) {
-        const message =
-          `Stage "${stage.slug}" requires artifact "${consume.artifact}" ` +
-          `whose producer(s) [${producers.map((p) => p.slug).join(", ")}] ` +
-          `are not on the "${label}" path.`;
-        if (opts?.strict) {
-          errors.push(
-            `${message} Strict (recompose) mode rejects a starved required input.`
-          );
-        } else {
-          advisories.push(`${message} Ensure existing artifact is current.`);
-        }
-      }
+  for (const { stage, artifact, producers } of unmadeInputs(grid, opts?.projectType)) {
+    if (producers.length === 0) {
+      errors.push(
+        `Stage "${stage.slug}" requires artifact "${artifact}" ` +
+          `but no stage in the graph produces it.`
+      );
+      continue;
+    }
+    const message =
+      `Stage "${stage.slug}" requires artifact "${artifact}" ` +
+      `whose producer(s) [${producers.map((p) => p.slug).join(", ")}] ` +
+      `are not on the "${label}" path.`;
+    if (opts?.strict) {
+      errors.push(
+        `${message} Strict (recompose) mode rejects a starved required input.`
+      );
+    } else {
+      advisories.push(`${message} Ensure existing artifact is current.`);
     }
   }
 
@@ -1812,6 +1802,60 @@ export function validateGrid(
     grid as Record<string, "EXECUTE" | "SKIP">,
   );
   return { valid: errors.length === 0, errors, advisories, summary, nearest_stock };
+}
+
+/** Each required input `grid` leaves unmade: a stage it runs whose required
+ *  artifact no stage it runs produces (`producers` empty when no stage in the
+ *  graph does). In stage order, then consume order. The one walk behind
+ *  validateGrid's errors and advisories and the plan offer's skippedInputs.
+ *  required: false is silent; projectType filters conditional_on consumes. */
+function unmadeInputs(
+  grid: Record<string, string>,
+  projectType?: "brownfield" | "greenfield",
+): Array<{ stage: GraphStage; artifact: string; producers: GraphStage[] }> {
+  const graph = loadGraph();
+  const onPath = new Set(graph.filter((s) => grid[s.slug] === "EXECUTE").map((s) => s.slug));
+  const subgraph = graph
+    .filter((s) => onPath.has(s.slug))
+    .sort((a, b) => numericStageOrder(a.number, b.number));
+  const unmade: Array<{ stage: GraphStage; artifact: string; producers: GraphStage[] }> = [];
+  for (const stage of subgraph) {
+    for (const consume of stage.consumes ?? []) {
+      if (!consume.required) continue;
+      if (consume.conditional_on && projectType && consume.conditional_on !== projectType) continue;
+      const producers = producersOf(consume.artifact);
+      if (producers.some((p) => onPath.has(p.slug))) continue;
+      unmade.push({ stage, artifact: consume.artifact, producers });
+    }
+  }
+  return unmade;
+}
+
+/** The stages a custom plan skips that a stage it keeps uses, where the plan's
+ *  own changes cause it. A stock scope leaves some inputs unmade by design
+ *  (t66 pins those edges), so a skipped producer is named only when one of the
+ *  plan's unmade inputs it would make is not one `base`, the stock scope the
+ *  plan runs on, leaves unmade too (the plan skipped it, or added a stage that
+ *  needs it); it is then named with every kept stage that uses what it makes,
+ *  so the offer's one line is whole. Display names, in stage order. */
+function skippedInputs(
+  plan: Record<string, string>,
+  base: Record<string, string>,
+  projectType?: "brownfield" | "greenfield",
+): SkippedInput[] {
+  const key = (gap: { stage: GraphStage; artifact: string }): string => `${gap.stage.slug} ${gap.artifact}`;
+  const onBase = new Set(unmadeInputs(base, projectType).map(key));
+  const gaps = unmadeInputs(plan, projectType).filter((gap) => gap.producers.length > 0);
+  const named = new Set(gaps.filter((gap) => !onBase.has(key(gap))).flatMap((gap) => gap.producers.map((p) => p.slug)));
+  return loadGraph()
+    .filter((s) => named.has(s.slug))
+    .sort((a, b) => numericStageOrder(a.number, b.number))
+    .map((producer) => ({
+      stage: producer.name,
+      used_by: [...new Set(
+        gaps.filter((gap) => gap.producers.some((p) => p.slug === producer.slug)).map((gap) => gap.stage.name),
+      )],
+    }));
 }
 
 /** Check a composer proposal's `scopeSettings` member. All four keys are
@@ -4048,6 +4092,8 @@ const COMMANDS: Record<string, Handler> = {
         } else if (base !== null && !("error" in base)) {
           r.base_scope = base.scope;
           r.plan_changes = base.changes;
+          const skipped = skippedInputs(grid, loadScopeGrid()[base.scope]?.stages ?? {}, projectType);
+          if (skipped.length > 0 && r.summary) r.summary.skipped_inputs = skipped;
           r.creation_settings = creationSettingsFor(base.scope, r.scope_settings);
           const baseDepth = (loadScopeMapping()[base.scope]?.depth ?? "").toLowerCase();
           if (planDepth !== undefined && planDepth !== baseDepth) r.creation_depth = planDepth;

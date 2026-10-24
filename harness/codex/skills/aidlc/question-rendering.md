@@ -73,8 +73,9 @@ Map the spec fields 1:1:
   through." (Questions *files* still
   end every question with `X. Other (please specify)` per protocol §3 — the
   file format is harness-neutral.)
-- Limits: 1–3 questions per call, 2–3 options each. For 4+ options, split
-  across calls (options A–C, then D+); the questions file retains the full
+- Limits: 1-3 questions per call, 2-3 options each. A question from the
+  questions file with more options is asked as numbered prose instead
+  (Track 2, stage-protocol.md Step 3a); the questions file retains the full
   option set as the authoritative record.
 - **Answer capture**: the selection returns as the exact option label; record
   it verbatim (protocol: never summarize User Input).

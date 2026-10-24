@@ -12,6 +12,8 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { listMessages } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { cleanupTestProject, createTestProject, FIXTURES_DIR, REPO_ROOT, runOrchestrateNext, seededStateFile } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
@@ -69,20 +71,32 @@ function workspace(open = true) {
     expect(r.exitCode, `${args.join(" ")}: ${r.stdout}${r.stderr}`).toBe(0);
     return r.stdout.toString().trim();
   };
-  const said = (words: string): void => {
+  // The person types `words` in the chat; the id of the message the hook kept
+  // is what a setter names (--message) for what they asked. With work open the
+  // turn row names it; with none open there is no row, and it is the one
+  // message record the hook added.
+  const said = (words: string): string => {
+    const turns = () => readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN");
+    const rowsBefore = turns().length;
+    const before = new Set(listMessages(proj).map((message) => message.id));
     const r = spawn(["engine", "hook", "record-human-turn"], JSON.stringify({
       hook_event_name: "UserPromptSubmit", cwd: proj, session_id: SESSION, prompt: words,
     }));
     expect(r.exitCode, r.stderr.toString()).toBe(0);
+    const after = turns();
+    const added = listMessages(proj).filter((message) => !before.has(message.id)).map((message) => message.id);
+    const id = after.length > rowsBefore ? auditBlockField(after.at(-1)!.block, "Message Id") : added.length === 1 ? added[0] : null;
+    expect(id).not.toBeNull();
+    return id as string;
   };
   const off = (name: string, place: "local" | "project" | "global"): void => {
-    said("turn it off");
-    run(["config", "flags", "--bypass", name, `--${place}`, "--yes"]);
+    const id = said("turn it off");
+    run(["config", "flags", "--bypass", name, `--${place}`, "--yes", "--message", id]);
   };
-  // The person asks in chat; the agent runs the setter with their words.
+  // The person asks in chat; the agent runs the setter naming their message.
   const backOn = (key: string, words: string, extra: Record<string, string | undefined> = {}): string => {
-    said(words);
-    return run(["engine", "config", "set", key, "on", "--person-words", words], extra);
+    const id = said(words);
+    return run(["engine", "config", "set", key, "on", "--message", id], extra);
   };
   const file = (place: "local" | "project" | "global"): string =>
     place === "local" ? join(proj, "aidlc.settings.local.json")
@@ -245,6 +259,7 @@ describe("t-back-on-clears-your-own-switch: back on while a settings file keeps 
     const w = workspace();
     w.off("AIDLC_DISABLE_PLAN_APPROVAL_GUARD", "local");
     w.said("what is the next stage about?");
+    // Words the agent passes itself (--person-words) name no message of theirs.
     const out = w.run(["engine", "config", "set", "plan-approval", "on", "--person-words", "turn plan approval back on"]);
     expect(out).toContain("is still off: aidlc.settings.local.json keeps it off for this project.");
     expect(w.recorded("local")).toEqual(["AIDLC_DISABLE_PLAN_APPROVAL_GUARD"]);
@@ -357,12 +372,26 @@ describe("t-back-on-clears-your-own-switch: the agent's config flags clear does 
     expect(w.changed()).toBe("");
   });
 
-  test("only your own file keeps it off: cleared as before, with the clear's own lines", () => {
+  test("only your own file keeps it off: cleared, and the person's line says it is on again", () => {
     const w = teamClone();
     w.off(SWITCH, "local");
     const out = w.clear(SWITCH);
-    expect(out).toContain(`Cleared ${SWITCH} from aidlc.settings.local.json.`);
+    // From a chat the person's line is the whole of it; the file and its undo stay in the JSON result.
+    expect(out).toBe("The plan approval check is on again for this project.");
+    expect(w.recorded("local")).toEqual([]);
+  });
+
+  test("two checks cleared from your file while the team's file keeps one off: that one is still said", () => {
+    const w = teamClone();
+    const FREEZE = "AIDLC_DISABLE_REVIEW_FREEZE_HOOK";
+    w.off(FREEZE, "project");
+    w.commit();
+    w.off(SWITCH, "local");
+    w.off(FREEZE, "local");
+    const out = w.clear(SWITCH, "--clear-bypass", FREEZE, "--local");
     expect(out).toContain("The plan approval check is on again for this project.");
+    expect(out).toContain("still off: the switch is recorded in aidlc.settings.json.");
+    expect(out).not.toContain(`Cleared ${SWITCH}`);
     expect(w.recorded("local")).toEqual([]);
   });
 
@@ -443,8 +472,8 @@ describe("t-back-on-clears-your-own-switch: the agent's config flags clear does 
 
   test("the undo of a switch recorded in the machine's file names that file, and does what it says", () => {
     const w = teamClone();
-    w.said("turn plan approval off on this machine");
-    const out = w.run(["config", "flags", "--bypass", SWITCH, "--global", "--yes"]);
+    const asked = w.said("turn plan approval off on this machine");
+    const out = w.run(["config", "flags", "--bypass", SWITCH, "--global", "--yes", "--message", asked]);
     expect(out).toContain(`. To undo: bun .claude/tools/aidlc.ts ${back("global")}`);
     w.said("undo that");
     w.run(["config", "flags", "--clear-bypass", SWITCH, "--global", "--yes"]);
@@ -457,5 +486,37 @@ describe("t-back-on-clears-your-own-switch: the agent's config flags clear does 
     expect(onboarding).toContain("To turn it back on, run `{{INVOKE}} config flags --clear-bypass <switch> --yes`");
     const orchestrate = readFileSync(join(REPO_ROOT, "core", "tools", "aidlc-orchestrate.ts"), "utf-8");
     expect(orchestrate).not.toContain("run config flags --clear-bypass AIDLC_DISABLE_<NAME> --yes when the person asks");
+  });
+});
+
+// Turning a check off from a chat: the person reads the line in their own
+// words with its way back; the file, the undo command and the open workflow
+// are the record's, kept in the JSON result. At their own terminal they ran
+// the command themselves, so it says all of it as before.
+describe("t-back-on-clears-your-own-switch: a check turned off from a chat is said in the person's words", () => {
+  const SWITCH = "AIDLC_DISABLE_REVIEW_FREEZE_HOOK";
+  const FREEZE = "The review freeze check (it stops edits to work you already approved) is off for this project since ";
+  const ENGINE = ["To undo:", "Recorded AIDLC_", "open workflow"];
+  const bypass = (id: string, ...json: string[]): string[] =>
+    ["config", "flags", "--bypass", SWITCH, "--local", "--yes", "--message", id, ...json];
+
+  test("from a chat: the person's line alone, and the receipt stays in the JSON result", () => {
+    const w = workspace();
+    const out = w.run(bypass(w.said("turn the review freeze off for me")));
+    expect(out).toStartWith(FREEZE);
+    expect(out).toContain(', because you said: "turn the review freeze off for me". You can turn it back on any time.');
+    for (const words of ENGINE) expect(out).not.toContain(words);
+    expect(w.recorded("local")).toEqual([SWITCH]);
+    w.run(["config", "flags", "--clear-bypass", SWITCH, "--local", "--yes"]);
+    const json = JSON.parse(w.run(bypass(w.said("turn it off again"), "--json"))) as { data: { changes: string[] } };
+    expect(json.data.changes.join("\n")).toContain(`Recorded ${SWITCH} in aidlc.settings.local.json. To undo: `);
+    expect(json.data.changes.join("\n")).toContain("open workflow");
+  });
+
+  test("at your own terminal: the receipt, its undo and the open workflow line, as before", () => {
+    const w = workspace();
+    const out = w.run(bypass(w.said("turn the review freeze off for me")), { AIDLC_TEST_CONFIG_TTY: "1", AIDLC_SESSION_OVERRIDE: undefined });
+    expect(out).toContain(FREEZE);
+    for (const words of ENGINE) expect(out).toContain(words);
   });
 });

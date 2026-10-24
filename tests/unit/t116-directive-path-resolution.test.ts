@@ -416,7 +416,9 @@ describe("t116 per-unit {unit-name} injection", () => {
   test("Code Generation owes Plan Approval but no summary confirmation in a summary-on scope", () => {
     expect(CG.ceremony?.summary_confirmation).toBe("off");
     expect(CG.ceremony?.plan_approval).toBe("on");
-    expect(CG.ceremony_note).toStartWith("Summary confirmation is off for this work:");
+    expect(CG.ceremony_note).toContain("skip the stage file's Consolidated Summary step");
+    expect(CG.ceremony_note).not.toContain("is off");
+    expect(CG.ceremony_note).not.toMatch(/summary confirmation/i);
     expect(CG.ceremony_note).not.toContain("confirm the summary of the answers");
     expect(CG.protocol_modules ?? []).not.toContain("summary");
   });

@@ -19,10 +19,13 @@ import {
   kiroIdeLegacyPlanApprovalSessionId,
   markKiroIdeLegacyPlanApprovalHost,
   readPlanApprovalChallenge,
+  readAuditShardEvents,
   readPlanApprovalLegacyOffer,
+  readPlanApprovalLegacyRecoveryChallenge,
   workspaceSourceFingerprint,
   workspaceSourceState,
   writePlanApprovalChallenge,
+  writePlanApprovalLegacyRecoveryChallenge,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
@@ -248,6 +251,8 @@ function submitLegacyPrompt(
 function recoverLegacyCapability(
   installed: ReturnType<typeof project>,
   env: Record<string, string>,
+  // The moment between the person's yes and the agent's record of it.
+  pauseMs = 0,
 ): Directive {
   const recovery = invoke(installed, "next", undefined, env);
   expect(recovery).toMatchObject({
@@ -260,6 +265,7 @@ function recoverLegacyCapability(
   // The person's yes, in their own words, and the agent's record of it: the
   // recovery question's one choice command.
   submitLegacyPrompt(installed, env, "Yes, bring it back.");
+  if (pauseMs > 0) Bun.sleepSync(pauseMs);
   const yes = Bun.spawnSync(
     [
       BUN, join(dirname(installed.tool), "aidlc-log.ts"), "answer", "--stage", "code-generation",
@@ -473,6 +479,24 @@ describe("t327 Code Generation authority publication", () => {
     expect(takeover.legacy_plan_approval_choices?.approve).toMatch(
       /^Approve Plan \[[0-9a-f]{12}\]$/,
     );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // An older release asked the recovery question and kept no time, and Code
+  // Generation started on a teammate's clone, so this shard has no start row:
+  // shown again after the update, the yes typed after it is their answer.
+  test("an older release's recovery question, shown again, takes the yes typed after it", () => {
+    const installed = project("kiro-ide");
+    const env = { VSCODE_IPC_HOOK: `t327-older-question:${installed.dir}`, VSCODE_PID: String(process.pid) };
+    const session = kiroIdeLegacyPlanApprovalSessionId({ ...process.env, ...env }) ?? "";
+    startLegacyKiroHost(installed, env);
+    expect(runToCodeGeneration(installed, env).kind).toBe("run-stage");
+    expect(invoke(installed, "next", undefined, env).ask_type).toBe("legacy-plan-approval-recovery");
+    const { createdAt, ...older } = readPlanApprovalLegacyRecoveryChallenge(installed.dir, session)!;
+    expect(createdAt).toBeDefined();
+    writePlanApprovalLegacyRecoveryChallenge(installed.dir, older);
+    expect(readAuditShardEvents(installed.dir).some((row) =>
+      row.event === "STAGE_STARTED" && row.block.includes("**Stage**: code-generation"))).toBe(false);
+    expect(recoverLegacyCapability(installed, env, 1100).kind).toBe("run-stage");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("modern Kiro IDE receives no legacy capability from the same host variables", () => {

@@ -137,7 +137,9 @@ The receipt is not inferred from markdown alone. `aidlc-log.ts` records the
 reserved `SUMMARY_CONFIRMATION_RECORDED` event after a matching prompt record
 and a reply of the person's after that record, or on the message the agent
 names with `--message <id>` when it showed the summary before recording the
-prompt, with their words as `Person Reply`, binding it to the questions-file digest and its recorded
+prompt (a message sent before the last write of the questions file the audit
+records ahead of that prompt cannot be named: the summary was not there to
+see), with their words as `Person Reply`, binding it to the questions-file digest and its recorded
 `Hash Scope`. New receipts use `confirmed-content-v2`: the unchanged raw-content
 SHA-256 algorithm normalizes CRLF/lone CR to LF, retains sections in file order,
 and trims trailing whitespace once from the resulting content. All visible

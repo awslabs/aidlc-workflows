@@ -15,9 +15,10 @@ import {
   type Directive, type Exec, type Harness, type StoredRecord,
 } from "./aidlc-input-corpus.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   artifactFilename, auditBlockField, authorizedVerificationCommand, currentSwarmSourceMergeChain, findStageBySlug,
-  gitCommitSourceListing, latestMainWorkflowStageRunFloorForProject, latestPersonTurn, listIntents, personsGateReply,
+  gitCommitSourceListing, latestMainWorkflowStageRunFloorForProject, listIntents, personsGateReply, personsWordsText,
   readActiveDirectiveMarker, readAuditShardEvents, readProtectedResponse, readUnitSourceManifest,
   reviewArtifactFingerprint, serializeSourceListing, sourceListingSha256, stateDigest, unitSourceFingerprint,
   workspaceSourceFingerprint, workspaceSourceListing, writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
@@ -611,11 +612,32 @@ export async function pick(proj: string, item: AnswersItem, harness: Harness): P
 // --- what the tools recorded -------------------------------------------------------------------------------------------
 
 export interface Recorded { choice: string; words: string | null }
+
+/**
+ * The latest turn's words as its message record keeps them, unless the turn only commanded AIDLC or answered another
+ * engine question; else the labels the person picked in a question box, in the order shown.
+ */
+function latestTurnWords(proj: string): string | null {
+  const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  if (turn === undefined) return null;
+  const aside = auditBlockField(turn.block, "Reply") !== null || auditBlockField(turn.block, "Open Question") !== null;
+  const id = auditBlockField(turn.block, "Message Id");
+  const message = id === null ? null : readMessage(proj, id);
+  if (!aside && message?.words) return personsWordsText(message.words);
+  let picked: unknown = [];
+  try {
+    picked = JSON.parse(auditBlockField(turn.block, "Picked") ?? "[]");
+  } catch {
+    picked = [];
+  }
+  const labels = Array.isArray(picked) ? picked.filter((label): label is string => typeof label === "string" && label.trim() !== "") : [];
+  return labels.length > 0 ? labels.join(", ") : null;
+}
 /** The choice a tool recorded from the reply alone (`none` when nothing is recorded) and the words it kept. */
 export function recorded(proj: string, item: AnswersItem): Recorded {
   // The person's words as the record keeps them: the latest turn's words, else the message record's text (a picker
   // reply and a reply to an engine question are kept there, marked as a command turn).
-  const turn = latestPersonTurn(proj)?.words ?? messageRecord(proj, typedPrompt(item))?.text ?? null;
+  const turn = latestTurnWords(proj) ?? messageRecord(proj, typedPrompt(item))?.text ?? null;
   switch (item.question) {
     case "stage-gate":
     case "stage-gate-accept-as-is": {

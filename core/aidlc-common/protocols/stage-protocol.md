@@ -26,7 +26,7 @@ what they say, in their own words and in context, and do it.
   approval, "Review the plan" brings the question back.
 - When they ask to turn a check off for this piece of work, in their own words
   or by picking a guard's turn-it-off choice, run the setter yourself (that
-  choice's `command`, or `{{INVOKE}} engine config set guard.<fence> off --person-words '<their words>'`) and
+  choice's `command`, or `{{INVOKE}} engine config set guard.<fence> off --message <id>`, with `<id>` the message they asked in) and
   say in one line that it is off for this piece of work, comes back on for the
   next one, and that they can ask you to turn it back on. Never hand them a
   command to type.
@@ -318,7 +318,7 @@ recovery protocol's Session resume says, never as Request Changes.
 - **Their intent is genuinely unclear:** ask one short question, as a colleague
   would, and end the turn.
 - **Their words on a command line:** where the engine keeps their words (a
-  stage gate's Request Changes, Plan Approval), pass only the choice; their
+  stage gate's Request Changes), pass only the choice; their
   words are attached for you. Where their own words still travel (what to change
   at the summary or a recovery question, a `--reason`), put them in single
   quotes, never double quotes, so no shell runs a `$(...)`, a backtick, or a
@@ -328,9 +328,8 @@ recovery protocol's Session resume says, never as Request Changes.
   text holds any of `$`, a backtick, a quote, `%`, `&`, `|`, `<`, `>`, `^`, `!`
   or a line break goes in a file instead, so no shell reads it at all: write it
   with your file tool to `<record>/.aidlc-engine/answer-text/answer.txt` and
-  pass `--details-file .aidlc-engine/answer-text/answer.txt` (or
-  `--on-instruction-file` for their words that left a choice to you); the
-  engine reads the file and removes it.
+  pass `--details-file .aidlc-engine/answer-text/answer.txt`; the engine reads
+  the file and removes it.
 - **They also asked to stop for now:** record their choice with `--park`, or run
   `park --person-asked`, and tell them how to resume.
 
@@ -408,9 +407,9 @@ Structured bullet-point summary of what was produced:
   | requirements.md | 6 FR groups (18 sub-requirements), 4 NFRs |
   | requirements-analysis-questions.md | 5 questions, all answered |
   ```
-- For the FIRST completion message of a session (typically Requirements Analysis or Workspace Detection), include:
-  "**Project depth**: [Minimal/Standard/Comprehensive]: how much detail I write into each document.
-  **Test strategy**: [Minimal/Standard/Comprehensive]: how many tests I write.
+- For the FIRST completion message of a session (typically Requirements Analysis or Workspace Detection), include these lines with the levels the run-stage carries as `depth` and `test_strategy`, leaving out a line whose level it does not carry:
+  "**Project depth**: [depth]: how much detail I write into each document.
+  **Test strategy**: [test_strategy]: how many tests I write.
   Ask me to change either one at any approval gate."
 
 ### Part 3: Review + Approval (mandatory)
@@ -457,7 +456,7 @@ starts the questions afresh (`artifact_reuse`, or **Redo from scratch** under
 "Artifact Re-use").
 
 **Step 1: Create the questions file** in the appropriate `<record>/` directory with full [Answer]: tag format:
-- Include options A-E as appropriate for each question
+- Include options {{OPTION_LETTERS}} as appropriate for each question
 - EVERY ordinary question MUST end with `X. Other (please specify)` as the final
   option. The dedicated Consolidated Summary Confirmation added in Step 3a is
   the sole exception: its two semantic options are intentionally unlettered.
@@ -544,21 +543,21 @@ back an answer that names none, so the person is never asked again because of
 how they worded it. If their reply leaves the mode unclear, ask one short
 follow-up instead of guessing. When their request already said how they want to
 answer ("guide me through it"), do not ask it again: record the question as the
-step names it, then their choice with `--on-instruction '<their words>'` (in
-single quotes, as **Their words on a command line** above says), and say
+step names it, then their choice with `--on-instruction --message <id>`, with
+`<id>` the message that said it, and say
 **SAY:** "You asked to be guided, so I'll ask the questions here. Say if you'd
 rather edit the file or chat." The tool stamps the row.
 Never write the audit shard yourself.
 
 When the person asks for a different way at any stage ("let me just edit the
 file"), switch for this stage (see "Users can switch modes mid-stage" below) and
-record the new choice the same way, with `--on-instruction '<their words>'`, so
+record the new choice the same way, with `--on-instruction --message <id>`, so
 the later stages use it too.
 
 **Step 3a: If "Guide me" (interactive mode):**
 - Present questions as structured questions in batches, each with the trade its heading names in front of its text (Step 1; none when the heading has none; batching limits are harness-specific — see the question-rendering annex)
 - Where the tool shows questions as a numbered list, number every option and never ask for a file letter: a batch ends with "Reply with each question's number and the number of your choice (for example Q1: 2, Q2: 1), or just tell me." and a single question with "Reply with a number (or just tell me)."
-- For questions with 5+ options (single-select or multi-select): present ALL answer options, splitting across multiple structured questions if the harness's per-question option limit requires it (e.g., options A-D first, then options E+ in a follow-up). The user must see every option to make an informed choice. The file retains the full option set as the authoritative record.
+- A question from the questions file with more options than the harness's question tool takes (its question-rendering annex gives the limit) is still one question, asked once with every option: ask it on its own as a numbered list in one message, numbered and ended as the numbered-list bullet above says, never split across calls or into more questions. The file retains the full option set as the authoritative record.
 - Every structured question offers an "Other" escape (built into the harness UI or rendered as an explicit option per the annex). In interactive mode, when the user selects "Other" and answers in their own words, those words are their answer for that question. When they select it to ask about the question or talk it through, engage in conversation, then record what they settle on before continuing the batch. Explicitly tell the user this before the first batch, naming the escape the way their tool labels it (Claude Code's picker: "Type something"; Codex's question tool: "None of the above"; a numbered list: "Other"; the question-rendering annex gives it too): "Pick "[the escape's label]" on any question to answer in your own words or talk it through."
 - Before you show each batch, record it, and record its answers once they come, through the same log pair: `{{INVOKE}} engine log decision --stage <slug> --decision "<question numbers presented>" --options "<csv of the options shown>"` before the batch and `{{INVOKE}} engine log answer --stage <slug> --details '<the exact selections>'` after it. The tool stamps every row with its own fresh timestamp; there is no `date -u` call and no hand-written entry.
 - After each batch of answers, IMMEDIATELY write the answers back to the questions file (update each `[Answer]:` tag)
@@ -629,7 +628,7 @@ Construction, where the loop is meant to keep running without you.
 ### Error handling for invalid/missing answers
 When processing user answers from question files:
 - **Missing answers**: If any [Answer]: tag is still blank or contains only underscores, list the unanswered questions and ask the user to complete them before proceeding.
-- **Invalid answers**: If an answer does not match any provided option (A-E, X) and is not a clear free-text response for "Other", ask the user to clarify which option they intended.
+- **Invalid answers**: If an answer does not match any provided option ({{OPTION_LETTERS}}, X) and is not a clear free-text response for "Other", ask the user to clarify which option they intended.
 - **Ambiguous answers**: If an answer like "maybe B" or "either A or C" is given, ask the user to commit to a single choice and explain their reasoning.
 
 ### Contradiction detection (MANDATORY)
@@ -654,7 +653,7 @@ When contradictions are detected:
   - Answers that dodge the question or change the subject
   - Relaxing, lowering, or disabling a previously defined quality target (e.g.
     a test coverage threshold) instead of meeting it
-- When a user leaves a choice to you ("up to you", "whatever you think is best", or "choose the recommended answers" for this stage), decide: pick the option that best fits what they have said so far and record it with `{{INVOKE}} engine log answer --stage <slug> --details '<your choice>' --on-instruction '<their words that left it to you>'`, each in single quotes as **Their words on a command line** above says (a choice's text can come from the project), so the record shows you chose it as they asked. Then say one line. For one question: **SAY:** "You left <the question> to me, so I chose <the choice>. Say if you want something else." For several: **SAY:** "You left <Stage>'s <N> questions to me, so I chose the recommended answers: <question: choice; ...>. Say if you want any of them changed." The first time in a piece of work, also say once: **SAY:** "Approvals are still yours: I'll stop at each stage for you to approve." A checkpoint or an approval is never left to you: ask the person.
+- When a user leaves a choice to you ("up to you", "whatever you think is best", or "choose the recommended answers" for this stage), decide: pick the option that best fits what they have said so far and record it with `{{INVOKE}} engine log answer --stage <slug> --details '<your choice>' --on-instruction --message <id>`, with `<id>` the message of theirs that left it to you and the choice in single quotes as **Their words on a command line** above says (a choice's text can come from the project), so the record names their message and shows you chose it, reading it. Then say one line. For one question: **SAY:** "You left <the question> to me, so I chose <the choice>. Say if you want something else." For several: **SAY:** "You left <Stage>'s <N> questions to me, so I chose the recommended answers: <question: choice; ...>. Say if you want any of them changed." The first time in a piece of work, also say once: **SAY:** "Approvals are still yours: I'll stop at each stage for you to approve." A checkpoint or an approval is never left to you: ask the person. Outside an isolated `--single` run, when the message that left the questions to you also says not to ask them anything ("finish the stage, do not ask me anything"), it waives the summary confirmation and the learnings step (which asks what to keep for next time) for this piece of work: run `{{INVOKE}} engine config set summary-confirmation off --learnings off --message <id>` with that message's id, say in one line that both are off for this piece of work and that they can ask you to turn either back on, and generate.
 
 ---
 

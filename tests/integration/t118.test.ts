@@ -612,6 +612,99 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(eventCount(p, "STAGE_REVISING")).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("SP4h: a re-entry request that keeps the gate's --stage is carried out, never an error that ends the turn", () => {
+    const p = projWithState("state-mid-ideation.md");
+    run(ORCHESTRATE, [
+      "report", "--stage", "feasibility", "--result", "awaiting-approval", "--project-dir", p,
+    ]);
+    const atGate = readFileSync(statePath(p), "utf-8");
+    expect(atGate).toContain("- [?] feasibility");
+    const report = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
+
+    // The agent keeps the --stage of its gate reports: the redo of the stage
+    // the work is on is that redo.
+    const redo = report("--stage", "feasibility", "--choice", "redo");
+    expect(redo.kind).toBe("print");
+    expect(redo.message).toContain('Redo accepted at "feasibility"');
+    expect(redo.message).toContain("execute --target feasibility --direction redo");
+    expect(redo.message).toBe(report("--choice", "redo").message);
+    expect(redo.message).toBe(report("--choice", "redo", "--target", "feasibility").message);
+
+    // Where the stage cannot pick the move, the report is the one without it.
+    for (const extra of [
+      ["--choice", "resume"],
+      ["--choice", "fresh"],
+      ["--choice", "jump", "--target", "market-research"],
+    ]) {
+      const kept = report("--stage", "feasibility", ...extra);
+      expect(kept.kind, extra.join(" ")).toBe("print");
+      expect(kept.message, extra.join(" ")).toBe(report(...extra).message);
+    }
+    expect(report("--stage", "scope-definition", "--choice", "redo", "--target", "feasibility").message)
+      .toBe(redo.message);
+    expect(report("--stage", "feasibility").message).toBe(report().message);
+    const unknown = report("--stage", "feasibility", "--choice", "sideways");
+    expect(unknown.kind).toBe("error");
+    expect(unknown.message).toContain('Unknown --choice "sideways"');
+
+    // Anywhere the stage would pick a move (a jump with no --target, a redo of
+    // another stage), the agent names the stage with --target: nothing moves,
+    // nothing is asked of the person.
+    for (const extra of [
+      ["--stage", "feasibility", "--choice", "jump"],
+      ["--stage", "market-research", "--choice", "redo"],
+      ["--stage", "scope-definition", "--choice", "redo"],
+      ["--stage", "no-such-stage", "--choice", "redo"],
+    ]) {
+      const named = report(...extra);
+      expect(named.kind, extra.join(" ")).toBe("print");
+      expect(named.message, extra.join(" ")).toContain("--target <stage>");
+      for (const moved of [
+        "--direction redo", "next --stage", "Redo accepted", "Ask the person", "Run nothing", "Tell the person",
+        "has not run yet",
+      ]) {
+        expect(named.message, extra.join(" ")).not.toContain(moved);
+      }
+    }
+    expect(readFileSync(statePath(p), "utf-8")).toBe(atGate);
+    expect(eventCount(p, "GATE_REJECTED")).toBe(0);
+
+    // Unit by Unit, the step the Unit is on is the stage the work is on: the
+    // kept --stage redoes that step, as --target names it, where a bare redo
+    // with no Unit work yet resets the block's first stage.
+    const u = projWithState("state-jumped.md");
+    writeFileSync(
+      statePath(u),
+      readFileSync(statePath(u), "utf-8")
+        .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: functional-design\n- **Unit Stage**: code-generation"),
+      "utf-8",
+    );
+    const unitReport = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", u]));
+    const forTheStep = unitReport("--stage", "code-generation", "--choice", "redo");
+    expect(forTheStep.kind).toBe("print");
+    expect(forTheStep.message).toContain('Redo accepted at "code-generation"');
+    expect(forTheStep.message).not.toContain("functional-design");
+    expect(forTheStep.message).toBe(unitReport("--choice", "redo", "--target", "code-generation").message);
+    // A redo for named Units, or for every Unit, reopens the step the Unit is
+    // on: the kept --stage of that step is the same redo, and one naming the
+    // block's first stage moves nothing until the agent names it with --target.
+    const unitsBefore = readFileSync(statePath(u), "utf-8");
+    for (const units of [["--unit", "beta"], ["--every-unit"]]) {
+      const label = units.join(" ");
+      expect(unitReport("--stage", "code-generation", "--choice", "redo", ...units).message, label)
+        .toBe(unitReport("--choice", "redo", ...units).message);
+      const first = unitReport("--stage", "functional-design", "--choice", "redo", ...units);
+      expect(first.kind, label).toBe("print");
+      expect(first.message, label).toContain("--target <the stage they named>");
+      for (const moved of ["next --stage", "Redo accepted", "reopen"]) {
+        expect(first.message, label).not.toContain(moved);
+      }
+    }
+    expect(readFileSync(statePath(u), "utf-8")).toBe(unitsBefore);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("SP4g: \"take me back to X and stop there\" makes the move, then parks instead of carrying on", () => {
     const p = projWithState("state-jumped.md");
     const report = (...extra: string[]) =>

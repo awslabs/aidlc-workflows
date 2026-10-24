@@ -3719,6 +3719,30 @@ async function standAsideInMachineRoot(argv: readonly string[]): Promise<number>
   return 0;
 }
 
+// Copilot CLI reads .claude/settings.json as its own repository settings and
+// runs the hooks registered there, beside the Copilot install's own wiring
+// (.github/hooks/aidlc.json), so each Claude registration would run a second
+// time and record each typed line twice (#2921). Copilot marks every process
+// it starts with COPILOT_CLI=1 and gives the hooks it runs from .claude
+// CLAUDE_PROJECT_DIR (its shell tool gets neither that nor CLAUDECODE).
+// Claude Code started from Copilot's shell sets CLAUDECODE=1 on its own hooks,
+// and an adapter pins its harness before it runs a core hook as a child, so
+// neither stands aside. The adapter spellings stay handleRouteOnly's.
+export function copilotRunsClaudeRegistration(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env.COPILOT_CLI !== "1" || !env.CLAUDE_PROJECT_DIR || env.CLAUDECODE === "1") return false;
+  const pinned = env.AIDLC_HARNESS_NAME ?? "";
+  if (pinned !== "" && pinned !== "claude") return false;
+  try {
+    const action = resolveAction([...argv]);
+    return action.type === "hook" || action.type === "hook-group";
+  } catch {
+    return false;
+  }
+}
+
 function effectiveMutationScope(
   route: Route,
   argv: readonly string[],
@@ -3779,6 +3803,13 @@ export async function main(rawArgv: string[]): Promise<void> {
       runtime: process.versions.bun ?? process.version,
     });
     process.on("exit", (code) => hookTrace("exit", { code }));
+  }
+  // Before anything reads the project or pins a harness. The payload is taken
+  // so Copilot does not meet a closed pipe, and nothing is said.
+  if (tracedHook === "hook" && copilotRunsClaudeRegistration(argv)) {
+    hookTrace("copilot-stand-aside");
+    await readStdin();
+    return;
   }
   configureColor(argv);
   const projectDirOption = projectDirFlag(argv.slice(0, ourFlagLimit(argv)));

@@ -23,7 +23,9 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { cleanupTestProject, runOrchestrateNext, setupIntegrationProject } from "../harness/fixtures.ts";
-import { artifactFilename, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  artifactFilename, auditBlockField, MESSAGE_FILL, MESSAGE_SLOT, readAllAuditShards, readAuditShardEvents,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 3);
@@ -65,8 +67,9 @@ function run(proj: string, tool: string, args: string[]): { status: number; out:
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 
-// What the person types, through the human-turn hook every harness uses.
-function says(proj: string, prompt: string): void {
+// What the person types, through the human-turn hook every harness uses; the
+// id of the message the hook kept.
+function says(proj: string, prompt: string): string | null {
   const res = spawnSync(process.execPath, [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
     cwd: proj,
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
@@ -75,6 +78,8 @@ function says(proj: string, prompt: string): void {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   expect(res.status, res.stderr).toBe(0);
+  const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  return turn === undefined ? null : auditBlockField(turn.block, "Message Id");
 }
 
 function stateFile(proj: string): string {
@@ -224,17 +229,17 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     expect(JSON.stringify(next(proj).kept_replies ?? null)).not.toContain("skip code generation");
   });
 
-  // A setting asked for in plain words beside the skip names their words, so
-  // it lands as theirs (t-set-by-you-needs-their-reply).
-  test("a setting asked for beside the skip names their words", () => {
+  // A setting asked for in plain words beside the skip names the message they
+  // asked in, so it lands as theirs (t-set-by-you-needs-their-reply).
+  test("a setting asked for beside the skip names their message", () => {
     const proj = walk(["alpha", "beta"]);
-    says(proj, "skip code generation for this unit, and turn the sensors off");
+    const id = says(proj, "skip code generation for this unit, and turn the sensors off");
+    expect(id).not.toBeNull();
     const step = next(proj, ["--skip", "code-generation", "--sensors", "off"]);
     expect(step.kind, JSON.stringify(step)).toBe("print");
-    expect(step.message).toContain(
-      "config set sensors off --person-words '<their words>'`, with <their words> the person's reply that asked for it, " +
-        "word for word, and print its output verbatim.",
-    );
+    expect(step.message).toContain(`config set sensors off --message '${MESSAGE_SLOT}'\`${MESSAGE_FILL} (${id}, sent `);
+    expect(step.message).toContain("and print its output verbatim.");
+    expect(step.message).not.toContain("--person-words");
   });
 
   test("this Unit only when the Unit's code files are already written: still skipped as the person asked", () => {

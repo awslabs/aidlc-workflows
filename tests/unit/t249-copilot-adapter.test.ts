@@ -36,6 +36,8 @@
 //                    rules in the host's input shape and wait for an approved
 //                    plan; the brief a subagent receives is never the
 //                    person's turn (#1411).
+//   stop note      -> a Stop block's reason that Copilot sends back as the
+//                    chat's next prompt is the host's turn, never the person's.
 //
 // WHY SUBPROCESS. The adapter IS a subprocess shim — in-process unit testing
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
@@ -64,6 +66,7 @@ import { fileURLToPath } from "node:url";
 import {
   acquireAuditLock,
   auditBlockField,
+  auditLockDir,
   engineDir,
   humanTurnMarkerPath,
   humanTurnState,
@@ -688,6 +691,31 @@ function keptWords(dir: string): string {
   return existsSync(wordsDir)
     ? readdirSync(wordsDir).map((name) => readFileSync(join(wordsDir, name), "utf-8")).join("\n")
     : "";
+}
+
+// The text of every message record the human-turn hook kept.
+function messageRecordTexts(dir: string): string[] {
+  const messages = join(dir, "aidlc", ".aidlc-sessions", "messages");
+  return existsSync(messages)
+    ? readdirSync(messages).map((name) => String((JSON.parse(readFileSync(join(messages, name), "utf-8")) as { text?: unknown }).text))
+    : [];
+}
+
+// The record of the last Stop note the adapter sent to a chat.
+function stopNotePath(dir: string, session: string): string {
+  return join(dir, "aidlc", ".aidlc-sessions", `${session}.copilot-stop-note`);
+}
+
+// A Stop that blocks in this chat; its reason is what Copilot sends back. The
+// cap is raised so the same step blocks more than once, as under autonomy.
+function blockedStop(dir: string, session: string): string {
+  const r = runAdapter(
+    dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session }, { CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: "8" },
+  );
+  expect(r.code, r.stderr).toBe(0);
+  const parsed = JSON.parse(r.stdout) as { decision?: string; reason?: string };
+  expect(parsed.decision).toBe("block");
+  return String(parsed.reason);
 }
 
 // Copilot's directive budget sends a stage's rules ahead of its run-stage: follow
@@ -3812,6 +3840,91 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(recorded()).toHaveLength(1);
   }
 
+  // A folder's long and 8.3 short spellings. The scratch path may already be
+  // short (TEMP is C:\Users\ADMINI~1\... or RUNNER~1 for a long user name, and
+  // Bun's realpathSync keeps it), so both come from the native real path. A
+  // TEMP whose folders carry no 8.3 name (one created with 8.3 names off) gets
+  // one on the project's own folder. The path goes through the environment:
+  // Bun's quoting for `cmd /c` reaches a for-loop with its quotes still on.
+  function shortAndLong(dir: string): { short: string; long: string } {
+    const long = realpathSync.native(dir);
+    const shortPath = (): string => {
+      const spelled = spawnSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:AIDLC_T249_FOLDER).ShortPath",
+        ],
+        {
+          env: { ...process.env, AIDLC_T249_FOLDER: long },
+          encoding: "utf-8",
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        },
+      );
+      expect(spelled.status, `${spelled.stdout}${spelled.stderr}`).toBe(0);
+      return spelled.stdout.trim();
+    };
+    let short = shortPath();
+    let named = "";
+    if (!short.includes("~")) {
+      const set = spawnSync(
+        "fsutil.exe",
+        ["file", "setshortname", long, `S${Math.random().toString(16).slice(2, 7).toUpperCase()}~1`],
+        { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) },
+      );
+      named = `${set.stdout}${set.stderr}`.trim();
+      short = shortPath();
+    }
+    // A volume without 8.3 names cannot show the defect; say so, not pass.
+    expect(short, `no 8.3 short name for ${long}; fsutil file setshortname said: ${named}`).toContain("~");
+    expect(short.toLowerCase()).not.toBe(long.toLowerCase());
+    return { short, long };
+  }
+
+  // Copilot on Windows hands its hooks a project under %TEMP% in the 8.3
+  // spelling while the engine in the terminal resolves the long one. Hashed
+  // apart, every command after `next` ran untracked, the person's turn replaced
+  // the engine's Plan Approval question, and recording their approval was
+  // refused.
+  test.skipIf(process.platform !== "win32")("27b: a short-name hook cwd and the long-name terminal folder share one coordination identity", () => {
+    const { short, long } = shortAndLong(orchestrationProject());
+    inflateRules(long);
+    const { recorded } = planWritten(long);
+    const session = "copilot-short-name";
+    const ask = runLifecycle(short, session, "direct", ["next"], "short-ask", long);
+    expect(ask.directive).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    // The identity the previous release wrote for the long spelling: a record
+    // written before an update still matches after it.
+    expect(marker(long).project_sha256)
+      .toBe(createHash("sha256").update(normalizeDriveLetter(realpathSync(long)), "utf-8").digest("hex"));
+    const turn = runAdapter(short, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit, cwd: short, session_id: session, prompt: "1",
+    });
+    expect(turn.code, turn.stderr).toBe(0);
+    recordPlanAnswer(long);
+    expect(recorded()).toHaveLength(1);
+    let result = runLifecycle(short, session, "direct", ["next"], "short-build", long);
+    for (let part = 0; result.directive.kind === "load-steering"; part++) {
+      result = runLifecycle(short, session, part % 2 ? "direct" : "source", ["continue", String(result.directive.receipt)], `short-build-${part}`, long);
+      if (part > 20) throw new Error("steering did not converge");
+    }
+    expect(result.directive).toMatchObject({
+      kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
+    });
+    expect(marker(long)).toMatchObject({ delivery: "delivered", active_attempt: { status: "settled" } });
+    expect(readAudit(long)).not.toContain("COORDINATION_STOOD_ASIDE");
+  });
+
+  // The hook's audit rows and the engine's are serialized by one lock only when
+  // both spellings name one lock folder.
+  test.skipIf(process.platform !== "win32")("27c: both spellings of a project take one audit lock", () => {
+    const { short, long } = shortAndLong(orchestrationProject());
+    expect(auditLockDir(short)).toBe(auditLockDir(long));
+    expect(auditLockDir(short, DEFAULT_RECORD_DIR, DEFAULT_SPACE)).toBe(auditLockDir(long, DEFAULT_RECORD_DIR, DEFAULT_SPACE));
+  });
+
   // Code Generation's rules often need several parts on Copilot. The person
   // approves the plan once; every part then leads on to the build, never back
   // to the same question (#1411).
@@ -4516,6 +4629,78 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(typedPrompt(dir, chat, SUBAGENT_BRIEFING).code).toBe(0);
     expect(humanTurnCount(dir)).toBe(2);
     expect(messageTexts().sort()).toEqual(["Approve", SUBAGENT_BRIEFING].sort());
+  });
+
+  // The Copilot CLI hands the reason of a Stop block back to the agent as a new
+  // prompt, through the same seam and with the same keys as a typed message
+  // (live: "The last AI-DLC step stopped on a problem: ..." kept as the person's
+  // message, then named by the agent as their request for two Construction
+  // setting changes). The adapter knows what it sent: that prompt is the
+  // host's turn, and what the person types after it, the same words included,
+  // is theirs.
+  test("35h: a Stop note Copilot sends back as a prompt is not the person's turn", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000291";
+    const note = blockedStop(dir, session);
+    const sequence = humanSequence(dir);
+    expect(typedPrompt(dir, session, note).code).toBe(0);
+    expect(messageRecordTexts(dir)).toEqual([]);
+    expect(humanTurnCount(dir)).toBe(0);
+    const hostTurns = auditRows(dir, "HOST_TURN");
+    expect(hostTurns).toHaveLength(1);
+    expect(auditBlockField(hostTurns[0].block, "Source")).toBe("record");
+    expect(auditBlockField(hostTurns[0].block, "Session")).toBe(session);
+    expect(keptWords(dir)).toBe("");
+    // The Stop hook reads this sequence as the person speaking.
+    expect(humanSequence(dir)).toBe(sequence);
+    expect(existsSync(stopNotePath(dir, session))).toBe(false);
+
+    // The same note again in the same chat is the host's again.
+    expect(blockedStop(dir, session)).toBe(note);
+    expect(typedPrompt(dir, session, note).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(0);
+    expect(auditRows(dir, "HOST_TURN")).toHaveLength(2);
+    expect(humanSequence(dir)).toBe(sequence);
+
+    // What the person types next is theirs, and so are the note's own words
+    // once Copilot has sent it back.
+    expect(typedPrompt(dir, session, "Keep going with the plan, please.").code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(typedPrompt(dir, session, note).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(2);
+    expect(messageRecordTexts(dir).sort()).toEqual(["Keep going with the plan, please.", note].sort());
+    expect(auditRows(dir, "HOST_TURN")).toHaveLength(2);
+  });
+
+  test("35i: a Stop note record belongs to its chat and lasts until that chat's next prompt", () => {
+    const dir = scratchProject(true);
+    const chat = "ed5ea5b5-0000-4000-8000-000000000292";
+    const other = "ed5ea5b5-0000-4000-8000-000000000293";
+    // The same words in another chat are that chat's person, and leave this
+    // chat's record for its own echo.
+    const note = blockedStop(dir, chat);
+    expect(typedPrompt(dir, other, note).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(existsSync(stopNotePath(dir, chat))).toBe(true);
+    expect(typedPrompt(dir, chat, note).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(auditRows(dir, "HOST_TURN")).toHaveLength(1);
+
+    // A block Copilot did not send back: the chat's next prompt spends the
+    // record, so the note's words typed after it are the person's.
+    expect(blockedStop(dir, chat)).toBe(note);
+    expect(typedPrompt(dir, chat, "What happened there?").code).toBe(0);
+    expect(existsSync(stopNotePath(dir, chat))).toBe(false);
+    expect(humanTurnCount(dir)).toBe(2);
+    expect(typedPrompt(dir, chat, note).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(3);
+    expect(auditRows(dir, "HOST_TURN")).toHaveLength(1);
+
+    // A record that cannot be read is no match.
+    mkdirSync(stopNotePath(dir, chat));
+    expect(typedPrompt(dir, chat, note).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(4);
+    expect(auditRows(dir, "HOST_TURN")).toHaveLength(1);
   });
 
   // #1411: VS Code asks "Run command? Allow / Skip" before every shell call no

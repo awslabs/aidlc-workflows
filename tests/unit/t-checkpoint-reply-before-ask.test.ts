@@ -102,10 +102,10 @@ function agentEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-function tool(p: string, name: string, args: string[]) {
+function tool(p: string, name: string, args: string[], env: NodeJS.ProcessEnv = agentEnv()) {
   const result = spawnSync(process.execPath, [
     join(AIDLC_SRC, `tools/aidlc-${name}.ts`), ...args, "--project-dir", p,
-  ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: agentEnv() });
+  ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
   const last = (result.stdout ?? "").trim().split(/\r?\n/).at(-1) ?? "";
   let json: Record<string, unknown> | null = null;
   try { json = JSON.parse(last); } catch { json = null; }
@@ -168,6 +168,14 @@ function reviewLands(p: string, file: string): void {
   expect(recorded.status, recorded.out).toBe(0);
 }
 
+// The id of the message the person's latest turn kept: the one an approval
+// over the unfinished review names (--message).
+function latestMessageId(p: string): string {
+  const turn = readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN" &&
+    auditBlockField(row.block, "Session") === SESSION && auditBlockField(row.block, "Message Id") !== null).at(-1);
+  return turn ? auditBlockField(turn.block, "Message Id") ?? "" : "";
+}
+
 function checkpoint(p: string, action: string, extra: string[] = [], session = SESSION) {
   return tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", action, "--session", session, ...extra]);
 }
@@ -201,6 +209,8 @@ describe("t-checkpoint-reply-before-ask: the person answers before the Unit's qu
       const p = fixture(policy);
       const file = requestReview(p);
       says(p, "approve it as it is");
+      const id = auditBlockField(events(p, "HUMAN_TURN").at(-1)!.block, "Message Id");
+      expect(id).not.toBeNull();
       const asked = verifyAndAsk(p, file);
       expect(asked.earlier_reply).toBe("approve it as it is");
       const approved = checkpoint(p, "approve", ["--user-input", "approve it as it is"]);
@@ -209,6 +219,8 @@ describe("t-checkpoint-reply-before-ask: the person answers before the Unit's qu
       const gates = unitGates(p, "GATE_APPROVED");
       expect(gates).toHaveLength(1);
       expect(auditBlockField(gates[0].block, "Person Reply")).toBe("approve it as it is");
+      // The row names the message it stands on.
+      expect(auditBlockField(gates[0].block, "Message Id")).toBe(id);
       expect(questionsAsked(p)).toHaveLength(1);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -303,7 +315,9 @@ describe("t-checkpoint-reply-before-ask: the person answers before the Unit's qu
     const p = fixture("off");
     requestReview(p);
     says(p, "approve it as it is");
-    const verified = checkpoint(p, "verify", ["--over-unfinished-review"]);
+    // Named from the chat they said it in.
+    const verified = tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "verify", "--session",
+      SESSION, "--over-unfinished-review", "--message", latestMessageId(p)], { ...agentEnv(), AIDLC_SESSION_OVERRIDE: SESSION });
     expect(verified.json?.verified, verified.out).toBe(true);
     for (let run = 0; run < 2; run++) {
       const approved = checkpoint(p, "approve");

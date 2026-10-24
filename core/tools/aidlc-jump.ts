@@ -8,6 +8,7 @@ import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
 import { stageLabel } from "./aidlc-validity.ts";
 import {
+  addedStagesPassedOver,
   addPendingPersonLines,
   type CheckboxState,
   countCheckboxes,
@@ -199,6 +200,13 @@ export function backwardJumpNotice(
 ): string {
   return `Moved back to ${stageLabel(target, target.slug) ?? "that stage"}. ` +
     `You can return to ${stageLabel(from, from.slug) ?? "where you were"} any time.`;
+}
+
+// The redo `next` names for Reverse Engineering owed behind the stage the
+// person is on (they said this is existing code) says what comes next. Said
+// here, where it starts, so a skip asked for before it never hears it.
+export function reverseEngineeringRedoNotice(from: { slug: string; name: string; plugin?: string }): string {
+  return `Next I'll document the code, then we're back at ${stageLabel(from, from.slug) ?? "where we were"}.`;
 }
 
 if (import.meta.main) {
@@ -462,6 +470,7 @@ function movedState(
   currentSlug: string;
   currentStageForPhase: StageEntry | undefined;
   crossesPhaseBoundary: boolean;
+  phasesJumpedOver: string[];
   completedCount: number;
   timestamp: string;
 } {
@@ -524,10 +533,19 @@ function movedState(
     ];
     for (let i = targetIdx; i < graph.length; i++) {
       const slug = graph[i].slug;
+      const state = checkboxMap.get(slug);
       // Effective plan again: a recompose-ADDed stage's [x] is reset by a
       // backward jump like any on-plan stage (ADD-then-jump consistency).
-      if (effectiveAction(suffixes, scopeMapping, slug) !== "EXECUTE") continue;
-      const state = checkboxMap.get(slug);
+      if (effectiveAction(suffixes, scopeMapping, slug) !== "EXECUTE") {
+        // A stage the plan skips that the work never finished (a scope switch
+        // dropped it where the work stood, or after a jump past it) reads not
+        // started, as intent creation writes it: adding it back, returning to
+        // it or a scope that runs it then finds it ahead. Nothing of it reruns.
+        if (state && state !== "completed" && RESETTABLE.includes(state)) {
+          content = setCheckbox(content, slug, "pending");
+        }
+        continue;
+      }
       if (state && RESETTABLE.includes(state)) {
         content = setCheckbox(content, slug, "pending");
         stagesReset.push(slug);
@@ -541,9 +559,9 @@ function movedState(
   // Mark target [-] so state and checkbox agree.
   content = setCheckbox(content, targetSlug, "in-progress");
 
-  // Detect phase-boundary crossing. advance emits PHASE_COMPLETED/VERIFIED/
-  // STARTED when crossing phases, and so does jump, matching the state machine
-  // contract.
+  // Detect phase-boundary crossing. Like advance, a forward jump records the
+  // phase it leaves as completed; any other crossing only starts the target's
+  // phase again (handleExecute).
   const currentStageForPhase = findStageBySlug(currentSlug);
   const crossesPhaseBoundary =
     !!currentStageForPhase && currentStageForPhase.phase !== targetStage.phase;
@@ -572,17 +590,26 @@ function movedState(
   const completedCount = countCheckboxes(content, "completed");
   content = setField(content, "Completed", String(completedCount));
 
-  // Phase Progress rows track the boundary crossing the audit trio below
-  // records. Forward: the source phase's remaining work was force-[S]'d and
+  // Phase Progress rows track the boundary crossing handleExecute records in
+  // the audit. Forward: the source phase's remaining work was force-[S]'d and
   // PHASE_VERIFIED is emitted, so its row reads Verified; any phase jumped
-  // over entirely reads Skipped. Backward (or a caller-mis-specified redo
-  // that crosses a boundary): every phase after the target just had its
-  // EXECUTE stages reset to pending above, so those rows return to Pending,
-  // leaving zero-EXECUTE phases in their initial Skipped state. Either way the
-  // target's phase is now the active one.
+  // over entirely reads Skipped, and each such phase the plan runs is the
+  // jump's to record as skipped (phasesJumpedOver; one the plan leaves out
+  // already has its row from intent creation). Backward (or a
+  // caller-mis-specified redo that crosses a boundary): every phase after the
+  // target just had its EXECUTE stages reset to pending above, so those rows
+  // return to Pending, leaving zero-EXECUTE phases in their initial Skipped
+  // state. Either way the target's phase is now the active one.
+  const phasesJumpedOver: string[] = [];
   if (crossesPhaseBoundary && currentStageForPhase) {
     const phaseIdx = (p: string): number =>
       (PHASES as readonly string[]).indexOf(p);
+    const runsOnPlan = (p: string): boolean =>
+      graph.some(
+        (s) =>
+          s.phase === p &&
+          effectiveAction(suffixes, scopeMapping, s.slug) === "EXECUTE"
+      );
     if (direction === "forward") {
       content = setPhaseProgress(content, currentStageForPhase.phase, "Verified");
       for (
@@ -591,16 +618,12 @@ function movedState(
         i++
       ) {
         content = setPhaseProgress(content, PHASES[i], "Skipped");
+        if (runsOnPlan(PHASES[i])) phasesJumpedOver.push(PHASES[i]);
       }
     } else {
       for (let i = phaseIdx(targetStage.phase) + 1; i < PHASES.length; i++) {
         const p = PHASES[i];
-        const hasExecute = graph.some(
-          (s) =>
-            s.phase === p &&
-            effectiveAction(suffixes, scopeMapping, s.slug) === "EXECUTE"
-        );
-        if (hasExecute) content = setPhaseProgress(content, p, "Pending");
+        if (runsOnPlan(p)) content = setPhaseProgress(content, p, "Pending");
       }
     }
     content = setPhaseProgress(content, targetStage.phase, "Active");
@@ -618,7 +641,7 @@ function movedState(
   content = setField(content, "Last Completed Stage", lastCompleted);
   return {
     content, stagesSkipped, stagesReset, currentSlug, currentStageForPhase,
-    crossesPhaseBoundary, completedCount, timestamp,
+    crossesPhaseBoundary, phasesJumpedOver, completedCount, timestamp,
   };
 }
 
@@ -681,9 +704,13 @@ function handleExecute(args: string[]): void {
   const cameFrom = graph.some((node) => node.slug === unitStage)
     ? unitStage
     : shownStage !== targetSlug && graph.some((node) => node.slug === shownStage) ? shownStage : currentSlug;
+  // Back to a stage the plan added after the work had just passed over it: the
+  // person never stood at the stage the work had just entered, and the add's
+  // own line said what changed, so the move says nothing.
+  const addedBack = direction === "backward" && addedStagesPassedOver(content, pd).includes(targetSlug);
   const moved = movedState(content, targetSlug, targetStage, direction, scope, suffixes, scopeMapping);
   content = moved.content;
-  const { stagesSkipped, stagesReset, currentStageForPhase, crossesPhaseBoundary, completedCount, timestamp } = moved;
+  const { stagesSkipped, stagesReset, currentStageForPhase, crossesPhaseBoundary, phasesJumpedOver, completedCount, timestamp } = moved;
 
   // One content-addressed snapshot is shared by both rows in the jump
   // transition. The companion STAGE_STARTED repeats the SAME authority rather
@@ -721,18 +748,30 @@ function handleExecute(args: string[]): void {
       });
     }
 
-    // Phase boundary events (if crossing phases — matches advance's contract)
+    // Phase boundary events. Only a forward jump completes the phase it
+    // leaves (advance's contract) and records each whole phase it passes over
+    // as skipped, as the Phase Progress rows say; going back leaves that phase
+    // unfinished, so the record only starts the earlier phase again.
     if (crossesPhaseBoundary && currentStageForPhase) {
-      emitAudit(pd, "PHASE_COMPLETED", {
-        "From phase": currentStageForPhase.phase,
-        "To phase": targetStage.phase,
-        "Stages completed": String(completedCount),
-        Details: `Phase boundary crossed via ${direction} jump`,
-      });
-      emitAudit(pd, "PHASE_VERIFIED", {
-        "Phase boundary": `${currentStageForPhase.phase} → ${targetStage.phase}`,
-        Details: "Traceability verification on jump",
-      });
+      if (direction === "forward") {
+        emitAudit(pd, "PHASE_COMPLETED", {
+          "From phase": currentStageForPhase.phase,
+          "To phase": targetStage.phase,
+          "Stages completed": String(completedCount),
+          Details: "Phase boundary crossed via forward jump",
+        });
+        emitAudit(pd, "PHASE_VERIFIED", {
+          "Phase boundary": `${currentStageForPhase.phase} → ${targetStage.phase}`,
+          Details: "Traceability verification on jump",
+        });
+        for (const phase of phasesJumpedOver) {
+          emitAudit(pd, "PHASE_SKIPPED", {
+            Phase: phase,
+            Scope: scope,
+            Reason: `Skipped by jump to ${targetSlug} (forward)`,
+          });
+        }
+      }
       emitAudit(pd, "PHASE_STARTED", {
         Phase: targetStage.phase,
         Scope: scope,
@@ -774,22 +813,27 @@ function handleExecute(args: string[]): void {
 
   writeStateFile(pd, content);
 
-  // The jump is done, so the way back can never fail it. When no chat can
-  // hold the line for the next step, it rides the tool's output instead.
+  // The jump is done, so its line (the way back, or what comes after an owed
+  // Reverse Engineering) can never fail it. When no chat can hold the line for
+  // the next step, it rides the tool's output instead.
   const from = graph.find((node) => node.slug === cameFrom);
-  let backNotice: string | undefined;
-  if (direction === "backward" && from) {
-    backNotice = backwardJumpNotice(targetStage, from);
+  let keptNotice: string | undefined;
+  if (direction === "redo" && targetSlug === "reverse-engineering" && from && from.slug !== targetSlug) {
+    keptNotice = reverseEngineeringRedoNotice(from);
+  } else if (direction === "backward" && from && !addedBack) {
+    keptNotice = backwardJumpNotice(targetStage, from);
+  }
+  if (keptNotice !== undefined) {
     try {
       const session = resolveWorkflowSelection(pd).sessionId;
-      if (session && addPendingPersonLines(pd, session, [backNotice])) backNotice = undefined;
+      if (session && addPendingPersonLines(pd, session, [keptNotice])) keptNotice = undefined;
     } catch {
       // No chat to hold it: the output carries it.
     }
   }
   const notice = direction === "forward"
     ? forwardJumpNotice(targetStage, graph.filter((node) => stagesSkipped.includes(node.slug)), cameFrom)
-    : backNotice;
+    : keptNotice;
 
   console.log(
     JSON.stringify({

@@ -244,6 +244,8 @@ function routingAsk(records: boolean): Json {
   };
 }
 
+const REPO_FACTS: Json = { repositories: 12, lines: 1200, minutes_per_repository: { low: 4, high: 7 } };
+
 const ASK_TYPES = [
   "scope-confirm", "compose-offer", "intent-pick", "unit-paused", "project-type", "plan-approval", "guard-recovery",
   "unit-claim", "legacy-plan-approval-recovery",
@@ -493,7 +495,11 @@ describe("a stage step carries its instructions, not the fields to branch on", (
     // Off is said, not left as an absence: a stage file's own declaration ("summary_confirmation: required", a
     // "MANDATORY PRE-GENERATION STOP when enabled") otherwise reads as the ask (seen live on Kiro CLI, twice in one run).
     const off = str(notes(runStage()).ceremony_note);
-    expect(off.startsWith("Summary confirmation is off for this work:")).toBe(true);
+    // The step alone, naming no setting: the agent reads it aloud to people who never chose one.
+    // Said for a stage that asks questions only: a stage that asks none (a first scan) is not told it has answers.
+    expect(off.startsWith("If this stage puts questions to the person, write the stage's outputs once their answers")).toBe(true);
+    expect(off).not.toContain("is off");
+    expect(off).not.toMatch(/summary confirmation/i);
     expect(off).toContain("skip the stage file's Consolidated Summary step and record nothing for it");
     expect(off).not.toContain("confirm the summary");
     expect(notes({ ...on, gate_only: true }).ceremony_note).toBeUndefined();
@@ -517,6 +523,9 @@ describe("a stage step carries its instructions, not the fields to branch on", (
       notes(runStage()),
       ...ASK_TYPES.map((type) => notes(ask(type))),
       notes(routingAsk(true)),
+      // What reading many repositories takes, with the question and on the step.
+      notes(ask("project-type", { ask_type: "repo-scope", repo_facts: REPO_FACTS })),
+      notes(runStage({ stage: "reverse-engineering", repo_facts: REPO_FACTS })),
     ];
     const leaks: string[] = [];
     for (const step of steps) {

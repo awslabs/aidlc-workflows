@@ -39,7 +39,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -47,6 +47,7 @@ import {
   createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
+  intentsDirOf,
   proposalFollowUp,
   removeWorkspaceRecord,
   REPO_ROOT,
@@ -485,24 +486,53 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
     });
 
     // (3) Bare `next`, no state and NO explicitly named scope (env/default
-    // resolution is not a creation signal): the engine cannot read a position to
-    // advance from and creating one is intent create's (mutating) job, so it emits
-    // the no-state error rather than guessing. The wording names the two explicit
-    // moves that DO start a workflow — it must never be the circular "Start a
-    // workflow with /aidlc <scope>" clause.
-    test("no-state bare next -> error directive (no position to advance from)", () => {
+    // resolution is not a creation signal): nothing is created, and this is the
+    // normal first step in a new project, so the person is asked what to build,
+    // never shown an error (on Claude Code an error is relayed as "The workflow
+    // stopped with this error").
+    test("no-state bare next -> asks what to build, never an error", () => {
       const r = emitNextNoState();
-      expect(r.directive.kind).toBe("error");
-      // Pin the no-state wording so a regression emitting an error of a DIFFERENT
-      // cause reds.
-      expect(r.directive.message ?? "").toContain("No workflow state found");
-      // Pin the guidance wording exactly: describe-what-to-build or
-      // describe-what-to-build and name-a-scope both create intents; there is no
-      // --init. A regression back to the
-      // circular clause (or a re-introduced --init) reds here.
-      expect(r.directive.message ?? "").toContain(
-        'Start one by describing what to build (/aidlc "build the auth service") or by naming a scope (/aidlc --scope <scope>).',
-      );
+      expect(r.directive.kind, r.raw).toBe("print");
+      expect(r.directive.narration).toBe("Tell me what to build and I'll start it.");
+      expect(r.directive.message ?? "").toContain('when they say what to build, run that as their request (/aidlc "<their words>")');
+      expect(r.directive.message ?? "").not.toContain("No workflow state found");
+    });
+
+    // (3b) Work created here whose state file is gone is not a new project: it
+    // keeps the error, which the Kiro IDE Plan Approval recovery reads as
+    // failing closed (t218).
+    test("no-state bare next over a registered record with no state file -> error", () => {
+      const proj = createTestProject();
+      tempDirs.push(proj);
+      const res = spawnSync(BUN, [TOOL, "next", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: cleanEnv(),
+      });
+      const directive = parseDirective(res.stdout ?? "");
+      expect(directive.kind, `${res.stdout}${res.stderr}`).toBe("error");
+      expect(directive.message ?? "").toContain("No workflow state found");
+    });
+
+    // (3c) A space whose only work was archived has nothing in progress, as a
+    // new project does: the person starting new work is asked what to build.
+    test("no-state bare next where the only work is archived -> asks what to build", () => {
+      const proj = createTestProject();
+      tempDirs.push(proj);
+      const intents = intentsDirOf(proj, "default");
+      writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8"));
+      const rows = JSON.parse(readFileSync(join(intents, "intents.json"), "utf-8")) as { status: string }[];
+      writeFileSync(join(intents, "intents.json"), JSON.stringify(rows.map((row) => ({ ...row, status: "archived" }))));
+      // Archiving clears the cursor (intent archive), so nothing is selected.
+      unlinkSync(join(intents, "active-intent"));
+      const res = spawnSync(BUN, [TOOL, "next", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: cleanEnv(),
+      });
+      const directive = parseDirective(res.stdout ?? "");
+      expect(directive.kind, `${res.stdout}${res.stderr}`).toBe("print");
+      expect(directive.narration).toBe("Tell me what to build and I'll start it.");
     });
 
     // (4) Conflicting explicit namings: `next bugfix --scope mvp` names TWO

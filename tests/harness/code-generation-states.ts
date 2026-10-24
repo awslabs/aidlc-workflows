@@ -32,11 +32,11 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   invalidateActiveDirectiveContext,
-  latestPersonTurn,
   readActiveDirectiveMarker,
   readAuditShardEvents,
   stateDigest,
   workspaceSourceListing,
+  personsWordsText,
   writeActiveDirectiveMarker,
   writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -204,8 +204,7 @@ export function auditEvents(proj: string) {
 /**
  * The person's newest message, whole, as the hook kept it: the newest HUMAN_TURN
  * row names a Message Id, and the message store holds the text as the host
- * delivered it (a flags-only line included). Falls back to the engine's reader
- * of the person's words when the row carries no id.
+ * delivered it (a flags-only line included). Null when the row names none.
  */
 export function latestHumanTurnWords(proj: string): string | null {
   const rows = auditEvents(proj).filter((row) => row.event === "HUMAN_TURN");
@@ -213,7 +212,7 @@ export function latestHumanTurnWords(proj: string): string | null {
   if (!last) return null;
   const id = /\*\*Message Id\*\*: ([0-9a-f]{8})/.exec(last.block)?.[1];
   const stored = id ? readMessage(proj, id) : null;
-  return stored?.text ?? latestPersonTurn(proj)?.words ?? null;
+  return stored ? personsWordsText(stored.text) : null;
 }
 
 /** Every engine command a text names in backticks, in the tree's own spelling. */

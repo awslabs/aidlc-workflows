@@ -1571,11 +1571,12 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     expect(d.message).toContain("answer --stage feasibility --details");
     expect(requestCommand(d.message!)).not.toBe("");
     expect(d.message).toContain("If you cannot tell which it is, ask the person");
-    // The person's words are kept for the other reading; neither they nor the
-    // question's audit text ride the directive.
+    // The person's words are kept for the other reading and never ride the
+    // directive; the question as it was asked does, so a chat that never saw it
+    // asked reads their reply against it.
     expect(storedQuestions().map((q) => q.text)).toEqual([ANSWER]);
     expect(storedQuestions()[0].stateSha256).toBeUndefined();
-    expect(d.message).not.toContain("Feasibility learning candidates");
+    expect(d.message).toContain('"Feasibility learning candidates"');
     expect(d.message).not.toContain(ANSWER);
   });
 

@@ -27,6 +27,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   artifactFilename,
   auditBlockField,
@@ -68,6 +69,17 @@ import {
   WORKER_BRIEF_SECTIONS_FIXTURE,
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
+
+// The person's message, kept as the prompt hook keeps it: its id is what a
+// review they asked for names (--person-asked --message <id>).
+function personAsks(proj: string, words: string): string {
+  const kept = saveMessage(proj, {
+    session: null, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text: words, picker: null,
+    words, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+  });
+  appendAuditEntry("HUMAN_TURN", { "Message Id": kept.id }, proj);
+  return kept.id;
+}
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -314,8 +326,8 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     editReviewedArtifact(proj);
     expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
     expect(acceptedRows(proj)).toHaveLength(1);
-    appendAuditEntry("HUMAN_TURN", {}, proj);
-    const again = ["review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "2", "--person-asked"];
+    const asked = personAsks(proj, "review it again");
+    const again = ["review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "2", "--person-asked", "--message", asked];
     const requested = run(LOG_TOOL, again, proj);
     expect(requested.status, requested.stderr).toBe(0);
     appendFileSync(
@@ -339,8 +351,8 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
     editReviewedArtifact(proj);
     expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
-    appendAuditEntry("HUMAN_TURN", {}, proj);
-    const again = ["review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "2", "--person-asked"];
+    const asked = personAsks(proj, "review it again");
+    const again = ["review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "2", "--person-asked", "--message", asked];
     for (const args of [again, [...again, "--retry-pending"], [...again, "--verdict", "NOT-READY"]]) {
       const logged = run(LOG_TOOL, args, proj);
       expect(logged.status, logged.stderr).toBe(0);

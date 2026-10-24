@@ -154,10 +154,12 @@ reviewer, learnings, or approval steps.
   and add the note that it comes after one more revision. Never count the
   rounds yourself.
 - **Batching limits**: max 4 questions per `AskUserQuestion` call, max 4
-  options per question, and **at least 2 options per question**. For 5+
-  options, split across multiple calls (options A-D, then E+); the questions
-  file retains the full option set as the authoritative record. Never send a
-  one-option call: the tool rejects it before the user can answer.
+  options per question, and **at least 2 options per question**. A question
+  from the questions file with more options is asked as a numbered list
+  instead (stage-protocol.md Step 3a; a multi-select ends "Reply with all
+  numbers that apply (e.g. 1, 3)."); the questions file retains the full
+  option set as the authoritative record. Never send a one-option call: the
+  tool rejects it before the user can answer.
 - **"Other" escape**: `AskUserQuestion` has a built-in "Other" option, always
   available — do NOT add an explicit Other option to the spec's options list
   for interactive batches. Claude Code labels that row "Type something", so

@@ -1475,6 +1475,35 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     expect(auditBlockField(approvals(dir).at(-1)!.block, "Person Reply")).toBe("looks right, ship it");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Two replies under the question: the decision's words are both, and its row names both messages, oldest first,
+  // ending with the latest, as a stage gate's row names its window.
+  const turnMessages = (dir: string) => readAuditShardEvents(dir).filter((row) => row.event === "HUMAN_TURN")
+    .map((row) => auditBlockField(row.block, "Message Id"));
+
+  test("an approval on two replies names both messages its words came in", async () => {
+    const dir = project();
+    await pass(dir, "skeleton");
+    human(dir, "skeleton", "looks right");
+    submitCommandChoice(dir, "t341-checkpoint", "ship it");
+    approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint");
+    const gate = approvals(dir).at(-1)!;
+    const ids = turnMessages(dir).slice(-2);
+    expect(auditBlockField(gate.block, "Message Ids")).toBe(ids.join(","));
+    expect(auditBlockField(gate.block, "Message Id")).toBe(ids[1]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a change request on two replies names both messages its words came in", async () => {
+    const dir = project();
+    await pass(dir, "skeleton");
+    human(dir, "skeleton", "not yet");
+    submitCommandChoice(dir, "t341-checkpoint", "the title should say Orders");
+    rejectConstructionCheckpoint(dir, "alpha", "skeleton", "Request Changes", "Rename the title to Orders", "t341-checkpoint");
+    const rejected = readAuditShardEvents(dir).filter((row) => row.event === "GATE_REJECTED").at(-1)!;
+    const ids = turnMessages(dir).slice(-2);
+    expect(auditBlockField(rejected.block, "Message Ids")).toBe(ids.join(","));
+    expect(auditBlockField(rejected.block, "Message Id")).toBe(ids[1]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("a question with no reply yet waits for one, and none open names the ask", async () => {
     const dir = project();
     await pass(dir, "skeleton");

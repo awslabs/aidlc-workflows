@@ -13,7 +13,8 @@
 //     prompt as the human-turn hook parses it from its payload. A typed field that is handed the words becomes a
 //     source too (`personsGateReply().words`, the protected response's words, the plan ask's replies), and so does
 //     an audit row field the writer puts the words in (Person Reply, Feedback, Reason, Details, Picked), read by
-//     `auditBlockField`, and a field of the same name on a value that came out of JSON.parse.
+//     `auditBlockField`, and a field of the same name on a value that came out of JSON.parse. The questions files'
+//     `[Answer]:` line is a source by the functions that read it out of the file (ANSWER_LINE_READERS).
 //   - Flow: locals, destructuring, array elements, string and array methods, a parameter handed the words, and a
 //     call's result where the callee hands back what it was given (each function's summary, so a helper is a reader
 //     only where it is given the words). Booleans and numbers carry nothing: a comparison's result is the decision,
@@ -27,8 +28,8 @@
 //
 // What it does not see: the adapters' own parsing of their host's input (untyped JSON in harness/*/hooks); the three
 // host-text identities and the legacy nonce match are on ALLOWED whether or not the scan reaches them, so a typed read
-// there is caught the day it appears. The questions file's `[Answer]:` lines are not a source here (S2a's R31 and
-// S3's R32 have their own tests).
+// there is caught the day it appears. The `[Answer]:` line read inline from the file's text (a stage's questions
+// counted, the claim-sources sensor) is on ALLOWED_UNREACHED by name.
 
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
@@ -48,6 +49,8 @@ export interface ToGo extends Allowed {
   slice: Slice;
   /** The design's row (DESIGN.md section 2.2a). */
   row: string;
+  /** The casts out of PersonsWords it reads through until its slice lands (`as unknown as string`), never an unwrap. */
+  widenings?: number;
 }
 
 export interface Found {
@@ -74,6 +77,16 @@ export const RECORD_COPIES: ReadonlyArray<{ file: string; type: string; field: s
   { file: "core/tools/aidlc-lib.ts", type: "ProtectedResponse", field: "words" },
   { file: "core/tools/aidlc-plan-approval-ask.ts", type: "PlanApprovalAskReply", field: "text" },
   { file: "core/tools/aidlc-question-store.ts", type: "StoredQuestion", field: "text" },
+];
+/**
+ * The questions files' `[Answer]:` line, by the functions that read it out of the file. Mostly the agent writes it (the
+ * summary's tag, a choice it records), but the Code Generation plan file asks the person to write their own answer
+ * there, and a stage's questions file may be answered there too. `field`: the line is that field of the result.
+ */
+export const ANSWER_LINE_READERS: ReadonlyArray<{ file: string; fn: string; field?: string }> = [
+  { file: "core/tools/aidlc-lib.ts", fn: "summaryAnswerFromFile" },
+  { file: "core/tools/aidlc-plan-approval-ask.ts", fn: "answerWrittenInFile" },
+  { file: "core/tools/aidlc-testing-posture.ts", fn: "latestPlanApproval", field: "answer" },
 ];
 /**
  * The person's free text as `next`'s flag parse hands it out: the request the agent forwards (`intent`), the words a
@@ -148,11 +161,18 @@ function shippedFiles(root: string): { program: string[]; options: ts.CompilerOp
   return { program, options: { ...main.options, noEmit: true }, scanned };
 }
 
-/**
- * Every place in `files` (default: the shipped engine) where the person's words are used, keyed `file#name`.
- * `files` given: only those are scanned, with the engine they import as the sources' home.
- */
-export function scanPersonsWords(options: { root?: string; files?: string[] } = {}): Map<string, Found> {
+// One program per set of files, so the brand's scan reads the checker the words' scan has already filled.
+const programs = new Map<string, { program: ts.Program; scannedNames: Map<string, string> }>();
+function pinProgram(options: { root?: string; files?: string[] }): { program: ts.Program; scannedNames: Map<string, string> } {
+  const key = JSON.stringify([options.root ?? REPO_ROOT, options.files ?? null]);
+  let built = programs.get(key);
+  if (!built) {
+    built = buildPinProgram(options);
+    programs.set(key, built);
+  }
+  return built;
+}
+function buildPinProgram(options: { root?: string; files?: string[] }): { program: ts.Program; scannedNames: Map<string, string> } {
   const root = options.root ?? REPO_ROOT;
   let programFiles: string[];
   let compilerOptions: ts.CompilerOptions;
@@ -166,7 +186,33 @@ export function scanPersonsWords(options: { root?: string; files?: string[] } = 
     ({ program: programFiles, options: compilerOptions, scanned: shipped } = shippedFiles(root));
     scannedNames = new Map([...shipped].map(([file, name]) => [fileKey(file), name]));
   }
-  const program = ts.createProgram(programFiles, compilerOptions);
+  return { program: ts.createProgram(programFiles, compilerOptions), scannedNames };
+}
+
+/** The outermost named function `n` sits in, as a place names it (`file#name`). */
+function unitName(n: ts.Node): string {
+  let name = "<module>";
+  for (let p: ts.Node | undefined = n.parent; p; p = p.parent) {
+    if (ts.isFunctionDeclaration(p) && p.name) name = p.name.text;
+    else if (ts.isMethodDeclaration(p) && p.name) {
+      const cls = ts.isClassLike(p.parent) && p.parent.name ? `${p.parent.name.text}.` : "";
+      name = `${cls}${p.name.getText()}`;
+    } else if (ts.isConstructorDeclaration(p)) {
+      name = `${ts.isClassLike(p.parent) && p.parent.name ? p.parent.name.text : "class"}.constructor`;
+    } else if ((ts.isArrowFunction(p) || ts.isFunctionExpression(p)) && ts.isVariableDeclaration(p.parent) &&
+      ts.isIdentifier(p.parent.name) && ts.isVariableStatement(p.parent.parent.parent) && ts.isSourceFile(p.parent.parent.parent.parent)) {
+      name = p.parent.name.text;
+    }
+  }
+  return name;
+}
+
+/**
+ * Every place in `files` (default: the shipped engine) where the person's words are used, keyed `file#name`.
+ * `files` given: only those are scanned, with the engine they import as the sources' home.
+ */
+export function scanPersonsWords(options: { root?: string; files?: string[] } = {}): Map<string, Found> {
+  const { program, scannedNames } = pinProgram(options);
   const checker = program.getTypeChecker();
   const scanned = program.getSourceFiles().filter((sf) => scannedNames.has(fileKey(sf.fileName)));
   const scannedSet = new Set(scanned);
@@ -185,6 +231,7 @@ export function scanPersonsWords(options: { root?: string; files?: string[] } = 
   // --- labels: the words (W), or a function's own parameter (P<i>@<fn>) ---
   const symLabels = new Map<ts.Symbol, Set<string>>();
   const sourceName = new Map<ts.Symbol, string>();
+  const answerLineFns = new Map<ts.Node, string>();
   const ret = new Map<ts.Node, Set<string>>();
   const reached = new Map<ts.Node, Set<number>>();
   const fnId = new Map<ts.Node, number>();
@@ -294,6 +341,18 @@ export function scanPersonsWords(options: { root?: string; files?: string[] } = 
   for (const sf of engineFiles) {
     const file = posix(sf.fileName);
     const visit = (n: ts.Node) => {
+      if (ts.isFunctionDeclaration(n) && n.name) {
+        for (const reader of ANSWER_LINE_READERS) {
+          if (reader.fn !== n.name.text || !file.endsWith(`/${reader.file}`)) continue;
+          const why = `the [Answer]: line (${reader.fn})`;
+          if (reader.field === undefined) {
+            ret.set(n, new Set([WORDS]));
+            answerLineFns.set(n, why);
+          } else if (n.type && ts.isTypeLiteralNode(n.type)) {
+            for (const m of n.type.members) if (m.name && ts.isIdentifier(m.name) && m.name.text === reader.field) seed(symOf(m.name), why, false);
+          }
+        }
+      }
       if (ts.isInterfaceDeclaration(n) && n.name.text === "StoredMessage" && file.endsWith("/aidlc-message-store.ts")) {
         for (const m of n.members) {
           if (m.name && ts.isIdentifier(m.name) && ["text", "words", "picker"].includes(m.name.text)) seed(symOf(m.name), `message store ${m.name.text}`);
@@ -644,22 +703,6 @@ export function scanPersonsWords(options: { root?: string; files?: string[] } = 
   }
 
   // --- the places, and how each uses the words ---
-  const unitName = (n: ts.Node): string => {
-    let name = "<module>";
-    for (let p: ts.Node | undefined = n.parent; p; p = p.parent) {
-      if (ts.isFunctionDeclaration(p) && p.name) name = p.name.text;
-      else if (ts.isMethodDeclaration(p) && p.name) {
-        const cls = ts.isClassLike(p.parent) && p.parent.name ? `${p.parent.name.text}.` : "";
-        name = `${cls}${p.name.getText()}`;
-      } else if (ts.isConstructorDeclaration(p)) {
-        name = `${ts.isClassLike(p.parent) && p.parent.name ? p.parent.name.text : "class"}.constructor`;
-      } else if ((ts.isArrowFunction(p) || ts.isFunctionExpression(p)) && ts.isVariableDeclaration(p.parent) &&
-        ts.isIdentifier(p.parent.name) && ts.isVariableStatement(p.parent.parent.parent) && ts.isSourceFile(p.parent.parent.parent.parent)) {
-        name = p.parent.name.text;
-      }
-    }
-    return name;
-  };
   const isNullish = (e: ts.Expression) => e.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(e) && e.text === "undefined") || ts.isVoidExpression(e);
   const isEmptyString = (e: ts.Expression) => (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) && e.text === "";
   const decidesParam = new Map<ts.Node, Set<number>>();
@@ -778,6 +821,7 @@ export function scanPersonsWords(options: { root?: string; files?: string[] } = 
         else if (ts.isCallExpression(n)) {
           const d = callee(n);
           if (d && FIELD_READERS.has(declName(d))) found.sources.add(`audit field ${stringOf(n.arguments[1]) ?? "?"}`);
+          else if (d && answerLineFns.has(d)) found.sources.add(answerLineFns.get(d) as string);
         }
       }
       places.set(key, found);
@@ -802,6 +846,80 @@ export function scanPersonsWords(options: { root?: string; files?: string[] } = 
     visit(sf);
   }
   return places;
+}
+
+// ---------------------------------------------------------------------------
+// The brand
+// ---------------------------------------------------------------------------
+
+/** The one way from PersonsWords back to text (core/tools/aidlc-lib.ts). */
+export const UNWRAP = "core/tools/aidlc-lib.ts#personsWordsText";
+
+/** What a place does across the brand: its calls of the unwrap, and its casts out of PersonsWords and into it. */
+export interface BrandUse {
+  unwraps: number;
+  /** One line each: an `as` whose operand's type holds PersonsWords and whose target's does not. */
+  castsOut: string[];
+  /** One line each: the other way round. */
+  castsIn: string[];
+}
+
+/**
+ * The places in `files` (default: the shipped engine) that call the unwrap or cast across the brand, keyed `file#name`.
+ * A type holds PersonsWords when it is the brand, or a union, a field, an element or a type argument holds it, as the
+ * checker resolves them; `x as unknown as string` is one cast out, its inner half.
+ */
+export function scanPersonsWordsBrand(options: { root?: string; files?: string[] } = {}): Map<string, BrandUse> {
+  const { program, scannedNames } = pinProgram(options);
+  const checker = program.getTypeChecker();
+  const lib = program.getSourceFiles().find((sf) => posix(sf.fileName).endsWith("/core/tools/aidlc-lib.ts"));
+  let brand: ts.Symbol | undefined;
+  let unwrap: ts.Node | undefined;
+  for (const st of lib?.statements ?? []) {
+    if (ts.isInterfaceDeclaration(st) && st.name.text === "PersonsWords") brand = checker.getSymbolAtLocation(st.name);
+    if (ts.isFunctionDeclaration(st) && st.name?.text === UNWRAP.split("#")[1]) unwrap = st;
+  }
+  if (!brand || !unwrap) throw new Error("core/tools/aidlc-lib.ts declares no PersonsWords or no personsWordsText");
+  const held = new Map<ts.Type, boolean>();
+  const holds = (t: ts.Type, depth = 0): boolean => {
+    const known = held.get(t);
+    if (known !== undefined) return known;
+    held.set(t, false);
+    let v = false;
+    if (t.isUnionOrIntersection()) v = t.types.some((x) => holds(x, depth + 1));
+    else if (t.getSymbol() === brand) v = true;
+    else if (depth < 6 && t.flags & ts.TypeFlags.Object) {
+      const args = (t as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference ? checker.getTypeArguments(t as ts.TypeReference) : [];
+      v = args.some((x) => holds(x, depth + 1)) ||
+        checker.getPropertiesOfType(t).some((p) => holds(checker.getTypeOfSymbol(p), depth + 1));
+    }
+    held.set(t, v);
+    return v;
+  };
+  const uses = new Map<string, BrandUse>();
+  for (const sf of program.getSourceFiles()) {
+    const file = scannedNames.get(fileKey(sf.fileName));
+    if (file === undefined) continue;
+    const at = (n: ts.Node) => {
+      const key = `${file}#${unitName(n)}`;
+      const entry = uses.get(key) ?? { unwraps: 0, castsOut: [], castsIn: [] };
+      uses.set(key, entry);
+      return entry;
+    };
+    const line = (n: ts.Node) => `${sf.getLineAndCharacterOfPosition(n.getStart()).line + 1}: ${n.getText().replace(/\s+/g, " ").slice(0, 100)}`;
+    const visit = (n: ts.Node) => {
+      if (ts.isCallExpression(n) && checker.getResolvedSignature(n)?.declaration === unwrap) at(n).unwraps++;
+      if ((ts.isAsExpression(n) || ts.isTypeAssertionExpression(n)) && !ts.isConstTypeReference(n.type)) {
+        const from = holds(checker.getTypeAtLocation(n.expression));
+        const to = holds(checker.getTypeFromTypeNode(n.type));
+        if (from && !to) at(n).castsOut.push(line(n));
+        else if (!from && to) at(n).castsIn.push(line(n));
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  return uses;
 }
 
 /** The fixture files of the pin's reds. */
@@ -851,13 +969,18 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${STORE}#messageIsReply`]: { use: "keeps", why: "the presence shape: a message with words or none (words === null)" },
   [`${STORE}#noReplySince`]: { use: "keeps", why: "the presence shape: a line of settings alone is no reply (words === null)" },
   [`${ORCH}#handOutSettingsLine`]: { use: "keeps", why: "the presence shape: a line of settings alone (words === null) is handed to its setter once" },
+  [UNWRAP]: { use: "keeps", why: "the brand's one way back to text, for the places below that read the message store or the gate-words record", from: [`${LIB}#gateWordsSinceUnitReview`, `${LIB}#personsGateReply`, `${LIB}#requireProtectedResponse`, `${LOG}#answerEnginePlanApproval`, `${ORCH}#takePersonsOwnLine`, `${STATE}#parkedWords`, `${STATE}#personsWordsFields`, `${GUARD_SWITCH}#saidInChat`, `${ORCH}#emit`, `${SWITCHES}#recordSwitchChange`, `${STATE}#requireHumanConstructionPolicyChange`, "core/tools/aidlc-utility.ts#handleReclassify", `${STATE}#handleReject`, `${LOG}#handleAnswer`, `${LIB}#keptRepliesSinceStageStart`, `${LIB}#latestReplyAfter`, `${UNIT_CP}#approveConstructionCheckpoint`, `${LIB}#personsWordsKept`] },
+  [`${LIB}#keptRepliesSinceStageStart`]: { use: "keeps", why: "the resume re-show: every reply since the stage started that nothing has used yet, a typed message's words and a box's replies, unpaired (R26: the agent pairs them)" },
+  [`${LIB}#latestReplyAfter`]: { use: "keeps", why: "the audit writer: the plan override receipt's Person Reply, their latest reply since the offer, with its message" },
+  [`${LIB}#protectedResponseFields`]: { use: "keeps", why: "the audit writer: a protected question's decision row, the response's words with every message they came in (Message Ids)" },
   [`${LIB}#readProtectedResponse`]: { use: "decides", why: "the protected response's own read: checks its fields' form (the digest's hex)" },
+  [`${LIB}#withdrawProtectedReplyWords`]: { use: "decides", why: "drops a kept reply by its message id (the scan reads a reply's id as its words), and keeps the words of the replies that stay" },
   [`${AUDIT}#appendAuditEntry`]: { use: "keeps", why: "the audit writer", from: [`${LOG}#emitAudit`] },
   [`${AUDIT}#appendAuditEntryUnlocked`]: { use: "keeps", why: "the audit writer", from: [`${AUDIT}#appendAuditEntry`, `${LOG}#emitAudit`] },
   [`${AUDIT}#tapAuditMetric`]: { use: "keeps", why: "the audit writer: the row's metric", from: [`${AUDIT}#appendAuditEntryUnlocked`] },
   [`${LOG}#emitAudit`]: { use: "keeps", why: "the audit writer", from: [`${LOG}#handleAnswer`, `${LOG}#handleReview`] },
   [`${STATE}#personsWordsFields`]: { use: "keeps", why: "the audit writer: a gate row's Person Reply and Message Id from S1's window" },
-  [`${LIB}#personsGateReply`]: { use: "keeps", why: "the audit writer: S1's window, every unspent reply since the stage's floor, blank ones left out" },
+  [`${LIB}#personsGateReply`]: { use: "keeps", why: "the audit writer: S1's window, every unspent reply since the stage's floor, blank ones and ones an earlier answer recorded (but the latest) left out" },
   [`${STATE}#approvedTogetherWordsFields`]: { use: "keeps", why: "the audit writer: copies the together gate's Person Reply onto the stages it approved" },
   [`${STATE}#personsFeedbackOutput`]: { use: "keeps", why: "the reject's output to the agent names whether their words were kept", from: [`${STATE}#handleReject`] },
   [`${STATE}#refuseForAgent`]: { use: "keeps", why: "a reject's refusal shows a blank reply as received (formatReceivedReply)", from: [`${STATE}#handleReject`] },
@@ -865,44 +988,48 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${READER}#formatReceivedReply`]: { use: "keeps", why: "shows a blank reply as received in a refusal", from: [`${STATE}#handleReject`] },
   [`${LIB}#hasUnsafeSingleLineCharacter`]: { use: "keeps", why: "the audit writer's guard against a line break in a one-line field", from: [`${UNIT_CP}#rejectConstructionCheckpoint`, `${SWARM_CP}#rejectSwarmCheckpoint`] },
   [`${UNIT_CP}#approveConstructionCheckpoint`]: { use: "keeps", why: "the audit writer: the checkpoint approval's Person Reply" },
-  [`${SWARM_CP}#approveSwarmCheckpoint`]: { use: "keeps", why: "the audit writer: the batch approval's Person Reply" },
-  [`${LOG}#protectedPersonsWords`]: { use: "keeps", why: "the audit writer: a protected question's Person Reply" },
   [`${LOG}#answerEnginePlanApproval`]: { use: "keeps", why: "the audit writer: the plan answer's Person Reply" },
   [`${LOG}#handleReview`]: { use: "keeps", why: "the audit writer: the review request's Person Reply" },
   [`${LOG}#handleAnswers`]: { use: "keeps", why: "the audit writer: a batch of answers, blank details left out" },
+  [`${LOG}#handleAnswer`]: { use: "keeps", why: "the audit writer: an answer's Person Reply, the message named or every unspent reply of this chat an earlier answer did not record" },
   "core/tools/aidlc-jump.ts#handleReopen": { use: "keeps", why: "the audit writer: a reopen for a change keeps their words as Feedback" },
   [`${STATE}#parkedWords`]: { use: "keeps", why: "the audit writer: the park row's Person Reply" },
   // The recorded answer's Details is the choice the agent recorded, never the file's [Answer]: line (S2a's R31).
-  [`${LIB}#offeredChoiceLabel`]: { use: "decides", why: "the agent's --details, or a recorded answer's Details, against the labels the question offered (O4)", from: ["core/tools/aidlc-sensor-claim-sources.ts#assumptionsAcceptedOnRecord"] },
+  [`${LIB}#offeredChoiceLabel`]: { use: "decides", why: "the agent's --details, or a recorded answer's Details, against the labels the question offered (O4)", from: [`${LIB}#blockingSensorPicks`, "core/tools/aidlc-sensor-claim-sources.ts#assumptionsAcceptedOnRecord"] },
   "core/tools/aidlc-sensor-claim-sources.ts#assumptionsAcceptedOnRecord": { use: "decides", why: "the claim-sources sensor reads whether the Intent Capture assumptions were accepted from the recorded answer to that question" },
   [`${STATE}#requireHumanConstructionPolicyChange`]: { use: "keeps", why: "the audit writer: the Construction policy row's Person Reply" },
-  [`${STATE}#emitConstructionPolicySet`]: { use: "keeps", why: "the audit writer: the Construction policy row", from: [`${STATE}#handleSetConstructionIteration`, `${STATE}#handleSetConstructionPolicy`, `${STATE}#handleSetUnitOwnership`] },
-  [`${STATE}#handleSetConstructionIteration`]: { use: "keeps", why: "hands the policy row its Person Reply" },
-  [`${STATE}#handleSetConstructionPolicy`]: { use: "keeps", why: "hands the policy row its Person Reply" },
-  [`${STATE}#handleSetUnitOwnership`]: { use: "keeps", why: "hands the policy row its Person Reply" },
+  [`${STATE}#emitConstructionPolicySet`]: { use: "keeps", why: "the audit writer: the Construction policy row's Person Reply, the words of the message the setter names" },
   [`${SWITCHES}#recordSwitchChange`]: { use: "keeps", why: "the switch record keeps the words that switched a check off" },
   [`${SWITCHES}#switchOffLine`]: { use: "keeps", why: "status: says a check is off with the words that switched it off" },
-  [`${SWITCHES}#quoted`]: { use: "keeps", why: "status: quotes those words, cut", from: [`${SWITCHES}#switchOffLine`] },
+  [`${SWITCHES}#quoted`]: { use: "keeps", why: "status: quotes those words, cut", from: [`${GUARD_SWITCH}#askedSwitchLine`, `${SWITCHES}#switchOffLine`] },
   [`${SWITCHES}#switchesOffLines`]: { use: "keeps", why: "status: the lines above" },
   [`${SWITCHES}#switchOffNotices`]: { use: "keeps", why: "status: the lines above" },
-  [`${POSTURE}#planApprovalOverridePersonReply`]: { use: "keeps", why: "the audit writer: the plan override receipt's Person Reply" },
   [`${ASK}#correctReadRequestChanges`]: { use: "keeps", why: "the audit writer: the replies kept since a Request Changes are the correction's words" },
   [`${ASK}#rejectionRevision`]: { use: "keeps", why: "the plan's revision keeps the rejection's Feedback" },
   [`${LIB}#freshReviewReceipts`]: { use: "keeps", why: "the presence shape: whether a review row carries Feedback" },
   [`${LIB}#plainSummaryAttemptRecorded`]: { use: "keeps", why: "the summary's answer as the agent recorded it (Details), for its recovery" },
   [`${LIB}#isSummaryConfirmationChoice`]: { use: "keeps", why: "as above", from: [`${LIB}#plainSummaryAttemptRecorded`] },
   [`${ORCH}#withKeptReplies`]: { use: "keeps", why: "the resume re-show: hands the agent the replies a stage kept" },
+  [`${ORCH}#chatReplies`]: { use: "keeps", why: "the presence shape: whether an answer recorded now carries their words (words !== null), for the step at an open question" },
+  [`${LIB}#personsWordsKept`]: { use: "keeps", why: "the presence shape: whether the chat's latest message has any text (a host that hands the hook an empty prompt keeps none), for the step at a question shown again" },
+  // next's request (S2b): kept and quoted, never compared; what was read is the message id.
+  [`${ORCH}#routeNext`]: { use: "decides", why: "next itself: quotes and previews the request (quoteCommandArgument) and whether one is there" },
+  [`${ORCH}#freshWorkRoute`]: { use: "decides", why: "hands the request to the plan proposal step", from: [`${ORCH}#routeNext`] },
+  [`${ORCH}#planProposalDirective`]: { use: "decides", why: "keeps the request as a question and previews it; reuses the question the words came through without comparing them", from: [`${ORCH}#freshWorkRoute`, `${ORCH}#routeNext`] },
+  [`${ORCH}#saveReadingQuestion`]: { use: "keeps", why: "keeps the words as a routing question with the message they came in", from: [`${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#routeNext`] },
+  [`${ORCH}#takePersonsOwnLine`]: { use: "keeps", why: "the /aidlc parse of the person's own line; already read is the message id" },
+  [`${ORCH}#emit`]: { use: "decides", why: "the words the person said belong to the work in progress are kept once as the code plan question's reply (notePlanApprovalAskReply), and leave it by their message id" },
   [`${ORCH}#withParkedReply`]: { use: "keeps", why: "the resume re-show: the words they parked the work with" },
   [`${ORCH}#wordsAtPark`]: { use: "keeps", why: "the resume re-show: reads the park row's Person Reply" },
   [`${READER}#stripRecommendedDecorator`]: { use: "keeps", why: "a cut of the agent's \"(Recommended)\" mark, given words by the places that compare (each listed)", from: [`${LIB}#isSummaryConfirmationChoice`, `${LIB}#offeredChoiceLabel`, `${READER}#exactOptionPick`, `${READER}#isOneOfChoices`, `${POSTURE}#recordPlanApprovalHumanResponse`] },
   [`${READER}#isOneOfChoices`]: { use: "decides", why: "a question box's pick, host structure: whether the box offered the protected question's own labels", from: [`${POSTURE}#pickerAsksProtectedQuestion`] },
   [`${POSTURE}#pickerAsksProtectedQuestion`]: { use: "decides", why: "a question box's pick, host structure (DESIGN 2.2 item 6: a box pick stays structure)", from: [`${POSTURE}#recordProtectedHumanResponse`] },
-  [`${LIB}#guardRecoveryTextSha256`]: { use: "keeps", why: "the digest of the guard-recovery reply its record keeps (consumeSharedDirectiveAsk writes it; guardRecoveryFeedbackStatus matches it until S6)", from: [`${LIB}#consumeSharedDirectiveAsk`, `${LIB}#guardRecoveryFeedbackStatus`] },
-  [`${LIB}#normalizeGuardRecoveryText`]: { use: "keeps", why: "the spacing cut before that digest, and before handleReject's duplicate check", from: [`${LIB}#guardRecoveryTextSha256`, `${STATE}#handleReject`] },
+  [`${LIB}#guardRecoveryTextSha256`]: { use: "keeps", why: "the digest of the guard-recovery reply its record keeps (consumeSharedDirectiveAsk writes it)", from: [`${LIB}#consumeSharedDirectiveAsk`] },
+  [`${LIB}#normalizeGuardRecoveryText`]: { use: "keeps", why: "the spacing cut before that digest", from: [`${LIB}#guardRecoveryTextSha256`] },
   [`${LIB}#contentSha256`]: { use: "keeps", why: "that digest", from: [`${LIB}#guardRecoveryTextSha256`] },
   // A question box's pick of an engine-handed list, host structure since S3 (#2926): a typed reply is the agent's to read.
   [`${HOOK}#extractResponseText`]: { use: "decides", why: "a question box's payload, host structure: unwraps the box's JSON (a typed prompt is kept as typed since S3)", from: [`${HOOK}#respond`] },
-  [`${LIB}#consumeSharedDirectiveAsk`]: { use: "decides", why: "guard recovery: the box's pick when the box offered the remedies, and the reply's digest the recovery record keeps", from: [`${HOOK}#respond`] },
+  [`${LIB}#consumeSharedDirectiveAsk`]: { use: "decides", why: "guard recovery: the box's pick when the box offered the remedies, and the reply's digest the recovery record keeps (from emit: a routed request's message, kept again as the reply the routing question took from the recovery question)", from: [`${HOOK}#respond`, `${ORCH}#emit`] },
   [`${POSTURE}#recordProtectedHumanResponse`]: { use: "decides", why: "the protected question's response: the box's pick only, and the words kept with presence", from: [`${HOOK}#respond`] },
   [`${READER}#protectedQuestionPick`]: { use: "decides", why: "a question box's pick of the protected question's choices", from: [`${POSTURE}#recordProtectedHumanResponse`] },
   [`${ASK}#notePlanApprovalAskReply`]: { use: "decides", why: "Plan Approval: the box's pick only, and the replies after the ask kept for the record", from: [`${HOOK}#respond`, `${ORCH}#emit`] },
@@ -912,18 +1039,37 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${SWARM_CP}#rejectSwarmCheckpoint`]: { use: "keeps", why: "the audit writer: the batch reject's Feedback and Reason" },
   [`${LIB}#changeRequestWords`]: { use: "keeps", why: "the reject's lines joined as the change to make", from: [`${UNIT_CP}#rejectConstructionCheckpoint`, `${SWARM_CP}#rejectSwarmCheckpoint`] },
   [`${LIB}#requireProtectedResponse`]: { use: "keeps", why: "the audit writer: a named message's words become the protected response's" },
-  [`${ASK}#recordPlanApprovalAnswer`]: { use: "keeps", why: "the audit writer: the plan answer keeps the replies' words" },
+  // The setters (S6): a setting the person asked for keeps the words of the message the agent names, as Person Reply
+  // and in the line that says it is set by them; nothing compares them.
+  [`${GUARD_SWITCH}#saidInChat`]: { use: "keeps", why: "a setting is theirs on the message the agent names: its words for the record" },
+  [`${GUARD_SWITCH}#applyIntentSettings`]: { use: "keeps", why: "the audit writer: a setting's Person Reply, the named message's words" },
+  [`${GUARD_SWITCH}#askedSwitchLine`]: { use: "keeps", why: "the line that says a check is off quotes the words they asked in", from: [`${GUARD_SWITCH}#applyIntentSettings`] },
+  "core/tools/aidlc-utility.ts#writeSettings": { use: "keeps", why: "hands the setter's lines on to its output" },
+  "core/tools/aidlc-utility.ts#applyKeptToPickedWork": { use: "keeps", why: "as above, for settings kept for the work the person picks" },
+  "core/tools/aidlc-utility.ts#handleConfigChange": { use: "keeps", why: "prints the setter's lines" },
+  "core/tools/aidlc-utility.ts#handleIntent": { use: "keeps", why: "prints the lines of the settings kept for the work they pick" },
+  "core/tools/aidlc-utility.ts#handleSpace": { use: "keeps", why: "as above, for the space they pick" },
+  "core/tools/aidlc-utility.ts#handleRecompose": { use: "keeps", why: "prints the setter's lines with the plan change" },
+  "core/tools/aidlc-utility.ts#handleScopeChange": { use: "decides", why: "prints the setter's lines, each ended with a full stop when it has none (the line's last character) for the person's next line" },
+  "core/tools/aidlc-utility.ts#handleReclassify": { use: "keeps", why: "the audit writer: the reclassify row's Person Reply, the named message's words" },
+  [`${STATE}#handleReject`]: { use: "keeps", why: "the audit writer: a reject's Feedback (their words) and Message Id, the agent's text beside them as Conductor Summary" },
+  // The questions files' `[Answer]:` line (ANSWER_LINE_READERS): its presence, and the agent's own writes checked
+  // against its own arguments (O4's class), never what the person wrote there.
+  [`${LIB}#checkSummaryConfirmationEvidence`]: { use: "decides", why: "O4: the summary's [Answer]: tag is the agent's write (log's summary step has it write the choice label), checked against the engine's own label (SUMMARY_ANSWER_INVALID)" },
+  [`${POSTURE}#planApprovalQuestionEvidence`]: { use: "decides", why: "O4: the plan file's [Answer]: label, written by the agent itself, checked against its own --details (blank before the question); on the engine's plan question the recorder writes the line and never runs this" },
+  [`${POSTURE}#planApprovalAnswerLabel`]: { use: "keeps", why: "cuts the recorder's option letter and quotes off that label", from: [`${POSTURE}#planApprovalQuestionEvidence`] },
+  [`${POSTURE}#questionsFileHasPendingPlanApproval`]: { use: "decides", why: "the presence shape: whether the plan file's [Answer]: line is still blank (or underscores)" },
+  [`${ASK}#onlyTheirAnswerDiffers`]: { use: "keeps", why: "the presence shape: the person's answer in the plan file stays while the same question stands (the engine never erases what they wrote)" },
+  [`${ASK}#requestPlanApprovalReviewNow`]: { use: "keeps", why: "the presence shape: a recorded answer on the plan file's line is cleared when the person asks to review the plan again" },
   // The request the agent forwards to next (its free text) and the question store that keeps it: shown back, quoted
   // into a command, kept; each with its reason.
   "core/tools/aidlc-runtime-paths.ts#quoteCommandArgument": { use: "decides", why: "shell-quotes their words into a command the agent runs", from: [`${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`] },
   [`${LIB}#parseLiteralShellInvocation`]: { use: "decides", why: "as above", from: [`${LIB}#isTerminalConfigurationDispatch`] },
   [`${LIB}#isTerminalConfigurationDispatch`]: { use: "decides", why: "reads the engine's own step message (which may quote their request) for a configuration command" },
-  [`${LIB}#addPendingPersonLines`]: { use: "keeps", why: "keeps a step's narration for the person's next line", from: [`${ORCH}#sayPendingPersonLines`] },
-  [`${LIB}#writeRecordFileNoFollow`]: { use: "keeps", why: "bytes to a record file", from: [`${ORCH}#projectTypeWordsArg`] },
+  [`${LIB}#addPendingPersonLines`]: { use: "keeps", why: "keeps a step's narration, or a setter's lines, for the person's next line", from: [`${ORCH}#sayPendingPersonLines`, `core/tools/aidlc-utility.ts#handleScopeChange`] },
   [`${LIB}#authoritativeProjectDescription`]: { use: "decides", why: "a shape read: splits a pasted <document> block, exact markers, from the directions around it", from: [`${ORCH}#authoritativeRequest`, `${ORCH}#documentSplitSentence`, `${ORCH}#namedDocumentNote`, `${ORCH}#pastedDocumentNote`] },
-  [`${LIB}#writeBufferAtomic`]: { use: "keeps", why: "bytes to a file", from: [`${LIB}#writeRecordFileNoFollow`] },
   "core/tools/aidlc-question-store.ts#parseQuestion": { use: "keeps", why: "the question store's own read: checks a record's shape" },
-  "core/tools/aidlc-question-store.ts#saveQuestion": { use: "keeps", why: "the question store's writer: keeps the request as the question's text", from: [`${ORCH}#composeOfferAskDirective`, `${ORCH}#createPrintDirective`, `${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`, `${ORCH}#scopeConfirmAskDirective`] },
+  "core/tools/aidlc-question-store.ts#saveQuestion": { use: "keeps", why: "the question store's writer: keeps the request as the question's text", from: [`${ORCH}#composeOfferAskDirective`, `${ORCH}#createPrintDirective`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`, `${ORCH}#saveReadingQuestion`, `${ORCH}#scopeConfirmAskDirective`] },
   "core/tools/aidlc-utility.ts#handleIntentCreate": { use: "keeps", why: "creates the work with the request's words (the question's text)" },
   [`${ORCH}#isKeptRequest`]: { use: "keeps", why: "the presence shape: whether next carries a request" },
   [`${ORCH}#noteRestartRequest`]: { use: "keeps", why: "keeps a new chat's request for the step that asks about it" },
@@ -941,7 +1087,6 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#routingQuestionReplyDirective`]: { use: "decides", why: "the routing question's reply step hands their words back, quoted, in its command", from: [`${ORCH}#routeNext`] },
   [`${ORCH}#newWorkRoutingAskDirective`]: { use: "decides", why: "as above (the routing question)", from: [`${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#routeNext`] },
   [`${ORCH}#printDirective`]: { use: "keeps", why: "prints a step, which may carry their request", from: [`${ORCH}#emitTypedResumeChoice`, `${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`] },
-  [`${ORCH}#projectTypeWordsArg`]: { use: "keeps", why: "hands their words on to the project-type record, trimmed", from: [`${ORCH}#routeNext`] },
   [`${ORCH}#projectTypeIsWholeRequest`]: { use: "keeps", why: "the presence shape: the line is only the project type" },
   [`${ORCH}#parkedDirective`]: { use: "keeps", why: "a step's narration, which may carry their words", from: [`${ORCH}#parkAfterApproval`] },
   [`${ORCH}#parkAfterApproval`]: { use: "keeps", why: "as above" },
@@ -972,7 +1117,7 @@ export const ALLOWED: Record<string, Allowed> = {
   // The agent's own recorded answer (O4): the agent-argument checks over what the agent recorded, never a message.
   [`${LIB}#latestRecordedAnswerMode`]: { use: "decides", why: "O4: the answer mode the agent recorded (QUESTION_ANSWERED Details)" },
   [`${LIB}#answerModeFromReply`]: { use: "decides", why: "O4: reads the agent's recorded answer mode", from: [`${LIB}#latestRecordedAnswerMode`] },
-  [`${STATE}#hasBlockingSensorOverrideAuthorization`]: { use: "decides", why: "O4: the agent's recorded override choice (QUESTION_ANSWERED Details) against the engine's label" },
+  [`${LIB}#blockingSensorPicks`]: { use: "decides", why: "O4: the agent's recorded Fix findings or override choice (QUESTION_ANSWERED Details) against the engine's labels or their number on the decision's own Options list" },
 };
 
 /**
@@ -985,7 +1130,17 @@ export const ALLOWED_UNREACHED: Record<string, Allowed> = {
   "harness/kiro-ide/hooks/aidlc-kiro-adapter.ts#messageOrigin": { use: "decides", why: "host-text identity: the Kiro workflow brief template (P1)" },
   [`${LIB}#kiroTurnOrigin`]: { use: "decides", why: "host-text identity: the Kiro templates (P1)" },
   [`${LIB}#kiroChatRecordOrigin`]: { use: "decides", why: "host-text identity: the Kiro chat record's mark for this prompt (P1)" },
+  // The `[Answer]:` line read inline from a questions file's text, the person's when they answer in the file.
+  [`${ORCH}#questionsCount`]: { use: "decides", why: "the presence shape: how many of a stage's [Answer]: lines hold an answer, for the review line" },
+  [`${ORCH}#answeredQuestionsFile`]: { use: "decides", why: "the presence shape: whether a stage's questions file holds its questions (an [Answer]: tag, filled or blank)" },
+  "core/tools/aidlc-sensor-claim-sources.ts#parseSourceUniverse": { use: "decides", why: "the claim-sources sensor: duplicate [Answer]: entries and which questions are filled (presence and shape); its Assumption Confirmation read is S2a's R31" },
+  "core/tools/aidlc-sensor-claim-sources.ts#answerIsFilled": { use: "decides", why: "the presence shape: an [Answer]: line holds more than blanks or underscores", from: ["core/tools/aidlc-sensor-claim-sources.ts#parseSourceUniverse"] },
 };
+
+/** The places that make a record's words PersonsWords: the two records' writers and their own reads of the file. */
+export const BRAND_WRITERS: readonly string[] = [
+  `${STORE}#saveMessage`, `${STORE}#parseMessage`, `${LIB}#recordGateWords`, `${LIB}#readGateWords`,
+];
 
 /** The agent-argument checks (O4): they read the agent's argv or the file it wrote, never the person's words. */
 export const AGENT_ARGUMENT_CHECKS: readonly string[] = [
@@ -997,34 +1152,7 @@ export const AGENT_ARGUMENT_CHECKS: readonly string[] = [
  * Today's readers the reading slices remove (DESIGN.md section 5), each with its slice and row. The slice deletes its
  * lines; a place that stays after it, keeping the words, moves to ALLOWED in the same change.
  */
-export const STILL_TO_GO: Record<string, ToGo> = {
-  // S2a: the agent's own questions: no default by position, no say-back, no pairing.
-  [`${LIB}#latestPersonTurn`]: { use: "decides", slice: "S2a", row: "R24", why: "the latest turn's words as the default Person Reply, a pick's labels decoded" },
-  [`${LIB}#pickedLabels`]: { use: "decides", slice: "S2a", row: "R24", why: "latestPersonTurn's decode of a row's Picked", from: [`${LIB}#latestPersonTurn`] },
-  [`${LIB}#pickedLabelList`]: { use: "decides", slice: "S2a", row: "R26", why: "the decode of a row's Picked for keptRepliesSinceStageStart and pickedLabels", from: [`${LIB}#keptRepliesSinceStageStart`, `${LIB}#pickedLabels`] },
-  [`${LIB}#keptRepliesSinceStageStart`]: { use: "decides", slice: "S2a", row: "R26", why: "pairs the kept replies with the logged questions" },
-  // S2b: the ids.
-  [`${ORCH}#takePersonsOwnLine`]: { use: "decides", slice: "S2b", row: "R7 (reading-lead: S2b)", why: "\"already read\" compares the person's words with the words a reading step kept; S2b compares the message id; the line itself stays the /aidlc parse (then ALLOWED)" },
-  "core/tools/aidlc-question-store.ts#wordsAlreadyRead": { use: "decides", slice: "S2b", row: "R7 (reading-lead: S2b)", why: "as above", from: [`${ORCH}#takePersonsOwnLine`] },
-  [`${ORCH}#emit`]: { use: "decides", slice: "S2b", row: "R7 (reading-lead, 2026-10-23)", why: "a routed request's words withdrawn from the plan ask's replies by text, and handed to notePlanApprovalAskReply" },
-  [`${ORCH}#withdrawRoutedWords`]: { use: "decides", slice: "S2b", row: "R7 (reading-lead, 2026-10-23)", why: "drops kept reply lines equal to a routed request's words (the routing question's text); S2b names the message" },
-  [`${ORCH}#planProposalDirective`]: { use: "decides", slice: "S2b", row: "R7 (reading-lead, 2026-10-23)", why: "reuses a kept question whose text equals the request; S2b compares the message id" },
-  [`${ORCH}#freshWorkRoute`]: { use: "decides", slice: "S2b", row: "R7 (reading-lead, 2026-10-23)", why: "as above", from: [`${ORCH}#routeNext`] },
-  [`${ORCH}#routeNext`]: { use: "decides", slice: "S2b", row: "R7 (reading-lead, 2026-10-23)", why: "next itself: through planProposalDirective; otherwise it quotes and previews their request (then ALLOWED)" },
-  // S6: quotes become pointers; the setters name their message.
-  [`${STORE}#personsSaidWords`]: { use: "decides", slice: "S6", row: "R27", why: "gathers everything they said for a quote to be found in" },
-  [`${STORE}#holdsQuote`]: { use: "decides", slice: "S6", row: "R27", why: "finds the agent's quote inside their words", from: [`${LOG}#handleAnswer`] },
-  [`${STORE}#wordEdge`]: { use: "decides", slice: "S6", row: "R27", why: "as above", from: [`${STORE}#holdsQuote`] },
-  [`${STORE}#quoteText`]: { use: "keeps", slice: "S6", row: "R27", why: "as above", from: [`${STORE}#holdsQuote`] },
-  [`${LOG}#handleAnswer`]: { use: "decides", slice: "S6", row: "R27 (S6), R22 to R25 (S2a)", why: "the --on-instruction quote check, and the answer's default Person Reply; after S6 and S2a it only keeps their words (then ALLOWED as the writer)" },
-  [`${STORE}#replyOfTheirs`]: { use: "decides", slice: "S6", row: "R28", why: "--person-words equal to a reply of theirs" },
-  [`${GUARD_SWITCH}#saidInChat`]: { use: "keeps", slice: "S6", row: "R28", why: "the setters' reading of whether a setting is theirs; S6 names the message" },
-  [`${LIB}#guardRecoveryFeedbackStatus`]: { use: "decides", slice: "S6", row: "R29", why: "the reject's --feedback matched to the recovery reply's digest", from: [`${STATE}#handleReject`] },
-  [`${STATE}#handleReject`]: { use: "decides", slice: "S6", row: "R29", why: "the guard-recovery digest match; its duplicate check (Conductor Summary left off when it equals their words) stays, then ALLOWED as the writer" },
-  [`${ORCH}#withdrawSettingWords`]: { use: "decides", slice: "S6", row: "R28 (reading-lead: S6a)", why: "drops kept reply lines equal to the latest turn's words; S6 withdraws by the message id" },
-  [`${LIB}#withdrawProtectedReplyWords`]: { use: "decides", slice: "S6", row: "R28 (reading-lead: S6a)", why: "as above, for the protected response", from: [`${ORCH}#withdrawRoutedWords`, `${ORCH}#withdrawSettingWords`] },
-  [`${ASK}#withdrawPlanApprovalReplies`]: { use: "decides", slice: "S6", row: "R28 (reading-lead: S6a)", why: "as above, for the plan ask's replies", from: [`${ORCH}#emit`, `${ORCH}#withdrawRoutedWords`, `${ORCH}#withdrawSettingWords`] },
-};
+export const STILL_TO_GO: Record<string, ToGo> = {};
 
 /**
  * The text-blind fuzz's failure groups today's main still has (tests/harness/text-blind-fuzz.ts), each named with the
@@ -1036,12 +1164,4 @@ export interface FuzzRow {
   row: string;
   why: string;
 }
-export const FUZZ_STILL_TO_GO: readonly FuzzRow[] = [
-  { group: "I2 QUESTION_ANSWERED names no message", slice: "S2c", row: "DESIGN.md item 7 (reading-lead, 2026-10-23)", why: "an answer logged in a chat with no reply of its own since the last decision names no message: the window is this chat's, and a named id from another chat of the same work is refused" },
-  { group: "I2 QUESTION_ANSWERED names no message", slice: "S2b", row: "the ids (reading-lead, 2026-10-23)", why: "the code plan and protected questions' own answers name no message" },
-  { group: "I2 VERIFICATION_COMMAND_RECORDED names no message", slice: "S2a", row: "R24", why: "the verification answer takes Person Reply from the protected response and names no message" },
-  { group: "I2 GATE_REJECTED names no message", slice: "S2b", row: "the ids (reading-lead, 2026-10-23)", why: "a Unit or batch checkpoint reject with no --message writes the protected response's words and no Message Id" },
-  { group: "I2 GATE_APPROVED names no message", slice: "S2b", row: "the ids (reading-lead, 2026-10-23)", why: "a Unit or batch checkpoint approval with no --message writes no Message Id" },
-  { group: "I2 REQUEST_ROUTED names no message", slice: "S2b", row: "the ids (reading-lead, 2026-10-23)", why: "a routing pick records no Message Id" },
-  { group: "I5 the person's words copied into QUESTION_ANSWERED.User Input", slice: "PA-fixes", row: "F3", why: "recordPlanApprovalAnswer's fallback puts their words in a Request Changes' User Input; PA-fixes makes User Input the agent's change text and Person Reply their words" },
-];
+export const FUZZ_STILL_TO_GO: readonly FuzzRow[] = [];

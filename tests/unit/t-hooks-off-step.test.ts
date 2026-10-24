@@ -190,7 +190,11 @@ function intentCreate(proj: string, h: Harness): void {
   age(proj);
 }
 
-type Printed = { kind: string; message?: string };
+type Printed = { kind: string; message?: string; narration?: string };
+
+// Nothing here to carry on with: the first step in a new project asks what to build.
+const noWorkflow = (directive: Printed) =>
+  directive.kind === "print" && directive.narration === "Tell me what to build and I'll start it.";
 
 function next(proj: string, h: Harness, extra: Record<string, string> = {}, args: string[] = []): Printed {
   const r = run(proj, [join(proj, h.dir, "tools", "aidlc-orchestrate.ts"), "next", ...args], attendedEnv(extra));
@@ -659,8 +663,6 @@ describe("the request the first next stopped with carries on after the restart",
   const LINE = "Carrying on with your earlier request.";
   const kept = (proj: string) => join(proj, "aidlc", ".aidlc-sessions", "kept-request.json");
   type Routed = Printed & { narration?: string };
-  const noWorkflow = (directive: Printed) =>
-    directive.kind === "error" && (directive.message ?? "").includes("No workflow state found");
 
   for (const h of HARNESSES) {
     test(`${h.name}: the entry word alone carries on with the request, once`, () => {
@@ -1073,8 +1075,6 @@ describe("a next stopped inside a workflow is named in the restart line and runs
 
   test("before any workflow, the id and the entry alone carry it on once between them", () => {
     const REQUEST = "add a dark mode toggle to the settings page";
-    const noWorkflow = (directive: Printed) =>
-      directive.kind === "error" && (directive.message ?? "").includes("No workflow state found");
     // The id first: the entry alone then finds nothing to carry on with.
     const named = installed(OPENCODE);
     const id = idIn(next(named, OPENCODE, {}, ["--", REQUEST]));
@@ -1308,7 +1308,7 @@ describe("a person at their own terminal is told the step that works there", () 
     intentCreate(other, h);
     const agent = run(other, [join(other, h.dir, "tools", "aidlc.ts"), "engine", "config", "set", "guard.plan-approval", "off"], attendedEnv());
     expect(agent.code).not.toBe(0);
-    expect(`${agent.stdout}${agent.stderr}`).toContain("No reply from the person");
+    expect(`${agent.stdout}${agent.stderr}`).toContain("Run it with --message <id>, the message they asked in, when they ask for it.");
     expect(`${agent.stdout}${agent.stderr}`).not.toMatch(/AIDLC_SKIP_/);
   });
 

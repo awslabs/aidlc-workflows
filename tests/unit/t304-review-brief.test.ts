@@ -31,6 +31,7 @@ import {
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   auditBlockField,
   findStageBySlug,
@@ -72,6 +73,17 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+
+// The person's message, kept as the prompt hook keeps it: its id is what a
+// review they asked for names (--person-asked --message <id>).
+function personAsks(proj: string, words: string): string {
+  const kept = saveMessage(proj, {
+    session: null, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text: words, picker: null,
+    words, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+  });
+  appendAuditEntry("HUMAN_TURN", { "Message Id": kept.id }, proj);
+  return kept.id;
+}
 
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -1438,7 +1450,7 @@ describe("t304 executable review brief scenarios", () => {
 
   test("a finished review after the change saw it: Approve records Accepted risk", () => {
     const { proj } = fixedAfterReviewProject("off");
-    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const asked = personAsks(proj, "review it again");
     const again = [
       "review",
       "--stage",
@@ -1448,6 +1460,8 @@ describe("t304 executable review brief scenarios", () => {
       "--iteration",
       "2",
       "--person-asked",
+      "--message",
+      asked,
     ];
     const requested = run(LOG, again, proj);
     expect(requested.status, requested.out).toBe(0);

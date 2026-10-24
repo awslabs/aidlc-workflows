@@ -4051,14 +4051,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "error",
           "print"
         ],
         "words": null,
         "settings": [],
         "no_ask": true,
         "names": [
-          "describing what to build"
+          "Tell me what to build"
         ]
       },
       "end": {
@@ -4147,7 +4146,6 @@
     "expected": {
       "engine": {
         "kinds": [
-          "error",
           "print"
         ],
         "words": null,
@@ -8490,14 +8488,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "error",
           "print"
         ],
         "words": null,
         "settings": [],
         "no_ask": true,
         "names": [
-          "describing what to build"
+          "Tell me what to build"
         ]
       },
       "end": {
@@ -18607,7 +18604,7 @@
     "expected": {
       "engine": {
         "kinds": [
-          "error"
+          "print"
         ],
         "words": null,
         "settings": []

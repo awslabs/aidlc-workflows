@@ -185,6 +185,10 @@ function answer(proj: string, details: string): string {
   return result.stdout;
 }
 
+// The message of the answer command's JSON line.
+const recordedMessage = (out: string): string =>
+  (JSON.parse(out.trim().split("\n").at(-1) ?? "{}") as { message?: string }).message ?? out;
+
 function planAnswers(proj: string): string[] {
   return readAuditShardEvents(proj)
     .filter((row) => ["PLAN_APPROVAL_RECORDED", "QUESTION_ANSWERED"].includes(row.event) &&
@@ -201,6 +205,9 @@ function routingQuestionOverThePlan(proj: string, planQuestionOpen = true): Emit
   say(proj, `/aidlc ${CHANGE}`);
   const print = next(proj, [CHANGE]);
   expect(print.kind, JSON.stringify(print)).toBe("print");
+  // Their words may answer the plan question as a change: the step says where
+  // the agent passes it, or the revision asks them again what to change.
+  if (planQuestionOpen) expect(print.message).toContain("--details 'Request Changes: <what they asked>'");
   const request = /`[^`]* next (--request [0-9a-f]{8})`/.exec(print.message ?? "")?.[1];
   expect(request, print.message).toBeDefined();
   const routing = next(proj, (request as string).split(" "));
@@ -305,7 +312,7 @@ describe("a number for the routing question answers it alone while the code plan
       expect(back.kind, JSON.stringify(back)).toBe("print");
       expect(back.message).toContain("--checkpoint plan-approval");
       expect(back.message).not.toContain("--request");
-      expect(answer(proj, "Request Changes")).toContain("with the person's words as what to change");
+      expect(recordedMessage(answer(proj, `Request Changes: ${CHANGE}`))).toContain('Recorded "Request Changes"');
       expect(planAnswers(proj)).toEqual(["QUESTION_ANSWERED: Request Changes"]);
       const revise = next(proj);
       expect(revise.kind).toBe("run-stage");
@@ -338,7 +345,7 @@ describe("a number for the routing question answers it alone while the code plan
       expect(read.kind, JSON.stringify(read)).toBe("print");
       expect(read.message).toContain("--checkpoint plan-approval");
       expect(read.message).not.toContain("--request");
-      expect(answer(proj, "Request Changes")).toContain("with the person's words as what to change");
+      expect(recordedMessage(answer(proj, `Request Changes: ${CHANGE}`))).toContain('Recorded "Request Changes"');
       const revise = next(proj);
       expect(revise.kind, JSON.stringify(revise)).toBe("run-stage");
       expect(revise.plan_approval?.status).toBe("revise");
@@ -667,7 +674,9 @@ describe("a number for the routing question is never kept as a Unit checkpoint o
 });
 
 // Feasibility at its approval gate ("Approve Feasibility?"), shown in chat a101.
-function gateProject(policy: Policy): string {
+// `started` writes the stage's own start row, as `next` does when it starts a
+// stage: the floor a gate decision's reply must come after.
+function gateProject(policy: Policy, started = false): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
   writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8")
@@ -676,6 +685,7 @@ function gateProject(policy: Policy): string {
         "- **Summary Confirmation**: off (set by you)"), "utf-8");
   say(proj, "/aidlc");
   expect(next(proj).kind).toBe("run-stage");
+  if (started) appendAuditEntry("STAGE_STARTED", { Stage: "feasibility" }, proj);
   const stage = findStageBySlug("feasibility")!;
   const dir = join(seededRecordDir(proj), "ideation", "feasibility");
   mkdirSync(dir, { recursive: true });
@@ -748,6 +758,47 @@ describe("a message sent while another engine question was open answers the ques
     expect(auditBlockField(rows[0].block, "Person Reply")).toBe("approve feasibility first");
     expect(auditBlockField(rows[0].block, "Message Id")).toBe(id);
   });
+
+  // After the stage started: the refusal names the message sent while the
+  // new-work offer was open, and naming it records the approval. It is no
+  // "came before this stage started" (it came after), and nothing is asked again.
+  for (const policy of ["off", "strict"] as const) {
+    test(`${policy}: after the stage started, the message the refusal names approves the gate when the agent names it`, () => {
+      const proj = gateProject(policy, true);
+      const words = "fix the crash when the export list is empty";
+      say(proj, `/aidlc --new-intent ${words}`);
+      expect(next(proj, ["--new-intent", words]).ask_type).toBe("scope-confirm");
+      say(proj, "approve feasibility first");
+      const id = latestTurnMessage(proj);
+      const refused = report(proj, "approved", ["--user-input", "Approve"]);
+      expect(refused.out).toContain(`If their message ${id}`);
+      const approved = report(proj, "approved", ["--user-input", "Approve", "--message", id]);
+      expect(approved.code, approved.out).toBe(0);
+      expect(approved.out).not.toContain("came before this stage started");
+      const rows = readAuditShardEvents(proj).filter((row) => row.event === "GATE_APPROVED");
+      expect(rows).toHaveLength(1);
+      expect(auditBlockField(rows[0].block, "Message Id")).toBe(id);
+      expect(auditBlockField(rows[0].block, "Person Reply")).toBe("approve feasibility first");
+    });
+
+    // The routed request, then "approve it" while the routing question is open:
+    // the agent reads it as the gate's answer and names it.
+    test(`${policy}: "approve it" typed while the routing question is open, after the stage started, records when the agent names it`, () => {
+      const proj = gateProject(policy, true);
+      routingQuestionOverTheStep(proj);
+      say(proj, "approve it");
+      const id = latestTurnMessage(proj);
+      expect(readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1)?.block)
+        .toContain("**Open Question**: new-work-routing");
+      const approved = report(proj, "approved", ["--user-input", "Approve", "--message", id]);
+      expect(approved.code, approved.out).toBe(0);
+      expect(approved.out).not.toContain("came before this stage started");
+      const rows = readAuditShardEvents(proj).filter((row) => row.event === "GATE_APPROVED");
+      expect(rows).toHaveLength(1);
+      expect(auditBlockField(rows[0].block, "Message Id")).toBe(id);
+      expect(auditBlockField(rows[0].block, "Person Reply")).toBe("approve it");
+    });
+  }
 
   test("a checkpoint answer typed while the new-work offer is open is recorded once the agent names it, with no second question", () => {
     const proj = checkpointProject("off");

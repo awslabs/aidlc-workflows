@@ -67,6 +67,7 @@ outputs: application code + code-generation-plan.md, code-generation-questions.m
 
 - Application code goes to workspace root, NEVER to the record dir. The developer's one change there is ticking each step's box in the plan as it finishes that step
 - Brownfield: modify files in-place. NEVER create duplicates like ClassName_modified.java
+- Files already in the project that this work did not create (a README, LICENSE, docs, configs) are the person's, on a new project too: leave them as they are and build the code around them; this work's own notes on what it built with and how to run it go in `code-summary.md`, and its test command is already in `unit-test-instructions.md`. Change one of them only when the person asks for it or the work cannot be built without it (on brownfield, the code the work changes): name the change in the plan and say it once at the gate, naming the file and what changed in it, and the way back only when there is one
 - Add data-testid attributes to interactive UI elements for test automation
 - Work in this order: plan (Step 2), Step 3 (the person's Plan Approval; with plan approval off, only its one-line notice), generation (Step 4), the Step 5 files, then the review (when `directive.protocol_modules` lists `reviewer`) and the completion handoff (Step 6). The review checks the finished work: never dispatch the reviewer before the Step 5 files exist. When the directive already carries `plan_approval.status: "approved"` (a resumed or continued build), the plan and test instructions on disk are the approved ones: skip Steps 2 and 3 and build them as they are. Never rewrite an approved plan or its test instructions; change them only when the person asks
 - For a Unit (`directive.unit` present), write `source-manifest.json` in Step 5, before the review, listing every application-source path this unit created, modified, or deleted in this stage, including shell-, scaffolding-, and generator-written files; a unit reopened by a rejection keeps the paths its earlier attempts listed. Zero-Unit work writes no `source-manifest.json`
@@ -222,8 +223,10 @@ When both files from Step 2 are written, run `next`:
   --details "Approve Plan"` (or `"Request Changes"`, or `"I'll edit the files"`).
   For a question about several Units, add `--units "<unit>,<unit>"` to record a
   choice for some of them, then record the rest. The person's words are kept
-  with the record, and a change request uses them as what to change; add
-  `--reason` only to say more. When they approved and asked for a change ("approve,
+  with the record. When they asked for changes, pass what to change after the
+  choice (`--details 'Request Changes: <what they asked>'`, single-quoted); when
+  their reply only picked Request Changes, ask what should change before you
+  record it. When they approved and asked for a change ("approve,
   but add a test for the empty cart"), make that change in the plan first (once
   they have replied, its plan and test instructions are open to you; code
   waits), then record "Approve Plan": the approval covers the plan as it stands
@@ -299,12 +302,12 @@ After approval:
 or the machine switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` can turn the plan
 stop off for this piece of work; the engine then routes straight to the build
 with the notice above. When the person asks for it, in their own words or with
-`/aidlc --plan-approval off`, run `{{INVOKE}} engine config set guard.plan-approval off --person-words '<their words>'`
+`/aidlc --plan-approval off`, run `{{INVOKE}} engine config set guard.plan-approval off --message <id>`, with `<id>` the message they asked in,
 and say in one line that it is off. When they only ask about it ("skip plan
 approval?"), answer in one line, offer to turn it off for this piece of work, and
 show the plan question again; their yes is the ask. Never suggest turning it off
 otherwise.
-Turning it back on (`config set plan-approval on --person-words '<their words>'`) is fine whenever they ask.
+Turning it back on (`config set plan-approval on --message <id>`) is fine whenever they ask.
 - A new stage attempt (a jump, a rejected gate, a workflow restart) needs its own
   approval: `next` asks again, or, while plan approval is off, builds the plan
   for that attempt with the same one-line notice. After a rejected gate, while the plan is still
@@ -336,7 +339,8 @@ the override; the reason travels in that file, never on the command line:
 bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --questions-file "<code-generation-record>/code-generation-questions.md" --details "Approve Plan" --override-file "<code-generation-record>/override-reason.txt" --unit "<directive.unit>"
 ```
 
-Tell the person the `say` line it prints, once, then run `next`.
+Tell the person in one line, in your own words, that their approval to build it with no check of the project's
+files is recorded, then run `next`.
 
 > **Build-and-Test loop-back:** The loop-back protocol module
 > (`aidlc-common/protocols/stage-protocol-loopback.md`) defines this replay.

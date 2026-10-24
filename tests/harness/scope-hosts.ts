@@ -28,10 +28,12 @@ import { copilotSkillPrompt } from "./aidlc-input-corpus.ts";
 import { FIXTURES_DIR, REPO_ROOT } from "./fixtures.ts";
 import {
   activeRecord,
+  auditEvents,
   cleanupScopeProjects,
   clip,
   createScopeProject,
   expectedStages,
+  field,
   type RunResult,
   runScope,
   SCOPE_RUN_TIMEOUT_MS,
@@ -1225,6 +1227,10 @@ export function hostJourneyProblems(journey: HostJourney): string[] {
     problems.push(`the work's audit shards are ${JSON.stringify(shards)}: not the first clone's, sorting last, and one from the fresh clone`);
   }
   for (const detour of run.agent.detours) problems.push(`the person was sent round a detour: ${detour}`);
+  // Classic runs with its guards off, so a step a helper may not take shows only as the fence standing aside.
+  for (const e of auditEvents(run.proj).filter((e) => e.event === "GUARD_STOOD_ASIDE" && field(e.block, "Guard") === "state-transition")) {
+    problems.push(`the state-transition guard stood aside for a step the stand-in took: ${clip(field(e.block, "Details") ?? "", 300)}`);
+  }
   if (new Set(chats).size !== 2) problems.push(`the person used chats ${JSON.stringify(chats)}, not two`);
   const checkpoints = run.agent.asked.filter((a) => a.what === "unit checkpoint").map((a) => a.unit);
   if (JSON.stringify(checkpoints) !== JSON.stringify(UNITS)) problems.push(`Unit checkpoints asked for ${JSON.stringify(checkpoints)}, not each Unit once`);

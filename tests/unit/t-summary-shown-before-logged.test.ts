@@ -10,8 +10,9 @@
 // the engine says nothing back for the agent to read out. The refusal names
 // the person's message ids and times, never their words, so the agent retries
 // without asking them again; a message from before the stage started cannot
-// be named. No reply since the last decision still records nothing, with no
-// line about a missed reply.
+// be named, nor one sent before the agent last wrote the questions file (a
+// write the record holds): the summary was not there to see. No reply since
+// the last decision still records nothing, with no line about a missed reply.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -19,7 +20,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
+import { readMessage, saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, seedAidlcMemory, seededRecordDir, seededStateFile, seedStateFile,
 } from "../harness/fixtures.ts";
@@ -139,6 +140,28 @@ function stop(proj: string): string {
   return result.stdout.toString().trim();
 }
 
+// The agent's own write of the questions file, as the write hook records it.
+function agentWrites(proj: string, questions: string): void {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_SESSION_OVERRIDE: SESSION,
+  };
+  delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+  const result = Bun.spawnSync({
+    cmd: [process.execPath, DISPATCHER, "engine", "hook", "write-audit-log"], cwd: proj, env,
+    stdin: new TextEncoder().encode(JSON.stringify({
+      hook_event_name: "PostToolUse", session_id: SESSION, tool_name: "Edit", tool_input: { file_path: questions },
+    })),
+    stdout: "pipe", stderr: "pipe", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.exitCode, result.stderr.toString()).toBe(0);
+}
+
+// The record's times are whole seconds: what comes next lands in a later one.
+function nextSecond(): void {
+  const now = new Date().toISOString().slice(0, 19);
+  while (new Date().toISOString().slice(0, 19) === now) Bun.sleepSync(10);
+}
+
 const said = (out: string): unknown => {
   const line = out.split("\n").find((entry) => entry.includes('"emitted":"SUMMARY_CONFIRMATION_RECORDED"'));
   return line ? (JSON.parse(line) as { say?: string }).say : "no receipt output";
@@ -242,6 +265,30 @@ describe("t-summary-shown-before-logged: a summary answered before its question 
       expect(events(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(0);
     });
 
+    // A reply typed while another engine question was on screen (the routing
+    // question) is still theirs when the agent names it: it came after the
+    // stage started, so the floor lets it confirm the summary.
+    test(`a confirmation sent while another question was open records once the agent names it (Guard Policy ${policy})`, () => {
+      const { proj, questions } = project(policy);
+      says(proj, "the greeting shows a blank title, fix it");
+      appendAuditEntry("STAGE_STARTED", { Stage: STAGE }, proj);
+      questionsLeftToTheAgent(proj);
+      expect(askSummary(proj, questions).status).toBe(0);
+      const held = saveMessage(proj, {
+        session: SESSION, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text: "looks correct",
+        picker: null, words: "looks correct", settings: [],
+        route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+      });
+      appendAuditEntry("HUMAN_TURN", { Session: SESSION, "Message Id": held.id, "Open Question": "new-work-routing" }, proj);
+      const recorded = answerSummary(proj, questions, "Looks correct", "Looks correct", held.id);
+      expect(recorded.status, recorded.out).toBe(0);
+      expect(recorded.out).not.toContain("came before this stage started");
+      const receipts = events(proj, "SUMMARY_CONFIRMATION_RECORDED");
+      expect(receipts).toHaveLength(1);
+      expect(auditBlockField(receipts[0].block, "Message Id")).toBe(held.id);
+      expect(auditBlockField(receipts[0].block, "Person Reply")).toBe("looks correct");
+    });
+
     // The refusal's other way on is the person's next reply: the question stays
     // open, the turn ends there, and their reply confirms it.
     test(`after the refusal the turn ends at the summary and their next reply confirms it (Guard Policy ${policy})`, () => {
@@ -254,6 +301,47 @@ describe("t-summary-shown-before-logged: a summary answered before its question 
       const recorded = answerSummary(proj, questions, "Looks correct");
       expect(recorded.status, recorded.out).toBe(0);
       expect(events(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(1);
+    });
+
+    // A live run: "approve" typed at another question, then the agent wrote
+    // the summary, recorded its question and named that message. The summary
+    // they confirm was on record before they replied, or they never saw it.
+    test(`a reply sent before the agent wrote the summary cannot be named to confirm it (Guard Policy ${policy})`, () => {
+      const { proj, questions } = project(policy);
+      questionsLeftToTheAgent(proj);
+      says(proj, "approve");
+      const reply = latestMessage(proj);
+      agentWrites(proj, questions);
+      expect(askSummary(proj, questions).status).toBe(0);
+      const bare = answerSummary(proj, questions, "Looks correct");
+      expect(bare.status).not.toBe(0);
+      expect(refusal(bare.out)).not.toContain(reply.id);
+      expect(refusal(bare.out)).toContain("Show the summary and end your turn");
+      const named = answerSummary(proj, questions, "Looks correct", "Looks correct", reply.id);
+      expect(named.status).not.toBe(0);
+      expect(refusal(named.out)).toContain(`their message ${reply.id} came before the summary was last written`);
+      expect(refusal(named.out)).toContain("Show the summary and end your turn");
+      expect(events(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(0);
+    });
+
+    // Writing the confirmation's own `[Answer]:` comes after its question's
+    // record, and is no change to what they confirmed.
+    test(`the summary written before the reply is confirmed on the message the agent names (Guard Policy ${policy})`, () => {
+      const { proj, questions } = project(policy);
+      questionsLeftToTheAgent(proj);
+      agentWrites(proj, questions);
+      nextSecond();
+      says(proj, "looks correct");
+      const reply = latestMessage(proj);
+      expect(askSummary(proj, questions).status).toBe(0);
+      writeFileSync(questions, readFileSync(questions, "utf-8").replace(/\[Answer\]:[^\n]*\n$/, "[Answer]: Looks correct\n"));
+      agentWrites(proj, questions);
+      const recorded = answerSummary(proj, questions, "Looks correct", "Looks correct", reply.id);
+      expect(recorded.status, recorded.out).toBe(0);
+      const receipts = events(proj, "SUMMARY_CONFIRMATION_RECORDED");
+      expect(receipts).toHaveLength(1);
+      expect(auditBlockField(receipts[0].block, "Message Id")).toBe(reply.id);
+      expect(auditBlockField(receipts[0].block, "Person Reply")).toBe("looks correct");
     });
 
     test(`with no reply since the last decision, nothing is recorded and no reply is called missed (Guard Policy ${policy})`, () => {

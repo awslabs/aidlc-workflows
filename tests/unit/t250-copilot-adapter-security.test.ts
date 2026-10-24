@@ -129,7 +129,7 @@ const AUDIT_TOOL_STUB = `export function appendAuditEntry(_k: string, _d: unknow
 const LIB_TOOL_STUB = `import { join } from "node:path";
 // The engine's own reading of a line is pure, so the rig uses the real one, and
 // the real in-process hook runner, which runs the stub guards beside it.
-export { beforeDelimiter, boundDirectiveMessage, ENGINE_OWNED_STATE_TRANSITIONS, nextLineFlags, readOrchestratorLauncherOptions, runHookHere } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
+export { beforeDelimiter, boundDirectiveMessage, ENGINE_OWNED_STATE_TRANSITIONS, nextLineFlags, readOrchestratorLauncherOptions, runHookHere, sessionsDir, validSessionId } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
 export function decideFence(): { decision: "hold" | "stand-aside" } {
   return { decision: process.env.T250_STATE_TRANSITION_STANDS_ASIDE === "1" ? "stand-aside" : "hold" };
 }
@@ -2046,6 +2046,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       for (const command of [
         "aidlc engine state set-construction-checkpoints disabled",
         "bun .aidlc/tools/aidlc-state.ts set-construction-checkpoints disabled",
+        // The message they asked in beside it, which the setter proves.
+        "aidlc engine state set-construction-checkpoints disabled --message 0a1b2c3d",
       ]) {
         // The setter's own check passes for exactly this value: no second confirmation.
         expect(decision(command, "Construction Checkpoints=disabled"), command).toBe("allow");
@@ -2076,7 +2078,10 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         // Not asked for: the host still asks.
         expect(decision(command), command).toBeUndefined();
       }
-      // The person's words beside the switch (--person-words) are still that switch.
+      // The message they asked in beside the switch (--message, the setter proves it) is still that
+      // switch, and so is the words form from before it.
+      expect(decision("aidlc engine config set plan-approval off --message 0a1b2c3d", "plan-approval=off")).toBe("allow");
+      expect(decision("aidlc engine config set plan-approval off --message 0a1b2c3d")).toBeUndefined();
       expect(decision("aidlc engine config set guard.review-freeze off --person-words 'turn the review freeze off'",
         "guard.review-freeze=off")).toBe("allow");
       expect(decision("aidlc engine config set guard.review-freeze off --person-words-file .aidlc-engine/answer-text/answer.txt",

@@ -28,6 +28,9 @@ const manifest: HarnessManifest = {
   // in-flight ledger until its SubagentStop. Claude Code sets
   // CLAUDE_CODE_SESSION_ID in its agent's shell.
   agentFinishRecorded: { env: ["CLAUDE_CODE_SESSION_ID"] },
+  // AskUserQuestion takes four options besides its own "Type something" row
+  // (question-rendering.md, "Batching limits"), so a question is lettered A-D.
+  questionOptions: 4,
   // A Claude Code session open before setup has no /aidlc and runs none of
   // its hooks until it starts again.
   configNextStep:

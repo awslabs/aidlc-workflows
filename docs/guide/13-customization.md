@@ -249,9 +249,10 @@ New intents store `Sensors`, `Learnings`, `Summary Confirmation`,
 label such as `on (from scope classic)`. For a plan composed for this piece of work, `--status` shows that label as `(from the approved plan)`; the state file keeps the scope. The label reads `set by you` when the
 record shows you asked for it: you typed the switch as a flag on your own line
 (with the settings typed beside it), you ran the command at your own terminal,
-or you asked in your own words and the agent passed those words with the setter
-(`--person-words`), and a message of yours in this chat since the last decision
-is exactly those words. Your words go on the audit row. A setting the agent runs
+or you asked in your own words and the agent named the message you asked in
+with the setter (`--message <id>`), which the engine proves is yours, from this
+chat and not used up by a later decision. Your whole message goes on the audit
+row. A setting the agent runs
 on its own after a reply that never asked for it ("looks good, carry on") still
 takes effect, and reads `set by a command`. Sensors, learnings or summary confirmation you type with a request
 (`/aidlc --learnings on build the export`), or before any work exists, also
@@ -481,21 +482,21 @@ Switching one off writes `- **Guards Off**: review-freeze (set by you)` into `ai
 
 The reviewer-scope setting governs the dispatched reviewer's read/search bound. A checkout stamped as owning one team Unit still cannot write another Unit's `construction/` subtree; that ownership boundary is not switchable by Guard Policy, a per-work fence setting, or `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK`.
 
-Ask in your own words and the agent carries it out; a typed switch is the same setter, run by the agent from its first `next`. A switchable fence's main-session refusal names its switch. A setter that would turn a fence off, run when no reply from you has arrived since the last decision, says:
+Ask in your own words and the agent carries it out; a typed switch is the same setter, run by the agent from its first `next`. A switchable fence's main-session refusal names its switch. A setter that would turn a fence off, run without naming the message you asked in, says:
 
-> Turning the review-freeze check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
+> Turning the review-freeze check off is the person's call. Run it with --message <id>, the message they asked in, when they ask for it.
 
 A CLI setter that would turn plan approval off says:
 
-> Turning plan approval off lets code generation start without the person approving the plan, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it.
+> Turning plan approval off lets code generation start without the person approving the plan, so it is their call. Run it with --message <id>, the message they asked in, when they ask for it.
 
-A setter that would change the policy to `relaxed`, run when no reply from you has arrived since the last decision, says:
+A setter that would change the policy to `relaxed`, run without naming the message you asked in, says:
 
-> Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
+> Setting Guard Policy relaxed lowers fences, which is the person's call. Run it with --message <id>, the message they asked in, when they ask for it.
 
 Creation with an explicit `relaxed` flag below the scope's default (on `enterprise`), run with no message of yours on record in that chat, says the same:
 
-> Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
+> Setting Guard Policy relaxed lowers fences, which is the person's call. Run it with --message <id>, the message they asked in, when they ask for it.
 
 Other fence names and `off` use the corresponding name or value; unattended runs append the driver guidance. Memory-held strict refuses before applying a switch or checking a bypass and instead names the memory file to edit. A human-presence refusal names no switch; it says no reply from the person is on record and what happened to one they already sent (the harness's hook steps, or `/aidlc --doctor`), and never asks them to reply again.
 
@@ -561,7 +562,7 @@ On Claude Code it looks like this, from a run on the `mvp` plan (drawing charact
 [AIDLC] inventory-api - IDEATION [##--------] 1/4 > Feasibility -- Architect Agent
 ```
 
-This shows, in order: the piece of work, the current phase, phase progress (as a bar and a ratio, both scoped to the current phase), stage display name, and lead agent. Before any work is selected it reads `[AIDLC] ready`. On the right come Claude Code's model, then `ctx:N%`, how much of the context window is used. When the Claude usage ledger has data, the tokens in and out and `$<usd>` follow for the active workflow and current transcript/session only; prior workflows and sessions are excluded. Setting `AIDLC_DISABLE_USAGE_TRACKING=1` turns usage tracking off entirely and removes this segment. [Your First Workflow](02-your-first-workflow.md) explains each segment.
+This shows, in order: the piece of work, the current phase, phase progress (as a bar and a ratio, both scoped to the current phase), stage display name, and lead agent. While Reverse Engineering analyses ten or more repositories, the stage name is followed by how many of them are done, as in `> Reverse Engineering 37/190`. Before any work is selected it reads `[AIDLC] ready`. On the right come Claude Code's model, then `ctx:N%`, how much of the context window is used. When the Claude usage ledger has data, the tokens in and out and `$<usd>` follow for the active workflow and current transcript/session only; prior workflows and sessions are excluded. Setting `AIDLC_DISABLE_USAGE_TRACKING=1` turns usage tracking off entirely and removes this segment. [Your First Workflow](02-your-first-workflow.md) explains each segment.
 
 The `$<usd>` value is a local estimate priced from **public list prices**, not a bill. When Amazon Bedrock is the recorded provider (`CLAUDE_CODE_USE_BEDROCK=1`), what Bedrock actually charges depends on your inference profile, region, service tier, and any negotiated or subscription pricing, so the figure may not match your invoice. Most of the token volume in a long workflow is cache reads — billed, at the reduced cache-read rate — so the counts and the estimate grow steadily; that is real usage, not inflation. To price new usage at your own rates, point `AIDLC_MODEL_RATES` at a rates file (see [Rate table and overrides](../reference/06-hooks-and-tools.md#rate-table-and-overrides)); totals already recorded keep the rates they were priced at. If you'd rather not show the estimate — while presenting, screen-sharing, or recording — set `AIDLC_DISABLE_USAGE_TRACKING=1` (see [Troubleshooting](15-troubleshooting.md#statusline-shows-a-cost-segment-you-dont-want-or-usage-tracking-concerns)).
 

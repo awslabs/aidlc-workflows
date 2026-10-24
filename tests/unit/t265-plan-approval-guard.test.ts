@@ -812,6 +812,34 @@ const STAGE_DISPATCH = (proj: string, prompt: string) => ({
 // A POSIX single-quoted word, as the engine and the harness shells carry a path.
 const shellQuoted = (word: string): string => `'${word.replaceAll("'", "'\\''")}'`;
 
+// A Windows folder's 8.3 spelling, as t244 asks for it, leading back to the
+// same folder. The path goes in through the environment: cmd.exe would read
+// the quotes a spawned argument carries as part of the name.
+function windowsShortSpelling(folder: string): string {
+  const spelled = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:AIDLC_T265_FOLDER).ShortPath",
+    ],
+    {
+      env: { ...process.env, AIDLC_T265_FOLDER: folder },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    },
+  );
+  expect(spelled.status, `${spelled.stdout}${spelled.stderr}`).toBe(0);
+  const short = spelled.stdout.trim();
+  // A volume without 8.3 names cannot show the defect; say so, not pass.
+  expect(short.toLowerCase(), `no 8.3 short name for ${folder}; see fsutil 8dot3name query`)
+    .not.toBe(folder.toLowerCase());
+  expect(short).toContain("~");
+  expect(realpathSync.native(short)).toBe(folder);
+  return short;
+}
+
 const WRITE = (filePath: string) => ({
   hook_event_name: "PreToolUse",
   tool_name: "Write",
@@ -2771,6 +2799,156 @@ describe("t265b hook lifecycle", () => {
     },
   );
 
+  // The Kiro adapters name the project by the guard's own path, the long
+  // spelling, and hand it the host's folder and paths, which can carry 8.3
+  // short names (%TEMP% does for a user name over eight characters). A host
+  // can also name the project short and write by the long path.
+  test.skipIf(process.platform !== "win32")(
+    "a write through a Windows short-name spelling of the project waits for the plan as one through its own spelling does",
+    () => {
+      const proj = realpathSync.native(scratchProject());
+      try {
+        seedState(proj);
+        seedActiveDirective(proj, "code-generation");
+        seedUnit(proj, null, { plan: true, answer: null });
+        const short = windowsShortSpelling(proj);
+        const plan = join(RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
+        // Every row's exit code beside the one expected, so one run shows them all.
+        const expected: Record<string, number> = {};
+        const actual: Record<string, number> = {};
+        const stderr: Record<string, string> = {};
+        const check = (project: string, cwd: string, row: string, payload: Record<string, unknown>, code: number) => {
+          const key = `project ${project === short ? "short" : "long"}, cwd ${cwd === short ? "short" : "long"}: ${row}`;
+          const result = runHook(proj, { ...payload, cwd }, { CLAUDE_PROJECT_DIR: project });
+          expected[key] = code;
+          actual[key] = result.code;
+          stderr[key] = result.stderr;
+        };
+        check(proj, short, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+        check(proj, short, "Write src/inline.ts", WRITE(join(short, "src", "inline.ts")), 2);
+        check(proj, short, "Write the plan", WRITE(join(short, plan)), 0);
+        check(proj, short, "printf plan > the plan", BASH(`printf plan > ${toPosix(plan)}`), 0);
+        check(proj, short, "Write NOTES.md", WRITE(join(short, "NOTES.md")), 0);
+        check(proj, short, "Write outside the project", WRITE(join(dirname(short), "t265-elsewhere", "notes.md")), 0);
+        check(short, proj, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+        check(short, proj, "Write the plan", WRITE(join(proj, plan)), 0);
+        check(short, proj, "Write NOTES.md", WRITE(join(proj, "NOTES.md")), 0);
+        check(proj, proj, "Write src/inline.ts", WRITE(join(proj, "src", "inline.ts")), 2);
+        expect(actual).toEqual(expected);
+        // The code waits with the words its own spelling gets.
+        expect(stderr["project long, cwd short: Write src/inline.ts"])
+          .toBe(stderr["project long, cwd long: Write src/inline.ts"]);
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // The same folder through a linked parent: a host can hand the guard the
+  // folder the person opened while the guard names the project by its real
+  // path, or the other way round.
+  test("a write through a linked parent of the project waits for the plan as one through its own spelling does", () => {
+    const outer = mkdtempSync(join(tmpdir(), "t265-outer-"));
+    const links = mkdtempSync(join(tmpdir(), "t265-links-"));
+    const proj = join(outer, "proj");
+    try {
+      renameSync(scratchProject(), proj);
+      const dirLink = process.platform === "win32" ? "junction" : "dir";
+      // The link leads only to this test's own folder.
+      symlinkSync(outer, join(links, "outer"), dirLink);
+      const linked = join(links, "outer", "proj");
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation");
+      seedUnit(proj, null, { plan: true, answer: null });
+      const record = join(RECORD_REL, "construction", "code-generation");
+      const plan = join(record, "code-generation-plan.md");
+      // A link inside the project is still a link, whichever spelling reaches it.
+      mkdirSync(join(proj, "src"), { recursive: true });
+      symlinkSync(join(proj, "src"), join(proj, record, "workspace-alias"), dirLink);
+      const expected: Record<string, number> = {};
+      const actual: Record<string, number> = {};
+      const stderr: Record<string, string> = {};
+      const check = (project: string, cwd: string, row: string, payload: Record<string, unknown>, code: number) => {
+        const key = `project ${project === linked ? "linked" : "real"}, cwd ${cwd === linked ? "linked" : "real"}: ${row}`;
+        const result = runHook(proj, { ...payload, cwd }, { CLAUDE_PROJECT_DIR: project });
+        expected[key] = code;
+        actual[key] = result.code;
+        stderr[key] = result.stderr;
+      };
+      check(proj, linked, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+      check(proj, linked, "Write src/inline.ts", WRITE(join(linked, "src", "inline.ts")), 2);
+      check(proj, linked, "Write the plan", WRITE(join(linked, plan)), 0);
+      check(proj, linked, "printf plan > the plan", BASH(`printf plan > ${toPosix(plan)}`), 0);
+      check(proj, linked, "Write NOTES.md", WRITE(join(linked, "NOTES.md")), 0);
+      check(proj, linked, "Write through a link inside the project",
+        WRITE(join(linked, record, "workspace-alias", "blocked.ts")), 2);
+      check(proj, linked, "Write outside the project", WRITE(join(links, "elsewhere", "notes.md")), 0);
+      check(linked, proj, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+      check(linked, proj, "Write the plan", WRITE(join(proj, plan)), 0);
+      check(linked, proj, "Write NOTES.md", WRITE(join(proj, "NOTES.md")), 0);
+      check(proj, proj, "Write src/inline.ts", WRITE(join(proj, "src", "inline.ts")), 2);
+      expect(actual).toEqual(expected);
+      // The code waits with the words its own spelling gets.
+      expect(stderr["project real, cwd linked: Write src/inline.ts"])
+        .toBe(stderr["project real, cwd real: Write src/inline.ts"]);
+    } finally {
+      rmSync(links, { recursive: true, force: true });
+      rmSync(outer, { recursive: true, force: true });
+    }
+  });
+
+  // A drive letter substituted for the project folder (`subst`, or a mapped
+  // drive) is the project spelled from a drive root, with no folder above it.
+  test.skipIf(process.platform !== "win32")(
+    "a write through a drive letter substituted for the project folder waits for the plan as one through its own spelling does",
+    () => {
+      const proj = realpathSync.native(scratchProject());
+      // A letter nothing uses, substituted for this test's own folder and
+      // removed in finally; the mapping lives only in this logon session.
+      const letter = "ZYXWVUTSRQPONMLKJ".split("").find((l) => !existsSync(`${l}:\\`));
+      expect(letter, "no free drive letter").toBeDefined();
+      const root = `${letter}:\\`;
+      const made = spawnSync("subst", [`${letter}:`, proj], {
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      try {
+        expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+        seedState(proj);
+        seedActiveDirective(proj, "code-generation");
+        seedUnit(proj, null, { plan: true, answer: null });
+        const plan = join(RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
+        const expected: Record<string, number> = {};
+        const actual: Record<string, number> = {};
+        const stderr: Record<string, string> = {};
+        const check = (project: string, cwd: string, row: string, payload: Record<string, unknown>, code: number) => {
+          const key = `project ${project === root ? "drive" : "folder"}, cwd ${cwd === root ? "drive" : "folder"}: ${row}`;
+          const result = runHook(proj, { ...payload, cwd }, { CLAUDE_PROJECT_DIR: project });
+          expected[key] = code;
+          actual[key] = result.code;
+          stderr[key] = result.stderr;
+        };
+        check(proj, root, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+        check(proj, root, "Write src/inline.ts", WRITE(join(root, "src", "inline.ts")), 2);
+        check(proj, root, "Write the plan", WRITE(join(root, plan)), 0);
+        check(proj, root, "printf plan > the plan", BASH(`printf plan > ${toPosix(plan)}`), 0);
+        check(proj, root, "Write NOTES.md", WRITE(join(root, "NOTES.md")), 0);
+        check(proj, root, "Write outside the project", WRITE(join(dirname(proj), "t265-elsewhere", "notes.md")), 0);
+        check(root, proj, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+        check(root, proj, "Write the plan", WRITE(join(proj, plan)), 0);
+        check(root, proj, "Write NOTES.md", WRITE(join(proj, "NOTES.md")), 0);
+        check(proj, proj, "Write src/inline.ts", WRITE(join(proj, "src", "inline.ts")), 2);
+        expect(actual).toEqual(expected);
+        // The code waits with the words its own spelling gets.
+        expect(stderr["project folder, cwd drive: Write src/inline.ts"])
+          .toBe(stderr["project folder, cwd folder: Write src/inline.ts"]);
+      } finally {
+        spawnSync("subst", [`${letter}:`, "/d"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+        rmSync(proj, { recursive: true, force: true });
+      }
+    },
+  );
+
   test.skipIf(process.platform !== "win32")(
     "Windows cwd casing preserves recovery without authorizing workspace changes",
     () => {
@@ -2798,6 +2976,82 @@ describe("t265b hook lifecycle", () => {
       }
     },
   );
+
+  // The Kiro adapters name the project by the guard's own path, the long
+  // spelling, and hand it the folder the IDE runs in, which can carry 8.3 short
+  // names (%TEMP% does for a user name over eight characters).
+  test.skipIf(process.platform !== "win32")(
+    "a Windows short-name spelling of the project runs AI-DLC's own tools and authorizes nothing else",
+    () => {
+      const proj = realpathSync.native(scratchProject());
+      try {
+        seedState(proj);
+        seedActiveDirective(proj, "code-generation");
+        seedUnit(proj, null, { plan: true, answer: null });
+        mkdirSync(join(proj, "other", ".claude", "tools"), { recursive: true });
+        cpSync(join(proj, ".claude", "tools", "aidlc.ts"), join(proj, "other", ".claude", "tools", "aidlc.ts"));
+        const short = windowsShortSpelling(proj);
+        // Every command's exit code beside the one expected, so one run shows them all.
+        const expected: Record<string, number> = {};
+        const actual: Record<string, number> = {};
+        const check = (cwd: string, command: string, code: number) => {
+          const key = `${cwd === short ? "short" : "long"} cwd: ${command}`;
+          expected[key] = code;
+          actual[key] = runHook(proj, { ...BASH(command), cwd }).code;
+        };
+        const next = "bun .claude/tools/aidlc.ts engine orchestrate next";
+        check(short, next, 0);
+        check(short, "bun .claude/tools/aidlc-testing-posture.ts render", 0);
+        check(short, `bun ${shellQuoted(join(short, ".claude", "tools", "aidlc.ts"))} engine orchestrate next`, 0);
+        check(proj, `${next}; cd ${shellQuoted(short)}`, 0);
+        check(short, "bun other/.claude/tools/aidlc.ts engine orchestrate next", 2);
+        check(short, `${next}; cd ${shellQuoted(join(proj, "other"))}`, 2);
+        expect(actual).toEqual(expected);
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // The same folder through a linked parent: a host can hand the guard the
+  // folder the person opened while the guard names the project by its real path.
+  test("a project folder reached through a linked parent runs AI-DLC's own tools and authorizes nothing else", () => {
+    const outer = mkdtempSync(join(tmpdir(), "t265-outer-"));
+    const links = mkdtempSync(join(tmpdir(), "t265-links-"));
+    const proj = join(outer, "proj");
+    try {
+      renameSync(scratchProject(), proj);
+      // The link leads only to this test's own folder.
+      symlinkSync(outer, join(links, "outer"), process.platform === "win32" ? "junction" : "dir");
+      const linked = join(links, "outer", "proj");
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation");
+      seedUnit(proj, null, { plan: true, answer: null });
+      mkdirSync(join(proj, "other", ".claude", "tools"), { recursive: true });
+      cpSync(join(proj, ".claude", "tools", "aidlc.ts"), join(proj, "other", ".claude", "tools", "aidlc.ts"));
+      const expected: Record<string, number> = {};
+      const actual: Record<string, number> = {};
+      const check = (cwd: string, command: string, code: number) => {
+        const key = `${cwd === linked ? "linked" : "real"} cwd: ${command}`;
+        expected[key] = code;
+        actual[key] = runHook(proj, { ...BASH(command), cwd }).code;
+      };
+      const next = "bun .claude/tools/aidlc.ts engine orchestrate next";
+      check(linked, next, 0);
+      check(linked, "bun .claude/tools/aidlc-testing-posture.ts render", 0);
+      check(linked, `bun ${shellQuoted(join(linked, ".claude", "tools", "aidlc.ts"))} engine orchestrate next`, 0);
+      check(proj, `${next}; cd ${shellQuoted(linked)}`, 0);
+      check(linked, "bun other/.claude/tools/aidlc.ts engine orchestrate next", 2);
+      check(linked, `cd ${shellQuoted(join(linked, "other"))} && ${next}`, 2);
+      check(proj, `${next}; cd ${shellQuoted(join(linked, "other"))}`, 2);
+      check(linked, "echo code > src/inline.ts", 2);
+      check(linked, `${next}; echo code > src/inline.ts`, 2);
+      expect(actual).toEqual(expected);
+    } finally {
+      rmSync(links, { recursive: true, force: true });
+      rmSync(outer, { recursive: true, force: true });
+    }
+  });
 
   test("planning through the Bun entry point requires a real installed file", () => {
     const proj = scratchProject();

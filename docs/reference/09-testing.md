@@ -355,9 +355,11 @@ time, a checkpoint each. After the first Unit's checkpoint the person stops for
 the day, picks the work up from a fresh clone (the folder left with only what a
 clone holds, the first clone's audit shard sorting last), and carries on in a
 second chat with `/aidlc --resume`. The journey checks what the scope runs
-check, plus two audit shards, two chats, each Unit's checkpoint asked once, and
+check, plus two audit shards, two chats, each Unit's checkpoint asked once,
 no detour the person should not meet (such as being told to resume work they
-just picked up). CI runs them as their
+just picked up), and no state-transition guard standing aside for one of the
+stand-in's own steps (classic runs with its guards off, so a step a helper may
+not take shows only there). CI runs them as their
 own integration job (`scope-hosts`): Linux on pull requests and in the merge
 queue, and Linux, macOS and Windows in the nightly Full Suite (its `scope_runs`
 job) and in a `full_verification` Full Suite.
@@ -911,9 +913,10 @@ the scope-host runs and the guard matrix on all three. Integration and
 E2E run as independent jobs per OS, each with a fresh Bun runner process.
 Every call owns a fresh checkout, installs frozen dependencies under Bun 1.4.2,
 regenerates projections once, and invokes the Bash wrapper with `--debug -P 8
---no-llm`. E2E runs retain `--isolated-e2e`; smoke and unit remain serial within
-each checkout. Sharing the workflow shares the commands and setup, not previous
-test results.
+--no-llm`. E2E runs retain `--isolated-e2e`; smoke remains serial within each
+checkout, and so does unit except in a macOS shard
+([Unit Sharding](#unit-sharding)). Sharing the workflow shares the commands and
+setup, not previous test results.
 
 CI groups code contracts, installer ShellCheck, the coverage ratchet, PR
 changelog preservation, Linux smoke and production-guard checks in one job.
@@ -1130,6 +1133,7 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 | `AIDLC_TEST_GUARD_PROFILE` | `fixture` (runner-set) | Runner-provided diagnostic for tests: `fixture` or `production`, selected by the runner CLI. An inherited value does not select the profile; the runner replaces it in every test child. |
 | `AIDLC_TEST_COMPILED_DIR` | `<runner log dir>/compiled` (runner-set) | Run-owned handoff from t238 to t249: the verified native `aidlc` / `aidlc.exe` plus adjacent `runtime/`. The runner replaces inherited values in every child, keeping the artifact outside per-file temp cleanup and isolated from other runs. |
 | `AIDLC_TEST_COMPILED_EXECUTABLE` | unset | Optional existing executable for direct, non-sharded t249 invocations without a runner handoff. Never a build destination; it cannot replace a missing sharded handoff. |
+| `AIDLC_TEST_UNIT_PARALLEL` | unset | A trial cap on how many files a `--unit --shard` run starts at once, on any platform, in place of the `parallel` entry in `tests/unit-shard-weights.json`; `-P` stays the ceiling. CI never sets it. See [Unit Sharding](#unit-sharding). |
 | `AIDLC_TUI_SETTING_SOURCES` | `project,local` | Setting sources injected into live `claude` TUI launches: the project's settings and its own `.claude/settings.local.json` (where AI-DLC's status line is the person's choice), never user settings. Use `default` or an empty value only for focused calibration that intentionally includes user Claude settings. |
 | `AIDLC_TUI_TRACE_POLL_MS` | `10000` | Minimum interval between `answer_gate_poll` snapshots in TUI NDJSON traces while a long journey is waiting for the next menu or disk terminator. |
 | `AIDLC_ACP_DIAGNOSTIC_TRACE` | unset | Set to `1` with ACP debug tracing to write a private `<trace>.protocol.ndjson` sidecar containing tool input/chunk events, session/turn identity, cancellation requests and aggregate input shapes. Excludes agent-prose events, prompt/auth RPC bodies and process environment. Tool inputs remain private diagnostic data. Limits: 1 MiB per event and 64 MiB per file; `diagnostic_incomplete` or `json_parse_error` means the capture cannot establish complete protocol evidence. |
@@ -1180,7 +1184,8 @@ bash tests/run-tests.sh       # POSIX compatibility wrapper
 --filter PAT    # Only run tests whose filename matches extended regex PAT
 --exclude PAT   # Leave out tests whose filename matches PAT; the rest run as an ordinary tier
 --parallel N    # Run up to N test files concurrently within a tier (alias: -P N).
-                # Default: 1 (serial). Smoke and unit tiers are always serial.
+                # Default: 1 (serial). Smoke is always serial; unit is too, except
+                # a --shard run on a platform the unit weights cap (macOS).
 --file-timeout N  # Independent file ceiling in seconds for every tier; caps isolated E2E too.
                   # Default: 7200 outside isolated E2E.
 --run-timeout N   # Shared work deadline in seconds across setup and all selected files.
@@ -1339,7 +1344,7 @@ journeys. Full Suite additionally requires complete coverage for that selection.
 
 All 8 parallel calls observed `cache_read=73789`. This historical help-command probe observed prompt-cache reuse without throttling or corruption; it does not establish capacity for concurrent full workflows.
 
-**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially within one checkout. Unit CI reduces wall-clock time with isolated shards instead: each shared-workflow call owns a fresh checkout and runs its assigned files serially, so packaging tests can regenerate `dist/` without racing readers. PR CI uses ten weighted unit shards on Linux and eight workers for integration, which start the longest integration files first. Manual Full Suite `full_verification` uses sixteen shards on each of Linux, macOS, and Windows; smoke runs once per OS, and deterministic integration and isolated E2E run in separate jobs with eight workers each. Adding `-P 8` to a combined smoke/unit command alone does not parallelize those tiers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
+**What stays serial.** The smoke tier ignores `--parallel` and runs serially within one checkout. So does the unit tier, except in a `--shard` run on a platform that `tests/unit-shard-weights.json` caps (macOS; see [Unit Sharding](#unit-sharding)). Unit CI reduces wall-clock time with isolated shards: each shared-workflow call owns a fresh checkout. PR CI uses ten weighted unit shards on Linux and eight workers for integration, which start the longest integration files first. Manual Full Suite `full_verification` uses sixteen shards on each of Linux, macOS, and Windows; smoke runs once per OS, and deterministic integration and isolated E2E run in separate jobs with eight workers each. Adding `-P 8` to a combined smoke/unit command alone does not parallelize those tiers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
 
 **Output under parallelism.** `START` markers stream live; several can appear before the first `DONE`. In normal/verbose mode, the TypeScript coordinator buffers each test's TAP body and writes it as one block when that file finishes. In `--debug` mode, Bun stdout/stderr streams live while still being written to each per-test log; parallel debug output is prefixed by file basename so overlapping workers remain attributable. SDK/TUI/Kiro-ACP driver traces are written beside the logs as `$LOG_DIR/sdk-drive-*.ndjson`, `$LOG_DIR/tui-drive-*.ndjson`, and `$LOG_DIR/kiro-acp-drive-*.ndjson`; isolated E2E places them under the file's artifact directory. The runner prints their paths at startup and at each test start. Kiro-ACP traces include tool calls and updates, output previews, permission answers, process stderr, and result/timeout/end events so a timeout can be investigated from retained evidence.
 
@@ -2365,9 +2370,22 @@ join the least-loaded shard without changing the command. The runner exits 2 whe
 assignable groups, so no valid shard command can report success after running
 zero files.
 
-Each shard remains serial. Run separate shards in separate checkouts or CI jobs.
-Do not run them concurrently against one repository tree because packaging
-tests regenerate `dist/` and can race tests that read generated files.
+A shard runs its files one at a time, except on a platform the weights file caps
+under `parallel` (macOS, whose merge-queue unit shards set how fast the queue
+moves). There a shard starts up to that many files at once, never more than
+`-P`; more would not help, because the heaviest single file sets the floor.
+Side by side, an affinity group runs first and alone, in its order: t238 builds
+the binary t249 reads, and its release packaging (`scripts/package-release.ts`)
+regenerates the shared `dist/` and `dist-release/` in place, so a file reading
+them at that moment would find them missing. The other files start
+longest-first by that platform's weights, each in its own process with its own
+temporary folders.
+`AIDLC_TEST_UNIT_PARALLEL=<n>` sets the cap for one run on any platform, for a
+trial off macOS; nothing in CI sets it. A run without `--shard` stays serial.
+
+Run separate shards in separate checkouts or CI jobs: a runner without
+`AIDLC_TEST_PACKAGE_READY=1` regenerates `dist/` before its first file, under
+the readers of any other run in the same tree.
 
 The affinity list keeps cross-file prerequisites explicit. The native binary
 builder test currently runs before the Copilot compiled-adapter coverage in the
@@ -2390,7 +2408,8 @@ With more than one worker, the integration tier starts its parallel files
 longest-first by `tests/integration-weights.json` (keyed by summary row name), so
 a long file never starts last and sets the tier's wall time. Unweighted files
 and ties keep name order; with no readable weights file, files start in name
-order. Serial files and the smoke and unit tiers are unaffected.
+order. Serial files and the smoke tier are unaffected; a unit shard with more
+than one worker orders its files by the unit weights, as above.
 
 `--integration --shard N/M` balances the filtered integration inventory using
 the same integration weights. Filtering happens before partitioning; exclusions

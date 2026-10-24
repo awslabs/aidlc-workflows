@@ -5,20 +5,22 @@
 // not asked, asked, sent back with Request Changes, or changed after its approval
 // under strict, `report` opening the gate, completing the stage or approving it
 // with no gate open, and a Unit's `unit complete`, are answered with the step
-// that names `next`; nothing moves. Once the plan is approved (or plan approval
+// that names `next`; an isolated run's `report --single`, with the step that
+// names that run's own `next`; nothing moves. Once the plan is approved (or plan approval
 // is off) they go through, the refusal never comes back after its step, and the
 // gate shown again after a review (the step its opening retired) goes through.
 // The engine is the hold's one owner: the plan-approval guard in front of the
 // same commands, on every harness, admits them, says nothing and records nothing.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { cleanupTestProject, seedBoltDagBatches, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
   answer,
   auditEvents,
   createCodeGenerationProject,
+  namedCommands,
   next,
   openCodeGenerationGate,
   reply,
@@ -56,7 +58,11 @@ function stageLine(proj: string): string {
 function reviewed(proj: string, iteration: number, { personAsked, unit }: { personAsked?: boolean; unit?: string } = {}): void {
   const request = `bun .claude/tools/aidlc.ts engine log review --stage code-generation${unit ? ` --unit ${unit}` : ""}` +
     ` --reviewer ${REVIEWER} --iteration ${iteration}`;
-  const requested = runNamed(proj, `${request}${personAsked ? " --person-asked" : ""}`);
+  // A review the person asked for names the message they asked in.
+  const turn = auditEvents(proj).filter((row) => row.event === "HUMAN_TURN" && /\*\*Message Id\*\*: /.test(row.block)).at(-1);
+  const id = /\*\*Message Id\*\*: (\S+)/.exec(turn?.block ?? "")?.[1] ?? "";
+  const asked = personAsked ? ` --person-asked --message ${id}` : "";
+  const requested = runNamed(proj, `${request}${asked}`);
   const reviewFile = (JSON.parse(requested.stdout || "{}") as { reviewFile?: string }).reviewFile;
   if (requested.status !== 0 || !reviewFile) throw new Error(`no review file named:\n${requested.stdout}${requested.stderr}`);
   mkdirSync(dirname(join(proj, reviewFile)), { recursive: true });
@@ -552,11 +558,16 @@ describe("one owner: the engine's own completion holds while the plan waits, and
 
 // An isolated run (`next --stage code-generation --single`) asks the same plan
 // question; its `report --single` waits for the same plan, and the guard leaves
-// that to it as well. The run closes outside the main workflow, so its record
-// is its STAGE_COMPLETED row.
+// that to it as well. Its step names the run's own `next` with the scope it
+// started with, since a bare `next` routes the main workflow and, with no
+// workflow, `next` takes the default scope, which the open attempt refuses. The
+// run closes outside the main workflow, so its record is its STAGE_COMPLETED row.
 describe("one owner: an isolated Code Generation run completes only once its plan lets it build", () => {
   const SINGLE = ["--stage", "code-generation", "--single"];
   const SINGLE_REPORT = "bun .claude/tools/aidlc.ts engine orchestrate report --single --stage code-generation --result completed";
+  const singleWaits = (scope: string) => "The code plan is not approved yet: run " +
+    `\`bun .claude/tools/aidlc-orchestrate.ts next --stage code-generation --single --scope ${scope}\` and follow the step it prints.`;
+  const SINGLE_WAITS = singleWaits("poc");
   const completions = (proj: string) => auditEvents(proj).filter((row) => row.event === "STAGE_COMPLETED").length;
   const ISOLATED: Array<{ name: string; waits: boolean; build: () => string }> = [
     { name: "no plan yet", waits: true, build: () => {
@@ -597,7 +608,7 @@ describe("one owner: an isolated Code Generation run completes only once its pla
       const ran = runNamed(proj, SINGLE_REPORT);
       const step = JSON.parse(ran.stdout || "{}") as Step;
       if (state.waits) {
-        expect(step.message, ran.stdout).toBe(WAITS);
+        expect(step.message, ran.stdout).toBe(SINGLE_WAITS);
         expect(completions(proj)).toBe(before);
       } else {
         expect(step.kind, ran.stdout).toBe("done");
@@ -605,5 +616,48 @@ describe("one owner: an isolated Code Generation run completes only once its pla
       }
     });
   }
+
+  test("the workflow at another stage: the early report's step brings back the isolated run's plan question", () => {
+    const proj = createCodeGenerationProject();
+    created.push(proj);
+    const stateFile = seededStateFile(proj);
+    writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
+      .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: requirements-analysis"), "utf-8");
+    next(proj, SINGLE);
+    writePlan(proj);
+    expect(next(proj, SINGLE).ask_type).toBe("plan-approval");
+    const state = readFileSync(stateFile, "utf-8");
+    const before = completions(proj);
+    const ran = runNamed(proj, SINGLE_REPORT);
+    const step = JSON.parse(ran.stdout || "{}") as Step;
+    expect(step.message, ran.stdout).toBe(SINGLE_WAITS);
+    const named = namedCommands(step.message ?? "");
+    expect(named).toHaveLength(1);
+    const followed = runNamed(proj, named[0]);
+    expect(JSON.parse(followed.stdout || "{}") as Step, followed.stdout).toMatchObject({
+      kind: "ask", ask_type: "plan-approval", stage: "code-generation",
+    });
+    expect(completions(proj)).toBe(before);
+    expect(readFileSync(stateFile, "utf-8")).toBe(state);
+  });
+
+  test("no workflow and a scope typed for the run: the early report's step keeps that scope", () => {
+    const proj = createCodeGenerationProject();
+    created.push(proj);
+    unlinkSync(seededStateFile(proj));
+    const scoped = [...SINGLE, "--scope", "bugfix"];
+    next(proj, scoped);
+    writePlan(proj);
+    next(proj, scoped);
+    const rows = auditEvents(proj).length;
+    const ran = runNamed(proj, SINGLE_REPORT);
+    const step = JSON.parse(ran.stdout || "{}") as Step;
+    expect(step.message, ran.stdout).toBe(singleWaits("bugfix"));
+    const followed = runNamed(proj, namedCommands(step.message ?? "")[0]);
+    const after = JSON.parse(followed.stdout || "{}") as Step;
+    expect(after.kind, followed.stdout).not.toBe("error");
+    expect(after.stage, followed.stdout).toBe("code-generation");
+    expect(auditEvents(proj)).toHaveLength(rows);
+  });
 });
 

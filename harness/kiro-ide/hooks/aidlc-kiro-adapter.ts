@@ -2992,6 +2992,11 @@ function buildForward(): Forward {
           // verb-intercept, beside this hook, runs a command the person typed
           // and hands the agent its output itself.
           relays_terminal_output: true,
+          // Kiro IDE draws a card in the chat for every command hook it runs,
+          // and whether the card shows this hook's output to the person is not
+          // measured, so the hook keeps its message-id line to itself here;
+          // the reply steps of `next` name the ids instead.
+          context_may_reach_person: true,
         },
       };
     }

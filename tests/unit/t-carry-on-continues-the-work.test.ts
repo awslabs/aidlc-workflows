@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, function:takePersonsOwnLine, function:wordsAlreadyRead
+// covers: subcommand:aidlc-orchestrate:next, function:takePersonsOwnLine, function:saveReadingQuestion
 //
 // No word list decides what the person meant. "carry on", "proceed", "ok go" or
 // "keep going please" typed after /aidlc over work in progress are words like
@@ -10,7 +10,8 @@
 // should I do? 1. Part of the active work ..."). Where work is here but none is
 // selected in this chat (a teammate's clone), the same reading comes first, so
 // "carry on" is never offered as new work, and the bare `next` the print names
-// is not read as that line again (takePersonsOwnLine, wordsAlreadyRead), and words
+// is not read as that line again (takePersonsOwnLine; saveReadingQuestion marks the
+// message by id, never its words), and words
 // that name one piece and ask for it to go on ("continue auth") get the pick
 // question's own one-step answer, `next --pick <name>`, so the person never
 // says it twice. Parked work picked that way after `/aidlc --resume` (a fresh

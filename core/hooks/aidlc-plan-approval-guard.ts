@@ -29,7 +29,8 @@
 // Where no tool of the engine's owns the call, a condition stays here
 // (engineCommandAdmitted): a recorded switch that turns a check off, four config
 // settings that can take a check away, and a release fetched or applied, pass
-// once a person has asked; a jump waits for the person's move: the restart
+// once a person has asked; a jump waits for the person's move (the jump `next`
+// names back to a stage the person just added excepted): the restart
 // they picked at the recovery question, or one they asked for, unless the
 // engine's last step was superseded (a `jump execute`, or the `jump reopen` it
 // printed, to the stage the agent's own settled `next --stage` claimed on this
@@ -115,7 +116,6 @@ import {
   isClaudeCodeHookInput,
   isoTimestamp,
   personAskedSinceGate,
-  personSpokeSinceGate,
   readActiveDirectiveMarker,
   readIssuedDirectiveMarker,
   spacesRoot,
@@ -131,6 +131,7 @@ import {
   selectedRecordIsFinished,
   stateDigest,
   stateFilePath,
+  addedStagesPassedOver,
   worktreesDir,
   writeGuardAgentContext,
   writeGuardStoodAside,
@@ -148,6 +149,7 @@ import {
   LOCK_FOLDER_HELD_SAID_KEY,
   lockFolderHeldGoesOnStep,
 } from "../tools/aidlc-lock-line.ts";
+import { personTurnStands } from "../tools/aidlc-message-store.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
@@ -166,6 +168,7 @@ import {
   planReviewAppendix,
   promptTestingContractMarkers,
   setAsideBuildUnderOff,
+  stepNextCommand,
   WORKER_BRIEF_SECTIONS,
 } from "../tools/aidlc-testing-posture.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
@@ -471,6 +474,23 @@ function promptCarriesReviewAppendix(
   return fold(promptText).includes(content);
 }
 
+// The step this call judged, so a refusal names that step's own `next`
+// (stepNextCommand): an isolated Code Generation run's while its attempt is
+// open, since a bare `next` routes the main workflow. Reset at the start of
+// every call, since an adapter can run several calls through this module
+// (runHookHere), and the command is worked out only when a refusal names it.
+let judgedStep: { projectDir: string; marker: ActiveDirectiveMarker | null; next?: string } | null = null;
+
+function workflowNext(): string {
+  return `${aidlcToolInvocation("orchestrate")} next`;
+}
+
+function stepNext(): string {
+  if (judgedStep === null) return workflowNext();
+  judgedStep.next ??= stepNextCommand(judgedStep.projectDir, judgedStep.marker);
+  return judgedStep.next;
+}
+
 // Every command a refusal names is spelled the way this install runs it, so
 // the agent can run it as printed (the native `aidlc engine ...`, or the
 // source tree's `bun <harness-dir>/tools/...`), and `next` is always named
@@ -478,7 +498,7 @@ function promptCarriesReviewAppendix(
 // a held jump's wait names is the invocation its claim is hashed over
 // (nextStageInvocation).
 function nextOnItsOwn(wayOn: EngineInvocation | null = null): string {
-  const command = wayOn === null ? `${aidlcToolInvocation("orchestrate")} next` : renderEngineInvocation(wayOn);
+  const command = wayOn === null ? stepNext() : renderEngineInvocation(wayOn);
   return `\`${command}\` ${AS_ITS_OWN_COMMAND}`;
 }
 
@@ -528,13 +548,15 @@ export function appendixBlockReason(mentioned: string[]): string {
 // tells the agent not to ask for an approval nobody wants. The agent repeats
 // these words to the person, so the clause names no engine part and no
 // switch: the command it follows is already named once, and "it" is enough.
+// An isolated run's build comes from that command again, never a bare `next`.
 function nextAfterPlanClause(planApprovalOff: boolean, handsOver: boolean): string {
   if (planApprovalOff) {
     return "plan approval is off for this work, so it starts the build without asking anyone; " +
       "do not ask the person to approve the plan.";
   }
+  const again = stepNext() === workflowNext() ? "the `next`" : "that command again";
   return handsOver
-    ? "the engine asks the person to approve the plan, and the `next` after their answer hands over the build."
+    ? `the engine asks the person to approve the plan, and ${again} after their answer hands over the build.`
     : "the engine asks the person to approve it before any code is written.";
 }
 
@@ -907,6 +929,32 @@ function isPlanWaitSideWrite(projectDir: string, target: string, planPaths: stri
   });
 }
 
+// A path into the project spelled another way than the project is (a Windows
+// 8.3 short name, a linked parent folder, a drive letter substituted for the
+// project folder, which is a drive root), spelled from the project folder, so
+// every check reads it as the project's own. The folder is found by identity
+// and what lies under it stays as written, so a link inside is still seen.
+function inProjectSpelling(projectDir: string, target: string): string {
+  const projectLexical = resolve(projectDir);
+  if (isWithinDir(target, projectLexical)) return target;
+  for (let folder = target; ; folder = dirname(folder)) {
+    if (sameDirectoryIdentity(folder, projectLexical)) return join(projectLexical, relative(folder, target));
+    if (dirname(folder) === folder) return target;
+  }
+}
+
+// A real path with any Windows 8.3 short name expanded: Bun's realpathSync
+// keeps the short name, realpathSync.native expands it. Where native cannot
+// answer (some volumes, such as a RAM disk), the realpathSync answer stands;
+// no test can make native fail.
+function expandedRealPath(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return realpathSync(path);
+  }
+}
+
 // A write outside the project is never the plan's business: the path as
 // written lies outside the project, and so does the real path of its deepest
 // existing ancestor, so a link from outside into the project counts as inside
@@ -914,7 +962,7 @@ function isPlanWaitSideWrite(projectDir: string, target: string, planPaths: stri
 function isOutsideProject(projectDir: string, target: string): boolean {
   try {
     const projectLexical = resolve(projectDir);
-    const projectReal = realpathSync(projectLexical);
+    const projectReal = expandedRealPath(projectLexical);
     const targetAbs = resolve(target);
     if (isWithinDir(targetAbs, projectLexical) || isWithinDir(targetAbs, projectReal)) return false;
     const suffix: string[] = [];
@@ -925,7 +973,7 @@ function isOutsideProject(projectDir: string, target: string): boolean {
       suffix.unshift(basename(cursor));
       cursor = parent;
     }
-    const real = join(realpathSync(cursor), ...suffix);
+    const real = join(expandedRealPath(cursor), ...suffix);
     return !isWithinDir(real, projectLexical) && !isWithinDir(real, projectReal);
   } catch {
     return false;
@@ -1161,6 +1209,9 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
       if (!(RECORDABLE_PROJECT_BYPASSES as readonly string[]).includes(name)) return false;
       changes = true;
       lowers ||= arg === "--bypass";
+    } else if (arg === "--message") {
+      // The message the person asked in, which the setter itself proves.
+      if (args[++index] === undefined) return false;
     } else if (arg === "--project-dir") {
       // The way back the engine prints names this project when it ran
       // elsewhere: the same folder by identity, however it is spelled.
@@ -1494,6 +1545,7 @@ interface JumpCommand {
   target: string | undefined;
   units: string | undefined;
   via: string | undefined;
+  direction: string | undefined;
 }
 
 const NO_ENGINE_CONTEXT: EngineCommandContext = { jumpAdmitted: () => false };
@@ -1521,8 +1573,10 @@ const NO_ENGINE_CONTEXT: EngineCommandContext = { jumpAdmitted: () => false };
 // another jump goes against that pick. Any other jump is their own move. The
 // report that opens the gate moves the state and writes no
 // step, so the step the person answers there is the one the engine issued last
-// (readIssuedDirectiveMarker); whether their words still stand is
-// personSpokeSinceGate's. With no step on record there is nothing to wait for.
+// (readIssuedDirectiveMarker); whether their turn still stands is
+// personTurnStands's (no decision after it, so the approval they just gave
+// never also reopens what it approved). With no step on record there is
+// nothing to wait for.
 // Parked work's last step is the park, which no issued step outlives.
 function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand): boolean | EngineInvocation {
   try {
@@ -1583,9 +1637,22 @@ function jumpIsPersonsMove(
   jump: JumpCommand,
 ): boolean | EngineInvocation {
   if (typeof command === "string" && isSelectedGuardRestartContinuation(projectDir, cwd, command, state, marker)) return true;
-  if (!personSpokeSinceGate(projectDir, { requests: true })) return false;
+  if (!personTurnStands(projectDir, "plain", { requests: true })) return false;
   const last = lastStepAdmitsPersonsMoves(projectDir, jump);
   return typeof last === "boolean" || runtimeHarnessName(projectDir) === "copilot" ? last : false;
+}
+
+// The jump `next` names back to a stage the plan added after the work had just
+// passed over it (addedStagesPassedOver, the check recompose and `next` read):
+// the person's own add carried out, leaving Code Generation before anything of
+// it is written, so it waits for no further turn of theirs.
+function jumpBackToAddedStage(projectDir: string, state: string, jump: JumpCommand): boolean {
+  if (jump.verb !== "execute" || jump.direction !== "backward" || jump.target === undefined) return false;
+  try {
+    return addedStagesPassedOver(state, projectDir).includes(jump.target);
+  } catch {
+    return false;
+  }
 }
 
 // The last value given for a flag, as `--flag value` or `--flag=value`.
@@ -1644,7 +1711,8 @@ function configToolAdmitted(projectDir: string, rest: readonly string[]): boolea
 // and the next tool call would pass under the switch. As `config flags` it is
 // judged whole (recordedSwitchChangeAdmitted); the config tool's two forms above
 // keep theirs. One more has no other owner: a jump (the jump tool checks no pick
-// and no person) waits for the person's move (jumpIsPersonsMove). Every other
+// and no person) waits for the person's move (jumpIsPersonsMove), unless it is
+// the one `next` names back to a stage they just added (jumpBackToAddedStage). Every other
 // engine command is the engine's to judge, a Code Generation completion
 // included: `report` and `unit complete` hold it while its plan waits.
 function engineCommandAdmitted(
@@ -1655,7 +1723,7 @@ function engineCommandAdmitted(
   const configArgs = configToolArgs(engineArgs);
   if (configArgs !== null && !configToolAdmitted(projectDir, configArgs)) return false;
   const args = configArgs !== null ? ["config", ...configArgs] : engineArgs[0] === "engine" ? engineArgs.slice(1) : engineArgs;
-  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted({ verb: args[1], target: lastFlag(args, "--target"), units: lastFlag(args, "--units"), via: lastFlag(args, "--via") })) return false;
+  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted({ verb: args[1], target: lastFlag(args, "--target"), units: lastFlag(args, "--units"), via: lastFlag(args, "--via"), direction: lastFlag(args, "--direction") })) return false;
   // `next` takes no `--bypass`: on its line the token is one of the person's
   // words ("add a --bypass option"), never a check turned off, as the engine's
   // own reading says (nextLineFlags). Every other command is read whole, as its
@@ -1695,20 +1763,20 @@ function isThisBun(name: string): boolean {
 function isTrustedToolFile(projectDir: string, cwd: string, script: string): boolean {
   if (!script) return false;
   const projectLexical = resolve(projectDir);
-  const absolute = isAbsolute(script) ? resolve(script) : resolve(cwd, script);
+  const written = isAbsolute(script) ? resolve(script) : resolve(cwd, script);
   const trustedToolsDir = resolve(projectLexical, harnessDir(), "tools");
-  if (relative(trustedToolsDir, dirname(absolute)) !== "") return false;
+  // One folder has several spellings (another case on Windows, an 8.3 short
+  // name, a linked parent), so the folder itself decides, and the checks below
+  // read the installed spelling. A distinct case-sensitive folder or a copy of
+  // the tools elsewhere does not inherit the installed tool's authority.
+  if (dirname(written) !== trustedToolsDir && !sameDirectoryIdentity(dirname(written), trustedToolsDir)) return false;
+  const absolute = join(trustedToolsDir, basename(written));
   try {
     const projectReal = realpathSync(projectLexical);
     assertNoSymlinkInChainOrThrow(
       projectReal,
       relative(projectLexical, absolute),
     );
-    // Windows realpath can preserve caller casing. For a case-only spelling
-    // difference, require the same directory identity as well: a distinct
-    // case-sensitive directory must not inherit the installed tool's authority.
-    if (dirname(absolute) !== trustedToolsDir &&
-      !sameDirectoryIdentity(dirname(absolute), trustedToolsDir)) return false;
     return lstatSync(absolute).isFile() && !lstatSync(absolute).isSymbolicLink();
   } catch {
     return false;
@@ -1761,8 +1829,8 @@ function shellInvocationNeedsApproval(
       target.split(/[\\/]+/).some((part) => part === "." || part === "..")) return true;
     const current = resolve(cwd);
     const destination = resolve(target);
-    return relative(current, destination) !== "" ||
-      !sameDirectoryIdentity(current, destination);
+    // The same folder however it is spelled (see isTrustedToolFile).
+    return !sameDirectoryIdentity(current, destination);
   }
   if (dialect.powerShell && READ_ONLY_POWERSHELL_CMDLETS.has(name)) {
     // A path, extension or wrapper would name some other program.
@@ -1919,7 +1987,7 @@ async function mutationIntent(
   }
   return {
     targets: targets.map((target) =>
-      isAbsolute(target) ? resolve(target) : resolve(cwd, target)
+      inProjectSpelling(projectDir, isAbsolute(target) ? resolve(target) : resolve(cwd, target))
     ),
     opaqueShell,
     shellCommand,
@@ -2046,6 +2114,7 @@ async function evaluate(
   input: string,
   workflow: ReturnType<typeof enterHookWorkflow>,
 ): Promise<number> {
+  judgedStep = null;
   // Runtime integrity is not a fence and cannot be disabled with this hook.
   if (refuseRuntimeIntegrityViolation(parsed)) return 2;
 
@@ -2265,6 +2334,7 @@ async function evaluate(
     state = readFileSync(statePath, "utf-8");
     const currentStage = getField(state, "Current Stage") ?? "";
     let activeDirective = readActiveDirectiveMarker(projectDir, state);
+    judgedStep = { projectDir, marker: activeDirective };
     const durableStage = normalizeStageName(currentStage);
     let directiveStage = normalizeStageName(activeDirective?.stage ?? "");
     setAside = (activeDirective === null && durableStage === GUARDED_STAGE) ||
@@ -2307,7 +2377,8 @@ async function evaluate(
             {
               jumpAdmitted: (jump) => {
                 const move = toolName === "Bash" &&
-                  jumpIsPersonsMove(projectDir, cwd, toolInput.command, state ?? "", activeDirective, jump);
+                  (jumpBackToAddedStage(projectDir, state ?? "", jump) ||
+                    jumpIsPersonsMove(projectDir, cwd, toolInput.command, state ?? "", activeDirective, jump));
                 if (typeof move === "object") jumpWayOn = move;
                 return move === true;
               },
@@ -2384,9 +2455,10 @@ async function evaluate(
       else {
         activeDirective = readIssuedDirectiveMarker(projectDir);
         directiveStage = normalizeStageName(activeDirective?.stage ?? "");
+        judgedStep = { projectDir, marker: activeDirective };
       }
     }
-    rulesArriving = codeGenerationRulesArrivingReason(activeDirective);
+    rulesArriving = codeGenerationRulesArrivingReason(activeDirective, projectDir);
     if (
       activeDirective?.version !== 2 ||
       directiveStage !== GUARDED_STAGE

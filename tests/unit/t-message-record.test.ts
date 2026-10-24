@@ -432,12 +432,52 @@ describe("the human-turn hook keeps one record of each message", () => {
     pickMany(proj, ["Keep which notes?", "Anything to add?"], {});
     expect(records(proj)).toEqual([]);
   });
+
+  // Claude Code lets the person press Submit answers on a box of several
+  // questions, or a multi-select one, with nothing picked; its result echoes the
+  // questions beside the empty answers (live on 2.1.310). The box's question was
+  // kept as their words and joined their approval's Person Reply.
+  const asked = [
+    { question: "Which capabilities should the first version include?", multiSelect: true,
+      options: [{ label: "Core task CRUD" }, { label: "Due dates" }] },
+    { question: "Where should tasks be stored?", multiSelect: false,
+      options: [{ label: "Browser local storage" }, { label: "SQLite" }] },
+  ];
+  const unanswered: Array<[string, typeof asked, Record<string, unknown>]> = [
+    ["submitted with nothing picked", asked, { questions: asked, answers: {}, annotations: {} }],
+    ["answered with blank text", asked.slice(1), { questions: asked.slice(1), answers: { [asked[1].question]: "  \t " } }],
+  ];
+  for (const [shape, questions, response] of unanswered) {
+    test(`claude: a box ${shape} keeps none of its own words as the person's, and their next reply stands alone`, () => {
+      const proj = withWork();
+      run(proj, [DISPATCHER, "engine", "hook", "record-human-turn"], JSON.stringify({
+        hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: SESSION, cwd: proj,
+        tool_input: { questions }, tool_response: response,
+      }));
+      const [record] = records(proj);
+      expect(record.source).toBe("picker");
+      expect(record.text).toBe("");
+      expect(record.words).toBeNull();
+      expect(record.picker?.map((entry) => entry.reply)).toEqual(questions.map(() => null));
+      say(proj, "Nothing to add, approve");
+      const log = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+      const chat = { AIDLC_SESSION_OVERRIDE: SESSION, AIDLC_SESSION_OVERRIDE_SOURCE: undefined };
+      run(proj, [log, "decision", "--stage", "requirements-analysis", "--decision", "Q1, Q2", "--options", "A,B",
+        "--project-dir", proj], "", chat);
+      run(proj, [log, "answer", "--stage", "requirements-analysis", "--details", "Q1: A; Q2: A", "--project-dir", proj],
+        "", chat);
+      const answered = readAuditShardEvents(proj).filter((row) => row.event === "QUESTION_ANSWERED").at(-1);
+      expect(auditBlockField(answered?.block ?? "", "Person Reply")).toBe("Nothing to add, approve");
+    });
+  }
 });
 
-// A choice the person left to the agent is recorded with their words only when
-// a message of theirs holds them (log answer --on-instruction): on every host
-// hook path the record keeps the words that check reads.
-describe("a typed prompt's words back a choice the person left to the agent", () => {
+// A choice the person left to the agent names the message that left it (log
+// answer --on-instruction --message): on every host hook path the HUMAN_TURN
+// row names the message the hook kept, and the answer's record keeps its whole
+// words by that id. Words the agent passes with the flag are its own and claim
+// nothing.
+describe("a typed prompt's message backs a choice the person left to the agent", () => {
   const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
   const log = (proj: string, args: string[]) => {
     const r = spawnSync(BUN, [LOG, ...args, "--project-dir", proj], {
@@ -445,20 +485,38 @@ describe("a typed prompt's words back a choice the person left to the agent", ()
     });
     return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
   };
+  const answers = (proj: string) => readAuditShardEvents(proj).filter((row) => row.event === "QUESTION_ANSWERED");
   for (const harness of HARNESSES) {
-    test(`${harness}: their quote is recorded, and words they never typed are not`, () => {
+    test(`${harness}: their message is recorded by the id the hook kept, and the agent's own words claim nothing`, () => {
       const proj = withWork();
-      say(proj, "Q1 is B. Use the recommended answers for the rest!", harness);
+      const words = "Q1 is B. Use the recommended answers for the rest!";
+      say(proj, words, harness);
+      const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+      const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+      expect(id).not.toBeNull();
       expect(log(proj, ["decision", "--stage", "requirements-analysis", "--decision", "Q2-Q4", "--options", "A,B"]).status).toBe(0);
       const theirs = log(proj, [
-        "answer", "--stage", "requirements-analysis", "--details", "Q2: A", "--on-instruction", "use the recommended answers for the rest",
+        "answer", "--stage", "requirements-analysis", "--details", "Q2: A", "--on-instruction", "--message", id as string,
       ]);
       expect(theirs.status, theirs.out).toBe(0);
+      const named = answers(proj).at(-1)?.block ?? "";
+      expect(auditBlockField(named, "Answer Source")).toBe("chosen by the agent, reading their message");
+      expect(auditBlockField(named, "Message Id")).toBe(id);
+      expect(auditBlockField(named, "Person Reply")).toBe(words);
       const mine = log(proj, [
         "answer", "--stage", "requirements-analysis", "--details", "Q3: A", "--on-instruction", "grounded from the request",
       ]);
-      expect(mine.status, mine.out).not.toBe(0);
-      expect(readAuditShardEvents(proj).filter((row) => row.event === "QUESTION_ANSWERED")).toHaveLength(1);
+      expect(mine.status, mine.out).toBe(0);
+      const own = answers(proj).at(-1)?.block ?? "";
+      expect(auditBlockField(own, "Answer Source")).toBeNull();
+      expect(auditBlockField(own, "Message Id")).toBeNull();
+      expect(auditBlockField(own, "Conductor Summary")).toBe("grounded from the request");
+      const unknown = log(proj, [
+        "answer", "--stage", "requirements-analysis", "--details", "Q4: A", "--on-instruction", "--message", "0badc0de",
+      ]);
+      expect(unknown.status, unknown.out).not.toBe(0);
+      expect(unknown.out).toContain("no message record 0badc0de");
+      expect(answers(proj)).toHaveLength(2);
     });
   }
 });

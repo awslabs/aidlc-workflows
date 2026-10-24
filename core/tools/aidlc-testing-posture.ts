@@ -48,6 +48,8 @@ import {
   clearPlanApprovalReceipt,
   isolatedCodeGenerationTestStrategy,
   readActiveDirectiveMarker,
+  singleStageAttemptIsOpen,
+  singleStageAttemptScope,
   authorizedVerificationCommand,
   readIssuedDirectiveMarker,
   readAuditShardEvents,
@@ -57,6 +59,8 @@ import {
   readPlanApprovalLegacyOffer,
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyRecoveryChallenge,
+  stageReplyFloorTime,
+  writePlanApprovalLegacyRecoveryChallenge,
   engineAskMark,
   readApprovedPlanCopy,
   readPlanApprovalReceipt,
@@ -101,7 +105,6 @@ import {
   sourceListingSha256,
   parseSourceListing,
   parseCheckboxes,
-  personSpokeSinceGate,
   structuredField,
   structuredFieldSpan,
   toPosix,
@@ -125,17 +128,20 @@ import {
   writePlanApprovalLegacyRecoveryResponse,
   noteEngineAskMark,
   humanTurnState,
-  latestPersonTurn,
+  latestReplyAfter,
   personRepliedAfter,
   unattendedHumanPresenceHint,
   writeApprovedPlanCopy,
   writePlanApprovalReceipt,
   runtimeSessionHint,
+  scopeArg,
   writePlanApprovalResponse,
   writeProtectedResponse,
   isoTimestamp,
+  isScopeName,
   markProtectedQuestionReplied,
   readProtectedResponse,
+  PROTECTED_RESPONSE_REPLIES_MAX,
   PROTECTED_RESPONSE_WORDS_MAX_CHARS,
   writeWorkspaceSourceSnapshot,
   type GuardRemedyOp,
@@ -158,7 +164,7 @@ import {
   TESTING_POSTURE_SUBCOMMANDS,
 } from "./aidlc-lib.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
-import { noReplySince } from "./aidlc-message-store.ts";
+import { noReplySince, personTurnStands, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
 import { aidlcToolInvocation, entrySkillInvocation, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer, isOneOfChoices, pickerOffersChoices, protectedQuestionPick,
@@ -1846,16 +1852,21 @@ export function approvedPlanChangeLine(
 
 /**
  * Write the approved plan, test instructions and answer back: the person said
- * to go back to the plan they approved. Their word since their last decision
- * stands behind it: the agent going back on its own would undo an edit that
- * may be the person's.
+ * to go back to the plan they approved. Their turn with no decision after it
+ * stands behind it, or the message the agent names (`message`, the request
+ * form: "approve, and go back" in one message): the agent going back on its
+ * own would undo an edit that may be the person's.
  */
-export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTarget): string {
-  if (!personSpokeSinceGate(projectDir, { requests: true })) {
-    throw new Error(
+export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTarget, message?: string): string {
+  if (message !== undefined) {
+    const proof = proveMessage(projectDir, message, "request", { request: true });
+    if ("refusal" in proof) throw new Error(proof.refusal);
+  } else if (!personTurnStands(projectDir, "plain", { requests: true })) {
+    throw new Error(requestMessageStep(
+      projectDir,
       "The person has not said to go back to the plan they approved. Ask them \"" + APPROVED_PLAN_UNDO_QUESTION +
         "\" and run this again only after they say yes.",
-    );
+    ));
   }
   const authority = resolveCodeGenerationAuthority(projectDir, target);
   const copy = readApprovedPlanCopy(projectDir, authority);
@@ -2634,11 +2645,17 @@ const PART_RECEIPT_RE = /^[A-Za-z0-9_-]{8}$/;
  * ones. The run-stage may plan, build, or close a gate, so the line names the
  * step only as the stage's own. Null when no rules part is in flight.
  */
-export function codeGenerationRulesArrivingReason(marker: ActiveDirectiveMarker | null): string | null {
+export function codeGenerationRulesArrivingReason(
+  marker: ActiveDirectiveMarker | null,
+  projectDir?: string,
+): string | null {
   if (marker?.version !== 2 || marker.stage !== CODE_GENERATION_STAGE || marker.kind !== "load-steering") {
     return null;
   }
   const engine = aidlcToolInvocation("orchestrate");
+  // With the project known, the fresh `next` is the step's own: an isolated
+  // run's parts are started again by that run's `next` (stepNextCommand).
+  const next = projectDir === undefined ? `${engine} next` : stepNextCommand(projectDir, marker);
   const loaded = `The Code Generation rules are still arriving (part ${marker.part} of ${marker.parts} has been loaded). ` +
     `Run each command named here ${AS_ITS_OWN_COMMAND}.`;
   const after = "follow each part until the Code Generation step itself arrives; nothing is built or handed to a worker before then.";
@@ -2647,8 +2664,8 @@ export function codeGenerationRulesArrivingReason(marker: ActiveDirectiveMarker 
   const receipt = marker.continue_token;
   return receipt !== undefined && PART_RECEIPT_RE.test(receipt)
     ? `${loaded} Run \`${engine} continue ${receipt}\` and ${after} ` +
-      `If you do not have the earlier parts, run \`${engine} next\` instead.`
-    : `${loaded} Run \`${engine} next\` and ${after}`;
+      `If you do not have the earlier parts, run \`${next}\` instead.`
+    : `${loaded} Run \`${next}\` and ${after}`;
 }
 
 function refuseWhileRulesArrive(projectDir: string): void {
@@ -2658,7 +2675,7 @@ function refuseWhileRulesArrive(projectDir: string): void {
   } catch {
     return;
   }
-  const reason = codeGenerationRulesArrivingReason(marker);
+  const reason = codeGenerationRulesArrivingReason(marker, projectDir);
   if (reason !== null) throw new Error(reason);
 }
 
@@ -3220,9 +3237,41 @@ export function codeGenerationPlanWaits(projectDir: string, units: ReadonlyArray
   });
 }
 
-/** The step a completion gets while its plan waits: the plan's question is `next`'s. */
-export function codeGenerationPlanWaitsStep(): string {
-  return `The code plan is not approved yet: run \`${aidlcToolInvocation("orchestrate")} next\` and follow the step it prints.`;
+/**
+ * An isolated Code Generation run's own `next`, with the scope it started
+ * with: a bare `next` routes the main workflow and, with no workflow, `next`
+ * takes the default scope, which the open attempt refuses. A recorded scope
+ * that is not a scope name is not put in a command.
+ */
+export function isolatedCodeGenerationNext(scope: string | null): string {
+  return `${aidlcToolInvocation("orchestrate")} next --stage code-generation --single` +
+    (scope !== null && isScopeName(scope) ? ` --scope ${scopeArg(scope)}` : "");
+}
+
+/**
+ * The `next` that issues a step again: an isolated Code Generation run's own
+ * while the step is that run's (its marker or directive says `single`) and its
+ * attempt is open, else the bare `next`. An audit that cannot be read keeps the
+ * bare `next`.
+ */
+export function stepNextCommand(projectDir: string, step: { single?: boolean; stage?: string } | null): string {
+  const workflow = `${aidlcToolInvocation("orchestrate")} next`;
+  if (step?.single !== true || step.stage !== CODE_GENERATION_STAGE) return workflow;
+  try {
+    if (!singleStageAttemptIsOpen(projectDir, CODE_GENERATION_STAGE)) return workflow;
+    return isolatedCodeGenerationNext(singleStageAttemptScope(projectDir, CODE_GENERATION_STAGE));
+  } catch {
+    return workflow;
+  }
+}
+
+/**
+ * The step a completion gets while its plan waits: the plan's question is
+ * `next`'s, and an isolated run's is its own (isolatedCodeGenerationNext).
+ */
+export function codeGenerationPlanWaitsStep(isolated?: { scope: string }): string {
+  const next = isolated === undefined ? `${aidlcToolInvocation("orchestrate")} next` : isolatedCodeGenerationNext(isolated.scope);
+  return `The code plan is not approved yet: run \`${next}\` and follow the step it prints.`;
 }
 
 function recordCodeGenerationContinuation(
@@ -3985,8 +4034,12 @@ function writeLegacyRecoveryChoice(projectDir: string, session: string, challeng
 /**
  * The person's yes to the legacy recovery question, as the conductor read it
  * from their reply in any words: the engine writes the response from its own
- * choice, once a reply of theirs came in this chat after the question was asked
- * (a question an older engine asked, with no time kept, takes any reply).
+ * choice, once a reply of theirs came in this chat after the question was asked.
+ * A question an older engine asked kept no time and takes one when this engine
+ * shows it (ensurePlanApprovalLegacyRecoveryChallenge). Not yet shown, the reply
+ * stands after Code Generation started, never on any message the chat ever sent;
+ * with no start on record either, it is timed from now, so their next reply
+ * answers it.
  */
 export function recordPlanApprovalLegacyRecoveryAnswer(
   projectDir: string,
@@ -3995,7 +4048,12 @@ export function recordPlanApprovalLegacyRecoveryAnswer(
   return withAuditLock(projectDir, () => {
     const recovery = readPlanApprovalLegacyRecoveryChallenge(projectDir, session);
     if (recovery === null) return "no-question";
-    if (noReplySince(projectDir, session, recovery.createdAt ?? new Date(0).toISOString())) return "no-reply";
+    let since = recovery.createdAt ?? stageReplyFloorTime(projectDir, "code-generation");
+    if (since === null) {
+      since = isoTimestamp();
+      writePlanApprovalLegacyRecoveryChallenge(projectDir, { ...recovery, createdAt: since });
+    }
+    if (noReplySince(projectDir, session, since)) return "no-reply";
     writeLegacyRecoveryChoice(projectDir, session, recovery.challengeId);
     return "recorded";
   });
@@ -4066,7 +4124,7 @@ function protectedQuestionFromAnotherChat(projectDir: string, session: string): 
 // picker asked this question. Nothing is inferred from the words here.
 export function recordProtectedHumanResponse(
   projectDir: string, session: string, responseText: string, questionText: string | null,
-  picker?: PlanApprovalPickerQuestion,
+  picker?: PlanApprovalPickerQuestion, messageId?: string,
 ): { recorded: boolean } {
   return withAuditLock(projectDir, () => {
     const text = responseText.trim();
@@ -4079,8 +4137,11 @@ export function recordProtectedHumanResponse(
     }
     if (!text || isNonAnswer(text)) return { recorded: false };
     const previous = readProtectedResponse(projectDir, session);
-    const earlier = previous?.challengeId === question.challengeId ? previous.words : undefined;
+    const same = previous?.challengeId === question.challengeId;
+    const earlier = same ? previous.words : undefined;
     const words = (earlier ? `${earlier}\n${text}` : text).slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
+    const replies = [...(same ? previous.replies ?? [] : []), { ...(messageId ? { messageId } : {}), words: text }]
+      .slice(-PROTECTED_RESPONSE_REPLIES_MAX);
     // A pick in a question box that asked this question (or, with no question
     // text, the one question open) is the host's own structure and is kept as
     // the choice; a typed reply, in any words, is the conductor's to read.
@@ -4092,6 +4153,7 @@ export function recordProtectedHumanResponse(
       responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
       words,
       at: isoTimestamp(),
+      replies,
     });
     return { recorded: true };
   });
@@ -4130,10 +4192,10 @@ export function personAskedForPlanApprovalOverride(projectDir: string): boolean 
   return humanTurnState(projectDir, { replies: true }) === "acted";
 }
 
-/** Their words for the record: their latest reply since the offer, when the host passed any. */
-export function planApprovalOverridePersonReply(projectDir: string): string | null {
+/** Their latest reply since the offer, for the record: its message, and its words when the host passed any. */
+export function planApprovalOverridePersonReply(projectDir: string): { messageId: string; words: string | null } | null {
   const offered = engineAskMark(projectDir, PLAN_APPROVAL_OVERRIDE_OFFERED);
-  return offered === null ? null : latestPersonTurn(projectDir, { repliesAfter: offered })?.words ?? null;
+  return offered === null ? null : latestReplyAfter(projectDir, offered);
 }
 
 /** The refusal when no such reply is on record, with the step for an unattended run or a reply not recorded. */
@@ -5527,6 +5589,15 @@ function targetFromArgs(
   throw new Error(`${subcommand} requires exactly one of --unit <unit> or --stage-level`);
 }
 
+// The message the agent names with `--message <id>`, the one the person asked in.
+function messageFromArgs(args: string[]): string | undefined {
+  const at = args.lastIndexOf("--message");
+  if (at < 0) return undefined;
+  const id = args[at + 1];
+  if (!id || id.startsWith("--")) throw new Error("--message requires the id of the person's message");
+  return id;
+}
+
 // What the human-turn hook recorded for the pending Plan Approval question,
 // as the same notice line the hook adds. Several harnesses never show the
 // conductor that line, so this read gives them the same next step.
@@ -5697,7 +5768,7 @@ export function main(argv: string[]): void {
         console.log(recordedPlanApprovalReply(projectDir, replySession(projectDir, argv)));
         return;
       case "restore":
-        console.log(restoreApprovedPlan(projectDir, targetFromArgs(argv, "restore")));
+        console.log(restoreApprovedPlan(projectDir, targetFromArgs(argv, "restore"), messageFromArgs(argv)));
         return;
       default:
         throw new Error(

@@ -44,6 +44,10 @@ two invocation policies:
 | `dist/` | `bun <harness-dir>/tools/aidlc.ts` | `bun <harness-dir>/tools/` |
 | `dist-release/` | `aidlc` | `aidlc ` |
 
+Where core prose says how a questions file letters a question's options, it
+writes `{{OPTION_LETTERS}}`: `A-E`, or the shorter range the manifest's
+`questionOptions` sets (below).
+
 The transform applies to Markdown and structured command surfaces
 (`.json`/`.toml`/`.hook`), and to invocation tokens in TypeScript; it is not a
 general source rewrite. The runtime `harnessDir()` seam in
@@ -139,6 +143,12 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   (`HOST_LABELS` in `core/tools/aidlc-runtime-paths.ts`), never from the
   project-editable `productName`; add your harness there, or it reads "this
   assistant".
+- `questionOptions` (optional) - for a host whose structured-question box shows
+  fewer than five options besides its own Other row: the number it shows, the
+  one its `question-rendering.md` names. The questions file then letters each
+  question's options from A to that letter before `X. Other`, so the agent puts
+  every question in the box whole. Absent, the file uses A-E. Only Claude Code
+  declares it (4, for AskUserQuestion).
 - `agentFinishRecorded` (optional) - `{ env: [...] }`, only for a host whose own
   stop event runs the `log-subagent` hook (its `SUBAGENT_COMPLETED` row) before
   the agent that dispatched a helper sees the helper's result, for every
