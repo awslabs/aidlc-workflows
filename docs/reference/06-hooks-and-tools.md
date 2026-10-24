@@ -823,7 +823,8 @@ decide. All four fence hooks call it before they refuse.
 The check is the fence as `fenceCheckName` names it: `plan re-approval` for
 the plan-approval fence (lowered, it lets only an edited plan go on without
 being asked about again; plan approval itself stays as set), and the fence's
-id for the others.
+id for the others, and also for a plan built with plan approval off (a skipped
+receipt), since nobody approved it.
 The source is the text `formatFence` prints inside its parentheses, such as
 `set by you`, `env AIDLC_DISABLE_PLAN_APPROVAL_GUARD`, or
 `guard policy off (from scope classic)`. Without detail, the final sentence
