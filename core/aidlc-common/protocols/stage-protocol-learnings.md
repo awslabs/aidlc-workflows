@@ -66,8 +66,9 @@ When this module is listed, trigger after Step N-1 (completion message rendered)
    `description` and `matches` as strings, plus optional `timeout_seconds`
    (number) and `category`. Either entry may carry an optional `source` field
    set to `"orchestrator"` (the default) or `"user_addition"`, which lands on
-   the audit row. A malformed entry fails the whole call before the audit lock
-   is taken, so nothing is half-written.
+   the audit row. An entry with `keep: false` is a candidate the person did not
+   keep and is left out. A malformed entry fails the whole call before the audit
+   lock is taken, so nothing is half-written.
 
    The tool rejects a `--slug` that differs from the selections file's `stage_slug`, then verifies inside one `withAuditLock` transaction that the pinned space and non-null intent record still exist. It deduplicates against both the fresh audit snapshot and hashes emitted earlier in the same batch, using a `<!-- cid:<intent-slug>:<stage-slug>:<content-hash> -->` marker whose content hash is the full SHA-256 digest of the learning text. A crashed run therefore recovers without double-appending, while distinct learning text cannot share a truncated persisted identity:
    - **Learning** → appends a practice line under the orchestrator-routed heading in `<scope>.md` (scope ∈ {project, team}): `- <text> (learned YYYY-MM-DD) <!-- cid:... -->`. Ensure-exists the heading first, so a routed heading the file doesn't yet carry is created rather than throwing. Emits `RULE_LEARNED` (with `Source: orchestrator | user_addition`, `Heading: <routed>`).
