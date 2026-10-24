@@ -330,6 +330,7 @@ import {
   commandAtPersonsTerminal,
   unattendedHumanPresenceHint,
   personsGateReply,
+  personsWordsKept,
   planApprovalAskIsOpen,
   planApprovalRuntimeFile,
   readPlanApprovalRuntimeRecord,
@@ -3556,13 +3557,20 @@ function openApprovalGateStage(stateContent: string): string | null {
 
 // The person's replies in this chat a decision would stand on (personsGateReply),
 // by id and time only: the agent has their words, and names the one its reading
-// came from when it is not all of them. None when the record cannot say.
-function replyIds(projectDir: string, stage: string): Array<{ id: string; at: string }> {
+// came from when it is not all of them. `wordsKept`: an answer recorded now
+// carries their words as Person Reply, as `log answer` reads the same reply.
+// None when the record cannot say.
+function chatReplies(projectDir: string, stage: string): { replies: Array<{ id: string; at: string }>; wordsKept: boolean } {
   try {
-    return personsGateReply(projectDir, resolveInvokingSessionId(projectDir), stage).replies;
+    const reply = personsGateReply(projectDir, resolveInvokingSessionId(projectDir), stage);
+    return { replies: reply.replies, wordsKept: reply.words !== null };
   } catch {
-    return [];
+    return { replies: [], wordsKept: false };
   }
+}
+
+function replyIds(projectDir: string, stage: string): Array<{ id: string; at: string }> {
+  return chatReplies(projectDir, stage).replies;
 }
 
 function replyIdsNote(replies: Array<{ id: string; at: string }>, command: string): string {
@@ -3602,8 +3610,9 @@ function questionOptions(block: string): string[] {
 
 // How the person's answer to the stage's open question is recorded, named
 // from the question's own row, so a new chat, which never saw it asked, has
-// all it needs.
-function openQuestionAnswer(stage: string, block: string): string {
+// all it needs. `wordsKept`: the person's words go on the answer's row as
+// Person Reply (personsGateReply, personsWordsKept).
+function openQuestionAnswer(stage: string, block: string, wordsKept: boolean): string {
   const checkpoint = auditBlockField(block, "Checkpoint");
   const unit = auditBlockField(block, "Unit");
   const batch = auditBlockField(block, "Batch number");
@@ -3621,9 +3630,16 @@ function openQuestionAnswer(stage: string, block: string): string {
   // their options offered both.
   const options = questionOptions(block);
   const offered = options.length === 0 ? APPROVAL_GATE_CHOICES : protectedChoices(options);
-  const numbered = offered === null ? ""
-    : `${offered.length === 1 ? "its one choice is" : "its choices are"} ` +
-      `${offered.map((choice, at) => `${at + 1}. ${choice}`).join(" and ")}; `;
+  const numberedChoices = (choices: readonly string[]) =>
+    `${choices.length === 1 ? "its one choice is" : "its choices are"} ` +
+    `${choices.map((choice, at) => `${at + 1}. ${choice}`).join(" and ")}; `;
+  const numbered = offered === null ? "" : numberedChoices(offered);
+  // Any other question with choices takes the choice the agent read from the
+  // reply, where its pick is counted (blockingSensorPicks), and the person's
+  // own words go on the row beside it. Where nothing keeps their words, their
+  // reply itself is the record, so it is never lost; a checkpoint question
+  // (the summary confirmation) records only a choice either way.
+  const reading = options.length > 0 && (wordsKept || checkpoint !== null);
   // The verification command and a Construction policy question name their
   // own flags and the setter an approval runs; the command itself stays in its
   // file, never on a shell line.
@@ -3646,7 +3662,9 @@ function openQuestionAnswer(stage: string, block: string): string {
         `\`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)}${flags} ` +
         `--details '<Approve or Request Changes>'\`; after an Approve, run \`${aidlcToolInvocation("state")} ${setter}\` and ` +
         "say its notice line"
-      : `record it with \`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)} --details '<their exact reply>'\` ` +
+      : `${reading ? `${numberedChoices(options)}record the choice they made, as you read it from their reply, with` : "record it with"} ` +
+        `\`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)} ` +
+        `--details '${reading ? "<their choice>" : "<their exact reply>"}'\` ` +
         "(with the checkpoint flags that question was logged with, when it has them)";
 }
 
@@ -3661,10 +3679,10 @@ function openQuestionReplyDirective(
   stage: string,
   block: string,
   requestId: string,
-  replies: Array<{ id: string; at: string }>,
+  { replies, wordsKept }: ReturnType<typeof chatReplies>,
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
-  const answer = openQuestionAnswer(stage, block);
+  const answer = openQuestionAnswer(stage, block, wordsKept);
   const decision = auditBlockField(block, "Decision");
   const choices = questionOptions(block);
   const asked = decision
@@ -3747,11 +3765,13 @@ function openQuestionAgainDirective(projectDir: string, stage: string, block: st
   const decision = auditBlockField(block, "Decision");
   if (!decision) return null;
   const choices = questionOptions(block);
+  // Their reply is not in yet: whether it will be kept is read from the turn that ran this.
+  const answer = openQuestionAnswer(stage, block, personsWordsKept(projectDir));
   return printDirective(
     `Stage "${stage}" has a question you asked that the person has not answered yet. Show it to them again, word ` +
       `for word as it was asked, with its choices, and end your turn: ${JSON.stringify(decision)}` +
       `${choices.length > 0 ? `, with the choices ${choices.map((choice) => JSON.stringify(choice)).join(", ")}` : ""}. ` +
-      `When they answer it, ${openQuestionAnswer(stage, block)}, then carry on with "${stage}" from where you asked ` +
+      `When they answer it, ${answer}, then carry on with "${stage}" from where you asked ` +
       `and run bare \`${aidlcToolInvocation("orchestrate")} next\` the next time you need the engine. If they say ` +
       "something else, pass their words to `next` and follow what it returns.",
   );
@@ -10835,7 +10855,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
-      emit(openQuestionReplyDirective(open.stage, open.block, words.id, replyIds(pd, open.stage)));
+      emit(openQuestionReplyDirective(open.stage, open.block, words.id, chatReplies(pd, open.stage)));
       return;
     }
     // Words at the engine's recovery question, once it holds the person's

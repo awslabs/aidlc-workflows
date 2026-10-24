@@ -1010,6 +1010,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${LIB}#plainSummaryAttemptRecorded`]: { use: "keeps", why: "the summary's answer as the agent recorded it (Details), for its recovery" },
   [`${LIB}#isSummaryConfirmationChoice`]: { use: "keeps", why: "as above", from: [`${LIB}#plainSummaryAttemptRecorded`] },
   [`${ORCH}#withKeptReplies`]: { use: "keeps", why: "the resume re-show: hands the agent the replies a stage kept" },
+  [`${ORCH}#chatReplies`]: { use: "keeps", why: "the presence shape: whether an answer recorded now carries their words (words !== null), for the step at an open question" },
   // next's request (S2b): kept and quoted, never compared; what was read is the message id.
   [`${ORCH}#routeNext`]: { use: "decides", why: "next itself: quotes and previews the request (quoteCommandArgument) and whether one is there" },
   [`${ORCH}#freshWorkRoute`]: { use: "decides", why: "hands the request to the plan proposal step", from: [`${ORCH}#routeNext`] },

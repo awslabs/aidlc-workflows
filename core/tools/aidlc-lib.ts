@@ -30049,6 +30049,24 @@ export function personsGateReply(projectDir: string, session: string | null, sta
   }
 }
 
+// Whether the person's next reply in this chat will be on an answer's row in
+// their own words (personsGateReply): the engine can name the chat, and the
+// human-turn hook kept its latest turn here as a message. By structure only,
+// before they reply; once their reply is in, personsGateReply's words say it
+// exactly. False with hooks off, a host whose prompt hook kept nothing, a chat
+// the engine cannot name, or a record it cannot read.
+export function personsWordsKept(projectDir: string): boolean {
+  try {
+    const session = resolveInvokingSessionId(projectDir);
+    if (session === null) return false;
+    const turn = ownShardRows(projectDir).mine
+      .findLast((row) => row.event === "HUMAN_TURN" && auditBlockField(row.block, "Session") === session);
+    return turn !== undefined && auditBlockField(turn.block, "Message Id") !== null;
+  } catch {
+    return false;
+  }
+}
+
 // A decision's row names every message its window stands on, oldest first,
 // when there are several (Message Ids, comma-separated), beside the latest
 // (Message Id): the row's words and its ids then match. One message, or the
