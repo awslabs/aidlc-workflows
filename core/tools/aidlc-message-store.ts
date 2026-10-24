@@ -498,10 +498,11 @@ function onlyItsOwnDecisionAfter(
   return decisions.size <= 1;
 }
 
-// Whether the only decision recorded after `message` is one reopen (the rows of
-// one redo or jump back over its Units, reopenOf) naming no other message: the
-// message asked for it, so a change asked for beside it still answers the
-// question that reopen brought up. Ids, times and the engine's own rows only.
+// Whether the only decision recorded after `message` is one reopen (the rows
+// of one redo, jump back or change over its Units, reopenOf) naming no other
+// message: the message asked for it, so a change asked for beside it still
+// answers the question that reopen brought up. Ids, times and the engine's own
+// rows only.
 function onlyItsReopenAfter(rows: readonly AuditShardEvent[], message: Pick<StoredMessage, "id" | "at">): boolean {
   let reopen: string | null = null;
   for (const row of rows) {
