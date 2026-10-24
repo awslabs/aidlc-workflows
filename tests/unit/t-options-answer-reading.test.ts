@@ -1,5 +1,7 @@
 // covers: function:openQuestionAnswer, function:personsWordsKept, function:blockingSensorPicks
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-log:answer, hook:aidlc-review-freeze
+// covers: function:hasBlockingSensorOverrideAuthorization, function:blockingSensorOverrideReport
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-log:answer
+// covers: hook:aidlc-review-freeze
 //
 // A question with choices records the choice the agent read from the person's reply, with their own words kept beside
 // it (Arden 2026-10-24). Live on Codex the blocking check ("Fix findings" / "Override blocking sensors") was shown
@@ -12,6 +14,12 @@
 // way; with no human turn on record that plain answer then needs the presence switch, which the hooks-off case sets.
 // A question with no choices keeps the reply step. The pick is read from the agent's reading, never from their words.
 //
+// After an Override blocking sensors pick the gate is still shut, and live on Codex the step's bare `next` handed back
+// the stage itself: the agent's edit of the reviewed document met the review freeze, and the person read a recovery
+// question about a check they never touched instead of their gate. While the pick stands (the state tool's own test),
+// `next` names the report that carries it; a Request Changes or a later question on the stage spends it, and Fix
+// findings is the stage's own work.
+//
 // Mechanism: function. The shipped human-turn hook, `next`, the `log answer` command the step names (its placeholder
 // filled the way a reader fills it), and the shipped review-freeze hook, over a real record; no agent runs.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -20,9 +28,10 @@ import { dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, blockingSensorPicks, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { STAGE, buildQuestion } from "../harness/aidlc-answers-corpus.ts";
-import { LOG, SESSION, env, exec, next, say, type Exec } from "../harness/aidlc-input-corpus.ts";
+import { LOG, ORCHESTRATE, SESSION, env, exec, next, say, type Exec } from "../harness/aidlc-input-corpus.ts";
 import {
-  AIDLC_SRC, FIXTURES_DIR, cleanupTestProject, createOrchestrationTestProject, seededRecordDir, seededStateFile,
+  AIDLC_SRC, FIXTURES_DIR, cleanupTestProject, createOrchestrationTestProject, recordArtifactWriteViaHook, seededRecordDir,
+  seededStateFile,
 } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
@@ -212,5 +221,103 @@ describe("t-options-answer-reading: an options question records the agent's read
     expect(auditBlockField(answers(proj).at(-1)!.block, "Person Reply")).toBe("Fix findings");
     expect(blockingSensorPicks(readAuditShardEvents(proj), STAGE).size).toBe(0);
     expect(await freeze(proj)).toBe(2);
+  });
+});
+
+const OVERRIDE_REPORT = 'report --stage requirements-analysis --result awaiting-approval --override-blocking-sensors ' +
+  '--user-input "Override blocking sensors"';
+
+/** The blocking question shown again after a resume, and the person's reply recorded as the choice the agent read. */
+async function pickedAfterResume(proj: string, read: string, reply: string): Promise<void> {
+  await buildQuestion(proj, "stage-gate-sensor-failure");
+  await say(proj, "/aidlc", "claude");
+  const shown = await next(proj, ["--resume"]);
+  await say(proj, reply, "claude");
+  const recorded = await followStep(proj, String(shown.directive?.message ?? ""), read, reply);
+  expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+}
+
+/** The report a step names, run as the agent runs it, in the shipped tree. */
+async function runReport(proj: string, message: string): Promise<Exec> {
+  const command = /`([^`]*aidlc-orchestrate\.ts report [^`]*)`/.exec(message)?.[1];
+  expect(command, message).toBeDefined();
+  const argv = ((command as string).match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map((part) => part.replace(/^["']|["']$/g, ""));
+  return exec([process.execPath, join(dirname(AIDLC_SRC), argv[1]), ...argv.slice(2), "--project-dir", proj],
+    { cwd: proj, env: env(proj) });
+}
+
+describe("t-options-answer-reading: after Override blocking sensors, next opens the person's gate", () => {
+  test("after Override blocking sensors is recorded, next names the override report and the gate opens with no recovery question", async () => {
+    const proj = project();
+    await pickedAfterResume(proj, "Override blocking sensors", "just approve it");
+    const step = await next(proj, []);
+    expect(step.directive?.kind, step.out).toBe("print");
+    const message = String(step.directive?.message ?? "");
+    expect(message).toContain(OVERRIDE_REPORT);
+    expect(message).toContain("show the gate with what it returns");
+
+    const reported = await runReport(proj, message);
+    const out = reported.stdout + reported.stderr;
+    expect(reported.status, out).toBe(0);
+    expect(out).not.toContain('"ask_type":"guard-recovery"');
+    expect(out).toContain("Requirements Analysis is ready for your review");
+    expect(readAuditShardEvents(proj).at(-1)?.event, out).toBe("STAGE_AWAITING_APPROVAL");
+  });
+
+  test("Request Changes at the review freeze's recovery question spends the pick, and next hands back the stage", async () => {
+    const proj = project();
+    await pickedAfterResume(proj, "Override blocking sensors", "just approve it");
+    // The agent edits the reviewed document anyway: the freeze refuses it and asks the person which way to go on.
+    expect(await freeze(proj)).toBe(2);
+    const recovery = await next(proj, []);
+    expect(recovery.directive?.ask_type, recovery.out).toBe("guard-recovery");
+    const feedback = "add a rule for titles made only of spaces";
+    await say(proj, `1, ${feedback}`, "claude");
+    const rejected = await exec([process.execPath, ORCHESTRATE, "report", "--stage", STAGE, "--result", "rejected",
+      "--user-input", "Request Changes", "--reason", feedback, "--project-dir", proj], { cwd: proj, env: env(proj) });
+    expect(rejected.status, rejected.stdout + rejected.stderr).toBe(0);
+    const after = await next(proj, []);
+    expect(after.out).not.toContain("--override-blocking-sensors");
+    expect(after.directive?.kind, after.out).toBe("run-stage");
+  });
+
+  test("Fix findings hands back the stage, with no override named", async () => {
+    const proj = project();
+    await pickedAfterResume(proj, "Fix findings", REPLY);
+    const step = await next(proj, []);
+    expect(step.directive?.kind, step.out).toBe("run-stage");
+    expect(step.out).not.toContain("--override-blocking-sensors");
+  });
+
+  test("an override report refused for another reason, with nothing answered since, gets the same step again", async () => {
+    const proj = project();
+    await pickedAfterResume(proj, "Override blocking sensors", "just approve it");
+    const first = await next(proj, []);
+    const message = String(first.directive?.message ?? "");
+    expect(message).toContain(OVERRIDE_REPORT);
+    // The confirmed summary changes before the report: the report refuses on it, not on the override.
+    const questions = join(seededRecordDir(proj), "inception", STAGE, `${STAGE}-questions.md`);
+    writeFileSync(questions, readFileSync(questions, "utf-8").replace("Should a blank title be refused?",
+      "Should a blank or whitespace-only title be refused?"), "utf-8");
+    recordArtifactWriteViaHook(proj, questions, "Edit");
+    const refused = await runReport(proj, message);
+    expect(refused.stdout + refused.stderr).toContain("SUMMARY_CONTENT_STALE");
+    const again = await next(proj, []);
+    expect(again.directive?.kind, again.out).toBe("print");
+    expect(String(again.directive?.message ?? "")).toBe(message);
+
+    // Their pick at that recovery question, carried out, is a later question on the stage: it spends the override.
+    await say(proj, "1", "claude");
+    const picked = await exec([process.execPath, LOG, "answer", "--stage", STAGE, "--checkpoint", "guard-recovery",
+      "--details", "reconfirm-summary", "--project-dir", proj], { cwd: proj, env: env(proj) });
+    expect(picked.stdout, picked.stderr).toContain('"recorded":"reconfirm-summary"');
+    writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]: Looks correct\n", "[Answer]: \n"), "utf-8");
+    recordArtifactWriteViaHook(proj, questions, "Edit");
+    const asked = await exec([process.execPath, LOG, "decision", "--checkpoint", "summary-confirmation", "--stage", STAGE,
+      "--questions-file", questions, "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes",
+      "--project-dir", proj], { cwd: proj, env: env(proj) });
+    expect(asked.status, asked.stdout + asked.stderr).toBe(0);
+    const spent = await next(proj, []);
+    expect(spent.out).not.toContain("--override-blocking-sensors");
   });
 });

@@ -318,8 +318,11 @@ The operator can fix the findings and retry, or make a separate explicit
 override decision. The conductor records a `DECISION_RECORDED` offering
 `Fix findings,Override blocking sensors`, waits for a new human turn, records
 the exact `QUESTION_ANSWERED`, then retries the gate report with
-`--override-blocking-sensors --user-input "Override blocking sensors"`. A bare
-flag, an unoffered/paraphrased choice, a missing human-backed receipt, or
+`--override-blocking-sensors --user-input "Override blocking sensors"`. While
+that pick stands (nothing asked, answered or sent back on the stage since it,
+and the gate not yet open), `next` names the same report instead of the stage,
+outside autonomy, team Unit gates and a Unit step a solo walk owes first. A
+bare flag, an unoffered/paraphrased choice, a missing human-backed receipt, or
 autonomous mode is refused. The recorded answer names its option by label or
 by its number on the offered list. Fix findings starts a new attempt the way
 Request Changes does: the reviewed outputs open for the fix, and the retried

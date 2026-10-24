@@ -61,7 +61,8 @@ import {
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   BLOCKING_SENSOR_OVERRIDE_DECISION,
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
-  blockingSensorPicks,
+  blockingSensorOverrideReport,
+  hasBlockingSensorOverrideAuthorization,
   BoltIdentityError,
   type CheckboxState,
   checkSummaryConfirmationEvidence,
@@ -4104,49 +4105,6 @@ function verifyGateSensorArtifactsUnchanged(
   }
 }
 
-function auditEventIsAfter(
-  later: ReturnType<typeof readAuditShardEvents>[number],
-  earlier: ReturnType<typeof readAuditShardEvents>[number],
-): boolean {
-  if (later.shard === earlier.shard) return later.pos > earlier.pos;
-  return later.timestamp > earlier.timestamp;
-}
-
-function hasBlockingSensorOverrideAuthorization(
-  pd: string,
-  slug: string,
-): boolean {
-  const rows = readAuditShardEvents(pd);
-  const stageRows = rows.filter((row) => {
-    const workflow = auditField(row.block, "Workflow");
-    return auditField(row.block, "Stage") === slug &&
-      !workflow?.startsWith("single-stage:");
-  });
-  const boundaries = stageRows.filter((row) =>
-    row.event === "STAGE_STARTED" ||
-    row.event === "STAGE_AWAITING_APPROVAL" ||
-    row.event === "GATE_REJECTED"
-  );
-  const interactions = stageRows.filter((row) =>
-    row.event === "DECISION_RECORDED" ||
-    row.event === "QUESTION_ANSWERED"
-  );
-  for (const [answer, choice] of blockingSensorPicks(rows, slug)) {
-    if (choice !== BLOCKING_SENSOR_OVERRIDE_CHOICE) continue;
-    if (!boundaries.every((boundary) => auditEventIsAfter(answer, boundary))) {
-      continue;
-    }
-    if (
-      interactions.every((row) =>
-        row === answer || auditEventIsAfter(answer, row)
-      )
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function enforceBlockingGateSensors(
   pd: string,
   stateContent: string,
@@ -4197,9 +4155,8 @@ function enforceBlockingGateSensors(
       `--decision "${BLOCKING_SENSOR_OVERRIDE_DECISION}" --options ` +
       `"${BLOCKING_SENSOR_OVERRIDE_OPTIONS.join(",")}", present those choices, and ` +
       `after the human selects "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" record it with ` +
-      `${aidlcToolInvocation("log")} answer. Then retry: ${aidlcToolInvocation("orchestrate")} ` +
-      `report --stage ${slug} --result ${reportResult} --override-blocking-sensors ` +
-      `--user-input "${BLOCKING_SENSOR_OVERRIDE_CHOICE}". Autonomous mode cannot override.`,
+      `${aidlcToolInvocation("log")} answer. Then retry: ` +
+      `${blockingSensorOverrideReport(slug, reportResult)}. Autonomous mode cannot override.`,
   );
 }
 
