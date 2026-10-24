@@ -995,8 +995,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
 
     test("a reshape answer from the pick list carries the reply through the record switch to the composer", () => {
       seedTwoIntentsNoCursor();
-      const first = JSON.parse(next(["fix the broken login button"]).stdout.trim());
-      const ask = JSON.parse(runEmittedCommand(first.confirm_command).stdout.trim());
+      const ask = JSON.parse(next(["fix the broken login button"]).stdout.trim());
       expect(ask.ask_type).toBe("new-work-routing");
       const [target] = ask.reshape_commands;
       const answer = reshapeNamed(routeNamed(OTHER_ANSWER).message);
