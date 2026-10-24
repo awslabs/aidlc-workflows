@@ -192,6 +192,9 @@ Every run command in this file MUST be scoped to this unit only, using exact
 test file paths or an exact unit filter. A bare project-wide command like
 `npm test` is not acceptable. Build and Test executes every unit's commands,
 so an unscoped command would rerun the whole suite once per unit.
+Built side by side, this Unit has its own copy of the project with none of
+the other Units of its batch in it: plan code and tests that pass with this
+Unit's code, the Units it depends on, and the project as it stands.
 
 Start the plan with a short `## Summary` section of three lines. The engine
 shows them to the person when it asks for approval:
