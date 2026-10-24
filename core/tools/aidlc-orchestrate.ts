@@ -3100,6 +3100,20 @@ function resumeAgain(flags: ParsedFlags): string {
   return ["next --resume", ...typedSettingModifiers(flags).map((modifier) => `--${modifier}`)].join(" ");
 }
 
+// The jump a scope or setting was typed with, named after the change so the
+// jump runs in the work as changed (the guide's `/aidlc --scope enterprise
+// --stage code-generation`), with the Units it was typed for.
+function jumpAfterChange(flags: ParsedFlags): string {
+  return [
+    `${aidlcToolInvocation("orchestrate")} next`,
+    flags.stage ? `--stage ${shellArg(flags.stage)}` : `--phase ${shellArg(flags.phase ?? "")}`,
+    ...(flags.jumpUnit !== undefined ? [`--unit ${shellArg(flags.jumpUnit)}`] : []),
+    ...(flags.everyUnit ? ["--every-unit"] : []),
+    ...(flags.change ? ["--change"] : []),
+    ...(flags.resume ? ["--resume"] : []),
+  ].join(" ");
+}
+
 function configSetCommand(modifiers: string[], personWords = false): string {
   return [
     aidlcDispatcherInvocation(`config set ${modifiers[0]}`),
@@ -10485,9 +10499,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
 
   // Branch 5 — scope or configuration changes against an existing workflow.
   // Changing scope or config is a MUTATION, so `next` names the move (print) and the conductor
-  // runs the tool; it never mutates here. Fires only when a modifier is present
-  // WITHOUT an explicit --stage/--phase jump (those take the jump path below).
-  if (stateContent && !flags.stage && !flags.phase) {
+  // runs the tool; it never mutates here. Fires only when a modifier is present.
+  // A --stage/--phase jump typed with it is named after the change, so neither
+  // is dropped; a jump with nothing to change takes the jump path below.
+  if (stateContent) {
+    const jump = flags.stage || flags.phase ? jumpAfterChange(flags) : null;
     // Named stage changes to a running plan land through recompose at once:
     // the person named the stages, so no approval re-asks it. Any scope or
     // setting change in the same command runs first.
@@ -10525,6 +10541,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       if (unnamed) parts.push(`--message '${MESSAGE_SLOT}'`);
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
       const fill = unnamed ? messageFill(pd) : "";
+      // The jump's own line says where the work goes, so no line says where it
+      // picks up before the jump moves it.
+      if (jump !== null) {
+        emit(printDirective(
+          `Run \`${command}\` to change scope${fill}, print its output verbatim, then run \`${jump}\` and follow what it returns.`,
+        ));
+        return;
+      }
       // On finished work the change starts the first stage the new scope adds
       // after the last one (the tool reads the same predicate), so nothing
       // waits on the person and the agent carries on into it (#2261). Over
@@ -10564,6 +10588,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const teamKeeps = modifiers.length > 0 && !describedWork && !planChanges ? teamKeepsTyped(flags, pd) : null;
     if (teamKeeps !== null) {
       const said = `Run nothing. Tell the person in one line: "${teamKeeps}"`;
+      if (jump !== null) {
+        emit(printDirective(`${said} Then run \`${jump}\` and follow what it returns.`));
+        return;
+      }
       emit(keptWhilePlanWaits(
         pickedUpIfTurnEnds(settingPrint(
           stillParked === null ? `${said} Then stop.` : `${said}, followed by "${stillParked}", and stop.${resumeOnYes()}`,
@@ -10579,6 +10607,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const unnamed = settingNeedsTheirWords(pd, modifiers);
       const command = configSetCommand(modifiers, unnamed);
       const fill = unnamed ? messageFill(pd) : "";
+      if (jump !== null) {
+        emit(printDirective(
+          `Run \`${command}\` to update the configuration${fill}, then print its output verbatim and run \`${jump}\` ` +
+            "and follow what it returns.",
+        ));
+        return;
+      }
       emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
         pickedUpIfTurnEnds(
           settingPrint(

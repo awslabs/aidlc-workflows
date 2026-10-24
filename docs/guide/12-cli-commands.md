@@ -996,7 +996,7 @@ Jump directly to a specific stage by slug or number.
 /aidlc --stage 2.3
 ```
 
-**Behavior:** If a workflow is active, jumps to the target stage (skipping intervening stages with warnings). If no workflow exists, you can combine with `--scope`:
+**Behavior:** If a workflow is active, jumps to the target stage (skipping intervening stages with warnings); a `--scope` or a setting typed with the jump is applied first, then the jump is made in the work as changed. If no workflow exists, you can combine with `--scope` to start one there:
 
 ```
 /aidlc --stage code-generation --scope bugfix

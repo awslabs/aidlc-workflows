@@ -169,13 +169,13 @@ This jumps to the first stage of the specified phase. As with a stage jump, AI-D
 
 ### Combining jumps with scope
 
-For projects without a state file, you can combine `--stage` or `--phase` with `--scope`:
+You can combine `--stage` or `--phase` with `--scope`:
 
 ```
 /aidlc --stage code-generation --scope bugfix
 ```
 
-This creates a new workflow with the specified scope and jumps directly to the target stage.
+With no workflow yet, this creates a new workflow with the specified scope and jumps directly to the target stage. On running work, AI-DLC changes the scope first and then makes the jump in the new scope; a setting typed beside them, such as `--depth`, is applied with the change.
 
 ---
 
