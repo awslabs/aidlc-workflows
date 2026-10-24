@@ -2966,10 +2966,42 @@ function reviewRecoveryAlreadyRequestedMessage(
   );
 }
 
-class ReviewRefusal extends Error {}
+// Under relaxed or off a change after the review is accepted and no further
+// review is owed (stage-protocol-reviewer.md 12a), so a review past the one
+// recovery names the work's own next step.
+function reviewChangeAcceptedMessage(
+  stage: string,
+  next: string,
+  complete: string | null,
+  retryWith: string | null,
+): string {
+  return unlessPersonAsked(
+    `Cannot start another review for "${stage}": its review receipt stands and the change is accepted, ` +
+      "so no further review is owed. ",
+    `${complete === null ? "Run" : `Record this Unit's completion with \`${complete}\`, then run`} ` +
+      `\`${next}\` and follow the step it returns.`,
+    retryWith,
+  );
+}
 
-function refuseReview(message: string): never {
-  throw new ReviewRefusal(message);
+// A Unit's completion while its step is still open on the stage: the step a
+// Unit's last review hands on before `next`.
+function openUnitCompletionCommand(pd: string, stage: string, unit: string | undefined): string | null {
+  if (unit === undefined) return null;
+  const open = unitOpenCheckpoints(pd, stage).some((entry) => entry.unit === unit && entry.state === "in-progress");
+  return open ? aidlcDispatcherInvocation(`state unit complete --stage ${stage} --unit ${quoteCommandArgument(unit)}`) : null;
+}
+
+// `changeNotices`: lines this request already recorded as said (a change
+// accepted under relaxed or off), carried on its refusal so they reach the person.
+class ReviewRefusal extends Error {
+  constructor(message: string, readonly changeNotices: readonly string[] = []) {
+    super(message);
+  }
+}
+
+function refuseReview(message: string, changeNotices: readonly string[] = []): never {
+  throw new ReviewRefusal(message, changeNotices);
 }
 
 function refuseReviewGuard(
@@ -3134,13 +3166,11 @@ function reviewVerdictStep(
     });
   }
   if (unit !== undefined) {
-    const open = unitOpenCheckpoints(pd, flags.stage).some((entry) => entry.unit === unit && entry.state === "in-progress");
+    const complete = openUnitCompletionCommand(pd, flags.stage, unit);
     return reviewVerdictNote({
       kind: "unit",
       next: aidlcDispatcherInvocation("orchestrate next"),
-      ...(open
-        ? { complete: aidlcDispatcherInvocation(`state unit complete --stage ${flags.stage} --unit ${quoteCommandArgument(unit)}`) }
-        : {}),
+      ...(complete !== null ? { complete } : {}),
     });
   }
   if (node.phase === "construction" && isAutonomousConstructionGate(state, node, pd)) return null;
@@ -3670,11 +3700,12 @@ function handleReview(args: string[]): void {
           return false;
         };
         const personMayHaveAsked = (): boolean => !askedInNamedMessage() && personSpoke();
-        const personAskedRetry = (): string | null =>
+        // `inPlaceOf` names a flag the retry drops: kept, it would land here again.
+        const personAskedRetry = (inPlaceOf?: string): string | null =>
           !personMayHaveAsked()
             ? null
             : `--person-asked --message <id>${iteration === expected ? "" : ` --iteration ${expected}`}` +
-              messageFill(pd);
+              `${inPlaceOf === undefined ? "" : ` in place of ${inPlaceOf}`}${messageFill(pd)}`;
         const refuseAttemptGuard = (
           code: string,
           invariant: string,
@@ -3721,6 +3752,21 @@ function handleReview(args: string[]): void {
         // shown to them, never retried, and would refuse a review they asked for.
         const refuseBound = (code: string, invariant: string, message: string): never =>
           personMayHaveAsked() ? refuseReview(message) : refuseAttemptGuard(code, invariant, message);
+        // Under relaxed or off the change is accepted and no review is owed (the
+        // rule recoveryReviewOwed in aidlc-state.ts reads), so a review the agent
+        // starts on its own past the one recovery is refused to it alone, and its
+        // way on is the Unit's next step: never the person's question, a redo of
+        // built work or a restart of the stage. A swarm Bolt keeps its own halt.
+        const changeAccepted = (): boolean =>
+          !(autonomousCandidate && attempt.boltStarted) &&
+          guardPolicyAcceptsChanges(pd, state, { selection: { intent, space } });
+        const refuseChangeAccepted = (retryWith: string | null): never =>
+          refuseReview(reviewChangeAcceptedMessage(
+            flags.stage,
+            aidlcDispatcherInvocation("orchestrate next"),
+            openUnitCompletionCommand(pd, flags.stage, flags.unit),
+            retryWith,
+          ), requestChangeNotices);
         // The one request that still works when a pending review can never
         // finish (see replaceIteration below): named in every refusal that would
         // otherwise leave the conductor restoring bytes it cannot restore.
@@ -3739,6 +3785,7 @@ function handleReview(args: string[]): void {
         if (retryPending) {
           const pendingRequest = attempt.pendingRequests.get(iteration);
           if (!pendingRequest) {
+            if (recoverySpent && changeAccepted()) refuseChangeAccepted(personAskedRetry("--retry-pending"));
             if (scopeStale) {
               if (recoverySpent) {
                 const message = reviewRecoverySpentMessage(
@@ -3971,6 +4018,7 @@ function handleReview(args: string[]): void {
           scopeStale &&
           attempt.pendingIterations.size === 0 &&
           !recoverySpent;
+        if (recoverySpent && changeAccepted() && boundStands()) refuseChangeAccepted(personAskedRetry());
         if (scopeStale && recoverySpent && boundStands()) {
           const message = reviewRecoverySpentMessage(
               flags.stage,
@@ -4107,7 +4155,7 @@ function handleReview(args: string[]): void {
         emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
       }, intent, space);
     } catch (e) {
-      if (e instanceof ReviewRefusal) error(e.message);
+      if (e instanceof ReviewRefusal) error(e.message, e.changeNotices);
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
     // A request is half of the exchange: the slot stays open until the same
