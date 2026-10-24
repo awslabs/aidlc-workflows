@@ -7,19 +7,20 @@
 // the reading step for unselected work, the agent picked the one piece
 // (`next --pick`, directly or through the pick question), the engine named a
 // bare `next` after the switch, and Requirements Analysis carried on: the redo
-// never happened and nobody was asked. Now the pick step names
-// `next -- '<their words>'` after the switch whenever the reading step kept
-// this chat's latest message for the piece picked, so the words get the
+// never happened and nobody was asked. Now, whenever the reading step kept
+// this chat's latest message for the piece picked, the pick step writes those
+// words, exactly as kept, to a file of its own in the request folder and names
+// `next --request-file <that file>` after the switch, so the words get the
 // reading they get with that work selected (go on, redo, jump, start fresh, an
-// answer to what is open). It is the same command the agent would run for
-// words typed there, built from the engine's own copy. Nothing else changes:
+// answer to what is open) with no shell on the way: a line break, a quote or a
+// character cmd.exe reads comes through as typed. Nothing else changes:
 // another chat's words, a later message, parked work and a pick with no words
 // before it keep the step they had.
 //
 // Spawns the real engine and Claude Code's own human-turn hook, as
 // tests/unit/t-next-takes-the-persons-line does.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { cleanupTestProject, createOrchestrationTestProject, intentsDirOf } from "../harness/fixtures.ts";
@@ -27,7 +28,6 @@ import {
   buildState, DISPATCHER, type Directive, env, exec, next, type RunOptions, SECOND_SESSION, say,
 } from "../harness/aidlc-input-corpus.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { quoteCommandArgument } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -40,7 +40,8 @@ const WORDS = "redo reverse engineering, the scan missed the src/legacy folder";
 const PIECE = "fixture-8000000000000001";
 const READING = "the person's words may ask to redo";
 // The step after the switch, as the pick step names it.
-const THEN = /then run `[^`]* next( --resume| -- [^`]+)?` and follow what it returns/;
+const THEN = /then run `[^`]* next( --resume| --request-file \S+| -- [^`]+)?` and follow what it returns/;
+const REQUEST_FILE = /^--request-file (aidlc\/\.aidlc-request-text\/[^/\s]+)$/;
 
 /** A teammate's clone of a bug fix at Requirements Analysis: the record is there, the git-ignored selection is not. */
 async function clone(state: "work-open" | "parked" | "gate-open" = "work-open"): Promise<string> {
@@ -70,6 +71,21 @@ function stepAfterSwitch(d: Directive | null): string {
   return then?.[1]?.trim() ?? "";
 }
 
+/** The file the step after the switch reads the words from, and what it holds. */
+function carried(proj: string, step: string): { file: string; words: string } {
+  const file = REQUEST_FILE.exec(step)?.[1];
+  expect(file, step).toBeDefined();
+  return { file: file!, words: readFileSync(join(proj, file!), "utf-8") };
+}
+
+function questionTexts(proj: string): string[] {
+  const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
+  return existsSync(dir)
+    ? readdirSync(dir).filter((name) => name.endsWith(".json"))
+      .map((name) => (JSON.parse(readFileSync(join(dir, name), "utf-8")) as { text: string }).text)
+    : [];
+}
+
 async function switchTo(proj: string, opts: RunOptions = {}): Promise<void> {
   const r = await exec([process.execPath, DISPATCHER, "engine", "intent", "switch", PIECE, "--project-dir", proj], {
     cwd: proj, env: env(proj, opts),
@@ -88,15 +104,18 @@ describe("the words that led to a pick are read against the piece picked", () =>
     const proj = await clone();
     await typed(proj, WORDS);
     const picked = await next(proj, ["--pick", PIECE]);
-    expect(stepAfterSwitch(picked.directive), picked.out).toBe(`-- ${quoteCommandArgument(WORDS)}`);
+    const { file, words } = carried(proj, stepAfterSwitch(picked.directive));
+    expect(words).toBe(WORDS);
     await switchTo(proj);
     const rows = auditRows(proj);
-    const read = await next(proj, ["--", WORDS]);
+    const read = await next(proj, ["--request-file", file]);
     expect(read.directive?.kind, read.out).toBe("print");
     expect(String(read.directive?.message), read.out).toContain(READING);
     expect(String(read.directive?.message), read.out).toContain('Work is in progress on "Todo app bug fix"');
     // Reading the words again records nothing of theirs a second time.
     expect(auditRows(proj)).toBe(rows);
+    // The file is spent once read.
+    expect(existsSync(join(proj, file))).toBe(false);
     // Their line is not taken a third time: the bare `next` after the reading is the work's own step.
     const goOn = await next(proj, []);
     expect(goOn.directive?.kind, goOn.out).toBe("run-stage");
@@ -110,7 +129,7 @@ describe("the words that led to a pick are read against the piece picked", () =>
     const command = (ask.directive?.select_commands as Array<{ selector: string; command: string }>)[0];
     expect(command.selector).toBe(PIECE);
     const picked = await next(proj, command.command.replace(/^.* next /, "").split(" "));
-    expect(stepAfterSwitch(picked.directive), picked.out).toBe(`-- ${quoteCommandArgument(WORDS)}`);
+    expect(carried(proj, stepAfterSwitch(picked.directive)).words, picked.out).toBe(WORDS);
   });
 
   // Measured on Claude Code 2.1.310: the agent put their words after the name, and the refusal of that command
@@ -121,20 +140,32 @@ describe("the words that led to a pick are read against the piece picked", () =>
     for (const tail of [[WORDS], ["--", WORDS], ["redo", "it"]]) {
       const picked = await next(proj, ["--pick", PIECE, ...tail]);
       expect(picked.directive?.kind, picked.out).toBe("print");
-      expect(stepAfterSwitch(picked.directive), picked.out).toBe(`-- ${quoteCommandArgument(WORDS)}`);
+      expect(carried(proj, stepAfterSwitch(picked.directive)).words, picked.out).toBe(WORDS);
     }
     // A flag after the name is still the agent's slip, named to it.
     const flagged = await next(proj, ["--pick", PIECE, "--scope", "bugfix"]);
     expect(flagged.directive?.kind, flagged.out).toBe("error");
   });
 
-  test("words with quotes and an apostrophe come back whole in the command", async () => {
-    const proj = await clone();
-    const words = `redo reverse engineering, the "legacy" scan missed Sam's folder`;
-    await typed(proj, words);
-    const picked = await next(proj, ["--pick", PIECE]);
-    expect(stepAfterSwitch(picked.directive), picked.out).toBe(`-- ${quoteCommandArgument(words)}`);
-  });
+  // Quotes, an apostrophe, the characters cmd.exe reads, and a line break: the words the reading kept are the words
+  // the picked work reads, character for character.
+  for (const [label, words] of [
+    ["quotes and an apostrophe", `redo reverse engineering, the "legacy" scan missed Sam's folder`],
+    ["cmd.exe's characters", "redo reverse engineering: src/legacy & src/old at 100% <both> | ^now"],
+    ["a line break", "redo reverse engineering\nthe scan missed the src/legacy folder"],
+  ] as const) {
+    test(`words with ${label} reach the picked work as typed`, async () => {
+      const proj = await clone();
+      await typed(proj, words);
+      const picked = await next(proj, ["--pick", PIECE]);
+      const kept = carried(proj, stepAfterSwitch(picked.directive));
+      expect(kept.words).toBe(words);
+      await switchTo(proj);
+      const read = await next(proj, ["--request-file", kept.file]);
+      expect(String(read.directive?.message), read.out).toContain(READING);
+      expect(questionTexts(proj).filter((text) => text === words).length).toBe(2);
+    });
+  }
 
   test("parked work picked that way still picks up through --resume", async () => {
     // Parked in another chat; this one never joined it.
@@ -155,9 +186,10 @@ describe("an approval typed before the pick gets the gate's reading", () => {
     const here: RunOptions = { session: SECOND_SESSION };
     await typed(proj, "approve", here);
     const picked = await next(proj, ["--pick", PIECE], here);
-    expect(stepAfterSwitch(picked.directive), picked.out).toBe("-- approve");
+    const kept = carried(proj, stepAfterSwitch(picked.directive));
+    expect(kept.words).toBe("approve");
     await switchTo(proj, here);
-    const read = await next(proj, ["--", "approve"], here);
+    const read = await next(proj, ["--request-file", kept.file], here);
     expect(String(read.directive?.message), read.out).toContain(GATE);
   });
 

@@ -4292,7 +4292,7 @@ function teamWordsReplyDirective(requestId: string, pd: string): PrintDirective 
 // teammate's clone, a chat that has not joined the work): the agent reads
 // whether they only ask to go on (the bare `next` asks which piece to pick up),
 // are about one piece (the pick question's own answer selects it, and the
-// words get that work's reading: wordsKeptForPick), only name one piece, or
+// words get that work's reading: keptWordsStep), only name one piece, or
 // describe new work. The engine kept the words.
 function unselectedWordsReplyDirective(
   requestId: string,
@@ -4318,21 +4318,33 @@ function unselectedWordsReplyDirective(
   );
 }
 
-// The words the reading step above kept from the message it reads now
-// (readingMessage), when the piece picked is one it listed: its own copy (no
-// digest, unlike the routing question asked with options, whose answer
-// already said where the words go). A later message of theirs, another
-// chat's, or a read that fails is none.
-function wordsKeptForPick(pd: string, record: string): string | null {
+// The step after the switch for the words the reading step above kept from
+// the message it reads now (readingMessage), when the piece picked is one it
+// listed: its own copy (no digest, unlike the routing question asked with
+// options, whose answer already said where the words go). They go through a
+// file of their own in the request folder, read as any request file is
+// (nextArgsWithRequestFile), so no shell on the way changes a line break or a
+// character cmd.exe reads; on the line only when that file cannot be written.
+// "" (a bare `next`) for a later message of theirs, another chat's, or a read
+// that fails.
+function keptWordsStep(pd: string, record: string): string {
+  let kept: StoredQuestion | undefined;
   try {
     const message = readingMessage(pd);
-    if (message === null) return null;
-    const kept = questionsFromMessage(pd, message.id).findLast((question) =>
+    if (message === null) return "";
+    kept = questionsFromMessage(pd, message.id).findLast((question) =>
       question.origin === "routing" && question.askedAbout?.pick === true && question.stateSha256 === undefined &&
       question.askedAbout.targets.some((target) => target.intent === record));
-    return kept?.text ?? null;
   } catch {
-    return null;
+    return "";
+  }
+  if (kept === undefined) return "";
+  const file = `${REQUEST_TEXT_DIR}/pick-${kept.id}.txt`;
+  try {
+    if (!isReadOnlyEngineProbe()) writeRecordFileNoFollow(pd, file, kept.text);
+    return ` --request-file ${file}`;
+  } catch {
+    return ` -- ${quoteCommandArgument(kept.text)}`;
   }
 }
 
@@ -5857,7 +5869,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   // The pick question's answer, `next --pick <record>`: select that record and
   // carry on in the same turn, so picking work up takes one step. Words the
   // agent adds after the name are its copy of the person's: the step after the
-  // switch carries the engine's own (wordsKeptForPick), so they change nothing.
+  // switch carries the engine's own (keptWordsStep), so they change nothing.
   if (args[0] === "--pick") {
     const name = args[1];
     const after = args[2] === "--" ? [] : args.slice(2);
@@ -10319,13 +10331,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // Parked work carries on as `--resume` does, through its unpark step: a
     // plain `next` would answer the park, since the turns that asked came
     // before any work was selected and are not in its record. Words the
-    // reading step kept for the piece picked (wordsKeptForPick) are passed on
-    // as typed there, so they get that work's own reading.
+    // reading step kept for the piece picked (keptWordsStep) are passed on as
+    // typed there, so they get that work's own reading.
     if (flags.carryOn && command.kind === "switch") {
       const statePath = stateFilePath(resolveProjectDir(projectDir), command.name);
       const parked = existsSync(statePath) && parkedWhereItStands(readFileSync(statePath, "utf-8"));
-      const kept = parked || flags.pickedUp ? null : wordsKeptForPick(resolveProjectDir(projectDir), command.name);
-      const then = parked || flags.pickedUp ? " --resume" : kept === null ? "" : ` -- ${quoteCommandArgument(kept)}`;
+      const then = parked || flags.pickedUp ? " --resume" : keptWordsStep(resolveProjectDir(projectDir), command.name);
       // Picked up by --resume: the person's one line, and the --resume they typed.
       const print = printDirective(
         `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, ${flags.pickedUp ? "" : "print its output verbatim, "}then run ` +
