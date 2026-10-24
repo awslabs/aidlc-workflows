@@ -39,7 +39,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -47,6 +47,7 @@ import {
   createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
+  intentsDirOf,
   proposalFollowUp,
   removeWorkspaceRecord,
   REPO_ROOT,
@@ -511,6 +512,27 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       const directive = parseDirective(res.stdout ?? "");
       expect(directive.kind, `${res.stdout}${res.stderr}`).toBe("error");
       expect(directive.message ?? "").toContain("No workflow state found");
+    });
+
+    // (3c) A space whose only work was archived has nothing in progress, as a
+    // new project does: the person starting new work is asked what to build.
+    test("no-state bare next where the only work is archived -> asks what to build", () => {
+      const proj = createTestProject();
+      tempDirs.push(proj);
+      const intents = intentsDirOf(proj, "default");
+      writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8"));
+      const rows = JSON.parse(readFileSync(join(intents, "intents.json"), "utf-8")) as { status: string }[];
+      writeFileSync(join(intents, "intents.json"), JSON.stringify(rows.map((row) => ({ ...row, status: "archived" }))));
+      // Archiving clears the cursor (intent archive), so nothing is selected.
+      unlinkSync(join(intents, "active-intent"));
+      const res = spawnSync(BUN, [TOOL, "next", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: cleanEnv(),
+      });
+      const directive = parseDirective(res.stdout ?? "");
+      expect(directive.kind, `${res.stdout}${res.stderr}`).toBe("print");
+      expect(directive.narration).toBe("Tell me what to build and I'll start it.");
     });
 
     // (4) Conflicting explicit namings: `next bugfix --scope mvp` names TWO
