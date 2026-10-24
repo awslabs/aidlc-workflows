@@ -438,6 +438,7 @@ export interface HookActivation {
   agentStepInHost?: { env: string[]; text: string };
   agentStepEdits?: string;
   registration?: { file: string; missing: string; invalid: string };
+  startedInsideProject?: string;
 }
 
 interface ShippedHarnessData {
@@ -631,6 +632,9 @@ function readShippedHarnessData(): ShippedHarnessData {
           ...(typeof activation.agentStep === "string" ? hostLine("agentStepInHost", activation.agentStepInHost) : {}),
           ...(typeof activation.agentStepEdits === "string" ? { agentStepEdits: activation.agentStepEdits } : {}),
           ...(registrationLines(activation.registration)),
+          ...(typeof activation.startedInsideProject === "string"
+            ? { startedInsideProject: activation.startedInsideProject }
+            : {}),
         }
         : null;
     // agentFinishRecorded is evidence the engine relies on to say no reviewer
@@ -2114,6 +2118,28 @@ function tailText(path: string, maxBytes: number): string | null {
     if (start === 0) return text;
     const newline = text.indexOf("\n");
     return newline < 0 ? "" : text.slice(newline + 1);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Nothing to do with a descriptor that is already gone.
+      }
+    }
+  }
+}
+
+// A file's first line, read no further than `maxBytes`; null when no line ends within them.
+function firstLine(path: string, maxBytes: number): string | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, "r");
+    const buffer = Buffer.alloc(maxBytes);
+    const text = buffer.subarray(0, readSync(fd, buffer, 0, maxBytes, 0)).toString("utf-8");
+    const newline = text.indexOf("\n");
+    return newline < 0 ? null : text.slice(0, newline);
   } catch {
     return null;
   } finally {
@@ -7815,17 +7841,97 @@ function hostNamedChat(projectDir: string): string | null {
   switch (runtimeHarnessDir(projectDir)) {
     case ".codex":
       return validSessionId(process.env.CODEX_THREAD_ID);
-    case ".claude": {
-      const pid = Number.parseInt(process.env.CLAUDE_PID ?? "", 10);
-      return Number.isSafeInteger(pid) && processIsAlive(pid)
-        ? validSessionId(process.env.CLAUDE_CODE_SESSION_ID)
-        : null;
-    }
+    case ".claude":
+      return claudeNamedChat()?.session ?? null;
     case ".kiro":
       return validSessionId(process.env.KIRO_SESSION_ID);
     default:
       return null;
   }
+}
+
+function claudeNamedChat(): { pid: number; session: string } | null {
+  const pid = Number.parseInt(process.env.CLAUDE_PID ?? "", 10);
+  const session = Number.isSafeInteger(pid) && processIsAlive(pid)
+    ? validSessionId(process.env.CLAUDE_CODE_SESSION_ID)
+    : null;
+  return session === null ? null : { pid, session };
+}
+
+// The folder the host started the chat in, from its own record of the running
+// chat, read only and no further than that one field: Claude Code's
+// sessions/<pid>.json in its config folder (its `cwd`, when its pid and session
+// id are this chat's), and the first line of the Codex thread's rollout (its
+// session record's `payload.cwd`). Both stay the folder the tool started in
+// when the agent's shell moves (measured on Claude Code 2.1.278 and 2.1.310,
+// Codex 0.164.0). A Codex thread resumed in another folder still names the
+// folder it first started in, since nothing past that first line is read. Null
+// for every other host and on any doubt, which keeps the caller's usual line.
+function hostChatStartFolder(projectDir: string): string | null {
+  const absolute = (value: unknown): string | null => typeof value === "string" && isAbsolute(value) ? value : null;
+  try {
+    switch (runtimeHarnessDir(projectDir)) {
+      case ".claude": {
+        const chat = claudeNamedChat();
+        if (chat === null) return null;
+        const config = process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
+        const record = JSON.parse(readFileSync(join(config, "sessions", `${chat.pid}.json`), "utf-8")) as
+          | { pid?: unknown; sessionId?: unknown; cwd?: unknown }
+          | null;
+        return record?.pid === chat.pid && record.sessionId === chat.session ? absolute(record.cwd) : null;
+      }
+      case ".codex": {
+        const thread = validSessionId(process.env.CODEX_THREAD_ID);
+        const rollout = thread === null ? null : codexRolloutPath(thread);
+        const line = rollout === null ? null : firstLine(rollout, CODEX_SESSION_RECORD_MAX_BYTES);
+        const entry = line === null ? null : JSON.parse(line) as
+          | { type?: unknown; payload?: { id?: unknown; cwd?: unknown } | null }
+          | null;
+        return entry?.type === "session_meta" && entry.payload?.id === thread ? absolute(entry.payload.cwd) : null;
+      }
+      default:
+        return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+// A rollout's first line carries Codex's base instructions beside the folder.
+const CODEX_SESSION_RECORD_MAX_BYTES = 1024 * 1024;
+
+// Codex files a thread's rollout under the day it started, in local time
+// (sessions/YYYY/MM/DD/rollout-<time>-<thread id>.jsonl), and the thread id is a
+// UUIDv7 whose first 48 bits are that start, so the folder is found from the id
+// alone; the days either side cover a time zone other than Codex's.
+function codexRolloutPath(thread: string): string | null {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(thread)) return null;
+  const started = Number.parseInt(thread.slice(0, 8) + thread.slice(9, 13), 16);
+  const root = join(process.env.CODEX_HOME?.trim() || join(homedir(), ".codex"), "sessions");
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  for (const offset of [0, -1, 1]) {
+    const day = new Date(started + offset * 24 * 60 * 60 * 1000);
+    const dir = join(root, String(day.getFullYear()), pad(day.getMonth() + 1), pad(day.getDate()));
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    const name = names.find((entry) => entry.startsWith("rollout-") && entry.endsWith(`-${thread}.jsonl`));
+    if (name !== undefined) return join(dir, name);
+  }
+  return null;
+}
+
+// The host's record says this chat was started in a folder inside the project,
+// not in the project folder itself.
+function chatStartedInsideProject(projectDir: string): boolean {
+  const start = hostChatStartFolder(projectDir);
+  if (start === null) return false;
+  const root = comparablePath(projectDir);
+  const folder = comparablePath(start);
+  return folder !== root && pathIsWithinRoot(root, folder);
 }
 
 export function resolveInvokingSessionId(projectDir: string): string | null {
@@ -28765,9 +28871,23 @@ function registrationFault(path: string): "missing" | "invalid" | null {
 
 /** The doctor's recovery sentence for hooks that stopped firing, per harness. */
 export function hookExecutionRecoveryText(projectDir?: string): string {
+  const startedInside = startedInsideProjectStep(projectDir);
+  if (startedInside !== null) return startedInside;
   const declared = hookActivation()?.recovery;
   if (declared) return fillHookActivationText(declared, projectDir);
   return HOOK_EXECUTION_RECOVERY_OTHER;
+}
+
+/**
+ * The harness's line for a chat its host started in a folder inside the
+ * project, filled with the project folder and the bare entry, or null: no
+ * setting brings the hooks back there, so doctor's steps give this line first.
+ */
+export function startedInsideProjectStep(projectDir?: string): string | null {
+  const line = hookActivation()?.startedInsideProject;
+  if (line === undefined) return null;
+  const project = resolveProjectDir(projectDir);
+  return chatStartedInsideProject(project) ? fillHookActivationText(line, project) : null;
 }
 
 // A harness's hook-activation text names the person's own entry command and
@@ -28808,10 +28928,15 @@ export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () 
   const activation = hookActivation();
   if (!activation?.agentStep) return null;
   const project = resolveProjectDir(projectDir);
+  // Started in a folder inside the project, no file or setting brings the
+  // hooks back: the one step is to start the tool in the project folder.
+  const startedInside = activation.startedInsideProject !== undefined && chatStartedInsideProject(project);
   const registration = activation.registration;
-  const fault = registration ? registrationFault(join(project, registration.file)) : null;
+  const fault = !startedInside && registration ? registrationFault(join(project, registration.file)) : null;
   let step: string;
-  if (registration && fault) {
+  if (startedInside) {
+    step = `Show the person this line and end your turn: "${activation.startedInsideProject}"`;
+  } else if (registration && fault) {
     const line = registration[fault].replaceAll("<repair>", projectSettingsRepair(runtimeHarnessName(project, harnessDir())));
     step = `Show the person this line and end your turn: "${line}"`;
   } else {
@@ -28827,7 +28952,7 @@ export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () 
   }
   const kept = keep && step.includes("<entry>") ? keep() : null;
   const entry = kept === null ? undefined : `${entrySkillInvocation()} --request ${kept}`;
-  return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(step, projectDir, next, entry)}`;
+  return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(step, startedInside ? project : projectDir, next, entry)}`;
 }
 
 /**

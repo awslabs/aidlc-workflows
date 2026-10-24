@@ -297,6 +297,22 @@ carry on. When the agent stopped a request of yours with this step, type the
 `/aidlc --request <id>` line it showed you instead: that request carries on,
 once.
 
+### Claude Code or Codex started in a folder inside the project
+
+Both tools offer `/aidlc` (`$aidlc` in Codex) from a folder inside the project,
+such as `src/`, but AI-DLC's hooks work only when the tool is started in the
+project folder itself: Claude Code runs none of the project's hooks there, and
+Codex runs them from that folder, where they cannot start. No setting and no
+`/hooks` trust changes that. When the tool's own record of the chat says it was
+started in such a folder, the agent changes nothing and shows one line: exit the
+tool, start it again in the project folder, and type the `/aidlc --request <id>`
+line it showed you, which carries on with your request once. Doctor gives the
+same step. To find where the chat started, AI-DLC reads that record and nothing
+else in it: on Claude Code `sessions/<pid>.json` in its config folder
+(`CLAUDE_CONFIG_DIR`, else `~/.claude`), on Codex the first line of the chat's
+file under `sessions/` in its home (`CODEX_HOME`, else `~/.codex`). With no such
+record the usual step for hooks that are not running stands.
+
 ### Claude managed policy blocks project hooks
 
 If `/hooks` reports that hooks are restricted by policy and shows zero configured hooks, run `/aidlc --doctor`. On Claude Code, doctor reads `/Library/Application Support/ClaudeCode/managed-settings.json` on macOS, `/etc/claude-code/managed-settings.json` on Linux/WSL, or `%ProgramFiles%\ClaudeCode\managed-settings.json` followed by the legacy `%PROGRAMDATA%\ClaudeCode\` location on Windows. Each candidate also includes alphabetical JSON fragments under its sibling `managed-settings.d/` directory. An effective top-level `allowManagedHooksOnly: true` blocks every project hook declared in `.claude/settings.json`. Set `AIDLC_MANAGED_SETTINGS_PATH` when the managed file lives elsewhere; its sibling fragment directory is included automatically.
