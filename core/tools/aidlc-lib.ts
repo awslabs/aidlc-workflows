@@ -37664,14 +37664,15 @@ function pipelineReceiptArtifactIsCurrent(
       true,
     );
     // Under Guard Policy relaxed or off, an edited handoff still records the
-    // scan the developer agent did. Under strict only its bytes are compared:
-    // a clone, a copy or a branch switch moves the file time and nothing the
-    // developer wrote, and `log link` already held the time to this attempt.
+    // scan the developer agent did. Under strict only its text is compared,
+    // CRLF read as LF: a clone, a copy or a branch switch moves the file time
+    // and its line endings and nothing the developer wrote, and `log link`
+    // already held the time to this attempt. A link recorded over the raw
+    // bytes before line endings were read so still stands on its checkout.
     if (acceptsChanges()) return true;
-    const digest = createHash("sha256")
-      .update(snapshot.bytes)
-      .digest("hex");
-    return receipt.artifactSha256 === `sha256:${digest}`;
+    const sha = (bytes: Buffer) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+    return receipt.artifactSha256 === sha(committedTextBytes(snapshot.bytes)) ||
+      receipt.artifactSha256 === sha(snapshot.bytes);
   } catch {
     return false;
   }

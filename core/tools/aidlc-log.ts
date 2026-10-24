@@ -23,6 +23,7 @@ import {
 import {
   CODEKB_ANALYSED_FILE,
   codekbAnalysed,
+  committedTextBytes,
   engineDir,
   gateEstimateSeconds,
   GATE_NOTE_SECONDS,
@@ -2808,8 +2809,10 @@ function handleLink(args: string[]): void {
             `Cannot record reverse-engineering developer link: ${toPosix(relative(pd, artifact))} was not rewritten after its prior pipeline receipt.`,
           );
         }
+        // The handoff's text, CRLF read as LF, so a checkout with the other line
+        // endings reads as the same scan.
         const digest = createHash("sha256")
-          .update(artifactBytes)
+          .update(committedTextBytes(artifactBytes))
           .digest("hex");
         fields["Artifact Path"] = toPosix(relative(pd, artifact));
         fields["Artifact SHA256"] = `sha256:${digest}`;

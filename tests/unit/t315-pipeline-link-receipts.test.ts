@@ -789,6 +789,52 @@ describe("t315 pipeline link receipts", () => {
     expect(pipelineLinkEvidence(proj, node).completed).toEqual([]);
   });
 
+  // Git for Windows checks committed text out with CRLF line endings, and a
+  // checkout elsewhere with LF: the handoff's text is the same, so its links
+  // stand whichever way it was written when they were recorded.
+  test("under Guard Policy strict, a checkout that changes only the handoff's line endings keeps both links", () => {
+    const node = { slug: RE_STAGE, lead_agent: LEAD, support_agents: [FINAL] };
+    const proj = pipelineProject();
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    expect(runLog(proj, LEAD).rc).toBe(0);
+    expect(runLog(proj, FINAL).rc).toBe(0);
+    const handoff = developerHandoffPath(proj);
+    const text = readFileSync(handoff, "utf-8");
+    writeFileSync(handoff, text.replace(/\n/g, "\r\n"), "utf-8");
+    expect(pipelineLinkEvidence(proj, node).completed).toEqual([LEAD, FINAL]);
+    appendFileSync(handoff, "\r\nPost-receipt edit.\r\n");
+    expect(pipelineLinkEvidence(proj, node).completed).toEqual([]);
+
+    const windows = pipelineProject();
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, windows);
+    const written = developerHandoffPath(windows);
+    mkdirSync(dirname(written), { recursive: true });
+    writeFileSync(written, text.replace(/\n/g, "\r\n"), "utf-8");
+    expect(runLog(windows, LEAD, undefined, false, false).rc).toBe(0);
+    expect(runLog(windows, FINAL).rc).toBe(0);
+    writeFileSync(written, text, "utf-8");
+    expect(pipelineLinkEvidence(windows, node).completed).toEqual([LEAD, FINAL]);
+  });
+
+  // A link recorded before line endings were read as LF holds the raw bytes'
+  // digest: on the checkout that wrote it, it still stands.
+  test("under Guard Policy strict, a link recorded over CRLF bytes before line endings were read as LF still stands", () => {
+    const node = { slug: RE_STAGE, lead_agent: LEAD, support_agents: [FINAL] };
+    const proj = pipelineProject();
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    const handoff = developerHandoffPath(proj);
+    mkdirSync(dirname(handoff), { recursive: true });
+    writeFileSync(handoff, "## Developer Code Scan Results\r\n\r\nWritten on Windows.\r\n", "utf-8");
+    process.env.AIDLC_TEST_RAW_LINE_ENDINGS = "1";
+    try {
+      expect(runLog(proj, LEAD, undefined, false, false).rc).toBe(0);
+    } finally {
+      delete process.env.AIDLC_TEST_RAW_LINE_ENDINGS;
+    }
+    expect(runLog(proj, FINAL).rc).toBe(0);
+    expect(pipelineLinkEvidence(proj, node).completed).toEqual([LEAD, FINAL]);
+  });
+
   // Under Guard Policy relaxed or off, a targeted fix after Request Changes, or
   // a handoff edited, copied or cloned, keeps the scan the agents already did.
   function offPipelineProject(): string {
