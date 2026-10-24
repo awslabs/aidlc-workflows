@@ -120,6 +120,9 @@ read-only check:
 - **STALE / UNVERIFIED / UNKNOWN_SCOPE** - the store's knowledge is out of
   date, unverifiable, or predates scope tracking. Present the rescan question
   below WITHOUT the reuse option.
+- **SCANNED** - this run already scanned the repo and published the store: ask
+  nothing and record nothing for it; when no repo is left to scan, go on to
+  Step 4.
 
 Reuse question (CURRENT + coverage fits the intent) - fold the tool's output
 (store intent, analyzed paths) into the prompt so the human decides on

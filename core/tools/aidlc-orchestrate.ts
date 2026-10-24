@@ -9022,10 +9022,14 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 // `next --resume` a re-entry sends (measured on Claude Code: the open stage came
 // back and their new work was gone): `--resume` is the agent's, never theirs. A
 // later bare `next` is the work in hand. Their `/aidlc` alone over work in hand
-// is a resume whichever the agent sent. Nothing happens without a chat identity
-// (no record is read), on a read-only probe (an observer learns the directive and
-// never asks), once anything is recorded after their line, or with any other
-// message last (a reply in plain words, a utility). Returns
+// is a resume whichever the agent sent. A reply in plain words is the agent's to
+// pass on, and is read here only while the current stage waits on its open
+// question (openStageQuestion), whole, as `next -- <their words>` takes it: a new
+// chat that never saw the question asked sent a bare `next` and the stage came
+// back with their answer dropped (live on Kiro CLI). Nothing happens without a
+// chat identity (no record is read), on a read-only probe (an observer learns the
+// directive and never asks), once anything is recorded after their line, or with
+// any other message last (plain words with no question open, a utility). Returns
 // their line's arguments when it took them, for the readings that look at the
 // command as typed.
 function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
@@ -9034,7 +9038,7 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   const carriesNothing = Object.entries(flags).every(([key, value]) =>
     key === "scope" || key === "positionalScope" || key === "resume" || value === undefined || value === false);
   if (!carriesNothing) return null;
-  const message = latestMessage(pd, engineSessionId);
+  const message = chatLatestMessage(pd, engineSessionId);
   if (message === null || message.source !== "prompt") return null;
   const stateContent = loadStateFileIfPresent(pd);
   if (message.words !== null) {
@@ -9058,8 +9062,17 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
     if (stateContent !== null ? !turnIsLatestRow(pd, message.id) : settingsKeptSince(pd, engineSessionId, message.at)) return null;
   }
   const typed = aidlcEntryWords(personsWordsText(message.text));
-  if (typed === null || typed.length === 0) return null;
-  const argv = splitKiroCommandArgs(typed);
+  let argv: string[];
+  if (typed === null) {
+    if (
+      stateContent === null || message.words === null || isTeamUnitOwnership(stateContent) ||
+      openStageQuestion(pd, stateContent) === null
+    ) return null;
+    argv = ["--", personsWordsText(message.words)];
+  } else {
+    if (typed.length === 0) return null;
+    argv = splitKiroCommandArgs(typed);
+  }
   const own = parseNextFlags(argv);
   // A line `next` already read for this chat (a reading step kept its words as
   // a question and marked the message) is not read again: the bare `next` the
@@ -9094,7 +9107,7 @@ function lineHandedOut(pd: string, session: string, messageId: string): boolean 
 function handOutSettingsLine(flags: ParsedFlags, pd: string): void {
   if (engineSessionId === undefined || isReadOnlyEngineProbe()) return;
   if (typedSettingModifiers(flags).length === 0) return;
-  const message = latestMessage(pd, engineSessionId);
+  const message = chatLatestMessage(pd, engineSessionId);
   if (message === null || message.source !== "prompt" || message.words !== null || message.settings.length === 0) return;
   markLineHandedOut(pd, engineSessionId, message.id);
 }
@@ -9120,7 +9133,7 @@ function saveReadingQuestion(
 ): StoredQuestion {
   const latest = engineSessionId === undefined
     ? listMessages(pd).findLast((message) => message.source === "prompt") ?? null
-    : latestMessage(pd, engineSessionId);
+    : chatLatestMessage(pd, engineSessionId);
   const message = latest !== null && latest.source === "prompt" ? latest : null;
   const question = saveQuestion(
     pd, text, scope, origin, askedAbout, newWork, composedFrom, stateSha256, settings, approvedRequest, message?.id,
@@ -9143,6 +9156,25 @@ function turnIsLatestRow(pd: string, messageId: string): boolean {
     return last !== undefined && last.event === "HUMAN_TURN" && auditBlockField(last.block, "Message Id") === messageId;
   } catch {
     return false;
+  }
+}
+
+// This chat's latest message. The store keeps whole seconds, and two messages
+// of one second sort by their random ids (latestMessage), so when the chat's
+// latest row is the person's turn and names a message of that same second, that
+// message is the latest: the shard keeps the order they came in.
+function chatLatestMessage(pd: string, session: string): ReturnType<typeof latestMessage> {
+  const latest = latestMessage(pd, session);
+  if (latest === null) return null;
+  try {
+    const own = basename(auditFilePath(pd));
+    const last = readAuditShardEvents(pd).filter((row) => basename(row.shard) === own).at(-1);
+    const id = last?.event === "HUMAN_TURN" ? auditBlockField(last.block, "Message Id") : null;
+    if (id === null || id === latest.id) return latest;
+    const turn = readMessage(pd, id);
+    return turn !== null && turn.session === session && turn.at === latest.at ? turn : latest;
+  } catch {
+    return latest;
   }
 }
 
