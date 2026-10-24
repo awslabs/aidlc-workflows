@@ -30,17 +30,17 @@ afterEach(() => {
 });
 
 // The tools as a person's run calls them: the presence and reviewer guards on.
-function env(proj: string): NodeJS.ProcessEnv {
-  const e: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_REVIEWER_GATE_GUARD: "0", AIDLC_SESSION_OVERRIDE: SESSION,
+function env(proj: string, session = SESSION): NodeJS.ProcessEnv {
+  const e: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_REVIEWER_GATE_GUARD: "0", AIDLC_SESSION_OVERRIDE: session,
     CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj };
   for (const key of ["AIDLC_SKIP_HUMAN_PRESENCE_GUARD", "AIDLC_UNATTENDED", "CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID",
     "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT"]) delete e[key];
   return e;
 }
 
-function engine(proj: string, args: string[], input?: string) {
+function engine(proj: string, args: string[], input?: string, session = SESSION) {
   const r = spawnSync(process.execPath, [join(proj, ".claude", "tools", "aidlc.ts"), ...args], {
-    cwd: proj, input, encoding: "utf-8", env: env(proj),
+    cwd: proj, input, encoding: "utf-8", env: env(proj, session),
   });
   return { status: r.status, stdout: r.stdout ?? "", out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
@@ -61,13 +61,20 @@ async function personSays(proj: string, prompt: string): Promise<string> {
   return auditBlockField(turn.block, "Message Id")!;
 }
 
-// One review pass, requested and recorded with the verdict given.
-function review(proj: string, iteration: number, verdict: "READY" | "NOT-READY"): Record<string, unknown> {
+// One review pass, requested and recorded with the verdict given, from the
+// chat named (this one by default), with the findings given (none by default;
+// NOT-READY gets a Major one).
+function review(
+  proj: string,
+  iteration: number,
+  verdict: "READY" | "NOT-READY",
+  opts: { session?: string; finding?: string } = {},
+): Record<string, unknown> {
+  const session = opts.session ?? SESSION;
   const base = ["engine", "log", "review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", String(iteration)];
-  const requested = last(engine(proj, base).stdout);
-  const findings = verdict === "READY"
-    ? "| Severity | Location | Finding | Required action |\n|---|---|---|---|\n"
-    : "| Severity | Location | Finding | Required action |\n|---|---|---|---|\n| Major | requirements.md | FR2 has no acceptance rule | Add one |\n";
+  const requested = last(engine(proj, base, undefined, session).stdout);
+  const finding = opts.finding ?? (verdict === "NOT-READY" ? "| Major | requirements.md | FR2 has no acceptance rule | Add one |\n" : "");
+  const findings = `| Severity | Location | Finding | Required action |\n|---|---|---|---|\n${finding}`;
   const body = `## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** ${REVIEWER}\n**Iteration:** ${iteration}\n\n### Findings\n\n` +
     `**Prior findings**\n\n| ID | Now | Severity | Note |\n|---|---|---|---|\n\n**New findings**\n\n${findings}`;
   const file = requested.reviewFile as string | undefined;
@@ -75,7 +82,7 @@ function review(proj: string, iteration: number, verdict: "READY" | "NOT-READY")
   mkdirSync(dirname(target), { recursive: true });
   if (file) writeFileSync(target, body);
   else appendFileSync(target, `\n${body}`);
-  const done = engine(proj, [...base, "--verdict", verdict]);
+  const done = engine(proj, [...base, "--verdict", verdict], undefined, session);
   expect(done.status, done.out).toBe(0);
   return last(done.stdout);
 }
@@ -119,6 +126,27 @@ describe("t-recovery-review-reply-stands: after the recovery review, the person'
     const rows = readAuditShardEvents(proj).filter((row) => row.event === "GATE_APPROVED");
     expect(rows.length).toBe(1);
     expect(auditBlockField(rows[0].block, "Message Id")).toBe(approve);
+  });
+
+  // The person approved in one chat; the recovery review is recorded from
+  // another (they picked the work up there). The agent there never saw their
+  // words, so the note names no message of the other chat's and the gate is
+  // asked, as before.
+  test("a READY recovery review recorded in another chat shows the gate there", async () => {
+    const { proj, approve } = await approvedThenStale();
+    const note = String(review(proj, 2, "READY", { session: "t-recovery-review-reply-stands-2" }).agent_note ?? "");
+    expect(note).not.toContain(approve);
+    expect(note).toContain("printing its output as the review brief, and ask the approval question in this turn.");
+  });
+
+  // A finding the person has not seen comes to them at the gate, with the
+  // review brief: their approval came before it.
+  test("a READY recovery review with a minor finding shows it at the gate and asks", async () => {
+    const { proj } = await approvedThenStale();
+    const note = String(review(proj, 2, "READY", { finding: "| Minor | requirements.md | FR1 names no error case | Name one |\n" })
+      .agent_note ?? "");
+    expect(note).not.toContain("still stands");
+    expect(note).toContain("printing its output as the review brief, and ask the approval question in this turn.");
   });
 
   test("a NOT-READY recovery review brings its findings to the gate, as before", async () => {

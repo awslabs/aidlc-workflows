@@ -259,6 +259,7 @@ import type {
 } from "./aidlc-lib.js";
 import {
   deriveReviewFindingsList,
+  readReviewArtifactContexts,
   renderReadableReviewCopy,
 } from "./aidlc-review-brief.js";
 import {
@@ -3163,10 +3164,15 @@ function reviewVerdictStep(
   }
   // The one recovery pass at an open gate the person already answered: the
   // approval refused for the stale review stands on their reply, which nothing
-  // has used, so the agent records it rather than asking again. A NOT-READY
-  // pass brings its findings to them at the gate.
+  // has used, so the agent records it rather than asking again. A reply in
+  // another chat is not named: the agent here never saw its words. A pass with
+  // a finding they have not seen (a NOT-READY one, or a READY one with a minor
+  // point) brings it to them at the gate, with the brief.
+  const reviewed = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
+  const unseen = () => reviewed === undefined || readReviewArtifactContexts(pd, reviewed).some((context) =>
+    context.findings.some((finding) => finding.status === "New" || finding.status === "Unresolved"));
   if (request.recovery && box === "awaiting-approval" && verdict === "READY" &&
-    personRepliedSinceGateShown(pd, { stage: flags.stage }) === true) {
+    personRepliedSinceGateShown(pd, { stage: flags.stage }) === true && !unseen()) {
     const replies = personsGateReply(pd, resolveInvokingSessionId(pd), flags.stage).replies;
     if (replies.length > 0) {
       const report = `orchestrate report --stage ${quoteCommandArgument(flags.stage)}`;
