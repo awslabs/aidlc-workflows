@@ -28,6 +28,7 @@ import {
   SPACE_NAME_REGEX,
 } from "./aidlc-runtime-paths.ts";
 export { entrySkillInvocation, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
+import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing } from "./aidlc-command.ts";
 import {
   type EngineInvocation,
   GUARD_REMEDY_WORDING,
@@ -1050,19 +1051,19 @@ export const READ_ONLY_FLAGS: ReadonlySet<string> = new Set([
   "--doctor",
   "--version",
 ]);
-// Whether the args carry words of the person's own: a token that is not a flag
-// and does not follow one (a flag's value), or anything after `--`. Among such
-// words a utility flag is part of what they asked for ("add a --version flag
-// that prints the version"), not AI-DLC's own utility; alone, or among other
-// flags, it is the utility. parseNextFlags and the harness seams read the
-// same rule, so they never disagree on one command.
+// Whether the args carry words of the person's own: a token that is neither a
+// flag nor a flag's value (nextFlagTakesFollowing: a flag `next` takes with no
+// value takes none), or anything after `--`. Among such words a utility flag
+// is part of what they asked for ("add a --version flag that prints the
+// version"), not AI-DLC's own utility; alone, or among other flags, it is the
+// utility. parseNextFlags and the harness seams read the same rule, so they
+// never disagree on one command.
 export function nextArgsCarryRequestWords(args: readonly string[]): boolean {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--") return i + 1 < args.length;
-    if (arg.startsWith("-")) continue;
-    if (i > 0 && args[i - 1].startsWith("-")) continue;
-    return true;
+    if (!arg.startsWith("-")) return true;
+    if (nextFlagTakesFollowing(arg, args[i + 1])) i++;
   }
   return false;
 }
@@ -1234,8 +1235,8 @@ export function requestWordsBeginAt(rawArgs: readonly string[]): number {
     const token = rawArgs[i];
     if (token === "--") return Number.POSITIVE_INFINITY;
     if (token.startsWith("-")) {
-      // A token after a flag is that flag's value, never a word of theirs.
-      if (rawArgs[i + 1] !== undefined && !rawArgs[i + 1].startsWith("-")) i++;
+      // A flag's value is never a word of theirs; a flag that takes none takes no word.
+      if (nextFlagTakesFollowing(token, rawArgs[i + 1])) i++;
       continue;
     }
     return NEXT_OWN_COMMAND_WORDS.has(token) ? Number.POSITIVE_INFINITY : i;
@@ -42495,16 +42496,8 @@ const DEPTH_VALUES = ["minimal", "standard", "comprehensive"] as const;
  * family come from their own tables, in nextFlagShape.
  */
 export const NEXT_FLAGS: ReadonlyMap<string, NextFlagShape> = new Map<string, NextFlagShape>([
-  ["--resume", { value: "none" }],
-  ["--single", { value: "none" }],
-  ["--new-intent", { value: "none" }],
-  ["--new-scope", { value: "none" }],
-  ["--continue", { value: "none" }],
-  ["--change", { value: "none" }],
-  ["--every-unit", { value: "none" }],
-  // Retired, still taken so the token never becomes task text.
-  ["--init", { value: "none" }],
-  ["--force", { value: "none" }],
+  // The flags it takes with no value, listed where the dispatcher reads them too.
+  ...[...NEXT_VALUELESS_FLAGS].map((flag): [string, NextFlagShape] => [flag, { value: "none" }]),
   ["--scope", { value: "free", needsFollowing: true, valueMayLookLikeFlag: true }],
   // The plan the agent proposes for a request; its words are read at call time
   // (nextFlagShape), and a missing value is an agent-facing step, not a refusal.

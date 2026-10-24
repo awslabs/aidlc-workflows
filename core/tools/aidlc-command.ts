@@ -151,6 +151,33 @@ export const PINNED_SYSTEM_GROUPS = ["workspace-sync"] as const;
 // The sections `aidlc config <section>` takes (aidlc-init.ts reads them).
 export const CONFIG_SECTIONS = ["models", "runtime", "providers", "trust", "flags", "project"] as const;
 
+/**
+ * The flags `next` takes with no value. NEXT_FLAGS in aidlc-lib.ts takes them
+ * from here, and the dispatcher, which does not load that module, reads the
+ * same list where it finds the person's words on a `next` line.
+ */
+export const NEXT_VALUELESS_FLAGS: ReadonlySet<string> = new Set([
+  "--resume",
+  "--single",
+  "--new-intent",
+  "--new-scope",
+  "--continue",
+  "--change",
+  "--every-unit",
+  // Retired, still taken so the token never becomes task text.
+  "--init",
+  "--force",
+]);
+
+/**
+ * Whether the token after a flag on a `next` line is that flag's value rather
+ * than a word of the person's: the next token that is not flag-shaped, unless
+ * `next` takes the flag with no value.
+ */
+export function nextFlagTakesFollowing(flag: string, following: string | undefined): boolean {
+  return following !== undefined && !following.startsWith("-") && !NEXT_VALUELESS_FLAGS.has(flag);
+}
+
 const LAUNCHER_FLAG_VALUES = new Set(["--project-dir"]);
 // The dispatcher's global flags: `aidlc` drops them wherever they appear
 // before `--`, then routes what remains.
