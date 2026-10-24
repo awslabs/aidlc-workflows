@@ -35576,6 +35576,14 @@ function lockDirMtimeMs(lockDir: string): number | null {
   }
 }
 
+// A lock folder whose stamp never finished is past the grace and counts as a
+// leak. The transaction lock's directory form judges its own unfinished stamp
+// by this too (aidlc-transaction.ts clearStaleLock).
+export function unstampedPastGrace(lockDir: string): boolean {
+  const mtime = lockDirMtimeMs(lockDir);
+  return mtime !== null && lockAcquireEpochMs() - mtime > unstampedGraceMs();
+}
+
 function ownerStampsEqual(now: LockOwner, judged: LockOwner): boolean {
   return (
     now.pid === judged.pid &&
@@ -35614,10 +35622,7 @@ function reapCandidate(lockDir: string): ReapCandidate | null {
     return null;
   }
   if (inspected.status === "missing") {
-    const mtime = lockDirMtimeMs(lockDir);
-    if (mtime === null || lockAcquireEpochMs() - mtime <= unstampedGraceMs()) {
-      return null;
-    }
+    if (!unstampedPastGrace(lockDir)) return null;
     const identity = unstampedIdentity(lockDir);
     return identity === null
       ? null

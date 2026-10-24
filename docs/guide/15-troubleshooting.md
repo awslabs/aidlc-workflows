@@ -156,9 +156,13 @@ has stopped when its PID is dead, or when the system has since given that PID
 to a later process (Windows reuses PIDs quickly): one whose start record
 differs from the one the lock recorded, or, for a lock from a release that
 recorded none, one that started after the lock was written. A directory lock
-also needs its recorded host/boot identity to match. Foreign, incomplete, or
-unverifiable directory owners are retained; a PID absent on this host is not
-proof that a foreign owner has stopped.
+also needs its recorded host/boot identity to match. A directory lock whose
+owner stamp never finished (no `owner.json`, an empty one, or one cut off
+before it reads as JSON) is what a command stopped while taking the lock
+leaves, and the next command clears it the same way once it is a few seconds
+old. A stamp that reads but names a foreign host, no valid owner, or a live
+process is retained, as is an unverifiable one; a PID absent on this host is
+not proof that a foreign owner has stopped.
 
 For manual diagnosis, preserve the error, lock, and named staging/recovery
 paths. Inspect `.aidlc-transaction.lock/owner.json` (the lock file itself for a
