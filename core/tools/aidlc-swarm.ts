@@ -1805,6 +1805,7 @@ function emitSwarmStarted(
   attempt: SwarmAttemptStamp,
   resumed: Record<string, string> = {},
   resumeFingerprints: Record<string, string> = {},
+  landingBranch: string | null = null,
 ): void {
   appendAuditEntry(
     "SWARM_STARTED",
@@ -1815,6 +1816,7 @@ function emitSwarmStarted(
       "Concurrency cap": concurrency,
       Stage: attempt.stage,
       "Run floor": attempt.floor,
+      ...(landingBranch ? { "Landing branch": landingBranch } : {}),
       ...(Object.keys(resumed).length ? {
         "Resumed": "true",
         "Checkpoint": "swarm-batch",
@@ -2486,7 +2488,11 @@ function handlePrepare(rest: string[]): void {
     fail(e instanceof Error ? e.message : String(e));
   }
 
-  const base = flags.base ?? currentBranch(repoCwd);
+  // The Units land on the branch checked out here, whatever base they fork
+  // from; a detached checkout names none.
+  const checkedOut = currentBranch(repoCwd);
+  const landingBranch = checkedOut === "HEAD" ? null : checkedOut;
+  const base = flags.base ?? checkedOut;
   const concurrency =
     flags.concurrency && /^[1-9][0-9]*$/.test(flags.concurrency)
       ? flags.concurrency
@@ -2849,6 +2855,7 @@ function handlePrepare(rest: string[]): void {
       attempt,
       Object.fromEntries(readyUnits.filter((unit) => resumes.has(unit)).map((unit) => [unit, resumes.get(unit)!.revision])),
       Object.fromEntries(readyUnits.filter((unit) => resumes.has(unit)).map((unit) => [unit, resumes.get(unit)!.approvalFingerprint])),
+      landingBranch,
     );
   }
 
@@ -2857,6 +2864,7 @@ function handlePrepare(rest: string[]): void {
       {
         batch: flags.batch,
         base,
+        ...(landingBranch ? { landing_branch: landingBranch } : {}),
         concurrency: Number(concurrency),
         units: prepared,
         ...(swarmChangeNotices.length > 0 ? { change_notices: swarmChangeNotices } : {}),
@@ -3240,12 +3248,17 @@ function handleFinalize(rest: string[]): void {
   const failedCount = failedResults.length;
   emitSwarmCompleted(projectDir, batch, convergedCount, failedCount);
 
+  const landingRows = readAuditShardEvents(projectDir);
   const envelope = {
     batch,
-    units: results.map((result) => ({
-      ...result,
-      bolt_slug: swarmBoltSlug(result.unit),
-    })),
+    units: results.map((result) => {
+      const landingBranch = result.status === "converged" ? preparedLandingBranch(landingRows, batch, result.unit) : null;
+      return {
+        ...result,
+        bolt_slug: swarmBoltSlug(result.unit),
+        ...(landingBranch ? { landing_branch: landingBranch } : {}),
+      };
+    }),
     converged: convergedCount,
     failed: failedCount,
     merge_failures: mergeFailures,
@@ -3298,6 +3311,17 @@ function currentSwarmAttempt(projectDir: string): SwarmAttemptStamp | null {
   } catch {
     return null;
   }
+}
+
+// The branch a Unit's landing goes onto: the one checked out in its repo's main
+// checkout when prepare started it, from the newest SWARM_STARTED row naming
+// the Unit in this batch. Null for a row that names none (a detached checkout,
+// or an earlier release).
+function preparedLandingBranch(rows: readonly AuditShardEvent[], batch: string, unit: string): string | null {
+  const started = latestResumeRow(rows.filter((row) => row.event === "SWARM_STARTED" &&
+    auditBlockField(row.block, "Batch number") === batch &&
+    splitCsv(auditBlockField(row.block, "Unit names") ?? "").includes(unit)));
+  return started === null ? null : auditBlockField(started.block, "Landing branch");
 }
 
 function preparedSwarmAttempt(

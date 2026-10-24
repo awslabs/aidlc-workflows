@@ -227,6 +227,7 @@ describe("the person's branch is ahead of main and carries the records: prepare 
     expect(git(pd, ["diff", "--name-only", "main", "HEAD", "--", "aidlc"])).toContain("/audit/");
     const result = prepare(pd, UNITS);
     expectPrepared(pd, result);
+    expect(JSON.parse(result.out)).toMatchObject({ base: "main", landing_branch: "feature" });
     const rows = readAuditShardEvents(pd);
     for (const unit of UNITS) {
       expect(units(result).find((entry) => entry.unit === unit)).toMatchObject({ base_commit: head });
@@ -243,10 +244,21 @@ describe("the person's branch is ahead of main and carries the records: prepare 
     expect(readFileSync(join(pd, "src", "shared.ts"), "utf-8")).toBe("export const shared = 2;\n");
   });
 
+  // The landing branch is the one prepare found, not whatever is checked out at landing: a switch in between is
+  // still caught by the landing's own branch check.
+  test("finalize names the branch prepare found even after the checkout moved, and the landing refuses there", () => {
+    const pd = project("branch-ahead");
+    expectPrepared(pd, prepare(pd, UNITS));
+    for (const unit of UNITS) writeUnitSource(pd, unit, 2);
+    git(pd, ["checkout", "-q", "-b", "elsewhere"]);
+    expect(() => checkReviewFinalizeAndLand(pd, { alpha: 2, beta: 2 }, "feature")).toThrow("expected branch feature, found elsewhere");
+  });
+
   test("on main itself the Units start on the named base, as before", () => {
     const pd = project("all-records");
     const result = prepare(pd, UNITS);
     expectPrepared(pd, result);
+    expect(JSON.parse(result.out)).toMatchObject({ base: "main", landing_branch: "main" });
     const head = git(pd, ["rev-parse", "HEAD"]);
     for (const unit of UNITS) expect(units(result).find((entry) => entry.unit === unit)).toMatchObject({ base_commit: head });
   });
