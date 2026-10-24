@@ -1343,8 +1343,10 @@ function constructionPolicyNotice(before: string, after: string, field: string):
       now: "Construction now goes stage by stage", was: "it went stage by stage",
       already: "Construction already goes stage by stage",
     },
+    // Parallel runs only stage by stage (setConstructionPolicyField), so said
+    // right after the order's own line, the two read as one change.
     swarm: {
-      now: "Construction now builds the Units in parallel", was: "it built the Units in parallel",
+      now: "Construction now builds the Units in parallel, stage by stage", was: "it built the Units in parallel",
       already: "Construction already builds the Units in parallel",
     },
     serial: {
