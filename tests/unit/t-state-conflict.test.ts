@@ -196,8 +196,18 @@ describe("a record of the work git left conflicted", () => {
     );
   });
 
+  test("a stash popped over the pull and added with its markers is still your stashed side", () => {
+    const clone = conflictedClone("stash");
+    expect(clone.git("add", "--", STATE).code).toBe(0);
+    const said = settleConflictedState(clone.blair, DEFAULT_RECORD_DIR, "default");
+    expect(getField(state(clone), "Last Updated")).toBe("2025-07-16T09:30:00Z");
+    expect(said).toContain("in your git history.");
+    expect(said).not.toContain("git checkout");
+  });
+
   test("the line is one line", () => {
-    const said = settleConflictedState(conflictedClone("merge").blair, DEFAULT_RECORD_DIR, "default") ?? "";
+    const said = settleConflictedState(conflictedClone("merge").blair, DEFAULT_RECORD_DIR, "default");
+    expect(typeof said).toBe("string");
     expect(said).not.toMatch(/[\r\n]/);
   });
 
