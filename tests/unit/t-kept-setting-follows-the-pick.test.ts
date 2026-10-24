@@ -223,6 +223,25 @@ describe("t-kept-setting-follows-the-pick: the work the chat picks gets what was
     expect(getField(state(picked), "Guards On") ?? "").not.toContain("review-freeze");
   });
 
+  // `/aidlc --resume` is a request to pick work up, so a setting typed with it
+  // is kept the same way and the pick question follows: the work picked gets it.
+  test.each([
+    ["/aidlc --resume --guard-policy relaxed", "guard-policy relaxed", "Guard Policy", "relaxed (set by you)"],
+    ["/aidlc --resume --depth minimal", "depth minimal", "Depth", "Minimal"],
+  ])("%s, then existing work picked: it lands there", (line, setter, field, value) => {
+    const [, picked] = workNoneSelected();
+    expect(getField(state(picked), field)).not.toBe(value);
+    reply(line);
+    const step = next(line.replace(/^\/aidlc\s+/, "").split(" "));
+    expect(String(step.message), JSON.stringify(step).slice(0, 300)).toContain(`engine config set ${setter}`);
+    expect(String(step.message)).toContain("run `bun .claude/tools/aidlc-orchestrate.ts next` and follow what it returns");
+    const kept = runNamed(step);
+    expect(kept.status, kept.out).toBe(0);
+    expect(kept.out).toContain("for the work you pick up or start next (set by you)");
+    pick(picked);
+    expect(getField(state(picked), field)).toBe(value);
+  });
+
   test("a space switch that lands on that space's one piece of work picks it", () => {
     workNoneSelected();
     expect(utility(["space-create", "foo"]).status).toBe(0);
@@ -299,6 +318,18 @@ describe("t-kept-setting-follows-the-pick: the keep line says where it goes", ()
     const kept = typeSetting("/aidlc --guard.review-freeze off");
     expect(kept).toContain("for the piece of work you start now (set by you)");
     expect(kept).not.toContain("pick up");
+  });
+
+  test("no work at all: a setting typed with --resume still gets the line that nothing is here to resume", () => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+    const health = hooksHealthDir(proj);
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "record-human-turn.last"), new Date().toISOString());
+    reply("/aidlc --resume --depth minimal");
+    const step = next(["--resume", "--depth", "minimal"]);
+    expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("error");
+    expect(String(step.message)).toContain("No workflow state found");
   });
 
   test("only finished work here: nothing to pick up, so for the piece of work they start now", () => {

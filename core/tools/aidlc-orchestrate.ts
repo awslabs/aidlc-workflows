@@ -10788,10 +10788,15 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // anything else, so it is never lost behind the question of which work to
     // pick up. A step, not an error. Where work is here to pick from, the agent
     // asks the engine again and the person gets that question in the same turn.
+    // A --resume asks to pick work up, so its setting is kept the same way when
+    // there is work here to pick; with none, it keeps the error below that
+    // nothing is here to resume.
     const typedBeforeWork = typedSettingModifiers(flags);
-    const settingBeforeWork = typedBeforeWork.length > 0 && !flags.intent && !flags.resume;
-    const pickFollows = settingBeforeWork && unselectedRecords(pd) !== null;
-    const thenWait = pickFollows ? "re-run next and follow what it returns." : "wait for them to say what to build.";
+    const pickFollows = typedBeforeWork.length > 0 && !flags.intent && unselectedRecords(pd) !== null;
+    const settingBeforeWork = typedBeforeWork.length > 0 && !flags.intent && (!flags.resume || pickFollows);
+    const thenWait = pickFollows
+      ? `run \`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns.`
+      : "wait for them to say what to build.";
     const teamKeepsBeforeWork = settingBeforeWork ? teamKeepsTyped(flags, pd) : null;
     if (teamKeepsBeforeWork !== null) {
       const said = `Run nothing. Tell the person in one line: "${teamKeepsBeforeWork}" Then ${thenWait}`;
