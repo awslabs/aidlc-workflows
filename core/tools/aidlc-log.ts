@@ -3753,11 +3753,13 @@ function handleReview(args: string[]): void {
         const refuseBound = (code: string, invariant: string, message: string): never =>
           personMayHaveAsked() ? refuseReview(message) : refuseAttemptGuard(code, invariant, message);
         // Under relaxed or off the change is accepted and no review is owed (the
-        // rule recoveryReviewOwed in aidlc-state.ts reads), so a review the agent
-        // starts on its own past the one recovery is refused to it alone, and its
-        // way on is the Unit's next step: never the person's question, a redo of
-        // built work or a restart of the stage. A swarm Bolt keeps its own halt.
+        // rule recoveryReviewOwed in aidlc-state.ts reads), so a review of a Unit
+        // the agent starts on its own past the one recovery is refused to it
+        // alone, and its way on is the Unit's next step: never the person's
+        // question, a redo of built work or a restart of the stage. A stage's own
+        // review keeps its way on, and so does a swarm Bolt.
         const changeAccepted = (): boolean =>
+          flags.unit !== undefined &&
           !(autonomousCandidate && attempt.boltStarted) &&
           guardPolicyAcceptsChanges(pd, state, { selection: { intent, space } });
         const refuseChangeAccepted = (retryWith: string | null): never =>
