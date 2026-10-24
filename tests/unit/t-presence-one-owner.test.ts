@@ -170,9 +170,13 @@ describe.each(POLICIES)("Guard Policy %s: a stop the person asked for", (policy)
     expect(rows(proj, "WORKFLOW_PARKED")).toHaveLength(0);
   });
 
+  // This chat's messages reach the record (its grant was the last of them); a
+  // chat none of whose messages ever did is t188's hooks-off case.
   test("a turn in another chat does not stand for this chat's stop; this chat's own turn does", () => {
     const proj = project(policy);
     autonomous(proj);
+    said(proj, "continue automatically");
+    appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, proj);
     said(proj, "stop for today", OTHER);
     expect(park(proj).out).toContain("Refusing to park");
     said(proj, "stop for today");
