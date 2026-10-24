@@ -31663,10 +31663,8 @@ export function stageDir(projectDir: string, phase: string, slug: string, intent
 }
 
 // The literal token used in the per-unit path shape when no concrete Unit of
-// Work is supplied at emit time. The unit value comes from active Bolt context
-// (a later engine increment threads it in); when absent, the faithful emission
-// is the documented `{unit-name}` placeholder shape, matching
-// 16-artifact-vocabulary.md, "Filesystem mapping".
+// Work is supplied at emit time: the documented `{unit-name}` placeholder
+// shape, matching 16-artifact-vocabulary.md, "Filesystem mapping".
 export const UNIT_NAME_PLACEHOLDER = "{unit-name}";
 
 // Where a stage's `<slug>-questions.md` lives: a Construction stage run for a
@@ -33505,18 +33503,20 @@ export function reviewRequestAction(lead: string, request: string | undefined): 
 // Where the questions a stage was never asked go, from the project: where its
 // run step keeps them, so a per-unit stage the plan runs with no Units keeps
 // them at stage level. Null when it cannot be said (an isolated run keeps its
-// own copy of the record; an unknown stage).
+// own copy of the record; an unknown stage; a per-unit stage with Units planned
+// and no Unit named, whose checks read only each Unit's file).
 function unaskedQuestionsFile(input: GuardRefusalInput): string | null {
   if (input.projectDir === undefined || input.summary?.isolated === true) return null;
-  let phase: string | undefined;
+  let stage: { slug: string; phase: string; for_each?: string } | undefined;
   try {
-    phase = (input.summary?.stage ?? findStageBySlug(input.stage))?.phase;
+    stage = input.summary?.stage ?? findStageBySlug(input.stage) ?? undefined;
   } catch {
     return null;
   }
-  if (phase === undefined) return null;
+  if (stage === undefined) return null;
   const stageLevel = usesStageLevelPerUnitArtifacts(getField(input.stateContent, "Scope"), input.stateContent);
-  const path = stageQuestionsFile(input.projectDir, phase, input.stage, stageLevel ? null : input.unit ?? null);
+  if (isPerUnitStage(stage) && !stageLevel && input.unit === undefined) return null;
+  const path = stageQuestionsFile(input.projectDir, stage.phase, input.stage, stageLevel ? null : input.unit ?? null);
   return toPosix(relative(input.projectDir, path));
 }
 
