@@ -1515,13 +1515,17 @@ export function briefNote(ceremony: Record<string, unknown>, modules: readonly s
 // Both states are said: off left as an absence read as the ask on Kiro CLI,
 // where the agent quoted the stage file's own "summary_confirmation: required"
 // and ran the checkpoint twice on a bugfix (the plan-approval-off note has the
-// same shape).
+// same shape). Off is said as the step alone and names no setting: the agent
+// reads the note aloud to people who never chose one. It is said only for a
+// stage that asks questions: worded as if every stage had answers, it had
+// opencode record an answer-mode question at a first Reverse Engineering scan,
+// which asks none, and show the gate again on every reply.
 export function ceremonyNote(state: "on" | "off"): string {
   return state === "on"
     ? "After this stage's questions are answered and before writing anything, confirm the summary of the answers " +
       "with the person (stage-protocol-summary.md)."
-    : "Summary confirmation is off for this work: once the answers are written to the questions file, write the " +
-      "stage's outputs; skip the stage file's Consolidated Summary step and record nothing for it.";
+    : "If this stage puts questions to the person, write the stage's outputs once their answers are in the questions " +
+      "file; skip the stage file's Consolidated Summary step and record nothing for it.";
 }
 
 // --- The numbered rendering of a question ---

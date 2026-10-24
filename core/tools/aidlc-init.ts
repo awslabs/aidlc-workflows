@@ -11893,13 +11893,25 @@ function settingsChangeLines(
       }
     }
   }
-  // A clear aimed at one layer leaves the switch on where another records it.
+  lines.push(...stillRecordedAfter(projectDir, mutations, harness));
+  return lines;
+}
+
+// The switches one settings change turned off or back on.
+function changedBypasses(change: SettingsMutation): string[] {
+  const before = new Set(change.previous?.flags?.bypasses ?? []);
+  const after = new Set(change.next?.flags?.bypasses ?? []);
+  return [...[...after].filter((name) => !before.has(name)), ...[...before].filter((name) => !after.has(name))];
+}
+
+// A clear aimed at one layer leaves the switch on where another records it:
+// one line for each such switch, with the command that clears it there.
+function stillRecordedAfter(projectDir: string, mutations: readonly SettingsMutation[], harness?: string): string[] {
   const cleared = mutations.flatMap((change) => {
     const after = new Set(change.next?.flags?.bypasses ?? []);
     return (change.previous?.flags?.bypasses ?? []).filter((name) => !after.has(name));
   });
-  for (const name of new Set(cleared)) lines.push(...stillRecordedLines(projectDir, name, harness));
-  return lines;
+  return [...new Set(cleared)].flatMap((name) => stillRecordedLines(projectDir, name, harness));
 }
 
 // What a harness.json answer changed, with the command that puts the earlier
@@ -12428,12 +12440,26 @@ function recordBypassesOnly(
       ? []
       : postApplyOutstandingActions(projectDir, context.harnessDir, context.harness);
     if (options.mode === "human") {
-      // The person sees what changed with its undo, and which check is now
-      // off or on again; anything more only when something still needs them.
-      writeMenuLines("", changes);
+      // The person sees which check is now off or on again and, where they
+      // need it, what changed with its undo; anything more only when
+      // something still needs them. From a chat, for their own file, the
+      // switch's own line already says what changed and the way back, and the
+      // agent turns the check back on when they ask, never handing them a
+      // command, so the file, its undo and the open workflows stay in the JSON
+      // result. A change to the project's shared file or the machine's keeps
+      // them (from a chat chatBackOnLines never clears either, so the file and
+      // its undo are the person's way back), and so does a switch with no line
+      // of its own. A switch another file still keeps off is said either way:
+      // its own line is left out of switchLines for that one.
+      const ownSwitchesOnly = mutations.every((change) => change.target === "local") &&
+        mutations.flatMap(changedBypasses).every((name) => (PERSON_CHECK_SWITCHES as readonly string[]).includes(name));
+      const shown = switchLines.length > 0 && !commandAtPersonsTerminal() && ownSwitchesOnly
+        ? stillRecordedAfter(projectDir, mutations)
+        : changes;
+      writeMenuLines("", shown);
       writeMenuLines("", notes.map((note) => `Note: ${note}`));
       writeMenuLines("", switchLines);
-      if (changes.length + notes.length + switchLines.length === 0) {
+      if (shown.length + notes.length + switchLines.length === 0) {
         writeMenuLines("", [`configured flags settings for ${projectDir}`]);
       }
       if (outstandingActions.length > 0) {
