@@ -582,6 +582,18 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  // A print says itself when to stop ("print its output verbatim, then stop"),
+  // and loop step 3 stops on that; "Jump accepted. Run `next --stage ...`" says
+  // nothing of the kind, and the agent acts on what that `next` returns. A stop
+  // in the row would end the turn there with the jump not made.
+  test("the print row adds no stop of its own", () => {
+    const stopping = skills.filter((rel) => {
+      const row = readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n").find((line) => line.startsWith("| `print` |"));
+      return row === undefined || /\bstop/i.test(row);
+    });
+    expect(stopping).toEqual([]);
+  });
+
   test("the narration rule is worded identically across every harness", () => {
     // Byte-alignment, not just presence: the rule is authored once and ported,
     // so a per-harness reword is drift. Extracted by its own anchors rather than
