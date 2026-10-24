@@ -165,7 +165,7 @@ import {
 } from "./aidlc-lib.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import { noReplySince, personTurnStands, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
-import { aidlcToolInvocation, entrySkillInvocation, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer, isOneOfChoices, pickerOffersChoices, protectedQuestionPick,
 } from "./aidlc-reply-reader.ts";
@@ -4668,7 +4668,7 @@ function approvalWorktreeProvenance(parentDir: string, childDir: string, unit: s
     throw new Error("Worktree intent belongs to a different approval parent");
   }
   const intentUuid = delegated?.intentUuid ?? activeIntentUuid(child);
-  return { parent, child, repo, intentUuid, hash: hashObject(creation.block) };
+  return { parent, child, repo, intentUuid, hash: hashObject(creation.block), batch: meta.swarmBatch as string };
 }
 
 // The parent's approval a Unit forks from, read the way generation start reads
@@ -5097,6 +5097,9 @@ function worktreeDelegationParent(
     .update(`${parentQuestions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
     .digest("hex");
   const { delegation: _delegation, ...copiedReceipt } = receipt;
+  if (parentPrompt !== receipt.promptSha256 || questionsFileApprovalFingerprint(parentQuestions) !== receipt.fingerprint) {
+    throw new Error(delegatedPlanChangedReason(provenance, origin.unit));
+  }
   if (provenance.hash !== origin.provenanceSha256 ||
       provenance.intentUuid !== authority.intentId || provenance.intentUuid !== receipt.intentId ||
     parentAuthority.intentId !== receipt.intentId || parentAuthority.runFloor !== receipt.runFloor ||
@@ -5109,6 +5112,28 @@ function worktreeDelegationParent(
     throw new Error("Protected parent Plan Approval or the delegated worktree baseline is no longer current.");
   }
   return provenance.parent;
+}
+
+// The parent's plan for this Unit is no longer the one its build was handed: a
+// revision after prepare, approved again or waiting for that approval. Prepare
+// run again for the Unit hands an approved plan to the existing build (or says
+// why it cannot), so that is the step, after the question when it is open.
+// Approved means the person's approval, not a lowered fence letting the parent
+// go on without one. Worded as the conductor's: a worker meets it through the
+// plan-approval guard.
+function delegatedPlanChangedReason(
+  provenance: ReturnType<typeof approvalWorktreeProvenance>, unit: string,
+): string {
+  const repo = provenance.repo.repo === null ? "" : ` --repo ${quoteCommandArgument(provenance.repo.repo)}`;
+  const prepare = `\`${aidlcToolInvocation("swarm")} prepare --batch ${provenance.batch} --units ${quoteCommandArgument(unit)}${repo}\``;
+  const folder = `the project's main folder \`${provenance.parent}\``;
+  if (evaluateCodeGenerationApproval(provenance.parent, { unit }).ok) {
+    return `The plan for ${unit} was approved again after its build was prepared, so this build still holds the ` +
+      `earlier plan. To hand it the approved plan, the conductor runs ${prepare} from ${folder}.`;
+  }
+  return `The plan for ${unit} changed after its build was prepared and is not approved yet. From ${folder}, the ` +
+    `conductor runs \`${aidlcToolInvocation("orchestrate")} next\` and follows the step it prints, then ${prepare} to ` +
+    "hand the approved plan to this build.";
 }
 
 function validateWorktreeDelegation(
