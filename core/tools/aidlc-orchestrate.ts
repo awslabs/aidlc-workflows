@@ -3706,7 +3706,8 @@ function openQuestionAnswer(stage: string, block: string, wordsKept: boolean, al
         `\`[Answer]:\` line in ${summaryFile}, then record it with \`${summaryConfirmationCommands({
           stage, unit, questionsFile: summaryFile,
           single: auditBlockField(block, "Workflow")?.startsWith("single-stage:") === true,
-          details: `<${options.length > 0 ? options.join(" or ") : "their choice"}>`,
+          // What they asked to change rides after Request changes (aidlc-log.ts keeps it as Feedback).
+          details: options.length === 2 ? `<${options[0]}, or ${options[1]}: what they asked to change>` : "<their choice>",
         }).answer}\``
     : flags !== null
       ? `${numbered}record the choice they made with ` +
