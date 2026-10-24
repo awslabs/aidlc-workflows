@@ -16487,8 +16487,10 @@ export interface ReviewFingerprintStage {
 
 // Summary questions are mutable human inputs. Re-presenting their confirmation
 // answer does not change the reviewed input, but all substantive content does.
-// A plugin explicitly reviewing questions retains ordinary byte binding.
-function summaryOwnedReviewInput(
+// A plugin explicitly reviewing questions retains ordinary byte binding. The
+// gate-revision backstop (aidlc-state.ts) reads the same rule: a write to them
+// is the person's answers, not a revision of what the gate shows.
+export function summaryOwnedReviewInput(
   stage: Pick<ReviewFingerprintStage, "summary_confirmation" | "review_artifact">,
   artifact: string,
 ): boolean {

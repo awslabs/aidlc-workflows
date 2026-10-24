@@ -889,4 +889,45 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(eventCount(proj, "STAGE_REVISING")).toBe(1);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
+
+  // --- Scenario 15: the stage's own question rounds, with no gate opened. The
+  // questions file is written before the first answer and updated as the
+  // person answers; the documents are produced after; then the person
+  // approves. The questions file holds their answers, not the output the gate
+  // shows, so the rounds are no revision (the shape a strict walk met: a
+  // Request Changes they never gave, and their Approve refused).
+  test("15: question rounds before the documents are not a revision at a gate never opened", () => {
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    recordStageStarted(proj, slug);
+    fireArtifact(proj, feasibilityArtifact(proj, "feasibility-questions")); // the questions
+    recordHumanTurn(proj); // the person answers
+    fireArtifact(proj, feasibilityArtifact(proj, "feasibility-questions")); // their answers noted
+    fireArtifact(proj, feasibilityArtifact(proj, PRIMARY_ARTIFACT)); // production
+    recordHumanTurn(proj); // the person approves
+    const gs = guarded(proj, ["gate-start", slug, "--recovered"]);
+    expect(gs.rc, gs.out).toBe(0);
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(field(proj, "Revision Count")).toBe("0");
+    expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
+    expect(eventCount(proj, "STAGE_REVISING")).toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
+
+  // --- Scenario 15b: at a gate that was opened, a write to the questions file
+  // between the person's turns notes an answer; the documents are unchanged.
+  test("15b: a questions-file write at an open gate is not a revision", () => {
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj);
+    fireArtifact(proj, feasibilityArtifact(proj, "feasibility-questions"));
+    recordHumanTurn(proj); // the person approves
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(field(proj, "Revision Count")).toBe("0");
+    expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
 });
