@@ -4228,9 +4228,17 @@ export function sourceChangedOutsideAidlc(
   before: ReadonlyMap<string, string>,
   after: ReadonlyMap<string, string>,
 ): string[] {
+  return renderSourcePathKeys(sourceKeysChangedOutsideAidlc(projectDir, before, after));
+}
+
+function sourceKeysChangedOutsideAidlc(
+  projectDir: string,
+  before: ReadonlyMap<string, string>,
+  after: ReadonlyMap<string, string>,
+): Set<string> {
   const owned = aidlcOwnedSourceKey(projectDir);
   const theirs = (listing: ReadonlyMap<string, string>) => new Map([...listing].filter(([key]) => !owned(key)));
-  return sourceListingChangedPaths(theirs(before), theirs(after));
+  return sourceListingChangedKeys(theirs(before), theirs(after));
 }
 
 // The paths outside AI-DLC's own files that moved since a kept listing (a
@@ -4244,12 +4252,28 @@ export function sourceChangedOutsideAidlcSince(
   intent?: string,
   space?: string,
 ): string[] | null {
+  const keys = sourceKeysChangedOutsideAidlcSince(projectDir, stageSlug, listing, current, intent, space);
+  return keys === null ? null : renderSourcePathKeys(keys);
+}
+
+// The same, as `<repo>\0<path>` keys, for a line that names each path's repo.
+export function sourceKeysChangedOutsideAidlcSince(
+  projectDir: string,
+  stageSlug: string,
+  listing: string | undefined,
+  current: WorkspaceSourceState,
+  intent?: string,
+  space?: string,
+): Set<string> | null {
   const recorded = listing === undefined ? null : readBaselineSourceSnapshot(projectDir, stageSlug, listing, intent, space);
-  return recorded === null ? null : sourceChangedOutsideAidlc(
-    projectDir,
-    recordedSourceListingUnderCurrentBoundary(recorded, current.listing),
-    current.listing,
-  );
+  if (recorded === null) return null;
+  const before = recordedSourceListingUnderCurrentBoundary(recorded, current.listing);
+  // A path the registry's exclude list now leaves out of the walk (a cache
+  // excluded after the listing was kept) is nobody's change, as on the per-Unit
+  // unclaimed check.
+  const excluded = registryExcludedSourceKeys(projectDir, [...before.keys()].filter((key) => !current.listing.has(key)));
+  for (const key of excluded) before.delete(key);
+  return sourceKeysChangedOutsideAidlc(projectDir, before, current.listing);
 }
 
 // Whether the main checkout moved from a kept listing only in AI-DLC's own
@@ -16387,6 +16411,10 @@ export interface FreshReviewReceipts {
   sourceStaleReason: "boundary-unbindable" | "source-unreadable" | "fingerprint-mismatch" | null;
   /** Recovery ordinal/budget state associated with the newest source binding. */
   sourceStaleProgress: StaleReviewProgress | null;
+  /** The `<repo>\0<path>` keys outside AI-DLC's own files that moved since the
+   *  newest review's kept listing; null when the source is not stale or no
+   *  listing reads back. */
+  sourceChangedKeys: string[] | null;
   /** A workspace-global source-staleness recovery request has been emitted in
    *  this attempt. Source binding is global even when receipts are per-unit. */
   sourceRecoverySpent: boolean;
@@ -20979,6 +21007,7 @@ export function freshReviewReceipts(
     newestSourceUnit: null,
     sourceStale: false,
     sourceStaleReason: null,
+    sourceChangedKeys: null,
     sourceStaleProgress: null,
     sourceRecoverySpent: false,
     unitStale: new Set(),
@@ -21644,9 +21673,10 @@ export function freshReviewReceipts(
   // and then the reviewed source did not change. Null when no listing reads
   // back here (an earlier release, a move during the review, another machine):
   // fingerprints decide. Read for the active record, like the walk above.
-  const movedOutsideAidlc = fingerprintMoved && currentSourceState !== null
-    ? sourceChangedOutsideAidlcSince(projectDir, stage.slug, newestSourceListing, currentSourceState)
+  const movedKeys = fingerprintMoved && currentSourceState !== null
+    ? sourceKeysChangedOutsideAidlcSince(projectDir, stage.slug, newestSourceListing, currentSourceState)
     : null;
+  const movedOutsideAidlc = movedKeys === null ? null : renderSourcePathKeys(movedKeys);
   const sourceMismatch = fingerprintMoved && (movedOutsideAidlc === null || movedOutsideAidlc.length > 0);
   // An unbindable boundary or an unreadable workspace is not a change: strict
   // holds it stale, relaxed and off say once that it could not be checked. A
@@ -22016,6 +22046,7 @@ export function freshReviewReceipts(
         : currentSourceFingerprint === null
           ? "source-unreadable"
           : "fingerprint-mismatch",
+    sourceChangedKeys: sourceStale && movedKeys !== null ? [...movedKeys] : null,
     sourceStaleProgress: sourceStale
       ? newestSourceProgress === null
         ? null
@@ -28020,6 +28051,13 @@ export function sourceListingChangedPaths(
   before: ReadonlyMap<string, string>,
   after: ReadonlyMap<string, string>,
 ): string[] {
+  return renderSourcePathKeys(sourceListingChangedKeys(before, after));
+}
+
+function sourceListingChangedKeys(
+  before: ReadonlyMap<string, string>,
+  after: ReadonlyMap<string, string>,
+): Set<string> {
   const changed = new Set<string>();
   for (const [key, entry] of before) {
     if (!sourceListingEntriesEqual(after.get(key), entry)) changed.add(key);
@@ -28027,7 +28065,7 @@ export function sourceListingChangedPaths(
   for (const key of after.keys()) {
     if (!before.has(key)) changed.add(key);
   }
-  return renderSourcePathKeys(changed);
+  return changed;
 }
 
 /**

@@ -218,6 +218,8 @@ import {
   teamUnitGateStatus,
   unclaimableIgnoredSourceKeys,
   registryExcludedSourceKeys,
+  renderChangedPaths,
+  renderSourcePathKeys,
   unitCompletedReceipts,
   unitGateStatus,
   unitMajorConstructionStageSlugs,
@@ -5617,25 +5619,30 @@ function verifyReviewerPrecondition(
       }
       // The person's line: what changed, and the three ways through, in their
       // words. The agent knows the mechanics (the stage file and the reviewer
-      // protocol say how a manifest is written and a review recorded). The
-      // registry that reaches a path is the one in its own repo folder (the
-      // walk reads each repo root's file), so a recorded repo's path names it.
-      const registries = [...new Set(unclaimed.map((key) => {
-        const repo = key.slice(0, key.indexOf("\0"));
-        return repo ? `${inertPath(repo)}/.aidlc-source-paths.json` : ".aidlc-source-paths.json";
-      }))].sort();
-      const where = registries.length === 1 && registries[0] === ".aidlc-source-paths.json"
-        ? ".aidlc-source-paths.json"
-        : `the .aidlc-source-paths.json of the path's own folder (${registries.join(", ")})`;
+      // protocol say how a manifest is written and a review recorded).
       error(
         `Refusing to complete "${stage.slug}": ${unclaimed.length} change${unclaimed.length === 1 ? "" : "s"} made during ${stage.name} ` +
           `that no Unit's review covers (${rendered.join(", ")}${more}). A Unit that made one of them lists the path ` +
-          `in its source manifest and is reviewed once more; a change nobody meant is undone; a path that is not source ` +
-          `(a tool's cache, a build output, a folder that is not this project's code) is left out of the source checks by naming ` +
-          `it under "exclude" in ${where}.`,
+          `in its source manifest and is reviewed once more; a change nobody meant is undone; ${notSourceWayThrough(unclaimed)}.`,
       );
     }
   }
+}
+
+// The way through for a changed path that is not source, the same on every
+// refusal that names changed paths. The registry that reaches a path is the
+// one in its own repo folder (the walk reads each repo root's file), so a
+// recorded repo's path names it.
+function notSourceWayThrough(keys: readonly string[]): string {
+  const registries = [...new Set(keys.map((key) => {
+    const repo = key.slice(0, key.indexOf("\0"));
+    return repo ? `${inertPath(repo)}/.aidlc-source-paths.json` : ".aidlc-source-paths.json";
+  }))].sort();
+  const where = registries.length === 1 && registries[0] === ".aidlc-source-paths.json"
+    ? ".aidlc-source-paths.json"
+    : `the .aidlc-source-paths.json of the path's own folder (${registries.join(", ")})`;
+  return "a path that is not source (a tool's cache, a build output, a folder that is not this project's code) " +
+    `is left out of the source checks by naming it under "exclude" in ${where}`;
 }
 
 function staleSourcePreconditionError(
@@ -5694,10 +5701,16 @@ function staleSourcePreconditionError(
       receipts,
     });
   }
+  // What moved since the review: a path that is not source (a test run's
+  // cache) is left out by the exclude, and the review then still holds.
+  const changed = receipts.sourceChangedKeys;
+  const whatChanged = changed !== null && changed.length > 0
+    ? ` What changed: ${renderChangedPaths(renderSourcePathKeys(changed))}; ${notSourceWayThrough(changed)}.`
+    : "";
   if (recoverySpent) {
     const message =
       `Refusing to complete "${slug}": the workspace source changed again after ` +
-        `the one recovery review by ${reviewer} (source-fingerprint mismatch). ` +
+        `the one recovery review by ${reviewer} (source-fingerprint mismatch).${whatChanged} ` +
         `${recoveryGuidance(pd, content, slug)} ` +
         (requestChangesResetIsExecutable(content, slug)
           ? "Only a human Request Changes decision resets the review attempt; do not " +
@@ -5714,7 +5727,7 @@ function staleSourcePreconditionError(
   const message =
     `Cannot complete "${slug}" because the project source changed after ${reviewer} ` +
       `reviewed it. Ask ${reviewer} to review the current source once more and record ` +
-      `the verdict, or revert the source change, then try again.`;
+      `the verdict, or revert the source change, then try again.${whatChanged}`;
   // On a per-unit stage the review that covered the source is the newest
   // Unit's, so the one recovery review is that Unit's.
   const reviewUnit = receipts.newestSourceUnit ?? undefined;
