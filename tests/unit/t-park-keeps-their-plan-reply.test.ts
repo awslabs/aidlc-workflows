@@ -7,13 +7,15 @@
 // dropped the latest reply the plan question kept, which was their change, so
 // the next chat asked "Approve the code plan?" with nothing of it. The
 // conductor's own park (no --person-asked) dropped their "1" the same way.
+// The stop is the person's latest turn in this chat, in the order the turns
+// came, also in a team clone whose teammate's shard sorts after this one.
 //
 // Spawns the real engine and Claude Code's own human-turn hook.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { AIDLC_SRC, cleanupTestProject, createOrchestrationTestProject } from "../harness/fixtures.ts";
+import { readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { AIDLC_SRC, cleanupTestProject, createOrchestrationTestProject, seededAuditShard } from "../harness/fixtures.ts";
 import { buildState, DISPATCHER, env, exec, next, ORCHESTRATE, say, SESSION } from "../harness/aidlc-input-corpus.ts";
 import { planApprovalKeptReplyWaits } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 
@@ -77,6 +79,20 @@ describe("a park takes back only the message that asked for it", () => {
     const proj = await planQuestionOpen();
     await say(proj, CHANGE, "claude");
     await say(proj, "let's stop here for today", "claude");
+    await park(proj, ["--person-asked"]);
+    expect(kept(proj)).toEqual([CHANGE]);
+  });
+
+  test("in a team clone, a teammate's shard that sorts after this one does not stand in for the stop", async () => {
+    const proj = await planQuestionOpen();
+    await say(proj, CHANGE, "claude");
+    await say(proj, "let's stop here for today", "claude");
+    const mine = seededAuditShard(proj);
+    writeFileSync(join(dirname(mine), `zz-teammate-${basename(mine)}`), [
+      "## HUMAN_TURN", "**Timestamp**: 2026-01-01T00:00:01Z", "**Event**: HUMAN_TURN",
+      "**Session**: 01995000-7a11-7000-8000-0000000000aa", "**Origin**: person",
+      "**Source**: typed", "**Message Id**: aaaaaaaa", "", "---", "",
+    ].join("\n"));
     await park(proj, ["--person-asked"]);
     expect(kept(proj)).toEqual([CHANGE]);
   });

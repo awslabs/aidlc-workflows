@@ -123,7 +123,9 @@ import {
   saveRestartRequest,
   takeRestartRequest,
 } from "./aidlc-question-store.ts";
-import { latestMessage, listMessages, noReplySince, personTurnStands, readMessage } from "./aidlc-message-store.ts";
+import {
+  latestMessage, listMessages, noReplySince, personTurnStands, readMessage, standingPersonTurn,
+} from "./aidlc-message-store.ts";
 import { aidlcEntryWords, APPROVAL_GATE_CHOICES, protectedChoices } from "./aidlc-reply-reader.ts";
 import {
   type AskDirective,
@@ -18732,10 +18734,12 @@ function handlePark(args: string[], projectDir: string | undefined): void {
   // a reply they gave before it (a change, then a stop picked in the agent's
   // own question box) stays kept, and so does every reply under the
   // conductor's own park. A park typed as a command kept no such message.
+  // The message is the turn the state tool's park stood on: this chat's
+  // latest in the order they came, never the last row of a teammate's shard.
   if (asked) {
     try {
-      const turn = readAuditShardEvents(pd).filter((row) => row.event === "HUMAN_TURN").at(-1);
-      const messageId = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+      const turn = standingPersonTurn(pd, "request");
+      const messageId = turn === null ? null : auditBlockField(turn.block, "Message Id");
       if (messageId !== null) withdrawPlanApprovalReplies(pd, { messageId });
     } catch {
       // The reply stays kept; the question is asked again with it.
