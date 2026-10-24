@@ -108,6 +108,10 @@ intent owns a row in the space's `intents.json` registry — `{uuid, slug, dirNa
 scope, repos, status}` — and a **record dir** holding that run's state, audit
 trail, and artifacts. The `uuid` (a UUIDv7) is the canonical, collision-proof
 identity; `dirName` records the human-readable record-dir name verbatim.
+A hand edit that leaves a trailing comma, a comment or a BOM still reads as every
+row. A list nothing can read is never written over: the next new piece of work
+keeps its bytes as `intents.json.unreadable-<UTC time>` beside the new list, and
+you are told once.
 
 The row's `status` is the intent's lifecycle: `in-flight` from creation,
 `complete` once the last in-scope gate closes, or `archived` when you retire

@@ -4641,27 +4641,52 @@ export function appendIntentToRegistry(
 // Write a space's registry. A file git left conflicted was read as every row of
 // both sides, so this write keeps them all; the person hears once that git
 // still shows the file as conflicted. Their git is theirs: nothing is staged.
+// A file nothing can read (a hand edit gone wrong) is never written over: it is
+// kept byte for byte under a new name beside the new list.
 export function writeIntentRegistry(projectDir: string, list: IntentRegistryEntry[], space?: string): void {
   const path = intentsRegistryPath(projectDir, space);
-  let conflicted = false;
+  let bytes: Buffer | null = null;
   try {
-    conflicted = CONFLICT_START.test(readFileSync(path, "utf-8"));
+    bytes = readFileSync(path);
   } catch {
     // absent → a new list
   }
+  const text = bytes?.toString("utf-8") ?? null;
+  const conflicted = text !== null && CONFLICT_START.test(text);
+  const unreadable = text !== null && !conflicted && text.trim() !== "" && registryList(text) === null;
   mkdirSync(dirname(path), { recursive: true });
+  const keptAs = bytes && unreadable ? keepUnreadableRegistry(path, bytes) : null;
   writeFileAtomic(path, `${JSON.stringify(list, null, 2)}\n`);
-  if (!conflicted) return;
+  const shown = (file: string) => toPosix(relative(projectDir, file));
+  const line = conflicted
+    ? `Your list of work, ${shown(path)}, had a git conflict: every piece of work ` +
+      "from both sides was kept. If git still shows the file as conflicted, git add marks it resolved."
+    : keptAs
+      ? `Your list of work, ${shown(path)}, could not be read, so it was kept as ${shown(keptAs)}; ` +
+        "the new list holds only the new work."
+      : null;
+  if (!line) return;
   try {
     const session = resolveInvokingSessionId(projectDir);
-    if (session) {
-      addPendingPersonLines(projectDir, session, [
-        `Your list of work, ${toPosix(relative(projectDir, path))}, had a git conflict: every piece of work ` +
-          "from both sides was kept. If git still shows the file as conflicted, git add marks it resolved.",
-      ]);
-    }
+    if (session) addPendingPersonLines(projectDir, session, [line]);
   } catch {
     // A line the person may miss never undoes the write.
+  }
+}
+
+// The unreadable list's bytes go to `intents.json.unreadable-<UTC stamp>` (no
+// colon, which Windows refuses in a file name), numbered when that name is
+// taken. A copy, not a move: the list is never missing while the new one is written.
+function keepUnreadableRegistry(path: string, bytes: Buffer): string {
+  const stamp = isoTimestamp().replace(/[-:]/g, "");
+  for (let n = 1; ; n++) {
+    const kept = n === 1 ? `${path}.unreadable-${stamp}` : `${path}.unreadable-${stamp}-${n}`;
+    try {
+      writeFileSync(kept, bytes, { flag: "wx" });
+      return kept;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
   }
 }
 
@@ -4684,9 +4709,11 @@ function conflictSide(text: string, side: "ours" | "theirs"): string {
   return kept.join("\n");
 }
 
+// The list as the person's editor may leave it: a trailing comma, a comment or
+// a BOM does not hide its rows.
 function registryList(text: string): IntentRegistryEntry[] | null {
   try {
-    const parsed: unknown = JSON.parse(text);
+    const parsed: unknown = Bun.JSONC.parse(withoutBom(text));
     return Array.isArray(parsed) ? (parsed as IntentRegistryEntry[]) : null;
   } catch {
     return null;
@@ -4700,8 +4727,8 @@ export function spacesRoot(projectDir: string): string {
 }
 
 // Read a space's intents.json registry as a typed list. Returns [] when the
-// file is absent or malformed. A file git left conflicted (two clones started
-// work in one space) reads as every row of both sides, once per uuid. The
+// file is absent or nothing can read it. A file git left conflicted (two clones
+// started work in one space) reads as every row of both sides, once per uuid. The
 // canonical "what intents exist" record for humans/ordering/status — the cheap
 // on-disk listIntentDirs() scan is the path-resolver's record-presence signal,
 // but the registry carries the uuid/status/scope/repos a human or the --json
