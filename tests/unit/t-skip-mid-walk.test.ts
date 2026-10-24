@@ -259,7 +259,7 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     const proj = walk(["alpha", "beta"]);
     const step = next(proj, ["--skip", "code-generation"]);
     expect(named(step)).toContain(EVERY_UNIT);
-    expect(step.message).toContain('"Skipped Code Generation for every Unit from here. You can undo that any time."');
+    expect(step.message).toContain('"Skipped Code Generation for every Unit from here. You can undo that until Build and Test starts."');
     expect(step.message).toContain(
       "If they later ask to undo skipping it for every Unit, run " +
         "`bun .claude/tools/aidlc.ts engine recompose --add code-generation`.",
@@ -272,6 +272,25 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     expect(after.stage).toBe("functional-design");
     expect(after.unit).toBe("beta");
     expect(after.construction_checkpoint ?? null).toBeNull();
+  });
+
+  // Current Stage stays on the walk's first step while the Units take the
+  // walk, so the undo of a walk step taken off the plan holds until the stage
+  // after the walk starts; at Build and Test it is behind the work.
+  test("Code Generation for every Unit from here: its undo holds until Build and Test starts, and is refused there", () => {
+    const proj = walk(["alpha", "beta"]);
+    const step = next(proj, ["--skip", "code-generation"]);
+    const undo = /If they later ask to undo skipping it for every Unit, run `([^`]*)`/.exec(String(step.message))?.[1] ?? "";
+    expect(undo, step.message).toContain("engine recompose --add code-generation");
+    expect(runNamed(proj, EVERY_UNIT).status).toBe(0);
+    const back = runNamed(proj, undo);
+    expect(back.status, back.out).toBe(0);
+    expect(runNamed(proj, EVERY_UNIT).status).toBe(0);
+    const jumped = run(proj, "aidlc-jump.ts", ["execute", "--target", "build-and-test", "--direction", "forward", "--scope", "feature"]);
+    expect(jumped.status, jumped.out).toBe(0);
+    const late = runNamed(proj, undo);
+    expect(late.status).not.toBe(0);
+    expect(late.out).toContain("--stage code-generation --single");
   });
 
   test("with no other Unit left to build it, one command skips it, the stage is marked skipped, and the line names the Unit", () => {
@@ -312,7 +331,7 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     expect(named(step)).toEqual([EVERY_UNIT]);
     expect(step.message).toContain("covers every Unit");
     expect(step.message).toContain('"Code Generation can be skipped for one Unit while that Unit is working on it; the alpha Unit is on Functional Design now."');
-    expect(step.message).toContain('"Skipped Code Generation for every Unit from here. You can undo that any time."');
+    expect(step.message).toContain('"Skipped Code Generation for every Unit from here. You can undo that until Build and Test starts."');
   });
 
   test("Build and Test said mid-walk is taken off the plan, and the Unit carries on", () => {
@@ -426,13 +445,13 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     expect(only).not.toMatch(/recompose --skip [^`]*code-generation/);
     expect(only).toContain(
       '"Skipped NFR Requirements for the alpha Unit and Build and Test; the other Units still get NFR Requirements. ' +
-        "It can still be run for that Unit with `/aidlc --stage nfr-requirements --unit alpha`. You can undo the rest any time. " +
+        "It can still be run for that Unit with `/aidlc --stage nfr-requirements --unit alpha`. You can undo the rest until the work moves past Build and Test. " +
         'Code Generation can be skipped for one Unit while that Unit is working on it."',
     );
     const every = message.slice(message.indexOf(EVERY_FROM));
     expect(every).toContain(`engine recompose --skip nfr-requirements,code-generation,build-and-test --reason '${PERSON}'`);
     expect(every).toContain(
-      '"Skipped NFR Requirements and Code Generation for every Unit from here, and Build and Test. You can undo that any time."',
+      '"Skipped NFR Requirements and Code Generation for every Unit from here, and Build and Test. You can undo that until CI Pipeline starts."',
     );
   });
 
@@ -455,7 +474,7 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     expect(step.message).toContain(
       '"NFR Requirements can be skipped for one Unit while that Unit is working on it; the alpha Unit is paused on NFR Requirements now."',
     );
-    expect(step.message).toContain('"Skipped NFR Requirements for every Unit from here. You can undo that any time."');
+    expect(step.message).toContain('"Skipped NFR Requirements for every Unit from here. You can undo that until Build and Test starts."');
   });
 
   // With no other Unit left to take the step, the Unit's own step is skipped
@@ -476,7 +495,7 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     expect(every).toContain(`engine recompose --skip code-generation --reason '${PERSON}'`);
     expect(every).toContain(
       '"Skipped NFR Requirements for the alpha Unit, and Code Generation for every Unit from here. It can still be run for that Unit with ' +
-        '`/aidlc --stage nfr-requirements --unit alpha`. You can undo the rest any time."',
+        '`/aidlc --stage nfr-requirements --unit alpha`. You can undo the rest until Build and Test starts."',
     );
     expect(message).not.toContain('only, or for every Unit from here?');
     expect(message).not.toContain("run nothing");

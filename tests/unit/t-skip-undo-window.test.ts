@@ -5,16 +5,17 @@
 // skipped stage, or, with nothing after it on the plan, until the work is finished. Two live runs read "You can undo
 // that any time." and then met the refusal: on Codex the skip of Requirements Analysis, undone at Code Generation's
 // gate; on Claude Code on Windows the skip of the deployment stages, undone after the last approval. An add alone keeps
-// "any time" (a later "skip it" still works where it stands). Every move is a shipped tool's: intent-create, the
-// human-turn hook, then `next` and the commands its step names.
+// "any time" (a later "skip it" still works where it stands). A skip of Reverse Engineering the work still owes
+// holds while it is owed, until the first Construction stage starts. Every move is a shipped tool's: intent-create,
+// the human-turn hook, then `next` and the commands its step names.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { AIDLC_SRC, cleanupTestProject, createOrchestrationTestProject, removeWorkspaceRecord } from "../harness/fixtures.ts";
 import { env, exec, next, say, type Exec } from "../harness/aidlc-input-corpus.ts";
-import { getField, stateFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { getField, recordDir, stateFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
@@ -84,6 +85,24 @@ async function expressAtReverseEngineering(): Promise<string> {
   expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
   await say(proj, "/aidlc", "claude");
   expect((await next(proj, [])).directive?.stage).toBe("reverse-engineering");
+  return proj;
+}
+
+/** A bugfix on existing code, made without Reverse Engineering and put back while Requirements Analysis runs: the
+ *  work owes it behind the cursor. */
+async function bugfixOwingReverseEngineering(): Promise<string> {
+  const proj = createOrchestrationTestProject();
+  projects.push(proj);
+  removeWorkspaceRecord(proj);
+  const made = await exec([process.execPath, UTILITY, "intent-create", "--scope", "bugfix", "--project-type", "brownfield",
+    "--skip", "reverse-engineering", "--label", "blank-lines", "--arguments", "fix the crash on blank lines",
+    "--project-dir", proj], { cwd: proj, env: env(proj) });
+  expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+  await say(proj, "/aidlc", "claude");
+  expect((await next(proj, [])).directive?.stage).toBe("requirements-analysis");
+  const message = await step(proj, "I want the reverse engineering after all", ["--add", "reverse-engineering"]);
+  const add = /Run `([^`]*engine recompose [^`]*)`/.exec(message)?.[1] ?? "";
+  await ran(proj, add);
   return proj;
 }
 
@@ -160,6 +179,32 @@ describe("t-skip-undo-window: a skip says how long its undo holds", () => {
     const message = await step(proj, "switch to the poc plan and skip requirements analysis",
       ["--scope", "poc", "--skip", "requirements-analysis"]);
     expect(line(message)).toBe("Skipped Requirements Analysis. You can undo that until the work moves past it.");
+  });
+
+  // Reverse Engineering the work still owes comes off the plan, and its undo puts it back for `next` to run, while
+  // Construction has not started; once Code Generation is under way the undo is behind the work.
+  test("a skip of Reverse Engineering the work still owes: the undo holds until Code Generation starts", async () => {
+    const proj = await bugfixOwingReverseEngineering();
+    const { said, undo } = await skipped(proj, "no, skip the reverse engineering", ["--skip", "reverse-engineering"]);
+    expect(said).toBe("Skipped Reverse Engineering. You can undo that until Code Generation starts.");
+    await ran(proj, undo);
+    await skipped(proj, "skip the reverse engineering after all", ["--skip", "reverse-engineering"]);
+    await jumpTo(proj, "code-generation");
+    const plan = join(recordDir(proj) as string, "construction", "code-generation", "code-generation-plan.md");
+    mkdirSync(join(plan, ".."), { recursive: true });
+    writeFileSync(plan, "# Code Generation Plan\n", "utf-8");
+    const late = await runNamed(proj, undo);
+    expect(late.status).not.toBe(0);
+    expect(`${late.stdout}${late.stderr}`).toContain("--stage reverse-engineering --single");
+  });
+
+  // At Requirements Analysis' open gate on a bugfix the approval moves the work onto Code Generation, so the owed
+  // Reverse Engineering's window closes with the same reply: the run on its own is said, as for any skip there.
+  test("the owed Reverse Engineering skipped at the open gate before Construction names the run on its own", async () => {
+    const proj = await bugfixOwingReverseEngineering();
+    await ran(proj, "bun .claude/tools/aidlc-orchestrate.ts report --stage requirements-analysis --result awaiting-approval");
+    const { said } = await skipped(proj, "approve, and skip the reverse engineering", ["--skip", "reverse-engineering"]);
+    expect(said).toBe("Skipped Reverse Engineering. It can still be run on its own with `/aidlc --stage reverse-engineering --single`.");
   });
 
   test("an add alone keeps its way back", async () => {
