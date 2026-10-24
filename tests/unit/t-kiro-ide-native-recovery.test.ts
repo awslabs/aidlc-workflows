@@ -391,7 +391,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     expect(continuation.code, continuation.stderr).toBe(policy === "strict" ? 2 : 0);
     if (policy === "relaxed") {
       expect(continuation.stdout).toContain(
-        "Continuing past the plan-approval check because it is off for this piece of work (guard policy relaxed (from scope poc))",
+        "Continuing past the plan re-approval check because it is off for this piece of work (guard policy relaxed (from scope poc))",
       );
     } else if (policy === "off") {
       expect(continuation.stdout).not.toContain("Continuing past");

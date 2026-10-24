@@ -43575,6 +43575,15 @@ export const GUARD_FENCE_LABELS: Record<GuardFence, string> = {
 };
 
 /**
+ * A fence as a line the person reads names it. Lowered, the plan-approval
+ * fence lets only an edited plan go on without being asked about again; "plan
+ * approval" is the plan question's own setting, which stays as it is.
+ */
+export function fenceCheckName(fence: GuardFence): string {
+  return fence === "plan-approval" ? "plan re-approval" : fence;
+}
+
+/**
  * The stage-status verbs only the engine runs. The state tool refuses each one
  * from any other caller, whatever spelling ran it; the hooks and adapters that
  * name these verbs read this set.
@@ -44113,7 +44122,7 @@ export function guardStoodAsideLine(
   const where = recorded
     ? "Recorded in the audit trail"
     : `Not recorded in the audit trail, which was busy or could not be written; \`${aidlcInvocation()} doctor\` lists it`;
-  return `Continuing past the ${fence} check because it is off for this piece of work (${source}). ` +
+  return `Continuing past the ${fenceCheckName(fence)} check because it is off for this piece of work (${source}). ` +
     `${where}${detail ? `: ${detail}` : "."}`;
 }
 

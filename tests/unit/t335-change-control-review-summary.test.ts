@@ -1300,7 +1300,7 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
     expect(continuation.code, continuation.stderr).toBe(mode === "strict" ? 2 : 0);
     if (mode === "relaxed") {
       expect(continuation.stdout).toContain(
-        "Continuing past the plan-approval check because it is off for this piece of work (guard policy relaxed (set by you)). Recorded in the audit trail: dispatch of aidlc-developer-agent",
+        "Continuing past the plan re-approval check because it is off for this piece of work (guard policy relaxed (set by you)). Recorded in the audit trail: dispatch of aidlc-developer-agent",
       );
     } else if (mode === "off") {
       // Off means off: the row records the pass and nothing is said.

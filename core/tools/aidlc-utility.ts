@@ -208,6 +208,7 @@ import {
   guardFenceFromConfigKey,
   guardPolicyStateField,
   resolveFences,
+  fenceCheckName,
   fenceSourceLabel,
   formatFence,
   noteGuardPolicyRename,
@@ -1944,13 +1945,11 @@ To get started:
     });
     guardPolicyDisplay = formatGuardPolicy(resolution.value, shownSource(resolution.source));
     const fences = resolveFences(resolution, content);
-    // The plan-approval fence now only decides whether an approved plan that is
-    // edited asks again; the Plan Approval line below is the plan stop itself.
     const offBySource = new Map<string, string[]>();
     for (const fence of GUARD_FENCES) {
       if (fences[fence].value !== "off" || fences[fence].source.startsWith("guard policy ")) continue;
       const source = fenceSourceLabel(fences[fence]);
-      offBySource.set(source, [...(offBySource.get(source) ?? []), fence === "plan-approval" ? "plan re-approval" : fence]);
+      offBySource.set(source, [...(offBySource.get(source) ?? []), fenceCheckName(fence)]);
     }
     if (offBySource.size > 0) {
       fencesOffLine = `Checks off:     ${[...offBySource].map(([source, names]) => `${names.join(", ")} (${source})`).join("; ")}\n`;

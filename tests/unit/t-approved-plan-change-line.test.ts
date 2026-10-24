@@ -1,5 +1,6 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-testing-posture:restore,
-// function:approvedPlanChangeLine, function:approvedPlanChangeText, function:restoreApprovedPlan, function:personTurnStands
+// function:approvedPlanChangeLine, function:approvedPlanChangeText, function:restoreApprovedPlan, function:personTurnStands,
+// function:guardStoodAsideLine, function:fenceCheckName
 //
 // An approved code plan that changes before the build is named for the person
 // in one line, and they can go back to the plan they approved. A resumed build
@@ -18,6 +19,8 @@
 //   - ticking a step is not a change, an added step is named as added, and
 //     once the build has started the line says so and offers the rebuild;
 //   - the plan-approval guard lets restore through while the plan waits;
+//   - under relaxed, the line beside each build step on the edited plan says
+//     plan re-approval is off, never plan approval, which stays on;
 //   - their words in a new chat, in any wording, are read for the way back,
 //     and the print names the restore (a person once got a question about
 //     where the words belong instead, and their "1" built, or under strict
@@ -54,6 +57,7 @@ const POSTURE = join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts");
 const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
 const GUARD = join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const SESSION = "01995000-7a11-7000-8000-00000000c1de";
 const UNIT = "unit-2";
 const STEPS = [
@@ -380,6 +384,47 @@ describe("an approved plan that changed before the build is named, and can be un
       tool_input: { command },
     }));
     expect(hook.status, `${command}\n${hook.stderr}`).toBe(0);
+  });
+
+  // Relaxed lowers only the re-approval of an edited plan: plan approval, the
+  // plan question, stays on, and a line calling it off is false.
+  test("relaxed: once the approved plan changed, the build's line names plan re-approval, never plan approval off", () => {
+    const proj = project("relaxed");
+    approvedPlan(proj);
+    startBuild(proj);
+    rewrite(proj);
+    expect(next(proj).change_notices).toContain(changed(REBUILD_ASK, "after the build started"));
+    const stoodAside = () => readAuditShardEvents(proj).filter((row) =>
+      row.event === "GUARD_STOOD_ASIDE" && auditBlockField(row.block, "Guard") === "plan-approval").length;
+    const before = stoodAside();
+    const brief = run(proj, [POSTURE, "brief", ...targetArgs(UNIT), "--project-dir", proj]);
+    expect(brief.status, String(brief.stderr)).toBe(0);
+    const dispatch = run(proj, [GUARD], JSON.stringify({
+      hook_event_name: "PreToolUse",
+      session_id: SESSION,
+      cwd: proj,
+      tool_name: "Task",
+      tool_input: { subagent_type: "aidlc-developer-agent", prompt: String(brief.stdout) },
+    }));
+    expect(dispatch.status, String(dispatch.stderr)).toBe(0);
+    const write = run(proj, [GUARD], JSON.stringify({
+      hook_event_name: "PreToolUse",
+      session_id: SESSION,
+      cwd: proj,
+      tool_name: "Write",
+      tool_input: { file_path: join(proj, "src", "cart.ts"), content: "export const cart = [];\n" },
+    }));
+    expect(write.status, String(write.stderr)).toBe(0);
+    for (const said of [String(brief.stderr), String(dispatch.stdout), String(write.stdout)]) {
+      expect(said).toContain(
+        "Continuing past the plan re-approval check because it is off for this piece of work (guard policy relaxed (set by you))",
+      );
+      expect(said).not.toContain("plan-approval check because it is off");
+    }
+    expect(stoodAside()).toBe(before + 3);
+    const setting = run(proj, [UTILITY, "config-get", "guard.plan-approval", "--project-dir", proj]);
+    expect(setting.status, String(setting.stderr)).toBe(0);
+    expect(String(setting.stdout).trim()).toBe("on (from scope feature)");
   });
 });
 
