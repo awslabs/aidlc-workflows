@@ -9041,6 +9041,8 @@ export function boundDirectiveMessage(message: string): string {
 export interface ActiveDirectiveTarget {
   canonicalProjectDir: string; space: string; recordDirName: string | null;
   intentUuid: string | null; statePath: string; markerPath: string; lockDir: string; bucket: string;
+  // The name every process gives the folder (activeDirectiveContext), never a path to work in.
+  projectIdentity: string;
 }
 
 export class ActiveDirectiveLockContendedError extends Error {
@@ -9508,6 +9510,15 @@ function resolveActiveDirectiveTarget(
   space?: string,
 ): ActiveDirectiveTarget {
   const canonicalProjectDir = realpathSync(resolvePath(projectDir));
+  // Only the identity is the native path: on Windows that also turns a subst
+  // drive into its target and a mapped drive into \\server\share, so the record
+  // is still read and written through the folder as the caller spells it.
+  let projectIdentity = canonicalProjectDir;
+  try {
+    projectIdentity = realpathSync.native(canonicalProjectDir);
+  } catch {
+    // The resolved spelling stays the identity.
+  }
   const selection = resolveWorkflowSelection(canonicalProjectDir, {
     space,
     intent,
@@ -9555,6 +9566,7 @@ function resolveActiveDirectiveTarget(
   }
   return {
     canonicalProjectDir,
+    projectIdentity,
     space: resolvedSpace,
     recordDirName,
     intentUuid,
@@ -9759,13 +9771,16 @@ export function stateDigest(stateContent: string): string {
     .digest("hex");
 }
 
-// The project identity folds the drive letter (see normalizeDriveLetter): VS
-// Code hands Copilot hooks `c:\...` while its terminal runs the engine in
-// `C:\...`, and Bun's realpathSync keeps either spelling. Hashing them apart
-// denied every `continue` and `report` the engine had just issued (#811).
+// The project identity is the folder's native real path with the drive letter
+// folded (see normalizeDriveLetter), because Bun's realpathSync keeps the
+// spelling it is given on Windows: VS Code hands Copilot hooks `c:\...` while
+// its terminal runs the engine in `C:\...` (#811), and a project under %TEMP%
+// reaches the hooks as its 8.3 short name (C:\Users\ADMINI~1\...) while the
+// engine resolves the long one. Hashing them apart denied, or passed on
+// untracked, every command the engine had just issued.
 function activeDirectiveContext(target: ActiveDirectiveTarget, stateContent: string | null) {
   return {
-    projectSha256: createHash("sha256").update(normalizeDriveLetter(target.canonicalProjectDir), "utf-8").digest("hex"),
+    projectSha256: createHash("sha256").update(normalizeDriveLetter(target.projectIdentity), "utf-8").digest("hex"),
     intentUuid: target.intentUuid,
     statePresent: stateContent !== null,
     stateSha256: stateDigest(stateContent ?? ""),
@@ -34864,8 +34879,11 @@ function lockStaleMs(): number {
 // its space) but activeIntent() is NEVER consulted here.
 export function auditLockIdentity(projectDir: string, intent?: string, space?: string): string {
   let canonicalProjectDir = resolvePath(projectDir);
+  // The native path, as in activeDirectiveContext: here it is only a name, and
+  // Bun's realpathSync would give a hook spelling the folder 8.3 short and the
+  // engine spelling it long two different locks.
   try {
-    canonicalProjectDir = realpathSync(canonicalProjectDir);
+    canonicalProjectDir = realpathSync.native(canonicalProjectDir);
   } catch {
     // Creation and diagnostics can lock before the project exists. The absolute
     // lexical path is stable until realpath can resolve filesystem aliases.
