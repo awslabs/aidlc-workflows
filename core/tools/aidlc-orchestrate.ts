@@ -6430,14 +6430,16 @@ function composeDispatchDirective(
   const hd = harnessDir();
   const parts: string[] = [];
   const inFlightCallShape = subagentCallShape("aidlc-composer-agent");
+  // Their reply read as the request is: a pasted document goes to the composer as reference.
+  const reply = routingReshapeReply === null ? null : authoritativeRequest(routingReshapeReply);
   if (inFlight) {
     parts.push(
       `Dispatch the composer agent (${hd}/agents/aidlc-composer-agent.md) as a subagent to propose re-shaping the RUNNING workflow's pending stages` +
         (flags.intent ? ` for: "${authoritativeRequest(flags.intent)}".${pastedDocumentNote(flags.intent)}` : "."),
-      // Their reply as they typed it, the sentence closed only where it does not close itself.
-      ...(routingReshapeReply === null
+      // The sentence closed only where their reply does not close itself.
+      ...(routingReshapeReply === null || reply === null
         ? []
-        : [`Asked where that request belongs, the person answered: "${routingReshapeReply}"${/[.!?]$/.test(routingReshapeReply.trim()) ? "" : "."}`]),
+        : [`Asked where that request belongs, the person answered: "${reply}"${/[.!?]$/.test(reply) ? "" : "."}${pastedDocumentNote(routingReshapeReply)}`]),
       ...(inFlightCallShape === null ? [] : [inFlightCallShape]),
       "This returned directive has selected the composer path. Stages the person names go through next --skip or --add only BEFORE calling next compose; now dispatch the composer even when the request names exact stage flips. Dispatch the composer subagent with this message as its task and use its validated proposal at the approval gate. Do not substitute your own state read and proposal for that dispatch.",
       "The composer reads the live state file's Stage Progress, re-estimates the entropy components from what completed stages resolved, validates the flipped grid with --strict, and proposes SKIP/un-SKIP flips for PENDING, ahead-of-cursor stages only (completed [x], in-progress [-], and skipped [S] stages are frozen; an ADD whose required producer is skipped or behind the cursor is rejected, not proposed).",

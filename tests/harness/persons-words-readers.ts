@@ -1063,7 +1063,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ASK}#requestPlanApprovalReviewNow`]: { use: "keeps", why: "the presence shape: a recorded answer on the plan file's line is cleared when the person asks to review the plan again" },
   // The request the agent forwards to next (its free text) and the question store that keeps it: shown back, quoted
   // into a command, kept; each with its reason.
-  "core/tools/aidlc-runtime-paths.ts#quoteCommandArgument": { use: "decides", why: "shell-quotes their words into a command the agent runs", from: [`${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`] },
+  "core/tools/aidlc-runtime-paths.ts#quoteCommandArgument": { use: "decides", why: "shell-quotes their words into a command the agent runs", from: [`${ORCH}#reshapeReplyArgument`, `${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`] },
   [`${LIB}#parseLiteralShellInvocation`]: { use: "decides", why: "as above", from: [`${LIB}#isTerminalConfigurationDispatch`] },
   [`${LIB}#isTerminalConfigurationDispatch`]: { use: "decides", why: "reads the engine's own step message (which may quote their request) for a configuration command" },
   [`${LIB}#addPendingPersonLines`]: { use: "keeps", why: "keeps a step's narration, or a setter's lines, for the person's next line", from: [`${ORCH}#sayPendingPersonLines`, `core/tools/aidlc-utility.ts#handleScopeChange`] },
@@ -1085,6 +1085,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#namedDocumentNote`]: { use: "decides", why: "as above, for the compose offer", from: [`${ORCH}#composeOfferAskDirective`] },
   [`${ORCH}#composeOfferAskDirective`]: { use: "decides", why: "as above (the compose offer)", from: [`${ORCH}#freshWorkOfferDirective`] },
   [`${ORCH}#routingQuestionReplyDirective`]: { use: "decides", why: "the routing question's reply step hands their words back, quoted, in its command", from: [`${ORCH}#routeNext`] },
+  [`${ORCH}#reshapeReplyArgument`]: { use: "decides", why: "a print between a reshape answer and the composer hands their reply on, quoted, in its command, when the answer carried one" },
   [`${ORCH}#newWorkRoutingAskDirective`]: { use: "decides", why: "as above (the routing question)", from: [`${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#routeNext`] },
   [`${ORCH}#printDirective`]: { use: "keeps", why: "prints a step, which may carry their request", from: [`${ORCH}#emitTypedResumeChoice`, `${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`] },
   [`${ORCH}#projectTypeIsWholeRequest`]: { use: "keeps", why: "the presence shape: the line is only the project type" },

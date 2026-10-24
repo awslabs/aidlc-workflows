@@ -1233,13 +1233,13 @@ export function requestWordsBeginAt(rawArgs: readonly string[]): number {
   if (rawArgs[0] !== "next") return Number.POSITIVE_INFINITY;
   for (let i = 1; i < rawArgs.length; i++) {
     const token = rawArgs[i];
+    if (i === 1 && token === "compose") continue;
     if (token === "--") return Number.POSITIVE_INFINITY;
     if (token.startsWith("-")) {
       // A token after a flag is that flag's value, never a word of theirs.
       if (rawArgs[i + 1] !== undefined && !rawArgs[i + 1].startsWith("-")) i++;
       continue;
     }
-    if (i === 1 && token === "compose") continue;
     return NEXT_OWN_COMMAND_WORDS.has(token) ? Number.POSITIVE_INFINITY : i;
   }
   return Number.POSITIVE_INFINITY;
