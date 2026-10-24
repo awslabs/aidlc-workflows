@@ -210,6 +210,16 @@ describe("Kiro CLI's V3 offer at launch", () => {
     expect(kiroV3OfferNavigation(`${kiroV3Offer(1)}\n›  ask a question or describe a task ↵`)).toBeNull();
   });
 
+  test("on Windows Server the ASCII > caret is read the same way", () => {
+    // kiroV3Offer(0) with ">" is byte for byte the screen Kiro CLI 2.33.1 paints there.
+    const windows = (screen: string) => screen.replace("❯", ">");
+    expect(kiroV3OfferNavigation(windows(kiroV3Offer(0)))).toBe("Down");
+    expect(kiroV3OfferNavigation(windows(kiroV3Offer(1)))).toBe("Enter");
+    expect(kiroV3OfferNavigation(windows(kiroV3Offer(2)))).toBe("Up");
+    expect(kiroV3OfferNavigation(windows(kiroV3Offer(0)).replace("  Remind me later", "> Remind me later"))).toBeNull();
+    expect(kiroV3OfferNavigation(windows(kiroV3Offer(0)).replace("  Remind me later", "❯ Remind me later"))).toBeNull();
+  });
+
   test("the offer is answered Remind me later and never Enter on another option", async () => {
     const chat = "›  ask a question or describe a task ↵";
     let now = 0;
