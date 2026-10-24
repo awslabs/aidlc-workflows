@@ -280,7 +280,7 @@ import {
   parseReScope,
   pipelineAttemptStartedAt,
   pipelineLinkEvidence,
-  readIssuedDirectiveMarker,
+  issuedStepIsIsolatedRun,
   singleStageAttemptIsOpen,
   relativeCodekbDir,
   RESERVED_RECORD_NAMES,
@@ -11284,7 +11284,7 @@ function scannedThisAttempt(projectDir: string, repo: string): boolean {
   const stage = findStageBySlug("reverse-engineering");
   if (!stage) return false;
   try {
-    const singleRun = readIssuedDirectiveMarker(projectDir)?.single === true &&
+    const singleRun = issuedStepIsIsolatedRun(projectDir, stage.slug) &&
       singleStageAttemptIsOpen(projectDir, stage.slug);
     const since = Date.parse(pipelineAttemptStartedAt(projectDir, stage.slug, { singleRun }));
     if (Number.isNaN(since)) return false;

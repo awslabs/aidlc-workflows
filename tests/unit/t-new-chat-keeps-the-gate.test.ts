@@ -262,6 +262,23 @@ describe("t-new-chat-keeps-the-gate: what stays as it was", () => {
     expect(scopeDiff(tree, proj, FIRST).verdict).toBe("NO_STORE");
   });
 
+  test("an isolated rescan after the stage was approved: the store reads CURRENT, so the rescan is still asked", () => {
+    const proj = scanned(tree);
+    says(tree, proj, FIRST, "nothing to add");
+    expect(run(tree, proj, FIRST, "aidlc-log", ["answer", "--stage", STAGE, "--details", "Nothing to add"]).status).toBe(0);
+    const gate = run(tree, proj, FIRST, "aidlc-orchestrate", ["report", "--stage", STAGE, "--result", "awaiting-approval"]);
+    expect(gate.status, gate.out).toBe(0);
+    says(tree, proj, FIRST, "approve");
+    const approved = run(tree, proj, FIRST, "aidlc-orchestrate", ["report", "--stage", STAGE, "--result", "approved", "--user-input", "Approve"]);
+    expect(approved.status, approved.out).toBe(0);
+    expect(scopeDiff(tree, proj, FIRST).verdict).toBe("SCANNED");
+
+    Bun.sleepSync(1100);
+    says(tree, proj, FIRST, "/aidlc --stage reverse-engineering --single");
+    expect(next(tree, proj, FIRST, ["--stage", STAGE, "--single"])).toMatchObject({ kind: "run-stage", stage: STAGE, single: true });
+    expect(scopeDiff(tree, proj, FIRST).verdict).toBe("CURRENT");
+  });
+
   test("the stage's rerun guard says what SCANNED means", () => {
     const stage = readFileSync(join(REPO_ROOT, "dist", "claude", ".claude", "aidlc-common", "stages", "inception",
       `${STAGE}.md`), "utf-8");

@@ -11136,6 +11136,19 @@ export function readIssuedDirectiveMarker(projectDir: string): ActiveDirectiveMa
   }
 }
 
+// Whether the step the engine issued last for this work is an isolated
+// (`--single`) run of `stage`, even when a state write since then made it out
+// of date.
+export function issuedStepIsIsolatedRun(projectDir: string, stage: string): boolean {
+  try {
+    const target = resolveActiveDirectiveTarget(projectDir);
+    const marker = readActiveDirectiveMarkerRaw(target.markerPath);
+    return marker?.stage === stage && marker.single === true && (marker.intent_uuid ?? null) === target.intentUuid;
+  } catch {
+    return false;
+  }
+}
+
 // Read the shared/sessionless resume wait under the active-directive lock. The
 // marker is read before state while refreshActiveDirectiveMarker uses the same
 // lock after writing state, so a concurrent state transition either linearizes
