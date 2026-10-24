@@ -1218,11 +1218,11 @@ export const CHANGE_NOTICES_NOTE =
 // A question with one choice is said as its numbered question, since a picker
 // such as Claude Code's takes two options or more. The engine makes that call:
 // a skill sentence that named the case was read aloud to the person.
-export function questionNote(invocation: string, oneChoice = false): string {
+export function questionNote(invocation: string, oneChoice = false, next = `${invocation} next`): string {
   const show = oneChoice ? "say its numbered question to them as given" : "show it to them with its choices as given";
   return `This question is for the person, not for you: ${show}, end your turn, and act only on their reply. ` +
     "When their reply picks one of the choices (its number, its words, or their own words for it), run that " +
-    "choice's command; act on the step it returns, or run `" + invocation + " next` when it returns none. " +
+    "choice's command; act on the step it returns, or run `" + next + "` when it returns none. " +
     "Anything else is their own words: read what they meant.";
 }
 
@@ -1307,7 +1307,7 @@ export const PLAN_CHANGE_DETAILS =
 // step goes on; with no skill loaded nothing else names that command. `next`
 // is an isolated run's own (the question's `plan_approval.next`).
 export function planApprovalQuestionNote(invocation: string, logInvocation: string, next = `${invocation} next`): string {
-  return `${questionNote(invocation).replace(/\.$/, "")}. When they answer, record the choice they made with ` +
+  return `${questionNote(invocation, false, next).replace(/\.$/, "")}. When they answer, record the choice they made with ` +
     `\`${logInvocation} answer --stage code-generation --checkpoint plan-approval --details '<their choice>'\` ` +
     `${PLAN_CHANGE_DETAILS}, then run \`${next}\`.`;
 }

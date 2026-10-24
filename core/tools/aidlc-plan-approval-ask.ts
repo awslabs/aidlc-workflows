@@ -868,11 +868,15 @@ function routedPlanApproval(projectDir: string, directive: Directive): Directive
     record.targets.every((target) => units.includes(target.unit))
   ) {
     const replied = planApprovalEditingReplyStep(projectDir);
+    // An isolated run's reply goes on with that run's own `next`.
+    const then = directive.kind === "run-stage" && directive.single === true
+      ? `Then run \`${stepNextCommand(projectDir, directive)}\`.`
+      : "Then run next.";
     return planApprovalAskDirective(projectDir, record.targets.map((target) => target.unit), {
       question: record.question,
       editing: true,
       note: record.lastNotice ?? (replied
-        ? `The person replied while editing the files: ${replied}. Then run next.`
+        ? `The person replied while editing the files: ${replied}. ${then}`
         : "The person is editing the files. Wait for them to say done; do not change those files yourself."),
     });
   }
