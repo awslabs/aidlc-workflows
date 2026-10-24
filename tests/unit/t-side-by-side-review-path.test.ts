@@ -114,11 +114,17 @@ describe("a side-by-side Unit's worker writes its records where AI-DLC reads the
     });
   }
 
-  test("a batch Unit's brief before its worktree exists names no worktree", () => {
+  // The parallel-build protocol takes the brief before prepare, and the worker gets it at fan-out, after prepare.
+  test("a batch Unit's brief taken before prepare names the worktree prepare then makes, and its record folder", () => {
     const pd = fixture(["alpha"], CHECK);
-    const text = brief(pd);
-    expect(text).not.toContain("Your worktree is");
-    expect(text).not.toContain(".aidlc/worktrees");
+    const early = brief(pd);
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    const child = wt(pd);
+    const line = `Your worktree is \`${toPosix(child)}\`: write this Unit's code there, and its records ` +
+      `(code-summary.md, source-manifest.json, traceability.json) in \`${toPosix(codeGenerationRecordDir(child, "alpha"))}\`.`;
+    expect(early).toContain(line);
+    expect(brief(pd)).toContain(line);
   });
 
   test("a one-at-a-time build's brief names no worktree and keeps the project-relative plan", () => {
