@@ -201,6 +201,7 @@ import {
   resolveProjectFlag,
   resolveWorkflowSelection,
   sourceClaimCovers,
+  readUnitSourceManifest,
   aidlcOwnedSourceKey,
   onlyAidlcFilesChangedSince,
   sourceBaselineAuditFields,
@@ -5365,6 +5366,27 @@ function verifyReviewerPrecondition(
     staleSource &&
     !(staleRecovery?.recovery === true && approvableUnfinishedReview(pd, content, receipts, personCall, staleUnit))
   ) {
+    // On a stage built Unit by Unit, a change no Unit's manifest claims is
+    // named first: its way on (the Unit that made it lists the path and is
+    // reviewed once more) is then the one recovery review, which the
+    // stale-source line would spend without the claim. A path a Unit claims
+    // whose review went stale stays with that Unit's review once more.
+    // Already-[x] recovery checks no claims, and a spent recovery has no review
+    // left to carry one.
+    if (
+      requireReceiptExistence &&
+      applicableReconciliationUnits.length > 0 &&
+      receipts.sourceStaleReason === "fingerprint-mismatch" &&
+      receipts.sourceStaleProgress?.recoverySpent !== true &&
+      baselineUnclaimed !== null &&
+      baselineUnclaimed.length > 0
+    ) {
+      const manifests = applicableReconciliationUnits.map((unit) => readUnitSourceManifest(pd, stage.slug, unit));
+      const claimedByNoUnit = baselineUnclaimed.filter((pathKey) =>
+        !manifests.some((manifest) => manifest.ok && sourceClaimCovers(pathKey, manifest))
+      );
+      if (claimedByNoUnit.length > 0) unclaimedSourcePreconditionError(stage, claimedByNoUnit);
+    }
     staleSourcePreconditionError(
       pd,
       content,
@@ -5594,14 +5616,8 @@ function verifyReviewerPrecondition(
   ) {
     const unclaimed = baselineUnclaimed ?? [];
     if (unclaimed.length > 0) {
-      const rendered = unclaimed.slice(0, 10).map((key) => {
-        const separator = key.indexOf("\0");
-        const repo = key.slice(0, separator);
-        const path = key.slice(separator + 1);
-        return inertPath(repo ? `${repo}/${path}` : path);
-      });
-      const more = unclaimed.length > 10 ? ` and ${unclaimed.length - 10} more` : "";
       if (acceptsChanges) {
+        const { rendered, more } = renderUnclaimedSource(unclaimed);
         const listing = receipts.currentSourceListing;
         const entries = unclaimed.map((key) => `${key}\t${listing.get(key) ?? "-"}`).join("\n");
         acceptOutsideUnitChanges(pd, content, {
@@ -5615,27 +5631,45 @@ function verifyReviewerPrecondition(
         });
         return;
       }
-      // The person's line: what changed, and the three ways through, in their
-      // words. The agent knows the mechanics (the stage file and the reviewer
-      // protocol say how a manifest is written and a review recorded). The
-      // registry that reaches a path is the one in its own repo folder (the
-      // walk reads each repo root's file), so a recorded repo's path names it.
-      const registries = [...new Set(unclaimed.map((key) => {
-        const repo = key.slice(0, key.indexOf("\0"));
-        return repo ? `${inertPath(repo)}/.aidlc-source-paths.json` : ".aidlc-source-paths.json";
-      }))].sort();
-      const where = registries.length === 1 && registries[0] === ".aidlc-source-paths.json"
-        ? ".aidlc-source-paths.json"
-        : `the .aidlc-source-paths.json of the path's own folder (${registries.join(", ")})`;
-      error(
-        `Refusing to complete "${stage.slug}": ${unclaimed.length} change${unclaimed.length === 1 ? "" : "s"} made during ${stage.name} ` +
-          `that no Unit's review covers (${rendered.join(", ")}${more}). A Unit that made one of them lists the path ` +
-          `in its source manifest and is reviewed once more; a change nobody meant is undone; a path that is not source ` +
-          `(a tool's cache, a build output, a folder that is not this project's code) is left out of the source checks by naming ` +
-          `it under "exclude" in ${where}.`,
-      );
+      unclaimedSourcePreconditionError(stage, unclaimed);
     }
   }
+}
+
+function renderUnclaimedSource(unclaimed: string[]): { rendered: string[]; more: string } {
+  const rendered = unclaimed.slice(0, 10).map((key) => {
+    const separator = key.indexOf("\0");
+    const repo = key.slice(0, separator);
+    const path = key.slice(separator + 1);
+    return inertPath(repo ? `${repo}/${path}` : path);
+  });
+  return { rendered, more: unclaimed.length > 10 ? ` and ${unclaimed.length - 10} more` : "" };
+}
+
+function unclaimedSourcePreconditionError(
+  stage: { slug: string; name: string },
+  unclaimed: string[],
+): never {
+  const { rendered, more } = renderUnclaimedSource(unclaimed);
+  // The person's line: what changed, and the three ways through, in their
+  // words. The agent knows the mechanics (the stage file and the reviewer
+  // protocol say how a manifest is written and a review recorded). The
+  // registry that reaches a path is the one in its own repo folder (the
+  // walk reads each repo root's file), so a recorded repo's path names it.
+  const registries = [...new Set(unclaimed.map((key) => {
+    const repo = key.slice(0, key.indexOf("\0"));
+    return repo ? `${inertPath(repo)}/.aidlc-source-paths.json` : ".aidlc-source-paths.json";
+  }))].sort();
+  const where = registries.length === 1 && registries[0] === ".aidlc-source-paths.json"
+    ? ".aidlc-source-paths.json"
+    : `the .aidlc-source-paths.json of the path's own folder (${registries.join(", ")})`;
+  error(
+    `Refusing to complete "${stage.slug}": ${unclaimed.length} change${unclaimed.length === 1 ? "" : "s"} made during ${stage.name} ` +
+      `that no Unit's review covers (${rendered.join(", ")}${more}). A Unit that made one of them lists the path ` +
+      `in its source manifest and is reviewed once more; a change nobody meant is undone; a path that is not source ` +
+      `(a tool's cache, a build output, a folder that is not this project's code) is left out of the source checks by naming ` +
+      `it under "exclude" in ${where}.`,
+  );
 }
 
 function staleSourcePreconditionError(
