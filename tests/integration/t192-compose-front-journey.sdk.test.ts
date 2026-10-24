@@ -15,11 +15,11 @@
 //              11 files and 11 grid keys, and the created state runs a stock
 //              scope with a `Plan: <name>` line (the name the gate showed) and stage
 //              suffixes that differ from that scope's grid.
-//   case 2:    Approve and save as scope. After creation the conductor runs
-//              `scope save`, so a 12th scope lands (durable record + harness
-//              pair) carrying the running plan, keywords: [] (inferability is
-//              an explicit choice, never a side effect) and the four approved
-//              settings in the loader's words.
+//   case 2:    Approve and save as scope. The creation the engine names for
+//              that pick saves it (`--save-as`), so a 12th scope lands
+//              (durable record + harness pair) carrying the running plan,
+//              keywords: [] (inferability is an explicit choice, never a side
+//              effect) and the four approved settings in the loader's words.
 //
 // Assertions stay at the JOURNEY level (disk + tool results), tolerant of
 // conversational variance - NEVER on assistantText. If the live composer
@@ -72,12 +72,13 @@ const APPROVE_ALL = {
   map: {},
   fallback: { labelContains: "Approve" },
 };
-// Take the save option at the plan gate; the name question that follows offers
-// the composer's suggested name first, and a menu without the label takes it.
+// Take the save option at the plan gate, whatever its exact words ("Approve and
+// save" is the person's same pick); the name question that follows offers the
+// composer's suggested name first, and a menu without the label takes it.
 const APPROVE_AND_SAVE = {
   kind: "byHeader" as const,
   map: {},
-  fallback: { labelContains: "save as scope" },
+  fallback: { labelContains: "save" },
 };
 
 const STOCK_SCOPES = new Set([

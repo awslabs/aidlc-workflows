@@ -1,5 +1,6 @@
 // covers: function:planChangesBetween, function:planWithChanges,
 // function:splitSlugList, function:composedPlanLabel, function:PLAN_NAME_PATTERN,
+// function:savedScopeNameRefusal,
 // function:firstPlannedStageOfPhase, function:customPlanBase, function:customPlanStart,
 // function:guardPolicyAtLeast,
 // function:composerScoresPath, function:openComposerScores, function:takeComposerScores,
@@ -15,9 +16,10 @@
 // its own stage changes (`plan_changes`); creation writes those changes as the
 // state file's EXECUTE/SKIP suffixes and a `Plan` line, and no scope file is
 // written, so composing never grows the scope library. The person keeps a plan
-// they like with `scope save --name <name>` (at the gate, "Approve and save as
-// scope", or later, "save this plan as quick-fix"), which writes the running
-// work's plan as a durable scope record and projects it. Approved stage changes
+// they like with `scope save --name <name>` (later, "save this plan as
+// quick-fix"), or at the gate ("Approve and save as scope") through the
+// creation's `--save-as <name>`, which runs the same save; it writes the work's
+// plan as a durable scope record and projects it. Approved stage changes
 // and settings land in one recompose write, so a mixed approval is never left
 // half-applied, and next checks every depth, test-strategy, and stage value it
 // echoes into a command. The plan the composer validated keeps its scores on
@@ -896,6 +898,79 @@ describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
   });
 });
 
+// "Approve and save as scope" at the gate: the creation command the engine
+// names for that pick saves the plan, so the save never waits on a second
+// command after the work has started.
+describe("t351 (5b) the creation for Approve and save as scope saves the plan", () => {
+  test("next carries --save-as onto the creation command, and a name scope save refuses is refused first", () => {
+    const proj = installedProject();
+    const d = nextDirective(proj, ["--scope", "bugfix", "--add", ADD, "--skip", SKIP, "--plan-name", "quick-fix", "--save-as", "quick-fix", "--", "fix the parser"]);
+    expect(d.kind).toBe("print");
+    const creation = [...d.message.matchAll(/`([^`]*)`/g)].map((m) => m[1]).find((span) => span.includes("intent create"));
+    expect(creation, d.message).toContain("--plan-name quick-fix --save-as quick-fix");
+    for (const name of ["1fix", "Quick_Fix", "$(touch /tmp/t351-pwn)", `a${"b".repeat(40)}`]) {
+      const refused = nextDirective(proj, ["--scope", "bugfix", "--save-as", name, "--", "fix the parser"]);
+      expect(refused.kind, name).toBe("error");
+      expect(refused.message, name).toContain(`"${name}" cannot name a scope`);
+    }
+    expect(existsSync("/tmp/t351-pwn")).toBe(false);
+  });
+
+  test("the creation saves the new work's plan and says so once", () => {
+    const proj = installedProject();
+    const created = createComposed(proj, ["--plan-name", "quick-fix", "--save-as", "quick-fix"]);
+    expect(created.status, created.out).toBe(0);
+    expect(created.out).toContain("Intent created: ");
+    expect(created.out).toContain("Plan: quick-fix\n");
+    expect(created.out).not.toContain("no scope file written");
+    expect(created.out.split("Saved as scope quick-fix (").length).toBe(2);
+    expect(created.out).toContain('Next time: /aidlc --scope quick-fix "<what to build>"');
+    expect(stateOf(proj)).toContain("- **Plan**: quick-fix\n");
+    expect(savedRecords(proj)).toEqual(["quick-fix.md"]);
+    expect(scopeFiles(proj)).toContain("aidlc-quick-fix.md");
+    const grid = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "scope-grid.json"), "utf-8")) as Record<
+      string,
+      { stages: Record<string, string> }
+    >;
+    expect(grid["quick-fix"].stages[ADD]).toBe("EXECUTE");
+    expect(grid["quick-fix"].stages["deployment-pipeline"]).toBe("SKIP");
+    expect(readFileSync(join(proj, "aidlc", "scopes", "quick-fix.md"), "utf-8")).toContain("keywords: []");
+    expect(auditOf(proj)).toContain("**Saved as**: quick-fix");
+  });
+
+  test("a taken or malformed name creates nothing", () => {
+    const proj = installedProject();
+    for (const [name, message] of [
+      ["bugfix", "A scope named bugfix already exists. Pick another name."],
+      ["Quick_Fix", '"Quick_Fix" cannot name a scope'],
+    ]) {
+      const refused = createComposed(proj, ["--save-as", name]);
+      expect(refused.status, name).not.toBe(0);
+      // Refusals print one JSON error line.
+      expect(String((JSON.parse(refused.out) as { error?: unknown }).error), name).toContain(message);
+    }
+    expect(existsSync(join(proj, "aidlc", "spaces", "default", "intents"))).toBe(false);
+    expect(savedRecords(proj)).toEqual([]);
+  });
+
+  test("beside work in another space, the plan saved is the one just created", () => {
+    const proj = installedProject();
+    expect(runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix", "--arguments=other work", "--label", "other work"]).status).toBe(0);
+    expect(runTool(proj, "aidlc-utility.ts", ["space-create", "foo"]).status).toBe(0);
+    expect(runTool(proj, "aidlc-utility.ts", ["space", "default"]).status).toBe(0);
+    const created = createComposed(proj, ["--space", "foo", "--save-as", "quick-fix"]);
+    expect(created.status, created.out).toBe(0);
+    const record = readFileSync(join(proj, "aidlc", "scopes", "quick-fix.md"), "utf-8");
+    const fooRecord = readFileSync(join(proj, "aidlc", "spaces", "foo", "intents", "active-intent"), "utf-8").trim();
+    expect(record).toContain(`description: Plan saved from ${fooRecord}, based on bugfix`);
+    const grid = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "scope-grid.json"), "utf-8")) as Record<
+      string,
+      { stages: Record<string, string> }
+    >;
+    expect(grid["quick-fix"].stages[ADD]).toBe("EXECUTE");
+  });
+});
+
 describe("t351 (6) approved stage changes and settings land in one recompose write", () => {
   function running(): { proj: string; statePath: string } {
     const proj = createTestProject();
@@ -979,6 +1054,8 @@ describe("t351 (7) every conductor surface offers the save and never writes scop
       const text = read(surface);
       expect(text, surface).toContain("Approve / Approve and save as scope / Edit the plan / Reject");
       expect(text, surface).toContain("{{INVOKE}} engine scope save --name <name>");
+      // The save at the gate rides the creation, never a command after it.
+      expect(text, surface).toContain("add `--save-as <name>` to step 3's `next` command");
       expect(text, surface).toContain('"save this plan as quick-fix"');
       expect(text, surface).toContain("on Approve all run ONE recompose carrying the stage changes and the settings as its flags");
       expect(text, surface).not.toContain("author the two files");
@@ -1013,6 +1090,7 @@ describe("t351 (7) every conductor surface offers the save and never writes scop
     expect(d.kind).toBe("print");
     expect(d.message).toContain("Approve / Approve and save as scope / Edit the plan / Reject");
     expect(d.message).toContain("scope save --name <name>");
+    expect(d.message).toContain("pass --save-as <name> with those flags: the creation then saves the plan as that scope");
     expect(d.message).toContain("create it with --scope <baseScope> plus --skip <changes.skip> and --add <changes.add>");
   });
 });

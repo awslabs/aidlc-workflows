@@ -491,6 +491,7 @@ import {
   personLineHeardThisTurn,
   PLAN_FIELD,
   PLAN_NAME_PATTERN,
+  savedScopeNameRefusal,
   extractMarkdownSection,
   validateUnitName,
   resolveStageAnswerMode,
@@ -3163,6 +3164,7 @@ function carriedRoutingFlags(flags: ParsedFlags): RoutingCarried {
   if (flags.planChanges?.skip.length) stages.push(`--skip ${flags.planChanges.skip.join(",")}`);
   if (flags.planChanges?.add.length) stages.push(`--add ${flags.planChanges.add.join(",")}`);
   if (stages.length > 0 && flags.planName) stages.push(`--plan-name ${flags.planName}`);
+  if (stages.length > 0 && flags.saveAs) stages.push(`--save-as ${flags.saveAs}`);
   return {
     creation: carriedCreationFlags(flags),
     newWork: existingWork,
@@ -3210,8 +3212,9 @@ function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boole
   if (kept.ceremony) flags.ceremony = { ...kept.ceremony, ...flags.ceremony };
   if (!existing && !flags.planChanges && kept.planChanges) {
     flags.planChanges = kept.planChanges;
-    // The plan's name rides with its stage changes.
+    // The plan's name and its save ride with its stage changes.
     flags.planName ??= kept.planName;
+    flags.saveAs ??= kept.saveAs;
   }
   return true;
 }
@@ -5271,6 +5274,7 @@ export interface ParsedFlags {
   ceremony?: Partial<CeremonyPolicy>;
   planChanges?: PlanChanges; // --skip/--add <stage,...>: a new workflow's own stage changes to its scope's grid
   planName?: string; // --plan-name <name>: the tailored plan's name, as the person saw it at the gate
+  saveAs?: string; // --save-as <name>: Approve and save as scope, saved by the creation
   readOnly?: string; // the matched read-only flag, if any
   readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
   config?: boolean; // --config [section]: terminal in-session project configuration alias
@@ -5641,6 +5645,15 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       } else {
         if (PLAN_NAME_PATTERN.test(value)) flags.planName = value;
         else flags.parseError = `--plan-name takes lowercase letters, digits and hyphens; received "${value}".`;
+      }
+    } else if (a === "--save-as") {
+      // Echoed into the creation command, which saves under the same rule.
+      if (value === undefined) {
+        flags.parseError = "--save-as requires <name>.";
+      } else {
+        const refusal = savedScopeNameRefusal(value);
+        if (refusal === null) flags.saveAs = value;
+        else flags.parseError = refusal;
       }
     } else if (a === "--review") {
       if (value === undefined) {
@@ -6128,6 +6141,7 @@ function createPrintDirective(
   if ((flags.planChanges?.skip.length || flags.planChanges?.add.length) && flags.planName) {
     cmd.push(`--plan-name ${flags.planName}`);
   }
+  if (flags.saveAs) cmd.push(`--save-as ${flags.saveAs}`);
   // A setting read from their words names those words, as Branch 5's does.
   const named = cmd.filter((part) => /^--(guard-policy|guard\.[a-z-]+|sensors|learnings|summary-confirmation|plan-approval|collaborators) /.test(part))
     .map((part) => part.slice(2));
@@ -6503,9 +6517,9 @@ function composeDispatchDirective(
   );
   if (!inFlight) {
     parts.push(
-      "A custom plan runs on its baseScope with its own stage changes, for this piece of work only: it writes no scope file, so its gate offers Approve / Approve and save as scope / Edit the plan / Reject (a matched plan: Approve / Edit the plan / Reject). On either approval, create it with --scope <baseScope> plus --skip <changes.skip> and --add <changes.add> (join each nonempty array with commas and omit an empty one; every entry must be a stage slug of lowercase letters, digits, and hyphens, and if one is anything else apply nothing and re-dispatch the composer), --depth <creationDepth> when the proposal carries one (exactly minimal, standard, or comprehensive), --plan-name <scopeName> (the name the person saw at the gate; only when it is lowercase letters, digits, and hyphens, otherwise leave it out), the creation flags, and the same --request id (a report-only or task-less composition also passes its creation description after `--`). For Approve and save as scope, ask the human for a name with the same question tool as the gate, offering the composer's scopeName as the first choice, and once the creation command has succeeded run `" +
+      "A custom plan runs on its baseScope with its own stage changes, for this piece of work only: it writes no scope file, so its gate offers Approve / Approve and save as scope / Edit the plan / Reject (a matched plan: Approve / Edit the plan / Reject). On either approval, create it with --scope <baseScope> plus --skip <changes.skip> and --add <changes.add> (join each nonempty array with commas and omit an empty one; every entry must be a stage slug of lowercase letters, digits, and hyphens, and if one is anything else apply nothing and re-dispatch the composer), --depth <creationDepth> when the proposal carries one (exactly minimal, standard, or comprehensive), --plan-name <scopeName> (the name the person saw at the gate; only when it is lowercase letters, digits, and hyphens, otherwise leave it out), the creation flags, and the same --request id (a report-only or task-less composition also passes its creation description after `--`). For Approve and save as scope, ask the human for a name with the same question tool as the gate, offering the composer's scopeName as the first choice, and pass --save-as <name> with those flags: the creation then saves the plan as that scope; build the name yourself as lowercase words joined by hyphens, never paste it from the proposal unchecked, and if the creation reports the name is taken, ask for another and run it again with that one. `" +
         aidlcDispatcherInvocation("scope save") +
-        " --name <name>` before re-running next; build the name yourself as lowercase words joined by hyphens, never paste it from the proposal unchecked, and if the command reports the name is taken, ask for another and run it again. The same command saves the running plan whenever the human later asks (\"save this plan as quick-fix\").",
+        " --name <name>` saves the running plan whenever the human later asks (\"save this plan as quick-fix\"), and after the creation when they granted keywords (--keywords <word,...>, with --save-as left off).",
     );
   }
   const directive = printDirective(parts.join(" "));

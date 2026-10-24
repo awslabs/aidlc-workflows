@@ -337,6 +337,7 @@ import {
   planWithChanges,
   composedPlanLabel,
   PLAN_NAME_PATTERN,
+  savedScopeNameRefusal,
   splitSlugList,
   readAllAuditShards,
   readAuditShardEvents,
@@ -654,6 +655,7 @@ const INTENT_CREATE_VALUE_FLAGS = [
   "skip",
   "add",
   "plan-name",
+  "save-as",
   "message",
   "person-words",
   "person-words-file",
@@ -8018,6 +8020,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   if (planName !== undefined && !PLAN_NAME_PATTERN.test(planName)) {
     die(`--plan-name takes lowercase letters, digits and hyphens; received "${planName}".`);
   }
+  // Approve and save as scope: the plan is saved once the work is created, so
+  // a name the save would refuse creates nothing and is asked for again.
+  const saveAs = flags["save-as"];
+  if (saveAs !== undefined) {
+    if (saveAs === "" || saveAs === "true") die("--save-as requires <name>.");
+    const refusal = savedScopeNameRefusal(saveAs);
+    if (refusal !== null) die(refusal);
+    if (scopeNameTaken(saveAs)) die(`A scope named ${saveAs} already exists. Pick another name.`);
+  }
   const plannedStages = planWithChanges(scope, planChanges);
   if (plannedStages.errors.length > 0) {
     die(`intent-create refused: ${plannedStages.errors.join(" ")}`);
@@ -8213,6 +8224,9 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     die(errorMessage(e));
   }
 
+  // The record this run created and listed; an earlier return (a migration, a
+  // start already made) saves nothing.
+  let listed = null as { dirName: string; space: string } | null;
   // The whole mutation runs under the WORKSPACE lock so a concurrent first-run
   // is serialized - both creation attempts append distinct rows to intents.json without a
   // lost update. The migration probe + the registry append are the reads/writes
@@ -8533,7 +8547,12 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // (the creation line naming what the person set for this work) follows it.
     carryPendingPersonLines(projectDir, initialSelection.sessionId);
     if (questionId !== undefined) retireRequest(projectDir, questionId);
+    listed = { dirName: created.dirName, space: created.space };
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
+  if (saveAs !== undefined && listed !== null) {
+    saveRunningPlan(projectDir, saveAs, [], listed.dirName, listed.space,
+      ` The work was created; run \`${aidlcDispatcherInvocation("scope save")} --name ${saveAs}\` to save its plan.`);
+  }
 }
 
 // The scope→stage state-build half of creation: the workspace detection + state
@@ -8887,7 +8906,7 @@ ${stageProgress}
   process.stdout.write(
     `Intent created: ${createdDir} (space: ${createdSpace})
 State initialized: ${scope} scope, ${shownInScope} stages, ${effectiveDepth} depth
-${composedPlan ? `Plan: ${composedPlanLabel(flags["plan-name"])}, for this piece of work only (no scope file written)\n` : ""}Project type: ${projectType}${declaredType ? " (you said so)" : ""}
+${composedPlan ? `Plan: ${composedPlanLabel(flags["plan-name"])}${flags["save-as"] === undefined ? ", for this piece of work only (no scope file written)" : ""}\n` : ""}Project type: ${projectType}${declaredType ? " (you said so)" : ""}
 ${declaredType === "Brownfield" && scan.projectType !== "Brownfield" ? `${NO_CODE_FOUND_YET}\n` : ""}Languages: ${scan.languages}
 Frameworks: ${scan.frameworks}
 Build System: ${scan.buildSystem}
@@ -12761,9 +12780,12 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
 // runs, its depth, Guard Policy, the ceremony settings and its review
 // level. The record goes to aidlc/scopes/ and compile projects it, so
 // `--scope <name>` works at once. The running work is left as it is.
+// `intent create --save-as <name>` runs the same save on the work it creates.
 
-const SAVED_SCOPE_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-const SAVED_SCOPE_NAME_MAX = 40;
+function scopeNameTaken(name: string): boolean {
+  return Object.hasOwn(loadScopeMetadataAll(), name) || Object.hasOwn(loadScopeGrid(), name) ||
+    Object.hasOwn(loadComposedScopeRecords(), name);
+}
 
 function handleScopeSave(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
   const usage = (message: string): never =>
@@ -12776,12 +12798,8 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
   }
   const name = (flags.name ?? "").trim();
   if (name === "" || name === "true") usage("scope-save requires --name <name>.");
-  if (!SAVED_SCOPE_NAME.test(name) || name.length > SAVED_SCOPE_NAME_MAX) {
-    die(
-      `"${name}" cannot name a scope: use lowercase letters, digits, and single hyphens, ` +
-        `starting with a letter, at most ${SAVED_SCOPE_NAME_MAX} characters (for example quick-fix).`,
-    );
-  }
+  const refusal = savedScopeNameRefusal(name);
+  if (refusal !== null) die(refusal);
   // Keywords make the saved scope inferable from a request's words, so each
   // is one plain word (one another plan already has is noted under the lock
   // below).
@@ -12790,19 +12808,27 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
   if (badKeyword !== undefined) {
     die(`"${badKeyword}" cannot be a keyword: use one word of letters, digits, and hyphens, at most 40 characters.`);
   }
-  const sp = stateFilePath(projectDir, flags.intent, flags.space);
+  saveRunningPlan(projectDir, name, keywords, flags.intent, flags.space);
+}
+
+function saveRunningPlan(
+  projectDir: string,
+  name: string,
+  keywords: string[],
+  intent: string | undefined,
+  space: string | undefined,
+  failNote = "",
+): void {
+  const sp = stateFilePath(projectDir, intent, space);
   if (!existsSync(sp)) die("No state file found. scope-save keeps a running piece of work's plan; start one first.");
 
   withAuditLock(projectDir, () => {
-    const content = readStateFile(projectDir, flags.intent, flags.space);
+    const content = readStateFile(projectDir, intent, space);
     const scope = getField(content, "Scope");
     if (!scope) die("Cannot read current Scope from state file.");
     const scopeDef = loadScopeMapping()[scope];
     if (!scopeDef) die(`Unknown scope in state file: ${scope}.`);
-    const taken =
-      Object.hasOwn(loadScopeMetadataAll(), name) || Object.hasOwn(loadScopeGrid(), name) ||
-      Object.hasOwn(loadComposedScopeRecords(), name);
-    if (taken) die(`A scope named ${name} already exists. Pick another name.`);
+    if (scopeNameTaken(name)) die(`A scope named ${name} already exists. Pick another name.`);
     // A hint another plan already has is saved as asked and said once.
     const sharedHints = keywordCollisions(keywords);
 
@@ -12868,9 +12894,9 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
           Scope: scope,
           "Saved as": name,
           "Stages in Scope": String(executing),
-        }, flags.intent, flags.space));
+        }, intent, space));
     } catch (error) {
-      die(`Cannot save the scope: ${errorMessage(error)}`);
+      die(`Cannot save the scope: ${errorMessage(error)}${failNote}`);
     }
     const settings = [
       `sensors ${ceremony.sensors}`,
