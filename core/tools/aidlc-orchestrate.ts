@@ -14993,11 +14993,13 @@ function planChangeDirective(
     ...(skipped.length > 0 ? [`--skip ${skipped.join(",")}`] : []),
     ...(added.length > 0 ? [`--add ${added.join(",")}`] : []),
   ].join(" ");
-  // The person's own skip: recompose carries it out over its check that later
-  // stages keep what they read, as a stage skipped where it stands is.
-  const replan = (skipped: string[]): string =>
-    `${aidlcDispatcherInvocation("recompose")} ${flips(skipped, add)}` +
+  // The person's own skip, in their change or in the undo of their add:
+  // recompose carries it out over its check that later stages keep what they
+  // read, as a stage skipped where it stands is.
+  const recomposed = (skipped: string[], added: string[]): string =>
+    `${aidlcDispatcherInvocation("recompose")} ${flips(skipped, added)}` +
     (skipped.length > 0 ? ` --reason ${shellArg(PERSON_ASKED_SKIP_REASON)}` : "");
+  const replan = (skipped: string[]): string => recomposed(skipped, add);
   const skipName = (slug: string): string =>
     unitStep !== null && !unitStep.others && slug === unitStep.stage
       ? `${name(slug)} for the ${unitName} Unit`
@@ -15078,7 +15080,7 @@ function planChangeDirective(
         "Do not show a command's output. If a command refuses, tell the person in plain " +
         "words why it could not, and the way it names to do it instead, then stop." +
         (replanned
-          ? ` If they later ask to undo skipping it for every Unit, run \`${aidlcDispatcherInvocation("recompose")} ${flips(add, planSkip)}\`.`
+          ? ` If they later ask to undo skipping it for every Unit, run \`${recomposed(add, planSkip)}\`.`
           : "") +
         resume,
     ));
@@ -15121,7 +15123,7 @@ function planChangeDirective(
       ? "You can undo that any time."
       : `${skip.length === 1 ? "It" : skip.length === 2 ? "Either one" : "Any of them"} can still be run on its own with ${anyOf}.`;
   const line = `"${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ${wayBack}${noted ? ` ${noted}` : ""}${parkedTail}"`;
-  const undo = `If they later ask to undo it, run \`${aidlcDispatcherInvocation("recompose")} ${flips(add, planSkip)}\`.`;
+  const undo = `If they later ask to undo it, run \`${recomposed(add, planSkip)}\`.`;
   // The question named the stages after the skipped one too, and the same
   // reply can approve them: "skip Functional Design and approve the rest".
   const rest = started !== null && currentState === "awaiting-approval"
