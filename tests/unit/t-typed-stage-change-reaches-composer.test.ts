@@ -6,7 +6,9 @@
 // when it applies to that plan (a change the plan already makes is left off,
 // so creation never refuses it), and the question counts the plan it creates.
 // "Tailor a plan" hands it to the composer as the person's own change, so the
-// plan shown at the composer's gate has it. Both used to drop it unsaid.
+// plan shown at the composer's gate has it. Every plan listed under "Use a
+// different plan" carries the changes it can take, counted. All of them used
+// to drop it unsaid.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -160,12 +162,18 @@ describe("a stage change typed with the request reaches the plan the person appr
     const compose = String(offer.compose_command);
     expect(compose).toContain("--add functional-design");
     expect(String(next(proj, argsOf(compose)).message)).toContain("With this request the person asked to add functional-design");
-    // Each plan it lists carries the add when it skips that stage.
+    // Each plan it lists carries the add when it skips that stage, and the
+    // question counts each plan it names the same way.
     const scopes = withEnvAndFreshCaches(POLICY_ENV, () => loadScopeMapping());
     for (const row of offer.scope_commands as Array<{ scope: string; command: string }>) {
       const skips = scopes[row.scope]?.stages["functional-design"] !== "EXECUTE";
       expect(row.command.includes("--add functional-design"), row.scope).toBe(skips);
     }
+    // bugfix skips Functional Design, so its row and the question count it added.
+    const bugfixRow = (offer.scope_commands as Array<{ scope: string; stages?: string }>).find((row) => row.scope === "bugfix");
+    const named = /bugfix = (\d+) stages/.exec(String(offer.question))?.[1];
+    expect(named, String(offer.question)).toBeDefined();
+    expect(bugfixRow?.stages).toBe(`${named} stages`);
   });
 
   test("a stage list with any other compose is still refused", () => {

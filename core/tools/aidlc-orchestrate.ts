@@ -6312,7 +6312,7 @@ function changesThatApply(plan: string, typed: PlanChanges): PlanChanges | undef
 interface StageAnswers {
   /** The proposed plan's answers: the changes it can take, as flags. */
   plan: string;
-  /** Those changes, which its count and its row include. */
+  /** Those changes, which the question's count includes. */
   changes?: PlanChanges;
   /** The tailored plan's answer: every change, for its composer. */
   tailored: string;
@@ -6388,10 +6388,13 @@ function freshWorkOfferDirective(
   // user calibrates the order-of-magnitude difference before deciding, and
   // sees bugfix even when the description gave no word to match. Fall back
   // to bare names if any scope does not resolve.
-  const bugfix = effectiveScopeCostSummary("bugfix", pd, undefined, flags.projectType);
-  const express = effectiveScopeCostSummary("express", pd, undefined, flags.projectType);
-  const classic = effectiveScopeCostSummary("classic", pd, undefined, flags.projectType);
-  const feat = effectiveScopeCostSummary("feature", pd, undefined, flags.projectType);
+  // Each counted with the typed stage changes it can take, as its row is.
+  const anchor = (scope: string) =>
+    effectiveScopeCostSummary(scope, pd, stages.typed ? changesThatApply(scope, stages.typed) : undefined, flags.projectType);
+  const bugfix = anchor("bugfix");
+  const express = anchor("express");
+  const classic = anchor("classic");
+  const feat = anchor("feature");
   const fallbackExamples = [...validScopes()].slice(0, 3).join(", ") || "an explicit scope";
   const examples = bugfix && express && classic && feat
     ? `bugfix = ${bugfix.shown} stages, express = ${express.shown}, classic = ${classic.shown}, feature = ${feat.shown}`
