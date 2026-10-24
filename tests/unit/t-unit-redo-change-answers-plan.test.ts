@@ -161,11 +161,11 @@ function next(p: string, args: string[] = []): Directive {
 
 const stageDir = (p: string): string => join(seededRecordDir(p), "construction", UNIT, CG);
 
-function writePlan(p: string): void {
+function writePlan(p: string, extra = ""): void {
   mkdirSync(stageDir(p), { recursive: true });
   writeFileSync(join(stageDir(p), "code-generation-plan.md"),
     "# Code Generation Plan\n\n## Summary\n\n- Builds: alpha\n- Touches: src/alpha.ts\n" +
-      "- Tests: 1 unit test\n\n## Steps\n\n- [ ] Step 1: write alpha\n\n" + renderTestingContract(resolveTestingPosture(p)),
+      `- Tests: 1 unit test\n\n## Steps\n\n- [ ] Step 1: write alpha\n${extra}\n` + renderTestingContract(resolveTestingPosture(p)),
     "utf-8");
   writeFileSync(join(stageDir(p), "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test src/alpha.test.ts`.\n", "utf-8");
 }
@@ -244,6 +244,25 @@ describe("the change asked for with a Unit's redo answers its code plan question
     expect(refused.out).toContain("has not replied to the plan question since it was shown");
   });
 
+  // A change asked for at a late question reopens the Unit for exactly that
+  // change (Reopen: change), already the person's Request Changes on record:
+  // the revised plan's question needs a reply of its own.
+  test("after a change reopen the revised plan's question needs its own reply", () => {
+    const p = fixture("disabled", "strict");
+    built(p);
+    says(p, "Request changes: in alpha's code generation, trim spaces around the name");
+    const reopened = tool(p, "jump", ["reopen", "--target", CG, "--stages", CG, "--units", UNIT, "--scope", "classic", "--via", "change"]);
+    expect(reopened.status, reopened.out).toBe(0);
+    const revise = next(p);
+    expect(revise.plan_approval?.status, JSON.stringify(revise).slice(0, 600)).toBe("revise");
+    writePlan(p, "- [ ] Step 2: trim spaces around the name\n");
+    const asked = next(p);
+    expect(asked.ask_type, JSON.stringify(asked).slice(0, 600)).toBe("plan-approval");
+    const refused = answer(p, "Request Changes", ["--reason", "Trim spaces around the name"]);
+    expect(refused.status, refused.out).not.toBe(0);
+    expect(refused.out).toContain("has not replied to the plan question since it was shown");
+  });
+
   test("a message another decision followed is still spent", () => {
     const p = fixture("disabled", "strict");
     built(p);
@@ -256,6 +275,18 @@ describe("the change asked for with a Unit's redo answers its code plan question
 });
 
 describe("proveMessage: a message whose only decision since is its own reopen", () => {
+  test("Reopen: change spends the message, as a gate's Request Changes does", () => {
+    const p = fixture("disabled", "strict");
+    says(p, REDO);
+    const id = auditBlockField(readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN").at(-1)!.block, "Message Id")!;
+    Bun.sleepSync(1100);
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: CG, "Gate Stages": CG, "Gate Scope": "unit-end", Unit: UNIT, Reopen: "change",
+      "User Input": "Request Changes", Feedback: REDO,
+    }, p);
+    expect("refusal" in proveMessage(p, id, "answer", { reopened: true })).toBe(true);
+  });
+
   for (const via of ["jump", "redo"] as const) {
     test(`Reopen: ${via} leaves the message standing for the reopened form only`, () => {
       const p = fixture("disabled", "strict");
