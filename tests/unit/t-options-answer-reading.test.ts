@@ -163,6 +163,44 @@ describe("t-options-answer-reading: an options question records the agent's read
     expect(message).not.toContain("its choices are");
   });
 
+  // One reply answers every question its menu asked (`log answers` pairs it with each), so one choice in Details
+  // would stand for all of them: with several open, their whole reply goes in Details, as before.
+  test("several questions with choices open for one menu keep the reply step", async () => {
+    const proj = project();
+    writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-mid-inception.md"), "utf-8"), "utf-8");
+    appendAuditEntry("STAGE_STARTED", { Stage: STAGE }, proj);
+    await say(proj, "/aidlc", "claude");
+    for (const [decision, options] of [["Which database should the to-do app use?", "PostgreSQL,MySQL"],
+      ["How should people sign in?", "OAuth,Basic"]]) {
+      const logged = await exec([process.execPath, LOG, "decision", "--stage", STAGE, "--decision", decision,
+        "--options", options, "--project-dir", proj], { cwd: proj, env: env(proj) });
+      expect(logged.status, logged.stdout + logged.stderr).toBe(0);
+    }
+    const shown = await next(proj, ["--resume"]);
+    expect(String(shown.directive?.message ?? "")).toContain(RAW);
+    await say(proj, "/aidlc postgres, and oauth", "claude");
+    const read = await next(proj, ["postgres, and oauth"]);
+    const message = String(read.directive?.message ?? "");
+    expect(message).toContain("Read their reply.");
+    expect(message).toContain(RAW);
+    expect(message).not.toContain("its choices are");
+  });
+
+  // Kiro IDE 1.0.242 hands the prompt hook an empty prompt: the turn has its message record, with no text in it, so
+  // nothing will keep the words of the reply to come.
+  test("a host that hands the hook no prompt text keeps the reply step for the question shown again", async () => {
+    const proj = project();
+    await buildQuestion(proj, "stage-gate-sensor-failure");
+    const said = await say(proj, "", "kiro-ide");
+    expect(said.status, said.stderr).toBe(0);
+    expect(latestTurnId(proj)).not.toBeNull();
+    const shown = await next(proj, ["--resume"]);
+    const message = String(shown.directive?.message ?? "");
+    expect(message).toContain("Show it to them again");
+    expect(message).toContain(RAW);
+    expect(message).not.toContain("its choices are");
+  });
+
   test("the pick comes from the agent's reading, never from the person's words", async () => {
     const proj = project();
     await buildQuestion(proj, "stage-gate-sensor-failure");

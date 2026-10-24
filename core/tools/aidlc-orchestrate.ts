@@ -349,7 +349,7 @@ import {
   parseBoltDag,
   type KnowledgeCommand,
   parseKnowledgeCommand,
-  openDecisionBlock,
+  openDecisionMenu,
   hasPendingDecision,
   decisionWaitsOnPerson,
   type PluginCommand,
@@ -3520,23 +3520,31 @@ function unitMajorStopStage(projectDir: string, stateContent: string, currentSlu
 // and that stage's open question counts too. Which question waits on the
 // person is decisionWaitsOnPerson's, the Stop hook's reader too: under
 // autonomous Construction the person who is there answers it; an unattended
-// driver has nobody to answer a plain one. Null outside a [-] stage, or when
-// the state or audit cannot be read (never fail `next`).
-function openStageQuestion(projectDir: string, stateContent: string): { stage: string; block: string } | null {
+// driver has nobody to answer a plain one. `alone`: no other plain question
+// logged with it waits on the same reply (openDecisionMenu; `log answers` pairs
+// one reply with each). Null outside a [-] stage, or when the state or audit
+// cannot be read (never fail `next`).
+function openStageQuestion(
+  projectDir: string,
+  stateContent: string,
+): { stage: string; block: string; alone: boolean } | null {
   try {
     // `**Current Stage**:` with or without the bold markers or backticks, as the hook reads it.
     const stage = (stateContent.match(/Current Stage\*{0,2}:?\s*`?([^\n`]*)`?/)?.[1] ?? "").trim();
     if (stage.length === 0) return null;
     if (parseCheckboxes(stateContent).find((row) => row.slug === stage)?.state !== "in-progress") return null;
-    const waits = (block: string | null): block is string => block !== null && decisionWaitsOnPerson(stateContent, block);
-    const block = openDecisionBlock(projectDir, stage, "STAGE_STARTED");
-    if (waits(block)) return { stage, block };
+    const waits = (block: string | undefined): block is string => block !== undefined && decisionWaitsOnPerson(stateContent, block);
+    const alone = (menu: string[]) => menu.filter((row) => auditBlockField(row, "Checkpoint") === null).length <= 1;
+    const menu = openDecisionMenu(projectDir, stage, "STAGE_STARTED");
+    const block = menu.at(-1);
+    if (waits(block)) return { stage, block, alone: alone(menu) };
     const ahead = unitMajorStopStage(projectDir, stateContent, stage);
     if (ahead === null || ahead === stage || !hasPendingDecision(projectDir, ahead, undefined, undefined, true)) {
       return null;
     }
-    const aheadBlock = openDecisionBlock(projectDir, ahead);
-    return waits(aheadBlock) ? { stage: ahead, block: aheadBlock } : null;
+    const aheadMenu = openDecisionMenu(projectDir, ahead);
+    const aheadBlock = aheadMenu.at(-1);
+    return waits(aheadBlock) ? { stage: ahead, block: aheadBlock, alone: alone(aheadMenu) } : null;
   } catch {
     return null;
   }
@@ -3611,8 +3619,9 @@ function questionOptions(block: string): string[] {
 // How the person's answer to the stage's open question is recorded, named
 // from the question's own row, so a new chat, which never saw it asked, has
 // all it needs. `wordsKept`: the person's words go on the answer's row as
-// Person Reply (personsGateReply, personsWordsKept).
-function openQuestionAnswer(stage: string, block: string, wordsKept: boolean): string {
+// Person Reply (personsGateReply, personsWordsKept). `alone`: no other question
+// waits on the same reply (openStageQuestion).
+function openQuestionAnswer(stage: string, block: string, wordsKept: boolean, alone: boolean): string {
   const checkpoint = auditBlockField(block, "Checkpoint");
   const unit = auditBlockField(block, "Unit");
   const batch = auditBlockField(block, "Batch number");
@@ -3638,8 +3647,9 @@ function openQuestionAnswer(stage: string, block: string, wordsKept: boolean): s
   // reply, where its pick is counted (blockingSensorPicks), and the person's
   // own words go on the row beside it. Where nothing keeps their words, their
   // reply itself is the record, so it is never lost; a checkpoint question
-  // (the summary confirmation) records only a choice either way.
-  const reading = options.length > 0 && (wordsKept || checkpoint !== null);
+  // (the summary confirmation) records only a choice either way. One reply to
+  // several questions is recorded whole, as it answers each of them.
+  const reading = options.length > 0 && (checkpoint !== null || (wordsKept && alone));
   // The verification command and a Construction policy question name their
   // own flags and the setter an approval runs; the command itself stays in its
   // file, never on a shell line.
@@ -3676,13 +3686,12 @@ function openQuestionAnswer(stage: string, block: string, wordsKept: boolean): s
 // with the person's words, kept as `requestId`, which asks where that work
 // belongs.
 function openQuestionReplyDirective(
-  stage: string,
-  block: string,
+  { stage, block, alone }: { stage: string; block: string; alone: boolean },
   requestId: string,
   { replies, wordsKept }: ReturnType<typeof chatReplies>,
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
-  const answer = openQuestionAnswer(stage, block, wordsKept);
+  const answer = openQuestionAnswer(stage, block, wordsKept, alone);
   const decision = auditBlockField(block, "Decision");
   const choices = questionOptions(block);
   const asked = decision
@@ -3749,7 +3758,10 @@ function recoveryQuestionAnsweredByWordsDirective(marker: ActiveDirectiveMarker)
 // is a question the stage's questions file still holds (a guided batch logs
 // only its question numbers): the stage's step asks it from the file, with any
 // reply kept for it (withKeptReplies). Unreadable is left to that step too.
-function openQuestionAgainDirective(projectDir: string, stage: string, block: string): PrintDirective | null {
+function openQuestionAgainDirective(
+  projectDir: string,
+  { stage, block, alone }: { stage: string; block: string; alone: boolean },
+): PrintDirective | null {
   const checkpoint = auditBlockField(block, "Checkpoint");
   if (checkpoint !== null && checkpoint !== CONSTRUCTION_POLICY_CHECKPOINT) return null;
   try {
@@ -3766,7 +3778,7 @@ function openQuestionAgainDirective(projectDir: string, stage: string, block: st
   if (!decision) return null;
   const choices = questionOptions(block);
   // Their reply is not in yet: whether it will be kept is read from the turn that ran this.
-  const answer = openQuestionAnswer(stage, block, personsWordsKept(projectDir));
+  const answer = openQuestionAnswer(stage, block, personsWordsKept(projectDir), alone);
   return printDirective(
     `Stage "${stage}" has a question you asked that the person has not answered yet. Show it to them again, word ` +
       `for word as it was asked, with its choices, and end your turn: ${JSON.stringify(decision)}` +
@@ -10855,7 +10867,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
-      emit(openQuestionReplyDirective(open.stage, open.block, words.id, chatReplies(pd, open.stage)));
+      emit(openQuestionReplyDirective(open, words.id, chatReplies(pd, open.stage)));
       return;
     }
     // Words at the engine's recovery question, once it holds the person's
@@ -10908,7 +10920,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     !isTeamUnitOwnership(stateContent)
   ) {
     const open = openStageQuestion(pd, stateContent);
-    const again = open === null ? null : openQuestionAgainDirective(pd, open.stage, open.block);
+    const again = open === null ? null : openQuestionAgainDirective(pd, open);
     if (open !== null && again !== null) {
       pickUpStage = open.stage;
       leadsToSpeech.add(again);

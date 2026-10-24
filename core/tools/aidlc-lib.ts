@@ -15320,8 +15320,19 @@ export function openDecisionBlock(
   stage: string,
   afterEvent?: string,
 ): string | null {
+  return openDecisionMenu(projectDir, stage, afterEvent).at(-1) ?? null;
+}
+
+// Every question logged since the last answer, oldest first, the open one last:
+// one reply answers all of them (`log answers` pairs it with each). Empty when
+// none is open.
+export function openDecisionMenu(
+  projectDir: string,
+  stage: string,
+  afterEvent?: string,
+): string[] {
   const audit = readAllAuditShards(projectDir);
-  if (audit.length === 0) return null;
+  if (audit.length === 0) return [];
   const relevant = new Set([
     ...DECISION_PAIRING_EVENTS,
     ...(afterEvent ? [afterEvent] : []),
@@ -15352,15 +15363,16 @@ export function openDecisionBlock(
         event.stage === stage &&
         !event.workflow?.startsWith("single-stage:"),
     );
-    if (boundary === -1) return null;
+    if (boundary === -1) return [];
     start = boundary + 1;
   }
-  let open: string | null = null;
+  let menu: string[] = [];
   for (const event of events.slice(start)) {
     if (event.stage !== stage) continue;
-    open = nextOpenDecision(open, event.event, event.block);
+    const open = nextOpenDecision(menu.at(-1) ?? null, event.event, event.block);
+    menu = open === null ? [] : event.event === "DECISION_RECORDED" ? [...menu, open] : menu;
   }
-  return open;
+  return menu;
 }
 
 export function hasPendingDecision(
@@ -30051,17 +30063,22 @@ export function personsGateReply(projectDir: string, session: string | null, sta
 
 // Whether the person's next reply in this chat will be on an answer's row in
 // their own words (personsGateReply): the engine can name the chat, and the
-// human-turn hook kept its latest turn here as a message. By structure only,
-// before they reply; once their reply is in, personsGateReply's words say it
-// exactly. False with hooks off, a host whose prompt hook kept nothing, a chat
-// the engine cannot name, or a record it cannot read.
+// human-turn hook kept its latest turn here as a message with its text. Before
+// they reply; once their reply is in, personsGateReply's words say it exactly.
+// False with hooks off, a host whose prompt hook kept nothing or got an empty
+// prompt (Kiro IDE 1.0.242 hands it none), a chat the engine cannot name, or a
+// record it cannot read.
 export function personsWordsKept(projectDir: string): boolean {
   try {
     const session = resolveInvokingSessionId(projectDir);
     if (session === null) return false;
     const turn = ownShardRows(projectDir).mine
       .findLast((row) => row.event === "HUMAN_TURN" && auditBlockField(row.block, "Session") === session);
-    return turn !== undefined && auditBlockField(turn.block, "Message Id") !== null;
+    const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+    if (id === null) return false;
+    const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+    const message = readMessage(projectDir, id);
+    return message !== null && !isNonAnswer(personsWordsText(message.text));
   } catch {
     return false;
   }

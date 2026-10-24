@@ -1976,7 +1976,7 @@ A plain `log answer` needs a reply of the person's in this chat that no
 decision has used yet, sent before or after the question was logged: which
 question it answers is the agent's reading. For a question with choices,
 `--details` is the choice the agent read from the reply, and their reply itself
-only where no hook kept their words. The answer's row keeps every such
+where no hook kept their words or the reply answers several questions. The answer's row keeps every such
 reply's words (Person Reply), except one an earlier answer already recorded
 unless it is the latest, and names the latest (Message Id), and every one of
 them, oldest first, when there are several (Message Ids); when the engine
