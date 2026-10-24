@@ -2266,10 +2266,8 @@ function validateSwarmResume(
     readRegularFileNoFollowOrThrow(childStatePath, "preserved worktree state").toString("utf-8");
   if (getField(childState, "Merge-Held") === "true") throw new Error(`${unit}: resolve its held merge before resuming.`);
   // A plan approved again after this revision resumed is prepare's to hand to
-  // the resumed build, as for a build prepared in this attempt, and the journal
-  // of this revision still names the discard the build was recreated from.
-  const revisionJournal = !!creation && journal?.revision === revision && journal.creation === checkpointRevision(creation);
-  const discardedSha256 = matchingJournal || (alreadyResumed && revisionJournal) ? journal?.discardedSha256 : undefined;
+  // the resumed build, as for a build prepared in this attempt.
+  const discardedSha256 = matchingJournal ? journal?.discardedSha256 : undefined;
   if (!alreadyResumed) validateCodeGenerationWorktreeApproval(pd, worktree, unit, discardedSha256);
   return {
     unit, worktree, recordPrefix, revision, alreadyResumed, recovering, recreate: false,
@@ -2668,7 +2666,8 @@ function handlePrepare(rest: string[]): void {
     const discarded = resume ?? discardedPreparations.get(unit);
     if (resume && !resume.recreate && resume.alreadyResumed && requiresExecutionAllowance &&
       buildHoldsEarlierPlan(projectDir, unit, resume.worktree)) {
-      // Its Code Generation start was published with the batch's above.
+      // Its Code Generation start was published by the batch's beginCodeGeneration
+      // pass, which covers every Unit not retained.
       try {
         bindCodeGenerationWorktreeApproval(projectDir, resume.worktree, unit, resume.discardedSha256);
       } catch (error) {
