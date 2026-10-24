@@ -1766,6 +1766,39 @@ describe("t294 trust diagnostics", () => {
     }
   });
 
+  test("Grok native trust follows the native hooks and does not require a shipped permission file", async () => {
+    const project = temp("aidlc-t294-trust-grok-");
+    cpSync(join(DIST_RELEASE, "grok"), project, { recursive: true });
+    const machine = temp("aidlc-t294-trust-grok-machine-");
+    const overrides = {
+      AIDLC_HARNESS_DIR: ".grok",
+      AIDLC_HARNESS_NAME: "grok",
+      AIDLC_RUNTIME_HARNESS_ROOT: join(project, ".grok"),
+      AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_OFFLINE: "1",
+      ...hookPathEnv(),
+    };
+    const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
+    const compiled = spyOn(runtimePaths, "isCompiledExecutable").mockReturnValue(true);
+    try {
+      Object.assign(process.env, overrides);
+      const report = await collectDoctorReport(project);
+      const rows = report.checks.filter((check) => check.label.startsWith("Native command trust"));
+      expect(rows).toHaveLength(1);
+      expect(rows[0].pass, rows[0].label).toBe(true);
+      const allow = report.checks.find((check) => check.label.includes("config.toml"));
+      expect(allow?.pass).toBe(false);
+    } finally {
+      compiled.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   // Doctor's one native trust row for a Kiro project, as the installed aidlc
   // command reads it. The environment is set for the read alone, so a config
   // run between two reads gets the test's own.

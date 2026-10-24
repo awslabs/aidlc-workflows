@@ -4066,6 +4066,10 @@ export async function collectDoctorReport(
           hashes.every((hash) => seedText.includes(`trusted_hash = "${hash}"`));
       } else if (currentHarnessDir === ".cursor") {
         nativePermission = commands.includes(cursorTrustedShell());
+      } else if (currentHarnessDir === ".grok") {
+        // Grok Build does not ship a permission file. A missing aidlc allow
+        // entry stays the separate advisory. This row checks native hook wiring.
+        nativePermission = nativeHooks;
       } else if (currentHarnessName === "copilot") {
         // Copilot has no project command allowlist. Its folder-trust contract
         // is checked separately below; this row verifies native hook wiring.
