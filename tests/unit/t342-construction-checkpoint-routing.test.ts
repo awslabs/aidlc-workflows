@@ -1031,6 +1031,21 @@ describe("t342 Construction checkpoint routing", () => {
     expect(readAuditShardEvents(p)).toHaveLength(rows);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("asked for the Units in parallel while they are built one at a time, the two lines read as one change", () => {
+    const p = fixture();
+    const id = policyHuman(p, "let's build the units in parallel");
+    // Parallel needs stage by stage first: the agent runs both setters and says both lines, in this order.
+    const order = policyCli(p, "state", ["set-construction-iteration", "stage-major", "--message", id]);
+    expect(order.status, `${order.stdout}${order.stderr}`).toBe(0);
+    const parallel = policyCli(p, "state", ["set-construction-execution", "swarm", "--message", id]);
+    expect(parallel.status, `${parallel.stdout}${parallel.stderr}`).toBe(0);
+    expect([JSON.parse(order.stdout).notice, JSON.parse(parallel.stdout).notice]).toEqual([
+      "Construction now goes stage by stage (it built one Unit at a time). You can switch back any time.",
+      "Construction now builds the Units in parallel, stage by stage (it built the Units one after another). " +
+        "You can switch back any time.",
+    ]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("an unattended run never changes a Construction setting, even after a person turn", () => {
     const p = fixture();
     const before = readFileSync(seededStateFile(p));
