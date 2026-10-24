@@ -158,6 +158,8 @@ import {
   isBindableIntentRecordName,
   keptRepliesSinceStageStart,
   stageDir,
+  stageQuestionsFile,
+  UNIT_NAME_PLACEHOLDER,
   isSafeIntentRecordName,
   SPACE_NAME_REGEX,
   workflowParticipation,
@@ -7244,13 +7246,6 @@ function resolveSkeletonGate(stance: SkeletonStance, scope: string): boolean {
 // whole thesis"). The mapping is documented in
 // docs/reference/16-artifact-vocabulary.md, "Filesystem mapping".
 
-// The literal token used in the per-unit path shape when no concrete Unit of
-// Work is supplied at emit time. The unit value comes from active Bolt context
-// (a later engine increment threads it in); when absent, the faithful emission
-// is the documented `{unit-name}` placeholder shape, matching
-// 16-artifact-vocabulary.md, "Filesystem mapping".
-const UNIT_NAME_PLACEHOLDER = "{unit-name}";
-
 // True when the node runs once per Unit of Work. The marker + known-set rule
 // lives in aidlc-lib.ts (isPerUnitStage) so the runtime resolver and the cost
 // summary (gridCostSummary) agree on the per-unit set.
@@ -7818,10 +7813,7 @@ function boundedContextWarnings(warnings: string[]): string[] {
 // questions writes five new ones over them.
 function answeredQuestionsFile(projectDir: string, node: GraphStage, unit: string | null): string | null {
   try {
-    const dir = node.phase === "construction" && unit !== null && unit !== UNIT_NAME_PLACEHOLDER
-      ? join(docsRoot(projectDir), "construction", unit, node.slug)
-      : stageDir(projectDir, node.phase, node.slug);
-    const path = join(dir, `${node.slug}-questions.md`);
+    const path = stageQuestionsFile(projectDir, node.phase, node.slug, unit);
     if (!existsSync(path)) return null;
     return /^\[Answer\]:/m.test(readFileSync(path, "utf-8"))
       ? relative(projectDir, path).replaceAll("\\", "/")

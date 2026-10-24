@@ -215,6 +215,10 @@ function project(policy?: "off" | "relaxed" | "strict"): Project {
     "# Functional Spec\n\n## Workflows\n\n- save search\n",
   );
   writeFileSync(join(designDir, "traceability.json"), '{"links":[]}\n');
+  writeFileSync(join(designDir, "functional-design-questions.md"), [
+    "# Functional Design Questions", "", "## Q1", "Who can see a saved search?", "", "A) Its owner",
+    "B) Everyone", "X) Other (please specify)", "", "[Answer]: A", "",
+  ].join("\n"));
   mkdirSync(join(dir, "src"), { recursive: true });
   writeFileSync(join(dir, "src", "base.ts"), "export const base = 1;\n");
   // The suite runner disables the summary-confirmation and human-presence
@@ -371,7 +375,7 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     expect(ask.ask_type).toBe("guard-recovery");
     expect(ask.stage).toBe("functional-design");
     expect(ask.unit).toBe(UNIT);
-    expect(ask.reason_codes).toEqual(["SUMMARY_QUESTIONS_MISSING"]);
+    expect(ask.reason_codes).toEqual(["SUMMARY_RECEIPT_MISSING"]);
     const remedies = ask.remedies as Array<Record<string, unknown>>;
     expect(remedies.length).toBeGreaterThan(0);
     for (const remedy of remedies) {
