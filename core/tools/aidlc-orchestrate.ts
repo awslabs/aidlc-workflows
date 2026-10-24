@@ -15243,7 +15243,15 @@ function planChangeDirective(
         ...planSkip.map((slug) => [slug, "SKIP"] as const),
         ...add.map((slug) => [slug, "EXECUTE"] as const),
       ].reduce((content, [slug, action]) => setStageSuffix(content, slug, action), plan.stateContent);
-      if (nextInScopeStage(first, plan.scope, changed) === null) return "You can undo that until the work is finished.";
+      const closes = nextInScopeStage(first, plan.scope, changed);
+      // At the open gate of the stage before it, the reply usually approves
+      // that gate too ("approve, and skip requirements analysis"), and the
+      // approval starts the stage that closes the window: a live Codex run was
+      // refused on the very next line. The way that still holds is said.
+      if (gateOpen !== null && nextInScopeStage(gateOpen, plan.scope, changed)?.slug === closes?.slug) {
+        return `${planSkip.length === 1 ? "It" : planSkip.length === 2 ? "Either one" : "Any of them"} can still be run on its own with ${anyOf}.`;
+      }
+      if (closes === null) return "You can undo that until the work is finished.";
     }
     return `You can undo that until the work moves past ${planSkip.length === 1 && add.length === 0 ? "it" : name(first)}.`;
   };
