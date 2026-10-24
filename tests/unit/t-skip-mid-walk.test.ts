@@ -298,6 +298,8 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     const proj = walk(["alpha", "beta"]);
     const step = next(proj, ["--skip", "build-and-test"]);
     expect(named(step)).toEqual([`bun .claude/tools/aidlc.ts engine recompose --skip build-and-test --reason '${PERSON}'`]);
+    // Build and Test is no step of the walk: its undo holds until the work moves past it (t-skip-undo-window).
+    expect(step.message).toContain('"Skipped Build and Test. You can undo that until the work moves past it."');
     const replanned = runNamed(proj, named(step)[0]);
     expect(replanned.status, replanned.out).toBe(0);
     expect(readFileSync(stateFile(proj), "utf-8")).toContain("- [ ] build-and-test \u2014 SKIP");
