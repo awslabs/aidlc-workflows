@@ -190,6 +190,17 @@ const SHELL_INTERPRETERS = new Set([
 // heredoc is a program the person can see.
 const INLINE_CODE_RUNTIMES = new Set(["bun", "deno", "node", "perl", "php", "python", "python2", "python3", "ruby"]);
 const INLINE_CODE_FLAGS = new Set(["-c", "-e", "-E", "-p", "-r", "--eval", "--print", "eval"]);
+// AI-DLC's command named in a dynamic command, where a variable or
+// substitution may hide its invocation: a tools script (`aidlc.ts`,
+// `aidlc-<route>.ts`) or the launcher with its extension (`aidlc.exe`,
+// `.cmd`, `.ps1`, which a Windows path the POSIX reading drops the backslashes
+// of still shows) anywhere, or the bare launcher run by a substitution, which
+// the lexer does not read. The bare launcher as a command word is the literal
+// check's in mutationIntent, and a variable run as a command is
+// runsHiddenCommand's; a bare `aidlc` anywhere else is the record folder
+// (`R=aidlc`, `ls aidlc`, `aidlc/spaces`), not that command.
+const ENGINE_WORD =
+  /(?:(?:^|[\s;|&()<>'"`=:/\\])aidlc(?:(?:-[A-Za-z0-9._-]+)?\.ts|\.exe|\.cmd|\.ps1)|(?:\$\(|`)\s*aidlc)(?=$|[\s;|&()<>'"`])/i;
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const SAFE_READ_TOOLS = new Set([
   "Read",
@@ -1861,6 +1872,17 @@ function shellInvocationNeedsApproval(
   return true;
 }
 
+// A command word that is itself an expansion (`$x`, `"$A"`, `${cmd:-aidlc}`,
+// `$(...)`, a backtick), or a program that runs text the lexer does not read
+// (the interpreters, a runtime given its program inline): in a dynamic command
+// that names aidlc, it may run AI-DLC's command from a variable.
+function runsHiddenCommand(invocation: { name: string; args: string[]; executable?: string }): boolean {
+  const word = invocation.executable ?? invocation.name;
+  const program = normalizedCommandName(word);
+  return /^[$`]/.test(word) || SHELL_INTERPRETERS.has(program) ||
+    (INLINE_CODE_RUNTIMES.has(program) && invocation.args.some((arg) => INLINE_CODE_FLAGS.has(arg)));
+}
+
 function shellUsesDynamicEvaluation(command: string): boolean {
   let quote: "'" | '"' | null = null;
   let escaped = false;
@@ -1961,7 +1983,7 @@ async function mutationIntent(
     const looksLikeEngine = invocations.some((invocation) =>
       normalizedCommandName(invocation.executable ?? invocation.name).replace(/\.(?:cmd|ps1)$/, "") === "aidlc" ||
       invocation.args.some((arg) => /^aidlc(?:-[A-Za-z0-9._-]+)?\.ts$/.test(basename(arg)))) ||
-      (dynamic && /\baidlc\b/i.test(analysed));
+      (dynamic && (ENGINE_WORD.test(analysed) || (/\baidlc\b/i.test(analysed) && invocations.some(runsHiddenCommand))));
     engineRefused = looksLikeEngine && opaqueShell;
     // An escaped operator (`\>`, `\&`) is read as the lexer decodes it, which
     // is not trusted here; a variable, substitution or backtick (`dynamic`) can
