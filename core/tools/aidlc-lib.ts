@@ -30025,12 +30025,12 @@ const chatOf = (row: AuditShardEvent): string => auditBlockField(row.block, "Ses
 // a reply in the chat that reports it, or on the replies of the one chat that
 // replied since: replies from several other chats answered something else, in
 // chats that never had this gate put to them. True when the chat cannot be
-// named or the record cannot be read, which leaves the bound to the checks
-// around it.
+// named or resolved, or the record cannot be read, which leaves the bound to
+// the checks around it.
 export function unshownGateReplyStands(projectDir: string, stage: string): boolean {
-  const session = resolveInvokingSessionId(projectDir);
-  if (session === null) return true;
   try {
+    const session = resolveInvokingSessionId(projectDir);
+    if (session === null) return true;
     const { mine, others } = ownShardRows(projectDir);
     const chats = new Set(unspentStageTurns(mine, others, stage).unspent.filter((row) => isReplyTurn(row)).map(chatOf));
     return chats.has(session) || chats.size === 1;

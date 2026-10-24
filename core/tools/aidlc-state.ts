@@ -7416,7 +7416,7 @@ function refuseUnshownGate(pd: string, slug: string): never {
     question: `the "${slug}" gate`,
     shown: "the gate",
     command: "report",
-    why: "no reply of the person's in this chat answers this gate, which has not been shown here.",
+    why: "no reply of the person's in this chat since this stage last started answers this gate.",
   });
   refuseForAgent(step, { personDecided: named });
 }

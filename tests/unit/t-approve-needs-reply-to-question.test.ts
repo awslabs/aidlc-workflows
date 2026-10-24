@@ -241,7 +241,7 @@ describe("t-approve-needs-reply-to-question: only the person's reply to the appr
     person(proj, "option 4", "t-approve-other-chat-1");
     person(proj, "Nothing to add", "t-approve-other-chat-2");
     const refused = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Add User Stories"]);
-    expect(refused.out).toContain("because no reply of the person's in this chat answers this gate, which has not been shown here.");
+    expect(refused.out).toContain("because no reply of the person's in this chat since this stage last started answers this gate.");
     expect(refused.out.toLowerCase()).toContain(SHOW_IT);
     expect(rows(proj, "GATE_APPROVED")).toEqual([]);
     // Their reply in this chat approves it.

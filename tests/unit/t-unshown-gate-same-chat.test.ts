@@ -101,7 +101,7 @@ describe("t-unshown-gate-same-chat: the chat a report names is the chat the pers
       const host = project(name);
       threeChats(host, null);
       const refused = reportApproved(host);
-      expect(`${refused.stdout}${refused.stderr}`).toContain("no reply of the person's in this chat answers this gate");
+      expect(`${refused.stdout}${refused.stderr}`).toContain("no reply of the person's in this chat since this stage last started answers this gate");
       expect(rows(host, "GATE_APPROVED")).toEqual([]);
     });
   }
