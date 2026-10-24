@@ -516,6 +516,22 @@ describe("a fresh start for the steps", () => {
     expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "Request Changes\nlog every part" });
   });
 
+  // The store drops a day-old message once a decision has used it, as the
+  // rejection used the pick; their answer after it is kept.
+  test("a revision picked up the next day still gets their answer, after the pick's own record is gone", () => {
+    const proj = project();
+    interrupted(proj, 1, 2, 3, 4);
+    reply(proj, "Request Changes");
+    const pick = auditBlockField(readAuditShardEvents(proj).findLast((row) => row.event === "HUMAN_TURN")!.block, "Message Id");
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "code-generation", Unit: UNIT, "User Input": "Request Changes", Feedback: "Request Changes",
+      "Message Id": pick!,
+    }, proj);
+    reply(proj, "log every part");
+    rmSync(join(proj, "aidlc", ".aidlc-sessions", "messages", `${pick}.json`));
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "Request Changes\nlog every part" });
+  });
+
   test("a rejection that names no message of theirs is revised from its own feedback alone", () => {
     const proj = project();
     interrupted(proj, 1, 2, 3, 4);
