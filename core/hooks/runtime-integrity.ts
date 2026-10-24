@@ -1155,9 +1155,12 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
   // command reaches into the AIDLC workspace or already runs inside it.
   const plain = outside.replace(/["'\\]/g, "");
   // A Windows spelling keeps its backslashes as separators (`...\audit;`), so
-  // the folder tests also read the text with only its quotes removed.
+  // the folder tests also read the text with only its quotes removed. That
+  // reading never refuses more than the substring rule it replaces: its
+  // workspace clause also needs audit named as a word.
   const spelled = outside.replace(/["']/g, "");
-  const namesAudit = [plain, spelled].some((text) => AUDIT_DIRECTORY_TEXT.test(text) || AIDLC_WORKSPACE.test(text)) ||
+  const namesAudit = AUDIT_DIRECTORY_TEXT.test(plain) || AIDLC_WORKSPACE.test(plain) ||
+    AUDIT_DIRECTORY_TEXT.test(spelled) || (AIDLC_WORKSPACE.test(spelled) && AUDIT_WORD.test(spelled)) ||
     AIDLC_WORKSPACE.test(cwd);
   return words.some((word) => expandWord(word, values).some((expanded) => {
     if (expanded === null) return AUDIT_SEGMENT.test(withoutOwnFolders(word, cwd)) || namesAudit;
@@ -1170,6 +1173,8 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
 // not as a word of its own (`npm audit`), a variable's name (`$AUDIT/x`) or
 // part of a longer name (`audit-service`, `audit.md`).
 const AUDIT_DIRECTORY_TEXT = /(?:^|[^\w.$-])audit[\\/]|[\\/]audit(?![\w.-])/i;
+// `audit` as a word or a folder of its own, not part of a longer name.
+const AUDIT_WORD = /(?:^|[^\w.-])audit(?![\w.-])/i;
 
 // The folders the shell stands in and above are the person's own path, so an
 // `audit` in their names (a project under ~/audit/) is never the trail, which
@@ -1189,7 +1194,10 @@ function withoutOwnFolders(text: string, cwd: string): string {
     for (const home of homes) {
       if (fold(forward) !== home && !fold(forward).startsWith(`${home}/`)) continue;
       const rest = forward.slice(home.length);
-      for (const prefix of ["~", "$HOME", `\${HOME}`]) spellings.add(`${prefix}${rest}`);
+      for (const prefix of ["~", "$HOME", `\${HOME}`]) {
+        spellings.add(`${prefix}${rest}`);
+        spellings.add(`${prefix}${rest.replaceAll("/", "\\")}`);
+      }
     }
     for (const spelling of spellings) {
       const escaped = spelling.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
