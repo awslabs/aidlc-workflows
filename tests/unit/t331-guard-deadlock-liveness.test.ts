@@ -2490,6 +2490,35 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(again.remedies.map((remedy) => remedy.label)).not.toContain("Confirm the summary again");
   });
 
+  test("the agent's step names a Unit's own questions file, and none when the refusal names no Unit of a planned set", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const planned = [
+      "# AI-DLC State",
+      "- **Scope**: feature",
+      "- **Construction Iteration**: unit-major",
+      "- [x] units-generation \u2014 EXECUTE",
+      "- [-] functional-design \u2014 EXECUTE",
+      "",
+    ].join("\n");
+    const ask = (unit: string | undefined) => evaluateGuardRefusal({
+      code: "SUMMARY_QUESTIONS_MISSING",
+      blockedAction: "complete",
+      stage: "functional-design",
+      ...(unit ? { unit } : {}),
+      projectDir: project,
+      stateContent: planned,
+      invariant: "A stage's outputs stand on the person's confirmed answers.",
+      userMessage: "Refusing to complete \"functional-design\": its question flow has no functional-design-questions.md file.",
+      attempt: { recovery: "available", summaryCoverage: "missing", reviewCoverage: "missing", sourceCoverage: "current" },
+      humanAuthority: { freshTurn: false, unattended: false },
+    }).remedies.find((remedy) => remedy.op === "ask-stage-questions")?.action ?? "";
+    expect(ask("alpha")).toContain("/construction/alpha/functional-design/functional-design-questions.md");
+    // With Units planned the checks read each Unit's file, so a stage-level
+    // file named here would be one nothing reads.
+    expect(ask(undefined)).not.toContain("functional-design-questions.md`");
+  });
+
   test("a missing pipeline handoff is the agent's to dispatch, never a review request", () => {
     const wayOn = "Cannot complete \"reverse-engineering\" because these pipeline handoffs have not been recorded for " +
       "the current run: aidlc-architect-agent. Dispatch the missing pipeline links in their declared order.";
