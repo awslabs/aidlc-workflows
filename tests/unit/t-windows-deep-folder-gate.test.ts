@@ -11,7 +11,7 @@ import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -59,19 +59,34 @@ describe("the helper with the Unit names", () => {
     // Infrastructure Design's per-Unit review brief with an empty name:
     // aidlc/spaces/default/intents/<YYMMDD>-<label>/.aidlc-engine/reviews/infrastructure-design/units/<unit>/briefs/<sha256>.md
     expect(UNIT_RECORD_DEPTH).toBe(186);
-    const named = deepFolder(folder, "win32", ["u2-billing", "u1-order-management"]);
+    const named = deepFolder(folder, "win32", { names: ["u2-billing", "u1-order-management"] });
     expect(named?.adds).toBe(UNIT_RECORD_DEPTH + "u1-order-management".length);
     expect(named?.facts).toBe(`70 ${SAID} ${UNIT_RECORD_DEPTH + 19}`);
     expect(named?.adds).toBeGreaterThan(RECORD_DEPTH);
     // 70 + 1 + 186 + 3 is 260, not over it.
-    expect(deepFolder(folder, "win32", ["api"])).toBeNull();
-    expect(deepFolder(folder, "win32", ["apis"])?.depth).toBe(70);
+    expect(deepFolder(folder, "win32", { names: ["api"] })).toBeNull();
+    expect(deepFolder(folder, "win32", { names: ["apis"] })?.depth).toBe(70);
+  });
+
+  test("the work's own record folder counts: its space's name and its intent folder", async () => {
+    const { UNIT_RECORD_DEPTH, UNIT_RECORD_SUFFIX, deepFolder } = await import(HELPER);
+    // The default space with the label at its cap is where 186 comes from.
+    const capped = `aidlc/spaces/default/intents/261024-${"w".repeat(24)}`;
+    expect(capped.length + UNIT_RECORD_SUFFIX).toBe(UNIT_RECORD_DEPTH);
+    expect(deepFolder(folder, "win32", { names: ["api"], recordFolder: capped })).toBeNull();
+    // A team space with a longer name puts the same Unit's records past 260.
+    const team = `aidlc/spaces/payments-platform-team/intents/261024-${"w".repeat(24)}`;
+    const said = deepFolder(folder, "win32", { names: ["api"], recordFolder: team });
+    expect(said?.adds).toBe(team.length + UNIT_RECORD_SUFFIX + 3);
+    expect(said?.facts).toBe(`70 ${SAID} ${team.length + UNIT_RECORD_SUFFIX + 3}`);
+    // So does a second intent of the same day and label.
+    expect(deepFolder(folder, "win32", { names: ["api"], recordFolder: `${capped}-2` })?.adds).toBe(UNIT_RECORD_DEPTH + 5);
   });
 
   test("on Linux and macOS the names change nothing", async () => {
     const { deepFolder } = await import(HELPER);
-    expect(deepFolder(`/home/${"u".repeat(200)}`, "linux", ["u1-order-management"])).toBeNull();
-    expect(deepFolder(`/Users/${"u".repeat(200)}`, "darwin", ["u1-order-management"])).toBeNull();
+    expect(deepFolder(`/home/${"u".repeat(200)}`, "linux", { names: ["u1-order-management"] })).toBeNull();
+    expect(deepFolder(`/Users/${"u".repeat(200)}`, "darwin", { names: ["u1-order-management"] })).toBeNull();
   });
 
   test("the per-Unit review paths the engine builds stay within the number", async () => {
@@ -139,8 +154,9 @@ ${row(" ", "build-and-test")}
 `;
 
 // A project at Units Generation in a folder about 70 characters deep, its
-// units block naming `units`.
-function project(units: (depth: number) => string[]): { proj: string; units: string[] } {
+// units block naming `units`, which are picked from the folder's depth and the
+// length of the work's record folder under it.
+function project(units: (depth: number, record: number) => string[]): { proj: string; units: string[] } {
   const base = mkdtempSync(join(tmpdir(), "dg-"));
   made.push(base);
   // createTestProject adds `/aidlc-test-XXXXXX` (18) under TMPDIR.
@@ -162,7 +178,7 @@ function project(units: (depth: number) => string[]): { proj: string; units: str
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
   const dir = join(seededRecordDir(proj), "inception", STAGE);
   mkdirSync(dir, { recursive: true });
-  const names = units(proj.length);
+  const names = units(proj.length, relative(proj, seededRecordDir(proj)).length);
   writeFileSync(join(dir, "unit-of-work.md"), `# Units of Work\n\n| Unit ID | Directory | Name |\n|---|---|---|\n${
     names.map((name, i) => `| U${i + 1} | ${name} | ${name} |`).join("\n")
   }\n`);
@@ -192,10 +208,12 @@ const times = (text: string, part: string): number => text.split(part).length - 
 
 describe("the Units Generation gate", () => {
   test("Unit names that make the folder too deep: the gate says it once, and not again when it is shown again", async () => {
-    const { RECORD_DEPTH, UNIT_RECORD_DEPTH } = await import(HELPER);
+    const { RECORD_DEPTH, UNIT_RECORD_SUFFIX } = await import(HELPER);
     // A name long enough to pass 260 from this folder, and config's own threshold not met.
-    const { proj, units } = project((depth) => {
-      const length = Math.min(64, Math.max(4, 260 - depth - UNIT_RECORD_DEPTH));
+    let records = 0;
+    const { proj, units } = project((depth, record) => {
+      records = record + UNIT_RECORD_SUFFIX;
+      const length = Math.min(64, Math.max(4, 260 - depth - records));
       return ["u2-billing", `u1-${"o".repeat(length - 3)}`];
     });
     expect(proj.length + 1 + RECORD_DEPTH, proj).toBeLessThanOrEqual(260);
@@ -208,7 +226,7 @@ describe("the Units Generation gate", () => {
     expect(JSON.stringify(opened).split(SAID).length - 1).toBe(WINDOWS ? 1 : 0);
     if (WINDOWS) {
       expect(narration).toContain(
-        `This project folder is ${proj.length} ${SAID} ${UNIT_RECORD_DEPTH + longest}, so move the project`,
+        `This project folder is ${proj.length} ${SAID} ${records + longest}, so move the project`,
       );
     }
     const again = openGate(proj);
@@ -216,13 +234,14 @@ describe("the Units Generation gate", () => {
   });
 
   test("short Unit names: the gate says nothing about the folder", async () => {
-    const { UNIT_RECORD_DEPTH } = await import(HELPER);
-    const { proj } = project((depth) => {
-      const length = Math.max(1, 260 - depth - 1 - UNIT_RECORD_DEPTH);
-      return ["a".repeat(length)];
+    const { UNIT_RECORD_SUFFIX } = await import(HELPER);
+    let records = 0;
+    const { proj } = project((depth, record) => {
+      records = record + UNIT_RECORD_SUFFIX;
+      return ["a".repeat(Math.max(1, 260 - depth - 1 - records))];
     });
     // Short enough that the longest name lands the deepest record at 260, not over it.
-    expect(proj.length, proj).toBeLessThanOrEqual(260 - 1 - UNIT_RECORD_DEPTH - 1);
+    expect(proj.length, proj).toBeLessThanOrEqual(260 - 1 - records - 1);
     const opened = openGate(proj);
     // The gate opened: a refused one is a print too.
     expect(String(opened.message), JSON.stringify(opened)).toContain(`Recorded awaiting-approval for "${STAGE}"`);
