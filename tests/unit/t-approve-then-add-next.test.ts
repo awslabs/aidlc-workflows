@@ -248,9 +248,11 @@ describe("t-approve-then-add-next: the approval recorded first, the add of the s
 
   test("after a jump past Requirements Analysis, the add of User Stories lands; one with a skipped row after it does not", async () => {
     const proj = await gateAt();
+    // The person's `--stage` makes the jump in that `next`, which returns Code Generation's step.
     const jump = await next(proj, ["--stage", "code-generation"]);
-    expect(String(jump.directive?.message), jump.out).toContain("execute --target code-generation --direction forward");
-    expect((await tool(proj, JUMP, ["execute", "--target", "code-generation", "--direction", "forward", "--scope", "bugfix"])).status).toBe(0);
+    expect(jump.status, jump.out).toBe(0);
+    expect(jump.directive?.stage, jump.out).toBe("code-generation");
+    expect(current(proj)).toBe("code-generation");
     expect(checkbox(proj, "requirements-analysis")).toBe("S");
     const pd = await tool(proj, UTILITY, ["recompose", "--add", "practices-discovery"]);
     expect(pd.status).not.toBe(0);
