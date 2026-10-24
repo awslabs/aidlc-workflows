@@ -340,6 +340,8 @@ export async function run(
     "ask_questions",
     "askQuestion",
     "ask_question",
+    // ask_user as Copilot CLI hands it to the PascalCase hooks AI-DLC registers.
+    "AskUserQuestion",
   ]);
   const rawToolName = copilot.tool_name ?? copilot.toolName ?? "";
   const toolName = TOOL_ALIAS[rawToolName] ?? rawToolName;
