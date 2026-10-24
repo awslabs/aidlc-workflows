@@ -589,8 +589,8 @@ export function goldenPathProblems(j: GoldenJourney, run: GoldenRun): string[] {
  * listing of their files at that moment. That listing is compared with the one
  * taken before their first line; with no pick in the journey, the files as
  * they are now count. Which changed files are theirs is the engine's own
- * reader, as Plan Approval reads it: AI-DLC's record, its install, its part of
- * the root files it shares and the host's own folder are not.
+ * reader, as Plan Approval reads it: AI-DLC's record, its install, the root
+ * files it shares (whole) and the host's own folder are not.
  */
 export function filesBeforePlanProblems(proj: string, run: GoldenRun): string[] {
   if (run.files === null) return ["the journey could not list the person's files before its first line, so it cannot tell whether they changed before a plan was picked"];

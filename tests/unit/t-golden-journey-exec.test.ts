@@ -441,8 +441,8 @@ describe("an opencode run turn", () => {
 
 describe("the person's files until their pick of a plan starts the work", () => {
   const TREES = ["claude", "codex", "copilot", "opencode", "kiro", "kiro-ide", "cursor"];
-  // The kept Copilot run of 2026-10-23 (tests/logs/2026-10-23T22-02-03Z-p1143006): in its first turn, before the plan
-  // question was ever shown, the agent left src/app.js like this, and WORKFLOW_STARTED's Source Baseline listed it so.
+  // A Copilot golden run of 2026-10-23: in its first turn, before the plan question was ever shown, the agent left
+  // src/app.js like this, and WORKFLOW_STARTED's Source Baseline listed it so.
   const FIXED = `const name = process.argv[2];\nconsole.log(\`Hello, \${name}!\`);\n`;
 
   /** The person's greeter with `tree`'s shipped files copied in, as a copy that config never ran in. */
