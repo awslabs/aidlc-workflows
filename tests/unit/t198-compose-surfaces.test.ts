@@ -759,8 +759,9 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     const command = (label: string): string[] =>
       (new RegExp(`"${label}": \`[^\`]*? next ([^\`]+)\``).exec(named)?.[1] ?? "").split(" ");
     const kept = directiveOf(runNext(proj, command("Part of the active work")).out);
+    // Guard Policy relaxed lowers checks, so the step asks the setter for its lines alone.
     expect(String(kept.message)).toContain(
-      `config set depth minimal --guard-policy relaxed --message '${MESSAGE_SLOT}'\` to update the configuration${MESSAGE_FILL}`,
+      `config set depth minimal --guard-policy relaxed --message '${MESSAGE_SLOT}' --verbatim\` to update the configuration${MESSAGE_FILL}`,
     );
     // The separate-work choice reaches the plan question, then the creation.
     const separate = createdThrough(directiveOf(runNext(proj, command("Separate new piece of work")).out));
