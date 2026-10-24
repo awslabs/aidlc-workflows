@@ -499,10 +499,9 @@ export async function run(target: string, input: string): Promise<number> {
     }
 
     case "subagent-stop": {
-      const agent = runningAgent || stringField(toolInput.subagent_type);
       runCore("aidlc-log-subagent.ts", JSON.stringify({
         hook_event_name: "SubagentStop",
-        ...(agent ? { agent_type: agent } : {}),
+        ...(runningAgent ? { agent_type: runningAgent } : {}),
         ...(sessionId ? { session_id: sessionId } : {}),
       }));
       return 0;

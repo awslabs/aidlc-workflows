@@ -4808,12 +4808,20 @@ export async function collectDoctorReport(
     let allowsAidlc = false;
     if (existsSync(configPath)) {
       try {
-        const table = /\[permission\]([\s\S]*?)(?:\n\[|$)/.exec(readFileSync(configPath, "utf-8"))?.[1] ?? "";
-        allowsAidlc = /allow\s*=\s*\[[\s\S]*?aidlc/i.test(table);
+        const parsed = Bun.TOML.parse(withoutBom(readFileSync(configPath, "utf-8"))) as {
+          permission?: { allow?: unknown };
+        };
+        const allow = parsed.permission?.allow;
+        allowsAidlc = Array.isArray(allow) &&
+          allow.some((entry) => typeof entry === "string" && /aidlc/i.test(entry));
       } catch {
         allowsAidlc = false;
       }
     }
+    // A native install runs the aidlc binary; the bun scripts are copy-channel only.
+    const grokAllow = aidlcInvocation() === "aidlc"
+      ? '["Bash(aidlc *)"]'
+      : '["Bash(aidlc *)", "Bash(bun .grok/tools/aidlc*)", "Bash(bun .grok/hooks/aidlc*)"]';
     results.push(
       allowsAidlc
         ? { pass: true, label: ".grok/config.toml [permission] allow mentions aidlc" }
@@ -4822,7 +4830,7 @@ export async function collectDoctorReport(
             severity: "warn",
             label:
               ".grok/config.toml has no [permission] allow entry mentioning aidlc (AI-DLC does not write this file)",
-            fix: 'add allow = ["Bash(aidlc *)", "Bash(bun .grok/tools/aidlc*)", "Bash(bun .grok/hooks/aidlc*)"] under [permission] in .grok/config.toml',
+            fix: `add allow = ${grokAllow} under [permission] in .grok/config.toml`,
           },
     );
     const which = process.platform === "win32"
