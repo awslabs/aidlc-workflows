@@ -662,7 +662,8 @@ describe("t-plan-proposed-by-the-agent: creation retires the request's whole cha
     // the person gets the question of which work to pick up.
     const step = next(CLAUDE_TOOLS, proj, first as string[], chat);
     const setter = /Run `bun \.claude\/tools\/aidlc\.ts ([^`]+)`/.exec(String(step.message))?.[1];
-    expect(setter, JSON.stringify(step).slice(0, 300)).toBe("engine config set guard.review-freeze off");
+    // A check turned off: the step asks the setter for its lines alone, as it prints them verbatim.
+    expect(setter, JSON.stringify(step).slice(0, 300)).toBe("engine config set guard.review-freeze off --verbatim");
     const kept = spawnSync(process.execPath, [join(CLAUDE_TOOLS, "aidlc.ts"), ...(setter as string).split(" ")], {
       cwd: proj,
       encoding: "utf-8",

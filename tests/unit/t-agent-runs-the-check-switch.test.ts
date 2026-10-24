@@ -119,7 +119,9 @@ describe("a guard's turn-it-off choice is a command the agent runs", () => {
     });
     expect(guardOperationMatchesCommand(remedy.operation!, remedy.command!)).toBe(true);
     expect(remedy.action).toStartWith("Turn the review-freeze check off for this piece of work:");
-    expect(remedy.action).toContain("tell the person in one line");
+    // The setter's own output says its line to the person; the choice asks for no wording of the agent's.
+    expect(remedy.action).toEndWith("After the command succeeds, retry what was refused.");
+    expect(remedy.action).not.toContain("in one line");
     expect(remedy.action).not.toMatch(/\/aidlc|\$aidlc|typ(e|ing)|yourself/);
   });
 
