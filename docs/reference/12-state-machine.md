@@ -228,9 +228,9 @@ a pipeline stage that rests on reuse alone (every repository kept on its
 current-attempt `ARTIFACT_REUSED` row, no scan receipt), other than the
 person's own skip and an unattended run, also needs the person's answer to the
 stage's question on record (`QUESTION_ANSWERED` since the stage started): while
-that question is open the step shows it and names the same skip report for after
-their answer, and with no answer on record the step says how to record one;
-nothing is skipped until then. It runs
+that question is open the step shows it, and after their answer names the same
+skip report for a keep and the stage's scan for a scan; with no answer on record
+the step says how to record one; nothing is skipped until then. It runs
 before
 artifact, per-unit, and ensemble-evidence guards because a justified skip owes
 no completion evidence. The engine invokes the internal skip transition with

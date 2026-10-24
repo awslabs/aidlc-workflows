@@ -151,7 +151,9 @@ for (const tree of TREES) {
       const message = String(step.message);
       expect(message).toContain(`Show it to them, word for word as it was asked, with its choices, and end your turn: ${JSON.stringify(QUESTION)}`);
       expect(message).toContain('"Reuse existing knowledge base", "Full rescan", "Focused scan"');
-      expect(message).toContain(`then run the same skip report again: \`bun ${tree.tools}/tools/aidlc-orchestrate.ts report --stage ${STAGE} --result skipped`);
+      // The skip is the way on only after a keep; a scan answer carries on with the scan.
+      expect(message).toContain(`if they chose to keep the existing knowledge base, run the same skip report again: \`bun ${tree.tools}/tools/aidlc-orchestrate.ts report --stage ${STAGE} --result skipped`);
+      expect(message).toContain(`if they chose a scan, carry on with "${STAGE}"'s scan from where you asked.`);
       expect(message).not.toContain("again, word for word");
       nothingSkipped(proj);
 
@@ -172,6 +174,7 @@ for (const tree of TREES) {
       expect(step.kind).toBe("error");
       expect(String(step.message)).toContain(`\`bun ${tree.tools}/tools/aidlc-log.ts decision\``);
       expect(String(step.message)).toContain(`\`bun ${tree.tools}/tools/aidlc-log.ts answer\``);
+      expect(String(step.message)).toContain(`if they chose a scan, carry on with "${STAGE}"'s scan from where you asked.`);
       nothingSkipped(proj);
     });
 
@@ -226,6 +229,9 @@ describe("t-reuse-skip-needs-their-answer: what stays as it was", () => {
     asked(tree, proj);
     kept(tree, proj);
     says(tree, proj, "just skip reverse engineering");
+    const named = run(tree, proj, "aidlc", ["engine", "orchestrate", "next", "--skip", STAGE]);
+    const report = `report --stage ${STAGE} --result skipped --reason 'the person asked to skip it'`;
+    expect(String(lastJson(named.stdout).message)).toContain(report);
     const own = run(tree, proj, "aidlc", [
       "engine", "orchestrate", "report", "--stage", STAGE, "--result", "skipped", "--reason", "the person asked to skip it",
     ]);
