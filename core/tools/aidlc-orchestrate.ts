@@ -4206,6 +4206,23 @@ function routingAnswerCommands(
   };
 }
 
+// The plan rows the which-work question hands out beside its separate-work
+// answer, for a plan the person names in place of the proposed one: the
+// settings the question kept ride every row, a change to the proposed plan its
+// row alone. With none proposed that answer picks the plan next, so no row that
+// picks one is handed out beside it. The question's `scope_commands` and the
+// step that reads a reply to it both take these.
+function routingScopeCommands(
+  questionId: string,
+  proposedScope: string,
+  carried: RoutingCarried,
+  projectDir: string,
+): ScopeCommandRow[] {
+  if (proposedScope === "") return [];
+  return scopeCommands(`${aidlcToolInvocation("orchestrate")} next --new-intent`, questionId, carried.newWork, projectDir)
+    .map((entry) => entry.scope === proposedScope ? { ...entry, command: `${entry.command}${carried.planChanges}` } : entry);
+}
+
 // The options a stored routing question was asked with, in its numbered order.
 function routingQuestionOptions(question: StoredQuestion): readonly RoutingOption[] {
   if (question.askedAbout?.pick === true) return EXISTING_WORK_ROUTING_OPTIONS;
@@ -4239,9 +4256,11 @@ function openRoutingQuestion(projectDir: string): StoredQuestion | null {
 // question's answers with its own command, as the question gave them, so the
 // agent runs the one the person chose; nothing runs from the words themselves.
 // A reshape answer carries their words too: the composer it reaches works
-// without their chat. Null when the settings the question kept no longer parse:
+// without their chat. The question's row for each other plan follows the
+// separate-work answer, for a person who names one ("separate, but on the
+// classic plan"). Null when the settings the question kept no longer parse:
 // the words are then asked about as usual.
-function routingQuestionReplyDirective(question: StoredQuestion, words: string): PrintDirective | null {
+function routingQuestionReplyDirective(question: StoredQuestion, words: string, projectDir: string): PrintDirective | null {
   let carried = carriedFromQuestion(question, parseNextFlags([]));
   if (carried !== null && routingAskedAboutScope(question)) {
     const existing = parseNextFlags(question.settings?.existingWork ?? []);
@@ -4258,11 +4277,19 @@ function routingQuestionReplyDirective(question: StoredQuestion, words: string):
   );
   const named = (route: NewWorkRoute, command: string): string =>
     route === "reshape" ? `${command} -- ${quoteCommandArgument(words)}` : command;
-  const answers = routingQuestionOptions(question).map((option) => {
+  const otherPlans = routingScopeCommands(question.id, question.proposedScope, carried, projectDir)
+    .filter(({ scope }) => scope !== question.proposedScope);
+  const answers = routingQuestionOptions(question).flatMap((option) => {
     const command = commands.route[option.route];
-    if (command !== undefined) return `"${option.label}": \`${named(option.route, command)}\``;
-    const each = option.route === "continue" ? commands.select : commands.reshape;
-    return `"${option.label}": the command for the work they named, one of ${each.map(({ command: c }) => `\`${named(option.route, c)}\``).join(", ")}`;
+    if (command === undefined) {
+      const each = option.route === "continue" ? commands.select : commands.reshape;
+      return [`"${option.label}": the command for the work they named, one of ${each.map(({ command: c }) => `\`${named(option.route, c)}\``).join(", ")}`];
+    }
+    const answer = `"${option.label}": \`${named(option.route, command)}\``;
+    return option.route !== "separate" || otherPlans.length === 0 ? [answer] : [
+      answer,
+      `"${option.label}" on another plan they name: the command for that plan, one of ${otherPlans.map(({ command: c }) => `\`${c}\``).join(", ")}`,
+    ];
   });
   return printDirective(
     "The person has not answered the question about where their words belong, so `next` cannot tell their reply " +
@@ -4301,7 +4328,6 @@ function newWorkRoutingAskDirective(
     projectDir, description, proposedScope, "routing", askedAbout, false, derivedFrom, stateSha256,
     routingSettings(carried), approvedRequest,
   );
-  const tool = aidlcToolInvocation("orchestrate");
   const commands = routingAnswerCommands(stored.id, proposedScope, carried, availableIntents);
   const options = routing.options.map((option) => ({ label: option.label, detail: option.detail(proposedScope, routing.size) }));
   return {
@@ -4318,11 +4344,7 @@ function newWorkRoutingAskDirective(
     new_work_description: authoritativeRequest(description),
     proposed_scope: proposedScope,
     new_intent_command: commands.newIntent,
-    // A plan the person names in place of the proposed one has its row; with
-    // none proposed the separate-work answer picks the plan next, so no row
-    // that picks one is handed out beside it.
-    scope_commands: proposedScope === "" ? [] : scopeCommands(`${tool} next --new-intent`, stored.id, carried.newWork, projectDir).map((entry) =>
-      entry.scope === proposedScope ? { ...entry, command: `${entry.command}${carried.planChanges}` } : entry),
+    scope_commands: routingScopeCommands(stored.id, proposedScope, carried, projectDir),
     compose_command: commands.compose,
     // With a record to pick, the human continues it through its select command
     // and reshapes it through its reshape command; otherwise the question named
@@ -9532,7 +9554,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       key === "intent" || key === "markedWords" || value === undefined || value === false);
   const unmarkedProse = onlyProse && flags.markedWords !== true;
   const openRouting = unmarkedProse ? openRoutingQuestion(questionDir) : null;
-  const routingStep = openRouting === null ? null : routingQuestionReplyDirective(openRouting, flags.intent ?? "");
+  const routingStep = openRouting === null ? null : routingQuestionReplyDirective(openRouting, flags.intent ?? "", questionDir);
   if (routingStep !== null) {
     emit(routingStep);
     return;

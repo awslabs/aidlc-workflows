@@ -727,3 +727,49 @@ describe("t-plan-proposed-by-the-agent: the which-work question hands out no pla
     expect(named.scope_commands?.map((row) => row.scope).sort()).toEqual([...validScopes()].sort());
   });
 });
+
+// A person who answers the which-work question in their own words with another
+// plan than the one it named ("separate, but use the classic plan") gets that
+// plan: the step that reads their reply names each other plan's command, the
+// rows the question itself carries. Before, it named the proposed plan's alone,
+// so the plan they named was dropped or their words were spent as a new request.
+describe("t-plan-proposed-by-the-agent: a reply naming another plan at the which-work question has that plan's command", () => {
+  const WORDS = "Separate work, but use the classic plan";
+  const OTHER_PLAN = '"Separate new piece of work" on another plan they name';
+  const asked = (tools: string, project: string, plan: string[]): Directive => {
+    const read = next(tools, project, ["fix the logout bug"]);
+    const id = REQUEST.exec(String(read.message))![1];
+    const open = next(tools, project, ["--request", id, ...plan]);
+    expect(open.ask_type, JSON.stringify(open).slice(0, 300)).toBe("new-work-routing");
+    return open;
+  };
+
+  test.each([
+    ["claude code, work in progress", CLAUDE_TOOLS, activeProject],
+    ["kiro, work here and none selected", KIRO_TOOLS, () => cloneWithWork(KIRO_TOOLS)],
+  ])("%s: the step names the classic plan's command, which starts the work on classic", (_where, tools, make) => {
+    proj = make();
+    const open = asked(tools, proj, ["--propose", "bugfix"]);
+    const classic = open.scope_commands!.find((row) => row.scope === "classic")!.command;
+    const step = String(next(tools, proj, [WORDS]).message);
+    expect(step).toContain("has not answered the question about where their words belong");
+    // The proposed plan's command stays first under its own answer.
+    expect(step).toContain(`"Separate new piece of work": \`${open.new_intent_command}\``);
+    const others = step.slice(step.indexOf(OTHER_PLAN));
+    expect(step.indexOf(OTHER_PLAN), step).toBeGreaterThan(step.indexOf(`"Separate new piece of work": `));
+    expect(others).toContain(`\`${classic}\``);
+    for (const row of open.scope_commands!.filter((entry) => entry.scope !== "bugfix")) expect(others).toContain(`\`${row.command}\``);
+    const started = next(tools, proj, answerArgs(classic));
+    expect(started.kind, JSON.stringify(started).slice(0, 300)).toBe("print");
+    expect(String(started.message)).toContain("--scope classic");
+  });
+
+  test("claude code, work in progress, no plan proposed: the step names no plan's command beside the plan step", () => {
+    proj = activeProject();
+    const open = asked(CLAUDE_TOOLS, proj, []);
+    const step = String(next(CLAUDE_TOOLS, proj, [WORDS]).message);
+    expect(step).toContain(`"Separate new piece of work": \`${open.new_intent_command}\``);
+    expect(step).not.toContain(OTHER_PLAN);
+    expect(step).not.toContain("--new-intent --scope");
+  });
+});
