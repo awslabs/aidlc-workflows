@@ -372,12 +372,26 @@ describe("t-back-on-clears-your-own-switch: the agent's config flags clear does 
     expect(w.changed()).toBe("");
   });
 
-  test("only your own file keeps it off: cleared as before, with the clear's own lines", () => {
+  test("only your own file keeps it off: cleared, and the person's line says it is on again", () => {
     const w = teamClone();
     w.off(SWITCH, "local");
     const out = w.clear(SWITCH);
-    expect(out).toContain(`Cleared ${SWITCH} from aidlc.settings.local.json.`);
+    // From a chat the person's line is the whole of it; the file and its undo stay in the JSON result.
+    expect(out).toBe("The plan approval check is on again for this project.");
+    expect(w.recorded("local")).toEqual([]);
+  });
+
+  test("two checks cleared from your file while the team's file keeps one off: that one is still said", () => {
+    const w = teamClone();
+    const FREEZE = "AIDLC_DISABLE_REVIEW_FREEZE_HOOK";
+    w.off(FREEZE, "project");
+    w.commit();
+    w.off(SWITCH, "local");
+    w.off(FREEZE, "local");
+    const out = w.clear(SWITCH, "--clear-bypass", FREEZE, "--local");
     expect(out).toContain("The plan approval check is on again for this project.");
+    expect(out).toContain("still off: the switch is recorded in aidlc.settings.json.");
+    expect(out).not.toContain(`Cleared ${SWITCH}`);
     expect(w.recorded("local")).toEqual([]);
   });
 
@@ -472,5 +486,37 @@ describe("t-back-on-clears-your-own-switch: the agent's config flags clear does 
     expect(onboarding).toContain("To turn it back on, run `{{INVOKE}} config flags --clear-bypass <switch> --yes`");
     const orchestrate = readFileSync(join(REPO_ROOT, "core", "tools", "aidlc-orchestrate.ts"), "utf-8");
     expect(orchestrate).not.toContain("run config flags --clear-bypass AIDLC_DISABLE_<NAME> --yes when the person asks");
+  });
+});
+
+// Turning a check off from a chat: the person reads the line in their own
+// words with its way back; the file, the undo command and the open workflow
+// are the record's, kept in the JSON result. At their own terminal they ran
+// the command themselves, so it says all of it as before.
+describe("t-back-on-clears-your-own-switch: a check turned off from a chat is said in the person's words", () => {
+  const SWITCH = "AIDLC_DISABLE_REVIEW_FREEZE_HOOK";
+  const FREEZE = "The review freeze check (it stops edits to work you already approved) is off for this project since ";
+  const ENGINE = ["To undo:", "Recorded AIDLC_", "open workflow"];
+  const bypass = (id: string, ...json: string[]): string[] =>
+    ["config", "flags", "--bypass", SWITCH, "--local", "--yes", "--message", id, ...json];
+
+  test("from a chat: the person's line alone, and the receipt stays in the JSON result", () => {
+    const w = workspace();
+    const out = w.run(bypass(w.said("turn the review freeze off for me")));
+    expect(out).toStartWith(FREEZE);
+    expect(out).toContain(', because you said: "turn the review freeze off for me". You can turn it back on any time.');
+    for (const words of ENGINE) expect(out).not.toContain(words);
+    expect(w.recorded("local")).toEqual([SWITCH]);
+    w.run(["config", "flags", "--clear-bypass", SWITCH, "--local", "--yes"]);
+    const json = JSON.parse(w.run(bypass(w.said("turn it off again"), "--json"))) as { data: { changes: string[] } };
+    expect(json.data.changes.join("\n")).toContain(`Recorded ${SWITCH} in aidlc.settings.local.json. To undo: `);
+    expect(json.data.changes.join("\n")).toContain("open workflow");
+  });
+
+  test("at your own terminal: the receipt, its undo and the open workflow line, as before", () => {
+    const w = workspace();
+    const out = w.run(bypass(w.said("turn the review freeze off for me")), { AIDLC_TEST_CONFIG_TTY: "1", AIDLC_SESSION_OVERRIDE: undefined });
+    expect(out).toContain(FREEZE);
+    for (const words of ENGINE) expect(out).toContain(words);
   });
 });

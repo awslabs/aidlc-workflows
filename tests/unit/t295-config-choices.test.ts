@@ -611,7 +611,10 @@ describe("t295 flags section", () => {
     expect(planToken).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(changedSince(before)).toEqual([]);
 
-    const recorded = flags("--bypass", name, "--plan-token", planToken, "--yes");
+    // Typed at the person's own terminal, where the receipt and its undo are
+    // printed (from a chat the switch's own line is the whole print).
+    const typed = (...args: string[]) => flagsWith(ownTerminal(), ...args);
+    const recorded = typed("--bypass", name, "--plan-token", planToken, "--yes");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     // It says what happened and how to undo it, first, with no flags summary,
     // warning or closing "configured" line around it.
@@ -635,7 +638,7 @@ describe("t295 flags section", () => {
 
     // Typed without --yes, it is done as asked, with no question.
     before = files();
-    const cleared = flags("--clear-bypass", name);
+    const cleared = typed("--clear-bypass", name);
     expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
     expect(cleared.stdout).toContain(`Cleared ${name} from aidlc.settings.local.json. To undo: `);
     expect(cleared.stdout).toContain(`config flags --bypass ${name} --local --yes`);
@@ -932,7 +935,7 @@ describe("t295 flags section", () => {
     // The command the line names turns the check back on.
     const there = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes");
     expect(there.status, there.stdout + there.stderr).toBe(0);
-    expect(there.stdout).toContain("Cleared AIDLC_DISABLE_REVIEW_FREEZE_HOOK from aidlc.settings.local.json.");
+    expect(there.stdout).toContain("The review freeze check is on again for this project.");
     expect(resolvedFlags(project)?.bypasses).toBeUndefined();
     expect(existsSync(shared)).toBe(false);
   });
