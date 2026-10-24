@@ -619,24 +619,32 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
   // The person answered the stage's questions and was shown the summary of
   // them. A new chat's stage step only named the file, and an agent wrote new
   // questions over it; the summary now comes back as it was asked.
+  // The summary asked in the old chat, with the question's answers in the file.
+  function openSummary(unit: string | null) {
+    const p = unit ? construction() : inception("requirements-analysis");
+    if (unit) appendAuditEntry("STAGE_STARTED", { Stage: "functional-design" }, p);
+    const stage = unit ? "functional-design" : "requirements-analysis";
+    const dir = unit ? join(seededRecordDir(p), "construction", unit, stage) : join(seededRecordDir(p), "inception", stage);
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `${stage}-questions.md`);
+    writeFileSync(file, [
+      "# Questions", "", "## Q1", "Which bug?", "", "A) Done items come back", "X) Other (please specify)", "",
+      "[Answer]: A", "", "## Consolidated Summary Confirmation", "", "- Done items come back after a reload.", "",
+      "- Looks correct", "- Request changes", "", "[Answer]:", "",
+    ].join("\n"));
+    const relative = file.slice(p.length + 1).replaceAll("\\", "/");
+    const identity = ["--checkpoint", "summary-confirmation", "--stage", stage, ...(unit ? ["--unit", unit] : []), "--questions-file", relative];
+    const asked = tool(p, "log", ["decision", ...identity, "--session", OLD,
+      "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes"]);
+    expect(asked.status, asked.out).toBe(0);
+    // The agent writes the choice on the summary's tag, as the shown step says, before recording it.
+    const tag = (choice: string) => writeFileSync(file, readFileSync(file, "utf-8").replace(/\[Answer\]:\n$/, `[Answer]: ${choice}\n`));
+    return { p, stage, relative, identity, tag };
+  }
+
   for (const unit of [null, "alpha"] as const) {
     test(`a summary confirmation open ${unit ? "for a Unit " : "at a stage "}comes back from its questions file, answered by its own flags`, () => {
-      const p = unit ? construction() : inception("requirements-analysis");
-      if (unit) appendAuditEntry("STAGE_STARTED", { Stage: "functional-design" }, p);
-      const stage = unit ? "functional-design" : "requirements-analysis";
-      const dir = unit ? join(seededRecordDir(p), "construction", unit, stage) : join(seededRecordDir(p), "inception", stage);
-      mkdirSync(dir, { recursive: true });
-      const file = join(dir, `${stage}-questions.md`);
-      writeFileSync(file, [
-        "# Questions", "", "## Q1", "Which bug?", "", "A) Done items come back", "X) Other (please specify)", "",
-        "[Answer]: A", "", "## Consolidated Summary Confirmation", "", "- Done items come back after a reload.", "",
-        "- Looks correct", "- Request changes", "", "[Answer]:", "",
-      ].join("\n"));
-      const relative = file.slice(p.length + 1).replaceAll("\\", "/");
-      const identity = ["--checkpoint", "summary-confirmation", "--stage", stage, ...(unit ? ["--unit", unit] : []), "--questions-file", relative];
-      const asked = tool(p, "log", ["decision", ...identity, "--session", OLD,
-        "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes"]);
-      expect(asked.status, asked.out).toBe(0);
+      const { p, stage, relative, identity, tag } = openSummary(unit);
       const shown = bare(p, NEW);
       expect(shown.kind, JSON.stringify(shown)).toBe("print");
       expect(shown.message).toContain('"Does this all look correct?"');
@@ -644,14 +652,29 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
       expect(shown.message).toContain(relative);
       expect(shown.message).toContain("end your turn");
       expect(shown.message).toContain(`answer --checkpoint summary-confirmation --stage ${stage}${unit ? ` --unit ${unit}` : ""} --questions-file ${relative} --details`);
-      // The person confirms; the agent fills the tag and records it with the named flags.
       person(p, "yes", NEW);
-      writeFileSync(file, readFileSync(file, "utf-8").replace(/\[Answer\]:\n$/, "[Answer]: Looks correct\n"));
+      tag("Looks correct");
       const recorded = tool(p, "log", ["answer", ...identity, "--session", NEW, "--details", "Looks correct"]);
       expect(recorded.status, recorded.out).toBe(0);
       expect(readAuditShardEvents(p).some((row) => row.event === "SUMMARY_CONFIRMATION_RECORDED")).toBe(true);
     });
   }
+
+  // What they asked to change rides with the choice, so they are not asked
+  // "What should change?" for words they already said.
+  test("a Request changes reply to the summary shown again is recorded with what they asked to change", () => {
+    const { p, identity, tag } = openSummary(null);
+    const shown = bare(p, NEW);
+    expect(shown.message).toContain("Request changes: what they asked to change");
+    const said = "Request changes: blank titles include whitespace-only ones";
+    person(p, said, NEW);
+    tag("Request changes");
+    const recorded = tool(p, "log", ["answer", ...identity, "--session", NEW, "--details", said]);
+    expect(recorded.status, recorded.out).toBe(0);
+    expect(recorded.stdout).not.toContain("What should change?");
+    const receipt = readAuditShardEvents(p).filter((row) => row.event === "SUMMARY_CONFIRMATION_RECORDED").at(-1);
+    expect(auditBlockField(receipt!.block, "Feedback")).toBe("blank titles include whitespace-only ones");
+  });
 
   test("a Unit checkpoint question is asked again by its checkpoint step", () => {
     const p = fixture();
