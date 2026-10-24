@@ -26,8 +26,6 @@ const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
 const CHAT = "01995000-7a11-7000-8000-00000000a5a5";
 const STAGE = "requirements-analysis";
-// A message and a row keep whole seconds: a question logged a second later comes after the reply.
-const tick = () => Bun.sleepSync(1100);
 
 const created: string[] = [];
 afterEach(() => {
@@ -101,7 +99,6 @@ describe("an answer with no message named takes a reply only for a question it c
     asks(proj, "Which database should the to-do app use?", "PostgreSQL,SQLite,Other");
     const postgres = says(proj, "/aidlc postgres");
     answers(proj, "PostgreSQL");
-    tick();
     asks(proj, "Should a blank title be refused?", "Yes,No,Other");
     answers(proj, "Yes");
     expect(recorded(proj)).toEqual([
@@ -115,7 +112,6 @@ describe("an answer with no message named takes a reply only for a question it c
     asks(proj, "Which database should the to-do app use?", "PostgreSQL,SQLite,Other");
     const both = says(proj, "postgres, and yes, refuse blank titles");
     answers(proj, "PostgreSQL");
-    tick();
     asks(proj, "Should a blank title be refused?", "Yes,No,Other");
     answers(proj, "Yes", both);
     expect(recorded(proj).at(-1)).toEqual({ details: "Yes", words: "postgres, and yes, refuse blank titles", message: both });
@@ -125,7 +121,6 @@ describe("an answer with no message named takes a reply only for a question it c
     const proj = requirements();
     asks(proj, "Which database?", "PostgreSQL,SQLite");
     asks(proj, "Refuse blank titles?", "Yes,No");
-    tick();
     const both = says(proj, "postgres, and yes refuse blank titles");
     answers(proj, "PostgreSQL");
     answers(proj, "Yes");
@@ -138,7 +133,6 @@ describe("an answer with no message named takes a reply only for a question it c
   test("a reply no answer names yet answers the question the agent logs after it", () => {
     const proj = requirements();
     const said = says(proj, "use postgres for the database");
-    tick();
     asks(proj, "Which database?", "PostgreSQL,SQLite");
     answers(proj, "PostgreSQL");
     expect(recorded(proj)).toEqual([{ details: "PostgreSQL", words: "use postgres for the database", message: said }]);
