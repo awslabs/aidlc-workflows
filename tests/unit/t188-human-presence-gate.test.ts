@@ -648,7 +648,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
 
     test("the engine's park returns the paused step", () => {
       const sf = grantedFrom(GRANT_CHAT);
-      const env = { ...process.env, ...claudeChat, AIDLC_SKIP_ARTIFACT_GUARD: "1" };
+      const env: NodeJS.ProcessEnv = { ...process.env, ...claudeChat, AIDLC_SKIP_ARTIFACT_GUARD: "1" };
       delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
       delete env.AIDLC_UNATTENDED;
       const r = spawnSync(BUN, [ORCHESTRATE, "park", "--person-asked", "--project-dir", proj], {
