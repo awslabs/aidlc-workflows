@@ -1434,7 +1434,7 @@ function requireHumanConstructionPolicyChange(
   if (authority === null) {
     error(
       requestMessageStep(pd, `No message of the person's that asks to change ${field} is named. Change it only ` +
-        "when they ask for it, never to clear a refusal or on your own.") + ` ${CONSTRUCTION_POLICY_RECOVERY}`,
+        "when they ask for it, never to clear a refusal or on your own.", true) + ` ${CONSTRUCTION_POLICY_RECOVERY}`,
     );
   }
   return authority === "asked" && named !== undefined ? { words: personsWordsText(named.words ?? named.text), message: named.id } : null;

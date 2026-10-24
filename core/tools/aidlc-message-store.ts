@@ -390,15 +390,16 @@ export function chatsSince(rows: readonly AuditShardEvent[], pd: string, spentAt
 // agent can name the one that asked. Never their words: the agent has them. Another
 // chat's ids would leave an agent that cannot tell the chats apart to pick one
 // by its time; a message named from there still proves.
-// While the code plan question waits for the person, a message from before it
-// that a decision has followed (it arrived before the last approval or
-// decision) is not offered: a live Copilot CLI run took their "Approve" for the
-// stage before from this list and turned plan approval off, set by them, with
-// the question unanswered. Before the question it is offered, as "approve, and
-// turn plan approval off" needs where the agent learns ids only from these
-// steps. A message in the question's own second counts as after it, as in
-// noReplySince.
-export function requestMessages(pd: string): Array<{ id: string; at: string }> {
+// For a `setting`, while the code plan question waits for the person, a
+// message from before it that a decision has followed (it arrived before the
+// last approval or decision) is not offered: a live Copilot CLI run took their
+// "Approve" for the stage before from this list and turned plan approval off,
+// set by them, with the question unanswered. Before the question it is
+// offered, as "approve, and turn plan approval off" needs where the agent
+// learns ids only from these steps, and so is any other request (going back to
+// the plan their approval was for). A message in the question's own second
+// counts as after it, as in noReplySince.
+export function requestMessages(pd: string, setting = false): Array<{ id: string; at: string }> {
   try {
     const rows = readAuditShardEvents(pd);
     const spentAt = latestSpendingTimestamp(rows);
@@ -408,7 +409,7 @@ export function requestMessages(pd: string): Array<{ id: string; at: string }> {
     const { planQuestionShownAt } = require("./aidlc-plan-approval-ask.ts") as {
       planQuestionShownAt(projectDir: string): string | null;
     };
-    const shown = planQuestionShownAt(pd);
+    const shown = setting ? planQuestionShownAt(pd) : null;
     const from = shown === null ? null : Math.floor(Date.parse(shown) / 1000) * 1000;
     const offered = (message: StoredMessage): boolean =>
       from === null || Date.parse(message.at) >= from || spentAt === null || message.at >= spentAt;
@@ -424,8 +425,8 @@ export function requestMessages(pd: string): Array<{ id: string; at: string }> {
 
 // The step a refused request leads with: the agent names the message that asked
 // for it, when one of theirs can stand behind it, else `otherwise`.
-export function requestMessageStep(pd: string, otherwise: string): string {
-  const named = requestMessages(pd);
+export function requestMessageStep(pd: string, otherwise: string, setting = false): string {
+  const named = requestMessages(pd, setting);
   if (named.length === 0) return otherwise;
   return `If their message ${named.map((message) => `${message.id} (sent ${message.at})`).join(" or ")} asked for ` +
     `it, run the same command with --message <id>. Otherwise: ${otherwise}`;
@@ -545,7 +546,7 @@ export function proveMessage(
   // agent has no other place to learn their ids, and a live Codex run guessed
   // the chat's id, then the person's words, before it found one.
   if (options.request !== true || !("refusal" in proof)) return proof;
-  return { refusal: requestMessageStep(pd, proof.refusal) };
+  return { refusal: requestMessageStep(pd, proof.refusal, what === "setting") };
 }
 
 function messageProof(

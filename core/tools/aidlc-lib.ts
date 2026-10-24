@@ -2936,7 +2936,7 @@ export const MESSAGE_FILL = `, with ${MESSAGE_SLOT} the id of the person's messa
 // first, with their times (requestMessages); never their words.
 export function messageFill(projectDir: string): string {
   const { requestMessages } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
-  const named = requestMessages(projectDir);
+  const named = requestMessages(projectDir, true);
   return named.length === 0
     ? MESSAGE_FILL
     : `${MESSAGE_FILL} (${named.map((message) => `${message.id}, sent ${message.at}`).join("; ")})`;
@@ -43616,7 +43616,7 @@ export function guardSwitchRefusal(
   // refusal leads with that retry, naming ids and times and never their words.
   const { requestMessageStep } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
   const step = (otherwise: string): string =>
-    projectDir === undefined || !humanTurnMintAllowed() ? otherwise : requestMessageStep(projectDir, otherwise);
+    projectDir === undefined || !humanTurnMintAllowed() ? otherwise : requestMessageStep(projectDir, otherwise, true);
   // A terminal their own tool runs (Copilot in VS Code, Kiro IDE, Cursor): the
   // person is working in its chat, so the one line they read says to ask there.
   // Their tool is named as they know it, with no environment variable in sight.
