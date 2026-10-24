@@ -1271,9 +1271,10 @@ change. See
    ranked by severity for the human at the gate, with no repair loop behind
    them. Either way the reviewer reads the definition, Q&A, and artifacts, runs
    any listed validation tools, and writes exactly ONE file: its review, at the
-   `reviewFile` path. The review contains one matching Verdict, Reviewer, and
-   Iteration line, a Prior findings report for open rows it re-checked, a New
-   findings report without IDs or statuses, and no second H2 section. The
+   `reviewFile` path. The review contains one matching Verdict and Reviewer
+   line and one Iteration line (the request's round is the one recorded), a
+   Prior findings report for open rows it re-checked, a New findings report
+   without IDs or statuses, and no second H2 section. The
    reviewer never writes a person's decision or repeats fixed findings. It
    writes nothing else, in particular not the artifact it reviews. The request
    binds reviewed output bytes and workspace source before dispatch; retry cannot

@@ -17325,12 +17325,17 @@ export function reviewArtifactFingerprint(
 }
 
 /**
- * Validate one review section: exactly one canonical Verdict, Reviewer, and
- * Iteration line (and the legacy Request Challenge line only when the request
- * issued one), with no later rendered H1 or H2. `appendix` is the terminal
- * `## Review` section of a legacy embedded review and must open with that
- * heading; a review record body (`standalone`) is the same section with the
- * heading optional, because it is the whole document. A valid review also
+ * Validate one review section: exactly one canonical Verdict and Reviewer line
+ * matching the request, exactly one Iteration line (and the legacy Request
+ * Challenge line only when the request issued one), with no later rendered H1
+ * or H2. `appendix` is the terminal `## Review` section of a legacy embedded
+ * review and must open with that heading, and its Iteration line must name the
+ * request's round, because that line is what ties the appended section to its
+ * request. A review record body (`standalone`) is the same section with the
+ * heading optional, because it is the whole document; it is read from its
+ * request's own slot, so the round is the request's whatever number its
+ * Iteration line carries (the reviewer is never told that a rejection or a
+ * jump started the count again). A valid review also
  * carries the reviewer's own `**Verdict Dictated:**` answer, read the same way
  * (`verdictDictated`): `yes` or `no` when the section renders exactly one such
  * value, else null. The line is the reviewer's statement, never authority: a
@@ -17419,11 +17424,15 @@ export function validateReviewAppendix(
         "the reviewer appendix must contain exactly one Reviewer line matching the requested reviewer",
     };
   }
-  if (iterations.length !== 1 || iterations[0] !== String(expected.iteration)) {
+  if (
+    iterations.length !== 1 ||
+    (expected.standalone !== true && iterations[0] !== String(expected.iteration))
+  ) {
     return {
       valid: false,
-      reason:
-        "the reviewer appendix must contain exactly one Iteration line matching the request",
+      reason: expected.standalone === true
+        ? "the review must contain exactly one Iteration line"
+        : "the reviewer appendix must contain exactly one Iteration line matching the request",
     };
   }
   if (
