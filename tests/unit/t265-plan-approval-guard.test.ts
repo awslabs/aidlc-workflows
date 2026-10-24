@@ -2799,6 +2799,107 @@ describe("t265b hook lifecycle", () => {
     },
   );
 
+  // The Kiro adapters name the project by the guard's own path, the long
+  // spelling, and hand it the folder the IDE runs in, which can carry 8.3 short
+  // names (%TEMP% does for a user name over eight characters).
+  test.skipIf(process.platform !== "win32")(
+    "a Windows short-name spelling of the project runs AI-DLC's own tools and authorizes nothing else",
+    () => {
+      const proj = realpathSync.native(scratchProject());
+      try {
+        seedState(proj);
+        seedActiveDirective(proj, "code-generation");
+        seedUnit(proj, null, { plan: true, answer: null });
+        mkdirSync(join(proj, "other", ".claude", "tools"), { recursive: true });
+        cpSync(join(proj, ".claude", "tools", "aidlc.ts"), join(proj, "other", ".claude", "tools", "aidlc.ts"));
+        // The folder's 8.3 spelling, as t244 asks for it. The path goes in
+        // through the environment: cmd.exe would read the quotes a spawned
+        // argument carries as part of the name.
+        const spelled = spawnSync(
+          "powershell.exe",
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:AIDLC_T265_PROJECT).ShortPath",
+          ],
+          {
+            env: { ...process.env, AIDLC_T265_PROJECT: proj },
+            encoding: "utf-8",
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          },
+        );
+        expect(spelled.status, `${spelled.stdout}${spelled.stderr}`).toBe(0);
+        const short = spelled.stdout.trim();
+        // A volume without 8.3 names cannot show the defect; say so, not pass.
+        expect(short.toLowerCase(), `no 8.3 short name for ${proj}; see fsutil 8dot3name query`)
+          .not.toBe(proj.toLowerCase());
+        expect(short).toContain("~");
+        expect(realpathSync.native(short)).toBe(proj);
+        // Every command's exit code beside the one expected, so one run shows them all.
+        const expected: Record<string, number> = {};
+        const actual: Record<string, number> = {};
+        const check = (cwd: string, command: string, code: number) => {
+          const key = `${cwd === short ? "short" : "long"} cwd: ${command}`;
+          expected[key] = code;
+          actual[key] = runHook(proj, { ...BASH(command), cwd }).code;
+        };
+        const next = "bun .claude/tools/aidlc.ts engine orchestrate next";
+        check(short, next, 0);
+        check(short, "bun .claude/tools/aidlc-testing-posture.ts render", 0);
+        check(short, `bun ${shellQuoted(join(short, ".claude", "tools", "aidlc.ts"))} engine orchestrate next`, 0);
+        check(proj, `${next}; cd ${shellQuoted(short)}`, 0);
+        check(short, "bun other/.claude/tools/aidlc.ts engine orchestrate next", 2);
+        check(short, `${next}; cd ${shellQuoted(join(proj, "other"))}`, 2);
+        check(short, "echo code > src/inline.ts", 2);
+        check(short, `${next}; echo code > src/inline.ts`, 2);
+        expect(actual).toEqual(expected);
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // The same folder through a linked parent: a host can hand the guard the
+  // folder the person opened while the guard names the project by its real path.
+  test("a project folder reached through a linked parent runs AI-DLC's own tools and authorizes nothing else", () => {
+    const outer = mkdtempSync(join(tmpdir(), "t265-outer-"));
+    const links = mkdtempSync(join(tmpdir(), "t265-links-"));
+    const proj = join(outer, "proj");
+    try {
+      renameSync(scratchProject(), proj);
+      // The link leads only to this test's own folder.
+      symlinkSync(outer, join(links, "outer"), process.platform === "win32" ? "junction" : "dir");
+      const linked = join(links, "outer", "proj");
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation");
+      seedUnit(proj, null, { plan: true, answer: null });
+      mkdirSync(join(proj, "other", ".claude", "tools"), { recursive: true });
+      cpSync(join(proj, ".claude", "tools", "aidlc.ts"), join(proj, "other", ".claude", "tools", "aidlc.ts"));
+      const expected: Record<string, number> = {};
+      const actual: Record<string, number> = {};
+      const check = (cwd: string, command: string, code: number) => {
+        const key = `${cwd === linked ? "linked" : "real"} cwd: ${command}`;
+        expected[key] = code;
+        actual[key] = runHook(proj, { ...BASH(command), cwd }).code;
+      };
+      const next = "bun .claude/tools/aidlc.ts engine orchestrate next";
+      check(linked, next, 0);
+      check(linked, "bun .claude/tools/aidlc-testing-posture.ts render", 0);
+      check(linked, `bun ${shellQuoted(join(linked, ".claude", "tools", "aidlc.ts"))} engine orchestrate next`, 0);
+      check(proj, `${next}; cd ${shellQuoted(linked)}`, 0);
+      check(linked, "bun other/.claude/tools/aidlc.ts engine orchestrate next", 2);
+      check(linked, `cd ${shellQuoted(join(linked, "other"))} && ${next}`, 2);
+      check(proj, `${next}; cd ${shellQuoted(join(linked, "other"))}`, 2);
+      check(linked, "echo code > src/inline.ts", 2);
+      check(linked, `${next}; echo code > src/inline.ts`, 2);
+      expect(actual).toEqual(expected);
+    } finally {
+      rmSync(links, { recursive: true, force: true });
+      rmSync(outer, { recursive: true, force: true });
+    }
+  });
+
   test("planning through the Bun entry point requires a real installed file", () => {
     const proj = scratchProject();
     try {
