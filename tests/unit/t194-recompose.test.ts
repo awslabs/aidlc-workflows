@@ -576,22 +576,28 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect((JSON.parse(jr.out) as { notice?: string }).notice).toContain("You can go back to User Stories any time.");
   });
 
-  test("only a forward jump's instruction asks for its notice; a backward one is unchanged", () => {
+  test("a forward jump says its line with the step it lands on; the backward print at Code Generation is unchanged", () => {
     const proj = createdProject("bugfix");
-    const message = (args: string[]): string => {
+    const directive = (args: string[]): { kind?: string; stage?: string; message?: string; change_notices?: string[] } => {
       const out = run(proj, "aidlc-orchestrate.ts", ["next", ...args]).out;
-      return (JSON.parse(out.split("\n").find((line) => line.startsWith("{")) ?? "{}") as { message?: string }).message ?? "";
+      return JSON.parse(out.split("\n").find((line) => line.startsWith("{")) ?? "{}");
     };
     const before = /- \*\*Current Stage\*\*: ([a-z-]+)/.exec(readState(proj))?.[1];
-    const forward = message(["--stage", "code-generation"]);
-    expect(forward).toContain("--direction forward");
-    expect(forward).toContain("When its output carries `notice`, tell the person that line once, as written.");
-    run(proj, "aidlc-jump.ts", ["execute", "--target", "code-generation", "--direction", "forward"]);
-    // The guard recovery recognizes this exact backward line, so it stays as it was.
-    const backward = message(["--stage", String(before)]);
+    // The person's `next` makes the forward jump and says what it skipped with
+    // the step it lands on, once.
+    const forward = directive(["--stage", "code-generation"]);
+    expect(forward.kind).not.toBe("print");
+    expect(forward.stage).toBe("code-generation");
+    expect((forward.change_notices ?? []).filter((line) => line.startsWith("Moved to Code Generation"))).toHaveLength(1);
+    expect(readState(proj)).toContain("- **Current Stage**: code-generation");
+    // With Code Generation the step on record, the plan-approval guard judges a
+    // jump at the command the print names, and the guard recovery recognizes
+    // this exact backward line, so it stays as it was.
+    const backward = directive(["--stage", String(before)]).message ?? "";
     expect(backward).toContain("--direction backward");
     expect(backward).toMatch(/` to perform the jump, then re-run `next` to continue from the jump target\.$/);
     expect(backward).not.toContain("notice");
+    expect(readState(proj)).toContain("- **Current Stage**: code-generation");
   });
 
   // After "go back to Requirements Analysis", the person hears how to return,
