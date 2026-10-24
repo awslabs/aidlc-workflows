@@ -37663,14 +37663,11 @@ function pipelineReceiptArtifactIsCurrent(
       guardedPath,
       true,
     );
-    // Under Guard Policy relaxed or off, an edited, copied or cloned handoff
-    // still records the scan the developer agent did.
+    // Under Guard Policy relaxed or off, an edited handoff still records the
+    // scan the developer agent did. Under strict only its bytes are compared:
+    // a clone, a copy or a branch switch moves the file time and nothing the
+    // developer wrote, and `log link` already held the time to this attempt.
     if (acceptsChanges()) return true;
-    if (
-      Math.abs(snapshot.mtimeMs - receipt.artifactMtimeMs) > 0.01
-    ) {
-      return false;
-    }
     const digest = createHash("sha256")
       .update(snapshot.bytes)
       .digest("hex");
