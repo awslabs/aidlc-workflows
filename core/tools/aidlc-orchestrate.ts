@@ -17318,9 +17318,9 @@ function emitTypedResumeChoice(
       ));
       return;
     }
-    // A target `next --stage` refuses gets that refusal here, as it is: nothing
-    // moves, so there is nothing to park after, and `move()` would rebuild the
-    // print without its turn-ending mark.
+    // An initialization target gets the refusal `next --stage` gives, as it
+    // is: nothing moves, so there is nothing to park after, and `move()` would
+    // rebuild the print without its turn-ending mark.
     const initRefusal = initJumpRefusal(node.slug, pd);
     if (initRefusal) {
       emit(initRefusal);
