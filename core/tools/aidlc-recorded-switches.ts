@@ -382,7 +382,7 @@ export function backOnFromChatLines(
 ): string[] | null {
   const unique = [...new Set(names)];
   if (commandAtPersonsTerminal(env) || unique.some((name) => backOnSubject(name) === null)) return null;
-  if (!unique.some((name) => recordedIn(projectDir, name).some((target) => target !== "local"))) return null;
+  if (unique.every((name) => chatTurnsBackOn(recordedIn(projectDir, name)))) return null;
   return unique.map((name) =>
     backOnLine(projectDir, name, true, env) ?? unrecordedSwitchLine(projectDir, name as RecordableProjectBypass, env)
   );
@@ -452,6 +452,14 @@ function recordedIn(projectDir: string, name: string): SettingsTarget[] {
   });
 }
 
+// A chat's yes clears only the person's own aidlc.settings.local.json and
+// leaves the project's shared file and this machine's as they are
+// (backOnLine), so a chat turns a switch back on only when no other file
+// records it. The one owner for the line's offer, its command and the clear.
+function chatTurnsBackOn(files: readonly SettingsTarget[]): boolean {
+  return files.every((target) => target === "local");
+}
+
 // Take one switch out of the person's aidlc.settings.local.json, keeping
 // everything else the file records, the way `config flags --clear-bypass
 // --local` leaves it, and keep the switch record in step. False when the file
@@ -503,10 +511,9 @@ export function switchOffLine(
     ? "You can turn it back on any time."
     : wayBack === "command"
     ? `To turn it back on: ${wayBackCommand(off, files, env)}`
-    // A chat's yes leaves the project's shared file and this machine's as they
-    // are (backOnLine), so where either records the switch the line says what
-    // keeps it off instead of asking what a yes cannot do.
-    : files.some((target) => target !== "local")
+    // Where a chat's yes cannot turn it back on, the line says what keeps it
+    // off instead of asking what a yes cannot do.
+    : !chatTurnsBackOn(files)
     ? keptOffInFiles(off.projectDir!, files, "it")
     : "Do you want it back on?";
   return `The ${label}${settingPurpose(label)} is off ${where(off.target)} since ${since}${how}. ${back}`;
@@ -518,7 +525,7 @@ export function switchOffLine(
 // shared file and this machine's, so each file that keeps it off is named by
 // its place.
 function wayBackCommand(off: SwitchOff, files: readonly SettingsTarget[], env: NodeJS.ProcessEnv): string {
-  return commandAtPersonsTerminal(env) || files.every((target) => target === "local")
+  return commandAtPersonsTerminal(env) || chatTurnsBackOn(files)
     ? clearSwitchCommand(off.name, off.projectDir)
     : files.map((target) => clearSwitchCommand(off.name, off.projectDir, process.platform, target)).join(" and ");
 }
@@ -537,13 +544,40 @@ export function switchesOffLines(
 }
 
 /**
- * The lines the engine's next directive carries: each switch that went off,
- * or was first found off, since a directive last said so.
+ * The agent's own instruction beside a line that offers a check back on, never
+ * part of what the person hears: the one command that turns it back on from a
+ * chat, for a yes to the line or their own words asking for it. It names no
+ * file, so their "for this project" is never built into --project, the shared
+ * file, which does not hold it. A chat that opens with that request has made
+ * the line untrue, so what the command prints is the report to pass on
+ * instead. Null where the line makes no offer.
  */
-export function switchOffNotices(projectDir: string, env: NodeJS.ProcessEnv = process.env): string[] {
+export function backOnInstruction(off: SwitchOff): string | null {
+  if (!chatTurnsBackOn(off.projectDir === undefined ? [] : recordedIn(off.projectDir, off.name))) return null;
+  const label = PERSON_CHECK_SWITCH_LABELS[off.name] ?? off.name;
+  return `If the person wants the ${label} back on (a yes to its line, or their own words), run: ` +
+    `${clearSwitchCommand(off.name, off.projectDir)}. What it prints is then the report to pass on for that check.`;
+}
+
+/** The instruction for each switch off whose line offers it back on, for session start. */
+export function backOnInstructions(projectDir: string, env: NodeJS.ProcessEnv = process.env): string[] {
+  return switchesOff(projectDir, env).flatMap((off) => backOnInstruction(off) ?? []);
+}
+
+export interface SwitchOffNotice {
+  line: string;
+  backOn: string | null;
+}
+
+/**
+ * The lines the engine's next directive carries: each switch that went off,
+ * or was first found off, since a directive last said so, each with its
+ * instruction for a yes (backOnInstruction).
+ */
+export function switchOffNotices(projectDir: string, env: NodeJS.ProcessEnv = process.env): SwitchOffNotice[] {
   return switchesOff(projectDir, env)
     .filter((item) => item.entry?.announced === undefined)
-    .map((item) => switchOffLine(item, new Date(), "offer", env));
+    .map((item) => ({ line: switchOffLine(item, new Date(), "offer", env), backOn: backOnInstruction(item) }));
 }
 
 /**

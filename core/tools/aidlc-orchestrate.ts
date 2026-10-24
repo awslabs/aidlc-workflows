@@ -620,7 +620,7 @@ import {
   type StageValidityInspection,
 } from "./aidlc-validity.ts";
 import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
-import { markSwitchOffNoticesSaid, switchOffNotices } from "./aidlc-recorded-switches.ts";
+import { markSwitchOffNoticesSaid, type SwitchOffNotice, switchOffNotices } from "./aidlc-recorded-switches.ts";
 import { kiroHooksOffNotices, markKiroHooksOffSaid } from "./aidlc-kiro-hooks-off.ts";
 import {
   readRuleBundle,
@@ -770,7 +770,7 @@ let activeRetiredGuardPolicyNotice: string | null = null;
 // undefined until the first emission of this command reads it (hookHealthNotice).
 let activeHookHealthNotice: string | null | undefined;
 // The lines for checks a recorded switch turned off, read once per invocation.
-let activeSwitchOffNotices: string[] | null = null;
+let activeSwitchOffNotices: SwitchOffNotice[] | null = null;
 let engineProjectDir: string | undefined;
 
 function stageValidityUnchecked(): string {
@@ -781,7 +781,17 @@ function stageValidityUnchecked(): string {
 // says next (see writePrepared for when it counts as said).
 function switchOffNoticesOnce(projectDir: string): string[] {
   activeSwitchOffNotices ??= switchOffNotices(projectDir);
-  return activeSwitchOffNotices;
+  return activeSwitchOffNotices.map((notice) => notice.line);
+}
+
+// The agent's own instruction for a yes to each switch line this directive
+// carries, for its change notices note. A step that lost the lines (a part, an
+// error in its place) gets none.
+function switchBackOnFollowUps(directive: Directive): string[] {
+  const carried = directive.change_notices ?? [];
+  return (activeSwitchOffNotices ?? []).flatMap((notice) =>
+    notice.backOn !== null && carried.includes(notice.line) ? [notice.backOn] : []
+  );
 }
 
 let activeKiroHooksOffNotices: string[] | null = null;
@@ -1605,7 +1615,10 @@ function prepareEmission(directive: Directive): PreparedEmission {
   directive = withParkedReply(directive);
   // The agent notes count toward the size transport measures, so a step that
   // only fits without them is delivered in parts like any other.
-  directive = withAgentNotes(directive, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"));
+  directive = withAgentNotes(
+    directive, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
+    switchBackOnFollowUps(directive),
+  );
   // A route check asks one question: which Unit would the engine route now? It
   // never loads rules, so it skips transport entirely - which also keeps it from
   // minting the machine-local steering key on a checkout that has none.
@@ -1636,7 +1649,10 @@ function prepareEmission(directive: Directive): PreparedEmission {
   transported = withPickUpLine(transported);
   transported = withPhaseRulesAddedLine(transported);
   // Again for what was added after transport (a rebind notice).
-  transported = withAgentNotes(transported, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"));
+  transported = withAgentNotes(
+    transported, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
+    switchBackOnFollowUps(transported),
+  );
   const personLinesSaid = sayPendingPersonLines(requested, transported);
   // The bytes the host's tool panel shows first are the person's words.
   transported = withPersonsWordsFirst(transported);

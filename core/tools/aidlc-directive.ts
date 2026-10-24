@@ -1657,11 +1657,15 @@ export function bodyRuns(d: Record<string, unknown>): boolean {
 // The notes for one emitted directive. `invocation` is how this install runs
 // the orchestrate tool. A rules part carries none: its run-stage repeats the
 // advisory and the notices, and they are said from there, once.
+// `changeNoticesFollowUps` are the agent's own sentences for lines this
+// directive carries (the command a yes to a switch line runs), after
+// CHANGE_NOTICES_NOTE, so they never ride in a line the person hears.
 export function withAgentNotes<T extends object>(
   directive: T,
   invocation: string,
   logInvocation = invocation.replace(/aidlc-orchestrate\.ts$/, "aidlc-log.ts").replace(/ orchestrate$/, " log"),
   boltInvocation = invocation.replace(/aidlc-orchestrate\.ts$/, "aidlc-bolt.ts").replace(/ orchestrate$/, " bolt"),
+  changeNoticesFollowUps: readonly string[] = [],
 ): T {
   const d = directive as Record<string, unknown>;
   if (d.kind === "load-steering") return directive;
@@ -1671,7 +1675,7 @@ export function withAgentNotes<T extends object>(
     notes.stage_validity_note = stageValidityNote(invocation, typeof stage === "string" ? stage : null);
   }
   if (Array.isArray(d.change_notices) && d.change_notices.length > 0) {
-    notes.change_notices_note = CHANGE_NOTICES_NOTE;
+    notes.change_notices_note = [CHANGE_NOTICES_NOTE, ...new Set(changeNoticesFollowUps)].join(" ");
   }
   if (d.kind === "ask" && d.agent_work !== true) {
     if (!Array.isArray(d.choices)) {
