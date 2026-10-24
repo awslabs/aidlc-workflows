@@ -173,6 +173,10 @@ describe("t25 /aidlc --phase ideation backward jump (sdk)", () => {
         // **Event**: lines), so an unrelated mention in prose can't satisfy it - this
         // is the tool's emitted event-type.
         assertAuditEvent(r, "STAGE_JUMPED");
+        // The person left Construction unfinished, so the record never says it
+        // was completed or verified (the seeded audit holds neither row).
+        expect(r.auditEvents).not.toContain("PHASE_COMPLETED");
+        expect(r.auditEvents).not.toContain("PHASE_VERIFIED");
 
         // The STAGE_JUMPED block's field bytes.
         // auditEvents only carries event-type names, so for the field-level

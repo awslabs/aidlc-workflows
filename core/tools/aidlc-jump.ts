@@ -541,9 +541,9 @@ function movedState(
   // Mark target [-] so state and checkbox agree.
   content = setCheckbox(content, targetSlug, "in-progress");
 
-  // Detect phase-boundary crossing. advance emits PHASE_COMPLETED/VERIFIED/
-  // STARTED when crossing phases, and so does jump, matching the state machine
-  // contract.
+  // Detect phase-boundary crossing. Like advance, a forward jump records the
+  // phase it leaves as completed; any other crossing only starts the target's
+  // phase again (handleExecute).
   const currentStageForPhase = findStageBySlug(currentSlug);
   const crossesPhaseBoundary =
     !!currentStageForPhase && currentStageForPhase.phase !== targetStage.phase;
@@ -572,8 +572,8 @@ function movedState(
   const completedCount = countCheckboxes(content, "completed");
   content = setField(content, "Completed", String(completedCount));
 
-  // Phase Progress rows track the boundary crossing the audit trio below
-  // records. Forward: the source phase's remaining work was force-[S]'d and
+  // Phase Progress rows track the boundary crossing handleExecute records in
+  // the audit. Forward: the source phase's remaining work was force-[S]'d and
   // PHASE_VERIFIED is emitted, so its row reads Verified; any phase jumped
   // over entirely reads Skipped. Backward (or a caller-mis-specified redo
   // that crosses a boundary): every phase after the target just had its
@@ -721,18 +721,22 @@ function handleExecute(args: string[]): void {
       });
     }
 
-    // Phase boundary events (if crossing phases — matches advance's contract)
+    // Phase boundary events. Only a forward jump completes the phase it
+    // leaves (advance's contract); going back leaves that phase unfinished, so
+    // the record only starts the earlier phase again.
     if (crossesPhaseBoundary && currentStageForPhase) {
-      emitAudit(pd, "PHASE_COMPLETED", {
-        "From phase": currentStageForPhase.phase,
-        "To phase": targetStage.phase,
-        "Stages completed": String(completedCount),
-        Details: `Phase boundary crossed via ${direction} jump`,
-      });
-      emitAudit(pd, "PHASE_VERIFIED", {
-        "Phase boundary": `${currentStageForPhase.phase} → ${targetStage.phase}`,
-        Details: "Traceability verification on jump",
-      });
+      if (direction === "forward") {
+        emitAudit(pd, "PHASE_COMPLETED", {
+          "From phase": currentStageForPhase.phase,
+          "To phase": targetStage.phase,
+          "Stages completed": String(completedCount),
+          Details: "Phase boundary crossed via forward jump",
+        });
+        emitAudit(pd, "PHASE_VERIFIED", {
+          "Phase boundary": `${currentStageForPhase.phase} → ${targetStage.phase}`,
+          Details: "Traceability verification on jump",
+        });
+      }
       emitAudit(pd, "PHASE_STARTED", {
         Phase: targetStage.phase,
         Scope: scope,

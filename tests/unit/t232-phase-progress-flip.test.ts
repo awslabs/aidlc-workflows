@@ -19,7 +19,8 @@
 //   - complete-workflow: final phase -> Verified.
 //   - jump forward: source phase -> Verified, jumped-over phases -> Skipped,
 //     target -> Active. jump backward: reset phases with EXECUTE stages ->
-//     Pending, target -> Active.
+//     Pending, target -> Active. The audit matches: only a forward jump
+//     records the phase it leaves as completed and verified.
 //   - scope-change / recompose: re-derive only Pending/Skipped rows against
 //     the new plan; Verified/Active rows are history and stay untouched.
 //   - a state file WITHOUT the section still transitions cleanly (the flip is
@@ -57,6 +58,7 @@ import {
   seedStateFile,
   sedReplaceInFile,
 } from "../harness/fixtures.ts";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -131,6 +133,13 @@ function phaseProgressSection(proj: string): string {
     /## Phase Progress\n[\s\S]*?(?=\n## )/,
   );
   return m ? m[0] : "(no section)";
+}
+
+/** The record's PHASE_* rows, each with the phase it starts or leaves. */
+function phaseRows(proj: string): string[] {
+  return readAuditShardEvents(proj)
+    .filter((row) => row.event.startsWith("PHASE_"))
+    .map((row) => `${row.event} ${auditBlockField(row.block, "Phase") ?? auditBlockField(row.block, "From phase") ?? ""}`.trim());
 }
 
 function runIntentCreate(proj: string, scope: string): RunResult {
@@ -276,6 +285,7 @@ describe("t232 Phase Progress - jump + complete-workflow", () => {
 
   test("forward jump: source Verified, jumped-over Skipped, target Active", () => {
     expect(created.rc).toBe(0);
+    const before = phaseRows(proj).length;
     const res = run(JUMP_TOOL, proj, [
       "execute", "--target", "deployment-pipeline", "--direction", "forward",
     ]);
@@ -284,9 +294,13 @@ describe("t232 Phase Progress - jump + complete-workflow", () => {
     expect(rowStatus(proj, "Inception")).toBe("Skipped");
     expect(rowStatus(proj, "Construction")).toBe("Skipped");
     expect(rowStatus(proj, "Operation")).toBe("Active");
+    expect(phaseRows(proj).slice(before)).toEqual([
+      "PHASE_COMPLETED ideation", "PHASE_VERIFIED", "PHASE_STARTED operation",
+    ]);
   });
 
   test("backward jump: reset phases with EXECUTE stages return to Pending", () => {
+    const before = phaseRows(proj).length;
     const res = run(JUMP_TOOL, proj, [
       "execute", "--target", "practices-discovery", "--direction", "backward",
     ]);
@@ -296,6 +310,9 @@ describe("t232 Phase Progress - jump + complete-workflow", () => {
     expect(rowStatus(proj, "Operation")).toBe("Pending");
     // History before the target is not rewritten.
     expect(rowStatus(proj, "Ideation")).toBe("Verified");
+    // The person left Operation unfinished: the record starts Inception again
+    // and never says the phase they left was completed or verified.
+    expect(phaseRows(proj).slice(before)).toEqual(["PHASE_STARTED inception"]);
   });
 
   test("complete-workflow flips the final phase to Verified", () => {

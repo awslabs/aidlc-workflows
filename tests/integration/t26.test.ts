@@ -28,8 +28,8 @@
 //     (jump.ts; a jump never terminates, so
 //     Status stays Running and the workflow does NOT terminate —
 //     workflow_stopped:false),
-//   - crosses the construction->ideation phase boundary, so emits
-//     PHASE_COMPLETED / PHASE_VERIFIED / PHASE_STARTED (jump.ts),
+//   - crosses the construction->ideation phase boundary backward, so emits
+//     PHASE_STARTED only: Construction was left, not completed (jump.ts),
 //   - appends STAGE_JUMPED with Direction=BACKWARD / Source=functional-design /
 //     Target=intent-capture / Scope=feature (jump.ts),
 //   - appends STAGE_STARTED for the target (Stage=intent-capture,
