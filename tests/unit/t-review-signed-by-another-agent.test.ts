@@ -159,6 +159,11 @@ describe("the review file's signer", () => {
     expect(reviewFileSigner(Buffer.from(review(OTHER).replace(`**Reviewer:** ${OTHER}\n`, "")))).toBeNull();
     expect(reviewFileSigner(Buffer.from(`${review(OTHER)}\n**Reviewer:** ${REVIEWER}\n`))).toBeNull();
     expect(reviewFileSigner(Buffer.from(`\`\`\`\n**Reviewer:** ${OTHER}\n\`\`\`\n`))).toBeNull();
+    // A value in code, emphasis or a link is not a plain name: the validator's
+    // own words apply, never a name the renderer marked up.
+    for (const marked of [`\`${REVIEWER}\``, `_${REVIEWER}_`, `**${REVIEWER}**`, `[${REVIEWER}](x)`]) {
+      expect(reviewFileSigner(Buffer.from(review(marked)))).toBeNull();
+    }
   });
 });
 

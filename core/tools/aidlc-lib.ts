@@ -17474,10 +17474,11 @@ export function validateReviewAppendix(
 /**
  * Who a review file is signed by: its one rendered Reviewer value (repeated
  * word for word is one line), read by the same authority parse as
- * validateReviewAppendix, or null when it has none, two different ones, or
- * cannot be read. A review signed by someone other than its requested reviewer
- * is that agent's, so the verdict names the step that gets the requested
- * reviewer's review rather than a Reviewer line to change.
+ * validateReviewAppendix, or null when it has none, two different ones, one
+ * the renderer marked up (code, emphasis, a link: not a plain name), or cannot
+ * be read. A review signed by someone other than its requested reviewer is that
+ * agent's, so the verdict names the step that gets the requested reviewer's
+ * review rather than a Reviewer line to change.
  */
 export function reviewFileSigner(bytes: Uint8Array): string | null {
   let text: string;
@@ -17491,7 +17492,11 @@ export function reviewFileSigner(bytes: Uint8Array): string | null {
   const authority = renderReviewMarkdownAuthority(opening ? normalized.slice(opening[0].length) : normalized);
   if (authority === null) return null;
   const signers = [...new Set(authority.reviewers)];
-  return signers.length === 1 ? signers[0] : null;
+  if (signers.length !== 1) return null;
+  const [signer] = signers;
+  return [REVIEW_MARK_OPEN, REVIEW_MARK_CLOSE, REVIEW_NON_AUTHORITY].some((mark) => signer.includes(mark))
+    ? null
+    : signer;
 }
 
 type RenderedReviewAuthority = {
