@@ -808,6 +808,8 @@ describe("a parallel batch's writes judged from the parent", () => {
   const stoodAside = (pd: string) => readAuditShardEvents(pd).filter((row) =>
     row.event === "GUARD_STOOD_ASIDE" && auditBlockField(row.block, "Guard") === "plan-approval").length;
   const REFUSAL = "cannot select one approval target";
+  // A write seen only in the main checkout waits for the Units' landings, which check it.
+  const HELD = "the main checkout changes only by their landings";
 
   test("the helper's write in its prepared worktree passes; a write to the main checkout or a stray folder waits", () => {
     const pd = fixture();
@@ -840,7 +842,7 @@ describe("a parallel batch's writes judged from the parent", () => {
     // The main checkout stays as approved while the batch is out.
     const main = write(pd, join(pd, "src", `${UNIT}.ts`));
     expect(main.code, `${main.out}\n${main.err}`).toBe(2);
-    expect(main.err).toContain(REFUSAL);
+    expect(main.err).toContain(HELD);
     expect(blocked(pd)).toBe(before + (win32 ? 2 : 1));
 
     // A folder under .aidlc/worktrees that prepare did not create carries no approval.
@@ -848,7 +850,7 @@ describe("a parallel batch's writes judged from the parent", () => {
     mkdirSync(join(stray, "src"), { recursive: true });
     const strayWrite = write(pd, join(stray, "src", `${UNIT}.ts`));
     expect(strayWrite.code, `${strayWrite.out}\n${strayWrite.err}`).toBe(2);
-    expect(strayWrite.err).toContain(REFUSAL);
+    expect(strayWrite.err).toContain(HELD);
     expect(blocked(pd)).toBe(before + (win32 ? 3 : 2));
   });
 
@@ -960,7 +962,7 @@ describe("a parallel batch's writes judged from the parent", () => {
     for (const command of refusedProbes) {
       const refused = parentHook(pd, "Bash", { command });
       expect(refused.code, `${command}\n${refused.out}\n${refused.err}`).toBe(2);
-      expect(refused.err).toContain(REFUSAL);
+      expect(refused.err).toContain(HELD);
     }
     expect(blocked(pd)).toBe(before + refusedProbes.length);
   });
@@ -1001,16 +1003,16 @@ describe("a parallel batch's writes judged from the parent", () => {
     expect(blocked(pd)).toBe(before);
 
     // Seen writing in the main checkout (its code or its record), or in two worktrees: refused at once.
-    const waits = [
-      `bun test > test.log 2>&1; echo "exit=$?"`,
-      `cd ${alpha} && bun test; echo "exit=$?" > ${sh(join(pd, "src", "alpha.ts"))}`,
-      `echo "$X" > ${sh(join(recordDir(pd)!, "notes.md"))}`,
-      `echo "$X" > ${alpha}/a.txt; echo "$X" > ${beta}/b.txt`,
+    const waits: Array<[string, string]> = [
+      [`bun test > test.log 2>&1; echo "exit=$?"`, HELD],
+      [`cd ${alpha} && bun test; echo "exit=$?" > ${sh(join(pd, "src", "alpha.ts"))}`, HELD],
+      [`echo "$X" > ${sh(join(recordDir(pd)!, "notes.md"))}`, HELD],
+      [`echo "$X" > ${alpha}/a.txt; echo "$X" > ${beta}/b.txt`, REFUSAL],
     ];
-    for (const command of waits) {
+    for (const [command, why] of waits) {
       const refused = parentHook(pd, "Bash", { command });
       expect(refused.code, `${command}\n${refused.out}\n${refused.err}`).toBe(2);
-      expect(refused.err).toContain(REFUSAL);
+      expect(refused.err).toContain(why);
     }
     expect(blocked(pd)).toBe(before + waits.length);
 
@@ -1141,7 +1143,7 @@ describe("a parallel batch's writes judged from the parent", () => {
     publish(pd);
     const raised = write(pd, source);
     expect(raised.code).toBe(2);
-    expect(raised.err).toContain(REFUSAL);
+    expect(raised.err).toContain(HELD);
   });
 });
 

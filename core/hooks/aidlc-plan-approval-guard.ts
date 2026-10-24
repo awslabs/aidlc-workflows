@@ -293,6 +293,11 @@ const NO_CURRENT_DIRECTIVE =
   "the current state has no matching v2 code-generation active directive";
 const ENGINE_QUESTION_OPEN =
   "the engine is waiting for the person's answer to its recovery question";
+// Under strict every landing of the stage checks the main checkout against the
+// stage's start (assertAggregateSourceBeforeMerge), so nothing else changes it
+// while a parallel batch is out.
+const SWARM_MAIN_CHECKOUT_HELD =
+  "While the Units are built in parallel, the main checkout changes only by their landings, so each landing can check it";
 
 // --- The decision -------------------------------------------------------------
 
@@ -724,6 +729,10 @@ function authorityBlockReason(
   editingReply: string | null = null,
   wayOn: EngineInvocation | null = null,
 ): string {
+  if (reason === SWARM_MAIN_CHECKOUT_HELD) {
+    return `${authorityRemedy(reason, standing)} A change the person asks for in the main checkout can be made once ` +
+      "Code Generation is over.";
+  }
   if (reason === ENGINE_QUESTION_OPEN || reason === PLAN_APPROVAL_ASK_OPEN) {
     return authorityRemedy(reason, standing, asked, editingReply);
   }
@@ -2565,9 +2574,17 @@ async function evaluate(
           gatherUnitEvidence(projectDir, listed).every(approvalEvidenceIsCurrent)
         ) return 0;
         swarmBatchOut = true;
-        authorityFailure =
-          `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +
-          outOfDateClause(activeDirective);
+        // A write seen only in the main checkout, at a step still current,
+        // waits for the landings; one that reaches into a worktree too, or a
+        // step that lists no Unit or is out of date, is refused as any other.
+        const outOfDate = outOfDateClause(activeDirective);
+        const mainCheckoutOnly = listed.length > 0 && outOfDate === "" && seen.length > 0 &&
+          seen.length === mutation.targets.length &&
+          seen.every((candidate) => preparedBoltWorktreeUnit(projectDir, [candidate], listed) === null);
+        authorityFailure = mainCheckoutOnly
+          ? SWARM_MAIN_CHECKOUT_HELD
+          : `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +
+            outOfDate;
         standing = planStanding(projectDir, activeDirective);
         verdict = { block: true, mentioned: listed };
         blockedMutation = {
