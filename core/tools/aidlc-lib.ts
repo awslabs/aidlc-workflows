@@ -7073,6 +7073,11 @@ export function markPersonLineHeardThisTurn(projectDir: string, sessionId: strin
 // must run, or one waiting at its own question, is skipped as they asked.
 export const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
 
+// The reason the same step hands the agent for the undo it names after the
+// person's skip: recompose puts the stage back over its strict check, as the
+// skip took it off.
+export const PERSON_ASKED_UNDO_SKIP_REASON = "the person asked to undo skipping it";
+
 // What the person asked to leave out of a build (#1342): the `Deferred` items
 // in these traceability.json files, at most ten by id and then a count, or
 // null when there are none or a file cannot be read.

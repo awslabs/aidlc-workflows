@@ -496,6 +496,7 @@ import {
   findStageBySlug,
   withPersonsWordsFirst,
   PERSON_ASKED_SKIP_REASON,
+  PERSON_ASKED_UNDO_SKIP_REASON,
   readUnitSourceManifest,
   readIntentRegistry,
   unitPlainName,
@@ -15095,11 +15096,14 @@ function planChangeDirective(
   ].join(" ");
   // The person's own skip, in their change or in the undo of their add:
   // recompose carries it out over its check that later stages keep what they
-  // read, as a stage skipped where it stands is.
-  const recomposed = (skipped: string[], added: string[]): string =>
+  // read, as a stage skipped where it stands is. The undo of their skip puts
+  // the stage back the same way; an add of their own is checked.
+  const recomposed = (skipped: string[], added: string[], undo = false): string =>
     `${aidlcDispatcherInvocation("recompose")} ${flips(skipped, added)}` +
-    (skipped.length > 0 ? ` --reason ${shellArg(PERSON_ASKED_SKIP_REASON)}` : "");
+    (skipped.length > 0 ? ` --reason ${shellArg(PERSON_ASKED_SKIP_REASON)}`
+      : undo ? ` --reason ${shellArg(PERSON_ASKED_UNDO_SKIP_REASON)}` : "");
   const replan = (skipped: string[]): string => recomposed(skipped, add);
+  const undone = recomposed(add, planSkip, true);
   const skipName = (slug: string): string =>
     unitStep !== null && !unitStep.others && slug === unitStep.stage
       ? `${name(slug)} for the ${unitName} Unit`
@@ -15180,7 +15184,7 @@ function planChangeDirective(
         "Do not show a command's output. If a command refuses, tell the person in plain " +
         "words why it could not, and the way it names to do it instead, then stop." +
         (replanned
-          ? ` If they later ask to undo skipping it for every Unit, run \`${recomposed(add, planSkip)}\`.`
+          ? ` If they later ask to undo skipping it for every Unit, run \`${undone}\`.`
           : "") +
         resume,
     ));
@@ -15223,7 +15227,7 @@ function planChangeDirective(
       ? "You can undo that any time."
       : `${skip.length === 1 ? "It" : skip.length === 2 ? "Either one" : "Any of them"} can still be run on its own with ${anyOf}.`;
   const line = `"${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ${wayBack}${noted ? ` ${noted}` : ""}${parkedTail}"`;
-  const undo = `If they later ask to undo it, run \`${recomposed(add, planSkip)}\`.`;
+  const undo = `If they later ask to undo it, run \`${undone}\`.`;
   // The question named the stages after the skipped one too, and the same
   // reply can approve them: "skip Functional Design and approve the rest".
   const rest = started !== null && currentState === "awaiting-approval"
