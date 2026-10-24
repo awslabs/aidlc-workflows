@@ -41316,6 +41316,18 @@ export function composedPlanLabel(name?: string): string {
   return name && PLAN_NAME_PATTERN.test(name) ? name : "tailored plan";
 }
 
+const SAVED_SCOPE_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const SAVED_SCOPE_NAME_MAX = 40;
+
+/** Why `name` cannot name a saved scope, or null when it can. One rule for
+ *  `scope save`, `intent create --save-as` and `next --save-as`, so `next`
+ *  never names a creation the save then refuses. */
+export function savedScopeNameRefusal(name: string): string | null {
+  if (SAVED_SCOPE_NAME.test(name) && name.length <= SAVED_SCOPE_NAME_MAX) return null;
+  return `"${name}" cannot name a scope: use lowercase letters, digits, and single hyphens, ` +
+    `starting with a letter, at most ${SAVED_SCOPE_NAME_MAX} characters (for example quick-fix).`;
+}
+
 /** The stage changes that turn `base` into `grid`, in graph order. A slug the
  *  grid does not name counts as SKIP, as it does in a scope grid. */
 export function planChangesBetween(
@@ -42603,6 +42615,7 @@ export const NEXT_FLAGS: ReadonlyMap<string, NextFlagShape> = new Map<string, Ne
   ["--record", { value: "free" }],
   ["--unit", { value: "free" }],
   ["--plan-name", { value: "free" }],
+  ["--save-as", { value: "free" }],
   ["--skip", { value: "free" }],
   ["--add", { value: "free" }],
   ["--claim", { value: "free", valueMayLookLikeFlag: true }],

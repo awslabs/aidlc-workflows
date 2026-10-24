@@ -639,6 +639,17 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       });
     }
 
+    test("a plan saved at the gate keeps its save through the fresh-clone question", () => {
+      seedTwoIntentsNoCursor();
+      const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
+      const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      personApproves();
+      const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN, "--save-as", "price-check"]).stdout.trim());
+      expect(ask.ask_type).toBe("new-work-routing");
+      const creation = JSON.parse(runEmittedCommand(ask.new_intent_command).stdout.trim());
+      expect(creation.message).toContain("--plan-name price-check --save-as price-check");
+    });
+
     test("asked again about work selected meanwhile, the composed plan still rides along", () => {
       seedTwoIntentsNoCursor();
       const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
