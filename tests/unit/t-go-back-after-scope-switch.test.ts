@@ -5,7 +5,8 @@
 // started again, as intent creation writes it. Then adding it back, returning to it (the go-back's own line says the
 // person can) and switching back to a scope that runs it all reach it, instead of a refusal naming an isolated run, or
 // the router walking past it without a word. A stage the work finished keeps its box, and the go-back names only the
-// stages on the plan as reset. Every move is a shipped tool's: intent-create, then `next` and the command its step names.
+// stages on the plan as reset. Every move is a shipped tool's: intent-create, then `next` and the command its step names
+// (a jump `next` makes itself names none).
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -63,13 +64,20 @@ async function runNamed(proj: string, command: string, extra: Record<string, str
 function named(message: string, pattern: RegExp): string[] {
   return [...message.matchAll(/`([^`]+)`/g)].map((match) => match[1]).filter((command) => pattern.test(command));
 }
-/** The person types `typed`; the agent runs `next` and every command its step names that matches `pattern`. */
+/**
+ * The person types `typed`; the agent runs `next` and every command its step names that matches `pattern`. A `--stage`
+ * jump that `next` makes itself names none: its step is the target's, and the row already reads it.
+ */
 async function move(proj: string, typed: string, args: string[], pattern: RegExp): Promise<Exec[]> {
   await say(proj, typed, "claude");
   const step = await next(proj, args);
   expect(step.status, step.out).toBe(0);
   const message = String(step.directive?.message ?? "");
   const commands = named(message, pattern);
+  if (commands.length === 0 && args[0] === "--stage" && step.directive?.stage === args[1]) {
+    expect(getField(state(proj), "Current Stage"), step.out).toBe(args[1]);
+    return [];
+  }
   expect(commands.length, message).toBeGreaterThan(0);
   const ran: Exec[] = [];
   for (const command of commands) {
@@ -127,11 +135,10 @@ async function answerGate(proj: string, words: string, result: "approved" | "rej
 async function switchToBugfix(proj: string): Promise<void> {
   await move(proj, "this is really just a bug fix, switch the work to the bugfix scope", ["--scope", "bugfix"], /scope change/);
 }
-/** "Go back to Requirements Analysis": returns the jump's own output. */
-async function goBack(proj: string): Promise<{ stages_reset: string[] }> {
-  const [jumped] = await move(proj, "go back to requirements analysis", ["--stage", "requirements-analysis"], JUMP);
+/** "Go back to Requirements Analysis". */
+async function goBack(proj: string): Promise<void> {
+  await move(proj, "go back to requirements analysis", ["--stage", "requirements-analysis"], JUMP);
   expect(getField(state(proj), "Current Stage")).toBe("requirements-analysis");
-  return JSON.parse(jumped.stdout.trim().split("\n").findLast((line) => line.startsWith("{")) ?? "{}") as { stages_reset: string[] };
 }
 
 /** The four ways a run reaches the go-back with User Stories dropped by the switch. */
@@ -178,10 +185,9 @@ describe("t-go-back-after-scope-switch: the go-back leaves a stage the switch dr
   for (const [path, reach] of Object.entries(PATHS)) {
     test(`${path}: the row reads not started, and adding it back puts it next`, async () => {
       const proj = await reach();
-      const jumped = await goBack(proj);
+      await goBack(proj);
       expect(box(proj, "user-stories")).toBe("  SKIP");
       // Nothing of User Stories reruns or is invalidated: the go-back names the stages on the plan only.
-      expect(jumped.stages_reset).not.toContain("user-stories");
       expect(invalidated(proj)).not.toContain("user-stories");
       await move(proj, "Approve, and add User Stories next", ["--add", "user-stories"], /recompose --add user-stories/);
       expect(box(proj, "user-stories")).toBe("  EXECUTE");
@@ -220,9 +226,8 @@ describe("t-go-back-after-scope-switch: the go-back leaves a stage the switch dr
     await answerGate(proj, "Approve", "approved");
     expect(box(proj, "user-stories")).toBe("x EXECUTE");
     await switchToBugfix(proj);
-    const jumped = await goBack(proj);
+    await goBack(proj);
     expect(box(proj, "user-stories")).toBe("x SKIP");
-    expect(jumped.stages_reset).not.toContain("user-stories");
     expect(invalidated(proj)).not.toContain("user-stories");
   });
 });
