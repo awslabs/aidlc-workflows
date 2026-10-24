@@ -15656,7 +15656,10 @@ function readAuditShardTexts(
 }
 
 // The block sequence every shard parser walks; positions index into it.
-function auditShardBlocks(content: string): string[] {
+// Exported so a reader outside this file (the Unit candidate walk and the
+// publish-side projection in aidlc-unit.ts) splits a shard the same way rather
+// than carrying its own copy of the grammar.
+export function auditShardBlocks(content: string): string[] {
   return content.replace(/\r\n/g, "\n").split(/\n---\n/);
 }
 
