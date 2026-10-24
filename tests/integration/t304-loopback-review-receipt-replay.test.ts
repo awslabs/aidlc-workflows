@@ -31,7 +31,6 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
-const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const REVIEWER = "aidlc-architecture-reviewer-agent";
 const UNITS = ["alpha", "beta"];
