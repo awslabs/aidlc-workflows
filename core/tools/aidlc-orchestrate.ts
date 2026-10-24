@@ -206,6 +206,7 @@ import {
   supportAgentsAtOpenGate,
   type CheckboxLine,
   checkSummaryConfirmationEvidence,
+  clearEarlierAttemptSummaryAnswer,
   clearActiveDirectiveMarker,
   codekbRepoName,
   currentUnitLifecycleMode,
@@ -1456,9 +1457,32 @@ function nameCeremonyModules(directive: Directive): void {
   directive.protocol_modules = modules;
 }
 
+// A step that keeps an answered questions file after a jump back or a restart
+// starts a new attempt, which confirms its summary again: the earlier
+// attempt's answer is cleared before the agent reads the file
+// (clearEarlierAttemptSummaryAnswer). Every run-stage passes here; the Stop
+// hook's probe writes nothing, and a failed write leaves the file as it was.
+function clearEarlierAttemptSummary(directive: Directive): void {
+  if (directive.kind !== "run-stage" || directive.questions_answered === undefined) return;
+  if (engineProjectDir === undefined || isReadOnlyEngineProbe()) return;
+  if (directive.ceremony?.summary_confirmation !== "on") return;
+  const node = findStageBySlug(directive.stage);
+  const state = loadStateFileIfPresent(engineProjectDir);
+  if (node === undefined || state === null) return;
+  try {
+    clearEarlierAttemptSummaryAnswer(engineProjectDir, node, {
+      stateContent: state,
+      questionsFile: directive.questions_answered.path,
+    });
+  } catch {
+    // Bookkeeping only: the summary check still decides.
+  }
+}
+
 function prepareEmission(directive: Directive): PreparedEmission {
   nameUnitReviewModule(directive);
   nameCeremonyModules(directive);
+  clearEarlierAttemptSummary(directive);
   const requested = directive;
   // Read before the notices below can copy the directive. A guard-recovery
   // ask whose ways on are the conductor's own work (agent_work) is no question
