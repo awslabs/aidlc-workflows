@@ -10577,7 +10577,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       // next line.
       const current = (getField(stateContent, "Current Stage") ?? "").trim();
       const gateWaits = keepsPlace && stillParked === null &&
-        parseCheckboxes(stateContent).find((c) => c.slug === current)?.state === "awaiting-approval";
+        parseCheckboxes(stateContent).find((c) => c.slug === current)?.state === "awaiting-approval" &&
+        !practicesApprovalHeld(pd, current, stateContent);
       const switched = carriesOn
         ? printDirective(`Run \`${command}\` to change scope${fill}, then print its output verbatim and re-run next to carry on with the work.`)
         : turnEndingPrint(gateWaits
@@ -15669,6 +15670,18 @@ function isConcreteIsoInstant(value: string | null): boolean {
   return isoInstant.test(value) && !Number.isNaN(Date.parse(value));
 }
 
+// Practices Discovery holds its human approval until practices-promote has
+// committed both memory targets and a fresh two-part receipt for this stage
+// attempt. Gate opening deliberately precedes promotion, so the receipt is
+// required only on a forward approval of an unfinished stage. The approval
+// report refuses while this holds, and a step that hands the agent that report
+// (the gate's answer after a scope switch) leaves it out.
+function practicesApprovalHeld(projectDir: string, slug: string, stateContent: string): boolean {
+  return slug === "practices-discovery" &&
+    checkboxForSlug(stateContent, slug)?.state !== "completed" &&
+    !hasFreshPracticesAffirmationReceipt(projectDir, stateContent);
+}
+
 // Promotion owns a two-part receipt: the concrete state timestamp and a
 // PRACTICES_AFFIRMED audit row in the current stage attempt AND after the
 // stage's latest rejection/revision boundary. The timestamp alone is stale
@@ -18271,15 +18284,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     }
   }
 
-  // Practices Discovery holds its human approval until practices-promote has
-  // committed both memory targets and a fresh two-part receipt for this stage
-  // attempt. Gate opening deliberately precedes promotion, so enforce the
-  // receipt only on a forward approval of an unfinished stage.
-  if (
-    slug === "practices-discovery" &&
-    stageCheckbox.state !== "completed" &&
-    !hasFreshPracticesAffirmationReceipt(pd, stateContent)
-  ) {
+  if (practicesApprovalHeld(pd, slug, stateContent)) {
     emit(errorDirective(
       'Cannot approve "practices-discovery" because the approved practices have not been saved yet. ' +
         "Run aidlc-state.ts practices-promote after the human approves, then report " +
