@@ -617,16 +617,16 @@ the one that fits: the Unit that made the change lists the path and is
 reviewed once more; a change nobody meant is undone; a path that
 is not source (a tool's cache written inside the repo, a build output, a nested
 repository that is not this project's code) is left out of the source checks by
-naming it under `exclude` in `.aidlc-source-paths.json` (the file in that repo's
-own folder for a recorded repo, and in the checkout's own folder for a checkout
-recorded with `intent add-checkout`). The exclude works at once, with no further
-review; remove the line to put the path back. A path the project's `.gitignore`
-already ignores is never counted, and neither is a file another open piece of
-work in this folder lists in its own Units' source manifests (a second chat
-building its own work here), or anything under a folder it lists: that is the
-other work's change, and its own checks cover it. Archiving a piece of work you
-will not finish (`/aidlc intent archive <name>`) ends its claims. Under Guard
-Policy relaxed or off the change is kept and said once instead.
+naming it under `exclude` in `.aidlc-source-paths.json` (the file in its own
+folder for a recorded repo or a recorded checkout). The exclude works at once,
+with no further review; remove the line to put the path back. A path the
+project's `.gitignore` already ignores is never counted, and neither is a file
+another open piece of work in this folder lists in its own Units' source
+manifests (a second chat building its own work here), or anything under a folder
+it lists: that is the other work's change, and its own checks cover it.
+Archiving a piece of work you will not finish (`/aidlc intent archive <name>`)
+ends its claims. Under Guard Policy relaxed or off the change is kept and said
+once instead.
 
 On a plan with no Units the same change answers with "the project source
 changed after <reviewer> reviewed it" (or, once the one recovery review is used,
