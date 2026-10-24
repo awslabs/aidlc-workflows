@@ -112,7 +112,7 @@ describe("a parallel landing that clashes with a Unit already landed", () => {
     // beta's own file is staged in the same landing but merged cleanly; alpha's landed file is not beta's.
     const staged = guard(pd, "Write", write(join(pd, "src", "beta.ts")));
     expect(staged.code).toBe(2);
-    expect(staged.err).toContain("invoke-swarm");
+    expect(staged.err).toContain("the main checkout changes only by their landings");
     expect(guard(pd, "Write", write(join(pd, "src", "alpha.ts"))).code).toBe(2);
     // Once the landing is dropped there is nothing to combine.
     git(pd, ["reset", "--merge"]);
