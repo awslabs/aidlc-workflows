@@ -493,6 +493,8 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
       .split(",").map((n) => n.trim()).filter(Boolean);
     expect(previewed).toBeGreaterThan(0);
     expect(previewed).toBe(executed.filter((n) => !n.startsWith("0.")).length);
+    // Each executed stage is named the way the Stages to Skip row names it.
+    for (const entry of executed) expect(entry).toMatch(/^\d+\.\d+ \([a-z0-9-]+\)$/);
   });
 
   test("an empty --skip or --add list changes nothing, and the plan is still created", () => {
