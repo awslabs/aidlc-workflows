@@ -387,7 +387,7 @@ describe("t-plan-proposed-by-the-agent: finished work and new work beside active
     const ask = next(CLAUDE_TOOLS, proj, ["bugfix", "fix the login"]);
     expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
     const size = creationSize(CLAUDE_TOOLS, proj, ask.new_intent_command);
-    expect(ask.choices?.[1]?.detail).toBe(`Yes, set it up alongside the current one as "bugfix" work (${size}) without changing it`);
+    expect(ask.choices?.[1]?.detail).toBe(`Set it up alongside the current one as "bugfix" work (${size}) without changing it`);
   });
 
   test("with no plan proposed, the routing question says the plan comes next, and that answer reaches the proposal step", () => {

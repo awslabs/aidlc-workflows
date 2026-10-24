@@ -7576,23 +7576,21 @@
     "category": "routing-question-open",
     "input": "yes",
     "state": "routing-question-open",
-    "meaning": "the person means: the yes-led option of the routing question (a separate new piece of work alongside); the agent knows which question",
+    "meaning": "the person means: ambiguous: yes answers none of the routing question's three options; the agent asks once which one they meant",
     "expected": {
       "engine": {
         "kinds": [
           "print"
         ],
         "words": "yes",
-        "settings": [],
-        "no_ask": true
+        "settings": []
       },
       "end": {
-        "asks": 0,
-        "work": {
-          "words": "fix the login"
-        }
+        "asks": 1,
+        "work": "same"
       }
-    }
+    },
+    "ambiguous": true
   },
   {
     "id": "rq07-q",
@@ -11439,7 +11437,7 @@
     "category": "routing-question-open",
     "input": "yes",
     "state": "routing-question-open",
-    "meaning": "the person means: the yes-led option of the routing question (a separate new piece of work alongside); the agent knows which question (said in plain chat, no /aidlc)",
+    "meaning": "the person means: ambiguous: yes answers none of the routing question's three options; the agent asks once which one they meant (said in plain chat, no /aidlc)",
     "expected": {
       "engine": {
         "kinds": [
@@ -11452,11 +11450,10 @@
       },
       "end": {
         "asks": 1,
-        "work": {
-          "words": "fix the login"
-        }
+        "work": "same"
       }
     },
+    "ambiguous": true,
     "entry": "",
     "argv": {
       "posix": []

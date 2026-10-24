@@ -3473,14 +3473,18 @@ type RoutingOption = {
   readonly label: string;
   readonly detail: (scope: string, size: string) => string;
 };
+// An option's detail where the prose question's sentence carries it after a dash.
+function detailInSentence(detail: string): string {
+  return detail.charAt(0).toLowerCase() + detail.slice(1);
+}
 const NEW_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
   { route: "continue", label: "Part of the active work", detail: (_scope: string) => "Continue the current workflow" },
   {
     route: "separate",
     label: "Separate new piece of work",
     detail: (scope: string, size: string) => scope
-      ? `Yes, set it up alongside the current one as "${scope}" work${size ? ` (${size})` : ""} without changing it`
-      : "Yes, set it up alongside the current one without changing it; you pick its plan next",
+      ? `Set it up alongside the current one as "${scope}" work${size ? ` (${size})` : ""} without changing it`
+      : "Set it up alongside the current one without changing it; you pick its plan next",
   },
   { route: "reshape", label: "Reshape the active work", detail: (_scope: string) => "Change how the remaining plan is shaped" },
 ];
@@ -3514,8 +3518,8 @@ const EXISTING_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
     route: "separate",
     label: "Separate new piece of work",
     detail: (scope: string, size: string) => scope
-      ? `Yes, set it up alongside the existing work as "${scope}" work${size ? ` (${size})` : ""} without changing it`
-      : "Yes, set it up alongside the existing work without changing it; you pick its plan next",
+      ? `Set it up alongside the existing work as "${scope}" work${size ? ` (${size})` : ""} without changing it`
+      : "Set it up alongside the existing work without changing it; you pick its plan next",
   },
   {
     route: "reshape",
@@ -6665,7 +6669,7 @@ function intentPickPromptIfRecordsExist(
       `This project already has ${inProgress}, ` +
         `and none is currently selected: ${list}${unlisted}. You said: "${requestPreview(pendingWork.description)}".${documentSplitSentence(pendingWork.description)} ` +
         `Is this (1) part of existing work - select its record and continue it; ` +
-        `(2) a separate new piece of work - ${EXISTING_WORK_ROUTING_OPTIONS[1].detail(pendingWork.proposedScope, size)}; ` +
+        `(2) a separate new piece of work - ${detailInSentence(EXISTING_WORK_ROUTING_OPTIONS[1].detail(pendingWork.proposedScope, size))}; ` +
         "or (3) a change to an existing remaining plan - select its record, then reshape it?",
       {
         prompt: `This project already has ${inProgress}, ` +
@@ -11048,13 +11052,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const scopeChange = flags.scope !== undefined && flags.scope !== (getField(stateContent, "Scope") ?? "");
     const options = scopeChange ? SCOPE_CHANGE_ROUTING_OPTIONS : NEW_WORK_ROUTING_OPTIONS;
     // Name the plan a confirmed new intent would get so the single ask carries
-    // everything the offer needs: active work, the new text, the plan, and a
-    // "Yes"-led affirmative. Once emitted, this question is the sole route
-    // authority. A typed same-scope --scope is the plan; otherwise the one the
-    // agent proposed when it read the words (`--propose`); with none, or with
-    // `compose` (no ready-made plan fits: the plan question after the answer
-    // offers the tailored one), the separate-work answer says the plan is
-    // picked next.
+    // everything the offer needs: active work, the new text and the plan. Once
+    // emitted, this question is the sole route authority. A typed same-scope
+    // --scope is the plan; otherwise the one the agent proposed when it read
+    // the words (`--propose`); with none, or with `compose` (no ready-made plan
+    // fits: the plan question after the answer offers the tailored one), the
+    // separate-work answer says the plan is picked next.
     const proposed = flags.propose !== undefined && flags.propose !== "" && flags.propose !== "compose" ? flags.propose : "";
     const inferred = {
       scope: routingScopeProposal ?? flags.scope ?? flags.positionalScope ?? proposed,
@@ -11067,7 +11070,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           ? `Is this (1) a separate new piece of work - start new "${inferred.scope}" work for it, the current work stays as it is; ` +
             `(2) part of that work - change it to "${inferred.scope}" and continue it; `
           : "Is this (1) part of that work - continue it; (2) a separate new piece of work - " +
-            `${NEW_WORK_ROUTING_OPTIONS[1].detail(inferred.scope, size)}; `) +
+            `${detailInSentence(NEW_WORK_ROUTING_OPTIONS[1].detail(inferred.scope, size))}; `) +
         "or (3) a change to how the remaining plan is shaped?",
       {
         prompt: `Work is already in progress on: "${activeLabel}". You said: "${requestPreview(flags.intent)}".${documentSplitSentence(flags.intent)} What should I do?`,

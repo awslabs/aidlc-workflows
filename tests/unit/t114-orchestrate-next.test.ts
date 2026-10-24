@@ -1233,7 +1233,7 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     expect(out).toContain("already in progress");
     expect(out).toContain("standalone metrics dashboard");
     expect(out).toContain("continue");
-    expect(out).toContain("Yes, set it up alongside");
+    expect(out).toContain("Set it up alongside");
     expect(out).toContain("plan");
     expect(directive.question).toContain("(1)");
     expect(directive.question).toContain("(2)");
