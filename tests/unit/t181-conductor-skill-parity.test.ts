@@ -369,7 +369,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "with \"The last AI-DLC step stopped on a problem: ...\" when its last step hit one.";
     const forYou = "it is for you, not for the person (some tools show it to them too), so say nothing about it.";
     const waiting = "If you had just asked the person a question in your own words and are waiting for their answer, record it with " +
-      "`{{INVOKE}} engine log decision --stage <stage> --decision \"<the question>\" --options \"<the choices>\"`";
+      "`{{INVOKE}} engine log decision --stage <stage> --decision '<the question>' --options '<the choices>'`";
     const missing = skills.flatMap((rel) => {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       return [
@@ -1017,6 +1017,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       ]) {
         if (stale.test(body)) missing.push(`${rel}  still double-quotes the person's words: ${stale}`);
       }
+      // A question's choices travel too, and a $0.00 in one was recorded as the shell's own name. The `|` list
+      // example stays double-quoted: the Copilot adapter's VS Code allow takes a `|` only inside double quotes.
+      if (/--(decision|options) \\?"</.test(body)) missing.push(`${rel}  still double-quotes a question's text`);
     }
     // The engine's own messages that print such a command, escaped quotes included.
     const tools = join(REPO_ROOT, "core", "tools");
@@ -1025,6 +1028,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       if (/--(details|reason) \\?\\?"(Request [Cc]hanges: <|<(feedback|requested changes))/.test(body)) {
         missing.push(`core/tools/${name}  still double-quotes the person's words`);
       }
+      if (/--(decision|options) \\?\\?"</.test(body)) missing.push(`core/tools/${name}  still double-quotes a question's text`);
     }
     expect(missing).toEqual([]);
   });

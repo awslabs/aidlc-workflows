@@ -1837,7 +1837,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     // record step for that line and says not to ask again; running that step
     // lets the next Stop end the turn, so the person sees the question once.
     const asked = skill.match(
-      /If you had just asked the person a question in your own words and are waiting for their answer, record it with `([^`]+) --stage <stage> --decision "<the question>" --options "<the choices>"`, adding [^\n]*? and end your turn without asking it again or saying anything else\./,
+      /If you had just asked the person a question in your own words and are waiting for their answer, record it with `([^`]+) --stage <stage> --decision '<the question>' --options '<the choices>'`, adding [^\n]*? and end your turn without asking it again or saying anything else\./,
     );
     if (!asked) throw new Error("the Copilot skill names no record step for the one-line Stop note");
     expect(asked[1]).toEndWith("engine log decision");

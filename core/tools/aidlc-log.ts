@@ -4873,7 +4873,7 @@ function logUsage(subcommand: string | undefined): string {
     [...options].filter((option) => option !== "--project-dir").sort().join(" ");
   const usage: Record<string, string[]> = {
     decision: [
-      `${invoke("decision")} --stage <slug> --decision "<the question>" --options "<choice>,<choice>"`,
+      `${invoke("decision")} --stage <slug> --decision '<the question>' --options '<choice>,<choice>'`,
       "  Records a question before it is shown to the person. Required: --stage, --decision.",
       "  When a choice holds a comma, start the list with | and separate the choices with it: \"|<choice>|<choice>\".",
       `  --checkpoint: ${DECISION_CHECKPOINTS.join(", ")}. An ordinary question, the learnings one included, takes none.`,
