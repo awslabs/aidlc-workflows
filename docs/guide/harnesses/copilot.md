@@ -157,10 +157,12 @@ then use the ignored local `dist/copilot/` output.
   messages. AI-DLC recognizes that brief and never records it as your turn: it
   does not satisfy an approval, is not read as your answer or your requested
   changes, and does not apply a typed switch. Anything you type, including
-  while a subagent is still running, counts as before. The exception is the
-  first few seconds after a subagent starts in your chat: a message then that
-  AI-DLC cannot match to a brief is taken to be that brief and is not counted,
-  and if it was yours you are asked to reply again. AI-DLC's own note to the
+  while a subagent is still running, counts as before. The exception, in VS
+  Code only, is the first few seconds after a subagent starts in your chat
+  while its brief has not arrived: a message then that AI-DLC cannot match to
+  a brief is taken to be that brief and is not counted, and if it was yours
+  you are asked to reply again. The Copilot CLI never sends a brief into your
+  chat, so there every message you type counts. AI-DLC's own note to the
   agent when a turn ends with work still pending (such as "The last AI-DLC step
   stopped on a problem: ...") is not your turn either: the Copilot CLI hands it
   back as a chat message, and AI-DLC recognizes it and does not record it as

@@ -321,14 +321,16 @@ words, no answer to an open question, no typed switch, and no human-sequence
 advance. When the lock is busy, the adapter tries one plain read. Every launch
 writes the record before its subagent starts and a spend never removes the
 file, so a missing record reads the same as one that cannot be read. A prompt
-that matches no record, or arrives when the record cannot be read, while a
-subagent started in the same chat within the last 5 seconds (the subagent
-ledger says so) is not counted: it is almost certainly that subagent's brief,
-whether VS Code changed the brief's text or the record is unreadable, and a
-message the person did type in that window is asked for again. Any other
-prompt counts as before, including one typed while the subagent still runs. On
-the CLI a brief never arrives in the launching chat, so the window never
-catches a brief there.
+that matches no record while the record still holds a launch from the same chat
+(only a VS Code `runSubagent` record names its chat), or that arrives when the
+record cannot be read, while a subagent started in the same chat within the
+last 5 seconds (the subagent ledger says so) is not counted: it is almost
+certainly that subagent's brief, whether VS Code changed the brief's text or
+the record is unreadable, and a message the person did type in that window is
+asked for again. Any other prompt counts as before, including one typed while
+the subagent still runs. On the CLI a brief never arrives in the launching
+chat and its record names no chat, so there a prompt the record can be read
+for always counts, however soon after a start it comes.
 
 Each prompt the 5-second window holds back leaves an advisory
 `SUBAGENT_PROMPT_UNMATCHED` audit row (`Counted: no`, with a Reason naming
