@@ -18,7 +18,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
-import { AIDLC_SRC, cleanupTestProject, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
+import { AIDLC_SRC, cleanupTestProject, removeWorkspaceRecord, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename,
@@ -27,7 +27,9 @@ import {
   getField,
   latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents,
+  recordDir,
   setGuardPolicyLine,
+  stateFilePath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { env, exec, next, projectAt, say, templateProjects, type Exec } from "../harness/aidlc-answers-corpus.ts";
 
@@ -62,7 +64,7 @@ async function gateAt(policy: Policy = "relaxed"): Promise<string> {
 
 const tool = (proj: string, path: string, args: string[], extra: Record<string, string> = {}): Promise<Exec> =>
   exec([process.execPath, path, ...args, "--project-dir", proj], { cwd: proj, env: env(proj, { env: extra }) });
-const state = (proj: string): string => readFileSync(seededStateFile(proj), "utf-8");
+const state = (proj: string): string => readFileSync(stateFilePath(proj), "utf-8");
 const checkbox = (proj: string, slug: string): string | undefined =>
   new RegExp(`^- \\[(.)\\] ${slug} \u2014`, "m").exec(state(proj))?.[1];
 const current = (proj: string): string => getField(state(proj), "Current Stage") ?? "";
@@ -101,7 +103,7 @@ async function approve(proj: string, stage: string, said = true): Promise<void> 
 // A stage run to its gate the way a run leaves it: its documents written, its reviewer's READY on record, the gate open.
 async function runToGate(proj: string, stage: string): Promise<void> {
   const node = findStageBySlug(stage)!;
-  const dir = join(seededRecordDir(proj), node.phase, stage);
+  const dir = join(recordDir(proj) as string, node.phase, stage);
   mkdirSync(dir, { recursive: true });
   for (const name of node.produces ?? []) {
     const file = join(dir, artifactFilename(name));
@@ -202,6 +204,25 @@ describe("t-approve-then-add-next: the approval recorded first, the add of the s
     });
   }
 
+  test("refactor: approve Functional Design, then add NFR Requirements: its files are no work of Code Generation's", async () => {
+    // A refactor runs Functional Design, skips NFR Requirements and goes on to Code Generation.
+    const proj = await gateAt();
+    removeWorkspaceRecord(proj);
+    const made = await tool(proj, UTILITY, ["intent-create", "--scope", "refactor", "--project-type", "greenfield",
+      "--label", "title-check", "--arguments", "refactor the blank-title check into one place"]);
+    expect(made.status, made.stdout + made.stderr).toBe(0);
+    expect((await say(proj, "/aidlc", "claude")).status).toBe(0);
+    expect((await next(proj, [])).directive?.stage).toBe("requirements-analysis");
+    await runToGate(proj, "requirements-analysis");
+    await approve(proj, "requirements-analysis");
+    expect(current(proj)).toBe("functional-design");
+    await runToGate(proj, "functional-design");
+    await approveThenAdd(proj, "functional-design", "nfr-requirements");
+    await routedBack(proj, "nfr-requirements", "refactor");
+    expect(approvals(proj, "functional-design")).toHaveLength(1);
+    expect(checkbox(proj, "functional-design")).toBe("x");
+  });
+
   test("inside one phase: Domain Design just entered, the add of User Stories behind it lands with no phase change", async () => {
     const proj = await gateAt();
     expect((await tool(proj, UTILITY, ["recompose", "--add", "domain-design"])).status).toBe(0);
@@ -251,6 +272,16 @@ describe("t-approve-then-add-next: the approval recorded first, the add of the s
     expect(refused.status).not.toBe(0);
     expect(refused.stdout + refused.stderr).toContain("behind the current stage");
     expect(state(proj)).toBe(before);
+
+    // The same for a Unit's own Code Generation folder.
+    const unit = await gateAt();
+    await approve(unit, "requirements-analysis");
+    const unitPlan = join(seededRecordDir(unit), "construction", "todo-core", "code-generation", "code-generation-plan.md");
+    mkdirSync(join(unitPlan, ".."), { recursive: true });
+    writeFileSync(unitPlan, "# Code Generation Plan\n", "utf-8");
+    const perUnit = await tool(unit, UTILITY, ["recompose", "--add", "user-stories"]);
+    expect(perUnit.status).not.toBe(0);
+    expect(perUnit.stdout + perUnit.stderr).toContain("behind the current stage");
 
     // The same inside Inception: Domain Design's questions written.
     const dd = await gateAt();
