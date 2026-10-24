@@ -6343,9 +6343,9 @@ function createPrintDirective(
   // Approve never drops or adds a stage. A creation with no list is the
   // person's own pick of the plain scope (after a Reject), and keeps it, unless
   // the approved plan is that plain scope (a matched plan). The plan created as
-  // approved keeps the project type it was validated for when the person typed
-  // none and the scan reads the folder otherwise, so creation counts and runs
-  // the stages the gate showed.
+  // approved keeps the project type the composer planned for on the person's
+  // word (approvedComposerPlan) when they typed none and the scan reads the
+  // folder otherwise, so creation counts and runs the stages the gate showed.
   const composedFrom = flags.request ? readQuestion(projectDir, flags.request)?.composedFrom : undefined;
   const approved = flags.request
     ? approvedComposerPlan(projectDir, [flags.request, ...(composedFrom ? [composedFrom] : [])], scope)
@@ -10698,8 +10698,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       // approval off) reach the work it creates and no other.
       flags.request = saveQuestion(pd, "", flags.scope ?? "", "compose").id;
     }
-    // The plan's creation for this request records the composer's scores.
-    if (!inFlight && flags.request) openComposerScores(pd, flags.request);
+    // The plan's creation for this request records the composer's scores, and
+    // tells the type the composer planned for from the one the scan found now.
+    if (!inFlight && flags.request) openComposerScores(pd, flags.request, detectedProjectType(pd));
     const dispatch = composeDispatchDirective(flags, inFlight);
     if (splitSaid) dispatch.narration = `${dispatch.narration ?? ""}${splitSaid}`.trim();
     emit(dispatch);

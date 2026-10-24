@@ -3652,24 +3652,29 @@ export function computeArs(
 }
 
 // The composer's scores for the plan a front compose dispatch is working out
-// (#2575). The dispatch opens the record with its request id; `ars`
-// fills it with the scores it screened, and `validate-grid` keeps the plan its
-// last routed run passed, the one the gate shows, with the project type that
-// run was given; creation of that plan takes its stage changes and that type,
-// and writes the scores on WORKFLOW_STARTED, then removes the record. It sits beside the proposal, in the space's gitignored
-// engine dir. Every step is best-effort: a record that cannot be read or
-// written records nothing.
+// (#2575). The dispatch opens the record with its request id and the project
+// type the scan found then; `ars` fills it with the scores it screened, and
+// `validate-grid` keeps the plan its last routed run passed, the one the gate
+// shows, with the project type that run was given. Creation of that plan takes
+// its stage changes, and its type when the composer planned for another type
+// than that scan's (the person's word, never a scan the folder has outgrown),
+// writes the scores on WORKFLOW_STARTED, then removes the record. It sits
+// beside the proposal, in the space's gitignored engine dir. Every step is
+// best-effort: a record that cannot be read or written records nothing.
 export type ArsMethod = "codekb" | "fallback";
+type ProjectTypeWord = "brownfield" | "greenfield";
 interface ComposerScores {
   request: string;
+  scanned?: ProjectTypeWord;
   scores?: Record<ArsComponent, number>;
   method?: ArsMethod;
   plan?: KeptComposerPlan;
 }
+const isProjectTypeWord = (value: unknown): value is ProjectTypeWord => value === "brownfield" || value === "greenfield";
 interface KeptComposerPlan {
   scope: string;
   changes: PlanChanges;
-  projectType?: "brownfield" | "greenfield";
+  projectType?: ProjectTypeWord;
 }
 
 const KEPT_SLUG = /^[a-z0-9][a-z0-9-]*$/;
@@ -3689,6 +3694,7 @@ function readComposerScores(projectDir: string): ComposerScores | null {
     ) as Partial<ComposerScores> | null;
     if (typeof parsed?.request !== "string" || parsed.request === "") return null;
     const record: ComposerScores = { request: parsed.request };
+    if (isProjectTypeWord(parsed.scanned)) record.scanned = parsed.scanned;
     const scores = parsed.scores;
     if (scores !== undefined) {
       if (!ARS_COMPONENTS.every((c) => typeof scores?.[c] === "number" && scores[c] >= 0 && scores[c] <= 1)) return null;
@@ -3700,7 +3706,7 @@ function readComposerScores(projectDir: string): ComposerScores | null {
       Array.isArray(list) && list.every((slug) => typeof slug === "string" && KEPT_SLUG.test(slug));
     if (typeof plan?.scope === "string" && KEPT_SLUG.test(plan.scope) && slugs(plan.changes?.skip) && slugs(plan.changes?.add)) {
       record.plan = { scope: plan.scope, changes: { skip: plan.changes.skip, add: plan.changes.add } };
-      if (plan.projectType === "brownfield" || plan.projectType === "greenfield") record.plan.projectType = plan.projectType;
+      if (isProjectTypeWord(plan.projectType)) record.plan.projectType = plan.projectType;
     }
     return record;
   } catch {
@@ -3709,10 +3715,12 @@ function readComposerScores(projectDir: string): ComposerScores | null {
 }
 
 /** A front compose dispatch for `request` opens a fresh record, replacing any
- *  an earlier composition left. */
-export function openComposerScores(projectDir: string, request: string): void {
+ *  an earlier composition left, with the project type the scan found as it
+ *  dispatched (none when the scan could not say). */
+export function openComposerScores(projectDir: string, request: string, scanned?: string | null): void {
+  const record: ComposerScores = { request, ...(isProjectTypeWord(scanned) ? { scanned } : {}) };
   try {
-    writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify({ request })}\n`);
+    writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify(record)}\n`);
   } catch {
     // No record: the plan's creation records no scores.
   }
@@ -3725,6 +3733,7 @@ function fillComposerScores(projectDir: string, scores: Record<ArsComponent, num
   if (open === null) return;
   const record: ComposerScores = {
     request: open.request,
+    ...(open.scanned ? { scanned: open.scanned } : {}),
     scores: Object.fromEntries(ARS_COMPONENTS.map((c) => [c, scores[c]])) as Record<ArsComponent, number>,
     ...(method ? { method } : {}),
     ...(open.plan ? { plan: open.plan } : {}),
@@ -3751,17 +3760,20 @@ function keepComposerPlan(projectDir: string, plan: KeptComposerPlan): void {
 /** The plan the composer validated for one of `requests` (a creation's
  *  request and the one it was composed from) on `scope`: the stage changes
  *  creation of the approved plan carries, whatever list was typed for it, and
- *  the project type it was validated for, when the run was given one. Null
+ *  the project type it was validated for when that is not the type the scan
+ *  found as the dispatch opened the record: the composer plans on the scan's
+ *  type unless the person said otherwise, so only their word is carried. Null
  *  when the record belongs to other work, keeps no plan (one an older version
  *  wrote), or its plan runs on another scope. */
 export function approvedComposerPlan(
   projectDir: string,
   requests: readonly string[],
   scope: string,
-): { changes: PlanChanges; projectType?: "brownfield" | "greenfield" } | null {
+): { changes: PlanChanges; projectType?: ProjectTypeWord } | null {
   const record = readComposerScores(projectDir);
   if (record?.plan === undefined || !requests.includes(record.request) || record.plan.scope !== scope) return null;
-  return { changes: record.plan.changes, ...(record.plan.projectType ? { projectType: record.plan.projectType } : {}) };
+  const theirs = record.plan.projectType !== undefined && record.scanned !== undefined && record.plan.projectType !== record.scanned;
+  return { changes: record.plan.changes, ...(theirs ? { projectType: record.plan.projectType } : {}) };
 }
 
 /** The WORKFLOW_STARTED fields for a plan being created for `requests` (its
