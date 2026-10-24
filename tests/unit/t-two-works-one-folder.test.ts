@@ -22,6 +22,7 @@ import {
   auditBlockField,
   otherOpenWorkClaims,
   readAllAuditShards,
+  sourceClaimCovers,
   workspaceSourceListing,
   writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -308,6 +309,51 @@ describe("what is still this work's to account for", () => {
     );
     const works = otherOpenWorkClaims(setup.project, "code-generation");
     expect(works.map((work) => [work.work, work.paths])).toEqual([["export-fix", ["version.ts"]]]);
+  });
+});
+
+// Sibling repositories, one recorded by each piece of work: a claim is keyed to
+// the repository its own work records, never to this work's.
+describe("two pieces of work, each on its own sibling repository", () => {
+  function siblings(own: string[], theirs: string[]): string {
+    const dir = mkdtempSync(join(tmpdir(), "aidlc-t-two-works-repos-"));
+    dirs.push(dir);
+    const intents = join(dir, "aidlc", "spaces", "default", "intents");
+    for (const name of ["fixture-intent", "other-work"]) {
+      mkdirSync(join(intents, name), { recursive: true });
+      writeFileSync(join(intents, name, "aidlc-state.md"), "# State\n- **Scope**: feature\n");
+    }
+    writeFileSync(join(intents, "intents.json"), `${JSON.stringify([
+      { uuid: "80000000-0000-4000-8000-000000000001", slug: "fixture", dirName: "fixture-intent", status: "in-flight", repos: own },
+      { uuid: "80000000-0000-4000-8000-000000000002", slug: "export-fix", dirName: "other-work", status: "in-flight", repos: theirs },
+    ])}\n`);
+    writeFileSync(join(intents, "active-intent"), "fixture-intent\n");
+    for (const repo of ["repo-a", "repo-b"]) {
+      const path = join(dir, repo);
+      mkdirSync(join(path, "src"), { recursive: true });
+      git(path, ["init", "-q"]);
+      git(path, ["config", "user.email", "t@test"]);
+      git(path, ["config", "user.name", "t"]);
+      writeFileSync(join(path, "src", "index.ts"), `export const name = "${repo}";\n`);
+      git(path, ["add", "-A"]);
+      git(path, ["commit", "-qm", "seed"]);
+    }
+    manifest(join(intents, "other-work"), "gamma", ["src/index.ts"]);
+    return dir;
+  }
+
+  test("the other work's path is its own repository's, not the same path in this work's", () => {
+    const works = otherOpenWorkClaims(siblings(["repo-a"], ["repo-b"]), "code-generation");
+    expect(works.map((work) => work.paths)).toEqual([["repo-b/src/index.ts"]]);
+    expect(sourceClaimCovers("repo-b\0src/index.ts", works[0].claims)).toBe(true);
+    expect(sourceClaimCovers("repo-a\0src/index.ts", works[0].claims)).toBe(false);
+    expect(otherWorkNote(works)).toContain("export-fix (`repo-b/src/index.ts`)");
+  });
+
+  test("this work records both repositories: the other work's claim in its one repository still reads", () => {
+    const works = otherOpenWorkClaims(siblings(["repo-a", "repo-b"], ["repo-b"]), "code-generation");
+    expect(works.map((work) => work.paths)).toEqual([["repo-b/src/index.ts"]]);
+    expect(sourceClaimCovers("repo-b\0src/index.ts", works[0].claims)).toBe(true);
   });
 });
 

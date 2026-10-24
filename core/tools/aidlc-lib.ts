@@ -26462,6 +26462,8 @@ export interface ReadUnitSourceManifestOptions {
   /** Bolt worktrees fingerprint exactly one selected repo even if their forked
    * record still names the parent multi-repo intent. */
   worktreeRelative?: boolean;
+  /** The repos of the manifest's own work, when it is not this one. */
+  recordedRepos?: string[];
 }
 
 interface GitPathModeIndex {
@@ -27391,11 +27393,11 @@ export function readUnitSourceManifest(
 
 // Two chats, each on its own piece of work, can build in this one folder: a
 // file another open work's Units claim is that work's change, never this
-// work's. Every space's records but this one (resolved as
-// readUnitSourceManifest resolves it), less complete and archived ones (an
-// unregistered record is live, as activeIntent reads it). A manifest is read by
-// this work's own validator, so its keys are this listing's; one that does not
-// read whole is read write by write. A Bolt worktree is one Unit's own folder.
+// work's. Every space's records but this one (as readUnitSourceManifest
+// resolves it), less complete and archived ones (an unregistered record is
+// live, as activeIntent reads it). A manifest is read by the shared validator
+// under its own work's repos; one that does not read whole is read write by
+// write. A Bolt worktree is one Unit's own folder.
 // `work` and `paths` are inert. The completion check, the Code Generation step
 // and its review request all read this one set.
 export function otherOpenWorkClaims(
@@ -27415,6 +27417,7 @@ export function otherOpenWorkClaims(
       if (record === own) continue;
       const row = registry.find((entry) => recordDirMatches(entry, dirName));
       if (typeof row?.status === "string" && (isCompletedIntent(row) || isArchivedIntent(row))) continue;
+      const repos = { recordedRepos: Array.isArray(row?.repos) ? row.repos : [] };
       const claims: SourceClaimModel = { claims: new Set(), prefixes: [] };
       const paths = new Set<string>();
       let units: string[];
@@ -27432,7 +27435,7 @@ export function otherOpenWorkClaims(
           continue;
         }
         type Read = Extract<ReadUnitSourceManifestResult, { ok: true }>;
-        const whole = validateUnitSourceManifestBytes(projectDir, stageSlug, unit, raw, {});
+        const whole = validateUnitSourceManifestBytes(projectDir, stageSlug, unit, raw, repos);
         let value: unknown = null;
         if (!whole.ok) {
           try {
@@ -27441,12 +27444,12 @@ export function otherOpenWorkClaims(
         }
         const read: Read[] = whole.ok ? [whole] : isPlainObject(value) && Array.isArray(value.writes)
           ? value.writes.map((write) => validateUnitSourceManifestBytes(projectDir, stageSlug, unit,
-            Buffer.from(JSON.stringify({ ...value, writes: [write] })), {})).filter((one): one is Read => one.ok)
+            Buffer.from(JSON.stringify({ ...value, writes: [write] })), repos)).filter((one): one is Read => one.ok)
           : [];
         for (const one of read) {
           for (const key of one.claims) claims.claims.add(key);
           claims.prefixes.push(...one.prefixes);
-          for (const write of one.manifest.writes) paths.add(inertPath(write.repo ? `${write.repo}/${write.path}` : write.path));
+          for (const key of [...one.claims, ...one.prefixes]) paths.add(inertPath(key.replace("\0", "/").replace(/^\//, "")));
         }
       }
       if (paths.size === 0) continue;
@@ -27506,7 +27509,7 @@ function validateUnitSourceManifestBytes(
     };
   }
   const worktreeRelative = worktreeContext !== null;
-  const recordedRepos = worktreeRelative ? [] : intentRepos(projectDir);
+  const recordedRepos = worktreeRelative ? [] : options.recordedRepos ?? intentRepos(projectDir);
   const recordedRepoSet = new Set(recordedRepos);
   const checkouts = worktreeRelative ? [] : readRecordedSourceCheckouts(projectDir);
   const carriesWorkspaceShell =
