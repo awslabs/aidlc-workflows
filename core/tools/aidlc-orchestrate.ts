@@ -312,6 +312,7 @@ import {
   loadScopeMapping,
   scopeGuardPolicyDefault,
   nextInScopeStage,
+  setStageSuffix,
   stageReopenedByScopeChange,
   openPendingDecision,
   parseCheckboxes,
@@ -15219,10 +15220,34 @@ function planChangeDirective(
   // Each command names its stage, so it can be typed as shown.
   const onItsOwn = skip.map((slug) => `\`${entrySkillInvocation()} --stage ${slug} --single\``);
   const anyOf = onItsOwn.length <= 1 ? onItsOwn.join("") : `${onItsOwn.slice(0, -1).join(", ")} or ${onItsOwn.at(-1)}`;
+  // How long that opposite flip holds: recompose takes it only while the work
+  // runs and only for stages ahead of where it stands. So a skip's undo holds
+  // until the work moves past the earliest stage the change flips (an added
+  // one: until it starts), or, with nothing after that stage on the plan, until
+  // the work is finished. Live runs read "You can undo that any time." and met
+  // the refusal two stages later (Codex) or after the last approval (Claude
+  // Code on Windows). An add alone keeps it: a later skip of the stage works
+  // where it stands. A Unit walk's steps keep the walk's own line.
+  const undoHolds = (): string => {
+    if (planSkip.length === 0 || walk !== null) return "You can undo that any time.";
+    const order = loadGraph().map((stage) => stage.slug);
+    const first = [...planSkip, ...add].sort((a, b) => order.indexOf(a) - order.indexOf(b))[0];
+    if (add.includes(first)) return `You can undo that until ${name(first)} starts.`;
+    if (plan !== null) {
+      // Reverse Engineering owed behind the cursor has a window of its own.
+      if (order.indexOf(first) <= order.indexOf(current)) return "You can undo that any time.";
+      const changed = [
+        ...planSkip.map((slug) => [slug, "SKIP"] as const),
+        ...add.map((slug) => [slug, "EXECUTE"] as const),
+      ].reduce((content, [slug, action]) => setStageSuffix(content, slug, action), plan.stateContent);
+      if (nextInScopeStage(first, plan.scope, changed) === null) return "You can undo that until the work is finished.";
+    }
+    return `You can undo that until the work moves past ${planSkip.length === 1 && add.length === 0 ? "it" : name(first)}.`;
+  };
   const wayBack = unitStep !== null
     ? forTheUnit
     : started === null
-      ? "You can undo that any time."
+      ? undoHolds()
       : `${skip.length === 1 ? "It" : skip.length === 2 ? "Either one" : "Any of them"} can still be run on its own with ${anyOf}.`;
   const line = `"${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ${wayBack}${noted ? ` ${noted}` : ""}${parkedTail}"`;
   const undo = `If they later ask to undo it, run \`${recomposed(add, planSkip)}\`.`;
