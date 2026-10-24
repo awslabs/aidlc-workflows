@@ -17,6 +17,7 @@ import {
   isEngineEngagementSegment,
   isReadOnlyNextArgv,
   readNextLine,
+  readOrchestratorLauncherOptions,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { parseNextFlags } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
 import { REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
@@ -138,6 +139,20 @@ describe("the launcher's options are taken the one way the engine takes them", (
     const { message, proj } = nextIn(["--new-intent", "fix", "--project-dir", "handling"]);
     expect(message).toContain("`next` does not take `--project-dir handling`");
     expect(existsSync(join(proj, "handling"))).toBe(false);
+  });
+
+  test("a word after a flag that takes no value is theirs even when it is one of the engine's own words", () => {
+    for (const word of ["help", "config", "intent", "space", "park", "team-board"]) {
+      for (const option of [["--project-dir", "handling"], ["--aidlc-attempt-id", "x"]]) {
+        const line = ["next", "--new-intent", word, "me", "add", ...option];
+        const read = readOrchestratorLauncherOptions(line);
+        expect(read.args, line.join(" ")).toEqual(line);
+        expect(read.projectDir).toBeUndefined();
+        expect(read.attemptId).toBeUndefined();
+      }
+    }
+    // Opening the line, the engine's own word is its command, whose options are its own wherever they sit.
+    expect(readOrchestratorLauncherOptions(["next", "intent", "list", "--project-dir", "/x"]).projectDir).toBe("/x");
   });
 
   test("`--project-dir` never takes the mark as its folder, so the words behind it keep the line engaged", () => {

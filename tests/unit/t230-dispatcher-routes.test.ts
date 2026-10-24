@@ -1654,6 +1654,7 @@ describe("t230 dispatcher global flag translation", () => {
     for (const words of [
       ["next", "--new-intent", "fix", "--project-dir", "handling"],
       ["next", "--resume", "fix", "--verbose", "output"],
+      ["next", "--new-intent", "help", "me", "add", "--project-dir", "handling"],
     ]) {
       expect(resolveAction(["engine", "orchestrate", ...words])).toEqual({
         type: "delegate",
