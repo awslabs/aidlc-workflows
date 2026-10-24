@@ -95,9 +95,11 @@ function moveAt(
     const ran = agent.host.bash(step!);
     expect(ran.status, ran.stdout + ran.stderr).toBe(0);
     said.push(ran.stdout);
-    // A jump typed with the change is the `next` the step names after it, and
-    // the jump that `next` names is made as the agent makes it.
-    const jump = /`bun \.claude\/tools\/aidlc-orchestrate\.ts next ([^`]+)`/.exec(String(answer.message ?? ""))?.[1];
+    // A jump typed with the change is the `next` the step says to run and
+    // follow after it, and the jump that `next` names is made as the agent
+    // makes it. A `next --resume` offered "if they say yes" waits for them.
+    const jump = /run `bun \.claude\/tools\/aidlc-orchestrate\.ts next ([^`]+)` and follow what it returns/
+      .exec(String(answer.message ?? ""))?.[1];
     if (jump) {
       const jumped = agent.next(...jump.split(" "));
       if (jumped.kind === "print") agent.actOnPrint(jumped);
