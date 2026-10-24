@@ -1581,7 +1581,8 @@ reported before its outputs or its code exist (`REQUIRED_ARTIFACTS_MISSING`,
 sentence, which ends with the same report again (for missing code, the second
 report puts the approval question to the person with where AI-DLC looked); an output saved before the
 person's current summary confirmation (`SUMMARY_ARTIFACT_UNAUTHORIZED`, under strict, or with no recorded
-write under any policy) while no review covers it or is under way offers `produce-stage-output` too, the
+write under any policy) while no review covers the outputs as they are, none is under way and none is out
+of date offers `produce-stage-output` too, the
 refusal's own sentence naming every such output, and only a repeat asks the person; the source changed after its
 review (`SOURCE_REVIEW_STALE`, the source still readable) offers the one
 `start-recovery-review`, as a changed output does, and that remedy names its

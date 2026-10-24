@@ -14549,27 +14549,39 @@ function plainSummaryHint(projectDir: string, stage: string, unit: string | null
     : "";
 }
 
-const UNSAVED_REASON_PLURAL: Readonly<Record<string, string>> = {
-  "has no recorded write": "have no recorded write",
-  "was last saved under a different summary confirmation": "were last saved under a different summary confirmation",
-  "was last saved before the confirmed answers": "were last saved before the confirmed answers",
-};
+// Why an output does not descend from the current summary confirmation, said
+// of one output and of several.
+const UNSAVED_REASONS = {
+  unrecorded: { one: "has no recorded write", many: "have no recorded write" },
+  "other-confirmation": {
+    one: "was last saved under a different summary confirmation",
+    many: "were last saved under a different summary confirmation",
+  },
+  "before-answers": {
+    one: "was last saved before the confirmed answers",
+    many: "were last saved before the confirmed answers",
+  },
+} as const;
+type UnsavedReason = keyof typeof UNSAVED_REASONS;
 
 // The outputs the current summary confirmation does not authorize, in one
 // refusal sentence; one output reads as it always has.
-function unsavedOutputsMessage(slug: string, unsaved: ReadonlyArray<{ artifact: string; reason: string }>): string {
+function unsavedOutputsMessage(
+  slug: string,
+  unsaved: ReadonlyArray<{ artifact: string; reason: UnsavedReason }>,
+): string {
   if (unsaved.length === 1) {
     return `Refusing to continue "${slug}": this stage's output document ${unsaved[0].artifact} ` +
-      `${unsaved[0].reason}. Save the document again, so its write descends from the current ` +
+      `${UNSAVED_REASONS[unsaved[0].reason].one}. Save the document again, so its write descends from the current ` +
       "confirmation, then continue.";
   }
   const reasons = new Set(unsaved.map((entry) => entry.reason));
   const names = reasons.size === 1
     ? unsaved.map((entry) => entry.artifact)
-    : unsaved.map((entry) => `${entry.artifact} (${entry.reason})`);
+    : unsaved.map((entry) => `${entry.artifact} (${UNSAVED_REASONS[entry.reason].one})`);
   const list = `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
   const why = reasons.size === 1
-    ? UNSAVED_REASON_PLURAL[unsaved[0].reason] ?? unsaved[0].reason
+    ? UNSAVED_REASONS[unsaved[0].reason].many
     : "were not saved under the current confirmation";
   return `Refusing to continue "${slug}": this stage's output documents ${list} ${why}. Save each ` +
     "of them again, so each write descends from the current confirmation, then continue.";
@@ -15080,7 +15092,7 @@ export function checkSummaryConfirmationEvidence(
 
     // Every output the current confirmation does not authorize, so the refusal
     // names them all and one round of saves clears it.
-    const unsaved: Array<{ artifact: string; reason: string }> = [];
+    const unsaved: Array<{ artifact: string; reason: UnsavedReason }> = [];
     for (const artifact of summaryArtifactPaths(stage, question)) {
       const artifactAbs = resolvePath(artifact);
       const writes = events.filter((entry) => auditRowWritesFile(projectDir, entry, artifactAbs));
@@ -15140,10 +15152,10 @@ export function checkSummaryConfirmationEvidence(
           unsaved.push({
             artifact,
             reason: newestWrites.length === 0
-              ? "has no recorded write"
+              ? "unrecorded"
               : stampedElsewhere
-                ? "was last saved under a different summary confirmation"
-                : "was last saved before the confirmed answers",
+                ? "other-confirmation"
+                : "before-answers",
           });
         }
         continue;
