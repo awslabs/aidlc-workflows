@@ -423,3 +423,107 @@ describe("t190 validate-grid --keywords - collision check", () => {
     expect(body.advisories.some((e) => e.includes('The hint "bug" is also bugfix'))).toBe(true);
   });
 });
+
+// ===========================================================================
+// The plan offer's one risk line. A stock scope leaves some required inputs
+// unmade by design (t66 pins those edges), so the composer's final --custom run
+// names only what the plan's own changes leave unmade against the stock scope
+// it runs on, as summary.skipped_inputs: each skipped stage with every kept
+// stage that uses what it makes, in the names the person reads. The composer
+// copies summary verbatim, and the conductor says it once on the offer.
+// ===========================================================================
+describe("t190 validate-grid --custom names the stages a plan skips that a stage it keeps uses", () => {
+  const SETTINGS = {
+    sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "off", review_cap: "adversarial",
+  };
+  type Body = {
+    valid: boolean;
+    advisories: string[];
+    routing?: string;
+    base_scope?: string;
+    summary: { skipped_inputs?: Array<{ stage: string; used_by: string[] }> };
+  };
+  function stock(scope: string, edits: Record<string, "EXECUTE" | "SKIP"> = {}): Record<string, string> {
+    const grids = require("../../dist/claude/.claude/tools/data/scope-grid.json") as Record<string, { stages: Record<string, string> }>;
+    return { ...grids[scope].stages, ...edits };
+  }
+  // The composer's final run: --custom or --matched with the members they require.
+  function finalRun(
+    stages: Record<string, string>,
+    route: string[],
+    opts: { projectType?: string; depth?: string } = {},
+  ): Body {
+    tmp = mkdtempSync(join(tmpdir(), "aidlc-t190-gaps-"));
+    const proposal = join(tmp, "p.json");
+    writeFileSync(
+      proposal,
+      JSON.stringify({ stages, scopeSettings: SETTINGS, guardPolicy: "strict", depth: opts.depth ?? "comprehensive" }),
+      "utf-8",
+    );
+    const r = runValidateGrid(proposal, [...route, "--project-type", opts.projectType ?? "greenfield"], { AIDLC_PROJECT_DIR: tmp });
+    expect(r.rc, r.out).toBe(0);
+    return JSON.parse(r.out) as Body;
+  }
+  const SKIP = "SKIP" as const;
+  const EXECUTE = "EXECUTE" as const;
+  const UNITS = { stage: "Units Generation", used_by: ["Contract Design", "Functional Design", "Code Generation"] };
+
+  test("the live run's plan on a new project names Units Generation and the three stages that use it", () => {
+    const body = finalRun(stock("classic", {
+      "reverse-engineering": SKIP, "user-stories": SKIP, "refined-mockups": SKIP, "units-generation": SKIP,
+      "delivery-planning": SKIP, "intent-capture": EXECUTE, feasibility: EXECUTE, "scope-definition": EXECUTE,
+      "approval-handoff": EXECUTE,
+    }), ["--custom"]);
+    expect(body).toMatchObject({ valid: true, routing: "custom", base_scope: "classic" });
+    expect(body.summary.skipped_inputs).toEqual([UNITS]);
+    // The validator's own words stay in the advisories, beside the stage table.
+    expect(body.advisories.filter((a) => a.includes("[units-generation]")).length).toBe(4);
+  });
+
+  test("a matched stock plan says nothing: its unmade inputs are the scope's design", () => {
+    const body = finalRun(stock("bugfix"), ["--matched", "bugfix"]);
+    expect(body.routing).toBe("matched");
+    expect(body.advisories.length).toBeGreaterThan(0);
+    expect(body.summary).not.toHaveProperty("skipped_inputs");
+  });
+
+  test("a custom plan that leaves unmade only what its base already does says nothing", () => {
+    const body = finalRun(stock("classic", { "user-stories": SKIP }), ["--custom"]);
+    expect(body.base_scope).toBe("classic");
+    expect(body.advisories.some((a) => a.includes('"refined-mockups"'))).toBe(true);
+    expect(body.summary).not.toHaveProperty("skipped_inputs");
+  });
+
+  test("a stage the plan adds whose producer its base skips names that producer with every stage that uses it", () => {
+    const body = finalRun(stock("express", { "functional-design": EXECUTE }), ["--custom"], { depth: "minimal" });
+    expect(body.base_scope).toBe("express");
+    // Express runs Code Generation without Units Generation by design; once the
+    // plan's own Functional Design needs it too, the line names both users.
+    expect(body.summary.skipped_inputs).toEqual([
+      { stage: "Domain Design", used_by: ["Functional Design"] },
+      { stage: "Units Generation", used_by: ["Functional Design", "Code Generation"] },
+    ]);
+  });
+
+  test("existing code: the project type reaches the walk and the same gap is named", () => {
+    const body = finalRun(
+      stock("classic", { "units-generation": SKIP, "delivery-planning": SKIP }),
+      ["--custom"],
+      { projectType: "brownfield" },
+    );
+    expect(body.base_scope).toBe("classic");
+    expect(body.summary.skipped_inputs).toEqual([UNITS]);
+  });
+
+  test("two skipped stages are named in the plan's order, each with the stages that use it", () => {
+    const body = finalRun(
+      stock("classic", { "units-generation": SKIP, "delivery-planning": SKIP, "nfr-design": SKIP }),
+      ["--custom"],
+    );
+    expect(body.base_scope).toBe("classic");
+    expect(body.summary.skipped_inputs).toEqual([
+      UNITS,
+      { stage: "NFR Design", used_by: ["Infrastructure Design"] },
+    ]);
+  });
+});

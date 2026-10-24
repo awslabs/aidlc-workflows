@@ -657,6 +657,23 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(orchestrate).toContain("Render the proposal to the human as a SHORT offer");
   });
 
+  // A live run: the person approved a plan that skips Units Generation while
+  // three stages it keeps use what it makes, and the validator's warning stayed
+  // with the stage table, off screen. The plan's own gaps reach the offer once,
+  // in one line; the tables still come when asked.
+  test("a stage the plan skips that a stage it keeps uses is said once on the offer", () => {
+    const line = "When the `summary` carries `skipped_inputs`";
+    const missing = skills.flatMap((rel) => {
+      const composer = readFileSync(join(REPO_ROOT, rel.replace(/SKILL\.md$/, "composer.md")), "utf-8");
+      return [
+        ...(composer.split(line).length === 2 ? [] : [`${rel}: the skipped_inputs line, once`]),
+        ...(composer.includes("Apart from the `skipped_inputs` line, the composer's stage-decision table")
+          ? [] : [`${rel}: the tables stay on request apart from that line`]),
+      ];
+    });
+    expect(missing).toEqual([]);
+  });
+
   test("Codex conductor guidance uses its native $aidlc invocation", () => {
     const body = ["SKILL.md", "composer.md"]
       .map((file) => readFileSync(join(REPO_ROOT, "harness/codex/skills/aidlc", file), "utf-8"))

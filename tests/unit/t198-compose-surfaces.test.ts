@@ -139,6 +139,11 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     expect(String(d.message)).toContain("pass `--guard-policy <value>` for `strict` or `relaxed`, never for `off`");
     expect(String(d.message)).toContain("flips a matched plan's value below its stock default");
     expect(String(d.message)).toContain("a flip above the default keeps the plan matched");
+    // The stages a custom plan's own skips leave unmade reach the offer in one
+    // line, once; the tables stay on request.
+    expect(String(d.message).split("when the summary carries skipped_inputs").length).toBe(2);
+    expect(String(d.message)).toContain("one plain line saying so, once, for all of them together");
+    expect(String(d.message)).toContain("Apart from the skipped_inputs line, keep the composer's stage-decision table");
   });
 
   test("--report <path> consumes its value (no leak into the intent text)", () => {
@@ -314,6 +319,9 @@ describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
       expect(String(d.message)).toContain("go through next --skip or --add only BEFORE calling next compose");
       expect(String(d.message)).toContain("Dispatch the composer subagent with this message as its task");
       expect(String(d.message)).toContain("use its validated proposal at the approval gate");
+      // A recompose validates strictly, so an unmade input is refused, never a line on the offer.
+      expect(String(d.message)).not.toContain("skipped_inputs");
+      expect(String(d.message)).toContain("Keep the composer's stage-decision table");
       // The counterfactual: a guard-less engine routes this to the current
       // run-stage. Pin the absence.
       expect(d.kind).not.toBe("run-stage");
