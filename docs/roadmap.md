@@ -320,8 +320,8 @@ but do not yet have committed release versions.
 ## Known gaps
 
 - Stage-specific rules (`aidlc-stage-<slug>.md`) are reserved but unbuilt.
-- Plugin `when:` evaluation remains unbuilt. Marketplace discovery and trust
-  are implemented in open PR #1104, not yet shipped.
+- Marketplace discovery and trust are implemented in open PR #1104, not yet
+  shipped.
 - Write-fired sensors remain advisory; gate-bound sensors support blocking
   severity and human-backed override.
 - General cross-stage cycles and progressive in-place artefact enrichment remain
