@@ -1119,8 +1119,9 @@ workflow's own `aidlc-state.md`. The engine itself does not read the marker for
 this: it decides Plan Approval before it publishes its step, so it sets the
 route it is answering (`setTestingPostureRoute`), and a workflow `next` after an
 interrupted isolated run keeps the workflow's contract. While that attempt is
-open, the plan-approval guard's refusals, the rules-arriving line and the line
-for a build whose record could not be written name the run's own
+open, its plan step and plan question (`plan_approval.next`), the plan-approval
+guard's refusals, the rules-arriving line and the line for a build whose record
+could not be written name the run's own
 `next --stage code-generation --single --scope <the scope it started with>`
 (`stepNextCommand`), since a bare `next` routes the main workflow.
 

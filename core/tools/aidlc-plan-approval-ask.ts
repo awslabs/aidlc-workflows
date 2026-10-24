@@ -91,6 +91,7 @@ import {
   replaceTestingContractSection,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
+  stepNextCommand,
   testingContractDefectMessage,
   usableTestingContract,
   type CodeGenerationIssuance,
@@ -834,8 +835,22 @@ export const planApprovalOverrideOffers = new WeakSet<Directive>();
  * The directive `next` emits in place of a code-generation run-stage or
  * invoke-swarm: the same directive marked plan or build, or the engine's Plan
  * Approval question. Read-only: nothing is written until `publishPlanApprovalAsk`.
+ * An isolated run's plan step and question carry that run's own `next`
+ * (stepNextCommand) for the step to name, since a bare `next` routes the main
+ * workflow; the workflow's carry none.
  */
 export function routeCodeGenerationPlanApproval(projectDir: string, directive: Directive): Directive {
+  const routed = routedPlanApproval(projectDir, directive);
+  if (directive.kind !== "run-stage" || directive.single !== true) return routed;
+  if (routed.kind === "run-stage" && ["plan", "revise", "repair"].includes(routed.plan_approval?.status ?? "")) {
+    (routed.plan_approval as CodeGenerationPlanApprovalState).next = stepNextCommand(projectDir, directive);
+  } else if (routed.kind === "ask" && routed.ask_type === PLAN_APPROVAL_ASK_TYPE) {
+    (routed as PlanApprovalAskDirective).plan_approval.next = stepNextCommand(projectDir, directive);
+  }
+  return routed;
+}
+
+function routedPlanApproval(projectDir: string, directive: Directive): Directive {
   if (!isPlanApprovalBeat(directive)) return directive;
   const units: Array<string | null> = directive.kind === "run-stage"
     ? [directive.unit ?? null]
