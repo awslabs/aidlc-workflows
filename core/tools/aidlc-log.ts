@@ -2518,14 +2518,14 @@ function handleAnswer(args: string[]): void {
     // theirs in this chat that no decision has used yet (personsGateReply).
     // Which question a reply answers is the agent's reading, so a question
     // logged after the reply that answers it records on that reply, unless
-    // another answer already names it (the question's own time says which).
+    // another answer already names it (the question's own row says which).
     const question = decisionRowsInScope(readAuditShardEvents(pd), flags.stage, flags.unit).at(-1);
     if (named !== null) {
       fields["Message Id"] = named.id;
       const namedWords = named.words === null ? null : personsWordsText(named.words);
       if (namedWords && !isNonAnswer(namedWords)) fields["Person Reply"] = namedWords;
     } else if (instruction === undefined && !autonomousDecision) {
-      const reply = personsGateReply(pd, invokingChat(pd), flags.stage, question?.timestamp);
+      const reply = personsGateReply(pd, invokingChat(pd), flags.stage, question);
       if (reply.words) fields["Person Reply"] = reply.words;
       if (reply.messageId) fields["Message Id"] = reply.messageId;
       Object.assign(fields, windowMessageIds(reply));

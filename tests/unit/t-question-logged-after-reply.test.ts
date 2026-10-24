@@ -9,10 +9,12 @@
 // again, told their answer was lost.
 //
 // Which question a reply answers is the agent's reading, and an answer spends
-// no reply, so the second answer records on the same reply, first time, with
-// the message named on the row: no refusal, nothing
-// said about a lost answer. A reply an approval used is spent, and the plain
-// refusal stays.
+// no reply, so the second answer records first time: no refusal, nothing said
+// about a lost answer. Its row names no message: the reply is the first
+// answer's, and a question logged after it takes it only when the agent names
+// it (--message), since a live opencode run had a question the agent logged
+// itself recorded on the person's reply to another one. A reply an approval
+// used is spent, and the plain refusal stays.
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -113,8 +115,9 @@ describe("t-question-logged-after-reply: a question logged after the reply is sa
       expect(recorded.rc, recorded.out).toBe(0);
       for (const words of LOST) expect(recorded.out).not.toContain(words);
       expect(answers(proj)).toBe(2);
-      const row = readAuditShardEvents(proj).filter((entry) => entry.event === "QUESTION_ANSWERED").at(-1)!;
-      expect(auditBlockField(row.block, "Message Id")).toBe(id);
+      const [first, second] = readAuditShardEvents(proj).filter((entry) => entry.event === "QUESTION_ANSWERED");
+      expect(auditBlockField(first.block, "Message Id")).toBe(id);
+      expect(auditBlockField(second.block, "Message Id")).toBeNull();
     });
   }
 
