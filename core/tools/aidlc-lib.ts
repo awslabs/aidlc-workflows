@@ -9510,9 +9510,9 @@ function resolveActiveDirectiveTarget(
   space?: string,
 ): ActiveDirectiveTarget {
   const canonicalProjectDir = realpathSync(resolvePath(projectDir));
-  // Only the identity is the native path: on Windows that also turns a subst
-  // drive into its target and a mapped drive into \\server\share, so the record
-  // is still read and written through the folder as the caller spells it.
+  // Only the identity is the native path. On Windows that also turns a subst
+  // drive into its target and a mapped drive into \\server\share, so the
+  // record is still read and written through canonicalProjectDir.
   let projectIdentity = canonicalProjectDir;
   try {
     projectIdentity = realpathSync.native(canonicalProjectDir);
