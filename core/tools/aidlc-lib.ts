@@ -38140,12 +38140,16 @@ const foldedPathKey = (key: string): string => process.platform === "win32" ? ke
  * Code Generation attempt, each with the message they asked in, keyed as
  * mainCheckoutPathKey names them (case-folded on Windows); null when a strict
  * the team holds in memory keeps the main checkout as approved, or the record
- * cannot be read.
+ * cannot be read. `notNamedBy` leaves out the files a Unit's plan names (null:
+ * the plan could not be read, so none counts): a Unit that builds the file
+ * starts from it committed and approved, as on every Guard Policy.
  */
 export function mainCheckoutChangesAsked(
   projectDir: string,
   selection: { intent?: string; space?: string } = {},
+  notNamedBy?: readonly string[] | null,
 ): Map<string, string> | null {
+  if (notNamedBy === null) return null;
   try {
     if (resolveGuardPolicy(projectDir, undefined, { selection }).memoryStrict !== null) return null;
     const rows = readAuditShardEvents(projectDir, selection.intent, selection.space);
@@ -38168,7 +38172,9 @@ export function mainCheckoutChangesAsked(
         continue;
       }
       if (!message || !Array.isArray(listed)) continue;
-      for (const path of listed) if (typeof path === "string") asked.set(foldedPathKey(path), message);
+      for (const path of listed) {
+        if (typeof path === "string" && !plansNamePath(path, notNamedBy ?? [])) asked.set(foldedPathKey(path), message);
+      }
     }
     return asked;
   } catch {
@@ -38185,9 +38191,10 @@ export function mainCheckoutChangeAllowed(
   projectDir: string,
   paths: readonly string[] | null,
   selection: { intent?: string; space?: string } = {},
+  notNamedBy?: readonly string[] | null,
 ): string[] | null {
   if (paths === null || paths.length === 0) return null;
-  const asked = mainCheckoutChangesAsked(projectDir, selection);
+  const asked = mainCheckoutChangesAsked(projectDir, selection, notNamedBy);
   if (asked === null) return null;
   const messages = paths.map((path) => asked.get(foldedPathKey(path)));
   return messages.every((message) => message !== undefined) ? [...new Set(messages as string[])] : null;
