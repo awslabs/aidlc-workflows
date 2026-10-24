@@ -5103,8 +5103,7 @@ function worktreeDelegationParent(
   if (provenance.hash !== origin.provenanceSha256 ||
       provenance.intentUuid !== authority.intentId || provenance.intentUuid !== receipt.intentId ||
     parentAuthority.intentId !== receipt.intentId || parentAuthority.runFloor !== receipt.runFloor ||
-    parentAuthority.targetId !== receipt.targetId || parentPrompt !== receipt.promptSha256 ||
-    questionsFileApprovalFingerprint(parentQuestions) !== receipt.fingerprint ||
+    parentAuthority.targetId !== receipt.targetId ||
     hashObject(parentReceipt) !== origin.parentReceiptSha256 ||
     hashObject(copiedReceipt) !== hashObject(parentReceipt) ||
     parentReceipt?.status !== "generation" || receipt.status !== "generation" ||
@@ -5119,7 +5118,8 @@ function worktreeDelegationParent(
 // run again for the Unit hands an approved plan to the existing build (or says
 // why it cannot), so that is the step, after the question when it is open.
 // Approved means the person's approval, not a lowered fence letting the parent
-// go on without one. Worded as the conductor's: a worker meets it through the
+// go on without one, and a plan built without asking (plan approval off) is
+// said as that. Worded as the conductor's: a worker meets it through the
 // plan-approval guard.
 function delegatedPlanChangedReason(
   provenance: ReturnType<typeof approvalWorktreeProvenance>, unit: string,
@@ -5127,7 +5127,12 @@ function delegatedPlanChangedReason(
   const repo = provenance.repo.repo === null ? "" : ` --repo ${quoteCommandArgument(provenance.repo.repo)}`;
   const prepare = `\`${aidlcToolInvocation("swarm")} prepare --batch ${provenance.batch} --units ${quoteCommandArgument(unit)}${repo}\``;
   const folder = `the project's main folder \`${provenance.parent}\``;
-  if (evaluateCodeGenerationApproval(provenance.parent, { unit }).ok) {
+  const approval = evaluateCodeGenerationApproval(provenance.parent, { unit });
+  if (approval.ok && approval.skipped) {
+    return `The plan for ${unit} changed after its build was prepared, and plan approval is off for this work, so ` +
+      `this build still holds the earlier plan. To hand it the current plan, the conductor runs ${prepare} from ${folder}.`;
+  }
+  if (approval.ok) {
     return `The plan for ${unit} was approved again after its build was prepared, so this build still holds the ` +
       `earlier plan. To hand it the approved plan, the conductor runs ${prepare} from ${folder}.`;
   }

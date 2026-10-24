@@ -3,17 +3,18 @@
 // After the side-by-side build started, the person changes one Unit's plan and approves it again. That Unit's
 // prepared build still holds the earlier plan, so its own check refuses. The refusal names the step that hands the
 // build the approved plan (prepare again for that Unit, which transfers it to the existing build), and before the
-// approval, the question that collects it first; the steps it names, run as written, let the build go on, under every
-// Guard Policy.
+// approval, the question that collects it first; with plan approval off, that the plan is built without asking. The
+// steps it names, run as written, let the build go on, under every Guard Policy.
 
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { codeGenerationRecordDir } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
   cleanupCheckpointFixtures, fixture, nextDirective, plan, prepare, runCheckpointTool, swarm, wt,
 } from "../harness/swarm-checkpoint.ts";
+import { seededStateFile } from "../harness/fixtures.ts";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -91,6 +92,30 @@ test("a plan changed mid-build and not approved yet: the build's check names the
   const early = runNamedPrepare(pd, refused.reason);
   expect(early.code).not.toBe(0);
   expect(`${early.out}\n${early.err}`).toContain("explicitly approved Code Generation plan");
+});
+
+// With plan approval off for the work the changed plan is built without asking: the refusal says so, never that the
+// person approved it, and the step it names hands the build the current plan.
+test("plan approval off: a plan changed mid-build is said as built without asking, and the named step hands it over", () => {
+  const pd = fixture(UNITS);
+  const prepared = prepare(pd, UNITS);
+  expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+  const state = seededStateFile(pd);
+  writeFileSync(state, readFileSync(state, "utf-8")
+    .replace("- **Change Control**: strict\n", "- **Change Control**: strict\n- **Plan Approval**: off (set by you)\n"));
+  expect(nextDirective(pd)).toMatchObject({ kind: "invoke-swarm" });
+  plan(pd, "alpha", "revised");
+  expect(nextDirective(pd)).toMatchObject({ kind: "invoke-swarm" });
+  const refused = verifyInBuild(pd, "alpha");
+  expect(refused.code).toBe(2);
+  expect(refused.reason).toContain("plan approval is off for this work");
+  expect(refused.reason).not.toContain("approved again");
+  const handed = runNamedPrepare(pd, refused.reason);
+  expect(handed.code, `${handed.out}\n${handed.err}`).toBe(0);
+  expect(JSON.parse(handed.out).units).toEqual([
+    expect.objectContaining({ unit: "alpha", ok: true, approval_transferred: true }),
+  ]);
+  expect(verifyInBuild(pd, "alpha").ok).toBe(true);
 });
 
 // A lowered Guard Policy changes none of it: the changed plan is asked for again, and once the person approves it
