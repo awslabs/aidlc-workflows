@@ -2506,6 +2506,20 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       expect(message).not.toContain("code-generation");
     }
     expect(redoNamed(p, "code-generation")).toContain('Redo accepted at "code-generation" for unit "beta"');
+    // The --stage of the agent's gate reports, kept on the redo: beta's own
+    // step is that redo, and a step beta already did moves nothing until the
+    // agent names it with --target.
+    const kept = (stage: string) => JSON.parse(tool(p, "orchestrate", [
+      "report", "--result", "resumed", "--choice", "redo", "--stage", stage,
+    ]).stdout) as { kind: string; message: string };
+    expect(kept("code-generation").message).toBe(redoNamed(p, "code-generation"));
+    for (const stage of ["functional-design", "nfr-design"]) {
+      const named = kept(stage);
+      expect(named.kind, stage).toBe("print");
+      expect(named.message, stage).toContain("--target <the stage they named>");
+      expect(named.message, stage).not.toContain("next --stage");
+      expect(named.message, stage).not.toContain("reopen");
+    }
     const said = reopenFor(p, ["--stage", "functional-design"]);
     expect(said).toContain(
       "reopen --target functional-design --stages functional-design,nfr-requirements,nfr-design,infrastructure-design,code-generation --units beta ",

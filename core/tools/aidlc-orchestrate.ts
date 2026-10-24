@@ -17036,7 +17036,8 @@ function emitTypedResumeChoice(
   if (choice === "redo" && kept !== undefined) named = kept;
   const nameTheStage = (): PrintDirective => printDirective(
     "A re-entry report names the stage the person asked for with `--target <stage>`, not `--stage`. If they named " +
-      "one, run it again with `--target` in place of `--stage`; otherwise run it again without `--stage`.",
+      "one, run it again with `--target <the stage they named>` and without `--stage`; otherwise run it again " +
+      "without `--stage`.",
   );
   // The Unit step a "redo <stage>" named, kept so the redo is of that exact step.
   let unitStep: string | undefined;
@@ -17341,7 +17342,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     return;
   }
 
-  // A resume ask has no stage and commits no lifecycle outcome. Accept the
+  // A resume ask acts on no stage and commits no lifecycle outcome. Accept the
   // natural verdict used by conductors, then return to next without mutation.
   if (flags.result && RESUME_RESULTS.has(flags.result)) {
     handleResumeReport(flags, projectDir);
