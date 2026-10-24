@@ -37711,8 +37711,9 @@ export function pipelineLinkEvidence(
   const fitsChain = (receipt: PipelineLinkReceipt, index: number): boolean =>
     index < links.length - 1 || receipt.position === null ||
     receipt.position === `${links.length}/${links.length}`;
-  // One Guard Policy read for every repository's handoff: each read parses the
-  // memory files, so a read per receipt would grow the gate with the repositories.
+  // One Guard Policy read a call, shared by every repository's handoff check:
+  // each read parses the memory files, so a read per receipt would grow the gate
+  // with the repositories.
   let accepting: boolean | null = null;
   const acceptsChanges = (): boolean => (accepting ??= guardPolicyAcceptsChanges(projectDir));
   for (const repo of chainRepos) {
