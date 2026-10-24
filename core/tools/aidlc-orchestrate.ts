@@ -176,7 +176,8 @@ import {
   attemptEventDefinitelyBefore,
   attemptEventIsCrossShardTied,
   artifactFilename,
-  summaryConfirmedThisAttempt,
+  summaryAuthorizationThisAttempt,
+  summaryOutputDescendsFrom,
   auditBlockField,
   CONSTRUCTION_POLICY_CHECKPOINT,
   VERIFICATION_COMMAND_CHECKPOINT,
@@ -5097,15 +5098,23 @@ function confirmedDocumentsBeforeSwitch(
 ): { stage: string; files: string } | null {
   const current = (getField(stateContent, "Current Stage") ?? "").trim();
   const node = nodeForSlug(current);
-  if (node === undefined || parseCheckboxes(stateContent).find((c) => c.slug === current)?.state !== "in-progress") return null;
+  const box = parseCheckboxes(stateContent).find((c) => c.slug === current)?.state;
+  if (node === undefined || (box !== "in-progress" && box !== "revising")) return null;
   if (effectivePlanAction(current, newScope, null) === "EXECUTE") return null;
   if (unitMajorWalkBeat(pd, scope, stateContent, current) !== null) return null;
-  if (!summaryConfirmedThisAttempt(pd, current)) return null;
+  const authorization = summaryAuthorizationThisAttempt(pd, current);
+  if (authorization === null) return null;
+  // A document of an earlier confirmation (a go-back, changed answers) does not
+  // carry this one's stamp, so it is written again; the summary guard reads
+  // descent the same way. An optional output is named only when it is there.
   const folder = stageDir(pd, node.phase, current);
-  const missing = (node.produces ?? [])
-    .map((artifact) => join(folder, artifactFilename(artifact)))
-    .filter((path) => !existsSync(path))
-    .map((path) => `\`${toPosix(relative(pd, path))}\``);
+  const required = new Set((node.produces ?? []).filter((name) => !name.endsWith("-questions")));
+  const missing = [...required, ...(node.optional_produces ?? [])]
+    .map((artifact) => ({ path: join(folder, artifactFilename(artifact)), required: required.has(artifact) }))
+    .filter(({ path, required: needed }) => existsSync(path)
+      ? !summaryOutputDescendsFrom(pd, path, authorization.id)
+      : needed)
+    .map(({ path }) => `\`${toPosix(relative(pd, path))}\``);
   if (missing.length === 0) return null;
   const files = missing.length === 1 ? missing[0] : `${missing.slice(0, -1).join(", ")} and ${missing.at(-1)}`;
   return { stage: node.name, files };

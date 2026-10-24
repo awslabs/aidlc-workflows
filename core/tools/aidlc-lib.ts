@@ -14049,6 +14049,32 @@ function summaryArtifactPaths(
     .filter((path) => existsSync(path));
 }
 
+/**
+ * An output's newest recorded writes (`writes`, its ARTIFACT rows), and those
+ * of them not stamped with the summary authorization `id`. The output
+ * descends from that confirmation when it has writes and none of the newest
+ * lacks the stamp: the summary guard decides by this, and so does the switch
+ * step that writes a confirmed stage's documents first.
+ */
+export function summaryOutputDescent(
+  writes: AuditShardEvent[],
+  id: string,
+): { newestWrites: AuditShardEvent[]; unauthorized: AuditShardEvent[] } {
+  const newestWrites = latestEventFrontier(writes);
+  return {
+    newestWrites,
+    unauthorized: newestWrites.filter((entry) => auditBlockField(entry.block, SUMMARY_AUTHORIZATION_FIELD) !== id),
+  };
+}
+
+/** Whether the output at `artifactAbs` descends from the summary authorization `id` (see summaryOutputDescent). */
+export function summaryOutputDescendsFrom(projectDir: string, artifactAbs: string, id: string): boolean {
+  const writes = readAuditShardEvents(projectDir)
+    .filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event) && auditRowWritesFile(projectDir, entry, artifactAbs));
+  const { newestWrites, unauthorized } = summaryOutputDescent(writes, id);
+  return newestWrites.length > 0 && unauthorized.length === 0;
+}
+
 /** The audit events the summary-confirmation evidence reads. */
 export const SUMMARY_EVIDENCE_EVENTS = new Set([
   "WORKFLOW_STARTED",
@@ -14356,15 +14382,18 @@ export function readSummaryAuthorization(
 }
 
 /**
- * Whether the person confirmed this stage's summary ("Looks correct") in its
- * current attempt on the main workflow: the authorization `log answer` keeps,
- * for the attempt computed the way `log answer` computes it. Stage level only.
+ * The authorization `log answer` keeps when the person confirmed this stage's
+ * summary ("Looks correct") in its current attempt on the main workflow, for
+ * the attempt computed the way `log answer` computes it; null otherwise. Stage
+ * level only.
  */
-export function summaryConfirmedThisAttempt(projectDir: string, stage: string): boolean {
+export function summaryAuthorizationThisAttempt(projectDir: string, stage: string): SummaryAuthorization | null {
   const authorization = readSummaryAuthorization(projectDir, stage, null);
-  if (authorization === null || authorization.workflow !== null || authorization.choice !== "Looks correct") return false;
+  if (authorization === null || authorization.workflow !== null || authorization.choice !== "Looks correct") return null;
   const events = readAuditShardEvents(projectDir).filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event));
-  return authorization.attempt === summaryAttemptIdentity(summaryAttemptFloors(events, stage, undefined, false));
+  return authorization.attempt === summaryAttemptIdentity(summaryAttemptFloors(events, stage, undefined, false))
+    ? authorization
+    : null;
 }
 
 /**
@@ -15112,10 +15141,7 @@ export function checkSummaryConfirmationEvidence(
       // write-after-receipt ordering below.
       const receiptAuthorization = auditBlockField(receipt.block, SUMMARY_AUTHORIZATION_FIELD);
       if (isSummaryAuthorizationId(receiptAuthorization)) {
-        const newestWrites = latestFrontier(writes);
-        const unauthorized = newestWrites.filter(
-          (entry) => auditBlockField(entry.block, SUMMARY_AUTHORIZATION_FIELD) !== receiptAuthorization,
-        );
+        const { newestWrites, unauthorized } = summaryOutputDescent(writes, receiptAuthorization);
         if (newestWrites.length === 0 || unauthorized.length > 0) {
           // The governed checkpoint: the output was saved without the current
           // confirmation. Strict refuses with the existing remedy; relaxed
