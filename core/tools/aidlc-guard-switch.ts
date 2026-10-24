@@ -1208,9 +1208,16 @@ function grantCovers(
     firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: grant.withDescription === true });
   // Kept with no plan question about it, where work is here and none is
   // selected ("for the work you pick up or start next"): the work started
-  // from a which-work question's new-work answer, before or after the
-  // setting, with no plan question in between, is that next work.
-  if (answered === null) return readQuestion(projectDir, request)?.origin === "routing";
+  // from a which-work question's new-work answer, asked in the same sitting,
+  // before or after the setting, with no plan question in between, is that
+  // next work.
+  if (answered === null) {
+    const asked = readQuestion(projectDir, request);
+    const kept = Date.parse(grant.recordedAt);
+    const at = Date.parse(asked?.createdAt ?? "");
+    return asked?.origin === "routing" && !Number.isNaN(kept) && !Number.isNaN(at) &&
+      Math.abs(at - kept) <= OPEN_QUESTION_WINDOW_MS && Date.now() - kept <= OPEN_QUESTION_WINDOW_MS;
+  }
   const rootOf = (id: string): string => readQuestion(projectDir, id)?.composedFrom ?? id;
   return answered === request || rootOf(request) === rootOf(answered);
 }

@@ -294,6 +294,21 @@ describe("t-kept-setting-follows-the-pick: the work started from the which-work 
     expect(getField(state(startSeparate(routing)), "Guards Off") ?? "").toContain("review-freeze");
   });
 
+  test("kept in another sitting, then a request and 2: the new work starts without it", () => {
+    workNoneSelected();
+    typeSetting("/aidlc --guard.review-freeze off");
+    // The chat comes back two hours later (a resume): what it kept then is not this sitting's.
+    for (const name of [`fences-off-at-creation-${CHAT}.json`, `ceremonies-at-creation-${CHAT}.json`]) {
+      const path = planApprovalRuntimeFile(proj, name);
+      if (!existsSync(path)) continue;
+      const record = JSON.parse(readFileSync(path, "utf-8")) as { recordedAt: string };
+      record.recordedAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      writeFileSync(path, `${JSON.stringify(record)}\n`);
+    }
+    const routing = whichWork("add a CSV export");
+    expect(getField(state(startSeparate(routing)), "Guards Off") ?? "").not.toContain("review-freeze");
+  });
+
   test("kept, then words that only ask to go on and no pick, then a request and 2: the new work starts with it", () => {
     workNoneSelected();
     typeSetting("/aidlc --guard.review-freeze off");
