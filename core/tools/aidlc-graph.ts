@@ -100,6 +100,7 @@ import {
   resolveProjectDir,
   resolveProjectFlag,
   resolveWorkflowSelection,
+  REVIEW_CLASSES,
   type ReviewClass,
   scalarField,
   type ScopeDefinition,
@@ -3652,19 +3653,51 @@ export function computeArs(
 }
 
 // The composer's scores for the plan a front compose dispatch is working out
-// (#2575). The dispatch opens the record with its request id; `ars`
-// fills it with the scores it screened, and `validate-grid` keeps the plan its
-// last routed run passed, the one the gate shows; creation of that plan
-// takes its stage changes and writes the scores on WORKFLOW_STARTED, then
-// removes the record. It sits beside the proposal, in the space's gitignored
-// engine dir. Every step is best-effort: a record that cannot be read or
-// written records nothing.
+// (#2575). The dispatch opens the record with its request id and the project
+// type the scan found then; `ars` fills it with the scores it screened, and
+// `validate-grid` keeps the plan its last routed run passed, the one the gate
+// shows, with the project type that run was given. Creation of that plan takes
+// its stage changes, and its type when the composer planned for another type
+// than that scan's (the person's word, never a scan the folder has outgrown),
+// writes the scores on WORKFLOW_STARTED, then removes the record. The plan
+// also keeps the depth, settings and Guard Policy the gate showed beside its
+// stages, so the creation that approves it runs at them. It sits beside the
+// proposal, in the space's gitignored engine dir. Every step is best-effort: a
+// record that cannot be read or written records nothing.
 export type ArsMethod = "codekb" | "fallback";
+type ProjectTypeWord = "brownfield" | "greenfield";
 interface ComposerScores {
   request: string;
+  scanned?: ProjectTypeWord;
   scores?: Record<ArsComponent, number>;
   method?: ArsMethod;
-  plan?: { scope: string; changes: PlanChanges };
+  plan?: KeptComposerPlan;
+}
+const isProjectTypeWord = (value: unknown): value is ProjectTypeWord => value === "brownfield" || value === "greenfield";
+interface KeptComposerPlan {
+  scope: string;
+  changes: PlanChanges;
+  projectType?: ProjectTypeWord;
+  // Each only where it differs from the scope the plan runs on: creation_depth,
+  // creation_settings, and a Guard Policy above that scope's default.
+  depth?: CreationDepth;
+  settings?: SettingsChanges;
+  guardPolicy?: GuardPolicy;
+}
+type CreationDepth = NonNullable<ScopeValidation["creation_depth"]>;
+const CREATION_DEPTHS: readonly CreationDepth[] = ["minimal", "standard", "comprehensive"];
+
+/** A kept settings record whose every key is a setting and every value one of
+ *  its words, or null: a record edited by hand never reaches a command. */
+function keptSettings(value: unknown): SettingsChanges | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const settings: SettingsChanges = {};
+  for (const [key, word] of Object.entries(value)) {
+    if (key === "review" && (REVIEW_CLASSES as readonly unknown[]).includes(word)) settings.review = word as ReviewClass;
+    else if ((CEREMONY_KEYS as readonly string[]).includes(key) && (word === "on" || word === "off")) settings[key as CeremonyKey] = word;
+    else return null;
+  }
+  return settings;
 }
 
 const KEPT_SLUG = /^[a-z0-9][a-z0-9-]*$/;
@@ -3684,6 +3717,7 @@ function readComposerScores(projectDir: string): ComposerScores | null {
     ) as Partial<ComposerScores> | null;
     if (typeof parsed?.request !== "string" || parsed.request === "") return null;
     const record: ComposerScores = { request: parsed.request };
+    if (isProjectTypeWord(parsed.scanned)) record.scanned = parsed.scanned;
     const scores = parsed.scores;
     if (scores !== undefined) {
       if (!ARS_COMPONENTS.every((c) => typeof scores?.[c] === "number" && scores[c] >= 0 && scores[c] <= 1)) return null;
@@ -3695,6 +3729,11 @@ function readComposerScores(projectDir: string): ComposerScores | null {
       Array.isArray(list) && list.every((slug) => typeof slug === "string" && KEPT_SLUG.test(slug));
     if (typeof plan?.scope === "string" && KEPT_SLUG.test(plan.scope) && slugs(plan.changes?.skip) && slugs(plan.changes?.add)) {
       record.plan = { scope: plan.scope, changes: { skip: plan.changes.skip, add: plan.changes.add } };
+      if (isProjectTypeWord(plan.projectType)) record.plan.projectType = plan.projectType;
+      if ((CREATION_DEPTHS as readonly unknown[]).includes(plan.depth)) record.plan.depth = plan.depth;
+      const settings = keptSettings(plan.settings);
+      if (settings !== null) record.plan.settings = settings;
+      if (plan.guardPolicy === "strict" || plan.guardPolicy === "relaxed") record.plan.guardPolicy = plan.guardPolicy;
     }
     return record;
   } catch {
@@ -3703,10 +3742,12 @@ function readComposerScores(projectDir: string): ComposerScores | null {
 }
 
 /** A front compose dispatch for `request` opens a fresh record, replacing any
- *  an earlier composition left. */
-export function openComposerScores(projectDir: string, request: string): void {
+ *  an earlier composition left, with the project type the scan found as it
+ *  dispatched (none when the scan could not say). */
+export function openComposerScores(projectDir: string, request: string, scanned?: string | null): void {
+  const record: ComposerScores = { request, ...(isProjectTypeWord(scanned) ? { scanned } : {}) };
   try {
-    writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify({ request })}\n`);
+    writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify(record)}\n`);
   } catch {
     // No record: the plan's creation records no scores.
   }
@@ -3719,6 +3760,7 @@ function fillComposerScores(projectDir: string, scores: Record<ArsComponent, num
   if (open === null) return;
   const record: ComposerScores = {
     request: open.request,
+    ...(open.scanned ? { scanned: open.scanned } : {}),
     scores: Object.fromEntries(ARS_COMPONENTS.map((c) => [c, scores[c]])) as Record<ArsComponent, number>,
     ...(method ? { method } : {}),
     ...(open.plan ? { plan: open.plan } : {}),
@@ -3732,26 +3774,43 @@ function fillComposerScores(projectDir: string, scores: Record<ArsComponent, num
 
 /** A routed `validate-grid` run that passes keeps its plan in a record a
  *  dispatch opened, replacing an earlier run's; with none open it writes nothing. */
-function keepComposerPlan(projectDir: string, plan: { scope: string; changes: PlanChanges }): void {
+function keepComposerPlan(projectDir: string, plan: KeptComposerPlan): void {
   const open = readComposerScores(projectDir);
   if (open === null) return;
   try {
     writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify({ ...open, plan })}\n`);
   } catch {
-    // Unwritten: creation takes the stage changes the command carries.
+    // Unwritten: creation takes the stage changes and type the command carries.
   }
 }
 
-/** The stage changes of the plan the composer validated for one of `requests`
- *  (a creation's request and the one it was composed from) on `scope`: what
- *  creation of the approved plan carries, whatever list was typed for it. Null
- *  when the record belongs to other work, keeps no plan (one an older version
- *  wrote), or its plan runs on another scope. */
-export function approvedComposerPlan(projectDir: string, requests: readonly string[], scope: string): PlanChanges | null {
+/** The plan the composer validated for one of `requests` (a creation's
+ *  request and the one it was composed from) on `scope`: the stage changes
+ *  creation of the approved plan carries, whatever list was typed for it, and
+ *  the project type it was validated for when that is not the type the scan
+ *  found as the dispatch opened the record: the composer plans on the scan's
+ *  type unless the person said otherwise, so only their word is carried. The
+ *  depth, settings and Guard Policy the gate showed ride with it. Null when the
+ *  record belongs to other work, keeps no plan (one an older version wrote), or
+ *  its plan runs on another scope. */
+export function approvedComposerPlan(
+  projectDir: string,
+  requests: readonly string[],
+  scope: string,
+): ApprovedComposerPlan | null {
   const record = readComposerScores(projectDir);
   if (record?.plan === undefined || !requests.includes(record.request) || record.plan.scope !== scope) return null;
-  return record.plan.changes;
+  const { changes, depth, settings, guardPolicy } = record.plan;
+  const theirs = record.plan.projectType !== undefined && record.scanned !== undefined && record.plan.projectType !== record.scanned;
+  return {
+    changes,
+    ...(theirs ? { projectType: record.plan.projectType } : {}),
+    ...(depth ? { depth } : {}),
+    ...(settings ? { settings } : {}),
+    ...(guardPolicy ? { guardPolicy } : {}),
+  };
 }
+export type ApprovedComposerPlan = Omit<KeptComposerPlan, "scope">;
 
 /** The WORKFLOW_STARTED fields for a plan being created for `requests` (its
  *  request id and the one it was composed from): the composer's scores when
@@ -4103,7 +4162,18 @@ const COMMANDS: Record<string, Handler> = {
     r.valid = r.errors.length === 0;
     if (r.valid && r.routing !== undefined) {
       const kept = r.routing === "matched" ? r.matched_scope : r.base_scope;
-      if (kept !== undefined) keepComposerPlan(resolveProjectDir(), { scope: kept, changes: r.plan_changes ?? { skip: [], add: [] } });
+      if (kept !== undefined) {
+        const raised = r.guard_policy !== undefined && r.guard_policy !== scopeGuardPolicyDefault(kept) &&
+          guardPolicyAtLeast(r.guard_policy, scopeGuardPolicyDefault(kept));
+        keepComposerPlan(resolveProjectDir(), {
+          scope: kept,
+          changes: r.plan_changes ?? { skip: [], add: [] },
+          ...(projectType ? { projectType } : {}),
+          ...(r.creation_depth ? { depth: r.creation_depth } : {}),
+          ...(r.creation_settings && Object.keys(r.creation_settings).length > 0 ? { settings: r.creation_settings } : {}),
+          ...(raised ? { guardPolicy: r.guard_policy } : {}),
+        });
+      }
     }
     process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
     if (!r.valid) process.exit(1);

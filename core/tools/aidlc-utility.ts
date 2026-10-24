@@ -62,7 +62,7 @@ import {
   keptSettingsNotTheirs,
   levelsKeptForNextWork,
   parseReviewOverride,
-  planApprovalCreationGranted,
+  planApprovalCreationAsked,
   planApprovalMemoryLockRefusal,
   resolvePlanApprovalSetting,
   type ReviewOverride,
@@ -8084,8 +8084,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   // When the person asked for it off in this chat before the work existed (the
   // compose gate, the scope confirmation), the human-turn hook recorded their
   // words, and this piece of work starts with it off, set by them.
-  const planApprovalAsked = planApprovalCreationGranted(projectDir, initialSelection.sessionId, questionId ?? null) &&
-    process.env.AIDLC_UNATTENDED !== "1";
+  const planApprovalAsked = planApprovalCreationAsked(projectDir, initialSelection.sessionId, questionId ?? null);
   // The words cover the next piece of work this chat creates, and no later one:
   // a rejected plan, another request, or a failed attempt leaves nothing behind.
   consumePlanApprovalCreationGrant(projectDir, initialSelection.sessionId);
