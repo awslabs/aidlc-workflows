@@ -852,6 +852,26 @@ describe("a parallel batch's writes judged from the parent", () => {
     expect(blocked(pd)).toBe(before + (win32 ? 3 : 2));
   });
 
+  // With the fence on, the main checkout waits for the Units' landings, which check it: the
+  // refusal says so, where the person's approval stands, and when a change there can be made.
+  test("a main-checkout write while the Units are built in parallel says why it waits and when it can be made", () => {
+    const pd = fixture();
+    succeeded(prepare(pd));
+    publish(pd);
+    for (const target of [join(pd, "README.md"), join(pd, "src", `${UNIT}.ts`)]) {
+      const held = write(pd, target);
+      expect(held.code, `${target}\n${held.out}\n${held.err}`).toBe(2);
+      expect(held.err).toContain(
+        "While the Units are built in parallel, the main checkout changes only by their landings, so each landing " +
+          "can check it. The plan for Units alpha is already approved",
+      );
+      expect(held.err).toContain("A change the person asks for in the main checkout can be made once Code Generation is over.");
+      expect(held.err).toContain("aidlc-orchestrate.ts next");
+      expect(held.err).not.toContain("ambiguous or stale");
+      expect(held.err).not.toContain("directive kind");
+    }
+  });
+
   test("each listed Unit's worker writes in its own worktree and in no other", () => {
     const pd = fixture(true);
     succeeded(prepare(pd, false, GROUP_UNITS));
