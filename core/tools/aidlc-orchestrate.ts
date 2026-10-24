@@ -210,8 +210,9 @@ import {
   constructionSkeletonOn,
   constructionCheckpointGaps,
   effectivePlanAction,
-  addedStagesPassedOver,
   addReachesPassedOver,
+  constructionHasStarted,
+  owedJumpBack,
   errorMessage,
   agentFileText,
   readRegularFileNoFollowOrThrow,
@@ -547,13 +548,11 @@ import {
   shippedInlineContextEntries,
 } from "./aidlc-inline-context.ts";
 import {
-  constructionHasStarted,
   detectWorkspace,
   documentInputLooksSecret,
   GREENFIELD_RE_SKIP_LABEL,
   greenfieldWorkspaceGainedCode,
   projectTypeRecordedAsPersons,
-  reverseEngineeringOwedBehindCursor,
   scanSummary,
 } from "./aidlc-utility.ts";
 import { checkboxIsUnitProjection, ledgerStageActivity } from "./aidlc-doctor-bundle.ts";
@@ -11190,8 +11189,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   }
   // Reverse Engineering went back on the plan behind the cursor (the person
   // said this is existing code): run it now with a redo jump, which leaves the
-  // finished stages alone; once it is approved the walk returns here.
-  if (reverseEngineeringOwedBehindCursor(stateContent, recordDir(pd))) {
+  // finished stages alone; once it is approved the walk returns here. The
+  // plan-approval guard reads the same move (owedJumpBack).
+  const owed = owedJumpBack(stateContent, pd);
+  if (owed?.direction === "redo") {
     emit(printDirective(
       `Reverse Engineering is on the plan and has not run. Run \`${aidlcToolInvocation("jump")} execute --target reverse-engineering --direction redo --scope ${scopeArg(scope)}\` ` +
         `to run it now (finished stages stay finished, and the workflow returns to ${currentSlug} after it). ` +
@@ -11203,11 +11204,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // approval came before the add): go back to it now with a backward jump,
   // which resets only the stage the work had just entered, so it runs next as
   // it would have had the add come first. The add's own line said so.
-  const passedOver = addedStagesPassedOver(stateContent, pd)[0];
-  if (passedOver !== undefined) {
+  if (owed !== null) {
     emit(printDirective(
-      `${nodeForSlug(passedOver)?.name || passedOver} is on the plan and has not run. Run ` +
-        `\`${aidlcToolInvocation("jump")} execute --target ${passedOver} --direction backward --scope ${scopeArg(scope)}\` ` +
+      `${nodeForSlug(owed.target)?.name || owed.target} is on the plan and has not run. Run ` +
+        `\`${aidlcToolInvocation("jump")} execute --target ${owed.target} --direction backward --scope ${scopeArg(scope)}\` ` +
         "to start it now, and do not show its output. Then re-run `next` to continue.",
     ));
     return;

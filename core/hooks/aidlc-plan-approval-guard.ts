@@ -131,7 +131,7 @@ import {
   selectedRecordIsFinished,
   stateDigest,
   stateFilePath,
-  addedStagesPassedOver,
+  owedJumpBack,
   worktreesDir,
   writeGuardAgentContext,
   writeGuardStoodAside,
@@ -1642,14 +1642,17 @@ function jumpIsPersonsMove(
   return typeof last === "boolean" || runtimeHarnessName(projectDir) === "copilot" ? last : false;
 }
 
-// The jump `next` names back to a stage the plan added after the work had just
-// passed over it (addedStagesPassedOver, the check recompose and `next` read):
-// the person's own add carried out, leaving Code Generation before anything of
-// it is written, so it waits for no further turn of theirs.
-function jumpBackToAddedStage(projectDir: string, state: string, jump: JumpCommand): boolean {
-  if (jump.verb !== "execute" || jump.direction !== "backward" || jump.target === undefined) return false;
+// The jump `next` names back to a stage on the plan the work has passed and
+// not run (owedJumpBack, the check `next` prints it from): Reverse Engineering
+// the person put back behind the cursor, or a stage they added after the work
+// had just passed over it. It is their own change carried out, leaving Code
+// Generation before anything of it is written, so it waits for no further turn
+// of theirs.
+function jumpNextNamesBack(projectDir: string, state: string, jump: JumpCommand): boolean {
+  if (jump.verb !== "execute" || jump.target === undefined) return false;
   try {
-    return addedStagesPassedOver(state, projectDir).includes(jump.target);
+    const owed = owedJumpBack(state, projectDir);
+    return owed !== null && owed.target === jump.target && owed.direction === jump.direction;
   } catch {
     return false;
   }
@@ -1712,9 +1715,10 @@ function configToolAdmitted(projectDir: string, rest: readonly string[]): boolea
 // judged whole (recordedSwitchChangeAdmitted); the config tool's two forms above
 // keep theirs. One more has no other owner: a jump (the jump tool checks no pick
 // and no person) waits for the person's move (jumpIsPersonsMove), unless it is
-// the one `next` names back to a stage they just added (jumpBackToAddedStage). Every other
-// engine command is the engine's to judge, a Code Generation completion
-// included: `report` and `unit complete` hold it while its plan waits.
+// the one `next` names back to a stage the work passed and has not run
+// (jumpNextNamesBack). Every other engine command is the engine's to judge, a
+// Code Generation completion included: `report` and `unit complete` hold it
+// while its plan waits.
 function engineCommandAdmitted(
   projectDir: string,
   engineArgs: readonly string[],
@@ -2377,7 +2381,7 @@ async function evaluate(
             {
               jumpAdmitted: (jump) => {
                 const move = toolName === "Bash" &&
-                  (jumpBackToAddedStage(projectDir, state ?? "", jump) ||
+                  (jumpNextNamesBack(projectDir, state ?? "", jump) ||
                     jumpIsPersonsMove(projectDir, cwd, toolInput.command, state ?? "", activeDirective, jump));
                 if (typeof move === "object") jumpWayOn = move;
                 return move === true;

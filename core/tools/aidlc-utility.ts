@@ -333,7 +333,9 @@ import {
   cursorPastStage,
   addedStagesPassedOver,
   addReachesPassedOver,
+  constructionHasStarted,
   holdsAnyFile,
+  reverseEngineeringOwedBehindCursor,
   planWithChanges,
   composedPlanLabel,
   PLAN_NAME_PATTERN,
@@ -11497,48 +11499,6 @@ function handleDetect(projectDir: string, flags: Record<string, string>): void {
 // ---------------------------------------------------------------------------
 // reclassify - the person says the work is a new project or existing code
 // ---------------------------------------------------------------------------
-
-const STARTED_STATES: ReadonlySet<string> = new Set(["in-progress", "awaiting-approval", "revising", "completed"]);
-
-// True once a Construction or Operation stage has started. From then on the
-// folder holds code AI-DLC wrote, so the scan no longer tells new from
-// existing, and the workflow is not moved back into Inception.
-export function constructionHasStarted(content: string, workRecordDir?: string | null): boolean {
-  // Construction output in the record means this work has built: a jump back
-  // resets its stages, but the code in the folder is still its own.
-  if (workRecordDir && holdsAnyFile(join(workRecordDir, "construction"))) return true;
-  const states = new Map(parseCheckboxes(content).map((c) => [c.slug, c.state]));
-  const started = loadStageGraph().filter((stage) =>
-    (stage.phase === "construction" || stage.phase === "operation") &&
-    STARTED_STATES.has(states.get(stage.slug) ?? "pending"));
-  if (started.length !== 1 || !workRecordDir) return started.length > 0;
-  // Only just entered: an approval moved the cursor onto the first
-  // Construction stage and nothing of it is written yet, so nothing was built
-  // for a new project. A jump straight into Operation is work under way.
-  const [only] = started;
-  return !(
-    only.phase === "construction" &&
-    only.slug === getField(content, "Current Stage") &&
-    states.get(only.slug) === "in-progress" &&
-    !holdsAnyFile(join(workRecordDir, "construction"))
-  );
-}
-
-// Reverse Engineering is on the plan and has not run, the workflow is past it,
-// and Construction has not started: it runs now and the workflow then returns
-// to the stage the person was on (`next` names that move; the jump says so).
-export function reverseEngineeringOwedBehindCursor(content: string, workRecordDir?: string | null): boolean {
-  const graph = loadStageGraph();
-  const reIndex = graph.findIndex((stage) => stage.slug === "reverse-engineering");
-  const currentIndex = graph.findIndex((stage) => stage.slug === getField(content, "Current Stage"));
-  if (reIndex < 0 || currentIndex <= reIndex) return false;
-  const scope = getField(content, "Scope") ?? "";
-  const action = parseStateStageSuffixes(content).get("reverse-engineering") ??
-    loadScopeMapping()[scope]?.stages["reverse-engineering"];
-  return action === "EXECUTE" &&
-    parseCheckboxes(content).find((c) => c.slug === "reverse-engineering")?.state === "pending" &&
-    !constructionHasStarted(content, workRecordDir);
-}
 
 // The state already holds this type as the person's word, so a request that
 // names it again has nothing to record.

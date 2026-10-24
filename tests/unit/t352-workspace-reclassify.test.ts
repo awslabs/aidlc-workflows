@@ -56,6 +56,7 @@ import {
 import {
   acquireAuditLock,
   auditBlockField,
+  constructionHasStarted,
   DOCUMENT_INPUT_REQUEST_FILE,
   hooksHealthDir,
   MESSAGE_FILL,
@@ -63,13 +64,12 @@ import {
   nextInScopeStage,
   readAuditShardEvents,
   releaseAuditLock,
+  reverseEngineeringOwedBehindCursor,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { listMessages } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
-  constructionHasStarted,
   declaredProjectType,
   greenfieldWorkspaceGainedCode,
-  reverseEngineeringOwedBehindCursor,
   type ScanResult,
   scanSummary,
 } from "../../dist/claude/.claude/tools/aidlc-utility.ts";
