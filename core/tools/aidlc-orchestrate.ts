@@ -11165,7 +11165,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // approval came before the add): go back to it now with a backward jump,
   // which resets only the stage the work had just entered, so it runs next as
   // it would have had the add come first. The add's own line said so.
-  const passedOver = addedStagesPassedOver(stateContent, recordDir(pd))[0];
+  const passedOver = addedStagesPassedOver(stateContent, pd)[0];
   if (passedOver !== undefined) {
     emit(printDirective(
       `${nodeForSlug(passedOver)?.name || passedOver} is on the plan and has not run. Run ` +

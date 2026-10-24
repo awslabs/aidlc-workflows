@@ -29,7 +29,6 @@ import {
   parseStateStageSuffixes,
   readActiveDirectiveMarker,
   readStateFile,
-  recordDir,
   reviewArtifactEntries,
   resolveProjectDir,
   resolveStage,
@@ -693,7 +692,7 @@ function handleExecute(args: string[]): void {
   // Back to a stage the plan added after the work had just passed over it: the
   // person never stood at the stage the work had just entered, and the add's
   // own line said what changed, so the move says nothing.
-  const addedBack = direction === "backward" && addedStagesPassedOver(content, recordDir(pd)).includes(targetSlug);
+  const addedBack = direction === "backward" && addedStagesPassedOver(content, pd).includes(targetSlug);
   const moved = movedState(content, targetSlug, targetStage, direction, scope, suffixes, scopeMapping);
   content = moved.content;
   const { stagesSkipped, stagesReset, currentStageForPhase, crossesPhaseBoundary, completedCount, timestamp } = moved;

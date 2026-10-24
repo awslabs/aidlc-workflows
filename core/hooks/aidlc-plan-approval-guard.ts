@@ -29,7 +29,8 @@
 // Where no tool of the engine's owns the call, a condition stays here
 // (engineCommandAdmitted): a recorded switch that turns a check off, four config
 // settings that can take a check away, and a release fetched or applied, pass
-// once a person has asked; a jump waits for the person's move: the restart
+// once a person has asked; a jump waits for the person's move (the jump `next`
+// names back to a stage the person just added excepted): the restart
 // they picked at the recovery question, or one they asked for, unless the
 // engine's last step was superseded (a `jump execute`, or the `jump reopen` it
 // printed, to the stage the agent's own settled `next --stage` claimed on this
@@ -130,6 +131,7 @@ import {
   selectedRecordIsFinished,
   stateDigest,
   stateFilePath,
+  addedStagesPassedOver,
   worktreesDir,
   writeGuardAgentContext,
   writeGuardStoodAside,
@@ -1497,6 +1499,7 @@ interface JumpCommand {
   target: string | undefined;
   units: string | undefined;
   via: string | undefined;
+  direction: string | undefined;
 }
 
 const NO_ENGINE_CONTEXT: EngineCommandContext = { jumpAdmitted: () => false };
@@ -1593,6 +1596,19 @@ function jumpIsPersonsMove(
   return typeof last === "boolean" || runtimeHarnessName(projectDir) === "copilot" ? last : false;
 }
 
+// The jump `next` names back to a stage the plan added after the work had just
+// passed over it (addedStagesPassedOver, the check recompose and `next` read):
+// the person's own add carried out, leaving Code Generation before anything of
+// it is written, so it waits for no further turn of theirs.
+function jumpBackToAddedStage(projectDir: string, state: string, jump: JumpCommand): boolean {
+  if (jump.verb !== "execute" || jump.direction !== "backward" || jump.target === undefined) return false;
+  try {
+    return addedStagesPassedOver(state, projectDir).includes(jump.target);
+  } catch {
+    return false;
+  }
+}
+
 // The last value given for a flag, as `--flag value` or `--flag=value`.
 function lastFlag(args: readonly string[], name: string): string | undefined {
   let value: string | undefined;
@@ -1649,7 +1665,8 @@ function configToolAdmitted(projectDir: string, rest: readonly string[]): boolea
 // and the next tool call would pass under the switch. As `config flags` it is
 // judged whole (recordedSwitchChangeAdmitted); the config tool's two forms above
 // keep theirs. One more has no other owner: a jump (the jump tool checks no pick
-// and no person) waits for the person's move (jumpIsPersonsMove). Every other
+// and no person) waits for the person's move (jumpIsPersonsMove), unless it is
+// the one `next` names back to a stage they just added (jumpBackToAddedStage). Every other
 // engine command is the engine's to judge, a Code Generation completion
 // included: `report` and `unit complete` hold it while its plan waits.
 function engineCommandAdmitted(
@@ -1660,7 +1677,7 @@ function engineCommandAdmitted(
   const configArgs = configToolArgs(engineArgs);
   if (configArgs !== null && !configToolAdmitted(projectDir, configArgs)) return false;
   const args = configArgs !== null ? ["config", ...configArgs] : engineArgs[0] === "engine" ? engineArgs.slice(1) : engineArgs;
-  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted({ verb: args[1], target: lastFlag(args, "--target"), units: lastFlag(args, "--units"), via: lastFlag(args, "--via") })) return false;
+  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted({ verb: args[1], target: lastFlag(args, "--target"), units: lastFlag(args, "--units"), via: lastFlag(args, "--via"), direction: lastFlag(args, "--direction") })) return false;
   // `next` takes no `--bypass`: on its line the token is one of the person's
   // words ("add a --bypass option"), never a check turned off, as the engine's
   // own reading says (nextLineFlags). Every other command is read whole, as its
@@ -2312,7 +2329,8 @@ async function evaluate(
             {
               jumpAdmitted: (jump) => {
                 const move = toolName === "Bash" &&
-                  jumpIsPersonsMove(projectDir, cwd, toolInput.command, state ?? "", activeDirective, jump);
+                  (jumpBackToAddedStage(projectDir, state ?? "", jump) ||
+                    jumpIsPersonsMove(projectDir, cwd, toolInput.command, state ?? "", activeDirective, jump));
                 if (typeof move === "object") jumpWayOn = move;
                 return move === true;
               },
