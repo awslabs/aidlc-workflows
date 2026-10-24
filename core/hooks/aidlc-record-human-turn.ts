@@ -217,7 +217,7 @@ function extractResponseText(value: unknown): string {
     const text = extractResponseText(record[key]);
     if (text) return text;
   }
-  // A question box's result: its answers are all the person gave. The
+  // A question box's result: the person's picks are under `answers`. The
   // questions Claude Code echoes beside them are the box's own words, so a box
   // submitted with nothing picked is no text, never its first question.
   if ("answers" in record) return "";
