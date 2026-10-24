@@ -7373,9 +7373,8 @@ function verifyApprovalDecision(
     const gate = { stage: stage.slug, ...(unit !== undefined ? { unit } : {}) };
     const shown = message === undefined ? personRepliedSinceGateShown(pd, gate) : undefined;
     if (shown === false) refuseGateShownAfterReply(pd, "approve", stage.slug);
-    // A stage gate the record never shows stands on this chat's reply, or on
-    // the one chat that replied since; never on another chat's answer to
-    // something else.
+    // A stage gate the record never shows stands on this chat's reply, never
+    // on another chat's answer to something else.
     if (shown === null && unit === undefined && !unshownGateReplyStands(pd, stage.slug)) {
       refuseUnshownGate(pd, stage.slug);
     }

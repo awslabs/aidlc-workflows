@@ -30022,18 +30022,18 @@ const chatOf = (row: AuditShardEvent): string => auditBlockField(row.block, "Ses
 
 // A stage gate the record never shows (the agent reports a choice for a stage
 // whose gate it did not open, and the engine backfills the showing) stands on
-// a reply in the chat that reports it, or on the replies of the one chat that
-// replied since: replies from several other chats answered something else, in
-// chats that never had this gate put to them. True when the chat cannot be
-// named or resolved, or the record cannot be read, which leaves the bound to
-// the checks around it.
+// a reply in the chat that reports it: a reply in another chat answered
+// something else, in a chat that never had this gate put to them, and taking
+// it would guess whose approval it was. A reply the hook recorded with no chat
+// stands too, as do a chat that cannot be named or resolved and a record that
+// cannot be read, which leave the bound to the checks around it.
 export function unshownGateReplyStands(projectDir: string, stage: string): boolean {
   try {
     const session = resolveInvokingSessionId(projectDir);
     if (session === null) return true;
     const { mine, others } = ownShardRows(projectDir);
-    const chats = new Set(unspentStageTurns(mine, others, stage).unspent.filter((row) => isReplyTurn(row)).map(chatOf));
-    return chats.has(session) || chats.size === 1;
+    return unspentStageTurns(mine, others, stage).unspent.some((row) =>
+      isReplyTurn(row) && (chatOf(row) === "" || chatOf(row) === session));
   } catch {
     return true;
   }

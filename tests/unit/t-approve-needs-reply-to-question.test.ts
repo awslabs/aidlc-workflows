@@ -8,7 +8,7 @@
 // the engine backfills for the person's reported approval (report --stage on a
 // running stage) keeps the reply-since-the-last-decision rule: its row is
 // written after their reply by design, and stands on a reply in the chat
-// that reports it, or of the one chat that replied since.
+// that reports it.
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -250,12 +250,16 @@ describe("t-approve-needs-reply-to-question: only the person's reply to the appr
     expect(rows(proj, "GATE_APPROVED").length, approved.out).toBe(1);
   });
 
-  test("a gate never shown approves on the one chat that replied since, as the agent in another chat reports it", () => {
+  // One other chat replied, to another question, and the chat that reports the
+  // approval has said nothing: whose reply would stand is a guess, so nothing
+  // is recorded and the agent shows the gate here.
+  test("a gate never shown approves nothing in a silent chat when one other chat replied", () => {
     const slug = slugOf(proj);
     state(proj, ["checkbox", `${slug}=in-progress`]);
-    person(proj, "Approve", "t-approve-other-chat-1");
-    const approved = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
-    expect(rows(proj, "GATE_APPROVED").length, approved.out).toBe(1);
+    person(proj, "Nothing to add", "t-approve-other-chat-1");
+    const refused = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
+    expect(refused.out.toLowerCase()).toContain(SHOW_IT);
+    expect(rows(proj, "GATE_APPROVED")).toEqual([]);
   });
 
   test("a team Unit gate is bound at its own Unit's row", () => {

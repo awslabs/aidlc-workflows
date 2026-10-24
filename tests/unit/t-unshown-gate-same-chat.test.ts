@@ -1,7 +1,7 @@
 // covers: function:unshownGateReplyStands, function:verifyApprovalDecision, cli:aidlc-orchestrate(report)
 //
 // An approval reported for a stage whose gate the record never shows stands on
-// a reply in the chat that reports it (or of the one chat that replied since).
+// a reply in the chat that reports it.
 // On every tool, through its own hook wiring and its own shell for the agent's
 // command (tests/harness/scope-hosts.ts), the chat the agent's report names is
 // the chat the human-turn hook recorded for the person's reply in that chat:
