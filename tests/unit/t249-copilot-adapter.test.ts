@@ -3651,7 +3651,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     for (const [command, attempt] of [
       ["aidlc next --scope '`literal`'", "literal-backtick-attempt"],
       ["aidlc next --scope 'src/{a,b}.ts'", "literal-brace-attempt"],
-      ["aidlc next --scope src/\\{a,b\\}.ts", "escaped-brace-attempt"],
+      // A backslash escape is POSIX's: on Windows the CLI's shell is PowerShell,
+      // where it separates a path.
+      ...(process.platform === "win32" ? [] : [["aidlc next --scope src/\\{a,b\\}.ts", "escaped-brace-attempt"]]),
     ]) {
       const literal = runAdapter(
         dir,
