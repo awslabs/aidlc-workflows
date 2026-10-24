@@ -280,6 +280,15 @@ export type HarnessManifest = {
    */
   frontmatterAdditions?: Array<{ file: string; lines: string[] }>;
   /**
+   * The frontmatter lines a plugin's agent gets in place of frontmatterAdditions,
+   * which reach core's agents only: the dispatch surface of a persona with no
+   * role of its own. The packager writes them as the frontmatter of
+   * <harnessDir>/tools/data/plugin-agent.md, so the native release's rewrites
+   * reach them as they reach the personas, and the plugin compose hook adds
+   * them to every agent a plugin ships (each key the agent does not declare).
+   */
+  pluginAgentFrontmatter?: string[];
+  /**
    * Exact text the native release swaps in before its generic invocation
    * rewrite, for projected content whose copy-channel spelling has no
    * mechanical native form. Each `from` must occur in the native projection;

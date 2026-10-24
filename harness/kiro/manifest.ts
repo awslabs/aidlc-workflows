@@ -40,6 +40,11 @@ const PERSONA_AGENTS = [
   "aidlc-operations-agent",
 ] as const;
 
+// The Kiro IDE row's tools and MCP lines, without its permissions: on v2 the
+// JSON still decides, and the .md is only its prompt. A plugin's agent has no
+// JSON here, so on v2 it is not dispatched; on v3 these lines are its tools.
+const PERSONA_PROMPT_LINES = [`tools: ["read", "write", "shell"]`, "includeMcpJson: true"];
+
 const manifest: HarnessManifest = {
   name: "kiro",
   productName: "Kiro CLI",
@@ -219,12 +224,11 @@ const manifest: HarnessManifest = {
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 
-  // The Kiro IDE row's tools and MCP lines, without its permissions: on v2 the
-  // JSON still decides, and the .md is only its prompt.
   frontmatterAdditions: PERSONA_AGENTS.map((agent) => ({
     file: `agents/${agent}.md`,
-    lines: [`tools: ["read", "write", "shell"]`, "includeMcpJson: true"],
+    lines: PERSONA_PROMPT_LINES,
   })),
+  pluginAgentFrontmatter: PERSONA_PROMPT_LINES,
 
   // Neutral root guidance is shared; native setup is loaded through agent resources.
   onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "steering/aidlc-onboarding.md", fills: onboardingFills },

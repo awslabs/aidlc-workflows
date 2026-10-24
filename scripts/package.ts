@@ -516,6 +516,10 @@ const AGENT_TIERS_DATA = "tools/data/agent-tiers.json";
 const SETTINGS_SCHEMA_DATA = "tools/data/aidlc-settings.schema.json";
 const STAMP_DATA = "tools/data/aidlc-stamp.json";
 const PROJECTION_DATA = "tools/data/aidlc-projection.json";
+// The lines the plugin compose hook adds to a plugin's agent
+// (manifest-types.ts pluginAgentFrontmatter), in Markdown so the native
+// release's agent rewrites reach them.
+const PLUGIN_AGENT_DATA = "tools/data/plugin-agent.md";
 
 // The method ("memory"): the single hand-editable source of truth
 // for the layered practices (org/team/project + phases/). It is HARNESS-NEUTRAL
@@ -610,6 +614,13 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
   const dst = join(treeRoot, HARNESS_DATA);
   mkdirSync(dirname(dst), { recursive: true });
   writeFileSync(dst, `${JSON.stringify(data, null, 2)}\n`);
+}
+
+function writePluginAgentData(treeRoot: string, m: HarnessManifest): void {
+  if (!m.pluginAgentFrontmatter?.length) return;
+  const dst = join(treeRoot, PLUGIN_AGENT_DATA);
+  mkdirSync(dirname(dst), { recursive: true });
+  writeFileSync(dst, `---\n${m.pluginAgentFrontmatter.join("\n")}\n---\n`);
 }
 
 function writeAgentTiersData(treeRoot: string): void {
@@ -1018,6 +1029,7 @@ function buildTree(
   //     the compile step just created, hence walked + byte-diffed by --check
   //     like any other generated file.
   writeHarnessData(treeRoot, m);
+  writePluginAgentData(treeRoot, m);
   writeAgentTiersData(treeRoot);
   writeSettingsSchemaData(treeRoot);
 
@@ -1095,7 +1107,8 @@ function applyNativeReplacements(outRoot: string, m: HarnessManifest): void {
 function rewriteKiroNativeAllowlists(outRoot: string, m: HarnessManifest): void {
   if (m.tierFlavor !== "kiro") return;
   const agentsDir = join(outRoot, m.harnessDir, "agents");
-  for (const file of walk(agentsDir)) {
+  const pluginAgentData = join(outRoot, m.harnessDir, PLUGIN_AGENT_DATA);
+  for (const file of [...walk(agentsDir), ...(existsSync(pluginAgentData) ? [pluginAgentData] : [])]) {
     if (file.endsWith(".md")) {
       // Kiro IDE persona surfaces carry a YAML shell allowlist; the native
       // channel replaces the bun tool glob with the aidlc command prefix. The

@@ -966,7 +966,64 @@ function disallowedToolsValues(content: string): string[] {
   ].map((match) => match[1].trim());
 }
 
-function projectKiroNativeAgent({ file, content }: CopyContext): string {
+// The frontmatter lines this install gives a plugin's agent: the dispatch
+// surface its own personas carry, from the file the packager writes for the row
+// (manifest-types.ts pluginAgentFrontmatter). An install without it gives none.
+let _pluginAgentLines: string[] | null = null;
+function pluginAgentLines(): string[] {
+  if (_pluginAgentLines) return _pluginAgentLines;
+  let lines: string[] = [];
+  try {
+    const raw = readFileSync(join(HARNESS_DIR, "tools", "data", "plugin-agent.md"), "utf-8").replace(/^\uFEFF/, "");
+    const block = frontmatter(raw);
+    if (block) lines = block.split(/\r?\n/);
+  } catch {
+    // An install that predates the file.
+  }
+  _pluginAgentLines = lines;
+  return lines;
+}
+
+const topLevelKey = (line: string): string | null => line.match(/^([A-Za-z_][\w-]*):/)?.[1] ?? null;
+
+// The install's lines an agent gets, by key: an author's own key stays theirs.
+// The tools line, which grants the shell, comes only with the install's
+// permissions, whose deny keeps a delegate off the engine commands the guard
+// refuses it; beside the author's own permissions the tools are theirs to name.
+function pluginAgentDispatchLines(declared: ReadonlySet<string>): string[] {
+  const out: string[] = [];
+  let take = false;
+  for (const line of pluginAgentLines()) {
+    const key = topLevelKey(line);
+    if (key !== null) {
+      take = key === "tools"
+        ? !declared.has("tools") && !declared.has("permissions")
+        : !declared.has(key);
+    }
+    if (take) out.push(line);
+  }
+  return out;
+}
+
+// Why Kiro's agent roster cannot take this plugin agent file, or null.
+function kiroNativeAgentRefusal(rel: string, content: string): string | null {
+  if (!content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/)) {
+    return `plugin "${PLUGIN_NAME}" agent file "${rel}" has no closed frontmatter block; not copied to Kiro's agent roster`;
+  }
+  const disallowed = disallowedToolsValues(content);
+  if (disallowed.length > 1) {
+    return `plugin "${PLUGIN_NAME}" agent file "${rel}" declares multiple disallowedTools lines; Kiro accepts at most one disallowedTools: Task line; not copied`;
+  }
+  if (disallowed.length === 1 && !/^Task$/i.test(disallowed[0])) {
+    return `plugin "${PLUGIN_NAME}" agent file "${rel}" cannot project disallowedTools "${disallowed[0]}" to Kiro; not copied`;
+  }
+  return null;
+}
+
+// A plugin agent as Kiro installs it: without the Claude-only disallowedTools
+// and, unless `dispatch` is false (the copy the inline lead reads), with the
+// install's dispatch lines. The frontmatter is written LF.
+function projectKiroNativeAgent({ file, content }: CopyContext, dispatch = true): string {
   const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
   if (!m) throw new Error(`${file}: plugin agent has no closed frontmatter block`);
   const disallowed = disallowedToolsValues(content);
@@ -976,55 +1033,51 @@ function projectKiroNativeAgent({ file, content }: CopyContext): string {
   ) {
     throw new Error(`${file}: Kiro cannot project this disallowedTools declaration`);
   }
-  const fm = m[1]
+  const own = m[1]
     .split(/\r?\n/)
-    .filter((line) => !/^disallowedTools:/.test(line))
-    .join("\n");
+    .filter((line) => !/^disallowedTools:/.test(line));
+  const declared = new Set(own.map(topLevelKey).filter((key): key is string => key !== null));
+  const fm = [...own, ...(dispatch ? pluginAgentDispatchLines(declared) : [])].join("\n");
   return content.replace(m[0], () => `---\n${fm}\n---\n`);
 }
 
 function kiroNativeAgentPrecheck(): CopyPrecheck {
   return (ctx) => {
-    if (!ctx.content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/)) {
-      recordDrop(
-        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" has no closed frontmatter block; not copied to Kiro's agent roster`,
-      );
-      return false;
-    }
-    const disallowed = disallowedToolsValues(ctx.content);
-    if (disallowed.length > 1) {
-      recordDrop(
-        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" declares multiple disallowedTools lines; Kiro accepts at most one disallowedTools: Task line; not copied`,
-      );
-      return false;
-    }
-    if (disallowed.length === 1 && !/^Task$/i.test(disallowed[0])) {
-      recordDrop(
-        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" cannot project disallowedTools "${disallowed[0]}" to Kiro; not copied`,
-      );
-      return false;
-    }
-    return true;
+    const refusal = kiroNativeAgentRefusal(ctx.rel, ctx.content);
+    if (refusal) recordDrop(refusal);
+    return refusal === null;
   };
+}
+
+// An installed copy of a plugin agent that is this plugin's own older copy,
+// though no record says so: the plugin's source as it was before Kiro's
+// projection, or a projection from before this install's dispatch lines (a
+// project composed before the ownership record, on 2.11.0 or earlier).
+function olderKiroAgentCopy(installed: Buffer, content: string, file: string): boolean {
+  const text = installed.toString("utf-8");
+  if (frontmatterScalar(content, "plugin") !== PLUGIN_NAME || frontmatterScalar(text, "plugin") !== PLUGIN_NAME) {
+    return false;
+  }
+  if (text === content) return disallowedToolsValues(content).length > 0;
+  if (pluginAgentLines().length === 0) return false;
+  try {
+    return committedText(installed).equals(
+      committedText(Buffer.from(projectKiroNativeAgent({ file, rel: file, content }, false))),
+    );
+  } catch {
+    return false;
+  }
 }
 
 function migrateExistingKiroAgent(
   ctx: CopyContext & { dest: string; installed: Buffer },
 ): ExistingCopyAction {
   if (!ctx.file.endsWith(".md")) return "compare";
-  const installed = ctx.installed.toString("utf-8");
   // This migration is deliberately narrower than ordinary plugin upgrades:
-  // only an unchanged pre-projection copy owned by this plugin is rewritten.
-  // User edits, core files, and another plugin's files stay under no-clobber.
-  if (
-    installed !== ctx.content ||
-    frontmatterScalar(ctx.content, "plugin") !== PLUGIN_NAME ||
-    frontmatterScalar(installed, "plugin") !== PLUGIN_NAME
-  ) {
-    return "compare";
-  }
+  // only this plugin's own unchanged older copy is rewritten. User edits, core
+  // files, and another plugin's files stay under no-clobber.
+  if (!olderKiroAgentCopy(ctx.installed, ctx.content, ctx.file)) return "compare";
   const disallowed = disallowedToolsValues(ctx.content);
-  if (disallowed.length === 0) return "compare";
   if (disallowed.length > 1) {
     const installedRel = relative(PROJECT_DIR, ctx.dest).replace(/\\/g, "/");
     recordDrop(
@@ -1032,7 +1085,7 @@ function migrateExistingKiroAgent(
     );
     return "handled";
   }
-  if (!/^Task$/i.test(disallowed[0])) {
+  if (disallowed.length === 1 && !/^Task$/i.test(disallowed[0])) {
     const installedRel = relative(PROJECT_DIR, ctx.dest).replace(/\\/g, "/");
     recordDrop(
       `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" is already composed with unsupported disallowedTools "${disallowed[0]}"; fix the plugin source, remove "${installedRel}", and re-run compose`,
@@ -1346,6 +1399,10 @@ function installedIdeAgentIsDispatchable(agentsDir: string, agent: string): bool
   } catch {
     return false;
   }
+  return ideAgentIsDispatchable(content);
+}
+
+function ideAgentIsDispatchable(content: string): boolean {
   const fm = frontmatter(content);
   if (!fm) return false;
   const lines = fm.split(/\r?\n/);
@@ -1398,6 +1455,41 @@ function installedIdeAgentIsDispatchable(agentsDir: string, agent: string): bool
       itemIndent,
     )
   );
+}
+
+// The copy of a plugin's own agent this compose writes to agentsDir, or null
+// when it writes none: the plugin ships no such agent, the installed file is
+// one the copy keeps (someone else's, or a copy the person changed), or the
+// copy refuses the agent (its frontmatter, its plugin identity, or a name
+// another installed agent already has).
+function pluginKiroAgentCopy(agentsDir: string, agent: string): string | null {
+  const source = join(PLUGIN_ROOT, "agents", `${agent}.md`);
+  const rel = `${agent}.md`;
+  const dest = join(agentsDir, rel);
+  let content: string;
+  try {
+    content = projectPluginTokens(readFileSync(source, "utf-8"), HARNESS_LEAF);
+  } catch {
+    return null;
+  }
+  if (kiroNativeAgentRefusal(rel, content) !== null) return null;
+  if (frontmatterScalar(content, "plugin") !== PLUGIN_NAME) return null;
+  const name = frontmatterName(content);
+  const colliding = name ? installedNameRoster(agentsDir).get(name) : undefined;
+  if (colliding && colliding !== dest) return null;
+  const projected = projectKiroNativeAgent({ file: source, rel, content });
+  if (existsSync(dest)) {
+    const installed = readFileSync(dest);
+    const recorded = priorOwned().get(projectRelPosix(dest));
+    // The same calls the agents copy (copyTreeNoClobber) makes on that file.
+    const replaced = olderKiroAgentCopy(installed, content, source) ||
+      committedText(installed).equals(committedText(Buffer.from(projected))) ||
+      (recorded === undefined
+        ? sameButKnowledgePreflight(installed, Buffer.from(projected))
+        : recordedDigestMatches(installed, recorded));
+    if (!replaced) return null;
+  }
+  return projected;
 }
 
 // Kiro CLI, Kiro IDE, Codex, OpenCode, and Copilot each require a native
@@ -1561,10 +1653,13 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
     const gaps = new Map<string, DispatchGap>();
     for (const agent of dispatchedAgents) {
       if (!agent || gaps.has(agent)) continue;
+      // The agents copy runs after this check, so a plugin's own agent is
+      // judged on the copy it is about to write.
+      const pluginCopy = isKiroIde ? pluginKiroAgentCopy(surfaceDir, agent) : null;
       const gap = {
         agent,
         missingSurface: isKiroIde
-          ? !installedIdeAgentIsDispatchable(surfaceDir, agent)
+          ? !(pluginCopy === null ? installedIdeAgentIsDispatchable(surfaceDir, agent) : ideAgentIsDispatchable(pluginCopy))
           : !existsSync(join(surfaceDir, `${agent}${surfaceExt}`)) &&
             !(HARNESS_LEAF === ".aidlc" && pluginShipsViableNativeAgent(agent)),
         missingTrust: isKiroCli && !trustedAgents.has(agent),
@@ -2194,6 +2289,7 @@ try {
         ? join(PLUGIN_ROOT, "aidlc", "agents")
         : join(PLUGIN_ROOT, "agents");
     changed = copyTreeNoClobber(join(PLUGIN_ROOT, "scopes"), scopesDir, "scopes", installedNameCollisionPrecheck(scopesDir, "scopes")) || changed;
+    const composedAgents = new Set<string>();
     changed = copyTreeNoClobber(
       pluginAgentsDir,
       agentsDir,
@@ -2211,7 +2307,20 @@ try {
             ? projectKiroNativeAgent
             : undefined,
       HARNESS_LEAF === ".kiro" ? migrateExistingKiroAgent : undefined,
+      composedAgents,
     ) || changed;
+    // Kiro IDE's dispatch lines are about 32 KB of tool permissions; the lead
+    // reading a plugin's persona in its own chat reads it without them, from
+    // the copy the inline roster prefers, as for core's personas.
+    if (HARNESS_LEAF === ".kiro" && pluginAgentLines().some((line) => topLevelKey(line) === "permissions")) {
+      changed = copyTreeNoClobber(
+        pluginAgentsDir,
+        join(HARNESS_DIR, "aidlc-common", "personas"),
+        "persona copy",
+        ({ rel }) => composedAgents.has(rel.replace(/\\/g, "/")),
+        (ctx) => projectKiroNativeAgent(ctx, false),
+      ) || changed;
+    }
     if (IS_OPENCODE) {
       const rosterDir = nativeAgentsDir();
       changed = copyTreeNoClobber(
