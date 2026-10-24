@@ -5638,3 +5638,23 @@ describe("t249 Copilot guard-tool-call runs the four guards in the adapter's own
     expect(guardRuns(join(here, "guard-runs.ndjson")).map((run) => run.hook)).toEqual(GUARD_HOOKS.slice(0, 3));
   });
 });
+
+describe("t249 a jump the person asks for starts its step in the claimed next", () => {
+  test("next --phase makes the jump, returns the target's step, and the adapter delivers it", () => {
+    const dir = orchestrationProject();
+    const session = "jump-one-step-owner";
+    driveToRunStage(dir, session);
+    let routed = runLifecycle(dir, session, "direct", ["next", "--phase", "ideation"], `${session}-jump`);
+    // No command handed back to type: the claimed `next` made the jump itself.
+    expect(String(routed.directive.message ?? ""), JSON.stringify(routed.directive)).not.toContain("to perform the jump");
+    expect(readFileSync(seededStateFile(dir), "utf-8")).toContain("- **Current Stage**: intent-capture");
+    for (let part = 0; routed.directive.kind === "load-steering"; part++) {
+      routed = runLifecycle(dir, session, "direct", ["continue", String(routed.directive.receipt)], `${session}-jump-${part}`);
+      if (part > 20) throw new Error("steering did not converge");
+    }
+    expect(routed.directive).toMatchObject({ kind: "run-stage", stage: "intent-capture" });
+    const active = marker(dir);
+    expect(active).toMatchObject({ kind: "run-stage", stage: "intent-capture", delivery: "delivered", needs_rehydrate: false });
+    expect((active.active_attempt as Record<string, unknown>).status).toBe("settled");
+  });
+});
