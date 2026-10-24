@@ -1700,20 +1700,20 @@ function isThisBun(name: string): boolean {
 function isTrustedToolFile(projectDir: string, cwd: string, script: string): boolean {
   if (!script) return false;
   const projectLexical = resolve(projectDir);
-  const absolute = isAbsolute(script) ? resolve(script) : resolve(cwd, script);
+  const written = isAbsolute(script) ? resolve(script) : resolve(cwd, script);
   const trustedToolsDir = resolve(projectLexical, harnessDir(), "tools");
-  if (relative(trustedToolsDir, dirname(absolute)) !== "") return false;
+  // One folder has several spellings (another case on Windows, an 8.3 short
+  // name, a linked parent), so the folder itself decides, and the checks below
+  // read the installed spelling. A distinct case-sensitive folder or a copy of
+  // the tools elsewhere does not inherit the installed tool's authority.
+  if (dirname(written) !== trustedToolsDir && !sameDirectoryIdentity(dirname(written), trustedToolsDir)) return false;
+  const absolute = join(trustedToolsDir, basename(written));
   try {
     const projectReal = realpathSync(projectLexical);
     assertNoSymlinkInChainOrThrow(
       projectReal,
       relative(projectLexical, absolute),
     );
-    // Windows realpath can preserve caller casing. For a case-only spelling
-    // difference, require the same directory identity as well: a distinct
-    // case-sensitive directory must not inherit the installed tool's authority.
-    if (dirname(absolute) !== trustedToolsDir &&
-      !sameDirectoryIdentity(dirname(absolute), trustedToolsDir)) return false;
     return lstatSync(absolute).isFile() && !lstatSync(absolute).isSymbolicLink();
   } catch {
     return false;
@@ -1766,8 +1766,8 @@ function shellInvocationNeedsApproval(
       target.split(/[\\/]+/).some((part) => part === "." || part === "..")) return true;
     const current = resolve(cwd);
     const destination = resolve(target);
-    return relative(current, destination) !== "" ||
-      !sameDirectoryIdentity(current, destination);
+    // The same folder however it is spelled (see isTrustedToolFile).
+    return !sameDirectoryIdentity(current, destination);
   }
   if (dialect.powerShell && READ_ONLY_POWERSHELL_CMDLETS.has(name)) {
     // A path, extension or wrapper would name some other program.
