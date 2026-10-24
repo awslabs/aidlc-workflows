@@ -174,6 +174,18 @@ describe("the agent's words stay where the line is not the person's request", ()
     expect(recorded(proj).description).toBe(RETYPED);
   });
 
+  // A flag they mistyped is not taken by `next`, which hands the agent the
+  // correction; the agent's corrected call carries the request without it, and
+  // that stays the request, not their line with the mistyped flag in it.
+  test("a flag they mistyped, which the agent corrected", () => {
+    says(proj, "/aidlc --plan-aprroval off add the export");
+    const reading = next(proj, ["--plan-aprroval", "off", "add", "the", "export"]);
+    expect(reading.kind, JSON.stringify(reading)).toBe("print");
+    const step = next(proj, ["--plan-approval", "off", "add the export"]);
+    expect(JSON.stringify(step)).not.toContain("--plan-aprroval");
+    expect(step.message).toContain('"add the export"');
+  });
+
   // Over work in hand their line is the request only while their turn is still
   // the record's latest row, as when the agent passes nothing.
   test("over work in hand, a row recorded since their line", () => {

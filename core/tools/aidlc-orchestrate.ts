@@ -9038,8 +9038,10 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 // line that routes on the plan the agent's call routes on; on a line whose first
 // word is also a plan's name, all of them when the agent routes on no plan and
 // the rest after that word when it routes on that plan. Any other reading keeps
-// the agent's words. Only the request's words change: every other flag and the
-// command's arguments stay the agent's.
+// the agent's words, and so does a line with a flag `next` does not take (a
+// mistyped one the agent corrected is not part of the request). Only the
+// request's words change: every other flag and the command's arguments stay
+// the agent's.
 function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   if (engineSessionId === undefined || isReadOnlyEngineProbe()) return null;
   if (flags.request !== undefined) return null;
@@ -9050,7 +9052,7 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
     if (typed === null || typed.length === 0 || lineHandedOut(pd, engineSessionId, message.id)) return null;
     if (loadStateFileIfPresent(pd) !== null && !turnIsLatestRow(pd, message.id)) return null;
     const own = parseNextFlags(splitKiroCommandArgs(typed));
-    if (own.parseError || own.intent === undefined) return null;
+    if (own.parseError || own.intent === undefined || own.untakenFlag !== undefined) return null;
     const plan = flags.scope ?? flags.positionalScope ?? null;
     const words = personsWordsText(message.words);
     const step = own.readingStep;
