@@ -1638,13 +1638,13 @@ reopen, or, with no Unit on record, asks the person which Unit does the step
 again with `/aidlc --stage <stage> --unit <name>`.
 The first block stage still offers `restart-stage`, which is no forward jump,
 with its cost. A refusal that names a Unit, at a block stage in progress or at its
-open gate, offers `request-changes` for that Unit's step only, unless the Unit is the
-one in progress on that step: carrying it out runs `next --stage <stage> --unit <unit>
+open gate, offers `request-changes` for that Unit's step only, unless that Unit's step
+on the stage is still open (in progress, set aside or paused): carrying it out runs `next --stage <stage> --unit <unit>
 --change`, the reopen with the person's words as the change, the same step the
 recorded pick (`answer --checkpoint guard-recovery`) names, and every other Unit
 keeps its finished work (`requestChangesUnit`). The stage-wide resets offered in
-other states (`request-changes` for a refusal that names no Unit or for the Unit on
-the step, `redo-jump`, `restore-or-jump`) say in their action that
+other states (`request-changes` for a refusal that names no Unit or for a Unit whose
+step is still open, `redo-jump`, `restore-or-jump`) say in their action that
 they throw away every Unit's finished work and that each Unit then redoes it and
 needs its approvals again. A `skipped` stage, which the walk never routes,
 stage-major, and team walks keep their remedies.

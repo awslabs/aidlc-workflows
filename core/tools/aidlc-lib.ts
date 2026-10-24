@@ -33401,17 +33401,24 @@ export function requestChangesReportArgs(
 // The Unit whose step a Request Changes sends back on its own. In a solo walk
 // one Unit at a time, a refusal that names a Unit at a block stage is about
 // that Unit's step: its change goes through the Unit reopen, and every other
-// Unit keeps its finished work. The Unit in progress on this step is not sent
-// back (the reopen would route the step it is already on, and the refusal would
-// come again); it keeps the step's own ways on, as does a refusal that names
-// no Unit.
+// Unit keeps its finished work. A Unit with its step on this stage still open
+// is not sent back: in progress, the reopen would route the step it is already
+// on, and set aside or paused, it would be picked up where it stopped, so the
+// refusal would come again. It keeps the step's own ways on, as does a refusal
+// that names no Unit. The state names the Unit in progress; the step ledger
+// (unitOpenCheckpoints) also names one set aside or paused.
 function requestChangesUnit(
-  input: Pick<GuardRefusalInput, "stateContent" | "stage" | "unit" | "teamGate">,
+  input: Pick<GuardRefusalInput, "stateContent" | "stage" | "unit" | "teamGate" | "projectDir">,
 ): string | null {
   if (!input.unit) return null;
   const walk = soloUnitMajorRefusal(input);
   if (walk === null || walk.unit !== input.unit) return null;
-  return unitStepInProgress(input) === null ? input.unit : null;
+  if (unitStepInProgress(input) !== null) return null;
+  if (input.projectDir !== undefined &&
+    unitOpenCheckpoints(input.projectDir, input.stage).some((open) => open.unit === input.unit)) {
+    return null;
+  }
+  return input.unit;
 }
 
 // The step that sends back one Unit's step as the person's change, with their
@@ -33434,7 +33441,7 @@ export function requestChangesReportCommand(projectDir: string, stage: string, u
   } catch {
     teamGate = undefined;
   }
-  const own = stateContent === null ? null : requestChangesUnit({ stateContent, stage, unit, teamGate });
+  const own = stateContent === null ? null : requestChangesUnit({ stateContent, stage, unit, teamGate, projectDir });
   if (own !== null) return unitChangeCommand(stage, own);
   return renderEngineInvocation(
     { route: "orchestrate", args: requestChangesReportArgs(stage, unit, teamGate) },

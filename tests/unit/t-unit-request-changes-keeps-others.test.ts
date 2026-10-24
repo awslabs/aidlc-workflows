@@ -407,6 +407,26 @@ describe("what keeps its remedies", () => {
     expectStageWide(requestChanges(ask.remedies), true);
   });
 
+  test("a Unit set aside part way through its step keeps today's Request Changes", () => {
+    // alpha was reviewed, not finished, then set aside for beta (as reopening
+    // beta does): its open step is picked up, not reopened, so Request Changes
+    // stays the stage-wide one.
+    const p = fixture();
+    const started = tool(p, "state", ["unit", "start", "--stage", "functional-design", "--unit", "alpha"]);
+    expect(started.status, started.out).toBe(0);
+    cover(p, "alpha", ["functional-design"], false);
+    const paused = tool(p, "state", [
+      "unit", "pause", "--stage", "functional-design", "--unit", "alpha",
+      "--reason", "the person reopened beta", "--next-action", "Continue Functional Design for unit alpha.",
+      "--set-aside-for", "beta",
+    ]);
+    expect(paused.status, paused.out).toBe(0);
+    const ask = refusedAsk(p);
+    const remedy = requestChanges(ask.remedies);
+    expect(String(remedy.action)).not.toContain("--change");
+    expectStageWide(remedy, true);
+  });
+
   test("a stage-by-stage walk keeps today's Request Changes", () => {
     const p = fixture({ iteration: "stage-major" });
     cover(p, "alpha", ["functional-design"]);
