@@ -19,6 +19,7 @@ import {
   delegatedWorktreeIntent,
   decideFence,
   aidlcOwnedSourceKey,
+  isLinkTargetListingKey,
   attemptEventDefinitelyBefore,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
@@ -4904,10 +4905,12 @@ function approvedWorktreeSource(
     throw new Error("Parent source has changed since Plan Approval or cannot be bound. Re-present and approve the plan against the current parent source.");
   }
   // AI-DLC's own files are no Unit's source: a worktree need not reproduce
-  // them, so an update the person took need not be committed first.
+  // them, so an update the person took need not be committed first. Nor is
+  // what a link leads to outside the project, or to nothing: no commit holds
+  // it, and the link itself is still compared.
   const owned = aidlcOwnedSourceKey(parent);
   const theirs = (listing: ReadonlyMap<string, string>): string => serializeSourceListing(
-    new Map([...listing].filter(([key]) => !owned(`${repo.repo ?? ""}${key}`))),
+    new Map([...listing].filter(([key]) => !owned(`${repo.repo ?? ""}${key}`) && !isLinkTargetListingKey(listing, key))),
   );
   const prefix = `${repo.repo ?? ""}\0`;
   const expected = new Map([...parentSource.listing]
@@ -4974,7 +4977,9 @@ function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: str
     }
     const childHead = worktreeApprovalGit(provenance.child, ["rev-parse", "HEAD"]);
     const base = gitCommitSourceListing(provenance.child, childHead, provenance.repo.repo === null);
-    if (!base || serializeSourceListing(base) !== serializeSourceListing(childSource.listing)) {
+    // The commit holds a link, never what it leads to outside the worktree.
+    const live = new Map([...childSource.listing].filter(([key]) => !isLinkTargetListingKey(childSource.listing, key)));
+    if (!base || serializeSourceListing(base) !== serializeSourceListing(live)) {
       throw new Error("Preserved worktree source differs from the approved parent baseline and contains dirty or untracked source. Nothing was changed. Preserve that work, reconcile/review it on the parent, and obtain fresh Plan Approval before retrying.");
     }
     const parentHead = worktreeApprovalGit(provenance.repo.cwd, ["rev-parse", "HEAD"]);

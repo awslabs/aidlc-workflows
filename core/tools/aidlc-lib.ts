@@ -23978,6 +23978,19 @@ function linkTargetListingRel(rootReal: string, target: string, linkListingRel: 
     : `${linkListingRel}@target`;
 }
 
+// Whether a listing key names what a link leads to outside the root, or a
+// dangling link's missing target: `<link>@target` or a key below it, with
+// `<link>` a link the same listing holds. A commit holds the link and never
+// what it leads to, so a comparison with a commit's listing leaves these keys
+// out and still compares the link.
+export function isLinkTargetListingKey(listing: ReadonlyMap<string, string>, key: string): boolean {
+  for (let at = key.indexOf("@target"); at !== -1; at = key.indexOf("@target", at + 1)) {
+    const end = at + "@target".length;
+    if ((end === key.length || key[end] === "/") && listing.get(key.slice(0, at))?.startsWith("120000 ")) return true;
+  }
+  return false;
+}
+
 interface SourceSymlinkResolution {
   externalHop: boolean;
   target: string | null;
