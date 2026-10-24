@@ -1019,6 +1019,9 @@ let routingAnsweredAsActiveWork = false;
 // The words that answer was about, and the message they came in, for the
 // question the work in progress has open.
 let routingAnswered: { text: string; messageId?: string } | null = null;
+// The person's reply a reshape answer to the routing question carried: the
+// composer runs as a subagent without their chat, so its task names it.
+let routingReshapeReply: string | null = null;
 
 function isKeptRequest(args: readonly string[]): boolean {
   const flags = parseNextFlags([...args]);
@@ -4142,8 +4145,9 @@ function openRoutingQuestion(projectDir: string): StoredQuestion | null {
 // person's chat and reads whether they answer it. The step names each of the
 // question's answers with its own command, as the question gave them, so the
 // agent runs the one the person chose; nothing runs from the words themselves.
-// Null when the settings the question kept no longer parse: the words are then
-// asked about as usual.
+// A reshape answer carries their words too: the composer it reaches works
+// without their chat. Null when the settings the question kept no longer parse:
+// the words are then asked about as usual.
 function routingQuestionReplyDirective(question: StoredQuestion, words: string): PrintDirective | null {
   let carried = carriedFromQuestion(question, parseNextFlags([]));
   if (carried !== null && routingAskedAboutScope(question)) {
@@ -4159,17 +4163,19 @@ function routingQuestionReplyDirective(question: StoredQuestion, words: string):
     carried,
     pick ? question.askedAbout?.targets.map(({ intent }) => intent) : undefined,
   );
+  const named = (route: NewWorkRoute, command: string): string =>
+    route === "reshape" ? `${command} -- ${quoteCommandArgument(words)}` : command;
   const answers = routingQuestionOptions(question).map((option) => {
     const command = commands.route[option.route];
-    if (command !== undefined) return `"${option.label}": \`${command}\``;
+    if (command !== undefined) return `"${option.label}": \`${named(option.route, command)}\``;
     const each = option.route === "continue" ? commands.select : commands.reshape;
-    return `"${option.label}": the command for the work they named, one of ${each.map(({ command: c }) => `\`${c}\``).join(", ")}`;
+    return `"${option.label}": the command for the work they named, one of ${each.map(({ command: c }) => `\`${named(option.route, c)}\``).join(", ")}`;
   });
   return printDirective(
     "The person has not answered the question about where their words belong, so `next` cannot tell their reply " +
     "from a new request and took nothing from the line. If their words answer that question, run the command for " +
     `their choice: ${answers.join("; ")}. If they are asking for something else, run ` +
-    `\`${tool} -- ${quoteCommandArgument(words)}\`, which keeps every word of theirs. ` +
+    `\`${tool} -- ${quoteCommandArgument(words)}\`. ` +
     "If you cannot tell, ask them once in plain words.",
   );
 }
@@ -6411,6 +6417,12 @@ function subagentCallShape(agent: string): string | null {
   return null;
 }
 
+// The person's reply a reshape answer carried, for a print that hands that
+// answer on to `next compose`.
+function reshapeReplyArgument(): string {
+  return routingReshapeReply === null ? "" : ` -- ${quoteCommandArgument(routingReshapeReply)}`;
+}
+
 function composeDispatchDirective(
   flags: ParsedFlags,
   inFlight: boolean,
@@ -6418,10 +6430,16 @@ function composeDispatchDirective(
   const hd = harnessDir();
   const parts: string[] = [];
   const inFlightCallShape = subagentCallShape("aidlc-composer-agent");
+  // Their reply read as the request is: a pasted document goes to the composer as reference.
+  const reply = routingReshapeReply === null ? null : authoritativeRequest(routingReshapeReply);
   if (inFlight) {
     parts.push(
       `Dispatch the composer agent (${hd}/agents/aidlc-composer-agent.md) as a subagent to propose re-shaping the RUNNING workflow's pending stages` +
         (flags.intent ? ` for: "${authoritativeRequest(flags.intent)}".${pastedDocumentNote(flags.intent)}` : "."),
+      // The sentence closed only where their reply does not close itself.
+      ...(routingReshapeReply === null || reply === null
+        ? []
+        : [`Asked where that request belongs, the person answered: "${reply}"${/[.!?]$/.test(reply) ? "" : "."}${pastedDocumentNote(routingReshapeReply)}`]),
       ...(inFlightCallShape === null ? [] : [inFlightCallShape]),
       "This returned directive has selected the composer path. Stages the person names go through next --skip or --add only BEFORE calling next compose; now dispatch the composer even when the request names exact stage flips. Dispatch the composer subagent with this message as its task and use its validated proposal at the approval gate. Do not substitute your own state read and proposal for that dispatch.",
       "The composer reads the live state file's Stage Progress, re-estimates the entropy components from what completed stages resolved, validates the flipped grid with --strict, and proposes SKIP/un-SKIP flips for PENDING, ahead-of-cursor stages only (completed [x], in-progress [-], and skipped [S] stages are frozen; an ADD whose required producer is skipped or behind the cursor is rejected, not proposed).",
@@ -9443,6 +9461,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
     question = found;
+    if (found.origin === "routing" && flags.compose && flags.markedWords && flags.intent?.trim()) {
+      routingReshapeReply = flags.intent;
+    }
     flags.intent = found.text;
     if (!flags.scope && !flags.positionalScope && !flags.compose && !flags.continue) {
       flags.scope = found.proposedScope || undefined;
@@ -9930,7 +9951,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         : `\`${aidlcDispatcherInvocation("space switch")} ${shellArg(question.askedAbout.space)}\`, then `;
       emit(printDirective(
         `To ${flags.continue ? "continue" : "reshape"} ${flags.record}, run ${spaceStep}\`${aidlcDispatcherInvocation("intent switch")} ${shellArg(flags.record)}\`, ` +
-          `then run \`${aidlcToolInvocation("orchestrate")} next ${route} --request ${question.id}${carriedRoutingFlags(flags).existingWork}\` and follow what it returns.`,
+          `then run \`${aidlcToolInvocation("orchestrate")} next ${route} --request ${question.id}${carriedRoutingFlags(flags).existingWork}` +
+          `${flags.compose ? reshapeReplyArgument() : ""}\` and follow what it returns.`,
       ));
       return;
     }
@@ -10332,7 +10354,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(printDirective(
         `Run \`${configSetCommand(reshapeSettings, unnamed)}\` to apply the settings typed with this request to the work being reshaped` +
           `${unnamed ? messageFill(pd) : ""}, ` +
-          `then run \`${aidlcToolInvocation("orchestrate")} next compose --request ${question.id}\` and follow what it returns.`,
+          `then run \`${aidlcToolInvocation("orchestrate")} next compose --request ${question.id}${reshapeReplyArgument()}\` and follow what it returns.`,
       ));
       return;
     }
@@ -19323,6 +19345,7 @@ export function main(argv: string[]): void {
     restartUnmarkedNotice = false;
     routingAnsweredAsActiveWork = false;
     routingAnswered = null;
+    routingReshapeReply = null;
     engineProjectDir = undefined;
     resolvedDirectiveLimit = null;
     engineSessionId = undefined;

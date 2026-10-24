@@ -1221,7 +1221,8 @@ const NEXT_OWN_COMMAND_WORDS: ReadonlySet<string> = new Set([
 
 /**
  * Where a request of the person's own begins on a `next` line: at its first
- * bare word. This engine's own launcher options ride ahead of that word, which
+ * bare word (past a leading `compose`, this engine's own verb, as readNextTokens
+ * reads it). This engine's own launcher options ride ahead of that word, which
  * is where every caller puts them, so among their words the same token is a
  * word of their request and nothing of theirs is read as a folder to work in or
  * an attempt to claim. The `--` mark already separates their words itself. The
@@ -1232,6 +1233,7 @@ export function requestWordsBeginAt(rawArgs: readonly string[]): number {
   if (rawArgs[0] !== "next") return Number.POSITIVE_INFINITY;
   for (let i = 1; i < rawArgs.length; i++) {
     const token = rawArgs[i];
+    if (i === 1 && token === "compose") continue;
     if (token === "--") return Number.POSITIVE_INFINITY;
     if (token.startsWith("-")) {
       // A token after a flag is that flag's value, never a word of theirs.

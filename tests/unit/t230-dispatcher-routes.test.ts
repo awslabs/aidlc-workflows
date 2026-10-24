@@ -1728,6 +1728,23 @@ describe("t230 dispatcher global flag translation", () => {
     expect(version.json).toBe(true);
   });
 
+  // A leading `compose` after `next` is the engine's own verb, as the
+  // orchestrator's launcher reads it, so both take the same folder.
+  test("a folder after `next compose` is ours in front of their words and theirs among them", () => {
+    expect(resolveAction(["engine", "orchestrate", "next", "compose", "--project-dir", "/tmp/example", "--", "their words"]))
+      .toEqual({
+        type: "delegate",
+        tool: "aidlc-orchestrate.ts",
+        args: ["next", "compose", "--project-dir", "/tmp/example", "--", "their words"],
+      });
+    const words = ["next", "compose", "fix", "the", "--project-dir", "handling"];
+    expect(resolveAction(["engine", "orchestrate", ...words])).toEqual({
+      type: "delegate",
+      tool: "aidlc-orchestrate.ts",
+      args: words,
+    });
+  });
+
   test("extracts --project-dir before noun/verb parsing and restores it for delegation", () => {
     expect(resolveAction(["engine", "space", "--project-dir", "/tmp/example", "create", "teamB"])).toEqual({
       type: "delegate",

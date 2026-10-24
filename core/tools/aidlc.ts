@@ -2185,6 +2185,9 @@ function theirWordsBegin(argv: readonly string[], route: number): number | undef
       if (argv[i + 1] !== undefined && !argv[i + 1].startsWith("-")) i++;
       continue;
     }
+    // A leading `compose` after the verb is the engine's own, as the
+    // orchestrator's launcher reads it (requestWordsBeginAt).
+    if (named === route + 1 && token === "compose") continue;
     named++;
     if (named > route + 1) return i;
   }
