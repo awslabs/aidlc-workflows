@@ -368,6 +368,15 @@ describe("t139 native shell fidelity", () => {
     const enabled = `echo "$(cat <<'EOF'\n)\nEOF\n${FLAG}=1 bun run.ts\n)"`;
     expect(guardBypassCommands(command(enabled))).toEqual([enabled]);
   });
+
+  test("a Windows path quoted the cmd way, ending in a backslash, is read and still checked", () => {
+    // Observed from Claude Code on Windows: POSIX reads the final \" as an escaped quote.
+    const path = `"C:\\aidlc-live\\home\\temp\\aidlc-e2e-fixtures-ELkYOw\\aidlc-tui-2GewWz\\aidlc\\spaces\\default\\codekb\\aidlc-tui-2GewWz\\"`;
+    expect(guardBypassCommands(command(`ls -la ${path}`))).toEqual([]);
+    const enabled = [`${FLAG}=1 ls -la ${path}`, `ls -la ${path} && ${FLAG}=1 bun run.ts`];
+    for (const text of enabled) expect(guardBypassCommands(command(text))).toEqual([text]);
+    expect(() => guardBypassCommands(command(`ls "unterminated`))).toThrow("Unterminated shell quote");
+  });
 });
 
 const completed = ["workspace-scaffold", "workspace-detection", "state-init", "reverse-engineering", "requirements-analysis"];

@@ -158,13 +158,25 @@ interface Word {
 
 /** Lex shell words, keeping quoted data and here-document bodies out of commands. */
 function commandWords(source: string): Word[][] {
-  return readCommandWords(source, 0, false).commands;
+  try {
+    return readCommandWords(source, 0, false).commands;
+  } catch (error) {
+    // Claude Code on Windows can quote a path the cmd and PowerShell way, where a
+    // backslash inside double quotes is plain ("C:\dir\" closes there). Read text
+    // POSIX cannot close that way too; text neither reading closes still fails.
+    try {
+      return readCommandWords(source, 0, false, true).commands;
+    } catch {
+      throw error;
+    }
+  }
 }
 
 function readCommandWords(
   source: string,
   start: number,
   parenthesized: boolean,
+  windowsQuotes = false,
 ): { commands: Word[][]; end: number } {
   const commands: Word[][] = [];
   let words: Word[] = [];
@@ -178,7 +190,7 @@ function readCommandWords(
   const substitution = (opening: number): number => {
     // Use the same lexer inside $(): quotes and heredoc bodies can contain
     // literal parentheses, so counting parentheses alone is insufficient.
-    const nested = readCommandWords(source, opening + 2, true);
+    const nested = readCommandWords(source, opening + 2, true, windowsQuotes);
     commands.push(...nested.commands);
     return nested.end;
   };
@@ -208,7 +220,7 @@ function readCommandWords(
     while (index < source.length) {
       const char = source[index];
       if (!quote && /[ \t\r\n;|&()<>]/.test(char)) break;
-      if (char === "\\" && quote !== "'") {
+      if (char === "\\" && quote !== "'" && !(windowsQuotes && quote === '"')) {
         const next = source[index + 1] ?? "";
         if (quote === '"' && !'$`"\\\n'.includes(next)) {
           value += char;
@@ -287,7 +299,7 @@ function readCommandWords(
     }
     if (char === "(") {
       finish();
-      const nested = readCommandWords(source, index + 1, true);
+      const nested = readCommandWords(source, index + 1, true, windowsQuotes);
       commands.push(...nested.commands);
       index = nested.end;
       continue;
