@@ -2897,6 +2897,58 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // A drive letter substituted for the project folder (`subst`, or a mapped
+  // drive) is the project spelled from a drive root, with no folder above it.
+  test.skipIf(process.platform !== "win32")(
+    "a write through a drive letter substituted for the project folder waits for the plan as one through its own spelling does",
+    () => {
+      const proj = realpathSync.native(scratchProject());
+      // A letter nothing uses, substituted for this test's own folder and
+      // removed in finally; the mapping lives only in this logon session.
+      const letter = "ZYXWVUTSRQPONMLKJ".split("").find((l) => !existsSync(`${l}:\\`));
+      expect(letter, "no free drive letter").toBeDefined();
+      const root = `${letter}:\\`;
+      const made = spawnSync("subst", [`${letter}:`, proj], {
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      try {
+        expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+        seedState(proj);
+        seedActiveDirective(proj, "code-generation");
+        seedUnit(proj, null, { plan: true, answer: null });
+        const plan = join(RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
+        const expected: Record<string, number> = {};
+        const actual: Record<string, number> = {};
+        const stderr: Record<string, string> = {};
+        const check = (project: string, cwd: string, row: string, payload: Record<string, unknown>, code: number) => {
+          const key = `project ${project === root ? "drive" : "folder"}, cwd ${cwd === root ? "drive" : "folder"}: ${row}`;
+          const result = runHook(proj, { ...payload, cwd }, { CLAUDE_PROJECT_DIR: project });
+          expected[key] = code;
+          actual[key] = result.code;
+          stderr[key] = result.stderr;
+        };
+        check(proj, root, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+        check(proj, root, "Write src/inline.ts", WRITE(join(root, "src", "inline.ts")), 2);
+        check(proj, root, "Write the plan", WRITE(join(root, plan)), 0);
+        check(proj, root, "printf plan > the plan", BASH(`printf plan > ${toPosix(plan)}`), 0);
+        check(proj, root, "Write NOTES.md", WRITE(join(root, "NOTES.md")), 0);
+        check(proj, root, "Write outside the project", WRITE(join(dirname(proj), "t265-elsewhere", "notes.md")), 0);
+        check(root, proj, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+        check(root, proj, "Write the plan", WRITE(join(proj, plan)), 0);
+        check(root, proj, "Write NOTES.md", WRITE(join(proj, "NOTES.md")), 0);
+        check(proj, proj, "Write src/inline.ts", WRITE(join(proj, "src", "inline.ts")), 2);
+        expect(actual).toEqual(expected);
+        // The code waits with the words its own spelling gets.
+        expect(stderr["project folder, cwd drive: Write src/inline.ts"])
+          .toBe(stderr["project folder, cwd folder: Write src/inline.ts"]);
+      } finally {
+        spawnSync("subst", [`${letter}:`, "/d"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+        rmSync(proj, { recursive: true, force: true });
+      }
+    },
+  );
+
   test.skipIf(process.platform !== "win32")(
     "Windows cwd casing preserves recovery without authorizing workspace changes",
     () => {
