@@ -644,7 +644,7 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(suffixOf(stateOf(proj), "deployment-pipeline")).toBe("EXECUTE");
     const d = nextDirective(proj, ["--skip", "deployment-pipeline"]);
     expect(d.kind).toBe("print");
-    expect(d.message).toContain('"Skipped Deployment Pipeline. You can undo that any time."');
+    expect(d.message).toContain('"Skipped Deployment Pipeline. You can undo that until the work moves past it."');
     const skip = runTool(proj, "aidlc.ts", engine(/Run `([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? ""));
     expect(skip.status, skip.out).toBe(0);
     expect(suffixOf(stateOf(proj), "deployment-pipeline")).toBe("SKIP");
