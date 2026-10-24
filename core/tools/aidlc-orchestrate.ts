@@ -11060,7 +11060,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   if (reverseEngineeringOwedBehindCursor(stateContent, recordDir(pd))) {
     emit(printDirective(
       `Reverse Engineering is on the plan and has not run. Run \`${aidlcToolInvocation("jump")} execute --target reverse-engineering --direction redo --scope ${scopeArg(scope)}\` ` +
-        `to run it now (finished stages stay finished, and the workflow returns to ${currentSlug} after it), then re-run \`next\` to continue.`,
+        `to run it now (finished stages stay finished, and the workflow returns to ${currentSlug} after it). ` +
+        "When its output carries `notice`, tell the person that line once, as written. Then re-run `next` to continue.",
     ));
     return;
   }

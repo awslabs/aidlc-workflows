@@ -201,6 +201,13 @@ export function backwardJumpNotice(
     `You can return to ${stageLabel(from, from.slug) ?? "where you were"} any time.`;
 }
 
+// The redo `next` names for Reverse Engineering owed behind the stage the
+// person is on (they said this is existing code) says what comes next. Said
+// here, where it starts, so a skip asked for before it never hears it.
+export function reverseEngineeringRedoNotice(from: { slug: string; name: string; plugin?: string }): string {
+  return `Next I'll document the code, then we're back at ${stageLabel(from, from.slug) ?? "where we were"}.`;
+}
+
 if (import.meta.main) {
   main(process.argv.slice(2));
 }
@@ -774,22 +781,27 @@ function handleExecute(args: string[]): void {
 
   writeStateFile(pd, content);
 
-  // The jump is done, so the way back can never fail it. When no chat can
-  // hold the line for the next step, it rides the tool's output instead.
+  // The jump is done, so its line (the way back, or what comes after an owed
+  // Reverse Engineering) can never fail it. When no chat can hold the line for
+  // the next step, it rides the tool's output instead.
   const from = graph.find((node) => node.slug === cameFrom);
-  let backNotice: string | undefined;
-  if (direction === "backward" && from) {
-    backNotice = backwardJumpNotice(targetStage, from);
+  let keptNotice: string | undefined;
+  if (direction === "redo" && targetSlug === "reverse-engineering" && from && from.slug !== targetSlug) {
+    keptNotice = reverseEngineeringRedoNotice(from);
+  } else if (direction === "backward" && from) {
+    keptNotice = backwardJumpNotice(targetStage, from);
+  }
+  if (keptNotice !== undefined) {
     try {
       const session = resolveWorkflowSelection(pd).sessionId;
-      if (session && addPendingPersonLines(pd, session, [backNotice])) backNotice = undefined;
+      if (session && addPendingPersonLines(pd, session, [keptNotice])) keptNotice = undefined;
     } catch {
       // No chat to hold it: the output carries it.
     }
   }
   const notice = direction === "forward"
     ? forwardJumpNotice(targetStage, graph.filter((node) => stagesSkipped.includes(node.slug)), cameFrom)
-    : backNotice;
+    : keptNotice;
 
   console.log(
     JSON.stringify({

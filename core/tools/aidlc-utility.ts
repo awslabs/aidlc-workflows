@@ -11528,7 +11528,7 @@ function holdsAnyFile(dir: string): boolean {
 
 // Reverse Engineering is on the plan and has not run, the workflow is past it,
 // and Construction has not started: it runs now and the workflow then returns
-// to the stage the person was on (`next` names that move; reclassify says so).
+// to the stage the person was on (`next` names that move; the jump says so).
 export function reverseEngineeringOwedBehindCursor(content: string, workRecordDir?: string | null): boolean {
   const graph = loadStageGraph();
   const reIndex = graph.findIndex((stage) => stage.slug === "reverse-engineering");
@@ -11779,7 +11779,6 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
       lines.push("This piece of work is finished, so its plan stays as it is; I'll check the folder again for the next piece of work.");
     } else if (declared === "Brownfield") {
       if (reverseEngineeringOwedBehindCursor(content, recordDir(projectDir, intent, space))) {
-        lines.push(`Next I'll document the code, then we're back at ${stageNames([getField(content, "Current Stage") ?? ""])}.`);
         const doneWithoutCode = parseCheckboxes(content)
           .filter((c) => c.state === "completed")
           .map((c) => findStageBySlug(c.slug))

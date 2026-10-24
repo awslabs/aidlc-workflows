@@ -925,7 +925,7 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     expect(r.status).toBe(0);
     expect(reply(r)).toBe(
       "Project type is now existing code, as you said (TypeScript; React; npm (package.json) in ui-repo). " +
-        "Next I'll document the code, then we're back at Practices Discovery. To undo, say it's a new project.",
+        "To undo, say it's a new project.",
     );
 
     const s = state(proj);
@@ -945,11 +945,15 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     expect(audit).toContain("**Reverse Engineering**: back on the plan");
     expect(reverseEngineeringOwedBehindCursor(s)).toBe(true);
 
-    // next names the redo jump; finished stages are left alone.
+    // next names the redo jump; finished stages are left alone. The jump says
+    // what comes next, and the step has the agent say it.
     const move = next(proj);
     expect(move.kind).toBe("print");
     expect(String(move.message)).toContain("execute --target reverse-engineering --direction redo --scope classic");
-    expect(run(JUMP, proj, ["execute", "--target", "reverse-engineering", "--direction", "redo", "--scope", "classic"]).status).toBe(0);
+    expect(String(move.message)).toContain("When its output carries `notice`, tell the person that line once, as written.");
+    const redo = run(JUMP, proj, ["execute", "--target", "reverse-engineering", "--direction", "redo", "--scope", "classic"]);
+    expect(redo.status, said(redo)).toBe(0);
+    expect(JSON.parse(redo.stdout.trim()).notice).toBe("Next I'll document the code, then we're back at Practices Discovery.");
     const jumped = state(proj);
     expect(field(jumped, "Current Stage")).toBe("reverse-engineering");
     expect(field(jumped, "Next Stage")).toBe("practices-discovery");
@@ -972,7 +976,9 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     addRepo(proj);
     const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
     expect(r.status).toBe(0);
-    expect(reply(r)).toContain("then we're back at Requirements Analysis.");
+    expect(reply(r)).not.toContain("document the code");
+    const redo = run(JUMP, proj, ["execute", "--target", "reverse-engineering", "--direction", "redo", "--scope", "classic"]);
+    expect(JSON.parse(redo.stdout.trim()).notice).toBe("Next I'll document the code, then we're back at Requirements Analysis.");
     expect(reply(r)).toContain("Practices Discovery ran before the code was here. I'm carrying on with it as it is. Do you want me to redo Practices Discovery with the code?");
   });
 
@@ -1017,16 +1023,21 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     expect(String(next(proj).question)).toContain("then we continue at Practices Discovery");
     const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
     expect(r.status).toBe(0);
-    expect(reply(r)).toContain("Next I'll document the code, then we're back at Practices Discovery.");
+    expect(reply(r)).not.toContain("document the code");
     expect(reverseEngineeringOwedBehindCursor(state(proj))).toBe(true);
     expect(String(next(proj).message)).toContain("execute --target reverse-engineering --direction redo --scope classic");
+    const redo = run(JUMP, proj, ["execute", "--target", "reverse-engineering", "--direction", "redo", "--scope", "classic"]);
+    expect(JSON.parse(redo.stdout.trim()).notice).toBe("Next I'll document the code, then we're back at Practices Discovery.");
   });
 
   test("skipped once it is owed, it comes off the plan, next goes on, and the undo brings it back", () => {
     const proj = project();
     expect(create(proj, "classic").status).toBe(0);
     addRepo(proj);
-    expect(run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]).status).toBe(0);
+    const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
+    expect(r.status).toBe(0);
+    // Nothing said yet promises the step they are about to skip.
+    expect(reply(r)).not.toContain("document the code");
     expect(reverseEngineeringOwedBehindCursor(state(proj))).toBe(true);
     // "it's existing code, yes, but skip the reverse engineering": next names the plan change.
     const step = String(next(proj, ["--skip", "reverse-engineering"]).message);
@@ -1283,7 +1294,6 @@ describe("t352 what the person hears after saying it is existing code", () => {
     expect(validateDirective(directive).valid).toBe(true);
     expect(reply(r)).toBe(
       "Project type is now existing code, as you said (TypeScript; React; npm (package.json) in ui-repo). " +
-        "Next I'll document the code, then we're back at Requirements Analysis. " +
         "Practices Discovery ran before the code was here. I'm carrying on with it as it is. Do you want me to redo Practices Discovery with the code? " +
         "To undo, say it's a new project.",
     );
@@ -1428,19 +1438,49 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     // The reply named Practices Discovery, so its out-of-date warning is not
     // said again in this chat.
     expect(jump.stage_validity).toBeUndefined();
-    expect(spawnSync(BUN, [JUMP, "execute", "--target", "reverse-engineering", "--direction", "redo", "--scope", "classic", "--project-dir", proj], {
+    // The jump that starts Reverse Engineering says what comes next, kept for
+    // the chat like the reply.
+    const redo = spawnSync(BUN, [JUMP, "execute", "--target", "reverse-engineering", "--direction", "redo", "--scope", "classic", "--project-dir", proj], {
       encoding: "utf-8", env: chat, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-    }).status).toBe(0);
+    });
+    expect(redo.status, redo.stderr).toBe(0);
+    expect(JSON.parse(redo.stdout.trim()).notice).toBeUndefined();
     const reverseEngineering = nextIn(proj);
     expect(reverseEngineering.kind).toBe("run-stage");
     expect(String(reverseEngineering.narration)).toStartWith(
       "Project type is now existing code, as you said (TypeScript; React; npm (package.json) in ui-repo). " +
-        "Next I'll document the code, then we're back at Requirements Analysis. " +
         "Practices Discovery ran before the code was here. I'm carrying on with it as it is. Do you want me to redo Practices Discovery with the code? " +
-        "To undo, say it's a new project.",
+        "To undo, say it's a new project. " +
+        "Next I'll document the code, then we're back at Requirements Analysis.",
     );
+    expect(String(reverseEngineering.narration).split("document the code")).toHaveLength(2);
     expect(reverseEngineering.stage_validity).toBeUndefined();
-    expect(String(nextIn(proj).narration ?? "")).not.toContain("Project type is now");
+    const again = String(nextIn(proj).narration ?? "");
+    expect(again).not.toContain("Project type is now");
+    expect(again).not.toContain("document the code");
+  });
+
+  // The live Kiro CLI run of "it's existing code, yes, but skip the reverse
+  // engineering": the agent asked `next` first (the redo step), then skipped
+  // it, and the next stage promised the step they had just skipped.
+  test("said to be existing code but skipped, the next stage never promises documenting the code", () => {
+    const proj = project();
+    expect(run(UTIL, proj, ["intent-create", "--scope", "classic", "--arguments", "show the asset description on hover"], chat).status).toBe(0);
+    addRepo(proj);
+    expect(run(UTIL, proj, ["reclassify", "--project-type", "brownfield"], chat).status).toBe(0);
+    // The chat's prompt hook has run on this work.
+    mkdirSync(hooksHealthDir(proj), { recursive: true });
+    writeFileSync(join(hooksHealthDir(proj), "record-human-turn.last"), new Date().toISOString());
+    expect(String(nextIn(proj).message)).toContain("execute --target reverse-engineering --direction redo");
+    const step = nextIn(proj, ["--skip", "reverse-engineering"]);
+    expect(String(step.message)).toContain("recompose --skip reverse-engineering");
+    const skip = run(UTIL, proj, ["recompose", "--skip", "reverse-engineering", "--reason", "the person asked to skip it"], chat);
+    expect(skip.status, said(skip)).toBe(0);
+    const go = nextIn(proj);
+    expect(go.kind).toBe("run-stage");
+    expect(go.stage).toBe("practices-discovery");
+    expect(String(go.narration)).toStartWith("Project type is now existing code, as you said");
+    expect(String(go.narration)).not.toContain("document the code");
   });
 
   // Live runs on Claude Code and Kiro left the protocol's pick-up line unsaid:
