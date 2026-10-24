@@ -214,6 +214,7 @@ import {
   setPhaseProgress,
   singleStageAttemptIsOpen,
   stagesInScope,
+  stateFilePath,
   swarmConvergedUnits,
   teamUnitGateStatus,
   unclaimableIgnoredSourceKeys,
@@ -971,7 +972,11 @@ export function main(argv: string[]): void {
       "park",
       "unpark",
     ]);
-    if (subcommand && archivedProtectedCommands.has(subcommand)) {
+    // An isolated run's reuse with no work selected has no workflow that
+    // could be archived.
+    const isolatedWithoutWork = subcommand === "reuse-artifact" && args.includes("--single") &&
+      !existsSync(stateFilePath(resolveProjectDir(projectDir)));
+    if (subcommand && archivedProtectedCommands.has(subcommand) && !isolatedWithoutWork) {
       assertWorkflowNotArchived(
         readStateFile(resolveProjectDir(projectDir)),
         `aidlc-state.ts ${subcommand}`,
