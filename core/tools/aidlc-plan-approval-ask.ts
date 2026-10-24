@@ -186,6 +186,8 @@ export interface PlanApprovalAskRecord {
   replies?: PlanApprovalAskReply[];
   /** Where the audit trail stood when the question was shown: an answer needs a reply after it. */
   repliesFrom?: AuditMark;
+  /** Where it stood when this question was shown; their edit of the files moves repliesFrom, not this. */
+  shownFrom?: AuditMark;
   /** A grouped change request that named no Unit, waiting for "which one". */
   pendingChange?: string;
   results?: PlanApprovalAskResult[];
@@ -1109,7 +1111,7 @@ export function publishPlanApprovalAsk(
           mode: "ask",
           bound: true,
           ...shownNow(null, session),
-          repliesFrom: auditMark(projectDir),
+          ...shownFromNow(projectDir),
         };
     writePlanApprovalAsk(projectDir, record);
     directive.plan_approval.targets.forEach((view, index) => {
@@ -1299,13 +1301,20 @@ function currentPlanApprovalAsk(
   return same ? { marker, record } : null;
 }
 
+// A question shown fresh: its answer and what was said since both start here.
+function shownFromNow(projectDir: string): { repliesFrom: AuditMark; shownFrom: AuditMark } {
+  const mark = auditMark(projectDir);
+  return { repliesFrom: mark, shownFrom: mark };
+}
+
 /**
- * Where the record stood when the Plan Approval question was shown (the mark its
- * answer reads, personRepliedAfter), while it is the open step with a plan still
- * unanswered; else null.
+ * Where the record stood when the Plan Approval question was shown, while it is
+ * the open step with a plan still unanswered; else null. A record from before
+ * shownFrom reads the mark its answer reads (repliesFrom, personRepliedAfter).
  */
 export function planQuestionShown(projectDir: string): AuditMark | null {
-  return currentPlanApprovalAsk(projectDir, "some")?.record.repliesFrom ?? null;
+  const record = currentPlanApprovalAsk(projectDir, "some")?.record;
+  return record?.shownFrom ?? record?.repliesFrom ?? null;
 }
 
 /**
@@ -2308,7 +2317,7 @@ export function requestPlanApprovalReviewNow(projectDir: string): string | null 
       asked.targets.some((target) => looked.includes(target.unit)))) {
       const results = (asked.results ?? []).filter((result) => !looked.includes(result.unit));
       const reopened: PlanApprovalAskRecord = {
-        ...asked, askId: randomBytes(16).toString("hex"), repliesFrom: auditMark(projectDir), bound: true,
+        ...asked, askId: randomBytes(16).toString("hex"), ...shownFromNow(projectDir), bound: true,
       };
       delete reopened.replies;
       if (results.length > 0) reopened.results = results; else delete reopened.results;
