@@ -2771,6 +2771,127 @@ describe("t265b hook lifecycle", () => {
     },
   );
 
+  // The Kiro adapters name the project by the guard's own path, the long
+  // spelling, and hand it the host's folder and paths, which can carry 8.3
+  // short names (%TEMP% does for a user name over eight characters). A host
+  // can also name the project short and write by the long path.
+  test.skipIf(process.platform !== "win32")(
+    "a write through a Windows short-name spelling of the project waits for the plan as one through its own spelling does",
+    () => {
+      const proj = realpathSync.native(scratchProject());
+      try {
+        seedState(proj);
+        seedActiveDirective(proj, "code-generation");
+        seedUnit(proj, null, { plan: true, answer: null });
+        // The folder's 8.3 spelling, as t244 asks for it. The path goes in
+        // through the environment: cmd.exe would read the quotes a spawned
+        // argument carries as part of the name.
+        const spelled = spawnSync(
+          "powershell.exe",
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:AIDLC_T265_PROJECT).ShortPath",
+          ],
+          {
+            env: { ...process.env, AIDLC_T265_PROJECT: proj },
+            encoding: "utf-8",
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          },
+        );
+        expect(spelled.status, `${spelled.stdout}${spelled.stderr}`).toBe(0);
+        const short = spelled.stdout.trim();
+        // A volume without 8.3 names cannot show the defect; say so, not pass.
+        expect(short.toLowerCase(), `no 8.3 short name for ${proj}; see fsutil 8dot3name query`)
+          .not.toBe(proj.toLowerCase());
+        expect(short).toContain("~");
+        expect(realpathSync.native(short)).toBe(proj);
+        const plan = join(RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
+        // Every row's exit code beside the one expected, so one run shows them all.
+        const expected: Record<string, number> = {};
+        const actual: Record<string, number> = {};
+        const stderr: Record<string, string> = {};
+        const check = (project: string, cwd: string, row: string, payload: Record<string, unknown>, code: number) => {
+          const key = `project ${project === short ? "short" : "long"}, cwd ${cwd === short ? "short" : "long"}: ${row}`;
+          const result = runHook(proj, { ...payload, cwd }, { CLAUDE_PROJECT_DIR: project });
+          expected[key] = code;
+          actual[key] = result.code;
+          stderr[key] = result.stderr;
+        };
+        check(proj, short, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+        check(proj, short, "Write src/inline.ts", WRITE(join(short, "src", "inline.ts")), 2);
+        check(proj, short, "Write the plan", WRITE(join(short, plan)), 0);
+        check(proj, short, "printf plan > the plan", BASH(`printf plan > ${toPosix(plan)}`), 0);
+        check(proj, short, "Write NOTES.md", WRITE(join(short, "NOTES.md")), 0);
+        check(proj, short, "Write outside the project", WRITE(join(dirname(short), "t265-elsewhere", "notes.md")), 0);
+        check(short, proj, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+        check(short, proj, "Write the plan", WRITE(join(proj, plan)), 0);
+        check(short, proj, "Write NOTES.md", WRITE(join(proj, "NOTES.md")), 0);
+        check(proj, proj, "Write src/inline.ts", WRITE(join(proj, "src", "inline.ts")), 2);
+        expect(actual).toEqual(expected);
+        // The code waits with the words its own spelling gets.
+        expect(stderr["project long, cwd short: Write src/inline.ts"])
+          .toBe(stderr["project long, cwd long: Write src/inline.ts"]);
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // The same folder through a linked parent: a host can hand the guard the
+  // folder the person opened while the guard names the project by its real
+  // path, or the other way round.
+  test("a write through a linked parent of the project waits for the plan as one through its own spelling does", () => {
+    const outer = mkdtempSync(join(tmpdir(), "t265-outer-"));
+    const links = mkdtempSync(join(tmpdir(), "t265-links-"));
+    const proj = join(outer, "proj");
+    try {
+      renameSync(scratchProject(), proj);
+      const dirLink = process.platform === "win32" ? "junction" : "dir";
+      // The link leads only to this test's own folder.
+      symlinkSync(outer, join(links, "outer"), dirLink);
+      const linked = join(links, "outer", "proj");
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation");
+      seedUnit(proj, null, { plan: true, answer: null });
+      const record = join(RECORD_REL, "construction", "code-generation");
+      const plan = join(record, "code-generation-plan.md");
+      // A link inside the project is still a link, whichever spelling reaches it.
+      mkdirSync(join(proj, "src"), { recursive: true });
+      symlinkSync(join(proj, "src"), join(proj, record, "workspace-alias"), dirLink);
+      const expected: Record<string, number> = {};
+      const actual: Record<string, number> = {};
+      const stderr: Record<string, string> = {};
+      const check = (project: string, cwd: string, row: string, payload: Record<string, unknown>, code: number) => {
+        const key = `project ${project === linked ? "linked" : "real"}, cwd ${cwd === linked ? "linked" : "real"}: ${row}`;
+        const result = runHook(proj, { ...payload, cwd }, { CLAUDE_PROJECT_DIR: project });
+        expected[key] = code;
+        actual[key] = result.code;
+        stderr[key] = result.stderr;
+      };
+      check(proj, linked, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+      check(proj, linked, "Write src/inline.ts", WRITE(join(linked, "src", "inline.ts")), 2);
+      check(proj, linked, "Write the plan", WRITE(join(linked, plan)), 0);
+      check(proj, linked, "printf plan > the plan", BASH(`printf plan > ${toPosix(plan)}`), 0);
+      check(proj, linked, "Write NOTES.md", WRITE(join(linked, "NOTES.md")), 0);
+      check(proj, linked, "Write through a link inside the project",
+        WRITE(join(linked, record, "workspace-alias", "blocked.ts")), 2);
+      check(proj, linked, "Write outside the project", WRITE(join(links, "elsewhere", "notes.md")), 0);
+      check(linked, proj, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+      check(linked, proj, "Write the plan", WRITE(join(proj, plan)), 0);
+      check(linked, proj, "Write NOTES.md", WRITE(join(proj, "NOTES.md")), 0);
+      check(proj, proj, "Write src/inline.ts", WRITE(join(proj, "src", "inline.ts")), 2);
+      expect(actual).toEqual(expected);
+      // The code waits with the words its own spelling gets.
+      expect(stderr["project real, cwd linked: Write src/inline.ts"])
+        .toBe(stderr["project real, cwd real: Write src/inline.ts"]);
+    } finally {
+      rmSync(links, { recursive: true, force: true });
+      rmSync(outer, { recursive: true, force: true });
+    }
+  });
+
   test.skipIf(process.platform !== "win32")(
     "Windows cwd casing preserves recovery without authorizing workspace changes",
     () => {
