@@ -390,13 +390,27 @@ export function chatsSince(rows: readonly AuditShardEvent[], pd: string, spentAt
 // agent can name the one that asked. Never their words: the agent has them. Another
 // chat's ids would leave an agent that cannot tell the chats apart to pick one
 // by its time; a message named from there still proves.
+// While the code plan question waits for the person, a message from before it
+// that a decision has followed (it arrived before the last approval or
+// decision) is not offered: a live Copilot CLI run took their "Approve" for the
+// stage before from this list and turned plan approval off, set by them, with
+// the question unanswered. Before the question it is offered, as "approve, and
+// turn plan approval off" needs where the agent learns ids only from these
+// steps. A message in the question's own second counts as after it, as in
+// noReplySince.
 export function requestMessages(pd: string): Array<{ id: string; at: string }> {
   try {
     const rows = readAuditShardEvents(pd);
-    const chat = windowChat(pd, rows, latestSpendingTimestamp(rows), true);
+    const spentAt = latestSpendingTimestamp(rows);
+    const chat = windowChat(pd, rows, spentAt, true);
     if (chat === null) return [];
+    const { planQuestionShownAt } = require("./aidlc-plan-approval-ask.ts") as typeof import("./aidlc-plan-approval-ask.ts");
+    const shown = planQuestionShownAt(pd);
+    const from = shown === null ? null : Math.floor(Date.parse(shown) / 1000) * 1000;
+    const offered = (message: StoredMessage): boolean =>
+      from === null || Date.parse(message.at) >= from || spentAt === null || message.at >= spentAt;
     return listMessages(pd)
-      .filter((message) => message.session === chat &&
+      .filter((message) => message.session === chat && offered(message) &&
         "message" in messageProof(pd, message.id, "request", { request: true }))
       .map((message) => ({ id: message.id, at: message.at }))
       .reverse();

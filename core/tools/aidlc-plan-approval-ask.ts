@@ -1226,6 +1226,11 @@ function currentPlanApprovalAsk(
   return same ? { marker, record } : null;
 }
 
+/** When the Plan Approval question was last shown, while it is the open step with no answer yet; else null. */
+export function planQuestionShownAt(projectDir: string): string | null {
+  return currentPlanApprovalAsk(projectDir)?.record.issuedAt ?? null;
+}
+
 /**
  * The engine's Plan Approval question while it is the open step: whether every
  * plan it asks about has an answer, the choice on record when every plan has
