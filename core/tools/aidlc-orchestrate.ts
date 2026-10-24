@@ -5868,11 +5868,14 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   if (knowledgeCommand.kind !== "not-knowledge") return { knowledgeCommand };
   // The pick question's answer, `next --pick <record>`: select that record and
   // carry on in the same turn, so picking work up takes one step. Words the
-  // agent adds after the name are its copy of the person's: the step after the
-  // switch carries the engine's own (keptWordsStep), so they change nothing.
+  // agent adds after the name, or the `--request <id>` of the step that kept
+  // them, are its copy of the person's: the step after the switch carries the
+  // engine's own (keptWordsStep), so they change nothing.
   if (args[0] === "--pick") {
     const name = args[1];
     const after = args[2] === "--" ? [] : args.slice(2);
+    const request = after.indexOf("--request");
+    if (request >= 0 && isQuestionId(after[request + 1] ?? "")) after.splice(request, 2);
     if (name === undefined || after.some((arg) => arg.startsWith("-"))) {
       return { parseError: "--pick takes one record name; run the pick question's own command." };
     }

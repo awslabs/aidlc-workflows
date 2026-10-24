@@ -134,10 +134,14 @@ describe("the words that led to a pick are read against the piece picked", () =>
 
   // Measured on Claude Code 2.1.310: the agent put their words after the name, and the refusal of that command
   // ended the turn with the redo undone. The engine's own copy is what rides on.
-  test("the agent adds their words after the name: the same step, never a refusal", async () => {
+  // The same on the SDK drive at 0ad35724f: after the reading step's request print, the agent added that print's
+  // `--request <id>` after the name and stopped at the refusal.
+  test("the agent adds their words, or the reading step's request id, after the name: the same step, never a refusal", async () => {
     const proj = await clone();
-    await typed(proj, WORDS);
-    for (const tail of [[WORDS], ["--", WORDS], ["redo", "it"]]) {
+    const reading = await typed(proj, WORDS);
+    const id = /next --request ([0-9a-f]{8})/.exec(String(reading.message))?.[1];
+    expect(id).toBeDefined();
+    for (const tail of [[WORDS], ["--", WORDS], ["redo", "it"], ["--request", id!]]) {
       const picked = await next(proj, ["--pick", PIECE, ...tail]);
       expect(picked.directive?.kind, picked.out).toBe("print");
       expect(carried(proj, stepAfterSwitch(picked.directive)).words, picked.out).toBe(WORDS);
