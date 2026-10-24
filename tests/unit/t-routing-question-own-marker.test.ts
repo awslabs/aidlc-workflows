@@ -1,5 +1,6 @@
-// covers: subcommand:aidlc-orchestrate:next, function:notePlanApprovalAskReply, function:consumeSharedDirectiveAsk,
-// function:planApprovalKeptReplyWaits, function:openEngineQuestion, function:recordProtectedHumanResponse
+// covers: subcommand:aidlc-orchestrate:next, function:notePlanApprovalAskReply, function:keepRoutedPlanApprovalReply,
+// function:consumeSharedDirectiveAsk, function:planApprovalKeptReplyWaits, function:openEngineQuestion,
+// function:recordProtectedHumanResponse
 //
 // A number typed for a question the engine asks while another of its questions
 // is open answers nothing by itself. With the code plan question open, a
@@ -12,7 +13,9 @@
 //   - the number records nothing for the plan question, under Guard Policy off
 //     and strict, through every harness's human-turn hook;
 //   - "part of that work" asks the plan question again with the person's words
-//     as their reply to it, so the change they asked for reaches the plan;
+//     as their reply to it, so the change they asked for reaches the plan, and
+//     a reply they send after it stays their latest however often that answer
+//     runs, so the plan approval names the message they gave it in;
 //   - the same holds for the new-work plan offer ("/aidlc --new-intent ..."),
 //     a guard-recovery question (a routing "1" picks no remedy), and a Unit
 //     checkpoint or verification-command question, in the chat that asked it
@@ -200,10 +203,15 @@ function blankAnswer(proj: string): boolean {
   return /^\[Answer\]:[ \t]*$/m.test(readFileSync(join(stageDir(proj), "code-generation-questions.md"), "utf-8"));
 }
 
-function routingQuestionOverThePlan(proj: string, planQuestionOpen = true): Emitted {
+function routingQuestionOverThePlan(
+  proj: string,
+  planQuestionOpen = true,
+  words = CHANGE,
+  harness: Harness = "claude",
+): Emitted {
   if (planQuestionOpen) expect(next(proj).ask_type).toBe("plan-approval");
-  say(proj, `/aidlc ${CHANGE}`);
-  const print = next(proj, [CHANGE]);
+  say(proj, `${harness === "codex" ? "$" : "/"}aidlc ${words}`, harness);
+  const print = next(proj, [words]);
   expect(print.kind, JSON.stringify(print)).toBe("print");
   // Their words may answer the plan question as a change: the step says where
   // the agent passes it, or the revision asks them again what to change.
@@ -400,6 +408,64 @@ describe("a number for the routing question answers it alone while the code plan
       expect(blankAnswer(proj)).toBe(true);
     });
   }
+});
+
+// The plan approval stands on the person's latest reply, however often the
+// routing answer runs. In a live Codex run on Windows Server, at the open code
+// plan question, a person asked "where were we?" in a new chat, said it was part
+// of the work, and later approved the plan in a message of its own; the step for
+// that message named the routing answer again, the agent ran it, and the
+// approval was recorded on the "where were we?" message. A change asked for that
+// way, recorded and revised, was the message a later approval named.
+describe("a reply sent after the routing answer stays the latest, however often that answer runs", () => {
+  const LUNCH = "back after a long lunch. where were we, and what do I need to do next?";
+  const APPROVE = "Approve the code plan, on one condition: keep the existing tests as they are.";
+  const approval = (proj: string) => {
+    const row = readAuditShardEvents(proj).findLast((entry) => entry.event === "PLAN_APPROVAL_RECORDED");
+    return {
+      id: row && auditBlockField(row.block, "Message Id"),
+      words: row && auditBlockField(row.block, "Person Reply"),
+    };
+  };
+  const latestMessage = (proj: string) => {
+    const turn = readAuditShardEvents(proj).findLast((row) => row.event === "HUMAN_TURN");
+    return turn && auditBlockField(turn.block, "Message Id");
+  };
+
+  for (const harness of ["claude", "codex"] as const) {
+    test(`${harness}: after "where were we?", the approval names the message it was given in`, () => {
+      const proj = project("off");
+      const routing = routingQuestionOverThePlan(proj, true, LUNCH, harness);
+      say(proj, "1, it is the same work. I just want to know where it stands.", harness);
+      expect(nextNamed(proj, routing.continue_command).kind).toBe("print");
+      expect(next(proj).ask_type).toBe("plan-approval");
+      say(proj, APPROVE, harness);
+      const approved = latestMessage(proj);
+      nextNamed(proj, routing.continue_command);
+      expect(recordedMessage(answer(proj, "Approve Plan"))).toContain('Recorded "Approve Plan"');
+      const recorded = approval(proj);
+      expect(recorded.id).toBe(approved);
+      expect(recorded.words?.endsWith(APPROVE), recorded.words ?? "").toBe(true);
+    });
+  }
+
+  test("after a change asked that way and recorded, the revised plan's approval names its own message", () => {
+    const proj = project("off");
+    const routing = routingQuestionOverThePlan(proj);
+    say(proj, "1");
+    expect(nextNamed(proj, routing.continue_command).kind).toBe("print");
+    expect(recordedMessage(answer(proj, `Request Changes: ${CHANGE}`))).toContain('Recorded "Request Changes"');
+    expect(next(proj).plan_approval?.status).toBe("revise");
+    const plan = join(stageDir(proj), "code-generation-plan.md");
+    writeFileSync(plan, readFileSync(plan, "utf-8")
+      .replace("- [ ] Step 2:", `- [ ] Step 2: ${CHANGE} in \`src/todo.test.ts\`\n- [ ] Step 3:`), "utf-8");
+    expect(next(proj).ask_type).toBe("plan-approval");
+    say(proj, APPROVE);
+    const approved = latestMessage(proj);
+    nextNamed(proj, routing.continue_command);
+    expect(recordedMessage(answer(proj, "Approve Plan"))).toContain('Recorded "Approve Plan"');
+    expect(approval(proj)).toEqual({ id: approved, words: APPROVE });
+  });
 });
 
 describe("a number for the routing question picks no guard-recovery remedy", () => {
