@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-utility:recompose, subcommand:aidlc-jump:execute
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-utility:recompose, subcommand:aidlc-jump:execute, function:owedJumpBack
 //
 // "Approve, and add <Stage> next" when the agent records the approval first: the approval moves the work past the
 // stage the plan skips and starts the next one, so the add then names a stage behind the cursor. While nothing after
@@ -11,12 +11,14 @@
 // started. The jump's notice is also left out when the person themselves asks to go back to the added stage before
 // `next` ran the route: it would name a place they never were. Once anything after the stage has started, a stage
 // behind the cursor stays refused as before, and a scope change's stages behind the cursor stay as the scope change
-// leaves them.
+// leaves them. The same door, read from the same check as `next` (owedJumpBack), lets through the redo `next` names
+// to run Reverse Engineering the person left out at the plan pick and put back while Requirements Analysis ran, and
+// nothing wider.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { AIDLC_SRC, cleanupTestProject, removeWorkspaceRecord, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -80,10 +82,13 @@ const comparable = (proj: string): string => state(proj).replace(/^- \*\*Last Up
 // The Code Generation plan-approval guard's answer to the agent running `command`, as Claude Code's hook asks it in
 // a project with AI-DLC installed (the guard knows the engine's own commands by the installed tools).
 function guardAllows(proj: string, command: string, write?: string): { allowed: boolean; said: string } {
-  if (!existsSync(join(proj, ".claude", "tools"))) cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
-  const call = write === undefined
+  return guardAllowsCall(proj, write === undefined
     ? { tool_name: "Bash", tool_input: { command } }
-    : { tool_name: "Write", tool_input: { file_path: join(proj, write), content: command } };
+    : { tool_name: "Write", tool_input: { file_path: join(proj, write), content: command } });
+}
+
+function guardAllowsCall(proj: string, call: { tool_name: string; tool_input: Record<string, string> }): { allowed: boolean; said: string } {
+  if (!existsSync(join(proj, ".claude", "tools"))) cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
   const r = spawnSync(process.execPath, [join(proj, ".claude", "hooks", "aidlc-plan-approval-guard.ts")], {
     cwd: proj,
     env: env(proj),
@@ -342,6 +347,71 @@ describe("t-approve-then-add-next: the approval recorded first, the add of the s
     writeFileSync(plan, "# Code Generation Plan\n", "utf-8");
     const late = guardAllows(proj, `${jump} --target user-stories --direction backward --scope bugfix`);
     expect(late.allowed, late.said).toBe(false);
+  });
+
+  // A live run on Kiro CLI: the plan picked without Reverse Engineering ("1, but skip the reverse engineering"),
+  // then "I want the reverse engineering after all, undo the skip" while Requirements Analysis ran, then the
+  // approval. `next` named the redo that runs Reverse Engineering now, the Code Generation guard refused it, and
+  // `next` named it again: a loop the person could leave only by turning plan approval off.
+  test("Reverse Engineering left out at the plan pick and put back during Requirements Analysis runs after the approval", async () => {
+    const proj = await gateAt();
+    // The plan the person picked leaves Reverse Engineering out, as creation's --skip writes its row.
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8")
+      .replace(/^- \[x\] reverse-engineering \u2014 EXECUTE$/m, "- [ ] reverse-engineering \u2014 SKIP"));
+    expect((await say(proj, "I want the reverse engineering after all, undo the skip", "claude")).status).toBe(0);
+    const change = await next(proj, ["--add", "reverse-engineering"]);
+    expect(String(change.directive?.message), change.out).toContain("recompose --add reverse-engineering");
+    const added = await tool(proj, UTILITY, ["recompose", "--add", "reverse-engineering"]);
+    expect(added.status, added.stdout + added.stderr).toBe(0);
+    expect(events(proj).some((row) =>
+      row.event === "RECOMPOSED" && auditBlockField(row.block, "Stages added") === "reverse-engineering")).toBe(true);
+    expect(state(proj)).toMatch(/^- \[ \] reverse-engineering \u2014 EXECUTE/m);
+    await approve(proj, "requirements-analysis");
+    expect(current(proj)).toBe("code-generation");
+    const route = await next(proj, []);
+    expect(route.directive?.kind, route.out).toBe("print");
+    const named = /`([^`]*aidlc-jump\.ts execute[^`]*)`/.exec(String(route.directive?.message))?.[1] ?? "";
+    expect(named, route.out).toEndWith("execute --target reverse-engineering --direction redo --scope bugfix");
+    // The door is the step: another jump to it, or a redo of the stage just approved, waits for the person.
+    const jump = named.slice(0, named.indexOf(" --target"));
+    for (const command of [
+      `${jump} --target reverse-engineering --direction backward --scope bugfix`,
+      `${jump} --target requirements-analysis --direction redo --scope bugfix`,
+    ]) {
+      const other = guardAllows(proj, command);
+      expect(other.allowed, `${command}: ${other.said}`).toBe(false);
+    }
+    const blocked = events(proj).filter((row) => row.event === "PLAN_APPROVAL_BLOCKED").length;
+    const guard = guardAllows(proj, named);
+    expect(guard.allowed, guard.said).toBe(true);
+    expect(events(proj).filter((row) => row.event === "PLAN_APPROVAL_BLOCKED").length).toBe(blocked);
+    const jumped = await tool(proj, JUMP, ["execute", "--target", "reverse-engineering", "--direction", "redo", "--scope", "bugfix"]);
+    expect(jumped.status, jumped.stdout + jumped.stderr).toBe(0);
+    const run = await next(proj, []);
+    expect(run.directive?.kind, run.out).toBe("run-stage");
+    expect(run.directive?.stage, run.out).toBe("reverse-engineering");
+    // Its developer scan is dispatched and recorded, and its approval returns the work to Code Generation.
+    const scan = guardAllowsCall(proj, { tool_name: "Task", tool_input: {
+      subagent_type: "aidlc-developer-agent", description: "Reverse Engineering developer scan",
+      prompt: "Scan the code for Reverse Engineering and write developer-scan.md.",
+    } });
+    expect(scan.allowed, scan.said).toBe(true);
+    const scanFile = join(recordDir(proj) as string, "inception", "reverse-engineering", "developer-scan.md");
+    mkdirSync(join(scanFile, ".."), { recursive: true });
+    writeFileSync(scanFile, "# Developer scan\n\n- One module, one entry point.\n", "utf-8");
+    const link = await tool(proj, LOG, ["link", "--stage", "reverse-engineering", "--link", "aidlc-developer-agent",
+      "--artifact", relative(proj, scanFile)], NO_OUTPUT_CHECKS);
+    expect(link.status, link.stdout + link.stderr).toBe(0);
+    await runToGate(proj, "reverse-engineering");
+    await approve(proj, "reverse-engineering");
+    expect(current(proj)).toBe("code-generation");
+    const back = await next(proj, []);
+    expect(back.directive?.kind, back.out).toBe("run-stage");
+    expect(back.directive?.stage, back.out).toBe("code-generation");
+    // Code Generation's plan approval still holds the code.
+    const code = guardAllows(proj, "export const refuseBlankTitle = true;\n", "src/todo.ts");
+    expect(code.allowed, code.said).toBe(false);
   });
 
   test("with plan approval off, the move back goes through as any step does", async () => {
