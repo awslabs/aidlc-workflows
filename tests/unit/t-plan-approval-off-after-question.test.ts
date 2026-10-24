@@ -10,7 +10,8 @@
 // The setter, the recorded plan-approval switch and the plan guard's admission
 // of it all read the one check, and so do the refusals that name messages. A person who asked before the plan was shown is asked the plan
 // question once, with one line saying why; their reply since then turns it off.
-// Before the question, and for every other setting, nothing changes.
+// Before the question, for every other setting and for new work, nothing
+// changes; nor does it for a message sent with their edit of the shown plan.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -33,6 +34,8 @@ const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const GUARD = join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const CHAT = "01995000-7a11-7000-8000-00000000e6e6";
 // The line the person reads when they asked before the plan was shown.
 const LINE = "Turning plan approval off needs your word after the plan is shown, so this plan is asked once; say so " +
@@ -247,6 +250,32 @@ describe("before the plan question, and for every other setting, as before", () 
     const off = planApprovalOff(proj, both);
     expect(off.rc, off.out).toBe(0);
     expect(stateField(proj, "Plan Approval")).toBe("off (set by you)");
+  });
+
+  test("said with their own edit of the shown plan: recording the edit first, it goes off on that message", () => {
+    const proj = bugfixAtRequirements();
+    approveRequirements(proj, said(proj, "Approve"));
+    planQuestionShown(proj);
+    const both = said(proj, "I'll edit the files, and turn plan approval off");
+    const edit = run(proj, LOG, ["answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "I'll edit the files"]);
+    expect(edit.out).toContain("Recorded");
+    const off = planApprovalOff(proj, both);
+    expect(off.rc, off.out).toBe(0);
+    expect(off.out).not.toContain(LINE);
+    expect(stateField(proj, "Plan Approval")).toBe("off (set by you)");
+  });
+
+  test("new work created with plan approval off is not this rule's, while another work's plan question waits", () => {
+    const proj = bugfixAtRequirements();
+    const earlier = said(proj, "Approve, and start the export work with plan approval off");
+    approveRequirements(proj);
+    planQuestionShown(proj);
+    const made = run(proj, UTILITY, [
+      "intent-create", "--scope", "bugfix", "--arguments", "build the export", "--label", "export",
+      "--plan-approval", "off", "--message", earlier,
+    ]);
+    expect(made.rc, made.out).toBe(0);
+    expect(made.out).not.toContain(LINE);
   });
 
   test("another setting on the earlier message is not this rule's", () => {
