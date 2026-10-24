@@ -80,6 +80,16 @@ describe("a list of work edited by hand", () => {
     expect(readFileSync(join(intentsDirOf(proj), kept[0]), "utf-8")).toBe(broken);
   });
 
+  test("with a row left after its closing bracket is kept whole, never read as its first part", () => {
+    proj = createTestProject();
+    const pasted = `[\n${seededRow()}\n]\n  ${JSON.stringify(REPORTS)},\n]\n`;
+    writeFileSync(registry(), pasted, "utf-8");
+    appendIntentToRegistry(proj, { ...REPORTS, uuid: "01a133cc-c2a0-7b11-8a22-5d1f2e3a4b5c", dirName: "261024-search" }, "default");
+    const kept = keptCopies();
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(intentsDirOf(proj), kept[0]), "utf-8")).toBe(pasted);
+  });
+
   test("that nothing can read, a second time, keeps both copies", () => {
     proj = createTestProject();
     writeFileSync(registry(), "[ { first", "utf-8");

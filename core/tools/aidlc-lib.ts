@@ -107,7 +107,7 @@ export {
 // runtime require() below avoids the circular import (aidlc-graph.ts
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
 // imports are erased at runtime so they don't create the cycle.
-import { readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
+import { jsoncDocumentValue, readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
@@ -4710,14 +4710,11 @@ function conflictSide(text: string, side: "ours" | "theirs"): string {
 }
 
 // The list as the person's editor may leave it: a trailing comma, a comment or
-// a BOM does not hide its rows.
+// a BOM does not hide its rows. Anything else after the list makes it unreadable,
+// never read as its first part.
 function registryList(text: string): IntentRegistryEntry[] | null {
-  try {
-    const parsed: unknown = Bun.JSONC.parse(withoutBom(text));
-    return Array.isArray(parsed) ? (parsed as IntentRegistryEntry[]) : null;
-  } catch {
-    return null;
-  }
+  const parsed = jsoncDocumentValue(withoutBom(text));
+  return Array.isArray(parsed) ? (parsed as IntentRegistryEntry[]) : null;
 }
 
 // The `aidlc/spaces` root — the parent of every space dir. Sole helper so the

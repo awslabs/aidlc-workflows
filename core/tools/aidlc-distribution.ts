@@ -1280,6 +1280,16 @@ function jsoncNodeValue(text: string, node: JsoncNode): unknown {
   }
 }
 
+/**
+ * The value of a text that is exactly one JSONC value, comments and whitespace
+ * around it allowed; undefined otherwise. Bun.JSONC.parse alone stops at the
+ * first complete value and drops anything after it.
+ */
+export function jsoncDocumentValue(text: string): unknown {
+  const node = jsoncTree(text);
+  return node ? jsoncNodeValue(text, node) : undefined;
+}
+
 function plainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
