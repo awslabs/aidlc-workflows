@@ -610,6 +610,9 @@ function validateIntentSettingsArgs(
   allowed.add("message");
   allowed.add("person-words");
   allowed.add("person-words-file");
+  // Takes no value: an engine step that prints the setter's output as it is.
+  const bare = command === "config-change" ? "verbatim" : null;
+  if (bare !== null) allowed.add(bare);
   // Inspect option names before the parser's object assignment as well, so
   // even an unknown property-like name cannot disappear from validation.
   for (const arg of rawArgs) {
@@ -620,6 +623,10 @@ function validateIntentSettingsArgs(
     if (!allowed.has(name)) die(`${command} does not accept --${name}.`);
   }
   for (const name of allowed) {
+    if (name === bare) {
+      if (!missingValueFlags.has(name) && flags[name] !== undefined) die(`${command} --${name} takes no value.`);
+      continue;
+    }
     if (missingValueFlags.has(name) || (flags[name] !== undefined && flags[name].trim().length === 0)) {
       die(`${command} --${name} requires a nonblank value.`);
     }
@@ -13010,11 +13017,19 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
     process.stdout.write(`${lines.join("\n")}\n`);
     return;
   }
-  const lines = writeSettings(projectDir, intent, space, intentSettingsFromFlags(flags), {
+  const { lines, checkOffInTheirName } = writeSettings(projectDir, intent, space, intentSettingsFromFlags(flags), {
     sessionId: selection.sessionId, fail: die, ...named,
   });
-  process.stdout.write(`${lines.join("\n")}\n`);
+  // Only the agent reads this output, and on Copilot, Cursor and Kiro no hook
+  // line reaches the person, so a check of theirs switched off from the chat is
+  // said by the agent or not at all; the order says the lines are theirs. A step
+  // of the engine's that has the agent print the output as it is passes
+  // --verbatim, so the person never reads the order.
+  const said = checkOffInTheirName && flags.verbatim !== "true" ? [SAY_SETTER_LINES] : [];
+  process.stdout.write(`${[...said, ...lines].join("\n")}\n`);
 }
+
+const SAY_SETTER_LINES = "Say this to the person once, word for word:";
 
 // The setter's one transaction on a piece of work: the settings applied, their
 // audit rows, the state written, and the step in hand kept; its lines returned.
@@ -13027,8 +13042,9 @@ function writeSettings(
     sessionId: string | null; fail?: (message: string) => never; typedByPerson?: boolean;
     message?: StoredMessage; agentText?: string; notTheirs?: ReadonlySet<string>;
   },
-): string[] {
+): { lines: string[]; checkOffInTheirName: boolean } {
   let lines: string[] = [];
+  let checkOffInTheirName = false;
   withAuditLock(projectDir, () => {
     const content = readConfigState(projectDir, { intent, space });
     const update = applyIntentSettings(projectDir, content, request, {
@@ -13052,8 +13068,9 @@ function writeSettings(
       }
     }
     lines = update.lines;
+    checkOffInTheirName = update.checkOffInTheirName;
   }, intent, space);
-  return lines;
+  return { lines, checkOffInTheirName };
 }
 
 // What this chat kept for the work it picks up or starts next goes to the work
@@ -13069,7 +13086,7 @@ function applyKeptToPickedWork(projectDir: string, sessionId: string, space: str
   try {
     lines = writeSettings(projectDir, intent, space, kept, {
       sessionId, typedByPerson: true, notTheirs: keptSettingsNotTheirs(projectDir, sessionId),
-    });
+    }).lines;
   } catch (e) {
     lines = [errorMessage(e)];
   }

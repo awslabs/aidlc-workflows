@@ -3144,6 +3144,10 @@ function isTerminalConfigurationDispatch(
       : CONFIGURATION_STEP).exec(validated.data.message);
     if (!match) return false;
     if (match[2] !== undefined) expected.push("--message", MESSAGE_SLOT);
+    // The step asks the setter for its lines alone when one turns a check off.
+    if (scope === undefined && named.some((name) => turnsPersonCheckOff(name, values.get(name) ?? ""))) {
+      expected.push("--verbatim");
+    }
     const literal = parseLiteralShellInvocation(match[1]);
     if (!literal || literal.directory !== null) return false;
     const command = engineInvocationFromWords(literal.argv, literal.rawWords);
@@ -13271,6 +13275,11 @@ const PERSON_CHECK_SWITCH_VALUES: Readonly<Record<string, { on: readonly string[
   "guard.reviewer-scope": { on: ["on"], off: ["off"] },
   "guard-policy": { on: ["strict"], off: ["relaxed", "off"] },
 };
+
+/** Whether `config set <key> <value>` turns one of the person's checks off. */
+export function turnsPersonCheckOff(key: string, value: string): boolean {
+  return Object.hasOwn(PERSON_CHECK_SWITCH_VALUES, key) && PERSON_CHECK_SWITCH_VALUES[key].off.includes(value.toLowerCase());
+}
 
 // Whether `config set <key> <value>` switches one of the person's checks with
 // the person behind it: on always, off only once they asked since the last
@@ -33267,9 +33276,8 @@ export function lowerFenceRemedy(fence: SwitchableGuardFence, projectDir?: strin
     op: "lower-fence",
     action:
       `Turn the ${fence} check off for this piece of work: run the command with \`--message '${MESSAGE_SLOT}'\` ` +
-      `added${projectDir === undefined ? MESSAGE_FILL : messageFill(projectDir)}. After the command succeeds, tell the person in one ` +
-      "line that it is off for this piece of work, comes back on for the next one, and that they can ask you " +
-      "to turn it back on; then retry what was refused.",
+      `added${projectDir === undefined ? MESSAGE_FILL : messageFill(projectDir)}. After the command succeeds, retry what was ` +
+      "refused.",
     ...guardOperation({ kind: "lower-fence", fence }),
     requiresHuman: true,
     executableNow: true,
@@ -33281,9 +33289,7 @@ export function lowerFenceSentence(fence: SwitchableGuardFence): string {
   const setter = renderGuardOperation({ kind: "lower-fence", fence }, { harnessDir: harnessDir() });
   return (
     `If the person meant to do this now, offer to turn the ${fence} check off for this piece of work. When ` +
-    `they say so, run \`${setter} --message '${MESSAGE_SLOT}'\` yourself${MESSAGE_FILL} (their yes), and ` +
-    "tell them in one line that it is off for this piece of work, comes back on for the next one, and that " +
-    "they can ask you to turn it back on."
+    `they say so, run \`${setter} --message '${MESSAGE_SLOT}'\` yourself${MESSAGE_FILL} (their yes).`
   );
 }
 

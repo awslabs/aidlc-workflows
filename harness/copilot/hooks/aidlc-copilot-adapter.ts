@@ -790,14 +790,17 @@ export async function run(
       // One of the person's checks switched as they asked runs click-free when
       // they asked since the last decision (on always), with or without the
       // message they asked in beside it (--message, which the setter proves), or
-      // the words form from before it (--person-words, --person-words-file);
-      // any other setting keeps the prompt.
-      case "config":
+      // the words form from before it (--person-words, --person-words-file),
+      // and with the --verbatim an engine step ends it with; any other setting
+      // keeps the prompt.
+      case "config": {
+        const own = rest.at(-1) === "--verbatim" ? rest.slice(0, -1) : rest;
         return verb === "set" && !(
-          (rest.length === 2 ||
-            (rest.length === 4 && (rest[2] === "--message" || rest[2] === "--person-words" || rest[2] === "--person-words-file"))) &&
-          personCheckSwitchAllowed(projectDir, rest[0], rest[1])
+          (own.length === 2 ||
+            (own.length === 4 && (own[2] === "--message" || own[2] === "--person-words" || own[2] === "--person-words-file"))) &&
+          personCheckSwitchAllowed(projectDir, own[0], own[1])
         );
+      }
       // Turning Construction checkpoints on or off runs click-free when the
       // setter's own check passes (the person asked for it since the last
       // decision, or chose it); without that it keeps the prompt.

@@ -201,5 +201,6 @@ describe("said once: the agent is not asked to word it itself", () => {
     const protocol = readFileSync(join(REPO_ROOT, "core", "aidlc-common", "protocols", "stage-protocol.md"), "utf-8");
     expect(protocol).toContain("config set summary-confirmation off --learnings off --message <id>");
     expect(protocol).not.toContain("say in one line that both are off");
+    expect(protocol.replace(/\s+/g, " ")).not.toContain("say in one line that it is off for this piece of work");
   });
 });

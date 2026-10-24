@@ -481,7 +481,11 @@ export function applyIntentSettings(
     /** Settings carried with `typedByPerson` that were kept as a command's, not theirs. */
     notTheirs?: ReadonlySet<string>;
   },
-): { content: string; audit: AuditEntryInput[]; lines: string[] } {
+): {
+  content: string; audit: AuditEntryInput[]; lines: string[];
+  /** A line says a check of theirs is off for this piece of work, to a chat (not their own terminal). */
+  checkOffInTheirName: boolean;
+} {
   // `guard.plan-approval` is another way to say `plan-approval`: one switch that
   // removes the plan stop. Whether an edited plan asks again is Guard Policy's.
   if (requested["guard.plan-approval"] !== undefined) {
@@ -988,13 +992,15 @@ export function applyIntentSettings(
       if (offer) lines[lines.length - 1] = `${lines[lines.length - 1]} ${offer}`;
     }
   }
+  let checkOffInTheirName = false;
   for (const item of lowering) {
     if (!saidAsAsked(item.key)) continue;
     const line = askedSwitchLine(item, askedIn, cc.value, !atTheirTerminal);
     const offer = atTheirTerminal ? null : widerPlaceOffer(projectDir, projectSwitchOf(item.key), { work: content });
     lines.push(offer ? `${line} ${offer}` : line);
+    checkOffInTheirName ||= !atTheirTerminal;
   }
-  return { content, audit, lines };
+  return { content, audit, lines, checkOffInTheirName };
 }
 
 // The project's switch for a check set for this piece of work, which is where

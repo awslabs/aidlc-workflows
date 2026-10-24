@@ -513,6 +513,7 @@ import {
   unitSkippedItsCode,
   waveEligible,
   optionsList,
+  turnsPersonCheckOff,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
@@ -3132,11 +3133,19 @@ function jumpAfterChange(flags: ParsedFlags): string {
   ].join(" ");
 }
 
+// Every step that names it has the agent print or say its output as it is, so
+// a check turned off here asks the setter for its lines alone (--verbatim),
+// without the order it adds for an agent no step told to say them.
 function configSetCommand(modifiers: string[], personWords = false): string {
+  const turnsCheckOff = modifiers.some((modifier) => {
+    const [key, value = ""] = modifier.split(" ");
+    return turnsPersonCheckOff(key, value);
+  });
   return [
     aidlcDispatcherInvocation(`config set ${modifiers[0]}`),
     ...modifiers.slice(1).map((modifier) => `--${modifier}`),
     ...(personWords ? [`--message '${MESSAGE_SLOT}'`] : []),
+    ...(turnsCheckOff ? ["--verbatim"] : []),
   ].join(" ");
 }
 
@@ -9874,8 +9883,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       ));
       return;
     }
+    // Its output is printed as it is below, so the setter adds no order to it.
     const run = runTool("aidlc.ts", [
       "engine", "config", verb, ...tail,
+      ...(verb === "set" && !tail.includes("--verbatim") ? ["--verbatim"] : []),
       "--project-dir", resolveProjectDir(projectDir),
     ]);
     if (!run.ok) {

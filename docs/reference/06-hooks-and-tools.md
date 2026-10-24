@@ -1317,6 +1317,15 @@ model's context there either. The Claude channel was checked live with Claude
 Code 2.1.283; the Codex and opencode channels follow their documented hook and
 SDK contracts and are unit-tested at the adapter boundary (`t349`).
 
+No hook relays the setter's line when a check of the person's is switched off
+from a chat, on any harness, so the setter's own result carries it: `config set`
+(and `config-change`) prints one line for the agent first, "Say this to the
+person once, word for word:", then its lines as they are. The engine's steps
+that already have the agent print the setter's output as it is
+(`configSetCommand`, and the typed `config set` the engine runs itself) pass
+`--verbatim`, which leaves that line out. At the person's own terminal it is
+never printed.
+
 See [Runtime Graph](13-runtime-graph.md) for the compile lifecycle and the locked schema.
 
 ### PreCompact: validate-state.ts
