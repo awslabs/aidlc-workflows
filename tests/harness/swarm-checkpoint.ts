@@ -246,6 +246,7 @@ export function fixture(units = ["alpha"], command: string | null = CHECK, withS
   mkdirSync(join(code, "src"), { recursive: true });
   for (const unit of units) writeFileSync(join(code, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
   if (withSubmodule) addSubmodule(pd);
+  addSourceBeforeBaseline?.(code);
   const baseline = writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!);
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
   appendAuditEntry("STAGE_STARTED", { Stage: STAGE, "Source Baseline": baseline }, pd);
@@ -256,6 +257,19 @@ export function fixture(units = ["alpha"], command: string | null = CHECK, withS
   git(code, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "swarm fixture"]);
   for (const unit of units) approvePlan(pd, unit);
   return pd;
+}
+
+// More of the person's code, written by fixtureWithSource before the source
+// baseline so the approved plan covers it; null for every other fixture.
+let addSourceBeforeBaseline: ((code: string) => void) | null = null;
+
+export function fixtureWithSource(addSource: (code: string) => void, units = ["alpha"]): string {
+  addSourceBeforeBaseline = addSource;
+  try {
+    return fixture(units);
+  } finally {
+    addSourceBeforeBaseline = null;
+  }
 }
 
 export function prepare(pd: string, units = ["alpha"], resume = false) {
