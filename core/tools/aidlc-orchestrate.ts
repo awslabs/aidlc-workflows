@@ -19170,7 +19170,8 @@ export function main(argv: string[]): void {
   // there after a `cd`, which Claude Code keeps) would read the copy of the
   // record that checkout was made with, and none of the hooks' heartbeats,
   // which land in the project folder: the hooks would look off, or an approved
-  // plan not yet approved. Before anything is read or spent, the agent goes back.
+  // plan not yet approved. Before the record or the request is read, or the
+  // request spent, the agent goes back.
   const workerWorktree = commandKind === undefined ? null : swarmWorkerWorktreeMeta(resolvedProjectDir);
   if (workerWorktree !== null) {
     emit(printDirective(
