@@ -260,6 +260,10 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     const step = next(proj, ["--skip", "code-generation"]);
     expect(named(step)).toContain(EVERY_UNIT);
     expect(step.message).toContain('"Skipped Code Generation for every Unit from here. You can undo that any time."');
+    expect(step.message).toContain(
+      "If they later ask to undo skipping it for every Unit, run " +
+        "`bun .claude/tools/aidlc.ts engine recompose --add code-generation --reason 'the person asked to undo skipping it'`.",
+    );
     const replanned = runNamed(proj, EVERY_UNIT);
     expect(replanned.status, replanned.out).toBe(0);
     expect(readFileSync(stateFile(proj), "utf-8")).toContain("- [ ] code-generation \u2014 SKIP");
