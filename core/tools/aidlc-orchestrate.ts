@@ -525,6 +525,7 @@ import {
   type UnitClaimOverview,
 } from "./aidlc-unit.ts";
 import {
+  type ApprovedComposerPlan,
   approvedComposerPlan,
   type Consume,
   type GraphStage,
@@ -606,9 +607,13 @@ import {
   stepNextCommand,
 } from "./aidlc-testing-posture.ts";
 import {
+  ceremoniesCreationGranted,
   checksAre,
   fenceMemoryLockRefusal,
+  guardPolicyCreationGranted,
   guardPolicyNamed,
+  levelsKeptForNextWork,
+  planApprovalCreationAsked,
   planApprovalMemoryLockRefusal,
   settingsKeptSince,
   settingTheirs,
@@ -3211,6 +3216,7 @@ function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boole
   if (kept.ceremony) flags.ceremony = { ...kept.ceremony, ...flags.ceremony };
   if (!existing && !flags.planChanges && kept.planChanges) {
     flags.planChanges = kept.planChanges;
+    flags.storedPlanChanges = true;
     // The plan's name rides with its stage changes.
     flags.planName ??= kept.planName;
   }
@@ -5272,6 +5278,7 @@ export interface ParsedFlags {
   ceremony?: Partial<CeremonyPolicy>;
   planChanges?: PlanChanges; // --skip/--add <stage,...>: a new workflow's own stage changes to its scope's grid
   planName?: string; // --plan-name <name>: the tailored plan's name, as the person saw it at the gate
+  storedPlanChanges?: boolean; // planChanges came from the request's stored settings, not from this command
   readOnly?: string; // the matched read-only flag, if any
   readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
   config?: boolean; // --config [section]: terminal in-session project configuration alias
@@ -6074,6 +6081,45 @@ function workflowFinished(stateContent: string, scope: string): boolean {
   return nextInScopeStage(current, scope, stateContent) === null;
 }
 
+// A stage list typed beside the creation of a plan the composer kept for this
+// request that is not that plan's: an Approve retyped by hand, or a change the
+// person asked for at the gate that reached creation instead of the composer.
+// Creation cannot tell the two apart, so nothing is created from the list and
+// the step says so, with both ways on: the composer for a change, the plan's
+// own approval command for an Approve. That command types the plan's lists, and
+// a list read back from the request's stored settings was not typed here, so
+// neither comes back to this step. `described`: a report-only entry, whose
+// approval passes its description again.
+function composedPlanChangeStep(
+  flags: ParsedFlags,
+  scope: string,
+  kept: PlanChanges,
+  described = false,
+): PrintDirective | null {
+  const typed = flags.planChanges;
+  if (!typed || flags.storedPlanChanges || !flags.request) return null;
+  const same = (a: readonly string[], b: readonly string[]): boolean =>
+    new Set(a).size === new Set(b).size && a.every((slug) => b.includes(slug));
+  if (same(typed.skip, kept.skip) && same(typed.add, kept.add)) return null;
+  const listed = (changes: PlanChanges): string =>
+    [
+      ...(changes.skip.length > 0 ? [`skip ${changes.skip.join(", ")}`] : []),
+      ...(changes.add.length > 0 ? [`add ${changes.add.join(", ")}`] : []),
+    ].join("; ") || "no stage changes";
+  const carried = carriedRoutingFlags({ ...flags, planChanges: kept });
+  const approval = `${aidlcToolInvocation("orchestrate")} next --scope ${scopeArg(scope)}` +
+    `${flags.newIntent ? " --new-intent" : ""}${carried.newWork}${carried.planChanges} --request ${flags.request}` +
+    (described ? " -- <creationDescription>" : "");
+  return printDirective(
+    `Nothing is created yet: the stage changes typed here (${listed(typed)}) are not those of the plan the composer ` +
+      `proposed for this request, which its gate showed (${scope} with ${listed(kept)}). Read the person's reply at the ` +
+      "gate. If they asked for these changes, they edited the plan: dispatch the composer again to apply them, as " +
+      "composer.md says for an edit, and show them the revised plan; its approval creates it. If they approved the plan " +
+      `as shown, run \`${approval}\`${described ? ", with the same creationDescription as one shell-safe argument," : ""} ` +
+      "and follow what it returns: it creates that plan.",
+  );
+}
+
 function createPrintDirective(
   scope: string,
   flags: ParsedFlags,
@@ -6098,6 +6144,34 @@ function createPrintDirective(
     labelHint =
       ` Replace \`--label\` with a 2-3 word kebab essence of the requested work (e.g. "simple calc"), which becomes the readable folder name for this piece of work.`;
   }
+  // The stage changes of a plan composed for this request are the ones the
+  // composer validated and the gate showed, so a list retyped by hand on
+  // Approve never drops or adds a stage. A creation with no list is the
+  // person's own pick of the plain scope (after a Reject), and keeps it, unless
+  // the approved plan is that plain scope (a matched plan). The plan created as
+  // approved keeps the project type the composer planned for on the person's
+  // word (approvedComposerPlan) when they typed none and the scan reads the
+  // folder otherwise, so creation counts and runs the stages the gate showed.
+  const composedFrom = flags.request ? readQuestion(projectDir, flags.request)?.composedFrom : undefined;
+  const approved = flags.request
+    ? approvedComposerPlan(projectDir, [flags.request, ...(composedFrom ? [composedFrom] : [])], scope)
+    : null;
+  if (approved) {
+    const step = composedPlanChangeStep(flags, scope, approved.changes);
+    if (step) return step;
+    const changed = approved.changes.skip.length > 0 || approved.changes.add.length > 0;
+    const asApproved = flags.planChanges !== undefined || !changed;
+    // A custom plan approved as the gate showed it (a list typed for a plan
+    // with stage changes) also runs at the depth, settings and Guard Policy
+    // shown beside its stages. A matched plan is left as typed: with no list,
+    // its Approve reads the same as a plain pick of that scope after a Reject.
+    if (changed && flags.planChanges !== undefined) fillApprovedPlanSettings(flags, approved, projectDir);
+    if (flags.planChanges) flags.planChanges = changed ? approved.changes : undefined;
+    if (asApproved && !flags.projectType && approved.projectType) {
+      const scanned = detectedProjectType(projectDir);
+      if (scanned !== null && scanned !== approved.projectType) flags.projectType = approved.projectType;
+    }
+  }
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
   if (flags.projectType) cmd.push(`--project-type ${flags.projectType}`);
@@ -6114,15 +6188,6 @@ function createPrintDirective(
   }
   for (const key of CEREMONY_KEYS) {
     if (flags.ceremony?.[key]) cmd.push(`${CEREMONY_FLAGS[key]} ${flags.ceremony[key]}`);
-  }
-  // The stage changes of a plan composed for this request are the ones the
-  // composer validated and the gate showed, so a list retyped by hand on
-  // Approve never drops or adds a stage. A creation with no list is the
-  // person's own pick of the plain scope (after a Reject), and keeps it.
-  if (flags.planChanges && flags.request) {
-    const composedFrom = readQuestion(projectDir, flags.request)?.composedFrom;
-    const approved = approvedComposerPlan(projectDir, [flags.request, ...(composedFrom ? [composedFrom] : [])], scope);
-    if (approved) flags.planChanges = approved.skip.length > 0 || approved.add.length > 0 ? approved : undefined;
   }
   if (flags.planChanges?.skip.length) cmd.push(`--skip ${flags.planChanges.skip.join(",")}`);
   if (flags.planChanges?.add.length) cmd.push(`--add ${flags.planChanges.add.join(",")}`);
@@ -6172,6 +6237,35 @@ function createPrintDirective(
   // it speaks from.
   carriesNarration.add(directive);
   return directive;
+}
+
+// What an approved custom plan carries that its Approve command left out. A
+// value typed with the command stays: unlike a retyped stage list, it may be
+// the person's own word at Approve, and a typed lowering still meets intent
+// create's own check. So does a setting the person asked for in this chat
+// before the work existed, which intent create applies from their words. A
+// setting filled here names their message, as a typed one does.
+function fillApprovedPlanSettings(flags: ParsedFlags, plan: ApprovedComposerPlan, projectDir: string): void {
+  let session: string | null = null;
+  try {
+    session = resolveInvokingSessionId(projectDir);
+  } catch {
+    session = null;
+  }
+  const request = flags.request ?? null;
+  const levels = levelsKeptForNextWork(projectDir, session, request);
+  if (plan.depth && !flags.depth && levels.depth === undefined) flags.depth = plan.depth;
+  const asked = ceremoniesCreationGranted(projectDir, session, request);
+  for (const key of CEREMONY_KEYS) {
+    const value = plan.settings?.[key];
+    if (value === undefined || flags.ceremony?.[key] !== undefined) continue;
+    if (key === "plan_approval" ? planApprovalCreationAsked(projectDir, session, request) : asked[key] !== undefined) continue;
+    flags.ceremony = { ...flags.ceremony, [key]: value };
+  }
+  if (plan.settings?.review && !flags.review && levels.review === undefined) flags.review = plan.settings.review;
+  if (plan.guardPolicy && !flags.changeControl && guardPolicyCreationGranted(projectDir, session, request) === null) {
+    flags.changeControl = plan.guardPolicy;
+  }
 }
 
 // A plan named with nothing after it (`/aidlc bugfix`, `/aidlc --scope bugfix`)
@@ -9421,6 +9515,15 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       ));
       return;
     }
+    // A list that is not the plan kept for this entry gets its step while the
+    // entry is still there for the approval it names.
+    const composedScope = flags.scope ?? flags.positionalScope;
+    const kept = composedScope ? approvedComposerPlan(questionDir, [composition.id], composedScope) : null;
+    const step = kept && composedScope ? composedPlanChangeStep(flags, composedScope, kept.changes, true) : null;
+    if (step) {
+      emit(step);
+      return;
+    }
     const described = saveQuestion(questionDir, flags.intent, flags.scope ?? "", "front", undefined, false, composition.id);
     deleteQuestion(questionDir, composition.id);
     flags.request = described.id;
@@ -10358,8 +10461,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       // approval off) reach the work it creates and no other.
       flags.request = saveQuestion(pd, "", flags.scope ?? "", "compose").id;
     }
-    // The plan's creation for this request records the composer's scores.
-    if (!inFlight && flags.request) openComposerScores(pd, flags.request);
+    // The plan's creation for this request records the composer's scores, and
+    // tells the type the composer planned for from the one the scan found now.
+    if (!inFlight && flags.request) openComposerScores(pd, flags.request, detectedProjectType(pd));
     const dispatch = composeDispatchDirective(flags, inFlight);
     if (splitSaid) dispatch.narration = `${dispatch.narration ?? ""}${splitSaid}`.trim();
     emit(dispatch);
