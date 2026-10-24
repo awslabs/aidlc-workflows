@@ -2887,6 +2887,41 @@ describe("t314 multi-unit source attribution", () => {
     expect(approved.rc, approved.out).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  // Named as stale source, the edit's one recovery review would go without the
+  // claim, and the claim would then have no review left to ride on.
+  test("under strict, an edit no Unit claims after the last review is named first, and the one recovery review that claims it completes the stage", () => {
+    reviewBothUnits();
+    writeFileSync(join(proj, "notes.ts"), "export const note = 'nobody claimed me';\n", "utf-8");
+    const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("no Unit's review covers (notes.ts)");
+    expect(refused.out).not.toContain("project source changed after");
+    // The way it names: beta lists the path and is reviewed once more, admitted
+    // as the one recovery review.
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }, { path: "notes.ts" }]);
+    expect(readAllAuditShards(proj)).toContain("**Recovery**: stale-receipt");
+    const approved = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(approved.rc, approved.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // With a reviewed Unit's own file edited too, each Unit's review once more
+  // carries its own part and nothing is left for a Request Changes.
+  test("under strict, an unclaimed edit beside a reviewed Unit's own edit completes once each Unit is reviewed once more", () => {
+    reviewBothUnits();
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 9; // after its review\n", "utf-8");
+    writeFileSync(join(proj, "notes.ts"), "export const note = 'nobody claimed me';\n", "utf-8");
+    const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("no Unit's review covers (notes.ts)");
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }, { path: "notes.ts" }]);
+    const alphaOwed = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(alphaOwed.rc).not.toBe(0);
+    expect(alphaOwed.out).toContain("Changed after review: alpha");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    const approved = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(approved.rc, approved.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   // Units built one at a time: an AI-DLC update after the last Unit's review
   // moves only AI-DLC's own files, under every Guard Policy.
   test("an AI-DLC update after the last Unit's review does not stop the stage completing", () => {
