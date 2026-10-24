@@ -2451,6 +2451,45 @@ describe("AttemptView projections and refusal streaks", () => {
     return { first: first.ask, again: again.ask };
   }
 
+  test("outputs written before the stage's questions: the agent asks them first, and a repeat offers to answer them", () => {
+    const sentence = "Cannot start review for \"functional-design\": its question flow has no functional-design-questions.md " +
+      "file. Create and answer the stage questions, then record the consolidated summary checkpoint before generating artifacts.";
+    const attempt = {
+      recovery: "available" as const,
+      summaryCoverage: "missing" as const,
+      reviewCoverage: "missing" as const,
+      sourceCoverage: "current" as const,
+    };
+    const refusal = evaluateGuardRefusal({
+      code: "SUMMARY_QUESTIONS_MISSING",
+      blockedAction: "request-review",
+      stage: "functional-design",
+      unit: "alpha",
+      stateContent: state("-"),
+      invariant: "A stage's outputs stand on the person's confirmed answers.",
+      userMessage: sentence,
+      attempt,
+      humanAuthority: { freshTurn: false, unattended: false },
+    });
+    expect(refusal.remedies[0]).toMatchObject({ op: "ask-stage-questions", requiresHuman: false, interaction: "external-work" });
+    // Whose answers they are is said: the agent asks the person, never answers itself.
+    expect(refusal.remedies[0].action).toStartWith("Ask the person the stage's questions through its question flow");
+    const { first, again } = ownThenTheirs(refusal, attempt);
+    // Nothing goes to the person the first time: the agent asks the stage's questions.
+    expect(first.agent_work).toBe(true);
+    expect(first.remedies.map((remedy) => remedy.op)).toEqual(["ask-stage-questions"]);
+    // A repeat names what really happens: their questions, then the summary of their answers.
+    expect(again.agent_work).toBeUndefined();
+    const answer = again.remedies.find((remedy) => remedy.op === "reconfirm-summary");
+    expect(answer?.label).toBe("Answer its questions");
+    expect(answer?.description).toBe(
+      "I'll ask you the questions for Functional Design for alpha, show you a summary of your answers to confirm, " +
+        "then save its documents again from them.",
+    );
+    expect(answer?.action).toStartWith("Ask the person the stage's questions through its question flow");
+    expect(again.remedies.map((remedy) => remedy.label)).not.toContain("Confirm the summary again");
+  });
+
   test("a missing pipeline handoff is the agent's to dispatch, never a review request", () => {
     const wayOn = "Cannot complete \"reverse-engineering\" because these pipeline handoffs have not been recorded for " +
       "the current run: aidlc-architect-agent. Dispatch the missing pipeline links in their declared order.";
@@ -2906,6 +2945,10 @@ describe("AttemptView projections and refusal streaks", () => {
         stateContent: walk("in-progress"), attempt: spentBudget,
       },
       { ...base, code: "REQUIRED_ARTIFACTS_MISSING", stateContent: state("-"), attempt: current },
+      {
+        ...base, code: "SUMMARY_QUESTIONS_MISSING", stateContent: state("-"),
+        attempt: { ...current, summaryCoverage: "missing", reviewCoverage: "missing" },
+      },
     ];
     const seen = new Set<string>();
     // The stage protocol's reserved words, the bookkeeping the person has no use

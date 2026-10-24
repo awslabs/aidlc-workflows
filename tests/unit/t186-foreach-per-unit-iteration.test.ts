@@ -188,6 +188,7 @@ interface Directive {
     }>;
   };
   remedies?: Array<{
+    op?: string;
     action: string;
     executableNow: boolean;
   }>;
@@ -525,9 +526,14 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     const executable = (d.remedies ?? [])
       .filter((remedy) => remedy.executableNow)
       .map((remedy) => remedy.action);
+    // The stage's questions were never asked: asking the person them is the
+    // agent's own step, in the Unit's own questions file.
+    expect(d.agent_work).toBe(true);
+    expect((d.remedies ?? []).map((remedy) => remedy.op)).toEqual(["ask-stage-questions"]);
     expect(
       executable.some((action) =>
-        action.startsWith("Present the current consolidated summary")
+        action.startsWith("Ask the person the stage's questions through its question flow") &&
+        action.includes("/construction/alpha/functional-design/functional-design-questions.md")
       ),
     ).toBe(true);
     expect(
@@ -537,6 +543,33 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
           action.startsWith("Request the next permitted review"),
       ),
     ).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // 9c: a parallel wave's builders are subagents that cannot ask the person,
+  // so they can write every Unit's design with none of its questions asked.
+  // The agent is handed those questions to ask, Unit by Unit; the person is
+  // not asked how to go on.
+  test("9c: a wave whose builders wrote every Unit's design without its questions hands the agent the questions to ask", () => {
+    const proj = seedProject("functional-design", "on");
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      /^(- \*\*Scope\*\*: .*)$/m,
+      "$1\n- **Construction Iteration**: stage-major\n- **Construction Execution**: swarm",
+    ));
+    seedBoltDag(proj, ["alpha", "beta"], [["alpha", "beta"]]);
+    coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
+    coverUnit(proj, "beta", "functional-design", FD_REQUIRED_PRODUCES);
+    const d = runNext(proj, true);
+    expect(d.kind).toBe("ask");
+    expect(d.ask_type).toBe("guard-recovery");
+    expect(d.agent_work).toBe(true);
+    expect(d.reason_codes).toEqual(["SUMMARY_QUESTIONS_MISSING"]);
+    expect(d.unit).toBe("alpha");
+    expect((d.remedies ?? []).map((remedy) => remedy.op)).toEqual(["ask-stage-questions"]);
+    expect(d.remedies?.[0].action).toContain(
+      "/construction/alpha/functional-design/functional-design-questions.md",
+    );
+    expect(JSON.stringify(d)).not.toContain("Confirm the summary again");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 9b: with every unit covered, the approve is ALLOWED (the guard passes) and
