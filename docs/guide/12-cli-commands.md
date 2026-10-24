@@ -2300,6 +2300,12 @@ aidlc engine bolt checkpoint --action approve --unit "<unit>" --kind <unit|skele
 aidlc engine bolt checkpoint --action reject --unit "<unit>" --kind <unit|skeleton> --user-input 'Request Changes' --reason '<human feedback>'
 ```
 
+When the person, as they decide, asks for a review finding to be fixed or
+rejects one, add `--fix-finding "<review-artifact>#R-NN"` to approve, or
+`--reject-finding "<review-artifact>#R-NN=<their reason>"` to reject
+(`--reopen-finding` for one the reviewer marked fixed that they say is not),
+once per finding, as at a stage's gate.
+
 When the person answered while another engine question was on screen (where
 their words belong, a new-work offer), their reply is not kept for the checkpoint;
 the refusal names that message, and `--message <id>` on approve or reject records
@@ -2417,6 +2423,9 @@ aidlc engine bolt swarm-checkpoint --action approve --batch <N> --units "<Units>
 # Only after the human chose Request Changes and supplied feedback:
 aidlc engine bolt swarm-checkpoint --action reject --batch <N> --units "<Units>" --user-input 'Request Changes' --reason '<human feedback>'
 ```
+
+The finding flags (`--fix-finding`, `--reject-finding`, `--reopen-finding`) work
+as at a Unit checkpoint; a batch's rejection records them on each Unit's row.
 
 The action consumes the response; a changed checkpoint needs a new question and
 answer. As for a Unit checkpoint, `--message <id>` records a reply the person

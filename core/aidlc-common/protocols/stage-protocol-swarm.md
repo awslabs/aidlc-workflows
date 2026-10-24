@@ -229,7 +229,10 @@ say more). When their reply only picked Request Changes, ask what should change
 before you record it. A reply typed in a new chat is kept for the question while it is the
 newest question asked; run the approve or reject command there, with no session,
 and never ask it again. A reply to a different question does not count. When they approved and asked for a change, approve, then make the change
-and say in one line what you changed. The response is one-shot and
+and say in one line what you changed. Add `--fix-finding "<review-artifact>#R-NN"`
+to `approve` for each review finding they asked to have fixed, and
+`--reject-finding "<review-artifact>#R-NN=<their reason>"` to `reject` for each one
+they rejected. The response is one-shot and
 bound to this batch, exact Unit set, current fingerprint, and per-Unit command
 digest set. Re-running swarm `finalize` withdraws every open checkpoint question
 and captured checkpoint response for this intent, in any session. After fresh

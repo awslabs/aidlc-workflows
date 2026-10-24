@@ -1391,8 +1391,8 @@ asked for it to be fixed) records `Fix requested` instead. All but
 `Accepted risk` are no decision, so the finding stays open and the next review
 re-checks it. A Unit's checkpoint and a swarm batch's approval record their
 Units' findings, and a stage's approval nobody gave records none that a Unit's
-own approval recorded. A Request Changes report records `Rejected: <reason>`
-only for explicit
+own approval recorded. A Request Changes report, or a checkpoint's
+`--action reject`, records `Rejected: <reason>` only for explicit
 `--reject-finding <review-artifact>#R-NN=<exact human reason>` values. It uses
 `--reopen-finding <review-artifact>#R-NN=<exact human reason>` when the person
 disagrees that a `Resolved (reviewer)` finding is fixed. The artifact may be

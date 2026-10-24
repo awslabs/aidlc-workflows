@@ -120,6 +120,13 @@ export type ApprovalFindingDispositions = (
   decider: ApprovalDecider,
 ) => Record<string, string>;
 
+// The fields a Request Changes row records for the review findings the person
+// rejected or reopened, from the same writer.
+export type RejectedFindingDispositions = (
+  stages: readonly string[],
+  units: readonly string[],
+) => Record<string, string>;
+
 export function constructionCheckpointKind(
   stateContent: string,
   unit: string,
@@ -1806,6 +1813,7 @@ export function rejectConstructionCheckpoint(
   givenReason: string,
   session = "",
   message?: string,
+  rejectedFindings?: RejectedFindingDispositions,
 ): ConstructionCheckpoint {
   // The conductor read the person's reply as a change request. What they said
   // to change is the reason: the conductor's --reason when given, otherwise the
@@ -1828,11 +1836,13 @@ export function rejectConstructionCheckpoint(
     if (current.root !== rechecked.root || current.result.fingerprint !== rechecked.result.fingerprint) {
       throw new Error("Construction checkpoint evidence changed before rejection.");
     }
+    const gate = gateFields(projectDir, rechecked.result, rechecked.state);
     appendAuditEntryUnlocked("GATE_REJECTED", {
-      ...gateFields(projectDir, rechecked.result, rechecked.state),
+      ...gate,
       Session: session,
       "User Input": userInput, Feedback: reason, Reason: reason,
       ...protectedResponseFields(response),
+      ...rejectedFindings?.(gate["Gate Stages"].split(", ").filter(Boolean), [unit]),
     }, projectDir);
     consumeProtectedQuestion(projectDir, session);
     return resolveConstructionCheckpoint(projectDir, unit, kind);

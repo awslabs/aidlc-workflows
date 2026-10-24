@@ -1633,7 +1633,7 @@ export function rejectedFindingDispositionField(
   projectDir: string,
   stages: ReviewDispositionStages,
   specs: string[],
-  unit?: string,
+  units?: string | readonly string[],
   reopenSpecs: string[] = [],
 ): string | undefined {
   if (specs.length === 0 && reopenSpecs.length === 0) return undefined;
@@ -1647,7 +1647,8 @@ export function rejectedFindingDispositionField(
         `the ${stageList.length === 1 ? "stage" : "gate"} has no reviewer.`,
     );
   }
-  const findings = gateFindings(reviewedContexts(projectDir, stageList, [unit]));
+  const scopes = units === undefined || typeof units === "string" ? [units] : units;
+  const findings = gateFindings(reviewedContexts(projectDir, stageList, scopes));
   const rejected = specs.map((raw) => selectGateFinding(findings, raw, "reject"));
   const reopened = reopenSpecs.map((raw) => selectGateFinding(findings, raw, "reopen"));
   const duplicate = (finding: { artifact: string; id: string }): never => {

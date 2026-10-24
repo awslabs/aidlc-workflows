@@ -4259,9 +4259,9 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     expect(reviewerProtocol).toContain("aidlc-review-brief.ts review");
     expect(reviewerProtocol).toContain("--reject-finding");
     expect(reviewerProtocol).toContain('--fix-finding "<review-artifact>#R-');
-    // Only the stage gate's report carries the flag; a Unit checkpoint's approval does not.
+    // The stage gate's report and a checkpoint's approve both carry the flag.
     expect(reviewerProtocol.replace(/\s+/g, " ")).toContain(
-      "to the stage gate's `report --result approved` command for each one",
+      "to the approval command (the stage gate's `report --result approved`, or a checkpoint's `--action approve`) for each one",
     );
   });
 
