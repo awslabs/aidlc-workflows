@@ -605,6 +605,73 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
   });
 
+  // Live on Claude Code with the hooks switched off in a new chat after the
+  // person chose "Continue automatically" in an earlier one: their "let's stop
+  // here for today" was refused in the engine's words and the build went on.
+  // A chat none of whose messages reached the record could not have had its
+  // stop recorded, so the stop is theirs with the note, and their choice stays.
+  // A chat the hooks did record keeps the guard, and so does a chat no host
+  // names (Cursor, opencode or Copilot with every hook off).
+  describe("a stop in a chat whose messages never reached the record", () => {
+    const CHAT = "01995000-7a11-7000-8000-00000000e877";
+    const GRANT_CHAT = "01995000-7a11-7000-8000-00000000e878";
+    const NO_HOST_CHAT = { CLAUDE_PID: "", CLAUDE_CODE_SESSION_ID: "", CODEX_THREAD_ID: "", KIRO_SESSION_ID: "" };
+    const claudeChat = { ...NO_HOST_CHAT, CLAUDE_PID: String(process.pid), CLAUDE_CODE_SESSION_ID: CHAT };
+    const codexChat = { ...NO_HOST_CHAT, CODEX_THREAD_ID: CHAT };
+    const CODEX_STATE = join(REPO_ROOT, "dist", "codex", ".codex", "tools", "aidlc-state.ts");
+
+    // "Continue automatically", granted with the message of `session` (none: a
+    // row from before rows named their chat).
+    function grantedFrom(session: string | null): string {
+      const sf = seededStateFile(proj);
+      writeFileSync(sf, readFileSync(sf, "utf-8").replace(
+        "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
+      ), "utf-8");
+      appendAuditEntry("HUMAN_TURN", session === null ? {} : { Session: session }, proj);
+      appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, proj);
+      return sf;
+    }
+
+    test.each([
+      ["Claude Code", STATE, claudeChat],
+      ["Codex", CODEX_STATE, codexChat],
+    ])("on %s the stop parks as theirs and Continue automatically stays", (_host, tool, host) => {
+      const sf = grantedFrom(GRANT_CHAT);
+      const park = guarded(proj, ["park", "--person-asked"], false, tool, host);
+      expect(park.rc, park.out).toBe(0);
+      expect(park.out).toContain("none of this chat's messages reached the record");
+      expect(park.out).not.toContain("this host can miss one");
+      const state = readFileSync(sf, "utf-8");
+      expect(state).toContain("- **Parked By**: person");
+      expect(state).toContain("- **Construction Autonomy Mode**: autonomous");
+    });
+
+    test("the engine's park returns the paused step", () => {
+      const sf = grantedFrom(GRANT_CHAT);
+      const env = { ...process.env, ...claudeChat, AIDLC_SKIP_ARTIFACT_GUARD: "1" };
+      delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+      delete env.AIDLC_UNATTENDED;
+      const r = spawnSync(BUN, [ORCHESTRATE, "park", "--person-asked", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env,
+      });
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+      expect(JSON.parse(r.stdout).kind, r.stdout).toBe("parked");
+      expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+    });
+
+    test.each([
+      ["the grant came from this chat", CHAT, claudeChat],
+      ["a row names no chat", null, claudeChat],
+      ["no host names the chat", GRANT_CHAT, NO_HOST_CHAT],
+    ])("the guard holds when %s", (_case, session, host) => {
+      const sf = grantedFrom(session);
+      const park = guarded(proj, ["park", "--person-asked"], false, STATE, host);
+      expect(park.rc).not.toBe(0);
+      expect(park.out).toContain("no reply from the person is on record");
+      expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+    });
+  });
+
   // An unattended run never parks itself, whatever the ledger holds, and an
   // empty ledger is no reply from the person.
   test("an autonomous park needs a recorded reply in an attended session", () => {

@@ -2408,7 +2408,8 @@ export interface ParkResult {
 // conductor's reading of those words (--person-asked); the tool proves only that
 // a turn of theirs in this chat stands behind it (personTurnStands). Their stop wins
 // over the autonomous grant and is recorded as theirs. On a host whose hooks can
-// miss a reply (its hookActivation says so), a stop they asked for in an
+// miss a reply (its hookActivation says so), or in a chat none of whose messages
+// reached the record (noMessageOfThisChat), a stop they asked for in an
 // attended session under the autonomous grant is theirs too, with a note that no
 // reply was on record. The conductor's own park is never theirs: gated work
 // pauses unmarked, and a run set to go on by itself goes on (the answer is the
@@ -2431,16 +2432,37 @@ function handlePark(args: string[]): void {
   // the same message gave (personTurnStands).
   const replied = asked && attendedSession && personTurnStands(pd, "request");
   const activation = hookActivation();
-  const missedReply = asked && attendedSession && !replied &&
-    (activation?.missedReply !== undefined || activation?.missesReplies === true) && autonomous();
+  const hostMissesReplies = activation?.missedReply !== undefined || activation?.missesReplies === true;
+  const missedReply = asked && attendedSession && !replied && autonomous() &&
+    (hostMissesReplies || noMessageOfThisChat(pd));
   const result = parkWorkflow(pd, { attended: replied || missedReply });
+  const why = hostMissesReplies ? "this host can miss one" : "none of this chat's messages reached the record";
   console.log(JSON.stringify(missedReply
     ? {
       ...result,
-      note: "No reply from the person was on record (this host can miss one), so this stop is recorded as theirs. " +
+      note: `No reply from the person was on record (${why}), so this stop is recorded as theirs. ` +
         "Tell them in one line that the work is parked and resumes when they ask.",
     }
     : result));
+}
+
+// A chat the host names (Claude Code's and Codex's shells do) with no message
+// on the record: its hooks are off, or its prompt hook never runs, so no stop
+// typed there could be on record. With the hooks running, every chat's message
+// is, the grant's included. A row naming no chat counts as this chat's, as
+// personTurnStands reads it, and a chat no host names proves nothing.
+function noMessageOfThisChat(pd: string): boolean {
+  try {
+    const chat = resolveInvokingSessionId(pd);
+    if (chat === null) return false;
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(pd, undefined, undefined, unreadable);
+    return unreadable.length === 0 && !rows.some((row) =>
+      row.event === "HUMAN_TURN" && (auditBlockField(row.block, "Session") ?? chat) === chat
+    );
+  } catch {
+    return false;
+  }
 }
 
 // The person's words that stop the work here, and the message that holds them,
