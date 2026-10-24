@@ -150,7 +150,7 @@ before starting a second intent alongside the first:
  > 1. Part of the active work
       Continue the current workflow
    2. Separate new piece of work
-      Yes, set it up alongside the current one as "bugfix" work (6 stages, 6 approval gates) without changing it
+      Set it up alongside the current one as "bugfix" work (6 stages, 6 approval gates) without changing it
    3. Reshape the active work
       Change how the remaining plan is shaped
    4. Type something.

@@ -9481,7 +9481,7 @@
   "shown": "numbered",
   "via": "chat",
   "input": "yes",
-  "meaning": "ambiguous: yes answers none of the three options of a where-does-this-belong question (matching it to the option whose detail starts with Yes would be a lexical rule standing in for reading); the agent asks once",
+  "meaning": "ambiguous: yes answers none of the three options of a where-does-this-belong question; the agent asks once",
   "reader": "agent",
   "ambiguous": true,
   "expected": {
