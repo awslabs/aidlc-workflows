@@ -2447,14 +2447,25 @@ function buildHoldsEarlierPlan(projectDir: string, unit: string, worktree: strin
 // The build's work has moved away from the main code the new approval
 // describes (a peer landed first, or main changed), so the new plan cannot be
 // handed to it in place. Nothing is changed; the person chooses between the
-// work it holds and the plan they approved. A build resumed after a checkpoint
-// send-back cannot land the work it holds under the earlier plan, so its line
-// names only the way that works.
-function planNotHandedOver(unit: string, error: unknown, canLandAsItIs = true): string {
+// work it holds and the plan they approved. Keeping the work is offered only
+// where its landing runs: work that converged in this attempt lands by the same
+// merge run again, and any other work only through the build's own check, which
+// refuses while the build holds the earlier plan.
+function planNotHandedOver(
+  projectDir: string, batch: string, unit: string, worktree: string, attempt: SwarmAttemptStamp, error: unknown,
+): string {
+  let landsAsItIs = mergedBackConvergence(projectDir, batch, unit, swarmBoltSlug(unit), attempt) !== null;
+  if (!landsAsItIs) {
+    try {
+      landsAsItIs = readCodeGenerationWorktreeSourceBaseline(worktree, unit) !== null;
+    } catch {
+      // The check's refusal: the landing would stop on it.
+    }
+  }
   return `Unit ${unit}: the plan approved again could not be handed to its existing build, ` +
     `whose work no longer lines up with the main code (${error instanceof Error ? error.message : String(error)}). ` +
     "The build and its work are kept. To build the new plan, set this Unit's current work aside (abort and discard it) " +
-    (canLandAsItIs ? "and run prepare again; to keep the current work instead, land it as it is." : "and run prepare again.");
+    (landsAsItIs ? "and run prepare again; to keep the current work instead, land it as it is." : "and run prepare again.");
 }
 
 function archiveSwarmResume(resume: SwarmResume): string {
@@ -2817,7 +2828,10 @@ function handlePrepare(rest: string[]): void {
           bindCodeGenerationWorktreeApproval(projectDir, kept, unit);
           transferred = true;
         } catch (error) {
-          prepared.push({ unit, ok: false, worktree_path: kept, retained: true, error: planNotHandedOver(unit, error) });
+          prepared.push({
+            unit, ok: false, worktree_path: kept, retained: true,
+            error: planNotHandedOver(projectDir, flags.batch, unit, kept, attempt, error),
+          });
           continue;
         }
       }
@@ -2833,7 +2847,10 @@ function handlePrepare(rest: string[]): void {
       try {
         bindCodeGenerationWorktreeApproval(projectDir, resume.worktree, unit, resume.discardedSha256);
       } catch (error) {
-        prepared.push({ unit, ok: false, worktree_path: resume.worktree, resumed: true, error: planNotHandedOver(unit, error, false) });
+        prepared.push({
+          unit, ok: false, worktree_path: resume.worktree, resumed: true,
+          error: planNotHandedOver(projectDir, flags.batch, unit, resume.worktree, attempt, error),
+        });
         continue;
       }
       prepared.push({
