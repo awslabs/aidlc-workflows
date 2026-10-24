@@ -325,7 +325,7 @@ describe("t259 the engine's last word ended the turn", () => {
     expect(atQuestion.stdout).not.toContain('"decision":"block"');
 
     // The agent ran a bare next anyway and was handed the work in progress.
-    expect(JSON.parse(run(["engine", "orchestrate", "next"]).stdout).kind).toBe("run-stage");
+    expect(JSON.parse(run(["engine", "orchestrate", "next"]).stdout).stage).toBe("feasibility");
     expect(stop().stdout).toContain('"decision":"block"');
   });
 

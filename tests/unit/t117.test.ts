@@ -299,11 +299,11 @@ describe("t117 explicit resume routing", () => {
     const r = runOrchestrateNext(ORCH, p, ["--resume"]);
     expect(r.directive?.kind).toBe("run-stage");
     expect(r.directive?.stage).toBe("feasibility");
-    expect(r.steering.length).toBe(0);
-    expect(inlineRulePaths(r.directive)).toEqual(
-      r.directive?.rules_in_context as string[],
-    );
-    expect(inlineRulePaths(r.directive).length).toBeGreaterThan(0);
+    // Inline or in parts ahead of the step, the rules delivered are exactly
+    // the ones it names.
+    const delivered = [...new Set([...r.steering, r.directive].flatMap(inlineRulePaths))];
+    expect(delivered).toEqual(r.directive?.rules_in_context as string[]);
+    expect(delivered.length).toBeGreaterThan(0);
   });
 });
 
