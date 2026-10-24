@@ -1208,7 +1208,7 @@ describe("t351 (9) a tailored plan's scores are on its first audit entry (#2575)
   test("the plan the composer validated records the five scores and the method, then the record is spent", () => {
     const proj = installedProject();
     const id = compose(proj);
-    expect(JSON.parse(readFileSync(recordOf(proj), "utf-8"))).toEqual({ request: id });
+    expect(JSON.parse(readFileSync(recordOf(proj), "utf-8"))).toEqual({ request: id, scanned: "greenfield" });
     screen(proj);
     propose(proj, composedGrid());
     const created = createComposed(proj, ["--plan-name", "date-parser-fix", "--request", id]);
@@ -1306,7 +1306,7 @@ describe("t351 (9) a tailored plan's scores are on its first audit entry (#2575)
     compose(proj);
     screen(proj);
     const second = compose(proj, ["compose", "fix the date parser and its tests"]);
-    expect(JSON.parse(readFileSync(recordOf(proj), "utf-8"))).toEqual({ request: second });
+    expect(JSON.parse(readFileSync(recordOf(proj), "utf-8"))).toEqual({ request: second, scanned: "greenfield" });
     propose(proj, composedGrid());
     expect(createComposed(proj, ["--request", second]).status).toBe(0);
     expect(existsSync(recordOf(proj))).toBe(false);
@@ -1581,5 +1581,32 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
     const junk = creationOf(next(proj, ["--scope", base, ...lists(retyped), "--request", id]));
     expect(junk).toContain(`--add ${approved.add.join(",")}`);
     expect(junk).not.toContain("--project-type");
+  });
+
+  test("a type the composer took from the scan is not recorded as the person's when their code arrives before Approve", () => {
+    // The folder scans as a new project when the composer plans, so it plans
+    // on that type; the person adds their code while the gate waits.
+    const proj = installedProject();
+    const id = compose(proj);
+    const echoed = validate(
+      proj,
+      { stages: plannedGrid(), scopeSettings: SETTINGS, guardPolicy: "off", depth: "standard" },
+      ["--custom", "--project-type", "greenfield"],
+    );
+    cpSync(join(FIXTURES_DIR, "brownfield-todo"), proj, { recursive: true });
+    const printed = next(proj, [
+      "--scope", echoed.base_scope as string, ...lists(echoed.plan_changes as { skip: string[]; add: string[] }),
+      ...(echoed.creation_depth ? ["--depth", echoed.creation_depth] : []),
+      "--request", id,
+    ]);
+    expect(printed.kind, printed.message).toBe("print");
+    expect(creationOf(printed)).not.toContain("--project-type");
+    expect(printed.narration).not.toContain("The folder has no code yet");
+    const created = runCreation(proj, printed);
+    expect(created.status, created.out).toBe(0);
+    expect(created.out).not.toContain("(you said so)");
+    const state = stateOf(proj);
+    expect(state).toContain("- **Project Type**: Brownfield");
+    expect(state).toContain("- **Project Type Source**: workspace scan");
   });
 });
