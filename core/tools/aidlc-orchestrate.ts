@@ -500,7 +500,6 @@ import {
   findStageBySlug,
   withPersonsWordsFirst,
   PERSON_ASKED_SKIP_REASON,
-  PERSON_ASKED_UNDO_SKIP_REASON,
   readUnitSourceManifest,
   readIntentRegistry,
   unitPlainName,
@@ -15240,14 +15239,13 @@ function planChangeDirective(
   ].join(" ");
   // The person's own skip, in their change or in the undo of their add:
   // recompose carries it out over its check that later stages keep what they
-  // read, as a stage skipped where it stands is. The undo of their skip puts
-  // the stage back the same way; an add of their own is checked.
-  const recomposed = (skipped: string[], added: string[], undo = false): string =>
+  // read, as a stage skipped where it stands is. The undo of their skip is a
+  // plain add, which recompose takes for a stage this work skipped.
+  const recomposed = (skipped: string[], added: string[]): string =>
     `${aidlcDispatcherInvocation("recompose")} ${flips(skipped, added)}` +
-    (skipped.length > 0 ? ` --reason ${shellArg(PERSON_ASKED_SKIP_REASON)}`
-      : undo ? ` --reason ${shellArg(PERSON_ASKED_UNDO_SKIP_REASON)}` : "");
+    (skipped.length > 0 ? ` --reason ${shellArg(PERSON_ASKED_SKIP_REASON)}` : "");
   const replan = (skipped: string[]): string => recomposed(skipped, add);
-  const undone = recomposed(add, planSkip, true);
+  const undone = recomposed(add, planSkip);
   const skipName = (slug: string): string =>
     unitStep !== null && !unitStep.others && slug === unitStep.stage
       ? `${name(slug)} for the ${unitName} Unit`
