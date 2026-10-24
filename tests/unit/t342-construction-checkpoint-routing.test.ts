@@ -2212,7 +2212,11 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   test("a Unit redo with no reply of the person's on record is not recorded as their request", () => {
     const p = betaBuilding();
     cover(p, "beta", ["code-generation"]);
-    expect(readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN")).toHaveLength(0);
+    // The person's last turn was alpha's approval; nothing of theirs since.
+    const rows = readAuditShardEvents(p);
+    const approvedAt = rows.map((row) => row.event).lastIndexOf("GATE_APPROVED");
+    expect(approvedAt).toBeGreaterThanOrEqual(0);
+    expect(rows.slice(approvedAt + 1).filter((row) => row.event === "HUMAN_TURN")).toHaveLength(0);
     const command = /`[^`]*aidlc-jump\.ts (reopen [^`]+)`/.exec(redo(p))?.[1];
     const reopened = tool(p, "jump", command!.split(" "));
     expect(reopened.status, reopened.out).toBe(0);
