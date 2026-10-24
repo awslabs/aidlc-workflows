@@ -1161,10 +1161,6 @@ export class AgentStandIn {
         if (p === questions || existsSync(join(this.host.proj, p))) continue;
         this.host.write(p, this.hooks.artifactText?.(p, stage) ?? unitArtifactText(p, this.units) ?? artifactText(p, stage));
       }
-      if (stage === "practices-discovery") {
-        this.must("state", "practices-event", "--type", "discovered", "--field", "Sources Scanned: none",
-          "--field", "Drafts: team-practices.md, discovered-rules.md");
-      }
     };
     if (d.gate_only === true || (d.gate === true && d.build_settled === true)) {
       // The gate is re-presented, or presented on the last Unit once every
@@ -1183,6 +1179,11 @@ export class AgentStandIn {
       else work();
     }
     this.contributions(d);
+    // The conductor records the discovery once the helpers' turns are back (practices-discovery.md, Step 5).
+    if (stage === "practices-discovery") {
+      this.must("state", "practices-event", "--type", "discovered", "--field", "Sources Scanned: none",
+        "--field", "Drafts: team-practices.md, discovered-rules.md");
+    }
     if (typeof d.reviewer === "string") this.review(d);
     if (unit) {
       this.must("state", "unit", "complete", "--stage", stage, "--unit", unit);
@@ -1830,7 +1831,7 @@ export function runScope(scope: string, options: ScopeRunOptions = {}): ScopeRun
  * Hand-offs the shared Stop hook is known to block today. Each one has a
  * test.todo named after it; the fix that lets the turn end removes it here.
  */
-export const KNOWN_STOP_BLOCKS: readonly string[] = ["autonomy"];
+export const KNOWN_STOP_BLOCKS: readonly string[] = [];
 
 const STATE_LINE = /^- \[(.)\] ([a-z0-9-]+) \u2014 (EXECUTE|SKIP)/;
 
