@@ -14,7 +14,6 @@ import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import {
   AUDIT_TRAIL_REFUSAL,
@@ -23,6 +22,7 @@ import {
   runtimeIntegrityViolationKind,
   violatesRuntimeIntegrity,
 } from "../../dist/claude/.claude/hooks/runtime-integrity.ts";
+import { shellHomes } from "../../dist/claude/.claude/hooks/review-freeze-command.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -315,11 +315,11 @@ describe("t349 audit trail guard: shell commands", () => {
   });
 
   test("the project's own folders spelled from the home folder are not the audit trail either", () => {
-    // The home folder the hook reads, as the shell expands `~` and $HOME.
-    const home = process.env.HOME || homedir();
-    const proj = join(home, "audit", "proj");
+    // The home folder the hook reads, the one shellHomes says `~` and $HOME name.
+    const proj = join(shellHomes(false)[0], "audit", "proj");
     for (const command of [
       "npm test > ~/audit/proj/build/test-$(date +%s).log",
+      "npm test > ~\\audit\\proj\\build\\test-$(date +%s).log",
       "npm test > $HOME/audit/proj/build/test-$(date +%s).log",
       `npm test > \${HOME}/audit/proj/build/test-$(date +%s).log`,
       'cd ~/audit/proj && npm test > "$TEST_LOG"',
@@ -348,6 +348,17 @@ describe("t349 audit trail guard: shell commands", () => {
     }
     expect(bash("cd C:\\proj\\aidlc\\spaces\\default\\intents\\260925-login\\audit && echo x >> $(hostname).md", "C:\\proj"))
       .toBe("audit");
+    expect(bash("cd C:\\proj\\aidlc\\spaces\\default\\intents\\260925-login && cd audit && echo x >> $(hostname).md", "C:\\proj"))
+      .toBe("audit");
+    // A Windows path into the workspace that names no audit folder keeps the shared policy, as before.
+    expect(runtimeIntegrityViolationKind({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: 'Copy-Item C:\\proj\\aidlc\\spaces\\default\\memory\\team.md "$env:TEMP\\team.md"' },
+      cwd: "C:\\proj",
+      aidlc_shell: "powershell",
+    } as never)).toBeNull();
+    expect(bash('cd C:\\proj\\aidlc\\spaces\\default\\intents\\260925-login && echo y > "$OUT"', "C:\\proj")).toBeNull();
   });
 
   test("an unrelated directory named intents is not the AIDLC workspace", () => {
