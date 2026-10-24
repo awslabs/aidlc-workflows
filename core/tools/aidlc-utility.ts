@@ -486,7 +486,6 @@ import {
   isScopedReviewCopy,
   KIRO_CONDUCTOR_AGENT_FILE,
   PERSON_ASKED_SKIP_REASON,
-  PERSON_ASKED_UNDO_SKIP_REASON,
   personsWordsText,
 } from "./aidlc-lib.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
@@ -12428,6 +12427,20 @@ function rebuildEffectivePlanFields(
   return { content: next, executeStages, completedCount };
 }
 
+// The stages this work's plan has skipped, as its own record holds them: the
+// plan picked at creation (WORKFLOW_STARTED) and every plan change since
+// (RECOMPOSED), the person's own and those they approved at a compose question.
+function stagesSkippedInThisWork(projectDir: string, intent?: string, space?: string): Set<string> {
+  const skipped = new Set<string>();
+  for (const row of readAuditShardEvents(projectDir, intent, space)) {
+    if (row.event !== "WORKFLOW_STARTED" && row.event !== "RECOMPOSED") continue;
+    for (const slug of (auditBlockField(row.block, "Stages skipped") ?? "").split(",").map((s) => s.trim())) {
+      if (slug !== "" && slug !== "none") skipped.add(slug);
+    }
+  }
+  return skipped;
+}
+
 function handleRecompose(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
   const usage = (message: string): never => die(
     `${message}\nUsage: recompose [--skip <slug,...>] [--add <slug,...>] ` +
@@ -12658,6 +12671,12 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
         proposed[c.slug] = "EXECUTE";
       }
     }
+    // A stage this work skipped and the person now puts back (the undo, their
+    // own words later, a jump to it) is judged as the plan had it before the
+    // skip: what it reads that the plan leaves out is not new starvation. A
+    // stage the work never skipped is checked, alone or beside a put back.
+    const skippedHere = addList.length > 0 ? stagesSkippedInThisWork(projectDir, flags.intent, flags.space) : new Set();
+    for (const slug of addList) if (skippedHere.has(slug)) baseGrid[slug] = "EXECUTE";
     const projectType = (getField(content, "Project Type") || "").toLowerCase();
     const pt = projectType === "brownfield" || projectType === "greenfield"
       ? (projectType as "brownfield" | "greenfield")
@@ -12674,9 +12693,8 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     const newErrors = validation.errors.filter((e) => !baseErrors.has(e));
     // A stage the person named is skipped as they asked (the engine's skip
     // step passes its own reason for that): the stages after it run from what
-    // there is, as they do after a stage skipped where it stood. The undo the
-    // same step names puts the stage back the same way, with its own reason.
-    if (newErrors.length > 0 && reason !== PERSON_ASKED_SKIP_REASON && reason !== PERSON_ASKED_UNDO_SKIP_REASON) {
+    // there is, as they do after a stage skipped where it stood.
+    if (newErrors.length > 0 && reason !== PERSON_ASKED_SKIP_REASON) {
       die(
         `Recompose rejected by the strict validator:\n${newErrors.map((e) => `  - ${e}`).join("\n")}\n` +
           "To make the change, also add a stage that produces what is missing, or also skip the stage that needs it." +
