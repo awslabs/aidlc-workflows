@@ -1626,6 +1626,9 @@ function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand): bool
     if (marker === null) return true;
     if (marker.delivery === "superseded") {
       const attempt = current?.active_attempt;
+      // The same exception's other case: the jump a settled print named as its
+      // own step (noteNamedJump), run as named on the state it was named on, is
+      // the agent carrying that print out.
       if (
         attempt?.status === "settled" && current?.kind === "print" &&
         attempt.named_jump_sha256 === jumpClaimSha256(jump.args) &&
