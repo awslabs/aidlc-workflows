@@ -37881,13 +37881,12 @@ export const GATE_NOTE_SECONDS = 10;
 
 // About how many seconds the report that opens a codekb stage's approval gate
 // takes over `repos` repositories, rounded up: a fixed part plus a second for
-// every 150 repositories, fitted with a margin to the gate measured on
-// live-shaped projects on Linux, the report with its hooks (1.4 s at 190
-// repositories, 3 to 4 s at 1000, 7 to 11 s at 2000), times 1.6 for Windows
-// Server, the slower box (its bun process start against Linux's). An estimate
-// the agent says as "about", never a promise.
+// every 100 repositories, fitted with a margin to the gate measured on Windows
+// Server, the slower box, the report with its hooks (4.2 s at 190
+// repositories, 6.9 s at 500, 11.5 s at 1000; Linux 1.4 s, 2.3 s and 4 s). An
+// estimate the agent says as "about", never a promise.
 const GATE_FIXED_SECONDS = 3;
-const GATE_REPOS_PER_SECOND = 150;
+const GATE_REPOS_PER_SECOND = 100;
 export function gateEstimateSeconds(repos: number): number {
   return Math.ceil(GATE_FIXED_SECONDS + repos / GATE_REPOS_PER_SECOND);
 }

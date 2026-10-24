@@ -545,15 +545,15 @@ describe("the running count of a long analysis", () => {
     expect(last.analysed).toEqual({ done: 1000, total: 1000 });
     expect(last.gate_wait_note).toBe(
       "Every repository is analysed. The report that opens the approval gate checks the files of all 1000 " +
-        "repositories and takes about 10 seconds: before you run it, tell the person so in one line of your own.",
+        "repositories and takes about 13 seconds: before you run it, tell the person so in one line of your own.",
     );
     expect("gate_wait_note" in link(proj, "service-999", FINAL)).toBe(false);
   });
 
   test("the wait is said from where the estimate reaches ten seconds", () => {
     expect(gateEstimateSeconds(190)).toBe(5);
-    expect(gateEstimateSeconds(900)).toBeLessThan(GATE_NOTE_SECONDS);
-    expect(gateEstimateSeconds(901)).toBe(GATE_NOTE_SECONDS);
+    expect(gateEstimateSeconds(600)).toBeLessThan(GATE_NOTE_SECONDS);
+    expect(gateEstimateSeconds(601)).toBe(GATE_NOTE_SECONDS);
   });
 
   test("a short gate is not said, and under ten repositories a receipt carries no count", () => {
