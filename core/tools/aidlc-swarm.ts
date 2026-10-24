@@ -2291,12 +2291,14 @@ function buildHoldsEarlierPlan(projectDir: string, unit: string, worktree: strin
 // The build's work has moved away from the main code the new approval
 // describes (a peer landed first, or main changed), so the new plan cannot be
 // handed to it in place. Nothing is changed; the person chooses between the
-// work it holds and the plan they approved.
-function planNotHandedOver(unit: string, error: unknown): string {
+// work it holds and the plan they approved. A build resumed after a checkpoint
+// send-back cannot land the work it holds under the earlier plan, so its line
+// names only the way that works.
+function planNotHandedOver(unit: string, error: unknown, canLandAsItIs = true): string {
   return `Unit ${unit}: the plan approved again could not be handed to its existing build, ` +
     `whose work no longer lines up with the main code (${error instanceof Error ? error.message : String(error)}). ` +
     "The build and its work are kept. To build the new plan, set this Unit's current work aside (abort and discard it) " +
-    "and run prepare again; to keep the current work instead, land it as it is.";
+    (canLandAsItIs ? "and run prepare again; to keep the current work instead, land it as it is." : "and run prepare again.");
 }
 
 function archiveSwarmResume(resume: SwarmResume): string {
@@ -2671,7 +2673,7 @@ function handlePrepare(rest: string[]): void {
       try {
         bindCodeGenerationWorktreeApproval(projectDir, resume.worktree, unit, resume.discardedSha256);
       } catch (error) {
-        prepared.push({ unit, ok: false, worktree_path: resume.worktree, resumed: true, error: planNotHandedOver(unit, error) });
+        prepared.push({ unit, ok: false, worktree_path: resume.worktree, resumed: true, error: planNotHandedOver(unit, error, false) });
         continue;
       }
       prepared.push({

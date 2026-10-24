@@ -166,6 +166,33 @@ test("a plan approved again in a resumed checkpoint revision: the steps the refu
   checkReviewFinalizeAndLand(pd, { alpha: 3, beta: 3 });
 });
 
+// A resumed build already holds work of its own (the worker wrote source before the plan changed), so the approved
+// plan cannot be handed to it in place. Its line names only the way that works there: set the work aside (it is parked
+// and can be restored) and prepare again, which builds the plan the person approved.
+test("a resumed build with work of its own: the line names the way that works, and that way builds the approved plan", () => {
+  const pd = nativeCheckpointRevision(UNITS, false);
+  writeUnitSource(pd, "alpha", 4);
+  plan(pd, "alpha", "third");
+  expect(nextDirective(pd)).toMatchObject({ kind: "ask", stage: "code-generation" });
+  approveAgain(pd);
+  const kept = swarm(pd, ["prepare", "--batch", "1", "--units", "alpha", "--resume-existing"]);
+  expect(kept.code).toBe(2);
+  const [row] = JSON.parse(kept.out).units as Array<{ ok: boolean; error: string }>;
+  expect(row.ok).toBe(false);
+  expect(row.error).toContain("The build and its work are kept.");
+  expect(row.error).toContain("set this Unit's current work aside (abort and discard it)");
+  expect(row.error).not.toContain("land it as it is");
+  const aborted = runCheckpointTool(pd, "tools/aidlc-bolt.ts", [
+    "abort", "--name", "alpha", "--slug", "alpha", "--reason", "set aside for the plan approved again", "--discard", "--project-dir", pd,
+  ]);
+  expect(aborted.code, `${aborted.out}\n${aborted.err}`).toBe(0);
+  const rebuilt = swarm(pd, ["prepare", "--batch", "1", "--units", "alpha", "--resume-existing"]);
+  expect(rebuilt.code, `${rebuilt.out}\n${rebuilt.err}`).toBe(0);
+  expect(verifyInBuild(pd, "alpha").ok).toBe(true);
+  const childPlan = readFileSync(join(codeGenerationRecordDir(wt(pd, "alpha"), "alpha"), "code-generation-plan.md"), "utf-8");
+  expect(childPlan).toContain("third");
+});
+
 test("a plan changed in a resumed checkpoint revision and not approved yet is not handed to the build", () => {
   const pd = nativeCheckpointRevision(UNITS, false);
   plan(pd, "alpha", "third");
