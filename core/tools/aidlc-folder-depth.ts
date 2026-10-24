@@ -20,8 +20,14 @@ const WINDOWS_PATH_LIMIT = 260;
 // t-windows-deep-folder checks the review paths the engine builds stay within it.
 export const RECORD_DEPTH = 185;
 
-// The deepest per-Unit record before the Unit's own name: the review brief of
-// the longest per-Unit stage name with a reviewer, with the label at its cap:
+// The deepest per-Unit record is the review brief of the longest per-Unit
+// stage name with a reviewer. Under the work's record folder it takes this
+// many characters before the Unit's own name:
+// /.aidlc-engine/reviews/infrastructure-design/units/<unit>/briefs/<sha256>.md
+export const UNIT_RECORD_SUFFIX = 126;
+
+// The same record in the default space with the label at its cap, the count
+// when the work's own record folder is not known:
 // aidlc/spaces/default/intents/<YYMMDD>-<label>/.aidlc-engine/reviews/infrastructure-design/units/<unit>/briefs/<sha256>.md
 // t-windows-deep-folder-gate checks the per-Unit review paths stay within it.
 export const UNIT_RECORD_DEPTH = 186;
@@ -29,7 +35,7 @@ export const UNIT_RECORD_DEPTH = 186;
 export interface DeepFolder {
   /** The project folder's length in characters. */
   depth: number;
-  /** What AI-DLC's records add under it: RECORD_DEPTH, or UNIT_RECORD_DEPTH plus the longest Unit name. */
+  /** What AI-DLC's records add under it: RECORD_DEPTH, or the per-Unit records' depth with the longest Unit name. */
   adds: number;
   /** Doctor's row after "Project folder: ". */
   facts: string;
@@ -42,19 +48,21 @@ export interface DeepFolder {
 /**
  * On Windows, a project folder deep enough that AI-DLC's records would pass
  * 260 characters; null on any other platform and for a folder short enough.
- * With the work's Unit names, their per-Unit records are counted too. Reads
- * nothing but the path.
+ * With the work's Unit names, their per-Unit records are counted too, under
+ * the work's own record folder (relative to the project) when it is given.
+ * Reads nothing but the path.
  */
 export function deepFolder(
   projectDir: string,
   platform: NodeJS.Platform = process.platform,
-  unitNames: readonly string[] = [],
+  units?: { names: readonly string[]; recordFolder?: string | null },
 ): DeepFolder | null {
   if (platform !== "win32") return null;
   const folder = win32.resolve(projectDir);
   const depth = folder.length;
-  const adds = unitNames.length > 0
-    ? UNIT_RECORD_DEPTH + Math.max(...unitNames.map((name) => name.length))
+  const longest = Math.max(0, ...(units?.names ?? []).map((name) => name.length));
+  const adds = units && units.names.length > 0
+    ? (units.recordFolder ? units.recordFolder.length + UNIT_RECORD_SUFFIX : UNIT_RECORD_DEPTH) + longest
     : RECORD_DEPTH;
   if (depth + 1 + adds <= WINDOWS_PATH_LIMIT) return null;
   const facts = `${depth} characters deep; Windows tools refuse paths over ${WINDOWS_PATH_LIMIT} characters ` +
