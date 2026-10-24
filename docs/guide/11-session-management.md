@@ -175,7 +175,7 @@ You can combine `--stage` or `--phase` with `--scope`:
 /aidlc --stage code-generation --scope bugfix
 ```
 
-With no workflow yet, this creates a new workflow with the specified scope and jumps directly to the target stage. On running work, AI-DLC changes the scope first and then makes the jump in the new scope; a setting typed beside them, such as `--depth`, is applied with the change.
+With no workflow yet, this creates a new workflow with the specified scope and jumps directly to the target stage. On running work, AI-DLC changes the scope first and then makes the jump in the new scope; a `--depth`, `--test-strategy` or `--guard-policy` setting typed beside them is applied with the change. Set `--review` and the ceremony switches such as `--sensors` on their own before the jump.
 
 ---
 
