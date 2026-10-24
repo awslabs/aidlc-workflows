@@ -118,7 +118,7 @@ describe.each(POLICIES)("Guard Policy %s: a choice left to the agent names the m
     const r = log(proj, ["answer", "--stage", STAGE, "--details", "Q5: A; Q6: A; Q7: A", "--on-instruction", "--message", id]);
     expect(r.status, r.out).toBe(0);
     const row = answers(proj).at(-1);
-    expect(field(row, "Answer Source")).toBe("chosen by the agent as the person asked");
+    expect(field(row, "Answer Source")).toBe("chosen by the agent, reading their message");
     expect(field(row, "Message Id")).toBe(id);
     expect(field(row, "Person Reply")).toBe(words);
     expect(field(row, "Instruction")).toBeNull();
@@ -145,7 +145,7 @@ describe.each(POLICIES)("Guard Policy %s: a choice left to the agent names the m
     const r = log(proj, ["answer", "--stage", STAGE, "--details", "Q5: A; Q6: A; Q7: A", "--on-instruction"]);
     expect(r.status, r.out).toBe(0);
     const row = answers(proj).at(-1);
-    expect(field(row, "Answer Source")).toBe("chosen by the agent as the person asked");
+    expect(field(row, "Answer Source")).toBe("chosen by the agent, reading their message");
     expect(field(row, "Message Id")).toBe(id);
   });
 
@@ -156,7 +156,7 @@ describe.each(POLICIES)("Guard Policy %s: a choice left to the agent names the m
     const r = log(proj, ["answer", "--stage", STAGE, "--details", "Q5: A", "--on-instruction", "they said go ahead", "--message", id]);
     expect(r.status, r.out).toBe(0);
     const row = answers(proj).at(-1);
-    expect(field(row, "Answer Source")).toBe("chosen by the agent as the person asked");
+    expect(field(row, "Answer Source")).toBe("chosen by the agent, reading their message");
     expect(field(row, "Message Id")).toBe(id);
     expect(field(row, "Person Reply")).toBe("whatever you think is best");
     expect(field(row, "Conductor Summary")).toBe("they said go ahead");

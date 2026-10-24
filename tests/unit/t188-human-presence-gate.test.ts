@@ -1624,7 +1624,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       ]);
       expect(r.rc, r.out).toBe(0);
       const audit = readAllAuditShards(proj);
-      expect(audit).toContain("**Answer Source**: chosen by the agent as the person asked");
+      expect(audit).toContain("**Answer Source**: chosen by the agent, reading their message");
       expect(audit).toContain(`**Message Id**: ${id}`);
       expect(audit).toContain(`**Person Reply**: ${words}`);
       expect(audit).not.toContain("**Instruction**:");
@@ -2184,7 +2184,7 @@ describe("t188: a late-logged question takes the reply that answered it", () => 
       const answered = rows("QUESTION_ANSWERED");
       expect(answered).toHaveLength(2);
       expect(fieldOf(answered[0], "Message Id")).toBe(id);
-      expect(fieldOf(answered[1], "Answer Source")).toBe("chosen by the agent as the person asked");
+      expect(fieldOf(answered[1], "Answer Source")).toBe("chosen by the agent, reading their message");
       expect(fieldOf(answered[1], "Message Id")).toBe(id);
     });
 
@@ -2268,7 +2268,7 @@ describe("t188: a late-logged question takes the reply that answered it", () => 
       expect(log(["decision", "--stage", slug, "--decision", "Q4: logged after", "--options", "A,B"], inChat).rc).toBe(0);
       const left = log(["answer", "--stage", slug, "--details", "Q4: A", "--on-instruction", "--message", handedOver], inChat);
       expect(left.rc, left.out).toBe(0);
-      expect(fieldOf(rows("QUESTION_ANSWERED").at(-1)!, "Answer Source")).toBe("chosen by the agent as the person asked");
+      expect(fieldOf(rows("QUESTION_ANSWERED").at(-1)!, "Answer Source")).toBe("chosen by the agent, reading their message");
       expect(output(left).say).toBeUndefined();
     });
 

@@ -152,7 +152,7 @@ const gateItem = (row: AuditShardEvent) =>
  * can ask for: a stage reopened by a jump, a changed project type.
  *
  * A choice the person left to the agent (its row says Answer Source "chosen
- * by the agent as the person asked") is backed by the message it names
+ * by the agent, reading their message") is backed by the message it names
  * (Message Id), which the person may have sent before the question came; a
  * row naming no message of theirs is backed by nothing.
  *

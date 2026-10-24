@@ -12653,10 +12653,12 @@ export type HumanTurnState = "acted" | "consumed" | "none";
 export const COMMAND_TURN_REPLY = "command";
 export const QUESTION_TURN_REPLY = "question";
 
-// An answer the agent chose because the person left the choice to it ("up to
-// you", "choose the recommended answers"): the record says who chose and names
-// the message that handed it over (log answer --on-instruction --message).
-export const ANSWER_SOURCE_ON_INSTRUCTION = "chosen by the agent as the person asked";
+// An answer the agent chose on a message of theirs it read as leaving the
+// choice to it ("up to you", "choose the recommended answers"): the record says
+// what the tool knows, who chose and which message it read, which Message Id
+// names (log answer --on-instruction --message). Whether the message left the
+// choice is the agent's reading.
+export const ANSWER_SOURCE_ON_INSTRUCTION = "chosen by the agent, reading their message";
 
 // The agent's own account on a row, kept beside the person's words and never
 // read as theirs: the Request Changes text it reported, or words it passed in

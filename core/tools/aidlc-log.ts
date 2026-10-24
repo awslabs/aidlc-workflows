@@ -2525,9 +2525,9 @@ function handleAnswer(args: string[]): void {
         error("Nothing the person said in this piece of work is on record, so no choice was left to you. Ask them." +
           unattendedHumanPresenceHint());
       }
-      // The record says the person left it to the agent only beside the
-      // message that did, whose whole words it keeps; words the agent passed
-      // with the flag are its own and claim nothing.
+      // The record says the agent chose, reading a message of theirs, only
+      // beside that message, whose whole words it keeps; words the agent
+      // passed with the flag are its own and claim nothing.
       if (named !== null) {
         fields["Answer Source"] = ANSWER_SOURCE_ON_INSTRUCTION;
       }

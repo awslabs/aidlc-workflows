@@ -583,8 +583,8 @@ ask targeted follow-up. Do NOT proceed until resolved.
   is best", or "choose the recommended answers" for this stage), the agent
   decides: it picks the option that best fits what they have said and records
   it with `log answer --on-instruction --message <id>`, naming the message
-  that left the choice to it, so the record shows the agent chose it as they
-  asked. The engine proves that message (it exists, came through this chat,
+  that left the choice to it, so the record shows the agent chose it, reading
+  that message. The engine proves that message (it exists, came through this chat,
   and no decision after it has used it up, other than the one it gave itself)
   and keeps their whole words with the answer as `Person Reply`. Words written
   after the flag are the agent's own (`Conductor Summary`) and claim nothing;

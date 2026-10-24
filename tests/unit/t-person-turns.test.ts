@@ -148,7 +148,7 @@ describe("person-turn check", () => {
     row(dir, "DECISION_RECORDED", { Stage: "intent-capture" });
     row(dir, "QUESTION_ANSWERED", {
       Stage: "intent-capture", Details: "Q1: A; Q2: B",
-      "Answer Source": "chosen by the agent as the person asked", "Message Id": id,
+      "Answer Source": "chosen by the agent, reading their message", "Message Id": id,
     });
     expect(drive.unbacked()).toEqual([]);
   });
@@ -160,12 +160,12 @@ describe("person-turn check", () => {
     row(dir, "DECISION_RECORDED", { Stage: "intent-capture" });
     row(dir, "QUESTION_ANSWERED", {
       Stage: "intent-capture", Details: "Q1: A",
-      "Answer Source": "chosen by the agent as the person asked", "Conductor Summary": "up to you",
+      "Answer Source": "chosen by the agent, reading their message", "Conductor Summary": "up to you",
     });
     row(dir, "DECISION_RECORDED", { Stage: "requirements-analysis" });
     row(dir, "QUESTION_ANSWERED", {
       Stage: "requirements-analysis", Details: "Q1: B",
-      "Answer Source": "chosen by the agent as the person asked", "Message Id": kept(dir, "up to you"),
+      "Answer Source": "chosen by the agent, reading their message", "Message Id": kept(dir, "up to you"),
     });
     const problems = drive.unbacked();
     expect(problems).toHaveLength(2);
@@ -710,7 +710,7 @@ describe("person-turn check", () => {
       const id = kept(dir, "Guide me");
       row(dir, "QUESTION_ANSWERED", {
         Stage: "practices-discovery", Details: "Guide me",
-        "Answer Source": "chosen by the agent as the person asked", "Message Id": id,
+        "Answer Source": "chosen by the agent, reading their message", "Message Id": id,
       });
       return unbackedTuiDecisions(dir);
     });

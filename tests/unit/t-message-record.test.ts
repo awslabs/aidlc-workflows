@@ -462,7 +462,7 @@ describe("a typed prompt's message backs a choice the person left to the agent",
       ]);
       expect(theirs.status, theirs.out).toBe(0);
       const named = answers(proj).at(-1)?.block ?? "";
-      expect(auditBlockField(named, "Answer Source")).toBe("chosen by the agent as the person asked");
+      expect(auditBlockField(named, "Answer Source")).toBe("chosen by the agent, reading their message");
       expect(auditBlockField(named, "Message Id")).toBe(id);
       expect(auditBlockField(named, "Person Reply")).toBe(words);
       const mine = log(proj, [

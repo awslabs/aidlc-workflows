@@ -6,8 +6,8 @@
 // from before --message) are its own text, kept as such and claiming nothing,
 // so a misread shows in the record instead of being hunted by a matcher. In a
 // live run on Claude Code the agent once recorded its own summary as the
-// person's instruction; now the record can only say they left it to the agent
-// beside a message of theirs.
+// person's instruction; now the record can only say the agent chose, reading a
+// message of theirs it names.
 // covers: cli:aidlc-log(answer), function:handleAnswer, function:proveMessage
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -90,7 +90,7 @@ function fieldOf(row: { block: string }, name: string): string | null {
 }
 
 const claimed = (row: { block: string }) =>
-  fieldOf(row, "Answer Source") === "chosen by the agent as the person asked";
+  fieldOf(row, "Answer Source") === "chosen by the agent, reading their message";
 
 describe("t-on-instruction-words: a choice left to the agent names the message that left it", () => {
   test("the agent's own words never stand for theirs: recorded as its text, with no claim", () => {
@@ -119,6 +119,22 @@ describe("t-on-instruction-words: a choice left to the agent names the message t
     expect(claimed(row)).toBe(true);
     expect(fieldOf(row, "Message Id")).toBe(id);
     expect(fieldOf(row, "Person Reply")).toBe("Q1 is B. Choose the recommended answers for the rest.");
+  });
+
+  // The tool proves the message, never what it says: a message that left the
+  // agent nothing to choose is still the agent's reading, and the record says
+  // only that.
+  test("the record says what the tool knows: the agent chose, reading the message it names", () => {
+    const p = project();
+    typed(p, "also add an export to CSV");
+    const id = latestId(p);
+    askQuestions(p);
+    const r = leftToAgent(p, ["--message", id]);
+    expect(r.status, r.out).toBe(0);
+    const row = answers(p)[0];
+    expect(fieldOf(row, "Answer Source")).toBe("chosen by the agent, reading their message");
+    expect(fieldOf(row, "Message Id")).toBe(id);
+    expect(fieldOf(row, "Person Reply")).toBe("also add an export to CSV");
   });
 
   test("words in a file are the agent's own too", () => {
