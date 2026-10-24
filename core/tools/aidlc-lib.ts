@@ -32033,6 +32033,60 @@ export function readStateFile(projectDir: string, intent?: string, space?: strin
   return readFileSync(path, "utf-8");
 }
 
+// Git left its conflict in a record's aidlc-state.md: two clones advanced the
+// same work and one merged, rebased or popped a stash over the other's commit.
+// The record is written back from the person's own side, which git's own state
+// names (a rebase or a stash pop puts it second): their whole version from git's
+// index while git holds the file as conflicted (the version `git checkout
+// --ours/--theirs` writes), else their side of each conflict. The returned line
+// says where the other side stands and the git command that takes it. Git's
+// index is never touched. Null when there is no conflict, or when the record
+// cannot be written (the command then reads the text as it is).
+export function settleConflictedState(projectDir: string, intent: string, space: string): string | null {
+  const path = stateFilePath(projectDir, intent, space);
+  let text: string;
+  try {
+    text = readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
+  if (!CONFLICT_START.test(text)) return null;
+  const shown = toPosix(relative(projectDir, path));
+  const git = (...args: string[]) => spawnSync("git", args, { cwd: projectDir, encoding: "utf-8" });
+  const gitHas = (ref: string) => git("rev-parse", "-q", "--verify", ref).status === 0;
+  const unmerged = git("ls-files", "-u", "--", shown).stdout?.trim();
+  const rebasing = gitHas("REBASE_HEAD");
+  const merging = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"].some(gitHas);
+  // git stash names the stashed side in its closing marker.
+  const stashed = !rebasing && !merging && !!unmerged && /^>{7} Stashed changes\r?$/m.test(text);
+  const ownSecond = rebasing || stashed;
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const indexed = (stage: 2 | 3) => {
+    const shownStage = git("show", `:${stage}:./${shown}`);
+    return shownStage.status === 0 ? shownStage.stdout : null;
+  };
+  const side = (which: "ours" | "theirs") =>
+    ((unmerged ? indexed(which === "ours" ? 2 : 3) : null) ?? conflictSide(text, which)).split(/\r?\n/).join(eol);
+  const own = side(ownSecond ? "theirs" : "ours");
+  const other = side(ownSecond ? "ours" : "theirs");
+  try {
+    withAuditLock(projectDir, () => writeStateFile(projectDir, own, intent, space), intent, space);
+  } catch {
+    return null;
+  }
+  const ownAt = workStanding(own);
+  const otherAt = workStanding(other);
+  const command = unmerged ? `git checkout ${ownSecond ? "--ours" : "--theirs"} -- ${shown}` : null;
+  const sides = ownAt !== "" && ownAt === otherAt
+    ? `both sides stand ${ownAt}, and AI-DLC carried on from yours; ` +
+      (command ? `\`${command}\` takes the other side instead.` : "the other side is in your git history.")
+    : `AI-DLC carried on from your side${ownAt ? ` (${ownAt})` : ""}; the other side${otherAt ? ` (${otherAt})` : ""} ` +
+      (command ? `is still in git, and \`${command}\` takes it instead.` : "is in your git history.");
+  // In a rebase git's own hint names the step after resolving.
+  const resolved = command && !rebasing ? " If git still shows the file as conflicted, git add marks it resolved." : "";
+  return `Git left a conflict in AI-DLC's record of this work (${shown}): ${sides}${resolved}`;
+}
+
 export const PROJECT_DESCRIPTION_FILE = "project-description.json";
 export const DOCUMENT_INPUT_REQUEST_FILE = "document-input-path";
 const LEGACY_PROJECT_DESCRIPTION_SOURCE = "aidlc-state.md#Project";

@@ -398,6 +398,7 @@ import {
   reviewArtifactEntries,
   reviewAttemptWindow,
   setField,
+  settleConflictedState,
   withoutEntryWord,
   sortAttemptEvents,
   stageJumpReaches,
@@ -1380,6 +1381,22 @@ function phaseRulesAddedLine(space: string, names: readonly string[]): string | 
 function withPhaseRulesAddedLine(transported: Directive): Directive {
   const line = phaseRulesAdded;
   phaseRulesAdded = null;
+  return withPersonLine(transported, line);
+}
+
+// What this command did about git's conflict in the record (settleConflictedState),
+// said once with the step.
+let recordConflictLine: string | null = null;
+function withRecordConflictLine(transported: Directive): Directive {
+  const line = recordConflictLine;
+  recordConflictLine = null;
+  return withPersonLine(transported, line);
+}
+
+// A line for the person, said once: on a stage or question step's own
+// narration while the step still fits, else with the next step the agent
+// speaks from.
+function withPersonLine(transported: Directive, line: string | null): Directive {
   if (line === null) return transported;
   const own = transported.narration;
   if (transported.kind === "run-stage" || transported.kind === "ask") {
@@ -1657,6 +1674,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
   }
   transported = withPickUpLine(transported);
   transported = withPhaseRulesAddedLine(transported);
+  transported = withRecordConflictLine(transported);
   // Again for what was added after transport (a rebind notice).
   transported = withAgentNotes(
     transported, aidlcToolInvocation("orchestrate"), aidlcToolInvocation("log"), undefined,
@@ -19362,6 +19380,11 @@ export function main(argv: string[]): void {
     }
     engineSelections.set(resolvedProjectDir, { ...resolvedSelection, intent: null, binding: null });
   }
+  // Git left its conflict in the record (a pull, a rebase, a stash pop): the
+  // command carries on from the person's own side.
+  if (commandKind !== undefined && !unjoined && resolvedSelection.intent !== null && !isReadOnlyEngineProbe()) {
+    recordConflictLine = settleConflictedState(resolvedProjectDir, resolvedSelection.intent, resolvedSelection.space);
+  }
   // A stopped `next` kept for this chat, named by its id, runs as if the
   // person had typed it here, once (see namedRestartRequest).
   let restart: RestartRequest | null = null;
@@ -19460,6 +19483,7 @@ export function main(argv: string[]): void {
     });
   } finally {
     engineInvocation = null;
+    recordConflictLine = null;
     restoreSpentRequestFile = null;
     activeRetiredGuardPolicyNotice = null;
     activeHookHealthNotice = undefined;

@@ -632,6 +632,12 @@ Everything else under a space — `memory/**`, `knowledge/**`, `codekb/**`,
 committed. The rule of thumb: **cursors and runtime scratch are local; the shared
 work is committed.**
 
+When a pull, a rebase or a stash pop leaves git's conflict in a record's
+`aidlc-state.md` (two clones advanced the same work), the next step carries on
+from your own side and writes the record back without git's markers. It says
+once where the other side stands and the git command that takes it instead; git
+shows the file as conflicted until you add it.
+
 `knowledge/documents/` and `knowledge/documentkb/` are both committed, but they are
 owned by different parties and that difference is the whole design. `documents/`
 holds your originals: you add, move, and delete files there, and the framework never
