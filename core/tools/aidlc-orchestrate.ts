@@ -15681,6 +15681,13 @@ function emitJumpDirective(
         return;
       }
       jumpsMade++;
+      // A kept request this jump carries out says so with the step, before the
+      // jump's own line: the step it lands on may come in parts, and `continue`
+      // rebuilds it with this `next`'s settled lines, never its narration.
+      if (activeKeptRequestLine !== null) {
+        settledNotices.push(activeKeptRequestLine);
+        activeKeptRequestLine = null;
+      }
       const notice = jumpNotice(jumped.stdout);
       if (notice) settledNotices.push(notice);
       if (everyUnitSaid) settledNotices.push(everyUnitSaid);
