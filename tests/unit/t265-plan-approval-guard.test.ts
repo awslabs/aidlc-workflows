@@ -812,6 +812,34 @@ const STAGE_DISPATCH = (proj: string, prompt: string) => ({
 // A POSIX single-quoted word, as the engine and the harness shells carry a path.
 const shellQuoted = (word: string): string => `'${word.replaceAll("'", "'\\''")}'`;
 
+// A Windows folder's 8.3 spelling, as t244 asks for it, leading back to the
+// same folder. The path goes in through the environment: cmd.exe would read
+// the quotes a spawned argument carries as part of the name.
+function windowsShortSpelling(folder: string): string {
+  const spelled = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:AIDLC_T265_FOLDER).ShortPath",
+    ],
+    {
+      env: { ...process.env, AIDLC_T265_FOLDER: folder },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    },
+  );
+  expect(spelled.status, `${spelled.stdout}${spelled.stderr}`).toBe(0);
+  const short = spelled.stdout.trim();
+  // A volume without 8.3 names cannot show the defect; say so, not pass.
+  expect(short.toLowerCase(), `no 8.3 short name for ${folder}; see fsutil 8dot3name query`)
+    .not.toBe(folder.toLowerCase());
+  expect(short).toContain("~");
+  expect(realpathSync.native(short)).toBe(folder);
+  return short;
+}
+
 const WRITE = (filePath: string) => ({
   hook_event_name: "PreToolUse",
   tool_name: "Write",
@@ -2783,30 +2811,7 @@ describe("t265b hook lifecycle", () => {
         seedState(proj);
         seedActiveDirective(proj, "code-generation");
         seedUnit(proj, null, { plan: true, answer: null });
-        // The folder's 8.3 spelling, as t244 asks for it. The path goes in
-        // through the environment: cmd.exe would read the quotes a spawned
-        // argument carries as part of the name.
-        const spelled = spawnSync(
-          "powershell.exe",
-          [
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:AIDLC_T265_PROJECT).ShortPath",
-          ],
-          {
-            env: { ...process.env, AIDLC_T265_PROJECT: proj },
-            encoding: "utf-8",
-            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-          },
-        );
-        expect(spelled.status, `${spelled.stdout}${spelled.stderr}`).toBe(0);
-        const short = spelled.stdout.trim();
-        // A volume without 8.3 names cannot show the defect; say so, not pass.
-        expect(short.toLowerCase(), `no 8.3 short name for ${proj}; see fsutil 8dot3name query`)
-          .not.toBe(proj.toLowerCase());
-        expect(short).toContain("~");
-        expect(realpathSync.native(short)).toBe(proj);
+        const short = windowsShortSpelling(proj);
         const plan = join(RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
         // Every row's exit code beside the one expected, so one run shows them all.
         const expected: Record<string, number> = {};
@@ -2933,30 +2938,7 @@ describe("t265b hook lifecycle", () => {
         seedUnit(proj, null, { plan: true, answer: null });
         mkdirSync(join(proj, "other", ".claude", "tools"), { recursive: true });
         cpSync(join(proj, ".claude", "tools", "aidlc.ts"), join(proj, "other", ".claude", "tools", "aidlc.ts"));
-        // The folder's 8.3 spelling, as t244 asks for it. The path goes in
-        // through the environment: cmd.exe would read the quotes a spawned
-        // argument carries as part of the name.
-        const spelled = spawnSync(
-          "powershell.exe",
-          [
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:AIDLC_T265_PROJECT).ShortPath",
-          ],
-          {
-            env: { ...process.env, AIDLC_T265_PROJECT: proj },
-            encoding: "utf-8",
-            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-          },
-        );
-        expect(spelled.status, `${spelled.stdout}${spelled.stderr}`).toBe(0);
-        const short = spelled.stdout.trim();
-        // A volume without 8.3 names cannot show the defect; say so, not pass.
-        expect(short.toLowerCase(), `no 8.3 short name for ${proj}; see fsutil 8dot3name query`)
-          .not.toBe(proj.toLowerCase());
-        expect(short).toContain("~");
-        expect(realpathSync.native(short)).toBe(proj);
+        const short = windowsShortSpelling(proj);
         // Every command's exit code beside the one expected, so one run shows them all.
         const expected: Record<string, number> = {};
         const actual: Record<string, number> = {};

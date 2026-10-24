@@ -922,8 +922,8 @@ function inProjectSpelling(projectDir: string, target: string): string {
 
 // A real path with any Windows 8.3 short name expanded: Bun's realpathSync
 // keeps the short name, realpathSync.native expands it. Where native cannot
-// answer (some volumes, such as a RAM disk or a network share), the
-// realpathSync answer stands; no test can make native fail.
+// answer (some volumes, such as a RAM disk), the realpathSync answer stands;
+// no test can make native fail.
 function expandedRealPath(path: string): string {
   try {
     return realpathSync.native(path);
