@@ -101,10 +101,8 @@ work rather than deriving batches or changing order from an autonomy answer.
 
 ### Changing Construction policy
 
-Only one protected question may be open per session. Asking any new question
-(protected or ordinary) or opening a lifecycle gate withdraws it, so ask
-protected questions one at a time and wait for the answer before anything else.
-A withdrawn question must be asked again.
+Only one protected question may be open per session. Ask protected questions
+one at a time and wait for the answer before anything else.
 
 When the person asks in their own words to change `Construction Checkpoints`,
 `Construction Execution`, or `Construction Iteration` ("turn checkpoints off",

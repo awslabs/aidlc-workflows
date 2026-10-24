@@ -2318,10 +2318,8 @@ proof file cannot verify a Unit. On a checkout with no proof file at all (a
 fresh clone, another machine), that receipt stands in for the proof of a Unit
 already approved whose evidence is unchanged, so nothing runs again.
 
-Only one protected question may be open per session. Asking any new question
-(protected or ordinary) or opening a lifecycle gate withdraws it, so ask
-protected questions one at a time and wait for the answer before anything else.
-A withdrawn question must be asked again.
+Only one protected question may be open per session. Ask protected questions
+one at a time and wait for the answer before anything else.
 
 The version-4 proof and CLI JSON retain `command_sha256` and the full canonical
 command in `command_label`, plus exit status, full captured stdout/stderr byte
