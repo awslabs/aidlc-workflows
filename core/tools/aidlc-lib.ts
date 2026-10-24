@@ -41344,10 +41344,10 @@ export function holdsAnyFile(dir: string): boolean {
 // The stages on the plan that its scope skips and that the work has just
 // passed over: behind the current stage and never started, with nothing after
 // them started but the current stage, which an approval or a jump only just
-// entered (in progress, and nothing of it in the work's record: for a
-// Construction stage nothing under construction/, as constructionHasStarted
-// reads it). Reverse Engineering behind the cursor has its own rule
-// (reverseEngineeringOwedBehindCursor).
+// entered (in progress, and nothing of it in the work's record: its own folder,
+// `<phase>/<slug>`, and each Unit's, `<phase>/<unit>/<slug>`, hold no file; the
+// stages before it wrote theirs elsewhere). Reverse Engineering behind the
+// cursor has its own rule (reverseEngineeringOwedBehindCursor).
 function stagesPassedOverJustNow(content: string, workRecordDir: string | null | undefined): string[] {
   const scope = getField(content, "Scope")?.trim() ?? "";
   const def = loadScopeMapping()[scope];
@@ -41363,9 +41363,10 @@ function stagesPassedOverJustNow(content: string, workRecordDir: string | null |
   const boxes = new Map(parseCheckboxes(content).map((c) => [c.slug, c.state]));
   if (now < 0 || boxes.get(current) !== "in-progress") return [];
   const entered = graph[now];
-  if (holdsAnyFile(entered.phase === "construction"
-    ? join(workRecordDir, "construction")
-    : join(workRecordDir, entered.phase, entered.slug))) return [];
+  const phaseDir = join(workRecordDir, entered.phase);
+  const holdsItsWork = (dir: string): boolean => holdsAnyFile(join(dir, entered.slug));
+  if (holdsItsWork(phaseDir) || (existsSync(phaseDir) && readdirSync(phaseDir, { withFileTypes: true })
+    .some((entry) => entry.isDirectory() && holdsItsWork(join(phaseDir, entry.name))))) return [];
   return added.filter((slug) => {
     const at = graph.findIndex((stage) => stage.slug === slug);
     return at >= 0 && at < now && graph.slice(at).every((stage) =>
