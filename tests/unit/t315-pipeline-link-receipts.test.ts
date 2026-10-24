@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-log:link, subcommand:aidlc-state:reuse-artifact, function:developerHandoffPaths, function:pipelineReceiptArtifactIsCurrent, audit:PIPELINE_LINK_COMPLETED, function:codekbStoreIsCurrent, function:codekbSourceRoot, function:latestPipelineLinkArtifactMtime, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:singleStageAttemptIsOpen, function:checkPipelineLinkEvidence, function:pipelineLinkWayOn
+// covers: subcommand:aidlc-log:link, subcommand:aidlc-state:reuse-artifact, function:developerHandoffPaths, audit:PIPELINE_LINK_COMPLETED, function:codekbStoreIsCurrent, function:codekbSourceRoot, function:latestPipelineLinkArtifactMtime, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:singleStageAttemptIsOpen, function:checkPipelineLinkEvidence, function:pipelineLinkWayOn
 //
 // Pipeline links are durable, ordered completion evidence. The log tool owns
 // each receipt; the engine and direct state transitions require the complete

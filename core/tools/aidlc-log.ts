@@ -324,16 +324,16 @@ function unknownCheckpointMessage(checkpoint: string, accepted: readonly string[
   return `Unknown --checkpoint "${checkpoint}". Accepted: ${accepted.join(", ")}`;
 }
 
-// Resolve the project dir AND assert that an active workflow exists before any
-// audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
-// --intent/--space, so it relies on default intent resolution. On a fresh shell
-// (pre-creation) or a >1-intent workspace with no active-intent cursor, that
-// resolution yields null and stateFilePath()/auditFilePath() collapse to the
-// BARE space record root (aidlc/spaces/<space>/intents/), where a workflow's
-// row would belong to no workflow. Existence of the resolved state file is the
-// same "is there an active workflow" signal every other emitter guards on: the
-// hooks via `if (!existsSync(stateFilePath(...)))` no-op, emitError() via the
-// same check.
+// Resolve the project dir AND assert, before any audit emit, that an active
+// workflow exists or that the row names an open isolated run. WHY: aidlc-log
+// is orchestrator-called per-question and threads no --intent/--space, so it
+// relies on default intent resolution. On a fresh shell (pre-creation) or a
+// >1-intent workspace with no active-intent cursor, that resolution yields
+// null and stateFilePath()/auditFilePath() collapse to the BARE space record
+// root (aidlc/spaces/<space>/intents/), where a workflow's row would belong to
+// no workflow. Existence of the resolved state file is the same "is there an
+// active workflow" signal every other emitter guards on: the hooks via
+// `if (!existsSync(stateFilePath(...)))` no-op, emitError() via the same check.
 // `isolatedStage` names the isolated run a row belongs to. With no work
 // selected, `next --single` records that run's start in the bare root and
 // `report --single` reads its evidence there, so a row for the run whose
