@@ -351,21 +351,23 @@ describe("t194 recompose - rejections", () => {
     expect(auditText(proj)).toContain("**Reason**: jump to user-stories");
   });
 
-  // The undo the skip step names carries the engine's own reason for it, so
-  // it puts the stage back as the skip took it off, even where the plan leaves
-  // out what the stage reads (bugfix's Deployment Pipeline); any other reason
-  // is checked.
-  test("the undo the skip step names puts a stage back over the strict check; another reason is checked", () => {
+  // A stage this work skipped goes back as the plan had it before the skip,
+  // even where the plan leaves out what it reads (bugfix's Deployment
+  // Pipeline), whatever reason the command carries: the undo, a fresh add, a
+  // jump to it. A stage the work never skipped is checked.
+  test("a stage this work skipped goes back over the strict check; one it never skipped is checked", () => {
+    for (const reason of [[], ["--reason", "jump to deployment-pipeline"]]) {
+      const proj = createdProject("bugfix");
+      const skip = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "deployment-pipeline", "--reason", "the person asked to skip it"]);
+      expect(skip.status, skip.out).toBe(0);
+      const back = run(proj, "aidlc-utility.ts", ["recompose", "--add", "deployment-pipeline", ...reason]);
+      expect(back.status, back.out).toBe(0);
+      expect(readState(proj)).toMatch(/- \[ \] deployment-pipeline \u2014 EXECUTE/);
+    }
     const proj = createdProject("bugfix");
-    const skip = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "deployment-pipeline", "--reason", "the person asked to skip it"]);
-    expect(skip.status, skip.out).toBe(0);
-    const jump = run(proj, "aidlc-utility.ts", ["recompose", "--add", "deployment-pipeline", "--reason", "jump to deployment-pipeline"]);
-    expect(jump.status).not.toBe(0);
-    expect(jump.out).toContain("Recompose rejected by the strict validator");
-    const undo = run(proj, "aidlc-utility.ts", ["recompose", "--add", "deployment-pipeline", "--reason", "the person asked to undo skipping it"]);
-    expect(undo.status, undo.out).toBe(0);
-    expect(readState(proj)).toMatch(/- \[ \] deployment-pipeline \u2014 EXECUTE/);
-    expect(auditText(proj)).toContain("**Reason**: the person asked to undo skipping it");
+    const fresh = run(proj, "aidlc-utility.ts", ["recompose", "--add", "observability-setup"]);
+    expect(fresh.status).not.toBe(0);
+    expect(fresh.out).toContain("Recompose rejected by the strict validator");
   });
 
   // Under "Continue automatically" the person's own plan change goes through,
