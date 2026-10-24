@@ -687,6 +687,22 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(forTheStep.message).toContain('Redo accepted at "code-generation"');
     expect(forTheStep.message).not.toContain("functional-design");
     expect(forTheStep.message).toBe(unitReport("--choice", "redo", "--target", "code-generation").message);
+    // A redo for named Units, or for every Unit, reopens the step the Unit is
+    // on: the kept --stage of that step is the same redo, and one naming the
+    // block's first stage moves nothing until the agent names it with --target.
+    const unitsBefore = readFileSync(statePath(u), "utf-8");
+    for (const units of [["--unit", "beta"], ["--every-unit"]]) {
+      const label = units.join(" ");
+      expect(unitReport("--stage", "code-generation", "--choice", "redo", ...units).message, label)
+        .toBe(unitReport("--choice", "redo", ...units).message);
+      const first = unitReport("--stage", "functional-design", "--choice", "redo", ...units);
+      expect(first.kind, label).toBe("print");
+      expect(first.message, label).toContain("--target <the stage they named>");
+      for (const moved of ["next --stage", "Redo accepted", "reopen"]) {
+        expect(first.message, label).not.toContain(moved);
+      }
+    }
+    expect(readFileSync(statePath(u), "utf-8")).toBe(unitsBefore);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("SP4g: \"take me back to X and stop there\" makes the move, then parks instead of carrying on", () => {
