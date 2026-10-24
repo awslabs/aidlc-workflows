@@ -2446,11 +2446,12 @@ function handlePark(args: string[]): void {
     : result));
 }
 
-// A chat the host names (Claude Code's and Codex's shells do) with no message
-// on the record: its hooks are off, or its prompt hook never runs, so no stop
-// typed there could be on record. With the hooks running, every chat's message
-// is, the grant's included. A row naming no chat counts as this chat's, as
-// personTurnStands reads it, and a chat no host names proves nothing.
+// A chat the engine can name (Claude Code's and Codex's shells name it, and the
+// session-start hook's map does elsewhere) with no message on the record: its
+// hooks are off, or its prompt hook never runs, so no stop typed there could be
+// on record. With the hooks running, every chat's message is, the grant's
+// included. A row naming no chat counts as this chat's, as personTurnStands
+// reads it, and a chat the engine cannot name proves nothing.
 function noMessageOfThisChat(pd: string): boolean {
   try {
     const chat = resolveInvokingSessionId(pd);

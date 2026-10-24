@@ -97,10 +97,14 @@ function guarded(
   host: NodeJS.ProcessEnv = {},
 ): { rc: number; out: string } {
   const env = { ...process.env };
-  // The host the agent's shell is in is the case's own, never the runner's.
+  // The host the agent's shell is in is the case's own, never the runner's,
+  // and so is the chat it names.
   delete env.VSCODE_IPC_HOOK;
   delete env.VSCODE_PID;
   delete env.TERM_PROGRAM;
+  for (const hostChat of ["CLAUDE_PID", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "KIRO_SESSION_ID"]) {
+    delete env[hostChat];
+  }
   Object.assign(env, host);
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
@@ -610,8 +614,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   // here for today" was refused in the engine's words and the build went on.
   // A chat none of whose messages reached the record could not have had its
   // stop recorded, so the stop is theirs with the note, and their choice stays.
-  // A chat the hooks did record keeps the guard, and so does a chat no host
-  // names (Cursor, opencode or Copilot with every hook off).
+  // A chat the hooks did record keeps the guard, and so does a chat the engine
+  // cannot name (Cursor, opencode or Copilot with every hook off).
   describe("a stop in a chat whose messages never reached the record", () => {
     const CHAT = "01995000-7a11-7000-8000-00000000e877";
     const GRANT_CHAT = "01995000-7a11-7000-8000-00000000e878";
@@ -646,6 +650,17 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(state).toContain("- **Construction Autonomy Mode**: autonomous");
     });
 
+    // Cursor's chat whose prompt hook never runs while its session-start hook
+    // does: the engine names the chat from the session-start hook's own map.
+    test("a chat named by the session-start hook's map parks as theirs too", () => {
+      const sf = grantedFrom(GRANT_CHAT);
+      writeSessionPidEntry(proj, process.pid, CHAT);
+      const park = guarded(proj, ["park", "--person-asked"], false, STATE, NO_HOST_CHAT);
+      expect(park.rc, park.out).toBe(0);
+      expect(park.out).toContain("none of this chat's messages reached the record");
+      expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+    });
+
     test("the engine's park returns the paused step", () => {
       const sf = grantedFrom(GRANT_CHAT);
       const env: NodeJS.ProcessEnv = { ...process.env, ...claudeChat, AIDLC_SKIP_ARTIFACT_GUARD: "1" };
@@ -662,7 +677,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     test.each([
       ["the grant came from this chat", CHAT, claudeChat],
       ["a row names no chat", null, claudeChat],
-      ["no host names the chat", GRANT_CHAT, NO_HOST_CHAT],
+      ["the engine cannot name the chat", GRANT_CHAT, NO_HOST_CHAT],
     ])("the guard holds when %s", (_case, session, host) => {
       const sf = grantedFrom(session);
       const park = guarded(proj, ["park", "--person-asked"], false, STATE, host);
