@@ -2804,6 +2804,60 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(copilotRuns(p, every!).refused).toBeNull();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // The person's Redo on re-entry goes through `report --result resumed
+  // --choice redo`, whose print names the reopen itself (#2772). On Copilot
+  // that reopen runs on the first ask, as on every other harness: the Unit in
+  // flight starts its step over instead of picking up its old build, and a
+  // built Unit's step is redone as their redo. Only the reopen the print named
+  // runs that way.
+  const redoReopen = (step: Step) =>
+    /`(bun \.aidlc\/tools\/aidlc-jump\.ts reopen [^`]+)`/.exec(String(step.message ?? ""))?.[1];
+  function betaBuildingUnder(policy: string): string {
+    const p = betaBuilding();
+    writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
+      .replace("- **Change Control**: strict", `- **Guard Policy**: ${policy} (set by you)`));
+    startedBuild(p);
+    COPILOT.install(p);
+    copilotSays(p, "Redo Code Generation for beta from the start, please.");
+    return p;
+  }
+
+  for (const policy of ["strict", "off"]) {
+    test(`Copilot, Guard Policy ${policy}: the person's Redo of the Unit in flight, through report --result resumed --choice redo, runs the reopen it prints on the first ask`, () => {
+      const p = betaBuildingUnder(policy);
+      const reopen = redoReopen(copilotStep(p, "report --result resumed --choice redo"));
+      expect(reopen).toContain("--units beta --via redo");
+      expect(copilotRuns(p, reopen!).refused, "the Redo the person asked for was refused on Copilot").toBeNull();
+      const beat = copilotNext(p, "next");
+      expect(beat).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta" });
+      expect(beat.artifact_reuse).toEqual({ decision: "redo", unit: "beta" });
+      expect(beat.narration ?? "").not.toContain("Picking up");
+      expect(approved(p, "alpha")).toBe(true);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`Copilot, Guard Policy ${policy}: the person's Redo of a built Unit, through report --result resumed --choice redo, is redone as their redo`, () => {
+      const p = policyFixture("classic", `${policy} (set by you)`, "adversarial");
+      COPILOT.install(p);
+      buildReviewed(p, "alpha");
+      copilotSays(p, "carry on");
+      copilotNext(p, "next");
+      copilotSays(p, "Redo Code Generation for alpha, please.");
+      const reopen = redoReopen(copilotStep(p, "report --result resumed --choice redo"));
+      expect(reopen).toContain("--units alpha --via redo");
+      expect(copilotRuns(p, reopen!).refused, "the Redo the person asked for was refused on Copilot").toBeNull();
+      expect(reopenedAs(p)).toBe("redo");
+      expect(copilotNext(p, "next").artifact_reuse).toEqual({ decision: "redo", unit: "alpha" });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  test("Copilot: after the Redo's print, a reopen it did not name is still refused", () => {
+    const p = betaBuildingUnder("off");
+    const reopen = redoReopen(copilotStep(p, "report --result resumed --choice redo"));
+    expect(reopen).toContain("--via redo");
+    expect(copilotRuns(p, reopen!.replace(" --via redo", "")).refused, "a reopen the print did not name ran").not.toBeNull();
+    expect(copilotRuns(p, reopen!.replace("--units beta", "--units alpha")).refused, "another Unit's reopen ran").not.toBeNull();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // A side-by-side build was prepared (a Bolt opened per Unit) and the person
   // asked to build the Units one at a time instead: each Unit is then built,
   // reviewed and checked in the project itself. The prepared Bolts are closed

@@ -982,3 +982,63 @@ describe("a jump the person asked for on a step gone out of date names the step 
     expect(admitted.code, admitted.said).toBe(0);
   });
 });
+
+// The person's redo at the open gate goes through the re-entry report, whose
+// print names the jump itself. On Copilot the settle leaves that print out of
+// date like any other, and the jump it names runs on the first ask, as it does
+// on every other harness; only the jump that print named, on the state it was
+// named on, and only while it is the last step.
+describe("a redo the person asked for at the open gate runs on Copilot on the first ask", () => {
+  const copilot = SHAPES.find((shape) => shape.name === "copilot") as Shape;
+  const REDO = "Start Code Generation over from the beginning, please: redo it.";
+  const printedJump = (step: Step) =>
+    namedCommands(String(step.message ?? "")).find((command) => command.includes("aidlc-jump.ts execute"));
+
+  function redoAsked(policy: "strict" | "relaxed" | "off", planApproval: "on" | "off"): { proj: string; jump: string } {
+    const proj = openCodeGenerationGate(policy, planApproval);
+    created.push(proj);
+    copilot.install(proj);
+    const said = copilotAdapter(proj, "record-human-turn", {
+      hook_event_name: "UserPromptSubmit", prompt: REDO, timestamp: new Date().toISOString(),
+    });
+    expect(said.code, said.stderr).toBe(0);
+    const step = copilotStep(proj, "report --result resumed --choice redo");
+    const jump = printedJump(step);
+    expect(jump, JSON.stringify(step)).toContain("--direction redo");
+    return { proj, jump: jump as string };
+  }
+
+  test.each([["off", "off"], ["strict", "on"], ["relaxed", "on"]] as const)(
+    "Copilot, Guard Policy %s, plan approval %s: the jump the redo print names runs, and Code Generation starts again",
+    (policy, planApproval) => {
+      const { proj, jump } = redoAsked(policy, planApproval);
+      const ran = copilotRuns(proj, jump);
+      expect(ran.refused, "the redo the person asked for was refused on Copilot").toBeNull();
+      expect(auditEvents(proj).filter((row) => row.event === "PLAN_APPROVAL_BLOCKED")).toHaveLength(0);
+      expect(copilotStep(proj, "next").stage).toBe("code-generation");
+      expect(auditEvents(proj).filter((row) => row.event === "STAGE_JUMPED")).toHaveLength(1);
+    },
+  );
+
+  test("still refused: another jump than the one the print named", () => {
+    const { proj } = redoAsked("off", "off");
+    const other = "bun .aidlc/tools/aidlc-jump.ts execute --target requirements-analysis --direction backward --scope poc";
+    expect(copilotRuns(proj, other).refused, "a jump the print did not name ran").not.toBeNull();
+  });
+
+  test("still refused: the printed jump once the state has moved since the print", () => {
+    const { proj, jump } = redoAsked("off", "off");
+    const state = seededStateFile(proj);
+    const content = readFileSync(state, "utf-8");
+    const at = content.indexOf("\n") + 1;
+    writeFileSync(state, `${content.slice(0, at)}- **Moved**: since the print\n${content.slice(at)}`);
+    expect(copilotRuns(proj, jump).refused, "the printed jump ran on a state it was not named on").not.toBeNull();
+  });
+
+  test("still refused: the printed jump after another print that names none", () => {
+    const { proj, jump } = redoAsked("off", "off");
+    const resumed = copilotStep(proj, "report --result resumed --choice resume");
+    expect(printedJump(resumed), JSON.stringify(resumed)).toBeUndefined();
+    expect(copilotRuns(proj, jump).refused, "the redo's jump ran after a later print").not.toBeNull();
+  });
+});
