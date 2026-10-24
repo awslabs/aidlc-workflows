@@ -2711,12 +2711,17 @@ async function evaluate(
             return inside.startsWith("..") || isAbsolute(inside);
           });
         // Files the person asked to change there while the Units are built
-        // (swarm allow-change) go in: the landings keep them.
+        // (swarm allow-change) go in: the landings keep them. A file a listed
+        // Unit's plan names waits for that Unit, whenever it was asked for.
         const keys = mainCheckoutOnly && !mutation.opaqueShell
           ? seen.map((candidate) => mainCheckoutPathKey(projectDir, candidate))
           : [];
         const theirs = keys.length > 0 && keys.every((key) => key !== null) ? keys as string[] : null;
-        if (theirs !== null && mainCheckoutChangeAllowed(projectDir, theirs) !== null) return 0;
+        const planNamed = new Map(theirs === null ? [] : listed.map((unit) => [unit, planApprovalPlanNamedPaths(projectDir, unit)]));
+        const notNamedBy = [...planNamed.values()].some((paths) => paths === null)
+          ? null
+          : [...planNamed.values()].flatMap((paths) => paths ?? []);
+        if (theirs !== null && mainCheckoutChangeAllowed(projectDir, theirs, {}, notNamedBy) !== null) return 0;
         swarmBatchOut = true;
         authorityFailure = mainCheckoutOnly
           ? SWARM_MAIN_CHECKOUT_HELD
@@ -2724,7 +2729,7 @@ async function evaluate(
             outOfDate;
         if (
           theirs !== null &&
-          mainCheckoutChangeRefusal(projectDir, theirs, listed, (unit) => planApprovalPlanNamedPaths(projectDir, unit)) === null
+          mainCheckoutChangeRefusal(projectDir, theirs, listed, (unit) => planNamed.get(unit) ?? null) === null
         ) {
           swarmHeldWayOn = mainCheckoutChangeStep(projectDir, theirs, SWARM_MAIN_CHECKOUT_LATER, "make the change");
         }
