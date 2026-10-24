@@ -131,6 +131,20 @@ do not fold that security boundary into the block adapter. See
 [Markdown structure](01-architecture.md#markdown-structure) for how the adapter
 recovers source lines from the renderer.
 
+## Where new tool code goes
+
+`core/tools/aidlc-lib.ts` takes no new code: a new function, type or constant
+goes in its area's module under `core/tools/` (an existing `aidlc-<area>.ts`, or
+a new one), never in `aidlc-lib.ts`. Code moves out of it one area at a time,
+byte for byte, and stays importable from it through one `export ... from` line,
+so nothing that imports `aidlc-lib.ts` changes; a module split out of it never
+imports `aidlc-lib.ts`. `tests/unit/t-aidlc-lib-only-shrinks.test.ts` fails on a
+name `aidlc-lib.ts` declares that is not on
+`tests/fixtures/aidlc-lib-declarations.txt`, and on a module it imports that
+imports it back (the ones that did before this rule are listed in the test); a
+move deletes its names from that list and lowers the file's size cap in
+`biome.json`, and neither is ever raised.
+
 ## Testing
 
 The suite is entirely TypeScript (`t*.test.ts`, run via `bun`) across four levels — `smoke`, `unit`, `integration`, `e2e` — that map onto the three-layer pyramid (smoke + unit = L1 Protocol, integration = L2 Stage, e2e = L3 Acceptance). After the pinned development dependencies are installed, L1 runs locally without external services; the live integration and e2e files require the `claude` CLI tool (and Bedrock creds) and skip cleanly when it is absent.
