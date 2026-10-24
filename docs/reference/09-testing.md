@@ -355,9 +355,11 @@ time, a checkpoint each. After the first Unit's checkpoint the person stops for
 the day, picks the work up from a fresh clone (the folder left with only what a
 clone holds, the first clone's audit shard sorting last), and carries on in a
 second chat with `/aidlc --resume`. The journey checks what the scope runs
-check, plus two audit shards, two chats, each Unit's checkpoint asked once, and
+check, plus two audit shards, two chats, each Unit's checkpoint asked once,
 no detour the person should not meet (such as being told to resume work they
-just picked up). CI runs them as their
+just picked up), and no state-transition guard standing aside for one of the
+stand-in's own steps (classic runs with its guards off, so a step a helper may
+not take shows only there). CI runs them as their
 own integration job (`scope-hosts`): Linux on pull requests and in the merge
 queue, and Linux, macOS and Windows in the nightly Full Suite (its `scope_runs`
 job) and in a `full_verification` Full Suite.
