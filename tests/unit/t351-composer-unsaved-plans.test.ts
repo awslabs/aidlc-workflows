@@ -593,7 +593,8 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(setting, both.message).toBeGreaterThan(-1);
     expect(setting).toBeLessThan(both.message.indexOf("engine recompose --add team-formation"));
     expect(both.message).toContain("You can undo that any time.");
-    expect(both.message.endsWith("recompose --skip team-formation`."), both.message).toBe(true);
+    expect(both.message.endsWith("recompose --skip team-formation --reason 'the person asked to skip it'`."), both.message)
+      .toBe(true);
     // The setting's own line is still shown; recompose's counts are not.
     expect(both.message).toMatch(/config set depth minimal[^`]*` and print its output verbatim, then run `[^`]*engine recompose --add team-formation` to change this workflow's remaining stages as the person asked, and do not show its output/);
 
@@ -601,6 +602,32 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(combined.kind).toBe("error");
     expect(combined.message).toContain("Cannot combine --skip or --add");
     expect(combined.message).not.toContain("at creation");
+  });
+
+  // A live run on Claude Code: on a bugfix plan, "add the CI pipeline stage to
+  // the plan", then "actually, undo that". The undo the add's step named
+  // carried no reason, so recompose's strict check refused it (Deployment
+  // Pipeline needs what CI Pipeline makes) right after the person read "You
+  // can undo that any time".
+  test("an added stage's undo, run as named, goes through when a later stage needs what it makes", () => {
+    const proj = installedProject();
+    expect(runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix"]).status).toBe(0);
+    expect(suffixOf(stateOf(proj), "ci-pipeline")).toBe("SKIP");
+    const d = nextDirective(proj, ["--add", "ci-pipeline"]);
+    expect(d.kind).toBe("print");
+    expect(d.message).toContain('"Added CI Pipeline. You can undo that any time."');
+    // Each named command, word for word, from `engine` on.
+    const engine = (command: string): string[] => {
+      const words = (command.match(/'[^']*'|\S+/g) ?? []).map((word) => word.replace(/^'(.*)'$/, "$1"));
+      return words.slice(words.indexOf("engine"));
+    };
+    const add = runTool(proj, "aidlc.ts", engine(/Run `([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? ""));
+    expect(add.status, add.out).toBe(0);
+    expect(suffixOf(stateOf(proj), "ci-pipeline")).toBe("EXECUTE");
+    const undo = runTool(proj, "aidlc.ts", engine(/If they later ask to undo it, run `([^`]*)`/.exec(d.message)?.[1] ?? ""));
+    expect(undo.status, undo.out).toBe(0);
+    expect(suffixOf(stateOf(proj), "ci-pipeline")).toBe("SKIP");
+    expect(auditOf(proj)).toContain("**Reason**: the person asked to skip it");
   });
 
   // A live run on Claude Code: "approve build and test. and skip the deployment

@@ -1059,6 +1059,37 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     expect(String(next(proj).message)).toContain("execute --target reverse-engineering --direction redo --scope classic");
   });
 
+  test("skipped, added back, then undone: the undo the add names goes through", () => {
+    const proj = project();
+    expect(create(proj, "classic").status).toBe(0);
+    addRepo(proj);
+    expect(run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]).status).toBe(0);
+    // "skip the reverse engineering"
+    expect(String(next(proj, ["--skip", "reverse-engineering"]).message))
+      .toContain("recompose --skip reverse-engineering --reason 'the person asked to skip it'");
+    const skip = run(UTIL, proj, ["recompose", "--skip", "reverse-engineering", "--reason", "the person asked to skip it"]);
+    expect(skip.status, said(skip)).toBe(0);
+    // "add it back"
+    const addStep = String(next(proj, ["--add", "reverse-engineering"]).message);
+    expect(addStep).toContain("recompose --add reverse-engineering`");
+    const add = run(UTIL, proj, ["recompose", "--add", "reverse-engineering"]);
+    expect(add.status, said(add)).toBe(0);
+    expect(reverseEngineeringOwedBehindCursor(state(proj))).toBe(true);
+    // "undo": the command the add's step names for it, as written. It is the
+    // person's own skip, so it carries the engine's reason as their skip did.
+    const named = /If they later ask to undo it, run `[^`]* recompose ([^`]+)`/.exec(addStep)?.[1] ?? "";
+    expect(named).toBe("--skip reverse-engineering --reason 'the person asked to skip it'");
+    const typed = (named.match(/'[^']*'|\S+/g) ?? []).map((a) => a.replace(/^'(.*)'$/, "$1"));
+    const back = run(UTIL, proj, ["recompose", ...typed]);
+    expect(back.status, said(back)).toBe(0);
+    const s = state(proj);
+    expect(stageLine(s, "reverse-engineering")).toBe(`- [ ] reverse-engineering ${SEP} SKIP`);
+    expect(reverseEngineeringOwedBehindCursor(s)).toBe(false);
+    const go = next(proj);
+    expect(go.kind).toBe("run-stage");
+    expect(go.stage).toBe("practices-discovery");
+  });
+
   test("on a new project already past it, adding it stays refused and names the single run", () => {
     const proj = project();
     expect(create(proj, "classic").status).toBe(0);
