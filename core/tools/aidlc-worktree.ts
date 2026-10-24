@@ -3353,11 +3353,13 @@ function combinedSinceMerge(repoCwd: string): string[] {
 
 // The files the agent may write while a parallel batch is out, in a landing this
 // tool staged for one of `units`: while git could not merge some, those and the
-// ones combined since (refuseClash names them); once none is unmerged, every file
-// the landing staged, as when the person's hook refused its commit (refuseLanding
-// names them). In the checkout that landing runs in: the project's, or in a
-// workspace of several repositories the Unit's own. Relative to `projectDir`,
-// forward slashes; none when no such landing is staged.
+// ones combined since (refuseClash names them), and only those once all are
+// combined; when the landing merged clean and the person's hook refused its
+// commit, every file it staged (refuseLanding names them). A clean merge has no
+// combined file: git clears them when the next merge starts. In the checkout that
+// landing runs in: the project's, or in a workspace of several repositories the
+// Unit's own. Relative to `projectDir`, forward slashes; none when no such landing
+// is staged.
 export function stagedLandingClashFiles(projectDir: string, units: readonly string[]): string[] {
   const selection = resolveWorkflowSelection(projectDir, {});
   const files = new Set<string>();
@@ -3374,8 +3376,9 @@ export function stagedLandingClashFiles(projectDir: string, units: readonly stri
       if (!prefix.ok) continue;
       const under = prefix.stdout.trim();
       const unmerged = listConflictFiles(cwd);
-      const toCommit = unmerged.length > 0 ? [] : gitPaths(cwd, ["--cached"]) ?? [];
-      for (const path of [...unmerged, ...combinedSinceMerge(cwd), ...toCommit]) {
+      const combined = combinedSinceMerge(cwd);
+      const toCommit = unmerged.length > 0 || combined.length > 0 ? [] : gitPaths(cwd, ["--cached"]) ?? [];
+      for (const path of [...unmerged, ...combined, ...toCommit]) {
         if (path.startsWith(under)) files.add(`${repo === null ? "" : `${repo}/`}${path.slice(under.length)}`);
       }
     } catch {
