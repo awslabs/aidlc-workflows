@@ -15,7 +15,9 @@
 // asked with Request Changes alone too. The verification command question, and a
 // Construction policy question a record carries, are answered in any chat
 // the same way, and the step for prose names the flags their answer is
-// recorded with. A bare `/aidlc` in a
+// recorded with and the setters an Approve runs: a yes to building the Units
+// in parallel while they are built one at a time names the stage-by-stage
+// setter first, each with the person's message, and the two apply. A bare `/aidlc` in a
 // new chat shows again, as it was asked, a question with no step of its own
 // that asks it again; the others come back through their own step.
 import {
@@ -34,7 +36,7 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { recordProtectedHumanResponse } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
-  artifactFilename, auditBlockField, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
+  artifactFilename, auditBlockField, findStageBySlug, getField, latestMainWorkflowStageRunFloorForProject,
   mintProtectedQuestion, protectedTargetDigest, readAuditShardEvents, readProtectedQuestion, readProtectedResponse,
   requireProtectedResponse, reviewArtifactFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -436,9 +438,27 @@ describe("t-checkpoint-answer-any-chat: the step for prose at a verification com
     const print = next(p, ["approve"]);
     expect(print.kind, JSON.stringify(print)).toBe("print");
     expect(print.message).toContain("answer --stage functional-design --checkpoint construction-policy --field 'Construction Execution' --value swarm --details");
-    expect(print.message).toContain("set-construction-execution swarm`");
+    // Built one Unit at a time here, and parallel needs stage by stage first:
+    // an Approve runs both setters, in that order, each with their message.
+    expect(namedSetters(print.message)).toEqual([
+      "set-construction-iteration stage-major --message <id>", "set-construction-execution swarm --message <id>",
+    ]);
+  });
+
+  test("names the one setter, with the person's message, when Construction already goes stage by stage", () => {
+    const p = askedInOldChat("Construction policy");
+    writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8").replace(
+      "- **Construction Iteration**: unit-major", "- **Construction Iteration**: stage-major"));
+    const print = next(p, ["approve"]);
+    expect(print.kind, JSON.stringify(print)).toBe("print");
+    expect(namedSetters(print.message)).toEqual(["set-construction-execution swarm --message <id>"]);
   });
 });
+
+// The state setters a step names, in the order it names them.
+function namedSetters(message: string | undefined): string[] {
+  return [...(message ?? "").matchAll(/`[^`]*aidlc-state\.ts (set-[^`]*)`/g)].map((match) => match[1]);
+}
 
 // The person types a bare `/aidlc` in `session`, and the agent runs `next` there.
 function bare(p: string, session: string) {
@@ -512,6 +532,31 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
     expect(readProtectedResponse(p, NEW)?.choice).toBe("Approve");
     const recorded = answer(p, "Construction policy", NEW);
     expect(recorded.status, recorded.out).toBe(0);
+  });
+
+  test("a yes to building the Units in parallel, shown again while they are built one at a time, applies both setters it names", () => {
+    const p = askedInOldChat("Construction policy");
+    const shown = bare(p, NEW);
+    expect(shown.kind, JSON.stringify(shown)).toBe("print");
+    const setters = namedSetters(shown.message);
+    expect(setters).toEqual([
+      "set-construction-iteration stage-major --message <id>", "set-construction-execution swarm --message <id>",
+    ]);
+    person(p, "that's right", NEW);
+    const id = auditBlockField(readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN").at(-1)!.block, "Message Id");
+    expect(id).not.toBeNull();
+    const recorded = answer(p, "Construction policy", NEW);
+    expect(recorded.status, recorded.out).toBe(0);
+    for (const setter of setters) {
+      const ran = tool(p, "state", setter.replace("<id>", id!).split(" "));
+      expect(ran.status, ran.out).toBe(0);
+    }
+    const state = readFileSync(seededStateFile(p), "utf-8");
+    expect(getField(state, "Construction Iteration")).toBe("stage-major");
+    expect(getField(state, "Construction Execution")).toBe("swarm");
+    const set = readAuditShardEvents(p).filter((row) => row.event === "CONSTRUCTION_POLICY_SET");
+    expect(set.map((row) => auditBlockField(row.block, "Field"))).toEqual(["Construction Iteration", "Construction Execution"]);
+    expect(auditBlockField(set[0].block, "Message Id")).toBe(id);
   });
 
   test("a question its stage's questions file still holds is asked again by the stage's own step, from the file", () => {
