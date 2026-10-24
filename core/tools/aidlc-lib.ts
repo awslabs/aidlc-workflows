@@ -13855,12 +13855,19 @@ export function summaryConfirmationContentHash(content: string): string {
 // contract. The generic section extractor intentionally retains comments for
 // other callers, so it cannot safely validate this checkpoint.
 export function summaryConfirmationAnswer(content: string): string | null {
+  const answers = summaryAnswerLines(content);
+  return answers !== null && answers.length === 1 ? answers[0].value : null;
+}
+
+// The `[Answer]:` lines of the Consolidated Summary Confirmation section, by
+// line number in the file; null when the file has no such section.
+function summaryAnswerLines(content: string): Array<{ line: number; value: string }> | null {
 	const blocks = markdownBlocks(content);
 	const visibleLines = projectVisibleMarkdownLines(content, blocks, {
     preserveCommentBoundaries: true,
   });
   let inSummary = false;
-  const answers: string[] = [];
+  const answers: Array<{ line: number; value: string }> = [];
 
 	for (let index = 0; index < visibleLines.length; index++) {
 		const line = visibleLines[index];
@@ -13874,10 +13881,24 @@ export function summaryConfirmationAnswer(content: string): string | null {
     const answer = /^\[Answer\]:[ \t]*(.*)$/.exec(
       stripInvisibleCommentMarkers(line),
     );
-    if (answer) answers.push(answer[1].trim());
+    if (answer) answers.push({ line: index, value: answer[1].trim() });
   }
 
-  return inSummary && answers.length === 1 ? answers[0] : null;
+  return inSummary ? answers : null;
+}
+
+// The questions file with its one summary answer, a plain `[Answer]: Looks
+// correct` line, made blank again and every other byte as it was (line endings
+// included); null when the section holds anything else.
+function summaryAnswerCleared(content: string): string | null {
+  const answers = summaryAnswerLines(content);
+  if (answers === null || answers.length !== 1 || answers[0].value !== "Looks correct") return null;
+  const bom = content.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const parts = content.slice(bom.length).split(/(\r\n|\r|\n)/);
+  const at = answers[0].line * 2;
+  if (!/^\[Answer\]:[ \t]*Looks correct[ \t]*$/.test(parts[at] ?? "")) return null;
+  parts[at] = "[Answer]:";
+  return bom + parts.join("");
 }
 
 export function summaryConfirmationGuardDisabled(): boolean {
@@ -13999,6 +14020,17 @@ function summaryFlowStartedInAttempt(
   const floors = summaryAttemptFloors(
     events, stage.slug, options.workflow, unitMajor, isPerUnitStage(stage) ? events : undefined,
   );
+  return summaryFlowStartedAfter(projectDir, events, floors, stage, options);
+}
+
+// Whether the summary was asked or confirmed at or after the attempt's floors.
+function summaryFlowStartedAfter(
+  projectDir: string,
+  events: readonly AuditShardEvent[],
+  floors: readonly AuditShardEvent[],
+  stage: SummaryConfirmationStage,
+  options: { workflow?: string; unit?: string },
+): boolean {
   return events.some((entry) => {
     if (entry.event !== "DECISION_RECORDED" && entry.event !== "SUMMARY_CONFIRMATION_RECORDED") return false;
     if (auditBlockField(entry.block, "Stage") !== stage.slug ||
@@ -14013,6 +14045,119 @@ function summaryFlowStartedInAttempt(
       ? entry.pos > floor.pos
       : entry.timestamp >= floor.timestamp);
   });
+}
+
+// The floors of the current summary attempt, as the summary evidence reads them.
+function summaryEvidenceFloors(
+  stage: SummaryConfirmationStage,
+  stateContent: string | null,
+  workflow: string | undefined,
+  events: AuditShardEvent[],
+  auditRows: AuditShardEvent[],
+): AuditShardEvent[] {
+  const unitMajor =
+    isPerUnitStage(stage) &&
+    (
+      getField(stateContent ?? "", "Construction Iteration")?.trim() === "unit-major" ||
+      getField(stateContent ?? "", "Construction Checkpoints") === "enabled"
+    );
+  return summaryAttemptFloors(
+    events, stage.slug, workflow, unitMajor, isPerUnitStage(stage) ? auditRows : undefined,
+  );
+}
+
+// After every floor (true), before one (false), or unordered across shards (null).
+function afterSummaryFloor(entry: AuditShardEvent, floors: readonly AuditShardEvent[]): true | false | null {
+  if (floors.length === 0) return true;
+  const relations = floors.map((floor): true | false | null => {
+    if (entry.shard === floor.shard) return entry.pos > floor.pos;
+    if (entry.timestamp !== floor.timestamp) {
+      return entry.timestamp > floor.timestamp;
+    }
+    return null;
+  });
+  if (relations.every((relation) => relation === true)) return true;
+  if (relations.some((relation) => relation === false)) return false;
+  return null;
+}
+
+// A summary confirmation receipt for this stage, Unit and questions file.
+function summaryReceiptFor(
+  projectDir: string,
+  entry: AuditShardEvent,
+  slug: string,
+  workflow: string | undefined,
+  unit: string | null,
+  questionRelative: string,
+): boolean {
+  if (entry.event !== "SUMMARY_CONFIRMATION_RECORDED") return false;
+  if (auditBlockField(entry.block, "Stage") !== slug) return false;
+  if (
+    auditBlockField(entry.block, "Checkpoint") !==
+      SUMMARY_CONFIRMATION_CHECKPOINT
+  ) {
+    return false;
+  }
+  const eventWorkflow = auditBlockField(entry.block, "Workflow");
+  if (workflow !== undefined) {
+    if (eventWorkflow !== workflow) return false;
+  } else if (eventWorkflow?.startsWith("single-stage:")) {
+    return false;
+  }
+  const eventUnit = auditBlockField(entry.block, "Unit");
+  if ((eventUnit ?? null) !== unit) return false;
+  if (
+    eventUnit &&
+    !eventMatchesClaimAttempt(projectDir, entry.block, eventUnit)
+  ) {
+    return false;
+  }
+  return auditBlockField(entry.block, "Questions File") === questionRelative;
+}
+
+/**
+ * A jump back to a stage, or a restart of it, starts a new attempt, and a new
+ * attempt confirms its summary again. Its questions file still shows the
+ * earlier attempt's `[Answer]: Looks correct`, which reads as answered, so
+ * this clears that one answer when the file's only confirmation receipts are
+ * from before the current attempt and the summary has not been asked in it
+ * (a reply given in this attempt is never touched). Returns whether it wrote.
+ */
+export function clearEarlierAttemptSummaryAnswer(
+  projectDir: string,
+  stage: SummaryConfirmationStage,
+  options: { stateContent: string; questionsFile: string },
+): boolean {
+  if (!summaryConfirmationOwed(stage, { stateContent: options.stateContent })) return false;
+  const path = resolvePath(projectDir, options.questionsFile);
+  const question = summaryQuestionFiles(projectDir, stage, options.stateContent)
+    .find((candidate) => resolvePath(candidate.path) === path);
+  if (question === undefined) return false;
+  let content: string;
+  try {
+    content = readFileSync(path, "utf-8");
+  } catch {
+    return false;
+  }
+  const cleared = summaryAnswerCleared(content);
+  if (cleared === null) return false;
+  const auditRows = readAuditShardEvents(projectDir);
+  const events = auditRows.filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event));
+  const floors = summaryEvidenceFloors(stage, options.stateContent, undefined, events, auditRows);
+  if (floors.length === 0) return false;
+  const questionRelative = toPosix(relative(projectDir, path));
+  const receipts = events.filter((entry) =>
+    summaryReceiptFor(projectDir, entry, stage.slug, undefined, question.unit, questionRelative)
+  );
+  const earlier = receipts.some((entry) =>
+    afterSummaryFloor(entry, floors) === false && auditBlockField(entry.block, "Details") === "Looks correct"
+  );
+  if (!earlier || receipts.some((entry) => afterSummaryFloor(entry, floors) !== false)) return false;
+  if (summaryFlowStartedAfter(projectDir, auditRows, floors, stage, question.unit === null ? {} : { unit: question.unit })) {
+    return false;
+  }
+  writeFileAtomic(path, cleared);
+  return true;
 }
 
 function summaryAnswerFromFile(path: string): string | null {
@@ -14809,28 +14954,8 @@ export function checkSummaryConfirmationEvidence(
     );
 
   const workflow = options.workflow;
-  const unitMajor =
-    isPerUnitStage(stage) &&
-    (
-      getField(options.stateContent ?? "", "Construction Iteration")?.trim() === "unit-major" ||
-      getField(options.stateContent ?? "", "Construction Checkpoints") === "enabled"
-    );
-  const floors = summaryAttemptFloors(
-    events, stage.slug, workflow, unitMajor, isPerUnitStage(stage) ? auditRows : undefined,
-  );
-  const afterFloor = (entry: AuditShardEvent): true | false | null => {
-    if (floors.length === 0) return true;
-    const relations = floors.map((floor): true | false | null => {
-      if (entry.shard === floor.shard) return entry.pos > floor.pos;
-      if (entry.timestamp !== floor.timestamp) {
-        return entry.timestamp > floor.timestamp;
-      }
-      return null;
-    });
-    if (relations.every((relation) => relation === true)) return true;
-    if (relations.some((relation) => relation === false)) return false;
-    return null;
-  };
+  const floors = summaryEvidenceFloors(stage, options.stateContent ?? null, workflow, events, auditRows);
+  const afterFloor = (entry: AuditShardEvent): true | false | null => afterSummaryFloor(entry, floors);
 
   if (workflow !== undefined && isPerUnitStage(stage)) {
     const candidates = events.filter((entry) =>
@@ -14885,31 +15010,9 @@ export function checkSummaryConfirmationEvidence(
     }
 
     const questionRelative = toPosix(relative(projectDir, question.path));
-    const receiptCandidates = events.filter((entry) => {
-      if (entry.event !== "SUMMARY_CONFIRMATION_RECORDED") return false;
-      if (auditBlockField(entry.block, "Stage") !== stage.slug) return false;
-      if (
-        auditBlockField(entry.block, "Checkpoint") !==
-          SUMMARY_CONFIRMATION_CHECKPOINT
-      ) {
-        return false;
-      }
-      const eventWorkflow = auditBlockField(entry.block, "Workflow");
-      if (workflow !== undefined) {
-        if (eventWorkflow !== workflow) return false;
-      } else if (eventWorkflow?.startsWith("single-stage:")) {
-        return false;
-      }
-      const eventUnit = auditBlockField(entry.block, "Unit");
-      if ((eventUnit ?? null) !== question.unit) return false;
-      if (
-        eventUnit &&
-        !eventMatchesClaimAttempt(projectDir, entry.block, eventUnit)
-      ) {
-        return false;
-      }
-      return auditBlockField(entry.block, "Questions File") === questionRelative;
-    });
+    const receiptCandidates = events.filter((entry) =>
+      summaryReceiptFor(projectDir, entry, stage.slug, workflow, question.unit, questionRelative)
+    );
     const orderedReceipts = receiptCandidates.filter(
       (entry) => afterFloor(entry) === true,
     );

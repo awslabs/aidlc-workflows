@@ -429,6 +429,12 @@ them when none is answered yet, then an unanswered summary confirmation, then
 the stage's next step), never creating it again, writing new questions over it,
 or asking an answered question again (#1873). A redo the person asked for
 (`artifact_reuse`, which drops the field, or Redo from scratch) starts afresh.
+After a jump back or a restart, which starts a new attempt that confirms the
+summary again, the engine clears the file's summary `[Answer]:` when its only
+confirmation is from an earlier attempt and the summary has not been asked in
+this one (`clearEarlierAttemptSummaryAnswer`, before the step is emitted, never
+under the Stop hook's probe), so the conductor asks it once; every other answer
+is kept as written.
 
 **Step 2: How the person answers.** The engine resolves the stage's answer
 mode (`resolveStageAnswerMode`: `mode`, `ask`, `reused_from`, `notice`), and the
