@@ -5852,12 +5852,20 @@ export function consumeProtectedQuestion(projectDir: string, session: string): v
   withdrawProtectedQuestions(projectDir, session);
 }
 
-/** A new question or lifecycle gate retires consent, even when its session is unknown. */
-export function withdrawProtectedQuestions(projectDir: string, session: string): void {
+// A new question or lifecycle gate retires consent, even when its session is
+// unknown. With `keepAnswered` (the agent's own question, asked beside a
+// protected one the person already replied to in the chat it names, such as a
+// side question at a Unit checkpoint) that reply stands, so the choice they made
+// is recorded without asking them again.
+export function withdrawProtectedQuestions(
+  projectDir: string, session: string, options: { keepAnswered?: boolean } = {},
+): void {
   withAuditLock(projectDir, () => {
     const dir = planApprovalRuntimeDir(projectDir);
     assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
     if (session !== "*") {
+      const question = options.keepAnswered === true ? readProtectedQuestion(projectDir, session) : null;
+      if (question !== null && readProtectedResponse(projectDir, session)?.challengeId === question.challengeId) return;
       removeRuntimeFile(protectedQuestionPath(projectDir, session));
       removeRuntimeFile(protectedResponsePath(projectDir, session));
       return;

@@ -109,7 +109,11 @@ exact `--decision` digest when supplied in `tool_input.questions[].question` or
 forwarding a structured selection. A reply without rendered text relies on
 exclusivity: a new `log decision` withdraws the invoking session's protected
 question, or all sessions' questions if neither `--session` nor process ancestry
-resolves the owner. A lifecycle `gate-start` withdraws all protected questions
+resolves the owner. A `log decision` that is not itself a verification
+command, Construction policy or code plan question (the agent's own question,
+such as a side question at a Unit checkpoint) leaves in place a protected
+question the person already replied to in the chat it names, so the choice
+they made is recorded without asking again. A lifecycle `gate-start` withdraws all protected questions
 before `STAGE_AWAITING_APPROVAL`. Plan Approval keeps its separate runtime format;
 minting either kind removes the other's challenge and response, but ordinary
 decisions and lifecycle gates do not withdraw Plan Approval itself.

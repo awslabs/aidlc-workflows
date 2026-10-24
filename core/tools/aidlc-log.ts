@@ -1160,9 +1160,12 @@ function handleDecision(args: string[]): void {
   let protectedQuestion: ProtectedQuestion | null = null;
   try {
     protectedQuestion = withAuditLock(pd, () => {
+      // The agent's own question (not a protected or plan question) leaves a
+      // protected question the person already replied to in its chat in place.
       withdrawProtectedQuestions(
         pd,
         fields.Session || flags.session?.trim() || resolveSessionIdFromAncestry(pd) || "*",
+        { keepAnswered: !policyFields && !verificationCommand && !planEvidence },
       );
       emitAudit(pd, "DECISION_RECORDED", fields);
       if (!policyFields && !verificationCommand) return null;
