@@ -1989,7 +1989,7 @@ question it answers is the agent's reading. For a question with choices,
 `--details` is the choice the agent read from the reply, and their reply itself
 where no hook kept their words or the reply answers several questions. The answer's row keeps every such
 reply's words (Person Reply), except one an earlier answer already recorded
-unless it is the latest, and names the latest (Message Id), and every one of
+unless it is the latest and the question was logged no later than it, and names the latest (Message Id), and every one of
 them, oldest first, when there are several (Message Ids); when the engine
 cannot name the chat, it keeps only the id where one chat replied and neither
 where more did, and records the answer either way. `log decision --message <id>` and `log answer --message <id>` name

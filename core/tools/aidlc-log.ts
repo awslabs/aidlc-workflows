@@ -2517,13 +2517,15 @@ function handleAnswer(args: string[]): void {
     // in them, as they do at a gate: the message named, or every reply of
     // theirs in this chat that no decision has used yet (personsGateReply).
     // Which question a reply answers is the agent's reading, so a question
-    // logged after the reply that answers it records on that reply.
+    // logged after the reply that answers it records on that reply, unless
+    // another answer already names it (the question's own time says which).
+    const question = decisionRowsInScope(readAuditShardEvents(pd), flags.stage, flags.unit).at(-1);
     if (named !== null) {
       fields["Message Id"] = named.id;
       const namedWords = named.words === null ? null : personsWordsText(named.words);
       if (namedWords && !isNonAnswer(namedWords)) fields["Person Reply"] = namedWords;
     } else if (instruction === undefined && !autonomousDecision) {
-      const reply = personsGateReply(pd, invokingChat(pd), flags.stage);
+      const reply = personsGateReply(pd, invokingChat(pd), flags.stage, question?.timestamp);
       if (reply.words) fields["Person Reply"] = reply.words;
       if (reply.messageId) fields["Message Id"] = reply.messageId;
       Object.assign(fields, windowMessageIds(reply));
@@ -2570,7 +2572,6 @@ function handleAnswer(args: string[]): void {
     // the question its kind (or its two options) names. Whether their reply
     // already holds the note is the agent's to read.
     const fromBox = instruction === undefined && !autonomousDecision ? boxPicksAddANote(pd, named?.id) : null;
-    const question = decisionRowsInScope(readAuditShardEvents(pd), flags.stage, flags.unit).at(-1);
     const asksForNote = fromBox ?? (picksAddANote(flags.details) && question !== undefined &&
       isLearningsNoteDecision(question.block));
     if (asksForNote) rowEndsTurn = true;

@@ -31056,7 +31056,12 @@ export function stageStartFloorRefusal(
 // start (stageReplyFloor), in the order they came. A reply an answer on record
 // already names (its Message Id or Message Ids) was said for that question and
 // is left to it, unless it is their latest, which may answer this one too: an
-// answer spends no reply, but its words are not this decision's. `words` is their words as the message record
+// answer spends no reply, but its words are not this decision's. With
+// `askedAt`, when an answer's own question was logged, their latest is that
+// question's too only when the question was on record by its second: one reply
+// answers every question asked before it, never one the agent logged after it
+// had answered another (a live opencode run recorded the person's "postgres"
+// as their answer to a question they were never shown). `words` is their words as the message record
 // keeps them, joined by line breaks, left out when one of those messages is no
 // longer readable or was cut (the words kept would not be everything they
 // said); `messageId` names the latest; `replies` lists every one with its time,
@@ -31116,7 +31121,9 @@ export function unshownGateReplyStands(projectDir: string, stage: string): boole
   }
 }
 
-export function personsGateReply(projectDir: string, session: string | null, stage: string): GateReply {
+export function personsGateReply(
+  projectDir: string, session: string | null, stage: string, askedAt?: string,
+): GateReply {
   const none: GateReply = { words: null, messageId: null, replies: [], elsewhere: [] };
   try {
     const { mine, others } = ownShardRows(projectDir);
@@ -31136,8 +31143,10 @@ export function personsGateReply(projectDir: string, session: string | null, sta
       const ids = [auditBlockField(row.block, "Message Id"), ...(auditBlockField(row.block, "Message Ids") ?? "").split(",")];
       for (const id of ids) if (id) answered.add(id);
     }
+    const latestAnswers = (row: AuditShardEvent): boolean =>
+      askedAt === undefined || Date.parse(askedAt) <= Date.parse(row.timestamp);
     turns = turns.filter((row, at) =>
-      at === turns.length - 1 || !answered.has(auditBlockField(row.block, "Message Id") ?? ""));
+      (at === turns.length - 1 && latestAnswers(row)) || !answered.has(auditBlockField(row.block, "Message Id") ?? ""));
     const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
     const elsewhere = held.map((row) => {
       const id = auditBlockField(row.block, "Message Id") as string;
