@@ -9028,9 +9028,40 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 // message last (a reply in plain words, a utility). Returns
 // their line's arguments when it took them, for the readings that look at the
 // command as typed.
+//
+// When the agent's command does carry their request, it routes as passed, and
+// the words it is recorded with (the question copy, the work's description and
+// Project line, every audit Request) are still theirs, as their line typed them:
+// a live run on opencode passed "la página de la panadería" as "la pagina de la
+// panaderia". Under the same rules for which line is theirs, the engine's own
+// parse of that line says which of its words are the request: all of them on a
+// line that routes on the plan the agent's call routes on; on a line whose first
+// word is also a plan's name, all of them when the agent routes on no plan and
+// the rest after that word when it routes on that plan. Any other reading keeps
+// the agent's words. Only the request's words change: every other flag and the
+// command's arguments stay the agent's.
 function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   if (engineSessionId === undefined || isReadOnlyEngineProbe()) return null;
-  if (flags.intent !== undefined || flags.request !== undefined) return null;
+  if (flags.request !== undefined) return null;
+  if (flags.intent !== undefined) {
+    const message = latestMessage(pd, engineSessionId);
+    if (message === null || message.source !== "prompt" || message.words === null || message.cut === true) return null;
+    const typed = aidlcEntryWords(personsWordsText(message.text));
+    if (typed === null || typed.length === 0 || lineHandedOut(pd, engineSessionId, message.id)) return null;
+    if (loadStateFileIfPresent(pd) !== null && !turnIsLatestRow(pd, message.id)) return null;
+    const own = parseNextFlags(splitKiroCommandArgs(typed));
+    if (own.parseError || own.intent === undefined) return null;
+    const plan = flags.scope ?? flags.positionalScope ?? null;
+    const words = personsWordsText(message.words);
+    const step = own.readingStep;
+    if (step === undefined) {
+      if (message.route.scope === plan) flags.intent = words;
+    } else if (step.kind === "plan-word") {
+      if (plan === null) flags.intent = words;
+      else if (plan === step.scope) flags.intent = words.slice(step.scope.length).trim();
+    }
+    return null;
+  }
   const carriesNothing = Object.entries(flags).every(([key, value]) =>
     key === "scope" || key === "positionalScope" || key === "resume" || value === undefined || value === false);
   if (!carriesNothing) return null;
