@@ -166,31 +166,5 @@
         }
       }
     }
-  },
-  "postToolUse_askUserQuestion": {
-    "hook_event_name": "PostToolUse",
-    "session_id": "44e47e9b-b805-44c7-9265-342fcd064044",
-    "timestamp": "2026-10-24T09:08:10.618Z",
-    "cwd": "/workspace/copilot-fixture/proj",
-    "tool_name": "AskUserQuestion",
-    "tool_input": {
-      "message": "Which color do you prefer?",
-      "requestedSchema": {
-        "properties": {
-          "color": {
-            "type": "string",
-            "title": "Preferred color",
-            "enum": [
-              "Red",
-              "Blue"
-            ]
-          }
-        }
-      }
-    },
-    "tool_result": {
-      "result_type": "success",
-      "text_result_for_llm": "User responded: Blue"
-    }
   }
 }

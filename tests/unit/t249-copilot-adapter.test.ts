@@ -5,9 +5,9 @@
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
 // (field-verbatim captures off Copilot CLI 1.0.74, plus a task launch off 1.0.74
-// and 1.0.96, sanitized for publication) into the generated Copilot adapter
-// inside a scratch project carrying an active workflow state, then asserts the
-// observable core-hook effect:
+// and 1.0.96 and a question box off 1.0.103, sanitized for publication) into
+// the generated Copilot adapter inside a scratch project carrying an active
+// workflow state, then asserts the observable core-hook effect:
 //   continue-workflow → block fields at top level for CLI and under
 //                    hookSpecificOutput for VS Code; silent with no state.
 //   session-start  → additionalContext at top level for CLI and under
