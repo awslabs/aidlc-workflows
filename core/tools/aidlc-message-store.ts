@@ -16,6 +16,7 @@ import {
   readAuditShardEvents,
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
+  rejectionIsFreshAttempt,
   removeRecordFileNoFollow,
   resolveInvokingSessionId,
   sessionsDir,
@@ -498,18 +499,22 @@ function onlyItsOwnDecisionAfter(
   return decisions.size <= 1;
 }
 
-// Whether the only decision recorded after `message` is one reopen (the rows
-// of one redo, jump back or change over its Units, reopenOf) naming no other
-// message: the message asked for it, so a change asked for beside it still
-// answers the question that reopen brought up. Ids, times and the engine's own
-// rows only.
+// Whether the only decision recorded after `message` is one redo or jump back
+// (the rows of one reopen over its Units, reopenOf) naming no other message:
+// the message asked for it, so a change asked for beside it still answers the
+// question that reopen brought up. A change reopen is the person's Request
+// Changes already on record (rejectionIsFreshAttempt) and spends the message,
+// as a gate's Request Changes does. Ids, times and the engine's own rows only.
 function onlyItsReopenAfter(rows: readonly AuditShardEvent[], message: Pick<StoredMessage, "id" | "at">): boolean {
   let reopen: string | null = null;
   for (const row of rows) {
     if (row.timestamp <= message.at || !MESSAGE_SPENDING_EVENTS.has(row.event)) continue;
     const key = reopenOf(row);
     const named = auditBlockField(row.block, "Message Id");
-    if (key === null || (reopen !== null && key !== reopen) || (named !== null && named !== message.id)) return false;
+    if (
+      key === null || !rejectionIsFreshAttempt(row.block) || (reopen !== null && key !== reopen) ||
+      (named !== null && named !== message.id)
+    ) return false;
     reopen = key;
   }
   return reopen !== null;

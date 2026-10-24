@@ -1010,8 +1010,8 @@ This stage has a **two-part structure**: planning followed by generation.
    line itself approves nothing, the engine's receipt does. When the person's message in
    this chat that the question opened for already asked for a change ("go back
    to code generation: also accept -S", on finished work too, or a redo of one
-   Unit's step that names its change) and no decision but the reopen it asked
-   for has used it, the conductor records it as that question's Request Changes,
+   Unit's step that names its change) and no decision but the redo or jump it
+   asked for has used it, the conductor records it as that question's Request Changes,
    with their words (the message record is the proof, as `--message` reads
    it); an approval still needs a reply after the question shows, and the
    revised plan's question needs its own. The
