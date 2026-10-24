@@ -1614,20 +1614,45 @@ export const WORKER_BRIEF_SECTIONS: ReadonlyArray<ReadonlyArray<string>> = [
   ["## Approved unit-test instructions", "## Current unit-test instructions"],
 ];
 
-// A Unit of a parallel batch runs the tests the person approved through AI-DLC's
-// own check rather than as one more command for the person to allow; from the
-// main folder, where the tool path and the project are the batch's.
-function swarmUnitTestsLine(projectDir: string, unit: string | null): string {
-  if (!unit) return "";
+// The state when `unit` is one of the open parallel batch's Units, else null.
+function openSwarmBatchState(projectDir: string, unit: string | null): string | null {
+  if (!unit) return null;
   let state: string;
   try {
     state = readFileSync(stateFilePath(projectDir), "utf-8");
   } catch {
-    return "";
+    return null;
   }
   const marker = readActiveDirectiveMarker(projectDir, state);
-  const approved = authorizedVerificationCommand(projectDir, state);
-  if (marker?.kind !== "invoke-swarm" || !marker.units?.includes(unit) || !approved) return "";
+  return marker?.kind === "invoke-swarm" && marker.units?.includes(unit) ? state : null;
+}
+
+// A Unit of a parallel batch is built in its own worktree while its worker may
+// run in the main folder, so a relative record path can put the records where
+// nothing reads them: both folders are named absolute, the record folder at the
+// main folder's own record path inside the worktree. A brief before prepare
+// names no worktree.
+function swarmWorktreeLine(projectDir: string, unit: string | null): string {
+  if (!unit || openSwarmBatchState(projectDir, unit) === null) return "";
+  let worktree: string;
+  try {
+    worktree = resolve(resolveBoltIdentity(projectDir, boltSlugForUnit(unit), resolveWorkflowSelection(projectDir)).dir);
+  } catch {
+    return "";
+  }
+  if (!existsSync(worktree)) return "";
+  const records = join(worktree, relative(projectDir, codeGenerationRecordDir(projectDir, unit)));
+  return `\nYour worktree is \`${toPosix(worktree)}\`: write this Unit's code there, and its records ` +
+    `(code-summary.md, source-manifest.json, traceability.json) in \`${toPosix(records)}\`.\n`;
+}
+
+// A Unit of a parallel batch runs the tests the person approved through AI-DLC's
+// own check rather than as one more command for the person to allow; from the
+// main folder, where the tool path and the project are the batch's.
+function swarmUnitTestsLine(projectDir: string, unit: string | null): string {
+  const state = openSwarmBatchState(projectDir, unit);
+  const approved = state === null ? null : authorizedVerificationCommand(projectDir, state);
+  if (!unit || !approved) return "";
   return `\nTo run the tests the person approved (\`${approved.label}\`), run \`${swarmUnitTestCommand(unit)}\` ` +
     `as a command of its own from the project's main folder \`${resolve(projectDir)}\`, not from your worktree and ` +
     "with no `cd` before it: it runs them in your worktree and shows their output, and its JSON line says " +
@@ -1687,7 +1712,8 @@ export function workerBrief(
     `${marker}\n` +
     `AIDLC-TESTING-CONTRACT: ${contractHash}\n` +
     (resume ? progressSection(resume) : "") +
-    `\n${files}\n\n${FILE_TOOLS_RULE}\n${swarmUnitTestsLine(projectDir, target.unit)}` +
+    `\n${files}\n\n${FILE_TOOLS_RULE}\n${swarmWorktreeLine(projectDir, target.unit)}` +
+    swarmUnitTestsLine(projectDir, target.unit) +
     `\n${planFileSection}\n\nTick each step's box in \`${planFile}\` as you finish the step. ` +
     "That is the only change you make to that file.\n" +
     `\n${continuation ? planHeadings[1] : planHeadings[0]}\n\n` +
