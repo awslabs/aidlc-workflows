@@ -273,6 +273,7 @@ import {
   HARNESS_PRODUCT_NAMES,
   harnessHonestyNotes,
   isModelEffort,
+  isModelHarness,
   isModelId,
   isModelPreset,
   kiroAgentPinsAdded,
@@ -288,6 +289,7 @@ import {
   readAgentTiers,
   resolveModelPolicy,
   sessionModelsDetail,
+  sessionSetsAgentModels,
   type AgentTiers,
   type ModelAgentPolicy,
   type ModelEffort,
@@ -815,17 +817,7 @@ function configPositionals(argv: readonly string[]): Array<{ value: string; inde
 }
 
 function modelHarness(value: string): ModelHarness {
-  if (
-    value === "claude" ||
-    value === "codex" ||
-    value === "copilot" ||
-    value === "cursor" ||
-    value === "kiro" ||
-    value === "kiro-ide" ||
-    value === "opencode"
-  ) {
-    return value;
-  }
+  if (isModelHarness(value)) return value;
   throw new Error(`models policy is not supported for harness ${JSON.stringify(value)}`);
 }
 
@@ -2291,13 +2283,16 @@ function diagnosticWizard(
       if (
         selected.harness === "codex" ||
         selected.harness === "copilot" ||
-        selected.harness === "cursor"
+        selected.harness === "cursor" ||
+        selected.harness === "grok"
       ) {
         writeMenuText(
           selected.harness === "codex"
             ? "Configure the provider, credentials, and model in ~/.codex/config.toml before acknowledging this step.\n"
             : selected.harness === "copilot"
             ? "Configure Copilot BYOK provider variables before acknowledging this step.\n"
+            : selected.harness === "grok"
+            ? "Configure the provider and select the model in Grok Build before acknowledging this step.\n"
             : "Configure the provider and select the model in Cursor before acknowledging this step.\n",
         );
         const acknowledged = promptYesDefault(
@@ -2311,6 +2306,8 @@ function diagnosticWizard(
             ? "codex-provider-configuration"
             : selected.harness === "copilot"
             ? "copilot-byok-configuration"
+            : selected.harness === "grok"
+            ? "grok-provider-configuration"
             : "cursor-provider-configuration";
           skipMarkDone.add(action);
           writeMenuText(
@@ -8524,6 +8521,9 @@ function firstRunNextCommands(distribution: string): [string, string] {
   if (distribution === "cursor") {
     return ["cursor                         open Cursor in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
+  if (distribution === "grok") {
+    return ["grok                           open Grok Build in this repo", '/aidlc "what you want built"  describe your first intent'];
+  }
   if (distribution === "kiro-ide") {
     return ["kiro                          open Kiro IDE (or kiro-cli) in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
@@ -11154,10 +11154,9 @@ function prepareModelsSection(
       harness,
       current,
     );
-    // On Cursor and GitHub Copilot the session sets every agent's model and
-    // effort, so a clean check names the session, as doctor does, not the
-    // recorded policy.
-    const sessionSet = harness === "cursor" || harness === "copilot";
+    // On a session-model host the check names the session, as doctor does,
+    // not the recorded policy.
+    const sessionSet = sessionSetsAgentModels(harness);
     emitResult(
       drift.length === 0
         ? success(

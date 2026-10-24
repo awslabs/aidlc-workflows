@@ -1789,6 +1789,7 @@ describe("t293 doctor model policy advisory", () => {
       ["kiro", ".kiro"],
       ["kiro-ide", ".kiro"],
       ["opencode", ".aidlc"],
+      ["grok", ".grok"],
     ] as const) {
       const shipped = JSON.parse(
         readFileSync(join(DIST, harness, dir, "tools", "data", "harness.json"), "utf-8"),
@@ -1796,7 +1797,7 @@ describe("t293 doctor model policy advisory", () => {
       expect(HARNESS_PRODUCT_NAMES[harness], harness).toBe(shipped.productName);
     }
     expect(Object.keys(HARNESS_PRODUCT_NAMES).sort()).toEqual(
-      ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"],
+      ["claude", "codex", "copilot", "cursor", "grok", "kiro", "kiro-ide", "opencode"],
     );
   });
 

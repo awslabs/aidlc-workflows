@@ -233,7 +233,7 @@ export type HarnessManifest = {
      */
     registration?: { file: string; missing: string; invalid: string };
   };
-  /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
+  /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor" | ".grok"). */
   harnessDir: string;
   /** Explicit project-root reconciliation policies consumed by `aidlc config`. */
   rootIntegrations: RootIntegration[];
@@ -252,7 +252,7 @@ export type HarnessManifest = {
    * new harness picks its projection shape in its manifest - the packager
    * never infers it from the harness name.
    */
-  tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot" | "cursor";
+  tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot" | "cursor" | "grok";
   /**
    * Kiro rows only: which tree layout this row ships. `agent-v1` is the Kiro CLI
    * agent-JSON layout (JSON agents with hooks embedded in them); `kas` is the

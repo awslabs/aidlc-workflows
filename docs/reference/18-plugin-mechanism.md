@@ -287,7 +287,7 @@ state with project-local composition state, entirely offline:
 - Codex reads only plugin IDs declared in `~/.codex/config.toml`, then inspects
   their exact cache paths under
   `~/.codex/plugins/cache/<marketplace>/<plugin>/<version-or-local>/`.
-- On Kiro, Cursor, Copilot, and OpenCode AI-DLC reads no host plugin list. They
+- On Kiro, Cursor, Grok Build, Copilot, and OpenCode AI-DLC reads no host plugin list. They
   accept only the plugin root injected into the current hook. Outside that invocation
   a plugin composed into the project is listed as not compared (no host
   plugin list), never as missing, and doctor passes with the composed plugins
@@ -296,7 +296,7 @@ state with project-local composition state, entirely offline:
 
 Each adapter reads one host-native manifest: `.claude-plugin/plugin.json`,
 `.codex-plugin/plugin.json`, `.kiro-plugin/plugin.json` (Kiro and Kiro IDE),
-`.cursor-plugin/plugin.json`, Copilot's `.plugin/plugin.json`, or
+`.cursor-plugin/plugin.json`, `.grok-plugin/plugin.json`, Copilot's `.plugin/plugin.json`, or
 `.opencode-plugin/plugin.json`. An installed plugin is AI-DLC's when its root
 carries the plugin's own `.aidlc-plugin/plugin.json`, whose `name` is its key; a
 build from before that file travelled with the plugin (every released test-pro)

@@ -98,7 +98,7 @@ export type InvalidInstalledPlugin = {
 
 export type PluginInventory = {
   capability: InventoryCapability;
-  harness: "claude" | "codex" | "kiro" | "cursor" | "copilot" | "opencode";
+  harness: "claude" | "codex" | "kiro" | "cursor" | "copilot" | "grok" | "opencode";
   source?: string;
   installed: InstalledPlugin[];
   invalid: InvalidInstalledPlugin[];
@@ -242,6 +242,7 @@ function hostManifestDirectory(harness: PluginInventory["harness"]): string {
   if (harness === "codex") return ".codex-plugin";
   if (harness === "kiro") return ".kiro-plugin";
   if (harness === "cursor") return ".cursor-plugin";
+  if (harness === "grok") return ".grok-plugin";
   if (harness === "copilot") return ".plugin";
   return ".opencode-plugin";
 }
@@ -376,6 +377,7 @@ function harnessKind(harnessDir = runtimeHarnessDir(), projectDir = resolveProje
     declared === "kiro-ide" ||
     declared === "cursor" ||
     declared === "copilot" ||
+    declared === "grok" ||
     declared === "opencode"
   ) {
     return declared === "kiro-ide" ? "kiro" : declared;
@@ -383,6 +385,7 @@ function harnessKind(harnessDir = runtimeHarnessDir(), projectDir = resolveProje
   if (harnessDir === ".codex") return "codex";
   if (harnessDir === ".kiro") return "kiro";
   if (harnessDir === ".cursor") return "cursor";
+  if (harnessDir === ".grok") return "grok";
   return "claude";
 }
 

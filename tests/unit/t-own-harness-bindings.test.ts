@@ -7,8 +7,8 @@
 //
 // The construction, topology, reviewer and swarm modules each carry one
 // binding subsection per tool. A tool reads only its own, so each shipped tree
-// carries only its own: the agent no longer reads six other tools' text every
-// time it loads a module. The authored source keeps all seven, and nothing
+// carries only its own: the agent no longer reads the other tools' text every
+// time it loads a module. The authored source keeps every tool heading, and nothing
 // outside the bindings changes.
 
 import { describe, expect, test } from "bun:test";
@@ -24,6 +24,7 @@ const TREES: ReadonlyArray<readonly [string, string, string]> = [
   ["cursor", ".cursor", "Cursor"],
   ["opencode", ".aidlc", "opencode"],
   ["copilot", ".aidlc", "GitHub Copilot"],
+  ["grok", ".grok", "Grok"],
 ];
 const TOOLS = TREES.map(([, , heading]) => heading);
 const MODULES = [

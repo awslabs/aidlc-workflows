@@ -130,7 +130,7 @@ const CURSOR_SHORTCUT_SKILLS = ["aidlc-jump", "aidlc-scope", "aidlc-status"];
 function expectedSkills(harnessName: string): string[] {
   return [
     ...COMMON_EXPECTED_SKILLS,
-    ...(harnessName === "cursor" ? CURSOR_SHORTCUT_SKILLS : []),
+    ...(harnessName === "cursor" || harnessName === "grok" ? CURSOR_SHORTCUT_SKILLS : []),
   ].sort();
 }
 

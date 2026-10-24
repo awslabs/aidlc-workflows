@@ -23,6 +23,7 @@ const HOST_NAMED_FILES = new Set([
   ".codex-plugin/plugin.json",
   ".plugin/plugin.json",
   ".cursor-plugin/plugin.json",
+  ".grok-plugin/plugin.json",
   ".opencode-plugin/plugin.json",
   ".kiro/aidlc-plugins/test-pro/.kiro-plugin/plugin.json",
   ".kiro/hooks/aidlc-test-pro-compose.json",

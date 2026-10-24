@@ -1141,7 +1141,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expectDefers(docs("docs/reference/15-stage-definition.md"), section(docs("docs/reference/15-stage-definition.md"), "- `subagent` — hub-and-spoke.", "\n- `pipeline`"));
     expectDefers(docs("docs/reference/17-skill-system.md"), section(docs("docs/reference/17-skill-system.md"), "| `run-stage` |", "\n"));
 
-    const ensembleBindings = ["Claude Code", "Kiro CLI", "Kiro IDE", "Codex CLI", "Cursor", "opencode", "GitHub Copilot"];
+    const ensembleBindings = ["Claude Code", "Kiro CLI", "Kiro IDE", "Codex CLI", "Cursor", "opencode", "GitHub Copilot", "Grok"];
     const trees = [
       { label: "core", protocols: docs("core/aidlc-common/protocols"), stages: docs("core/aidlc-common/stages"), skills: [] as string[] },
       ...HARNESS_MATRIX.map((harness) => ({

@@ -64,7 +64,7 @@ describe("a refresh run by a 2.8.0 to 2.11.0 tool takes this release's /aidlc sk
     const readBy = HARNESS_MATRIX
       .filter((harness) => skillTheyRead(harness.distRoot, harness.manifest.harnessDir) !== null)
       .map((harness) => harness.name);
-    expect(readBy).toEqual(["claude", "codex", "cursor", "kiro", "kiro-ide", "opencode"]);
+    expect(readBy).toEqual(["claude", "codex", "cursor", "grok", "kiro", "kiro-ide", "opencode"]);
   });
 
   for (const tree of TREES) {
