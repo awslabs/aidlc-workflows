@@ -30200,6 +30200,43 @@ export function messageRetryStep(
     `reply answers it. Nothing is recorded yet: ${decision.why}`;
 }
 
+// What a decision shows the person, so a reply sent before it was last written
+// did not see it: `writes` picks the rows that write it (a stage gate's outputs,
+// the summary's questions file), and `until`, when given, the row after which a
+// write is no longer what was shown (the summary's question record: the person
+// fills in its [Answer]: line after it). `what` names it for the agent.
+export interface ShownWriting {
+  what: string;
+  writes: (row: AuditShardEvent) => boolean;
+  until?: (row: AuditShardEvent) => boolean;
+}
+
+// When what a decision shows was last written, from this clone's own shard in
+// the order its rows were written (a teammate's write on another clone is not
+// what this chat showed); null when the record holds no such write (one made
+// through the shell gives no time) or no `until` row.
+export function shownLastWrittenAt(projectDir: string, shown: ShownWriting): string | null {
+  const { mine } = ownShardRows(projectDir);
+  const end = shown.until === undefined ? mine.length : mine.findLastIndex(shown.until);
+  if (end < 0) return null;
+  return mine.slice(0, end).reduce<string | null>((at, row) => (shown.writes(row) ? row.timestamp : at), null);
+}
+
+// A stage gate shows the stage's outputs, its produces[] files, as last written.
+export function gateOutputWriting(projectDir: string, slug: string): ShownWriting | undefined {
+  const stage = findStageBySlug(slug);
+  if (stage === undefined) return undefined;
+  const repos = new Set(intentRepos(projectDir));
+  return {
+    what: "the stage's output",
+    writes: (row) => {
+      if (row.event !== "ARTIFACT_CREATED" && row.event !== "ARTIFACT_UPDATED") return false;
+      const file = auditBlockField(row.block, "File");
+      return file !== null && producesArtifactFile(stage, file, repos);
+    },
+  };
+}
+
 // A decision whose replies all came before its question was shown (a stage
 // gate, the summary confirmation): the agent names the reply that already
 // answered it, or shows the question. The ids are this chat's replies the
@@ -30207,31 +30244,44 @@ export function messageRetryStep(
 // was on screen (personsGateReply), oldest first. With a reply on record the
 // step is the agent's reading, never "show the question again": a re-ask is
 // what the person met when an agent relayed this refusal. `named` says whether
-// a reply was listed. With `writtenAt`, when what the question asks was last
-// written (the summary), a reply sent by then is not listed: it did not see it.
+// a reply was listed. With `shownWriting`, a reply sent by the time what the
+// question shows was last written is not listed, and a message the agent names
+// from then (`message`) is no answer to it (`before`): it did not see it. One
+// rule for the summary and a stage gate.
 export function answeredBeforeShownStep(
   projectDir: string,
   stage: string,
-  decision: { refused: string; question: string; shown: string; command: string; why: string },
-  writtenAt?: string,
-): { step: string; named: boolean } {
+  decision: { refused: string; question: string; shown: string; command: string; why: string; shownWriting?: ShownWriting },
+  message?: { id: string; at: string },
+): { step: string; named: boolean; before: boolean } {
+  let writtenAt: string | null = null;
+  try {
+    writtenAt = decision.shownWriting === undefined ? null : shownLastWrittenAt(projectDir, decision.shownWriting);
+  } catch {
+    writtenAt = null;
+  }
+  const before = message !== undefined && writtenAt !== null && message.at <= writtenAt;
+  const why = before
+    ? `their message ${message.id} came before ${decision.shownWriting?.what} was last written, so it does not answer it.`
+    : decision.why;
   let replies: GateReply["replies"] = [];
   try {
     const reply = personsGateReply(projectDir, resolveInvokingSessionId(projectDir), stage);
     replies = [...reply.replies, ...reply.elsewhere]
-      .filter((entry) => writtenAt === undefined || entry.at > writtenAt)
+      .filter((entry) => writtenAt === null || entry.at > writtenAt)
       .sort((a, b) => a.at.localeCompare(b.at));
   } catch {
     replies = [];
   }
   if (replies.length === 0) {
     return {
-      step: `${decision.refused} because ${decision.why} Show ${decision.shown} and end your turn; their next ` +
+      step: `${decision.refused} because ${why} Show ${decision.shown} and end your turn; their next ` +
         "reply answers it.",
       named: false,
+      before,
     };
   }
-  return { step: messageRetryStep(replies, decision), named: true };
+  return { step: messageRetryStep(replies, { ...decision, why }), named: true, before };
 }
 
 // What the person replied in any chat since the stage started that nothing has

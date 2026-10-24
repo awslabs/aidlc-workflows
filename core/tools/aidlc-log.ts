@@ -1426,13 +1426,31 @@ function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
   return open !== null;
 }
 
+// A row of this summary's question or its confirmation: the stage, Unit, workflow
+// and questions file it was asked for.
+function summaryRow(
+  pd: string,
+  entry: { block: string },
+  stage: string,
+  unit: string | undefined,
+  workflow: string | undefined,
+  questionsFile: string,
+): boolean {
+  return auditBlockField(entry.block, "Stage") === stage &&
+    auditBlockField(entry.block, "Checkpoint") === SUMMARY_CONFIRMATION_CHECKPOINT &&
+    (auditBlockField(entry.block, "Unit") ?? undefined) === unit &&
+    (auditBlockField(entry.block, "Workflow") ?? undefined) === workflow &&
+    auditBlockField(entry.block, "Questions File") === questionsFile &&
+    (unit === undefined || eventMatchesClaimAttempt(pd, entry.block, unit));
+}
+
 function pendingSummaryDecision(
   pd: string,
   stage: string,
   unit: string | undefined,
   workflow: string | undefined,
   questionsFile: string,
-): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string; contentAt?: string } {
+): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string } {
   const rows = readAuditShardEvents(pd);
   const entries = rows.filter((entry) => {
     // A turn that was only a command to AIDLC is no reply to the summary.
@@ -1449,17 +1467,7 @@ function pendingSummaryDecision(
     ) {
       return false;
     }
-    const matching =
-      auditBlockField(entry.block, "Stage") === stage &&
-      auditBlockField(entry.block, "Checkpoint") ===
-        SUMMARY_CONFIRMATION_CHECKPOINT &&
-      (auditBlockField(entry.block, "Unit") ?? undefined) === unit &&
-      (auditBlockField(entry.block, "Workflow") ?? undefined) === workflow &&
-      auditBlockField(entry.block, "Questions File") === questionsFile;
-    return matching && (
-      unit === undefined ||
-      eventMatchesClaimAttempt(pd, entry.block, unit)
-    );
+    return summaryRow(pd, entry, stage, unit, workflow, questionsFile);
   });
   if (entries.length === 0) {
     return { pending: false, humanAfterDecision: false };
@@ -1538,22 +1546,6 @@ function pendingSummaryDecision(
     return { pending: false, humanAfterDecision: false };
   }
 
-  // When the summary was last written before its question was recorded: a
-  // message sent by then did not see it. Filling in its `[Answer]:` comes after
-  // the record (`log decision` needs it blank), and a write the record does not
-  // hold (through the shell) gives no time. A write in another shard at the
-  // record's own second is left out: a guess never binds a decision.
-  const questionsAbs = resolve(pd, questionsFile);
-  const contentAt = rows
-    .filter((row) =>
-      auditRowWritesFile(pd, row, questionsAbs) &&
-      latestActions.every((decision) => follows(row, decision) === false)
-    )
-    .reduce<string | undefined>(
-      (latest, row) => latest === undefined || row.timestamp > latest ? row.timestamp : latest,
-      undefined,
-    );
-
   // Whether a reply turn of the person's came after the question's record: the
   // confirmation stands on one, unless the conductor names the message it read
   // it from (the caller proves that message). A turn in another shard at the
@@ -1567,7 +1559,7 @@ function pendingSummaryDecision(
       relations.every((relation) => relation === true)
     )
   ) {
-    return { pending: true, humanAfterDecision: true, contentAt };
+    return { pending: true, humanAfterDecision: true };
   }
   if (
     humanRelations.some((relations) =>
@@ -1581,7 +1573,7 @@ function pendingSummaryDecision(
       ambiguity: latestActionTimestamp,
     };
   }
-  return { pending: true, humanAfterDecision: false, contentAt };
+  return { pending: true, humanAfterDecision: false };
 }
 
 // Which chat's reply answers it is the protected question's (requireProtectedResponse):
@@ -2194,19 +2186,23 @@ function handleAnswer(args: string[]): void {
         if (named !== null && !repliedSinceStageStart(pd, flags.stage, named.id)) {
           error(stageStartFloorRefusal("confirm the summary of", flags.stage, named.id, "the summary"));
         }
-        const step = (why: string) => answeredBeforeShownStep(pd, flags.stage, {
+        // What the summary showed: its questions file as written before its
+        // question was recorded (filling in its `[Answer]:` comes after).
+        const questionsAbs = resolve(pd, summaryEvidence!.relativePath);
+        const checked = answeredBeforeShownStep(pd, flags.stage, {
           refused: "Cannot record the summary choice",
           question: `the "${flags.stage}" summary`,
           shown: "the summary",
           command: "log answer",
-          why,
-        }, pending.contentAt).step;
-        if (named !== null && pending.contentAt !== undefined && named.at <= pending.contentAt) {
-          error(step(`their message ${named.id} came before the summary was last written, so it does not answer it.`));
-        }
-        if (named === null && !pending.humanAfterDecision) {
-          error(step("no reply of the person's has arrived since the summary question was recorded."));
-        }
+          why: "no reply of the person's has arrived since the summary question was recorded.",
+          shownWriting: {
+            what: "the summary",
+            writes: (row) => auditRowWritesFile(pd, row, questionsAbs),
+            until: (row) => row.event === "DECISION_RECORDED" &&
+              summaryRow(pd, row, flags.stage, flags.unit, workflow, summaryEvidence!.relativePath),
+          },
+        }, named ?? undefined);
+        if (checked.before || (named === null && !pending.humanAfterDecision)) error(checked.step);
       }
       // Their words go on the receipt: the message named, or every reply of
       // theirs in this chat that no decision has used yet (personsGateReply).

@@ -107,6 +107,9 @@ import {
   CONDUCTOR_SUMMARY_FIELD,
   selectedGuardRecoveryRemedyAction,
   answeredBeforeShownStep,
+  gateOutputWriting,
+  shownLastWrittenAt,
+  type ShownWriting,
   messageRetryStep,
   personRepliedSinceGateShown,
   personsGateReply,
@@ -7388,9 +7391,20 @@ function verifyApprovalDecision(
     if (message !== undefined) {
       const proof = proveMessage(pd, message, "approval");
       if ("refusal" in proof) refuseForAgent(proof.refusal);
+      // Sent before the stage's output was last written, it did not see what
+      // the gate shows, so it approves nothing there (the summary's rule).
+      const { step, named, before } = answeredBeforeShownStep(pd, stage.slug, {
+        refused: `Cannot approve "${stage.slug}"`,
+        question: `the "${stage.slug}" gate`,
+        shown: "the gate",
+        command: "report",
+        why: "",
+        shownWriting: gateOutputWriting(pd, stage.slug),
+      }, proof.message);
+      if (before) refuseForAgent(step, { personDecided: named });
     } else if (!humanRepliedSinceGate(pd)) {
       const why = "no new human reply has been received for this approval question.";
-      const retry = openQuestionRetry(pd, stage.slug, why);
+      const retry = openQuestionRetry(pd, stage.slug, why, gateOutputWriting(pd, stage.slug));
       if (retry !== null) refuseForAgent(retry, { personDecided: true });
       refuseForAgent(
         `Cannot approve "${stage.slug}" because ${why} Wait for the human to type their choice, then retry the ` +
@@ -7426,6 +7440,7 @@ function refuseGateShownAfterReply(pd: string, verb: "approve" | "request change
     shown: "the gate",
     command: "report",
     why: "no new human reply has been received for this approval question since it was shown.",
+    ...(verb === "approve" ? { shownWriting: gateOutputWriting(pd, slug) } : {}),
   });
   refuseForAgent(step, { personDecided: named });
 }
@@ -7433,10 +7448,14 @@ function refuseGateShownAfterReply(pd: string, verb: "approve" | "request change
 // A decision at a stage gate with no reply of theirs since the last decision
 // but messages they sent while another engine question was on screen: the
 // agent names the one that answered this gate, if one did. Ids and times only.
-function openQuestionRetry(pd: string, slug: string, why: string): string | null {
+// With `shown` (an approval), one sent by the time the stage's output was last
+// written is left out, as answeredBeforeShownStep leaves it out.
+function openQuestionRetry(pd: string, slug: string, why: string, shown?: ShownWriting): string | null {
   let held: Array<{ id: string; at: string }> = [];
   try {
-    held = personsGateReply(pd, resolveInvokingSessionId(pd), slug).elsewhere;
+    const writtenAt = shown === undefined ? null : shownLastWrittenAt(pd, shown);
+    held = personsGateReply(pd, resolveInvokingSessionId(pd), slug).elsewhere
+      .filter((entry) => writtenAt === null || entry.at > writtenAt);
   } catch {
     held = [];
   }
