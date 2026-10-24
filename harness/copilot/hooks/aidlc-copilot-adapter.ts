@@ -1878,22 +1878,32 @@ export async function run(
   // "briefing" spends the matching launch's record; "unknown" means the
   // record could not be read even under the lock. A VS Code launch from
   // another chat never matches: its brief arrives under that chat's session.
-  // The record spent is kept in spentBriefing for the caller.
+  // The record spent is kept in spentBriefing for the caller. When the prompt
+  // matched none, briefDueHere says whether a launch from this chat still waits
+  // for a brief that comes into it: only VS Code's runSubagent records name the
+  // chat. Null when the record was not read.
   let spentBriefing: BriefingEntry | null = null;
+  let briefDueHere: boolean | null = null;
   function checkBriefing(prompt: unknown): "briefing" | "not-briefing" | "unknown" {
     if (typeof prompt !== "string" || prompt.trim().length === 0) return "not-briefing";
     const digest = briefingDigest(prompt);
     const matches = (entry: BriefingEntry): boolean =>
       entry.digests.includes(digest) && (!entry.session || !sessionId || entry.session === sessionId);
+    const dueHere = (entries: BriefingEntry[]): boolean =>
+      Boolean(sessionId) && entries.some((entry) => entry.session === sessionId);
     const spent = transactBriefings((entries) => {
       const index = entries.findIndex(matches);
       if (index >= 0) spentBriefing = entries.splice(index, 1)[0];
+      else briefDueHere = dueHere(entries);
       return { value: index >= 0, changed: index >= 0 };
     }, true);
     if (spent.read) return spent.value ? "briefing" : "not-briefing";
     // The lock stayed busy or the read failed under it: one plain read.
     try {
-      return liveBriefings(true).some(matches) ? "briefing" : "not-briefing";
+      const entries = liveBriefings(true);
+      if (entries.some(matches)) return "briefing";
+      briefDueHere = dueHere(entries);
+      return "not-briefing";
     } catch {
       return "unknown";
     }
@@ -2080,16 +2090,18 @@ export async function run(
       // A subagent's briefing is the agent speaking (difference #8): no
       // HUMAN_TURN, no kept words, no answer, no typed switch, no human
       // sequence. A different prompt typed while the subagent runs still
-      // counts once the first few seconds after its start have passed.
+      // counts, in VS Code once the first few seconds after its start have
+      // passed. The CLI never sends a brief into the launching chat, so its
+      // launch records name no chat and a prompt there counts at once.
       const brief = checkBriefing(prompt);
       if (brief === "briefing") {
         bindSubagentSession(spentBriefing);
         return 0;
       }
-      const started = justStartedSubagent();
+      const started = briefDueHere === false ? null : justStartedSubagent();
       if (started) {
         // A subagent has just started in this chat and this prompt matched
-        // none of its recorded briefs: the host changed the brief's text, or
+        // none of its recorded briefs: VS Code changed the brief's text, or
         // the record could not be read. It is almost certainly that subagent's
         // brief, so it is not counted. A message the person typed in those few
         // seconds is asked for again.
