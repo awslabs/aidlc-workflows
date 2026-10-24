@@ -33521,6 +33521,9 @@ export function evaluateGuardRefusal(
   );
   const remedies: GuardRemedy[] = [];
   const openForWork = state === "in-progress" || state === "awaiting-approval";
+  // A revision is open for its own review: reviewing the change is the
+  // conductor's step before it reports the revision done.
+  const openForReview = openForWork || state === "revising";
 
   if (input.autonomousBolt) {
     const slug = input.autonomousBolt.slug ?? input.autonomousBolt.unit;
@@ -33644,7 +33647,7 @@ export function evaluateGuardRefusal(
           "Apply the reviewer's requested repairs, then request review iteration " +
           `${input.attempt.repairReview.iteration + 1}.`,
         requiresHuman: false,
-        executableNow: input.attempt.summaryCoverage === "current" && openForWork,
+        executableNow: input.attempt.summaryCoverage === "current" && openForReview,
       });
       // Another pass is the reviewer's call; the person may want the gate now.
       remedies.push({
@@ -33666,7 +33669,7 @@ export function evaluateGuardRefusal(
           input.attempt.nextReview.request,
         ),
         requiresHuman: false,
-        executableNow: input.attempt.summaryCoverage === "current" && openForWork,
+        executableNow: input.attempt.summaryCoverage === "current" && openForReview,
       });
     }
     if (
@@ -33773,7 +33776,7 @@ export function evaluateGuardRefusal(
           input.attempt.requestReview,
         ),
         requiresHuman: false,
-        executableNow: input.attempt.summaryCoverage === "current" && openForWork,
+        executableNow: input.attempt.summaryCoverage === "current" && openForReview,
       });
     } else if (
       reviewBudgetAvailable &&
@@ -33789,7 +33792,7 @@ export function evaluateGuardRefusal(
           input.attempt.requestReview,
         ),
         requiresHuman: false,
-        executableNow: input.attempt.summaryCoverage === "current" && openForWork,
+        executableNow: input.attempt.summaryCoverage === "current" && openForReview,
       });
     }
     if (

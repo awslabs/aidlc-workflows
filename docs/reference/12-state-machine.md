@@ -1582,7 +1582,10 @@ sentence, which ends with the same report again (for missing code, the second
 report puts the approval question to the person with where AI-DLC looked); the source changed after its
 review (`SOURCE_REVIEW_STALE`, the source still readable) offers the one
 `start-recovery-review`, as a changed output does, and that remedy names its
-exact request; and a review pass the cap refuses with nobody having asked for it
+exact request; a revision reported done before its review (`REVIEW_EVIDENCE_MISSING`
+while the stage revises) offers the review it is missing (`request-review`,
+`start-recovery-review`, or the repairs before the reviewer's next pass), then the
+same report again; and a review pass the cap refuses with nobody having asked for it
 (`REVIEW_BUDGET_EXHAUSTED`) offers `present-findings-at-gate` before
 `present-approval-gate`, the same gate with its findings (on a stage this work
 runs with no review, the gate alone, since no review ran), or, part way through a
