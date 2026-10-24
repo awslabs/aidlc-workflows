@@ -129,7 +129,7 @@ const AUDIT_TOOL_STUB = `export function appendAuditEntry(_k: string, _d: unknow
 const LIB_TOOL_STUB = `import { join } from "node:path";
 // The engine's own reading of a line is pure, so the rig uses the real one, and
 // the real in-process hook runner, which runs the stub guards beside it.
-export { beforeDelimiter, boundDirectiveMessage, ENGINE_OWNED_STATE_TRANSITIONS, nextLineFlags, readOrchestratorLauncherOptions, runHookHere } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
+export { beforeDelimiter, boundDirectiveMessage, ENGINE_OWNED_STATE_TRANSITIONS, nextLineFlags, readOrchestratorLauncherOptions, runHookHere, sessionsDir, validSessionId } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
 export function decideFence(): { decision: "hold" | "stand-aside" } {
   return { decision: process.env.T250_STATE_TRANSITION_STANDS_ASIDE === "1" ? "stand-aside" : "hold" };
 }

@@ -76,6 +76,11 @@
 //      The shim hands the core hook the line rebuilt from that structure, and
 //      only when the installed file with those words equals the prompt's body
 //      byte for byte (copilotSkillInvocationLine).
+//  11. The CLI hands a Stop block's reason back to the agent as a new prompt,
+//      with the same keys as a typed one (live-captured on 1.0.103). The Stop
+//      case keeps a digest of the reason it sent for that chat and the chat's
+//      next prompt spends it: an exact match is the host's turn, never the
+//      person's message or reply (armStopNote, spendStopNote).
 //
 // Wiring (.github/hooks/aidlc.json, emitted by harness/copilot/emit.ts) is
 // matcher-FREE by design: VS Code parses but IGNORES matchers, so a matcher
@@ -126,10 +131,12 @@ import {
   resolveWorkflowSelection,
   noteHelperSession,
   runHookHere,
+  sessionsDir,
   settleCopilotCommand,
   settleCopilotIntentBoundary,
   stateFilePath,
   stateFilePathForSelection,
+  validSessionId,
 } from "../tools/aidlc-lib.ts";
 import { appendCoordinationStoodAside, appendSubagentPromptUnmatched } from "../tools/aidlc-audit.ts";
 import { keptRestartRun } from "../tools/aidlc-question-store.ts";
@@ -1949,6 +1956,54 @@ export async function run(
     }
   }
 
+  // The Stop note record (difference #11): the digest of the last block reason
+  // sent to a chat, beside that chat's other per-session files. Only the digest
+  // is kept, never the text.
+  function stopNotePath(chat: string): string {
+    const valid = validSessionId(chat);
+    return valid ? join(sessionsDir(projectDir), `${valid}.copilot-stop-note`) : "";
+  }
+
+  // Without a record the note, when it comes back, counts as the person's.
+  function armStopNote(chat: string, reason: string): void {
+    const path = stopNotePath(chat);
+    if (!path) return;
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, briefingDigest(reason), "utf-8");
+    } catch {
+      // The Stop goes out as it is.
+    }
+  }
+
+  // Whether `prompt` is the note this chat's last Stop sent. Every prompt in the
+  // chat spends the record, matched or not. A record that cannot be read, or
+  // cannot be spent, is no match: the prompt is the person's.
+  function spendStopNote(chat: string, prompt: unknown): boolean {
+    const path = stopNotePath(chat);
+    if (!path) return false;
+    let recorded: string;
+    try {
+      recorded = readFileSync(path, "utf-8").trim();
+    } catch {
+      return false;
+    }
+    let spent = false;
+    try {
+      rmSync(path, { force: true });
+      spent = true;
+    } catch {
+      try {
+        writeFileSync(path, "", "utf-8");
+        spent = true;
+      } catch {
+        // Neither: the digest stays, so it must not count now either.
+      }
+    }
+    return spent && recorded.length > 0 && typeof prompt === "string" && prompt.trim().length > 0 &&
+      recorded === briefingDigest(prompt);
+  }
+
   // --- Targets ----------------------------------------------------------------
 
   switch (target) {
@@ -2003,9 +2058,24 @@ export async function run(
     }
 
     case "record-human-turn": {
+      const delivered = copilot.prompt ?? copilot.user_prompt ?? copilot.message ?? "";
+      // The note this chat's last Stop sent, handed back by Copilot (difference
+      // #11): the host's turn, so the core hook keeps nothing of the person's,
+      // and the human sequence stays where it is.
+      if (spendStopNote(coreSessionId, delivered)) {
+        runCore(
+          "aidlc-record-human-turn.ts",
+          JSON.stringify({
+            hook_event_name: "UserPromptSubmit",
+            session_id: coreSessionId,
+            prompt: delivered,
+            origin: { kind: "host", reason: "copilot stop hook reason", source: "record" },
+          }),
+        );
+        return 0;
+      }
       // A skill the person invoked by its slash name is read as their own line
       // (copilotSkillInvocationLine) before anything else looks at the prompt.
-      const delivered = copilot.prompt ?? copilot.user_prompt ?? copilot.message ?? "";
       const prompt = copilotSkillInvocationLine(delivered, projectDir);
       // A subagent's briefing is the agent speaking (difference #8): no
       // HUMAN_TURN, no kept words, no answer, no typed switch, no human
@@ -2517,6 +2587,8 @@ export async function run(
           const parsed = JSON.parse(r.stdout) as Record<string, unknown>;
           const decision = parsed.decision;
           const reason = parsed.reason;
+          // Recorded before the block goes out: Copilot sends it back at once.
+          if (decision === "block" && typeof reason === "string" && reason.trim()) armStopNote(coreSessionId, reason);
           process.stdout.write(`${JSON.stringify({
             ...parsed,
             ...(typeof decision === "string"

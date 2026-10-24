@@ -160,7 +160,10 @@ then use the ignored local `dist/copilot/` output.
   while a subagent is still running, counts as before. The exception is the
   first few seconds after a subagent starts in your chat: a message then that
   AI-DLC cannot match to a brief is taken to be that brief and is not counted,
-  and if it was yours you are asked to reply again.
+  and if it was yours you are asked to reply again. The same goes for the note
+  AI-DLC gives the agent when a turn ends with work still pending (such as "The
+  last AI-DLC step stopped on a problem: ..."): the Copilot CLI hands it back as
+  a chat message, and AI-DLC never records it as yours.
 - **Typing `/aidlc` with your request keeps your words.** Copilot hands a
   skill you invoke by its slash name to AI-DLC as the skill's own text with
   your words filled in, not as the line you typed. AI-DLC rebuilds that line
