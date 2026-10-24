@@ -6097,6 +6097,27 @@ function createPrintDirective(
     labelHint =
       ` Replace \`--label\` with a 2-3 word kebab essence of the requested work (e.g. "simple calc"), which becomes the readable folder name for this piece of work.`;
   }
+  // The stage changes of a plan composed for this request are the ones the
+  // composer validated and the gate showed, so a list retyped by hand on
+  // Approve never drops or adds a stage. A creation with no list is the
+  // person's own pick of the plain scope (after a Reject), and keeps it, unless
+  // the approved plan is that plain scope (a matched plan). The plan created as
+  // approved keeps the project type it was validated for when the person typed
+  // none and the scan reads the folder otherwise, so creation counts and runs
+  // the stages the gate showed.
+  const composedFrom = flags.request ? readQuestion(projectDir, flags.request)?.composedFrom : undefined;
+  const approved = flags.request
+    ? approvedComposerPlan(projectDir, [flags.request, ...(composedFrom ? [composedFrom] : [])], scope)
+    : null;
+  if (approved) {
+    const changed = approved.changes.skip.length > 0 || approved.changes.add.length > 0;
+    const asApproved = flags.planChanges !== undefined || !changed;
+    if (flags.planChanges) flags.planChanges = changed ? approved.changes : undefined;
+    if (asApproved && !flags.projectType && approved.projectType) {
+      const scanned = detectedProjectType(projectDir);
+      if (scanned !== null && scanned !== approved.projectType) flags.projectType = approved.projectType;
+    }
+  }
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
   if (flags.projectType) cmd.push(`--project-type ${flags.projectType}`);
@@ -6113,15 +6134,6 @@ function createPrintDirective(
   }
   for (const key of CEREMONY_KEYS) {
     if (flags.ceremony?.[key]) cmd.push(`${CEREMONY_FLAGS[key]} ${flags.ceremony[key]}`);
-  }
-  // The stage changes of a plan composed for this request are the ones the
-  // composer validated and the gate showed, so a list retyped by hand on
-  // Approve never drops or adds a stage. A creation with no list is the
-  // person's own pick of the plain scope (after a Reject), and keeps it.
-  if (flags.planChanges && flags.request) {
-    const composedFrom = readQuestion(projectDir, flags.request)?.composedFrom;
-    const approved = approvedComposerPlan(projectDir, [flags.request, ...(composedFrom ? [composedFrom] : [])], scope);
-    if (approved) flags.planChanges = approved.skip.length > 0 || approved.add.length > 0 ? approved : undefined;
   }
   if (flags.planChanges?.skip.length) cmd.push(`--skip ${flags.planChanges.skip.join(",")}`);
   if (flags.planChanges?.add.length) cmd.push(`--add ${flags.planChanges.add.join(",")}`);

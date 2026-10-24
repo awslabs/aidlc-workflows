@@ -3654,9 +3654,9 @@ export function computeArs(
 // The composer's scores for the plan a front compose dispatch is working out
 // (#2575). The dispatch opens the record with its request id; `ars`
 // fills it with the scores it screened, and `validate-grid` keeps the plan its
-// last routed run passed, the one the gate shows; creation of that plan
-// takes its stage changes and writes the scores on WORKFLOW_STARTED, then
-// removes the record. It sits beside the proposal, in the space's gitignored
+// last routed run passed, the one the gate shows, with the project type that
+// run was given; creation of that plan takes its stage changes and that type,
+// and writes the scores on WORKFLOW_STARTED, then removes the record. It sits beside the proposal, in the space's gitignored
 // engine dir. Every step is best-effort: a record that cannot be read or
 // written records nothing.
 export type ArsMethod = "codekb" | "fallback";
@@ -3664,7 +3664,12 @@ interface ComposerScores {
   request: string;
   scores?: Record<ArsComponent, number>;
   method?: ArsMethod;
-  plan?: { scope: string; changes: PlanChanges };
+  plan?: KeptComposerPlan;
+}
+interface KeptComposerPlan {
+  scope: string;
+  changes: PlanChanges;
+  projectType?: "brownfield" | "greenfield";
 }
 
 const KEPT_SLUG = /^[a-z0-9][a-z0-9-]*$/;
@@ -3695,6 +3700,7 @@ function readComposerScores(projectDir: string): ComposerScores | null {
       Array.isArray(list) && list.every((slug) => typeof slug === "string" && KEPT_SLUG.test(slug));
     if (typeof plan?.scope === "string" && KEPT_SLUG.test(plan.scope) && slugs(plan.changes?.skip) && slugs(plan.changes?.add)) {
       record.plan = { scope: plan.scope, changes: { skip: plan.changes.skip, add: plan.changes.add } };
+      if (plan.projectType === "brownfield" || plan.projectType === "greenfield") record.plan.projectType = plan.projectType;
     }
     return record;
   } catch {
@@ -3732,25 +3738,30 @@ function fillComposerScores(projectDir: string, scores: Record<ArsComponent, num
 
 /** A routed `validate-grid` run that passes keeps its plan in a record a
  *  dispatch opened, replacing an earlier run's; with none open it writes nothing. */
-function keepComposerPlan(projectDir: string, plan: { scope: string; changes: PlanChanges }): void {
+function keepComposerPlan(projectDir: string, plan: KeptComposerPlan): void {
   const open = readComposerScores(projectDir);
   if (open === null) return;
   try {
     writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify({ ...open, plan })}\n`);
   } catch {
-    // Unwritten: creation takes the stage changes the command carries.
+    // Unwritten: creation takes the stage changes and type the command carries.
   }
 }
 
-/** The stage changes of the plan the composer validated for one of `requests`
- *  (a creation's request and the one it was composed from) on `scope`: what
- *  creation of the approved plan carries, whatever list was typed for it. Null
+/** The plan the composer validated for one of `requests` (a creation's
+ *  request and the one it was composed from) on `scope`: the stage changes
+ *  creation of the approved plan carries, whatever list was typed for it, and
+ *  the project type it was validated for, when the run was given one. Null
  *  when the record belongs to other work, keeps no plan (one an older version
  *  wrote), or its plan runs on another scope. */
-export function approvedComposerPlan(projectDir: string, requests: readonly string[], scope: string): PlanChanges | null {
+export function approvedComposerPlan(
+  projectDir: string,
+  requests: readonly string[],
+  scope: string,
+): { changes: PlanChanges; projectType?: "brownfield" | "greenfield" } | null {
   const record = readComposerScores(projectDir);
   if (record?.plan === undefined || !requests.includes(record.request) || record.plan.scope !== scope) return null;
-  return record.plan.changes;
+  return { changes: record.plan.changes, ...(record.plan.projectType ? { projectType: record.plan.projectType } : {}) };
 }
 
 /** The WORKFLOW_STARTED fields for a plan being created for `requests` (its
@@ -4103,7 +4114,13 @@ const COMMANDS: Record<string, Handler> = {
     r.valid = r.errors.length === 0;
     if (r.valid && r.routing !== undefined) {
       const kept = r.routing === "matched" ? r.matched_scope : r.base_scope;
-      if (kept !== undefined) keepComposerPlan(resolveProjectDir(), { scope: kept, changes: r.plan_changes ?? { skip: [], add: [] } });
+      if (kept !== undefined) {
+        keepComposerPlan(resolveProjectDir(), {
+          scope: kept,
+          changes: r.plan_changes ?? { skip: [], add: [] },
+          ...(projectType ? { projectType } : {}),
+        });
+      }
     }
     process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
     if (!r.valid) process.exit(1);

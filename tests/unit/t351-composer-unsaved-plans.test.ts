@@ -23,7 +23,8 @@
 // echoes into a command. The plan the composer validated keeps its scores on
 // its first audit entry, and no other plan or work picks them up (#2575). The
 // stage changes that plan's approval creates are the ones the validator kept
-// for its request, whatever list was typed on Approve.
+// for its request, whatever list was typed on Approve, and so is the project
+// type it was validated for when the person typed none.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -1335,7 +1336,9 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
   ]);
   const SETTINGS = { sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on", collaborators: "off", review_cap: "advisory" };
   const engineDir = (proj: string) => join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-engine");
-  type Validated = { base_scope?: string; plan_changes?: { skip: string[]; add: string[] }; creation_depth?: string };
+  type Validated = {
+    base_scope?: string; plan_changes?: { skip: string[]; add: string[] }; creation_depth?: string; summary?: { shown: number };
+  };
   type Printed = { kind: string; message: string; narration: string };
 
   function plannedGrid(): Record<string, "EXECUTE" | "SKIP"> {
@@ -1486,5 +1489,97 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
     const approved = echoed.plan_changes as { skip: string[]; add: string[] };
     const typed = { skip: approved.skip, add: approved.add.filter((slug) => slug !== "intent-capture") };
     expect(creationOf(next(proj, ["--scope", base, ...lists(typed), "--request", id]))).toContain(`--add ${typed.add.join(",")}`);
+  });
+
+  // The composer reads "our existing service" as existing code and plans for
+  // it, while the folder holds no code the scan can see: creation keeps the
+  // project type the plan was validated for, so Reverse Engineering stays on.
+  test("a plan composed for existing code in a folder the scan finds empty is created with Reverse Engineering, as the gate showed", () => {
+    const proj = installedProject();
+    const id = compose(proj);
+    const echoed = validate(
+      proj,
+      { stages: plannedGrid(), scopeSettings: SETTINGS, guardPolicy: "off", depth: "standard" },
+      ["--custom", "--project-type", "brownfield"],
+    );
+    const shown = echoed.summary?.shown as number;
+    // The composer's screen after its validation keeps the type too.
+    expect(runTool(proj, "aidlc-graph.ts", ["ars", "--iae", "0.35", "--csu", "0.75", "--ve", "0.8", "--r", "0.7", "--ua", "0.45", "--method", "fallback"]).status).toBe(0);
+    expect(JSON.parse(readFileSync(join(engineDir(proj), "composer-scores.json"), "utf-8")).plan.projectType).toBe("brownfield");
+    const printed = next(proj, [
+      "--scope", echoed.base_scope as string, ...lists(echoed.plan_changes as { skip: string[]; add: string[] }),
+      ...(echoed.creation_depth ? ["--depth", echoed.creation_depth] : []),
+      "--request", id,
+    ]);
+    expect(printed.kind, printed.message).toBe("print");
+    expect(creationOf(printed)).toContain("--project-type brownfield");
+    expect(printed.narration).toContain(`Setting up the plan you approved for this: ${shown} stages, `);
+    expect(printed.narration).not.toContain("The folder has no code yet");
+    const created = runCreation(proj, printed);
+    expect(created.status, created.out).toBe(0);
+    const state = stateOf(proj);
+    expect(suffixOf(state, "reverse-engineering")).toBe("EXECUTE");
+    expect(state).toContain("- **Project Type**: Brownfield");
+    expect(state).toContain("- **Project Type Source**: you");
+    const executed = (/^- \*\*Stages to Execute\*\*: (.+)$/m.exec(state)?.[1] ?? "")
+      .split(",").map((n) => n.trim()).filter((n) => n && !n.startsWith("0."));
+    expect(executed.length).toBe(shown);
+  });
+
+  test("a matched plan composed for existing code is created for existing code too", () => {
+    const proj = installedProject();
+    const id = compose(proj, "fix the flaky date parser in our existing service");
+    const bugfix = withEnvAndFreshCaches(POLICY_ENV, () => ({ settings: scopeSettingsOf("bugfix")!, policy: scopeGuardPolicyDefault("bugfix") }));
+    const echoed = validate(
+      proj,
+      { stages: stockGrid("bugfix"), scopeSettings: bugfix.settings, guardPolicy: bugfix.policy },
+      ["--matched", "bugfix", "--project-type", "brownfield"],
+    );
+    const printed = next(proj, ["--scope", "bugfix", "--request", id]);
+    expect(printed.kind, printed.message).toBe("print");
+    expect(creationOf(printed)).toContain("--project-type brownfield");
+    expect(printed.narration).toContain(`Setting up a bugfix workflow for this: ${echoed.summary?.shown} stages, `);
+    expect(printed.narration).not.toContain("The folder has no code yet");
+  });
+
+  test("a plan composed on the scan's own type, a type the person typed, or the plain base after a Reject keeps the type creation had", () => {
+    // Planned on the scan's type: nothing is added, and the line saying the
+    // folder has no code yet still stands.
+    const scanned = installedProject();
+    const scannedId = compose(scanned);
+    const onScan = validate(
+      scanned,
+      { stages: plannedGrid(), scopeSettings: SETTINGS, guardPolicy: "off", depth: "standard" },
+      ["--custom", "--project-type", "greenfield"],
+    );
+    const sameType = next(scanned, [
+      "--scope", onScan.base_scope as string, ...lists(onScan.plan_changes as { skip: string[]; add: string[] }), "--request", scannedId,
+    ]);
+    expect(creationOf(sameType)).not.toContain("--project-type");
+    expect(sameType.narration).toContain("The folder has no code yet");
+
+    const proj = installedProject();
+    const id = compose(proj);
+    const echoed = validate(
+      proj,
+      { stages: plannedGrid(), scopeSettings: SETTINGS, guardPolicy: "off", depth: "standard" },
+      ["--custom", "--project-type", "brownfield"],
+    );
+    const base = echoed.base_scope as string;
+    const approved = echoed.plan_changes as { skip: string[]; add: string[] };
+    // The person's own word on the type is the one creation takes.
+    const typed = creationOf(next(proj, ["--scope", base, ...lists(approved), "--project-type", "greenfield", "--request", id]));
+    expect(typed).toContain("--project-type greenfield");
+    expect(typed).not.toContain("--project-type brownfield");
+    // After a Reject, the plain base with no stage changes is the person's own pick.
+    expect(creationOf(next(proj, ["--scope", base, "--request", id]))).not.toContain("--project-type");
+    // A record whose type is not one of the two words keeps its plan, with no type.
+    const recordPath = join(engineDir(proj), "composer-scores.json");
+    const record = JSON.parse(readFileSync(recordPath, "utf-8"));
+    writeFileSync(recordPath, JSON.stringify({ ...record, plan: { ...record.plan, projectType: "existing code" } }));
+    const retyped = { skip: approved.skip, add: approved.add.filter((slug) => slug !== "intent-capture") };
+    const junk = creationOf(next(proj, ["--scope", base, ...lists(retyped), "--request", id]));
+    expect(junk).toContain(`--add ${approved.add.join(",")}`);
+    expect(junk).not.toContain("--project-type");
   });
 });
