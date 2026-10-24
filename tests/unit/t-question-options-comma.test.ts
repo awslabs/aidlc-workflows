@@ -2,10 +2,12 @@
 // covers: subcommand:aidlc-log:decision, subcommand:aidlc-log:answers, function:isLearningsNoteDecision
 //
 // A choice may hold a comma ("Refuse it, with a message"). A question logged
-// with its choices separated by `|` comes back whole when a new chat shows it
+// with its choices in the pipe form (the list starts with `|` and separates
+// them with it) comes back whole when a new chat shows it
 // again, and `log answers` lists it whole, so a pick by number lands on the
 // choice the person saw. A list written with commas, as every list was before,
-// reads as it always did. The one splitter (optionsList) is the grammar every
+// reads as it always did, and a `|` inside one of its choices ("Use string |
+// null") is part of that choice. The one splitter (optionsList) is the grammar every
 // reader of the Options field and of `--options` shares.
 //
 // Mechanism: function - `log decision`, the session-start hook, the human-turn
@@ -61,7 +63,7 @@ async function newChat(proj: string): Promise<void> {
 
 describe("t-question-options-comma: a choice that holds a comma comes back whole", () => {
   test("a bare /aidlc in a new chat shows the question again with its two choices whole", async () => {
-    const proj = await asked("Refuse it, with a message|Save it as Untitled");
+    const proj = await asked("|Refuse it, with a message|Save it as Untitled");
     await newChat(proj);
     await say(proj, "/aidlc", "claude", { session: OTHER_CHAT });
     const again = String((await next(proj, [], { session: OTHER_CHAT })).directive?.message ?? "");
@@ -70,7 +72,7 @@ describe("t-question-options-comma: a choice that holds a comma comes back whole
   });
 
   test("/aidlc 2 in that chat is read against the same two choices", async () => {
-    const proj = await asked("Refuse it, with a message|Save it as Untitled");
+    const proj = await asked("|Refuse it, with a message|Save it as Untitled");
     await newChat(proj);
     await say(proj, "/aidlc 2", "claude", { session: OTHER_CHAT });
     const reply = String((await next(proj, ["2"], { session: OTHER_CHAT })).directive?.message ?? "");
@@ -78,10 +80,18 @@ describe("t-question-options-comma: a choice that holds a comma comes back whole
   });
 
   test("log answers lists the two choices whole", async () => {
-    const proj = await asked("Refuse it, with a message|Save it as Untitled");
+    const proj = await asked("|Refuse it, with a message|Save it as Untitled");
     const listed = await exec([process.execPath, LOG, "answers", "--stage", STAGE, "--project-dir", proj], { cwd: proj, env: env(proj) });
     expect(listed.status, listed.stderr).toBe(0);
     expect(listed.stdout).toContain(JSON.stringify(["Refuse it, with a message", "Save it as Untitled"]));
+  });
+
+  test("a choice that holds a pipe, in a list written with commas, comes back whole", async () => {
+    const proj = await asked("Use string | null,Use an optional field");
+    await newChat(proj);
+    await say(proj, "/aidlc", "claude", { session: OTHER_CHAT });
+    const again = String((await next(proj, [], { session: OTHER_CHAT })).directive?.message ?? "");
+    expect(again).toContain('with the choices "Use string | null", "Use an optional field".');
   });
 
   test("a list written with commas reads as before", async () => {
@@ -94,19 +104,20 @@ describe("t-question-options-comma: a choice that holds a comma comes back whole
 });
 
 describe("t-question-options-comma: one splitter for every reader", () => {
-  test("optionsList splits on | when the text holds one, else on commas, and keeps empty pieces", () => {
-    expect(optionsList("Refuse it, with a message|Save it as Untitled")).toEqual(["Refuse it, with a message", "Save it as Untitled"]);
+  test("optionsList splits a list that starts with | on |, any other on commas, and keeps empty pieces", () => {
+    expect(optionsList("|Refuse it, with a message|Save it as Untitled")).toEqual(["Refuse it, with a message", "Save it as Untitled"]);
+    expect(optionsList(" | Approve | Request Changes ")).toEqual(["Approve", "Request Changes"]);
     expect(optionsList("Approve,Request Changes")).toEqual(["Approve", "Request Changes"]);
-    expect(optionsList(" Approve | Request Changes ")).toEqual(["Approve", "Request Changes"]);
+    expect(optionsList("Use string | null,Use an optional field")).toEqual(["Use string | null", "Use an optional field"]);
     expect(optionsList("A,,B")).toEqual(["A", "", "B"]);
     expect(optionsList(null)).toEqual([""]);
   });
 
   test("the learnings and answer-mode questions are known by their choices in either form", () => {
     const row = (options: string) => `## Decision\n**Event**: DECISION_RECORDED\n**Stage**: ${STAGE}\n**Options**: ${options}\n`;
-    expect(isLearningsNoteDecision(row("Nothing to add|Add a note"))).toBe(true);
+    expect(isLearningsNoteDecision(row("|Nothing to add|Add a note"))).toBe(true);
     expect(isLearningsNoteDecision(row("Nothing to add,Add a note"))).toBe(true);
-    expect(isAnswerModeDecision(row("Guide me|I'll edit the file|Chat"))).toBe(true);
+    expect(isAnswerModeDecision(row("|Guide me|I'll edit the file|Chat"))).toBe(true);
     expect(isAnswerModeDecision(row("Guide me,I'll edit the file,Chat"))).toBe(true);
   });
 });

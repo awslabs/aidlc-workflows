@@ -4848,7 +4848,7 @@ function logUsage(subcommand: string | undefined): string {
     decision: [
       `${invoke("decision")} --stage <slug> --decision "<the question>" --options "<choice>,<choice>"`,
       "  Records a question before it is shown to the person. Required: --stage, --decision.",
-      "  Separate the choices with | instead of commas when a choice holds a comma.",
+      "  When a choice holds a comma, start the list with | and separate the choices with it: \"|<choice>|<choice>\".",
       `  --checkpoint: ${DECISION_CHECKPOINTS.join(", ")}. An ordinary question, the learnings one included, takes none.`,
       `  Options: ${flags(DECISION_OPTIONS)}`,
     ],

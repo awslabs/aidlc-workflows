@@ -14488,14 +14488,16 @@ export function isSummaryConfirmationChoice(text: string | undefined): boolean {
 /** A decision whose offered options are the summary's two choices. */
 /**
  * The choices a question's Options field (or the `--options` it was logged
- * with) lists, in order and trimmed: split on `|` when the text holds one, so
- * a choice may hold a comma ("Refuse it, with a message|Save it as Untitled"),
- * and on commas otherwise, as every list was written before. Empty pieces are
- * kept for the callers that number them; the one owner of the grammar.
+ * with) lists, in order and trimmed. A list that starts with `|` separates
+ * its choices with `|`, so a choice may hold a comma ("|Refuse it, with a
+ * message|Save it as Untitled"); any other list is split on commas, as every
+ * list was written before, and a `|` inside it is part of its choice ("Use
+ * string | null"). Empty pieces are kept for the callers that number them; the
+ * one owner of the grammar.
  */
 export function optionsList(text: string | null | undefined): string[] {
-  const value = text ?? "";
-  return value.split(value.includes("|") ? "|" : ",").map((option) => option.trim());
+  const value = (text ?? "").trimStart();
+  return (value.startsWith("|") ? value.slice(1).split("|") : value.split(",")).map((option) => option.trim());
 }
 
 export function isSummaryConfirmationOptions(options: string | undefined): boolean {
