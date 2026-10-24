@@ -42,7 +42,9 @@
 // when it does not fit beside it, and the step lists the lead's persona as a
 // file, so neither takes room from the Units: on the opening stage the wave
 // holds both of the fixture's Units, and a step too long for even one is the
-// size error that says what to change.
+// size error that says what to change. A wave picked up again with the
+// person's kept replies holds fewer Units, so the step that carries their
+// words still goes out.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -110,6 +112,7 @@ type Printed = {
   inline_context_paths?: string[];
   message?: string;
   wave?: { entries: Array<{ unit: string }> };
+  kept_replies?: unknown;
 };
 type Delivery = {
   stage: string;
@@ -1126,5 +1129,31 @@ describe("t-copilot-directive-budget: building the Units in parallel hands them 
     for (const { stdout } of results) expect(Buffer.byteLength(stdout, "utf-8")).toBeLessThanOrEqual(own);
     expect(final.message).toContain(`GitHub Copilot shows at most ${own} bytes`);
     expect(final.message).toContain("knowledge files");
+  });
+
+  test("a wave picked up with the person's kept replies still goes out, with fewer Units", async () => {
+    const proj = unitProject(COPILOT_ROOT, ".aidlc", "after-inception", "off", "swarm");
+    const units = Array.from({ length: 12 }, (_, index) => `unit-${String(index).padStart(2, "0")}`);
+    seedBoltDag(proj, units);
+    const first = await deliverIn(proj, ".aidlc", "functional-design");
+    expectWholeDeliveries([first]);
+    const handedOut = first.final.wave?.entries.length ?? 0;
+    expect(handedOut).toBeGreaterThan(1);
+    expect(handedOut).toBeLessThan(units.length);
+    // The first Unit's question is still blank: the person answered it in a
+    // chat that ended before the answer was written.
+    const dir = join(seededRecordDir(proj), "construction", "unit-00", "functional-design");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "functional-design-questions.md"),
+      "# Functional Design questions\n\n## Question 1\nWho runs it?\n\nA) A shop owner\nB) A developer\nX) Other\n\n[Answer]:\n",
+    );
+    reply(proj, `A, the shop owner. ${"They run it monthly from the terminal and want totals by month, refunds apart. ".repeat(15)}`);
+    const resumed = await deliverIn(proj, ".aidlc", "functional-design");
+    expectWholeDeliveries([resumed]);
+    expect(JSON.stringify(resumed.final.kept_replies ?? null)).toContain("A, the shop owner.");
+    const entries = resumed.final.wave?.entries.map(({ unit }) => unit) ?? [];
+    expect(entries[0]).toBe("unit-00");
+    expect(entries.length).toBeLessThan(handedOut);
   });
 });
