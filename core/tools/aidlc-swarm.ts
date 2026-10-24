@@ -146,6 +146,7 @@ import {
   sourceClaimCovers,
   sourceListingEntriesEqual,
   type SourceClaimModel,
+  toPosix,
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
   verificationCommandDetails,
@@ -809,8 +810,8 @@ function reviewerReceiptError(
         return {
           error:
             `claimed converged but the worktree wrote application-source paths outside unit "${unit}"'s ` +
-            `source manifest (${rendered}); update construction/${unit}/code-generation/source-manifest.json ` +
-            `in the worktree, re-run the reviewer there, and record a fresh verdict before finalizing`,
+            `source manifest (${rendered}); update ${toPosix(join(codeGenerationRecordDir(wt, unit), "source-manifest.json"))}, ` +
+            `re-run the reviewer in the worktree, and record a fresh verdict before finalizing`,
         };
       }
     } finally {

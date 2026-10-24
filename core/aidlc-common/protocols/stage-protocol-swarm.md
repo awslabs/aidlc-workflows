@@ -412,7 +412,7 @@ execution; `next` names the repair.
    continuation; do not substitute a fabricated approval. Any further context
    for the worker follows the command's output; the worker reads and ticks its own
    progress in the plan file inside its worktree. The worker must produce the unit's
-   `construction/<unit>/code-generation/source-manifest.json` in the worktree,
+   `source-manifest.json` in the record folder its brief names,
    listing every application-source path it creates, modifies, or deletes,
    before the in-Bolt review. Because a Bolt is the single selected repository,
    these paths are worktree-relative and omit `repo` even when the parent intent
