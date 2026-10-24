@@ -366,7 +366,7 @@ function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean, sp
   expect(blocks()).toHaveLength(blocksBefore + (allowed ? 0 : 1));
   if (allowed) {
     // Relaxed says it carried on in one line; off records the row and says nothing.
-    if (speaks) expect(out).toContain("Continuing past the plan-approval check");
+    if (speaks) expect(out).toContain("Continuing past the plan re-approval check");
     else expect(out).not.toContain("Continuing past");
     expect(err).not.toContain('"ask_type":"guard-recovery"');
     const notice = notices().at(-1)!;
@@ -1104,7 +1104,7 @@ describe("a parallel batch's writes judged from the parent", () => {
     const main = write(pd, source);
     expect(main.code, `${main.out}\n${main.err}`).toBe(0);
     expect(stoodAside(pd)).toBe(asideBefore + 1);
-    if (mode === "relaxed") expect(main.out).toContain("Continuing past the plan-approval check");
+    if (mode === "relaxed") expect(main.out).toContain("Continuing past the plan re-approval check");
     else expect(main.out).not.toContain("Continuing past");
     const changedLowered = write(pd, join(worker, "src", `${UNIT}.ts`));
     expect(changedLowered.code, `${changedLowered.out}\n${changedLowered.err}`).toBe(0);

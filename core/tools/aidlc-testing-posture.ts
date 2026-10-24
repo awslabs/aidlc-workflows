@@ -3302,7 +3302,9 @@ function recordCodeGenerationContinuation(
   if (!recorded) {
     recordHookDrop(projectDir, "testing-posture", `GUARD_STOOD_ASIDE row not recorded (audit ledger busy or not writable): ${detail}`);
   }
-  const line = guardStoodAsideLine("plan-approval", continuation.fence.source, detail, recorded);
+  const line = guardStoodAsideLine(
+    "plan-approval", continuation.fence.source, detail, recorded, continuation.receipt.skipped !== undefined,
+  );
   // Under Guard Policy off the row is the whole account: the stand-aside line
   // is not said.
   const speaks = guardStandAsideSpeaks(continuation.fence);

@@ -2808,7 +2808,9 @@ async function evaluate(
         recordHookDrop(projectDir, HOOK_NAME, `GUARD_STOOD_ASIDE row not recorded (audit ledger busy or not writable): ${detail}`);
       }
       if (guardStandAsideSpeaks(gate)) {
-        writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail, recorded));
+        // Re-approval is named while any plan in the batch was approved by a person.
+        const planSkipped = selected.every(({ approval }) => approval.skipped === true);
+        writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail, recorded, planSkipped));
       }
       return 0;
     }
