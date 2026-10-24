@@ -769,7 +769,8 @@ let activeRedefinedStages: { line: string | null; rows: Record<string, string>[]
 let activeRetiredGuardPolicyNotice: string | null = null;
 // undefined until the first emission of this command reads it (hookHealthNotice).
 let activeHookHealthNotice: string | null | undefined;
-// The lines for checks a recorded switch turned off, read once per invocation.
+// The lines for checks a recorded switch turned off, each with the instruction a
+// yes runs, read once per invocation.
 let activeSwitchOffNotices: SwitchOffNotice[] | null = null;
 let engineProjectDir: string | undefined;
 
@@ -785,8 +786,8 @@ function switchOffNoticesOnce(projectDir: string): string[] {
 }
 
 // The agent's own instruction for a yes to each switch line this directive
-// carries, for its change notices note. A step that lost the lines (a part, an
-// error in its place) gets none.
+// carries, for its change notices note. The match is exact on the engine's own
+// strings, so a directive that does not carry a line gets no instruction for it.
 function switchBackOnFollowUps(directive: Directive): string[] {
   const carried = directive.change_notices ?? [];
   return (activeSwitchOffNotices ?? []).flatMap((notice) =>
