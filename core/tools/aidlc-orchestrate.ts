@@ -3429,12 +3429,16 @@ function scopeConfirmAskDirective(
   // The settings typed with the request, for an answer that arrives without
   // its option's command (the proposal step's question keeps the same).
   settings?: QuestionSettings,
+  // The stage changes typed with the request (`--skip`/`--add`): on the
+  // proposed plan's answers when they apply to it, and on the tailored plan's.
+  stages: { plan?: string; tailored?: string } = {},
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
   const stored = saveQuestion(projectDir, intentText, proposedScope, "front", undefined, newWork, derivedFrom, undefined, settings);
-  const confirmCommand = `${tool} next --scope ${scopeArg(proposedScope)} --request ${stored.id}${carried}`;
-  const composeCommand = `${tool} next compose --request ${stored.id}${carried}`;
-  const scopes = scopeCommands(`${tool} next`, stored.id, carried, projectDir, declaredType);
+  const confirmCommand = `${tool} next --scope ${scopeArg(proposedScope)} --request ${stored.id}${carried}${stages.plan ?? ""}`;
+  const composeCommand = `${tool} next compose --request ${stored.id}${carried}${stages.tailored ?? ""}`;
+  const scopes = scopeCommands(`${tool} next`, stored.id, carried, projectDir, declaredType).map((entry) =>
+    entry.scope === proposedScope ? { ...entry, command: `${entry.command}${stages.plan ?? ""}` } : entry);
   return {
     kind: "ask",
     ask_type: "scope-confirm",
@@ -3520,6 +3524,8 @@ function composeOfferAskDirective(
   // As above: the request an earlier question held these words for.
   derivedFrom?: string,
   settings?: QuestionSettings,
+  // The stage changes typed with the request, for the tailored plan.
+  tailored = "",
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
   const stored = saveQuestion(projectDir, intentText, "", "front", undefined, newWork, derivedFrom, undefined, settings);
@@ -3530,7 +3536,7 @@ function composeOfferAskDirective(
     response_route: "next",
     question,
     ...(document === null ? {} : { document_note: document }),
-    compose_command: `${tool} next compose --request ${stored.id}${carried}`,
+    compose_command: `${tool} next compose --request ${stored.id}${carried}${tailored}`,
     scope_commands: scopeCommands(`${tool} next`, stored.id, carried, projectDir, declaredType),
   };
 }
@@ -6311,11 +6317,17 @@ function freshWorkOfferDirective(
   const kept = derivedFrom === undefined ? null : readQuestion(pd, derivedFrom);
   const root = kept === null ? null : kept.origin === "routing" ? kept : kept.composedFrom ? readQuestion(pd, kept.composedFrom) : null;
   const settings = root?.origin === "routing" ? routingSettings(carriedRoutingFlags(flags)) : undefined;
+  // The stage changes typed with the request are the person's: the tailored
+  // plan's composer is told them, and the proposed plan takes them when they
+  // apply to it. One the plan already makes is left off its answers, since
+  // creation would refuse it, and the plan is created as it stands.
+  const tailored = carriedRoutingFlags(flags).planChanges;
   if (plan !== "compose") {
+    const applies = flags.planChanges !== undefined && planWithChanges(plan, flags.planChanges).errors.length === 0;
     // Preview the ceremony the user is confirming: stage/gate counts from the
     // compiled grid (never estimates). Drop the clause if the scope does not
     // resolve (a fixture tree without it) rather than emit a broken preview.
-    const clause = costClause(plan, pd, undefined, flags.projectType);
+    const clause = costClause(plan, pd, applies ? flags.planChanges : undefined, flags.projectType);
     const cost = clause ? ` - ${clause}` : "";
     return scopeConfirmAskDirective(
       `I'd run the "${plan}" plan for: "${requestPreview(intentText)}"${cost}.${documentSplitSentence(intentText)} ` +
@@ -6328,6 +6340,7 @@ function freshWorkOfferDirective(
       flags.projectType,
       derivedFrom,
       settings,
+      { plan: applies ? tailored : "", tailored },
     );
   }
   // Anchor the compose offer with the counts for the named scopes so the
@@ -6353,6 +6366,7 @@ function freshWorkOfferDirective(
     flags.projectType,
     derivedFrom,
     settings,
+    tailored,
   );
 }
 
@@ -7057,6 +7071,20 @@ function composeDispatchDirective(
     if (flags.projectType) {
       parts.push(
         `The person said this is ${flags.projectType === "brownfield" ? "existing code" : "a new project"}: the composer plans it as ${flags.projectType}, passing \`--project-type ${flags.projectType}\` to \`graph ars\` and \`graph validate-grid\` in place of the scan's projectType.`,
+      );
+    }
+    // Stages the person asked to skip or add with the request are their own
+    // change: the plan the composer proposes keeps them.
+    const asked = flags.planChanges;
+    if (asked && asked.skip.length + asked.add.length > 0) {
+      const named = [
+        ...(asked.skip.length > 0 ? [`skip ${asked.skip.join(", ")}`] : []),
+        ...(asked.add.length > 0 ? [`add ${asked.add.join(", ")}`] : []),
+      ].join(" and ");
+      parts.push(
+        `With this request the person asked to ${named}: that is their own change, so the plan the composer proposes ` +
+          "keeps it in its grid and in changes.skip and changes.add, never folded into a stock grid (a stock grid it " +
+          "changes is a custom plan on that base, as an edit at the gate makes it), until they change it at the gate.",
       );
     }
     if (flags.report) {
@@ -10230,9 +10258,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     ));
     return;
   }
+  // The plan offer's compose answer carries the stage changes typed with its
+  // request too, which the composer is told; every other compose takes none.
   if (
     flags.planChanges &&
-    (flags.readOnly || flags.config || flags.workspaceCommand || flags.compose ||
+    (flags.readOnly || flags.config || flags.workspaceCommand || (flags.compose && !offerCompose) ||
       flags.newScope || flags.report || flags.single || flags.stage || flags.phase || flags.resume)
   ) {
     emit(errorDirective(

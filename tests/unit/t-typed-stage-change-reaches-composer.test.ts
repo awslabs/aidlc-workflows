@@ -189,6 +189,7 @@ describe("a stage change typed with the request reaches the plan the person appr
   test("the composer keeps the person's change out of a stock grid until they change it at the gate", () => {
     const persona = readFileSync(join(REPO_ROOT, "core", "agents", "aidlc-composer-agent.md"), "utf-8");
     expect(persona).toContain("Stage changes the dispatch names as the person's own");
+    expect(persona).toContain("adopt a stock grid that undoes them");
     expect(persona).toContain("until the person changes them at the gate");
   });
 });
