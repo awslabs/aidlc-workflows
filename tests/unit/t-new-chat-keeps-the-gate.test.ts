@@ -1,5 +1,6 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:codekb-scope-diff, function:takePersonsOwnLine
 // covers: function:openQuestionReplyDirective, function:pipelineLinkEvidence, function:pipelineAttemptStartedAt
+// covers: function:chatLatestMessage, function:saveReadingQuestion
 //
 // A live run on Kiro CLI: Reverse Engineering finished its scan and asked "Anything to add for next time?" before
 // its gate; the person quit, opened a new chat and answered "nothing to add, keep going". The agent ran a bare
@@ -199,6 +200,19 @@ for (const tree of TREES) {
       says(tree, proj, SECOND, REPLY);
       readsTheirReply(next(tree, proj, SECOND));
       expect(next(tree, proj, SECOND)).toMatchObject({ kind: "run-stage", stage: STAGE });
+    });
+
+    test("two messages kept in one second: the reply the record shows last is the one read", () => {
+      const proj = scanned(tree);
+      newChat(tree, proj, SECOND);
+      says(tree, proj, SECOND, REPLY);
+      // A second message of the same second whose id sorts after theirs, with no turn of its own after their reply:
+      // the store alone cannot say which came last.
+      const dir = join(proj, "aidlc", ".aidlc-sessions", "messages");
+      const id = auditBlockField(rows(proj, "HUMAN_TURN").at(-1)!.block, "Message Id")!;
+      const kept = JSON.parse(readFileSync(join(dir, `${id}.json`), "utf-8")) as Record<string, unknown>;
+      writeFileSync(join(dir, "ffffffff.json"), `${JSON.stringify({ ...kept, id: "ffffffff", text: "older words", words: "older words" })}\n`);
+      readsTheirReply(next(tree, proj, SECOND));
     });
 
     test("in the same chat, a bare next before their answer is logged reads their reply", () => {

@@ -9263,7 +9263,7 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   const carriesNothing = Object.entries(flags).every(([key, value]) =>
     key === "scope" || key === "positionalScope" || key === "resume" || value === undefined || value === false);
   if (!carriesNothing) return null;
-  const message = latestMessage(pd, engineSessionId);
+  const message = chatLatestMessage(pd, engineSessionId);
   if (message === null || message.source !== "prompt") return null;
   const stateContent = loadStateFileIfPresent(pd);
   if (message.words !== null) {
@@ -9332,7 +9332,7 @@ function lineHandedOut(pd: string, session: string, messageId: string): boolean 
 function handOutSettingsLine(flags: ParsedFlags, pd: string): void {
   if (engineSessionId === undefined || isReadOnlyEngineProbe()) return;
   if (typedSettingModifiers(flags).length === 0) return;
-  const message = latestMessage(pd, engineSessionId);
+  const message = chatLatestMessage(pd, engineSessionId);
   if (message === null || message.source !== "prompt" || message.words !== null || message.settings.length === 0) return;
   markLineHandedOut(pd, engineSessionId, message.id);
 }
@@ -9358,7 +9358,7 @@ function saveReadingQuestion(
 ): StoredQuestion {
   const latest = engineSessionId === undefined
     ? listMessages(pd).findLast((message) => message.source === "prompt") ?? null
-    : latestMessage(pd, engineSessionId);
+    : chatLatestMessage(pd, engineSessionId);
   const message = latest !== null && latest.source === "prompt" ? latest : null;
   const question = saveQuestion(
     pd, text, scope, origin, askedAbout, newWork, composedFrom, stateSha256, settings, approvedRequest, message?.id,
@@ -9381,6 +9381,25 @@ function turnIsLatestRow(pd: string, messageId: string): boolean {
     return last !== undefined && last.event === "HUMAN_TURN" && auditBlockField(last.block, "Message Id") === messageId;
   } catch {
     return false;
+  }
+}
+
+// This chat's latest message. The store keeps whole seconds, and two messages
+// of one second sort by their random ids (latestMessage), so when the chat's
+// latest row is the person's turn and names a message of that same second, that
+// message is the latest: the shard keeps the order they came in.
+function chatLatestMessage(pd: string, session: string): ReturnType<typeof latestMessage> {
+  const latest = latestMessage(pd, session);
+  if (latest === null) return null;
+  try {
+    const own = basename(auditFilePath(pd));
+    const last = readAuditShardEvents(pd).filter((row) => basename(row.shard) === own).at(-1);
+    const id = last?.event === "HUMAN_TURN" ? auditBlockField(last.block, "Message Id") : null;
+    if (id === null || id === latest.id) return latest;
+    const turn = readMessage(pd, id);
+    return turn !== null && turn.session === session && turn.at === latest.at ? turn : latest;
+  } catch {
+    return latest;
   }
 }
 
