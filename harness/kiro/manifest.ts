@@ -46,7 +46,7 @@ const manifest: HarnessManifest = {
   // This tree's agents are built for Kiro CLI's v2 engine; the kiro-ide tree,
   // listed as Kiro, is the one for Kiro IDE and Kiro CLI on v3.
   choiceName: "Kiro CLI (V2)",
-  configNextStep: "run `kiro-cli chat`, then `/aidlc --doctor`",
+  configNextStep: "run `kiro-cli --v2` (on Kiro CLI older than 2.21.4, plain `kiro-cli`), then `/aidlc --doctor`",
   // Kiro CLI's engines read disjoint hook registrations. This tree registers
   // its hooks in the agent JSON `hooks` block, which the v2 engine runs while
   // the aidlc agent is active. The v3 engine (KAS) reads no agent-v1 JSON and
@@ -61,6 +61,9 @@ const manifest: HarnessManifest = {
   // format whose hooks v3 does run and v2 still runs (measured on kiro-cli
   // 2.23.1), so the text says v3 does not run the file as shipped; the v2
   // advice holds either way, because v2 runs both formats.
+  // `--v2` exists from Kiro CLI 2.21.4; before it, `--agent-engine v2` names the
+  // same engine (present on 2.19.2), and plain `kiro-cli` would follow the
+  // engine that got it wrong.
   // Measured live: with another agent picked, `/agent` and aidlc bring the
   // hooks back in the same chat; on the 3.0 engine only a start on v2 does,
   // and Kiro then prints its own `agent "aidlc" needs upgrading for this agent
@@ -73,8 +76,8 @@ const manifest: HarnessManifest = {
     recovery:
       "In Kiro CLI, type /agent and pick aidlc, then carry on. If Kiro says agent \"aidlc\" " +
       "needs upgrading for this agent engine, quit Kiro and start it again in this folder with: " +
-      "kiro-cli chat --agent-engine v2 --agent aidlc (from an ACP client, start " +
-      "`kiro-cli acp --agent-engine v2`).",
+      "kiro-cli --v2 --agent aidlc (before Kiro CLI 2.21.4: kiro-cli chat --agent-engine v2 --agent aidlc). " +
+      "From an ACP client, start `kiro-cli acp --agent-engine v2`.",
     // A session without the aidlc agent runs none of these hooks, even after
     // an earlier session did, so the person's reply can go unrecorded. Measured
     // live: with the hooks running, a reply typed to another agent picked in
@@ -85,19 +88,19 @@ const manifest: HarnessManifest = {
       "If the person already replied, that reply was not recorded for this question. If Kiro's own line " +
       'under your replies says `agent "aidlc" needs upgrading for this agent engine, using "default"`, ' +
       "tell them exactly this, with nothing about why: \"Your answer didn't reach AI-DLC. Quit Kiro and start " +
-      "it again in this folder with: kiro-cli chat --agent-engine v2 --agent aidlc, then give it once more.\" " +
+      "it again in this folder with: kiro-cli --v2 --agent aidlc (before Kiro CLI 2.21.4: kiro-cli chat --agent-engine v2 --agent aidlc), then give it once more.\" " +
       "Otherwise tell them exactly this, with nothing about why: \"Your answer didn't reach AI-DLC. Type /agent " +
       "and pick aidlc, then give it once more.\"",
     notRunYet:
       "This is expected before your first Kiro CLI chat in this folder. If you already started one, type /agent " +
       "and pick aidlc; if Kiro says agent \"aidlc\" needs upgrading for this agent engine, quit Kiro and start " +
-      "it again in this folder with: kiro-cli chat --agent-engine v2 --agent aidlc. Then run doctor again.",
+      "it again in this folder with: kiro-cli --v2 --agent aidlc (before Kiro CLI 2.21.4: kiro-cli chat --agent-engine v2 --agent aidlc). Then run doctor again.",
     agentStep:
       "Kiro is not running this project's aidlc agent in this session. You cannot change that " +
       "from inside it: do not approve, retry, or ask the person to answer again. If Kiro's own " +
       'line under your replies says `agent "aidlc" needs upgrading for this agent engine, using ' +
       '"default"`, show the person this line: "Quit Kiro and start it again in this folder ' +
-      'with: kiro-cli chat --agent-engine v2 --agent aidlc, then type <entry> to carry on." ' +
+      'with: kiro-cli --v2 --agent aidlc (before Kiro CLI 2.21.4: kiro-cli chat --agent-engine v2 --agent aidlc), then type <entry> to carry on." ' +
       'Otherwise show this line: "Type ' +
       '/agent and pick aidlc, then carry on." Then end your turn.',
   },

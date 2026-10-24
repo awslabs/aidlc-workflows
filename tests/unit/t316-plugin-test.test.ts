@@ -269,7 +269,7 @@ describe("t316 standalone plugin compose test", () => {
       "--install",
       installRoot,
       "--harness",
-      "kiro-ide",
+      "kiro",
       "--json",
     ]);
     expect(result.status, result.stderr).toBe(0);

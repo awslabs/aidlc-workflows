@@ -364,7 +364,7 @@ export function kiroCliWorkflowsQuestionDue(env: NodeJS.ProcessEnv = process.env
   return readKiroCliWorkflowsAnswer() === null && readKiroCliWorkflows(env)?.enabled === true;
 }
 
-const KIRO_CLI_RESTART_STEP = "Quit Kiro CLI and start `kiro-cli` again so your chats pick it up.";
+const KIRO_CLI_RESTART_STEP = "Quit Kiro CLI and start `kiro-cli --v3` again so your chats pick it up.";
 
 export const KIRO_CLI_WORKFLOWS_QUESTION =
   "Kiro CLI's Workflows feature is on. It stops AI-DLC's reviews and helpers from running in your Kiro CLI " +
@@ -395,7 +395,7 @@ export function kiroCliWorkflowsIssueMessage(): string {
 
 export function kiroCliWorkflowsFix(invoke: string): string {
   return `ask the agent to turn Kiro CLI Workflows off, or run \`${invoke} config trust --kiro-cli-workflows off\` ` +
-    "(a Kiro CLI setting for all your projects); then quit Kiro CLI and start `kiro-cli` again";
+    "(a Kiro CLI setting for all your projects); then quit Kiro CLI and start `kiro-cli --v3` again";
 }
 
 /**

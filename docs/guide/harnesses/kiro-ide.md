@@ -10,8 +10,8 @@ hook wiring, activation) differs.
 Harness-specific onboarding lives in `.kiro/steering/aidlc-onboarding.md`,
 whose `inclusion: always` frontmatter loads it automatically. The root
 `AGENTS.md` block is harness-neutral and shared with other installed harnesses;
-engine directories must still differ (the `kiro` and `kiro-ide` distributions cannot share `.kiro/`; in a project with
-`kiro`, `aidlc config --harness kiro-ide` switches `.kiro/` to this distribution in place).
+engine directories must still differ (the Kiro CLI (V2) and Kiro distributions cannot share `.kiro/`; in a project with
+Kiro CLI (V2), `aidlc config --harness kiro` switches `.kiro/` to this distribution in place).
 
 > [!IMPORTANT]
 > **Run AI-DLC on Kiro with Claude Opus 4.8.** The conductor drives a
@@ -59,7 +59,7 @@ curl -fsSL \
 sh "$tmp/install.sh"
 rm -rf "$tmp"
 cd your-project
-aidlc config --harness kiro-ide
+aidlc config --harness kiro
 aidlc doctor
 ```
 
@@ -90,8 +90,11 @@ asks you first. Earlier releases also merged it into
 reads that key, so the entry can be removed. Before the first workflow, follow
 [First run](#first-run): open `your-project/` in Kiro IDE, trust the folder and
 reload the window, choose **aidlc** in the chat panel's agent picker, and run
-`/aidlc --doctor`. In Kiro CLI, run `kiro-cli` in the project instead; it opens
-on the `aidlc` agent.
+`/aidlc --doctor`. In Kiro CLI, run `kiro-cli --v3` in the project instead; it
+opens on the `aidlc` agent. The first time, Kiro CLI 2.33.0 or later asks
+whether you trust this workspace: if you know what is in this folder, choose
+**Trust, continue**, since Kiro CLI loads the folder's hooks and agents only
+then (**Don't trust** exits).
 
 ### Versioned manual-copy alternative
 
@@ -122,14 +125,15 @@ if [ -f your-project/.kiro/settings/cli.json ]; then
 fi
 cp -R "$RUNTIME_ROOT/kiro-ide/.kiro/." your-project/.kiro/
 cp -R "$RUNTIME_ROOT/kiro-ide/aidlc/." your-project/aidlc/     # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
-cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro-ide
+cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro
 ```
 
 The first removal loop is the v2.5.57 hook-name migration. The second removes
 Kiro CLI-format agent JSON shipped by older distributions and the IDE 0.x
 `.kiro.hook` registrations, which Kiro IDE 1.x never executes. An overlay copy
 cannot delete retired files. The copy also replaces `.kiro/settings/cli.json`,
-which pins Kiro CLI to its v3 engine and the `aidlc` agent. That file is managed
+which asks Kiro CLI for its v3 engine and the `aidlc` agent (see the list below
+for which Kiro CLI releases read the engine there). That file is managed
 by AI-DLC like the rest of `.kiro/`: `aidlc config` stops with a conflict rather
 than overwrite a copy that differs from the shipped one, and `--force` replaces
 it. Keep your own Kiro CLI settings in the user-level `~/.kiro/settings/cli.json`
@@ -199,11 +203,16 @@ The install ships:
   No agent-v1 JSON ships. Their shell
   rules run AI-DLC's own commands and `bun --version` without
   asking; the project's own test and build commands still ask.
-- `.kiro/settings/cli.json` — pins Kiro CLI to its v3 engine and the `aidlc`
-  agent. Kiro CLI's default v2 engine runs none of the `.kiro/hooks/`
-  registrations, and a hook cannot detect that from inside. Kiro IDE does not
-  read this file. `kiro-cli acp` reads its `chat.defaultAgent` but not its
-  engine pin, so an ACP client has to start `kiro-cli acp --agent-engine v3`
+- `.kiro/settings/cli.json` — sets `"chat.agentEngine": "v3"` and
+  `"chat.defaultAgent": "aidlc"`. Kiro CLI's v2 engine runs none of the
+  `.kiro/hooks/` registrations, and a hook cannot detect that from inside, so
+  start Kiro CLI with `kiro-cli --v3`. Kiro CLI 2.33.0 takes the engine only
+  from the command line or your own Kiro CLI settings: it ignores the project
+  file's engine value and refuses `kiro-cli settings --workspace
+  chat.agentEngine`. Kiro CLI 2.24.1 to 2.32.x read the engine from this file.
+  Kiro IDE does not read this file. `kiro-cli acp` reads its
+  `chat.defaultAgent` but not its engine value, so an ACP client has to start
+  `kiro-cli acp --agent-engine v3`
   and declare
   `clientCapabilities._meta.kiro.hooks` as `{ enabled: true, v2: true }` in its
   `initialize` request, or the session runs no hooks (see
@@ -254,7 +263,9 @@ window. Otherwise choose **Cancel**.
 4. In chat, run `/aidlc --doctor` to verify the setup, then
    `/aidlc <description>` to start a workflow.
 
-On Kiro CLI, start `kiro-cli` in `your-project/`, then go to step 4.
+On Kiro CLI, start `kiro-cli --v3` in `your-project/`; if Kiro asks whether you
+trust this workspace and you know what is in this folder, choose **Trust,
+continue**. Then go to step 4.
 
 When `kiro-cli` is on your PATH, setup also offers Kiro CLI's session model,
 saved in your personal Kiro settings (`~/.kiro/settings/cli.json`). It is a
@@ -390,7 +401,7 @@ over, which is why the end of a stage is the best moment (see
 
 Kiro IDE and Kiro CLI v3 register hooks through v2 hook JSON files
 (`{"version":"v1","hooks":[{name,trigger,matcher,action}]}`, PascalCase
-triggers) under `.kiro/hooks/` (a different mechanism from the `kiro` CLI
+triggers) under `.kiro/hooks/` (a different mechanism from the Kiro CLI (V2)
 distribution, which carries a `hooks` block inside the agent JSON). Native hook commands route through
 `aidlc engine adapter kiro-ide`; source/development copies route through the projected
 `aidlc-kiro-adapter.ts` shim. Both normalize the IDE event into the shape the
@@ -580,10 +591,10 @@ tool, so an effort recorded for one agent for another tool applies on Kiro too.
 An `aidlc config` run that writes a model or effort value into a Kiro agent
 file that differs from what the file had, other than a value that run changes
 itself, says so in one line and names
-`aidlc config models --show --harness kiro-ide`, which shows where each value
+`aidlc config models --show --harness kiro`, which shows where each value
 is set; `--effort default` (or `--model default`) for that agent, with
 `--project`, `--local` or `--global` (machine settings) for the file it is in,
-and `--harness kiro-ide` when the project has another harness, takes it out
+and `--harness kiro` when the project has another harness, takes it out
 (an effort taken out this way is gone for every tool).
 `effortLevel` is not in Kiro's documentation. Measured on Kiro CLI 2.31.1 on
 its v3 engine and Kiro IDE 1.3.0.
@@ -630,8 +641,8 @@ switch only from your own Kiro CLI settings, so a project's
 `.kiro/settings/cli.json` value does not turn it off. AI-DLC asks about it the same way, with an answer of its
 own: during `aidlc config`, or once in your first Kiro CLI chat; `aidlc config
 --yes` takes the recommended answer and turns it off. AI-DLC changes it through
-Kiro CLI's own `kiro-cli settings` command; quit Kiro CLI and start `kiro-cli`
-again afterwards. To change it later, ask the agent, or run:
+Kiro CLI's own `kiro-cli settings` command; quit Kiro CLI and start `kiro-cli
+--v3` again afterwards. To change it later, ask the agent, or run:
 
 ```bash
 aidlc config trust --kiro-cli-workflows off --yes   # or: on
@@ -733,16 +744,16 @@ files (`hooks/`), the personas' delegate shell deny (`delegate-shell-deny.ts`),
 and onboarding fills — edit those
 (or `core/`), never hand-edit the generated `dist/kiro-ide`.
 
-This harness differs from the `kiro` CLI harness (`harness/kiro/`) in four ways:
+This harness differs from the Kiro CLI (V2) harness (`harness/kiro/`) in four ways:
 the `/aidlc` skill and the Markdown `agents/aidlc-aidlc.md` are its conductor surfaces
 (`settings/cli.json` also makes that agent Kiro CLI's default); it ships v2 hook
-JSON files (the `kiro` harness relies on the agent-JSON `hooks` block); it preloads standing rules through
+JSON files (the Kiro CLI (V2) harness relies on the agent-JSON `hooks` block); it preloads standing rules through
 always-included steering rather than CLI agent resources; the shared Kiro
 projection removes the core persona's Claude-only `disallowedTools` key; and
 its manifest adds `permissions.rules` frontmatter to every persona, beside the
 `tools:` line both harnesses add (each persona a stage reads inline also ships without them, as
 `.kiro/aidlc-common/personas/<agent>.md`, the file the lead reads in its own chat).
-It does not ship the `kiro` harness's agent-v1 JSON.
+It does not ship the Kiro CLI (V2) harness's agent-v1 JSON.
 See [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-harness.md).
 
 ## Next steps

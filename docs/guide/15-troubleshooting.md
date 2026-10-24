@@ -23,15 +23,15 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Cursor: approvals are never recorded | If the project is not in a git repository, run `git init` in it, then fully restart Cursor and trust the folder (see [Cursor project outside a git repository](#cursor-project-outside-a-git-repository)) |
 | Kiro IDE: `deny fs_read matching ".kiro/"` | Run `/aidlc --doctor`; remove the `.kiro/` rule from the ignore file it names (see [Kiro IDE Read Denials](#kiro-ide-read-denials)) |
 | Kiro IDE: AI-DLC's reviews and helpers do not run, the chat shows **Approval needed in agent-aidlc-...** panels, or `/aidlc` is handed to a Kiro workflow | Kiro's Workflows feature is on. Ask the agent to turn it off, or run `aidlc config trust --kiro-workflows off --yes`, then **Developer: Reload Window** (see [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers)) |
-| Kiro CLI: AI-DLC's reviews and helpers do not run, and the agent says it has no tool to hand work to | Kiro CLI's Workflows feature is on. Ask the agent to turn it off, or run `aidlc config trust --kiro-cli-workflows off --yes`, then quit Kiro CLI and start `kiro-cli` again (see [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers)) |
+| Kiro CLI: AI-DLC's reviews and helpers do not run, and the agent says it has no tool to hand work to | Kiro CLI's Workflows feature is on. Ask the agent to turn it off, or run `aidlc config trust --kiro-cli-workflows off --yes`, then quit Kiro CLI and start it again with `kiro-cli --v3` (see [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers)) |
 | Kiro IDE on Windows: command results end at an `AI-DLC reply:` line and steps take extra turns, or every command shows exit code -1 | Kiro's terminal is Command Prompt. Ask the agent to set it to PowerShell, or run `aidlc config trust --kiro-terminal powershell --yes`, then restart Kiro (see [Command Prompt as Kiro's terminal](harnesses/kiro-ide.md#command-prompt-as-kiros-terminal-on-windows)) |
 | Kiro IDE: the agent cites "my memory" and suggests bypassing a check or running a hook by hand | Ignore it and delete that Kiro memory (see [Kiro memories carry old AI-DLC advice](harnesses/kiro-ide.md#kiro-memories-carry-old-ai-dlc-advice)) |
 | State file corrupted | Run `/aidlc --doctor`, compare against state template |
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
 | Kiro IDE: a build, test or probe command the agent ran shows `Exit Code: -1` while AI-DLC's own commands work | Kiro did not run it: it is waiting for you to allow it, or you declined it. Choose **Allow** (or **Always allow**) on Kiro's prompt, or tell the agent how to go on |
-| Kiro IDE: your reply to an approval question is not seen, or commands come back with exit code -1 | Choose **Trust Folder & Continue** when Kiro asks whether you trust this folder (or select **Manage**, then **Trust**, on the Restricted Mode banner), then run **Developer: Reload Window** from the Command Palette and say carry on; if your next message is still not recorded, `/aidlc --doctor` shows why. In Kiro CLI, quit and start `kiro-cli` again in the folder (see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running)) |
+| Kiro IDE: your reply to an approval question is not seen, or commands come back with exit code -1 | Choose **Trust Folder & Continue** when Kiro asks whether you trust this folder (or select **Manage**, then **Trust**, on the Restricted Mode banner), then run **Developer: Reload Window** from the Command Palette and say carry on; if your next message is still not recorded, `/aidlc --doctor` shows why. In Kiro CLI, quit and start `kiro-cli --v3` again in the folder (see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running)) |
 | Kiro IDE: an approval says your answer was not recorded and names `aidlc-record-human-turn` under Agent Hooks, or the next AI-DLC step says an AI-DLC hook is switched off in Kiro's Agent Hooks | You switched that hook off in the Agent Hooks panel; AI-DLC never turns it back on for you. Turn it back on there (see [A Kiro hook switched off under Agent Hooks](#a-kiro-hook-switched-off-under-agent-hooks)) |
-| Kiro CLI (or a Kiro ACP client): every approval says no human reply has arrived, and restarting does not help | The engine does not match the distribution: `kiro` needs Kiro CLI's v2 engine, `kiro-ide` needs v3 (see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running)) |
+| Kiro CLI (or a Kiro ACP client): every approval says no human reply has arrived, and restarting does not help | The engine does not match the distribution: Kiro CLI (V2) needs Kiro CLI's v2 engine (`kiro-cli --v2`), Kiro needs v3 (`kiro-cli --v3`) (see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running)) |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
 | Audit log too large | Leave it where it is: a long project's audit file is large by design, and the engine reads it to know what you approved and finished (see [Audit Log Growing Too Large](#audit-log-growing-too-large)) |
 | Hooks appear to hang | Diagnose lock ownership with `/aidlc --doctor`; see [Lock Files Left Behind](#lock-files-left-behind) |
@@ -72,10 +72,10 @@ This chapter covers common issues and their solutions, organized by symptom.
 | `config plan changed after approval` | Rerun `aidlc config --dry-run --json`, review `data.actions`, and apply the new `data.planToken` with exactly the same source and behavior options. |
 | `locally modified` or `managed block was locally modified` from `aidlc config` | Run `aidlc config --dry-run --json` and review `data.actions`. Use `--force` only to replace baseline-owned framework bytes or managed blocks; it never authorizes unrelated root content. `.claude/settings.json` is merged by entry, so it does not need `--force`: a refresh puts back AI-DLC's hooks and command allow entries and keeps your hooks, deny rules, custom statusline, environment, and other settings, with a note saying what it put back. Retired shipped allow entries are not removed automatically. `.codex/config.toml` is merged by entry the same way: a refresh changes only AI-DLC's own keys, keeps your keys, tables and comments as they are, and keeps a value you changed in one of AI-DLC's keys, with a note when the release ships a different one. |
 | `AI-DLC files: N changed in this project` in `aidlc doctor` | Those AI-DLC files were edited in this project, so `aidlc config` keeps them and stops before it refreshes anything. To keep your version, move the named files somewhere else, then run `aidlc config`; to take the shipped versions over them, run `aidlc config --force`. A file whose only difference is its line endings (a Windows checkout turns LF into CRLF) is never counted. |
-| `cannot coexist in one project` | The second harness shares an engine directory (`opencode` / `copilot` use `.aidlc`) or an exclusive managed block (Copilot's `AGENTS.md`). Choose distinct engine directories and avoid exclusive blocks. `kiro` and `kiro-ide` also share `.kiro`, but `aidlc config --harness kiro-ide` (or `--harness kiro`) switches an installed one to the other in place; see [More than one harness in a project](18-install-and-lifecycle.md). The neutral `AGENTS.md` block is shared across Kiro CLI, Kiro IDE, Codex, Cursor, and OpenCode; `.gitignore` combines shipped entries. |
+| `cannot coexist in one project` | The second harness shares an engine directory (`opencode` / `copilot` use `.aidlc`) or an exclusive managed block (Copilot's `AGENTS.md`). Choose distinct engine directories and avoid exclusive blocks. Kiro CLI (V2) and Kiro also share `.kiro`, but `aidlc config --harness kiro` (or `--harness kiro-v2`) switches an installed one to the other in place; see [More than one harness in a project](18-install-and-lifecycle.md). The neutral `AGENTS.md` block is shared across Kiro CLI, Kiro IDE, Codex, Cursor, and OpenCode; `.gitignore` combines shipped entries. |
 | `cannot switch .kiro from <row> to <row>: installed <row> has no ownership baseline`, `has an ownership baseline recorded before it listed only shipped files`, or `has an unusable ownership baseline` | Nothing usable records which `.kiro/` files the installed row owns, so the switch would leave its files behind; it changes nothing. Follow the printed steps: move a damaged `.kiro/tools/data/aidlc-manifest.json` aside (the step names its full path), run the printed `config --harness <installed row>`, then run the switch again. |
-| `switching .kiro to kiro-ide lets Kiro run hook files AI-DLC does not own` | Kiro runs every `.kiro/hooks/*.json` file on its v3 engine and in Kiro IDE. Review the named files, then answer the prompt in a terminal, or run the printed `--dry-run` and apply the switch with the `--plan-token` it prints. `config plan changed after approval` or `hook files AI-DLC does not own changed after this switch was planned` means the set changed after review; review it again. |
-| `cannot switch .kiro to kiro-ide: .kiro/hooks is a link or a file, not a directory`, or `Kiro would run hooks through entries that are not regular files in .kiro/hooks` | Make `.kiro/hooks` a real directory holding its files; or replace each listed hook entry (a link, a directory, or another non-file) with a regular file or move it out of `.kiro/hooks`. Then run the switch again. |
+| `switching .kiro to kiro lets Kiro run hook files AI-DLC does not own` | Kiro runs every `.kiro/hooks/*.json` file on its v3 engine and in Kiro IDE. Review the named files, then answer the prompt in a terminal, or run the printed `--dry-run` and apply the switch with the `--plan-token` it prints. `config plan changed after approval` or `hook files AI-DLC does not own changed after this switch was planned` means the set changed after review; review it again. |
+| `cannot switch .kiro to kiro: .kiro/hooks is a link or a file, not a directory`, or `Kiro would run hooks through entries that are not regular files in .kiro/hooks` | Make `.kiro/hooks` a real directory holding its files; or replace each listed hook entry (a link, a directory, or another non-file) with a regular file or move it out of `.kiro/hooks`. Then run the switch again. |
 | `predates shared onboarding` | The named installed harness is older than the selected release (or has no valid recorded version) and its block is not shared. A preview sorts before the stable release with the same base version. Try refreshing it with `aidlc config --harness <name>` before adding another harness that shares the neutral `AGENTS.md` block. This is a hint for an older sibling: if it still refuses afterwards, its block is exclusive and they cannot coexist in one project. Copilot's block stays exclusive after refresh. Current exclusive blocks instead report `cannot coexist in one project`. `--force` does not bypass this compatibility check. |
 | `refusing to refresh <harness> from a release whose AGENTS.md is not shared` | Another installed harness shares the neutral root block, but the selected refresh source does not declare it shared. Use a release that declares `AGENTS.md` shared; `--force` does not bypass this guard, and no project files are changed. |
 | `shared block is owned by <harness> from a different release` | The shared `AGENTS.md` block matches the named sibling's baseline, not the selected release. Follow the refresh order in the error: refresh the selected harness from the same release as its sibling, or refresh the sibling from the selected release first. No project files are changed by the refused refresh. |
@@ -237,24 +237,30 @@ say the output has no recorded write, and, after the first workflow stage,
 doctor reports "Hooks have never executed". Restarting on the same engine
 changes nothing.
 
-- **`kiro` distribution** (`.kiro/agents/aidlc.json`): hooks run on Kiro CLI's
-  v2 engine, with the `aidlc` agent active; v3 does not run the file as AI-DLC
+- **Kiro CLI (V2) distribution** (`--harness kiro-v2`, `.kiro/agents/aidlc.json`):
+  hooks run on Kiro CLI's v2 engine, so start it with `kiro-cli --v2` (plain
+  `kiro-cli` before Kiro CLI 2.21.4, which has no `--v2`), with the `aidlc`
+  agent active; v3 does not run the file as AI-DLC
   ships it. With another agent picked, type `/agent` and pick `aidlc`, then
   carry on in the same chat. If Kiro prints `agent "aidlc" needs upgrading for
   this agent engine` under its replies, the session is on the 3.0 engine: quit
   Kiro and start it again in this folder with
-  `kiro-cli chat --agent-engine v2 --agent aidlc`. From an ACP client, start
+  `kiro-cli --v2 --agent aidlc` (before Kiro CLI 2.21.4,
+  `kiro-cli chat --agent-engine v2 --agent aidlc`). From an ACP client, start
   `kiro-cli acp --agent-engine v2`.
-- **`kiro-ide` distribution** (`.kiro/hooks/aidlc-*.json`): hooks run only on
-  Kiro CLI's v3 engine. `kiro-cli chat` reads the v3 pin in
-  `.kiro/settings/cli.json`; `kiro-cli acp` does not, so an ACP client must
-  start `kiro-cli acp --agent-engine v3`. It must also declare
+- **Kiro distribution** (`--harness kiro`, `.kiro/hooks/aidlc-*.json`): hooks
+  run only on Kiro CLI's v3 engine, so start it with `kiro-cli --v3`. Kiro CLI
+  2.33.0 takes the engine only from the command line or your own Kiro CLI
+  settings: it ignores the `"chat.agentEngine": "v3"` that
+  `.kiro/settings/cli.json` ships (and refuses `kiro-cli settings --workspace
+  chat.agentEngine`), which only Kiro CLI 2.24.1 to 2.32.x read. An ACP client
+  must start `kiro-cli acp --agent-engine v3`. It must also declare
   `clientCapabilities._meta.kiro.hooks` as `{ enabled: true, v2: true }` in its
   `initialize` request. Without both values, v3 runs no hooks.
 
 These behaviours were measured on Kiro CLI 2.21.1, and a later Kiro CLI may
 change them. After you switch, send a message and run `/aidlc --doctor`. On
-the `kiro` distribution, your message leaves the first heartbeat, so doctor
+the Kiro CLI (V2) distribution, your message leaves the first heartbeat, so doctor
 confirms the hooks from then on; until then it warns that they have not run in
 this project yet.
 

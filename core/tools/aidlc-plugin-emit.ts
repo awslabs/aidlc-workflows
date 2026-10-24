@@ -44,6 +44,7 @@ import {
 import { sharedKnowledgeWithoutFormatDocs } from "./aidlc-inline-context.ts";
 import { committedTextBytes, runWithOwnerStampedLock } from "./aidlc-lib.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { typedHarnessName } from "./aidlc-runtime-paths.ts";
 
 export type PluginTargetKind = "store" | "kiro" | "kiro-ide" | "cursor";
 
@@ -833,8 +834,8 @@ export function assertPluginBuildOutput(
   ) {
     throw new Error(
       `refusing to replace "${outDir}" - its ${PLUGIN_PROJECTION_MARKER} belongs to ` +
-        `plugin "${marker.plugin}" for harness "${marker.harness}", not plugin "${pluginName}" ` +
-        `for harness "${target.harnessName}".`,
+        `plugin "${marker.plugin}" for harness "${typedHarnessName(marker.harness)}", not plugin "${pluginName}" ` +
+        `for harness "${typedHarnessName(target.harnessName)}".`,
     );
   }
 }

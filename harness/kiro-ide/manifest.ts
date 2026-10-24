@@ -4,10 +4,13 @@
 //
 //   - Agents ship as Markdown only. The conductor is an authored aidlc-aidlc.md;
 //     persona files come from core and receive native tools/permissions.
-//   - settings/cli.json pins Kiro CLI to the v3 engine and to the aidlc agent.
-//     The default v2 engine runs no .kiro/hooks at all, and a hook cannot
-//     detect that from inside, so the pin is the only guard. Kiro IDE does not
-//     read this file.
+//   - settings/cli.json asks Kiro CLI for the v3 engine and the aidlc agent.
+//     The v2 engine runs no .kiro/hooks at all, and a hook cannot detect that
+//     from inside. Kiro CLI 2.33.0 reads the engine only from the person's own
+//     settings or the command line (measured: a project value is ignored, and
+//     `kiro-cli settings --workspace chat.agentEngine` is refused), so every
+//     line that starts Kiro CLI here says `kiro-cli --v3`; older Kiro CLI
+//     releases still read the pin. Kiro IDE does not read this file.
 //   - Always-included steering carries the active-space memory text, written
 //     by the engine (core/tools/aidlc-includes.ts kiroIdeSteering) and
 //     gitignored; the shipped file is its reference form.
@@ -142,7 +145,7 @@ const KIRO_IDE_TRUST_STEP =
   "carry on.";
 
 // The same step outside Kiro IDE, for Kiro CLI and an ACP client on this tree.
-const KIRO_CLI_RESTART = "In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder";
+const KIRO_CLI_RESTART = "In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder";
 const KIRO_ACP_CLIENT = "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.";
 const KIRO_CLI_ACP_STEP = `${KIRO_CLI_RESTART}. ${KIRO_ACP_CLIENT}`;
 
@@ -172,7 +175,7 @@ const manifest: HarnessManifest = {
   // One tree for Kiro IDE and Kiro CLI, so it is named after neither.
   productName: "Kiro",
   choiceNote: "Kiro IDE and Kiro CLI on its v3 engine",
-  configNextStep: "open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window and you know what is in this folder, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`)",
+  configNextStep: "open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window and you know what is in this folder, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli --v3` in the project instead; if Kiro asks whether you trust this workspace and you know what is in this folder, choose \"Trust, continue\"; then run `/aidlc --doctor`)",
   // Kiro IDE runs a folder's hooks and loads its aidlc agent only after the
   // folder is trusted and the window reloads; until then the first approval
   // gate cannot see the human's reply, so those steps come before the first
@@ -189,7 +192,9 @@ const manifest: HarnessManifest = {
     "3. Choose the aidlc agent in the chat panel's agent picker.",
     '4. /aidlc "what you want built"  describe your first intent',
     "",
-    "Using Kiro CLI instead? Start `kiro-cli` in this folder, then step 4.",
+    "Using Kiro CLI instead? Start `kiro-cli --v3` in this folder. If Kiro asks",
+    "whether you trust this workspace and you know what is in this folder,",
+    'choose "Trust, continue". Then step 4.',
   ],
   // Kiro IDE has no CLI of its own to probe. Its integrated terminal sets
   // TERM_PROGRAM=kiro (captured from Kiro IDE 1.1.14 on Windows), and its git
@@ -237,7 +242,7 @@ const manifest: HarnessManifest = {
       "from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), send a message and run " +
       "doctor again. If AI-DLC was installed while Kiro IDE was open, quit Kiro IDE fully and reopen " +
       "it instead: it keeps the PATH it started with, so its hooks cannot find aidlc, and Reload " +
-      "Window does not change that. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.",
+      "Window does not change that. In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder.",
     // A second cause, measured live on Kiro IDE 1.2.37 (#2167): a folder
     // trusted after Kiro opened it runs the agent's commands, but Kiro's agent
     // started with hooks off for the untrusted folder ("hooks.v2.execution

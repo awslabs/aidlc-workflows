@@ -33,6 +33,7 @@ import {
   composePluginFixture,
   copyHarnessInstall,
 } from "../harness/plugin-kit.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 const BUN = process.execPath;
 const TIMEOUT_MS = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
@@ -522,7 +523,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
       });
       const config = (...args: string[]) => run(join(proj, leaf, "tools", "aidlc.ts"), ["config", ...args]);
       const installed = run(join(release, leaf, "tools", "aidlc.ts"), [
-        "config", "--from", release, "--harness", harness, "--project-dir", proj, "--yes",
+        "config", "--from", release, "--harness", typedHarnessName(harness), "--project-dir", proj, "--yes",
       ]);
       expect(installed.status, `${installed.stdout}${installed.stderr}`).toBe(0);
       composePluginFixture({ plugin: PLUGIN, harness, projectDir: proj, pluginBuilt: built, copyInstall: false });

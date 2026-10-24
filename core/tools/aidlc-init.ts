@@ -23,7 +23,7 @@ import {
   CONFIG_SECTIONS,
   EXIT,
   type CommandResult,
-  emitResult,
+  emitResult as emitCommandResult,
   failure,
   globalOptions,
   readTerminalLine,
@@ -185,8 +185,11 @@ import {
   projectedDispatcher,
   type ProjectHarness,
   hasControlCharacters,
+  harnessArgsAsIds,
+  harnessArgsAsTyped,
   quoteCommandArgument,
   runtimeHarnessDir,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import {
   applyKiroSessionPlan,
@@ -1234,7 +1237,7 @@ function modelStateData(
 // harness when the project has more than one, since config would otherwise
 // ask which.
 function namedHarness(projectDir: string, harness: string | undefined): string {
-  return harness && discoverProjectHarnesses(projectDir).length > 1 ? ` --harness ${harness}` : "";
+  return harness && discoverProjectHarnesses(projectDir).length > 1 ? ` --harness ${typedHarnessName(harness)}` : "";
 }
 
 // A `config models` command about one harness of the project, run as shown
@@ -1253,7 +1256,7 @@ function showModels(
 ): void {
   const data = modelStateData(policy, tiers, harness, projectDir, resolved);
   if (options.mode !== "human") {
-    emitResult(success(`model policy for ${harness}`, data), options);
+    emitResult(success(`model policy for ${typedHarnessName(harness)}`, data), options);
     return;
   }
   const out = process.stdout;
@@ -1294,7 +1297,7 @@ function showModels(
       }, effort ${dim(item.effortSource, out)}.\n`;
     }
     if (item.unexpressed.length > 0) {
-      output += `    Not expressible on ${harness}: ${item.unexpressed.join(", ")}.\n`;
+      output += `    Not expressible on ${typedHarnessName(harness)}: ${item.unexpressed.join(", ")}.\n`;
     }
   }
   for (const note of data.notes) output += `  Note: ${note}\n`;
@@ -1756,7 +1759,7 @@ function selectedDiagnosticHarness(
   if (!selected) {
     throw new Error(
       requested && harnesses.length > 0
-        ? `project uses ${harnesses.map((item) => item.distribution).join(", ")}; refusing ${requested}`
+        ? `project uses ${harnesses.map((item) => typedHarnessName(item.distribution)).join(", ")}; refusing ${typedHarnessName(requested)}`
         : `${configCommand(section)} requires an installed project harness; run ${configCommand()} first`,
     );
   }
@@ -2014,7 +2017,7 @@ function checkDiagnosticSection(
     ? `providers needs no answer for ${selected.harness}; ` +
       sessionProvidersDetail(
         selected.harness,
-        `'${configInvocationFor(projectDir)} config providers --harness ${selected.harness}${projectTarget(projectDir)}'`,
+        `'${configInvocationFor(projectDir)} config providers --harness ${typedHarnessName(selected.harness)}${projectTarget(projectDir)}'`,
       )
     : providersUnrecorded
     ? `providers has no recorded answer for ${selected.harness}; the shipped fallback is in use. ` +
@@ -2395,7 +2398,7 @@ function statusLineSwitch(argv: readonly string[]): CommandResult {
   const installed = discoverProjectHarnesses(projectDir);
   const named = requested ? installed.filter((harness) => harness.distribution === requested) : installed;
   if (requested && named.length === 0) {
-    return usage(`this project is not set up for ${requested}`, configCommand(`--harness ${requested}${projectTarget(projectDir)}`));
+    return usage(`this project is not set up for ${typedHarnessName(requested)}`, configCommand(`--harness ${typedHarnessName(requested)}${projectTarget(projectDir)}`));
   }
   const targets = [...new Set(
     named.map((harness) => statusLineHarness(harness.distribution)).filter((harness): harness is StatusLineHarness => harness !== null),
@@ -2807,6 +2810,27 @@ function sameFile(left: string, right: string): boolean {
 // name this harness's tool there, not the first install the project shows.
 let configTargetHarnessDir: string | null = null;
 
+// A note every --json refusal of this config run carries in its data, so a
+// script reading only the result learns it too (the `--harness kiro` note).
+let refusalNote: string | null = null;
+
+function emitResult(result: CommandResult, options: ReturnType<typeof globalOptions>): void {
+  const data = result.data;
+  const prior = data !== null && typeof data === "object" && !Array.isArray(data)
+    ? (data as { notes?: unknown }).notes
+    : undefined;
+  // A result whose data cannot take a notes list, or already holds the note,
+  // goes out as it is.
+  const fits = (data === undefined || (data !== null && typeof data === "object" && !Array.isArray(data))) &&
+    (prior === undefined || (Array.isArray(prior) && !prior.includes(refusalNote)));
+  if (!refusalNote || result.ok || options.mode !== "json" || !fits) {
+    emitCommandResult(result, options);
+    return;
+  }
+  const notes = [...(Array.isArray(prior) ? prior : []), refusalNote];
+  emitCommandResult({ ...result, data: { ...(data as object | undefined), notes } }, options);
+}
+
 // How a printed command starts so it runs from where the user is: `aidlc`, or
 // the Bun tool that ran this command. The project's own tool is named from the
 // project when run there and by its path in the project when not. Any other
@@ -2841,7 +2865,7 @@ function configRerunWith(
   dropValueFlags: readonly string[] = [],
 ): string | undefined {
   const invocation = configInvocationFor(projectDir);
-  const args = stripVerb([...input]).filter((arg, index, all) =>
+  const args = harnessArgsAsTyped(stripVerb([...input])).filter((arg, index, all) =>
     !dropValueFlags.includes(arg) && !dropValueFlags.includes(all[index - 1] ?? "")
   );
   if (args.some(hasControlCharacters) || hasControlCharacters(projectDir)) return undefined;
@@ -2859,7 +2883,7 @@ function configMutationRerun(
   section: "models" | "runtime" | "providers" | "trust" | "flags" | "project",
   argv: readonly string[],
 ): string {
-  const args = argv.filter((arg) => arg !== "--yes").map(commandToken);
+  const args = harnessArgsAsTyped(argv.filter((arg) => arg !== "--yes")).map(commandToken);
   return configCommand([section, ...args, "--yes"].join(" "));
 }
 
@@ -2871,6 +2895,14 @@ function configCommandForHarness(harnessDir: string, args = ""): string {
 }
 
 let scriptedPromptAnswers: string[] | null = null;
+
+// A note config says as soon as it knows it, ahead of the plan it prints.
+// --json says it in the result instead (emitResult), and writes nothing else:
+// a script may read stdout and stderr together as one JSON value.
+function writeSwitchNote(note: string, options: ReturnType<typeof globalOptions>): void {
+  if (options.mode === "human") writeMenuRow("  Note: ", note);
+  else if (options.mode === "quiet") process.stdout.write(`Warning: ${note}\n`);
+}
 
 function configPrompt(fullLabel: string): string | null {
   // A long prompt wraps like any row; its last line is the prompt itself, laid
@@ -2987,7 +3019,7 @@ function setupMapRows(
   return [
     {
       label: "Harnesses",
-      detail: `${distribution} recorded`,
+      detail: `${typedHarnessName(distribution)} recorded`,
       needs: false,
     },
     {
@@ -4424,14 +4456,14 @@ function hooksDirProblem(projectDir: string, hooksDir: string): "redirected" | "
 function assertHooksDirReviewable(projectDir: string, hooksDir: string, harnessDir: string, requested: string): void {
   const problem = hooksDirProblem(projectDir, hooksDir);
   if (problem === "redirected") {
-    throw new SwitchRefusal(`cannot switch ${harnessDir} to ${requested}: ${hooksDir} is a link or a file, not a directory`, {
+    throw new SwitchRefusal(`cannot switch ${harnessDir} to ${typedHarnessName(requested)}: ${hooksDir} is a link or a file, not a directory`, {
       kind: "text",
       text: `make ${hooksDir} a directory holding its files, then run the switch again`,
     });
   }
   if (problem === "unreadable") {
     throw new SwitchRefusal(
-      `cannot switch ${harnessDir} to ${requested}: ${hooksDir} cannot be listed, so the hook files Kiro would run cannot be reviewed`,
+      `cannot switch ${harnessDir} to ${typedHarnessName(requested)}: ${hooksDir} cannot be listed, so the hook files Kiro would run cannot be reviewed`,
       { kind: "text", text: `make ${hooksDir} readable and searchable for this user, or move it aside, then run the switch again` },
     );
   }
@@ -4489,7 +4521,7 @@ function switchRefreshSteps(
   projectDir: string,
   remedy: { harness: string; moveAside?: string },
 ): string {
-  const refresh = `${configInvocationFor(projectDir)} config --harness ${remedy.harness}${projectTarget(projectDir)}`;
+  const refresh = `${configInvocationFor(projectDir)} config --harness ${typedHarnessName(remedy.harness)}${projectTarget(projectDir)}`;
   return remedy.moveAside
     ? `move ${join(projectDir, remedy.moveAside)} aside, then run \`${refresh}\``
     : refresh;
@@ -4580,8 +4612,8 @@ function entryIdentity(path: string): string {
 function assertSwitchBaseline(occupant: ProjectHarness, requested: string): void {
   const rel = `${occupant.harnessDir}/tools/data/aidlc-manifest.json`;
   const path = join(occupant.root, "tools", "data", "aidlc-manifest.json");
-  const lead = `cannot switch ${occupant.harnessDir} from ${occupant.distribution} to ${requested}: installed ${occupant.distribution}`;
-  const refresh = `refresh the installed ${occupant.distribution} row first`;
+  const lead = `cannot switch ${occupant.harnessDir} from ${typedHarnessName(occupant.distribution)} to ${typedHarnessName(requested)}: installed ${typedHarnessName(occupant.distribution)}`;
+  const refresh = `refresh the installed ${typedHarnessName(occupant.distribution)} row first`;
   const remedy = (moveAside?: string): SwitchRemedy => ({
     kind: "refresh",
     harness: occupant.distribution,
@@ -6839,7 +6871,7 @@ function prepareRefreshSource(
     if (rowChanged && current.trust !== undefined && prior) {
       notes.push(
         `The trust review recorded for ${prior.distribution} does not carry to ${descriptor.distribution}; once switched, review it again with ` +
-          `\`${configInvocationFor(projectDir)} config trust --harness ${descriptor.distribution}${projectTarget(projectDir)}\`.`,
+          `\`${configInvocationFor(projectDir)} config trust --harness ${typedHarnessName(descriptor.distribution)}${projectTarget(projectDir)}\`.`,
       );
     }
   }
@@ -7461,7 +7493,7 @@ function kiroAgentPinsNote(
   if (runs.length === 0) return null;
   return `Kiro ${dryRun ? "will run" : "now runs"} ${runs.join(", and ")}, as set for ${
     runs.length === 1 ? "that agent" : "those agents"
-  } with config models (an agent's effort is shared with your other tools); \`${configInvocationFor(projectDir)} config models --show --harness kiro-ide${projectTarget(projectDir)}\` shows where each is set.`;
+  } with config models (an agent's effort is shared with your other tools); \`${configInvocationFor(projectDir)} config models --show --harness ${typedHarnessName("kiro-ide")}${projectTarget(projectDir)}\` shows where each is set.`;
 }
 
 // The agent values a `config models` run changes: those that differ between
@@ -7635,10 +7667,10 @@ function materializeSource(
         .sort();
       const pick = distribution ?? (available.length === 1 ? available[0] : undefined);
       if (!pick) {
-        throw new Error(`${path} holds the ${available.join(", ")} harnesses; pass --harness <name>`);
+        throw new Error(`${path} holds the ${available.map(typedHarnessName).join(", ")} harnesses; pass --harness <name>`);
       }
       if (!available.includes(pick)) {
-        throw new Error(`${path} does not include the ${pick} harness; it has ${available.join(", ")}`);
+        throw new Error(`${path} does not include the ${typedHarnessName(pick)} harness; it has ${available.map(typedHarnessName).join(", ")}`);
       }
       root = join(runtimes, pick);
       return { root, cleanup, note, holds: available };
@@ -7776,9 +7808,9 @@ function releaseNeedSentence(need: ReleaseNeed): string {
     case "pin-missing":
       return `This project is pinned to ${need.version}, which is not installed.`;
     case "add":
-      return `Adding ${need.distribution} needs the ${need.version} release files.`;
+      return `Adding ${typedHarnessName(need.distribution)} needs the ${need.version} release files.`;
     case "switch":
-      return `Switching ${dir} from ${need.switchingFrom} to ${need.distribution} needs the ${need.version} release files.`;
+      return `Switching ${dir} from ${need.switchingFrom && typedHarnessName(need.switchingFrom)} to ${typedHarnessName(need.distribution)} needs the ${need.version} release files.`;
     case "restore":
       return `${dir} is missing aidlc/spaces/default/memory/.`;
     case "refresh":
@@ -7806,9 +7838,9 @@ function releaseNeedDownload(need: ReleaseNeed, host: string, form: "ask" | "sta
         ? `Download and install ${need.version} from ${host}`
         : `This first downloads and installs ${need.version} from ${host}`;
     case "add":
-      return `${fetch} and ${add} ${need.distribution}`;
+      return `${fetch} and ${add} ${typedHarnessName(need.distribution)}`;
     case "switch":
-      return `${fetch} and ${switchTo} ${need.harnessDir} to ${need.distribution}`;
+      return `${fetch} and ${switchTo} ${need.harnessDir} to ${typedHarnessName(need.distribution)}`;
     case "restore":
     case "mcp":
       return `${fetch} and ${restore} it`;
@@ -7828,7 +7860,7 @@ function selectSource(
     const { stamp, descriptor } = projectionFiles(source.root);
     if (requested && stamp.distribution !== requested) {
       if (source.cleanup) rmSync(source.cleanup, { recursive: true, force: true });
-      throw new Error(`source is ${stamp.distribution}, not requested harness ${requested}`);
+      throw new Error(`source is ${typedHarnessName(stamp.distribution)}, not requested harness ${typedHarnessName(requested)}`);
     }
     if (existingDistribution && stamp.distribution !== existingDistribution) {
       if (source.cleanup) rmSync(source.cleanup, { recursive: true, force: true });
@@ -7836,11 +7868,11 @@ function selectSource(
       // harness is the request to switch.
       if (switchesInPlace(existingDistribution, stamp.distribution)) {
         throw new SwitchRefusal(
-          `existing project uses ${existingDistribution}; refusing ${stamp.distribution} without --harness ${stamp.distribution}, which switches ${stamp.harnessDir} to it in place`,
+          `existing project uses ${typedHarnessName(existingDistribution)}; refusing ${typedHarnessName(stamp.distribution)} without --harness ${typedHarnessName(stamp.distribution)}, which switches ${stamp.harnessDir} to it in place`,
           { kind: "switch", harness: stamp.distribution },
         );
       }
-      throw new Error(`existing project uses ${existingDistribution}; refusing ${stamp.distribution}`);
+      throw new Error(`existing project uses ${typedHarnessName(existingDistribution)}; refusing ${typedHarnessName(stamp.distribution)}`);
     }
     return { ...source, stamp, descriptor };
   }
@@ -7856,8 +7888,8 @@ function selectSource(
       requiredVersion && versionFiltered.length === 0
         ? `project requires ${requiredVersion}, which is not installed; run aidlc config --pin ${requiredVersion}`
         : requiredVersion
-        ? `harness ${selectedName} is not installed in ${requiredVersion}; run aidlc config --pin ${requiredVersion}`
-        : `harness ${selectedName} is not installed`,
+        ? `harness ${typedHarnessName(selectedName)} is not installed in ${requiredVersion}; run aidlc config --pin ${requiredVersion}`
+        : `harness ${typedHarnessName(selectedName)} is not installed`,
       selectedName,
       requiredVersion,
     );
@@ -7871,8 +7903,8 @@ function selectSource(
     if (versionFiltered.length > 0) {
       throw new Error(
         requiredVersion
-          ? `configured default harness ${configuredDefault} is not installed in ${requiredVersion}; run aidlc config --pin ${requiredVersion}`
-          : `configured default harness ${configuredDefault} is unavailable; pass --harness <name>`,
+          ? `configured default harness ${typedHarnessName(configuredDefault)} is not installed in ${requiredVersion}; run aidlc config --pin ${requiredVersion}`
+          : `configured default harness ${typedHarnessName(configuredDefault)} is unavailable; pass --harness <name>`,
       );
     }
   }
@@ -7899,7 +7931,7 @@ function selectSource(
   }
   throw new Error(
     `multiple harnesses are installed; pass --harness <${
-      versionFiltered.map((item) => item.stamp.distribution).join("|")
+      versionFiltered.map((item) => typedHarnessName(item.stamp.distribution)).join("|")
     }>`,
   );
 }
@@ -8448,9 +8480,11 @@ function runConfigChild(
   // Setup writes the person's Kiro session itself, after every child: those
   // settings are outside the rollback snapshot.
   env.AIDLC_CONFIG_DEFER_KIRO_SESSION = "1";
+  // The child reads --harness as a person types it, as any config run does.
+  const typedArgs = harnessArgsAsTyped(args);
   const commandArgs = isCompiledExecutable()
-    ? ["config", ...args]
-    : [fileURLToPath(import.meta.url), "config", ...args];
+    ? ["config", ...typedArgs]
+    : [fileURLToPath(import.meta.url), "config", ...typedArgs];
   const result = spawnSync(process.execPath, commandArgs, {
     cwd,
     env,
@@ -8528,7 +8562,7 @@ function firstRunNextCommands(distribution: string): [string, string] {
     return ["codex                         open Codex CLI in this repo", '$aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "kiro") {
-    return ["kiro-cli chat                  open Kiro CLI in this repo", '/aidlc "what you want built"  describe your first intent'];
+    return ["kiro-cli --v2                  open Kiro CLI in this repo (before Kiro CLI 2.21.4: kiro-cli)", '/aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "opencode") {
     return ["opencode                       open opencode in this repo", '/aidlc "what you want built"  describe your first intent'];
@@ -8537,7 +8571,7 @@ function firstRunNextCommands(distribution: string): [string, string] {
     return ["cursor                         open Cursor in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "kiro-ide") {
-    return ["kiro                          open Kiro IDE (or kiro-cli) in this repo", '/aidlc "what you want built"  describe your first intent'];
+    return ["kiro                          open Kiro IDE (or kiro-cli --v3) in this repo", '/aidlc "what you want built"  describe your first intent'];
   }
   if (distribution === "copilot") {
     return ["copilot                        open Copilot CLI in this repo", '/aidlc "what you want built"  describe your first intent'];
@@ -10051,8 +10085,8 @@ function retiredFilesReport(
   const lines = [
     switched
       ? `${removed ? "Removed" : "Will remove"} ${paths.length === 1 ? "1 file" : `${paths.length} files`} that ${
-        switched.from
-      } ships and ${switched.to} does not:`
+        typedHarnessName(switched.from)
+      } ships and ${typedHarnessName(switched.to)} does not:`
       : `${removed ? "Removed" : "Will remove"} ${
         paths.length === 1 ? "1 file that is" : `${paths.length} files that are`
       } no longer part of AI-DLC ${version}:`,
@@ -10336,7 +10370,7 @@ function planRootIntegrations(
         actions.push({
           path: integration.path,
           action: "conflict",
-          detail: `${missingCopy.distribution} is missing its shipped block copy (${missingCopy.harnessDir}/tools/data/root-blocks/${marker}); run aidlc config --harness ${missingCopy.distribution} first`,
+          detail: `${missingCopy.distribution} is missing its shipped block copy (${missingCopy.harnessDir}/tools/data/root-blocks/${marker}); run aidlc config --harness ${typedHarnessName(missingCopy.distribution)} first`,
         });
         continue;
       }
@@ -11137,7 +11171,7 @@ function prepareModelsSection(
     emitResult(
       usage(
         requested && harnesses.length > 0
-          ? `project uses ${harnesses.map((item) => item.distribution).join(", ")}; refusing ${requested}`
+          ? `project uses ${harnesses.map((item) => typedHarnessName(item.distribution)).join(", ")}; refusing ${typedHarnessName(requested)}`
           : `${configCommand("models")} requires an installed project harness; run ${configCommand()} first`,
       ),
       options,
@@ -11175,7 +11209,7 @@ function prepareModelsSection(
         ? success(
             sessionSet
               ? sessionModelsDetail(harness, current)
-              : `model policy is reflected on ${harness}`,
+              : `model policy is reflected on ${typedHarnessName(harness)}`,
             { harness, drift: [] },
           )
         : failure(
@@ -11759,7 +11793,7 @@ function settingLeaves(file: AidlcSettingsFile | null): Map<string, SettingLeaf>
       const shown = SHOWN_MODEL_ID.test(model);
       leaves.set(`models.agents.${agent}.model.${harness}`, {
         section: "models",
-        label: `${agent} model (${harness})`,
+        label: `${agent} model (${typedHarnessName(harness)})`,
         value: model,
         shown: shown ? model : "(a model ID that is not shown)",
         args: !shown
@@ -11801,7 +11835,7 @@ function settingsCommand(
   harness?: string,
 ): string {
   return `${configInvocationFor(projectDir)} config ${section} ${
-    args.map((arg) => quoteCommandArgument(arg)).join(" ")
+    harnessArgsAsTyped(args).map((arg) => quoteCommandArgument(arg)).join(" ")
   }${target === null ? "" : ` --${target}`} --yes${args.includes("--harness") ? "" : namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
 }
 
@@ -12148,7 +12182,7 @@ function treesLeftBehindLines(
       : predatesFrameworkVersion(tree.frameworkVersion, written.version)
       ? `is still on ${tree.frameworkVersion}`
       : `is on ${tree.frameworkVersion}`;
-    const harness = `--harness ${tree.distribution}`;
+    const harness = `--harness ${typedHarnessName(tree.distribution)}`;
     const plain = installed.filter((candidate) => candidate.stamp.distribution === tree.distribution);
     // A copied tree no config run has recorded the files of reads every file
     // as unowned against another release, so it first records them at its
@@ -12580,6 +12614,15 @@ export async function main(
 ): Promise<void> {
   // A setup walk's own sections run inside the walk, for the harness it set up.
   if (!internal.setupWalkChild) configTargetHarnessDir = null;
+  if (!internal.setupWalkChild) refusalNote = null;
+  // What the person typed after --harness reads as a harness id once, here.
+  // From here on `input` holds ids, and a command printed back writes them as
+  // typed names (harnessArgsAsTyped). A setup walk's sections run on the walk's
+  // ids, and a copied tool's hand-off carries ids, which every release reads
+  // the same way.
+  const idsAlready = internal.setupWalkChild || process.env.AIDLC_CONFIG_HANDOFF !== undefined;
+  const typedHarnesses = idsAlready ? [] : valuesAfter(input, "--harness");
+  if (!idsAlready) input = harnessArgsAsIds(input);
   let argv = stripVerb(input);
   const options = globalOptions(argv);
   const positionals = configPositionals(argv);
@@ -12791,7 +12834,7 @@ export async function main(
       refreshCommands: (dir) => {
         const harnesses = discoverProjectHarnesses(dir).map((harness) => harness.distribution).sort();
         return harnesses.length > 1
-          ? harnesses.map((name) => `${configInvocationFor(dir)} config --harness ${name}${projectTarget(dir)}`)
+          ? harnesses.map((name) => `${configInvocationFor(dir)} config --harness ${typedHarnessName(name)}${projectTarget(dir)}`)
           : [`${configInvocationFor(dir)} config${projectTarget(dir)}`];
       },
     }), options);
@@ -12876,7 +12919,7 @@ export async function main(
     process.stdout.write("\n");
     writeMenuRow(
       "  ",
-      `Found ${installed.distribution} in ${installed.harnessDir}/; using the existing copied projection.`,
+      `Found ${typedHarnessName(installed.distribution)} in ${installed.harnessDir}/; using the existing copied projection.`,
     );
     const outstanding = existingProjectionOutstanding(projectDir, installed);
     await runSetupWalk(
@@ -12917,6 +12960,37 @@ export async function main(
         candidate.harnessDir === KIRO_SWITCH_DIR && switchesInPlace(candidate.distribution, requestedHarness)
       )
       : undefined;
+    const dryRun = argv.includes("--dry-run");
+    // `--harness kiro` named Kiro CLI (V2) before it named Kiro, so on a Kiro
+    // CLI (V2) project it may be an older script's refresh. At a terminal the
+    // person is asked first, unless a --plan-token already carries their
+    // approval of this switch's plan. Otherwise the note says what the name
+    // means and how to stay, before any check can refuse the run, in words
+    // true whatever happens next; under --json in the result (its notes on
+    // success, emitResult on any refusal).
+    if (switchOccupant?.distribution === "kiro" && !section && typedHarnesses.includes(typedHarnessName("kiro-ide"))) {
+      const stay = configCommand(`--harness ${typedHarnessName("kiro")}${projectTarget(projectDir)}`);
+      const asking = configInputIsTty() && options.mode === "human" && !options.yes &&
+        !dryRun && !argv.includes("--plan-token");
+      if (asking) {
+        const answer = configPrompt(
+          `This project is set up for Kiro CLI (V2). \`--harness ${typedHarnessName("kiro-ide")}\` now means Kiro (Kiro IDE and Kiro CLI v3). ` +
+            `Switch ${switchOccupant.harnessDir} to Kiro in place? [y/N]:`,
+        );
+        if (!answer || !/^y(?:es)?$/i.test(answer.trim())) {
+          emitResult(usage(`nothing changed; ${switchOccupant.harnessDir} stays on Kiro CLI (V2)`, stay), options);
+          return;
+        }
+      } else {
+        const note = `\`--harness ${typedHarnessName("kiro-ide")}\` now means Kiro (Kiro IDE and Kiro CLI v3), so on a Kiro CLI (V2) ` +
+          `project like this one it means switching ${switchOccupant.harnessDir} to Kiro in place; to keep Kiro CLI (V2), run \`${stay}\` instead.`;
+        if (options.mode === "json") {
+          refusalNote = note;
+          sourceNotes.push(note);
+        }
+        writeSwitchNote(note, options);
+      }
+    }
     if (switchOccupant && requestedHarness) {
       // The same order as the checks after source selection.
       assertHooksDirReviewable(projectDir, `${switchOccupant.harnessDir}/hooks`, switchOccupant.harnessDir, requestedHarness);
@@ -12943,7 +13017,6 @@ export async function main(
     );
     let recordOnly = recordSection;
     const copyChannel = aidlcInvocation() !== "aidlc";
-    const dryRun = argv.includes("--dry-run");
     const releaseSettings = {
       baseUrl: valueAfter(argv, "--release-base-url"),
       caBundle: valueAfter(argv, "--ca-bundle"),
@@ -13157,9 +13230,10 @@ export async function main(
     if (!selected) throw new Error("no configuration source was selected");
     // A copied project's tool refreshing from a newer release's files hands the
     // run to that release's own config, since an older tool may not read them:
-    // the person's command as typed, in the same project, with the download they
-    // agreed to. Sections may have asked their own questions already, so they
-    // stay here; a handed run never hands on.
+    // the person's command, its --harness values as ids (which every release
+    // reads the same way), in the same project, with the download they agreed
+    // to. Sections may have asked their own questions already, so they stay
+    // here; a handed run never hands on.
     const ranTool = projectedDispatcher();
     const newerTool = join(selected.root, selected.descriptor.harnessDir, "tools", "aidlc.ts");
     if (
@@ -13201,7 +13275,7 @@ export async function main(
     const { stamp, descriptor } = selected;
     configTargetHarnessDir = descriptor.harnessDir;
     if (existing.distribution && existing.distribution !== stamp.distribution) {
-      throw new Error(`project uses ${existing.distribution}; refusing ${stamp.distribution}`);
+      throw new Error(`project uses ${typedHarnessName(existing.distribution)}; refusing ${typedHarnessName(stamp.distribution)}`);
     }
     const installed = discoverProjectHarnesses(projectDir);
     // The harness this run replaces in its own directory, if any. A switch is
@@ -13244,21 +13318,21 @@ export async function main(
                 if (currentHash && contribution.hash === currentHash) continue;
               }
               throw new Error(
-                `refusing to refresh ${stamp.distribution} while installed ${sibling.distribution} co-owns ${integration.path} but has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${sibling.distribution} first`,
+                `refusing to refresh ${stamp.distribution} while installed ${sibling.distribution} co-owns ${integration.path} but has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${typedHarnessName(sibling.distribution)} first`,
               );
             } else if (
               sibling.frameworkVersion !== undefined && baseline === null &&
               !unchangedManagedBlockHash(projectDir, selected.root, descriptor.harnessDir, integration)
             ) {
               throw new Error(
-                `refusing to refresh ${stamp.distribution} while installed ${sibling.distribution} has lost its projection descriptor and ownership baseline; run aidlc config --harness ${sibling.distribution} first`,
+                `refusing to refresh ${stamp.distribution} while installed ${sibling.distribution} has lost its projection descriptor and ownership baseline; run aidlc config --harness ${typedHarnessName(sibling.distribution)} first`,
               );
             }
           }
           continue;
         }
         throw new Error(
-          `harness ${stamp.distribution} cannot be added while installed ${sibling.distribution} has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${sibling.distribution} first`,
+          `harness ${stamp.distribution} cannot be added while installed ${sibling.distribution} has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${typedHarnessName(sibling.distribution)} first`,
         );
       }
       for (const integration of descriptor.rootIntegrations) {
@@ -13278,7 +13352,7 @@ export async function main(
             predatesFrameworkVersion(sibling.frameworkVersion, stamp.frameworkVersion)
           ) {
             throw new Error(
-              `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}, whose install predates shared onboarding; run aidlc config --harness ${sibling.distribution} first — if it still refuses afterwards, its ${integration.path} is exclusive and they cannot coexist in one project`,
+              `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}, whose install predates shared onboarding; run aidlc config --harness ${typedHarnessName(sibling.distribution)} first — if it still refuses afterwards, its ${integration.path} is exclusive and they cannot coexist in one project`,
             );
           }
           throw new Error(
@@ -13601,7 +13675,7 @@ export async function main(
     const redirected = hookScan.entries.filter((entry) => !entry.regular).map((entry) => entry.path);
     if (redirected.length > 0) {
       throw new SwitchRefusal(
-        `cannot switch ${descriptor.harnessDir} to ${stamp.distribution}: Kiro would run hooks through entries that are not regular files in ${hooksDir} ${
+        `cannot switch ${descriptor.harnessDir} to ${typedHarnessName(stamp.distribution)}: Kiro would run hooks through entries that are not regular files in ${hooksDir} ${
           repositoryNames(redirected.map(displayName))
         }; replace each with a regular file or move it out of ${hooksDir}`,
         {
@@ -13620,13 +13694,13 @@ export async function main(
       actions.push({ path: hook.path, action: "preserve", detail: "hook file AI-DLC does not own, bound to this plan" });
     }
     const switchWarnings = hookNames.length > 0
-      ? [`AI-DLC does not own ${hookNames.length === 1 ? "this hook file" : "these hook files"} ${framedHooks}; Kiro runs ${hookNames.length === 1 ? "it" : "them"} on its v3 engine, which ${descriptor.harnessDir}/settings/cli.json now pins, and in Kiro IDE`]
+      ? [`AI-DLC does not own ${hookNames.length === 1 ? "this hook file" : "these hook files"} ${framedHooks}; Kiro runs ${hookNames.length === 1 ? "it" : "them"} in Kiro IDE and in Kiro CLI on its v3 engine (\`kiro-cli --v3\`)`]
       : [];
     prepared.notes.push(...hiddenRecords, ...switchWarnings);
     if (actions.some((action) => action.detail === KEPT_GITIGNORE_LINES_DETAIL)) {
       prepared.notes.push(KEPT_GITIGNORE_LINES_NOTE);
     }
-    const kiroForce = configCommandForHarness(descriptor.harnessDir, `--harness ${stamp.distribution} --force`);
+    const kiroForce = configCommandForHarness(descriptor.harnessDir, `--harness ${typedHarnessName(stamp.distribution)} --force`);
     const kiroUpgraded = actions.filter((action) => action.detail === KIRO_UPGRADED_DETAIL).length;
     if (kiroUpgraded > 0) prepared.notes.push(kiroUpgradedNote(kiroUpgraded, descriptor.harnessDir, kiroForce));
     const kiroKeptChanged = actions.filter((action) => action.detail === KIRO_KEPT_CHANGED_DETAIL).length;
@@ -13761,7 +13835,7 @@ export async function main(
       emitResult(success(
         withQuietWarnings(`${configuredSection ? `${configuredSection} configuration` : "config"} plan for ${projectDir}${
           switchingFrom
-            ? ` (switches ${descriptor.harnessDir} in place from ${switchingFrom.distribution} to ${stamp.distribution})`
+            ? ` (switches ${descriptor.harnessDir} in place from ${typedHarnessName(switchingFrom.distribution)} to ${typedHarnessName(stamp.distribution)})`
             : ""
         }: ${
           Object.entries(counts).map(([key, value]) => `${key}=${value}`).join(" ")
@@ -13831,7 +13905,7 @@ export async function main(
     if (hookNames.length > 0 && approvedToken !== planToken) {
       if (options.mode === "human" && configInputIsTty()) {
         const answer = configPrompt(
-          `Kiro will run hook files AI-DLC does not own ${framedHooks} once ${descriptor.harnessDir} is switched to ${stamp.distribution}. Switch anyway? [y/N]:`,
+          `Kiro will run hook files AI-DLC does not own ${framedHooks} once ${descriptor.harnessDir} is switched to ${typedHarnessName(stamp.distribution)}. Switch anyway? [y/N]:`,
         );
         if (!answer || !/^y(?:es)?$/i.test(answer.trim())) {
           emitResult(usage(`switch cancelled; ${descriptor.harnessDir} was not changed`), options);
@@ -13839,7 +13913,7 @@ export async function main(
         }
       } else {
         emitResult(failure(
-          `switching ${descriptor.harnessDir} to ${stamp.distribution} lets Kiro run hook files AI-DLC does not own ${framedHooks}; review them, then apply this plan with the --plan-token its dry run prints`,
+          `switching ${descriptor.harnessDir} to ${typedHarnessName(stamp.distribution)} lets Kiro run hook files AI-DLC does not own ${framedHooks}; review them, then apply this plan with the --plan-token its dry run prints`,
           EXIT.integrity,
           configRerunWith(input, projectDir, ["--dry-run"]),
         ), options);
@@ -14116,7 +14190,7 @@ export async function main(
       ? `configured model policy for ${projectDir}`
       : `configured ${projectDir} for ${descriptor.productName} ${stamp.frameworkVersion}${
         switchingFrom
-          ? `, switched ${descriptor.harnessDir} in place from ${switchingFrom.distribution} to ${stamp.distribution} (aidlc/ kept)`
+          ? `, switched ${descriptor.harnessDir} in place from ${typedHarnessName(switchingFrom.distribution)} to ${typedHarnessName(stamp.distribution)} (aidlc/ kept)`
           : ""
       }; next: ${
         cursorOutsideGit
@@ -14277,7 +14351,7 @@ export async function main(
       const offline = copyChannel
         ? takesSource
           ? `offline: get ${url} and its .sha256 into one folder, then add --from <that file>`
-          : `offline: get ${url} and its .sha256 into one folder, run ${configInvocationFor(projectDir)} config --harness ${release.distribution} --from <that file>${projectTarget(projectDir)}, then rerun this command`
+          : `offline: get ${url} and its .sha256 into one folder, run ${configInvocationFor(projectDir)} config --harness ${typedHarnessName(release.distribution)} --from <that file>${projectTarget(projectDir)}, then rerun this command`
         : `offline: ${
           configCommand(`--pin ${release.version} --offline --from <release directory>${projectTarget(projectDir)}`)
         }, then rerun this command`;
@@ -14349,7 +14423,7 @@ export async function main(
           : error.remedy.kind === "refresh"
           ? switchRefreshSteps(projectDir, error.remedy)
           : `${configInvocationFor(projectDir)} config ${from ? `--from ${quoteCommandArgument(from)} ` : ""}--harness ${
-            error.remedy.harness
+            typedHarnessName(error.remedy.harness)
           }${projectTarget(projectDir)}`
         : from
         ? `pass --from the release files: aidlc-copy-runtime-X.Y.Z.tar.gz, the runtime/ folder inside it, or one harness folder such as runtime/${requestedHarness ?? copiedHarness?.distribution ?? "claude"}/; or fetch them with ${

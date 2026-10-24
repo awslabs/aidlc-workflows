@@ -494,6 +494,39 @@ export function runtimeHarnessName(
   return "claude";
 }
 
+// The name a person types after --harness, where it differs from the harness
+// id. Installed projects keep the ids they record (`kiro` = Kiro CLI on its V2
+// engine, `kiro-ide` = Kiro for Kiro IDE and Kiro CLI v3), so their stamps,
+// hook commands and model keys mean what they meant; only what is typed and
+// printed changes. `kiro-ide` is still read as the id it is. The `kiro:` line
+// is how another release's files tell that it reads these names
+// (scripts/ci-update-from-previous.ts harnessArgFor).
+const TYPED_HARNESS_NAMES: Readonly<Record<string, string>> = Object.freeze({
+  kiro: "kiro-v2",
+  "kiro-ide": "kiro",
+});
+export const TYPED_NAMES_MARK = 'kiro: "kiro-v2"';
+
+/** The name to print after --harness for a harness id. */
+export function typedHarnessName(id: string): string {
+  return Object.hasOwn(TYPED_HARNESS_NAMES, id) ? TYPED_HARNESS_NAMES[id] : id;
+}
+
+/** The harness id a typed --harness name means. */
+export function harnessIdFromTyped(name: string): string {
+  return Object.entries(TYPED_HARNESS_NAMES).find(([, typed]) => typed === name)?.[0] ?? name;
+}
+
+/** A command line's --harness values, typed names read as harness ids. */
+export function harnessArgsAsIds(args: readonly string[]): string[] {
+  return args.map((arg, index) => (index > 0 && args[index - 1] === "--harness" ? harnessIdFromTyped(arg) : arg));
+}
+
+/** The same line with its --harness ids written as the names a person types, to print. */
+export function harnessArgsAsTyped(args: readonly string[]): string[] {
+  return args.map((arg, index) => (index > 0 && args[index - 1] === "--harness" ? typedHarnessName(arg) : arg));
+}
+
 function distributionFor(harnessDir: string, projectDir = runtimeProjectDir()): string {
   return runtimeHarnessName(projectDir, harnessDir);
 }

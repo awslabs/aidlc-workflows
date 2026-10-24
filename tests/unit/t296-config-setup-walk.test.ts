@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { readConfigDiagnosticRecords } from "../../core/tools/aidlc-config-diagnostics.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -318,14 +319,14 @@ describe("t296 first-run config setup walk", () => {
       "--from",
       join(REPO_ROOT, "dist-release", "kiro"),
       "--harness",
-      "kiro",
+      "kiro-v2",
       "--mcp",
       "none",
       "--yes",
     ];
     expect(run(kiroScaffold, path, env, "n\n").status).toBe(0);
     const section = run(
-      ["config", "providers", "--project-dir", path, "--harness", "kiro"],
+      ["config", "providers", "--project-dir", path, "--harness", "kiro-v2"],
       path,
       env,
     );
@@ -342,7 +343,7 @@ describe("t296 first-run config setup walk", () => {
     // `--quiet` one line, and a non-TTY caller gets the same answer without a
     // usage error.
     const asJson = run(
-      ["config", "providers", "--project-dir", path, "--harness", "kiro", "--json"],
+      ["config", "providers", "--project-dir", path, "--harness", "kiro-v2", "--json"],
       path,
       env,
     );
@@ -353,7 +354,7 @@ describe("t296 first-run config setup walk", () => {
       message: "providers needs no answer for kiro; its model access is harness-managed",
     }));
     const quiet = run(
-      ["config", "providers", "--project-dir", path, "--harness", "kiro", "--quiet"],
+      ["config", "providers", "--project-dir", path, "--harness", "kiro-v2", "--quiet"],
       path,
       env,
     );
@@ -362,7 +363,7 @@ describe("t296 first-run config setup walk", () => {
       "providers needs no answer for kiro; its model access is harness-managed",
     ]);
     const nonTty = run(
-      ["config", "providers", "--project-dir", path, "--harness", "kiro"],
+      ["config", "providers", "--project-dir", path, "--harness", "kiro-v2"],
       path,
       hookPathEnv("aidlc", false),
     );
@@ -387,7 +388,7 @@ describe("t296 first-run config setup walk", () => {
         "--from",
         join(REPO_ROOT, "dist-release", "kiro"),
         "--harness",
-        "kiro",
+        "kiro-v2",
         "--mcp",
         "none",
         "--yes",
@@ -849,7 +850,7 @@ describe("t296 first-run config setup walk", () => {
       const path = project(`aidlc-t296-session-models-${harness}-`);
       const args = [
         "config", "--project-dir", path, "--from", join(REPO_ROOT, "dist-release", harness),
-        "--harness", harness, "--mcp", "none", "--yes",
+        "--harness", typedHarnessName(harness), "--mcp", "none", "--yes",
       ];
       const fresh = run(args, path, env, "n\n");
       expect(fresh.status, fresh.stdout + fresh.stderr).toBe(0);
@@ -908,7 +909,7 @@ describe("t296 first-run config setup walk", () => {
       const path = project(`aidlc-t296-session-models-name-${harness}-`);
       const scaffold = run([
         "config", "--project-dir", path, "--from", join(REPO_ROOT, "dist-release", harness),
-        "--harness", harness, "--mcp", "none", "--yes",
+        "--harness", typedHarnessName(harness), "--mcp", "none", "--yes",
       ], path, env, "n\n");
       expect(scaffold.status, scaffold.stdout + scaffold.stderr).toBe(0);
       const descriptorPath = join(path, dir, "tools", "data", "harness.json");
@@ -929,7 +930,7 @@ describe("t296 first-run config setup walk", () => {
     const kiro = project("aidlc-t296-session-models-kiro-");
     const kiroRun = run([
       "config", "--project-dir", kiro, "--from", join(REPO_ROOT, "dist-release", "kiro"),
-      "--harness", "kiro", "--mcp", "none", "--yes",
+      "--harness", "kiro-v2", "--mcp", "none", "--yes",
     ], kiro, env, "n\n");
     expect(kiroRun.status, kiroRun.stdout + kiroRun.stderr).toBe(0);
     expect(setupRows(kiroRun.stdout).find((line) => line.includes("Models")))

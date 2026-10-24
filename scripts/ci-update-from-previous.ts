@@ -32,6 +32,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { TYPED_NAMES_MARK, typedHarnessName } from "../core/tools/aidlc-runtime-paths.ts";
 import { KIRO_HOOK_GROUPS } from "../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 import type { WorkResult } from "../tests/harness/work-open.ts";
 
@@ -258,6 +259,34 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
+// What a release's own config reads after --harness: from the release that
+// named the two Kiro harnesses `kiro` (Kiro) and `kiro-v2` (Kiro CLI (V2)), the
+// names a person types; before it, the ids. Measured on the release's files
+// (the first runtime-paths tool found under `dir`), since its version is not
+// known here. The candidate is this tree, which reads the typed names.
+const readsTypedNames = new Map<string, boolean>();
+export function harnessArgFor(dir: string, harness: string): string {
+  if (!readsTypedNames.has(dir)) readsTypedNames.set(dir, releaseReadsTypedNames(dir));
+  return readsTypedNames.get(dir) ? typedHarnessName(harness) : harness;
+}
+
+function releaseReadsTypedNames(dir: string): boolean {
+  const find = (at: string): string | undefined => {
+    if (!existsSync(at)) return undefined;
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      const path = join(at, entry.name);
+      if (entry.isFile() && entry.name === "aidlc-runtime-paths.ts") return path;
+      if (entry.isDirectory()) {
+        const found = find(path);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  };
+  const tool = find(dir);
+  return tool !== undefined && readFileSync(tool, "utf-8").includes(TYPED_NAMES_MARK);
+}
+
 async function check(previous: string, candidate: string, target: string, root: string, copy: boolean): Promise<number> {
   const deadline = Date.now() + CHECK_BUDGET_MS;
   const within = (ms: number) => Math.max(1_000, Math.min(ms, deadline - Date.now()));
@@ -360,9 +389,9 @@ async function check(previous: string, candidate: string, target: string, root: 
     if (harness === "copilot") writeFileSync(join(env.COPILOT_HOME!, "config.json"), `${JSON.stringify({ trustedFolders: [project] })}\n`);
     if (copy) {
       cpSync(join(previousRuntime, harness), project, { recursive: true });
-      tool(`the copy's setup for ${harness} on ${previous}`, harness, project, ["config", "--from", previousRuntime, "--harness", harness]);
+      tool(`the copy's setup for ${harness} on ${previous}`, harness, project, ["config", "--from", previousRuntime, "--harness", harnessArgFor(previousRuntime, harness)]);
     } else {
-      aidlc(`aidlc config --harness ${harness} on ${previous}`, ["config", "--project-dir", project, "--harness", harness, "--mcp", "none", "--quiet"]);
+      aidlc(`aidlc config --harness ${harness} on ${previous}`, ["config", "--project-dir", project, "--harness", harnessArgFor(machine, harness), "--mcp", "none", "--quiet"]);
     }
     return { harness, project };
   });
@@ -481,11 +510,11 @@ async function check(previous: string, candidate: string, target: string, root: 
     const known = failures.length;
     const count = hooks(harness, project, `before the refresh`);
     if (copy) {
-      tool(`the copy's refresh for ${harness} from ${target}`, harness, project, ["config", "--from", candidateRuntime, "--harness", harness, "--yes"]);
+      tool(`the copy's refresh for ${harness} from ${target}`, harness, project, ["config", "--from", candidateRuntime, "--harness", harnessArgFor(previousRuntime, harness), "--yes"]);
       const now = tool(`the copy's version for ${harness}`, harness, project, ["version"]);
       if (now.ok && !now.output.includes(target)) fail(`after the refresh the ${harness} copy reports "${now.output}", not ${target}`);
     } else {
-      aidlc(`aidlc config --yes for ${harness}`, ["config", "--project-dir", project, "--harness", harness, "--mcp", "none", "--yes", "--quiet"]);
+      aidlc(`aidlc config --yes for ${harness}`, ["config", "--project-dir", project, "--harness", typedHarnessName(harness), "--mcp", "none", "--yes", "--quiet"]);
     }
     hooks(harness, project, "after the refresh");
     if (copy) tool(`the copy's doctor for ${harness}`, harness, project, ["doctor", "--quiet"]);

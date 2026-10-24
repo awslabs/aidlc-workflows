@@ -261,7 +261,7 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     );
     // Trust takes effect after the reload; the agent picker does not stop the hooks.
     expect(output(run)).not.toContain("agent picker");
-    expect(output(run)).toContain("In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.");
+    expect(output(run)).toContain("In Kiro CLI, quit Kiro and start `kiro-cli --v3` again in this folder.");
     // What an ACP client must send is in the Kiro IDE guide, not in this line,
     // and the line says what to do, not how AI-DLC works.
     expect(output(run)).toContain(
@@ -302,9 +302,9 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(text).toMatch(/fail {2}Hooks have never executed although this workflow has progressed/);
     expect(text).toContain("In Kiro CLI, type /agent and pick aidlc, then carry on.");
     expect(text).toContain(
-      "quit Kiro and start it again in this folder with: kiro-cli chat --agent-engine v2 --agent aidlc",
+      "quit Kiro and start it again in this folder with: kiro-cli --v2 --agent aidlc (before Kiro CLI 2.21.4: " +
+        "kiro-cli chat --agent-engine v2 --agent aidlc). From an ACP client, start `kiro-cli acp --agent-engine v2`.",
     );
-    expect(text).toContain("from an ACP client, start `kiro-cli acp --agent-engine v2`");
     expect(text).not.toContain("fully restart the harness");
     for (const advice of KIRO_IDE_ADVICE) expect(text).not.toContain(advice);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

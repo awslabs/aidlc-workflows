@@ -56,7 +56,7 @@ aidlc config --harness claude
 aidlc doctor
 ```
 
-Replace `claude` with `kiro`, `kiro-ide`, `codex`, `cursor`, `opencode`, or
+Replace `claude` with `kiro`, `kiro-v2`, `codex`, `cursor`, `opencode`, or
 `copilot`. Running `aidlc config` without `--harness` starts the interactive
 setup when a terminal is available. If you use Kiro IDE's own terminal in a
 project folder you have not trusted yet, Kiro first asks whether you trust it.
@@ -86,8 +86,8 @@ guide in the table below. The complete walkthrough is in
 | Harness | Configure | Open | Invoke | Guide |
 | --- | --- | --- | --- | --- |
 | Claude Code | `aidlc config --harness claude` | `claude` | `/aidlc` | [Getting Started](docs/guide/01-getting-started.md) |
-| Kiro: Kiro IDE >= 1.1.70 / Kiro CLI >= 2.24.1 (v3) | `aidlc config --harness kiro-ide` | Open the project in Kiro IDE and choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` | `/aidlc` | [Kiro IDE](docs/guide/harnesses/kiro-ide.md) |
-| Kiro CLI (V2) >= 2.6 | `aidlc config --harness kiro` | `kiro-cli chat` | `/aidlc` | [Kiro CLI](docs/guide/harnesses/kiro-cli.md) |
+| Kiro: Kiro IDE >= 1.1.70 / Kiro CLI >= 2.24.1 (v3) | `aidlc config --harness kiro` | Open the project in Kiro IDE and choose **aidlc** in the chat panel's agent picker, or run `kiro-cli --v3` (when Kiro asks whether you trust the folder and you know what is in it, choose **Trust, continue**) | `/aidlc` | [Kiro IDE](docs/guide/harnesses/kiro-ide.md) |
+| Kiro CLI (V2) >= 2.6 | `aidlc config --harness kiro-v2` | `kiro-cli --v2` (before Kiro CLI 2.21.4: `kiro-cli`) | `/aidlc` | [Kiro CLI](docs/guide/harnesses/kiro-cli.md) |
 | Codex CLI >= 0.145.0 | `aidlc config --harness codex` | `codex` | `$aidlc` | [Codex CLI](docs/guide/harnesses/codex-cli.md) |
 | Cursor | `aidlc config --harness cursor` | Open Cursor or run `agent` | `/aidlc` | [Cursor](docs/guide/harnesses/cursor.md) |
 | opencode >= 1.17 | `aidlc config --harness opencode` | `opencode` | `/aidlc` | [opencode](docs/guide/harnesses/opencode.md) |
@@ -98,9 +98,10 @@ keeps the provider and model already selected by the user. `aidlc config
 providers` can apply Amazon Bedrock settings on supported project surfaces or
 record manual setup for other harnesses. Kiro CLI and Kiro IDE need no provider
 answer because model access comes with Kiro. For Kiro's v3 engine on Kiro CLI
-2.24.1 or later, use `kiro-ide`, which pins it; `kiro` is Kiro CLI (V2)
-([Kiro CLI](docs/guide/harnesses/kiro-cli.md) says how an existing `kiro`
-project switches). The methodology itself is
+2.24.1 or later, use `kiro` and start `kiro-cli --v3` (when it asks to trust the folder
+and you know what is in it, choose **Trust, continue**); `kiro-v2` is Kiro CLI
+(V2) ([Kiro CLI](docs/guide/harnesses/kiro-cli.md) says how an existing Kiro
+CLI (V2) project switches). The methodology itself is
 provider-independent.
 
 ## Recommended Model

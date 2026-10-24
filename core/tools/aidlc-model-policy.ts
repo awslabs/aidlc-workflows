@@ -13,6 +13,7 @@ import {
   type KiroEffort,
   type Tier,
 } from "./aidlc-tiers.ts";
+import { typedHarnessName } from "./aidlc-runtime-paths.ts";
 
 export const MODEL_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type ModelEffort = (typeof MODEL_EFFORTS)[number];
@@ -896,7 +897,7 @@ export function modelPolicySurfaceDrift(
       : expected;
     if (includeUnexpressed) {
       for (const field of reportedUnexpressed(expected, sessionSet)) {
-        issues.push(`${name}: ${field} policy is not expressible on ${harness}`);
+        issues.push(`${name}: ${field} policy is not expressible on ${typedHarnessName(harness)}`);
       }
     }
     let path = "";
@@ -963,7 +964,7 @@ export function modelPolicyDoctorIssues(
   for (const [name, tier] of Object.entries(tiers)) {
     const effective = resolveModelPolicy(policy, name, tier, harness, cap);
     for (const field of reportedUnexpressed(effective, sessionSet)) {
-      issues.push(`${name}: ${field} policy is not expressible on ${harness}`);
+      issues.push(`${name}: ${field} policy is not expressible on ${typedHarnessName(harness)}`);
     }
   }
   return [...new Set(issues)].sort();

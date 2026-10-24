@@ -292,7 +292,7 @@ export class AcpSession {
   constructor(projectDir: string, agent: string, trustAllTools: boolean) {
     remainingOperationTimeoutMs(undefined, { phase: "ACP launch" });
     this.tracePath = acpTracePath();
-    const args = ["kiro-cli", "acp", "--agent", agent];
+    const args = ["kiro-cli", "acp", "--agent-engine", "v2", "--agent", agent];
     if (trustAllTools) args.push("--trust-all-tools");
     writeAcpTrace(this.tracePath, "spawn", { args, cwd: projectDir });
     this.proc = Bun.spawn(args, {

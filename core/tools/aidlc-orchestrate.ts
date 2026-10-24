@@ -565,6 +565,7 @@ import {
   resolveHarnessPath,
   resolveHarnessRoot,
   runtimeHarnessName,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { terminalDispatcherArgv } from "./aidlc.ts";
 import { appendAuditEntries, appendAuditEntry } from "./aidlc-audit.ts";
@@ -9623,7 +9624,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // AI-DLC's status line, switched by the person: one config command applies it
   // and says the line; nothing of the work moves.
   if (flags.statusline === "on" || flags.statusline === "off") {
-    const command = `${aidlcInvocation()} config --statusline ${flags.statusline} --harness ${runtimeHarnessName()}`;
+    const command = `${aidlcInvocation()} config --statusline ${flags.statusline} --harness ${typedHarnessName(runtimeHarnessName())}`;
     emit(turnEndingPrint(
       `Run \`${command}\`, print its output verbatim, then stop. This is a setting, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));

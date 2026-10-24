@@ -2,6 +2,7 @@
 // Offline compose-tier test for an authored AIDLC plugin.
 
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { harnessIdFromTyped, typedHarnessName } from "./aidlc-runtime-paths.ts";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
@@ -349,10 +350,11 @@ function detectHarness(
   requested?: string,
 ): { name: string; target: PluginTarget } {
   if (requested) {
-    const target = targets[requested];
+    const id = harnessIdFromTyped(requested);
+    const target = Object.hasOwn(targets, id) ? targets[id] : undefined;
     if (!target) {
       throw new PluginTestUsageError(
-        `unknown harness "${requested}" (available: ${Object.keys(targets).sort().join(", ")})`,
+        `unknown harness "${requested}" (available: ${Object.keys(targets).map(typedHarnessName).sort().join(", ")})`,
       );
     }
     if (!existsSync(join(installRoot, target.harnessLeaf))) {
@@ -360,7 +362,7 @@ function detectHarness(
         `--harness ${requested} expects ${target.harnessLeaf}/ under ${installRoot}`,
       );
     }
-    return { name: requested, target };
+    return { name: id, target };
   }
   const candidates = Object.entries(targets).filter(([, target]) =>
     existsSync(join(installRoot, target.harnessLeaf)),
@@ -372,7 +374,7 @@ function detectHarness(
   }
   if (candidates.length > 1) {
     throw new PluginTestUsageError(
-      `install is ambiguous (${candidates.map(([name, target]) => `${name}:${target.harnessLeaf}`).join(", ")}); pass --harness <name>`,
+      `install is ambiguous (${candidates.map(([name, target]) => `${typedHarnessName(name)}:${target.harnessLeaf}`).join(", ")}); pass --harness <name>`,
     );
   }
   return { name: candidates[0][0], target: candidates[0][1] };
@@ -805,14 +807,14 @@ function formatPluginTest(
         "Plugin validation: INVALID",
         "Plugin test: FAILED",
       ) +
-      `Install: ${installRoot}\nHarness: ${result.harness}\n`
+      `Install: ${installRoot}\nHarness: ${typedHarnessName(result.harness)}\n`
     );
   }
   return [
     "Plugin test: CLEAN",
     `Plugin root: ${pluginRoot}`,
     `Install: ${installRoot}`,
-    `Harness: ${result.harness}`,
+    `Harness: ${typedHarnessName(result.harness)}`,
     `Composed files (${result.composedFiles.length}): ${result.composedFiles.join(", ") || "none"}`,
     `Changed files (${result.changedFiles.length}): ${result.changedFiles.join(", ") || "none"}`,
     `Drops: ${result.drops.length}`,

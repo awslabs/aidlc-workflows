@@ -36,6 +36,7 @@ import {
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { installRoot, windowsGitBashLauncherState } from "./aidlc-install-paths.ts";
 import { versionChannel } from "./aidlc-channel.ts";
@@ -283,11 +284,11 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
           harness.distribution,
           modelPolicyForHarness(resolved.models, harness.distribution),
         )
-          .map((issue) => `${harness.distribution}: ${issue}`),
+          .map((issue) => `${typedHarnessName(harness.distribution)}: ${issue}`),
       );
     } catch (error) {
       issues.push(
-        `${harness.distribution}: ${
+        `${typedHarnessName(harness.distribution)}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

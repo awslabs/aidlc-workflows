@@ -145,7 +145,7 @@ describe("config --pin while a workflow is running (#1418)", () => {
     writeFileSync(join(proj.dir, ".aidlc-version"), `${AIDLC_VERSION}\n`);
     const both = config(proj, ["--unpin"]);
     expect(both.status, both.output).toBe(0);
-    expect(both.output).toMatch(/Run `[^`]* config --harness claude` and `[^`]* config --harness kiro` to finish updating this project\./);
+    expect(both.output).toMatch(/Run `[^`]* config --harness claude` and `[^`]* config --harness kiro-v2` to finish updating this project\./);
   });
 
   test("with no workflow running, a pin to an earlier release says the step that brings the files to it", () => {

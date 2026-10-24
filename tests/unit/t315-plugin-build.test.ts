@@ -33,6 +33,7 @@ import {
   readPluginTargets,
 } from "../../dist/claude/.claude/tools/aidlc-plugin-emit.ts";
 import { asShippedBuild } from "../harness/plugin-host-names.ts";
+import { typedHarnessName } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -182,7 +183,7 @@ describe("t315 standalone plugin builder", () => {
     const pluginRoot = copyPlugin("all-harnesses");
     for (const harness of HARNESSES) {
       const outDir = join(scratch, "outputs", harness);
-      const result = run([pluginRoot, harness, outDir, "--json"]);
+      const result = run([pluginRoot, typedHarnessName(harness), outDir, "--json"]);
       expect(result.status, `${harness}: ${result.stderr}`).toBe(0);
       const json = JSON.parse(result.stdout) as Record<string, unknown>;
       expect(Object.keys(json)).toEqual(["valid", "errors", "warnings"]);
@@ -220,7 +221,7 @@ describe("t315 standalone plugin builder", () => {
     // On Kiro the whole plugin sits in its own folder, so a second plugin
     // dropped into the same project never lands on the first.
     const kiro = join(scratch, "third-party", "kiro-ide");
-    expect(run([root, "kiro-ide", kiro, "--json"]).status).toBe(0);
+    expect(run([root, "kiro", kiro, "--json"]).status).toBe(0);
     const folder = join(".kiro", "aidlc-plugins", "acme-standards");
     expect(hostName(kiro, join(folder, ".kiro-plugin"))).toBe("acme-standards");
     expect(existsSync(join(kiro, folder, ".aidlc-plugin", "plugin.json"))).toBe(true);
@@ -295,10 +296,10 @@ describe("t315 standalone plugin builder", () => {
   test("shared Kiro output shapes remain bound to the exact harness", () => {
     const pluginRoot = copyPlugin("kiro-owner");
     const outDir = join(scratch, "kiro-owned-output");
-    expect(run([pluginRoot, "kiro", outDir, "--json"]).status).toBe(0);
+    expect(run([pluginRoot, "kiro-v2", outDir, "--json"]).status).toBe(0);
     writeFileSync(join(outDir, "sentinel.txt"), "preserve\n", "utf-8");
 
-    const refused = run([pluginRoot, "kiro-ide", outDir, "--json"]);
+    const refused = run([pluginRoot, "kiro", outDir, "--json"]);
     expect(refused.status).toBe(1);
     const parsed = JSON.parse(refused.stdout) as {
       errors: Array<{ message: string }>;
@@ -306,7 +307,7 @@ describe("t315 standalone plugin builder", () => {
     expect(parsed.errors).toContainEqual(
       expect.objectContaining({
         message: expect.stringContaining(
-          'belongs to plugin "test-pro" for harness "kiro"',
+          'belongs to plugin "test-pro" for harness "kiro-v2"',
         ),
       }),
     );

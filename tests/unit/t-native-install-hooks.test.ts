@@ -234,7 +234,7 @@ describe.skipIf(SKIP_REASON !== null)("a native install runs every Claude Code h
   });
 
   test("Kiro CLI's /aidlc --doctor answers with the doctor report", () => {
-    const configured = sh('aidlc config --project-dir "$NATIVE_HOOKS_PROJECT" --harness kiro --mcp none --quiet', "", {
+    const configured = sh('aidlc config --project-dir "$NATIVE_HOOKS_PROJECT" --harness kiro-v2 --mcp none --quiet', "", {
       NATIVE_HOOKS_PROJECT: project,
     });
     expect(configured.status, configured.stdout + configured.stderr).toBe(0);

@@ -19,7 +19,7 @@ plain text or left out. The other tools differ in a few steps, listed in
   | --- | --- |
   | Codex CLI | 0.145.0 |
   | GitHub Copilot CLI | 1.0.74 (VS Code-only installs may omit the CLI) |
-  | Kiro CLI | 2.6.0 for the `kiro` row; 2.24.1 for the `kiro-ide` row |
+  | Kiro CLI | 2.6.0 for Kiro CLI (V2); 2.24.1 for Kiro |
 
 - **Git, for Codex CLI and Cursor.** Codex CLI finds a project's hooks only in
   a Git repository, and Cursor may skip them outside one, so run `git init` in
@@ -294,14 +294,14 @@ setup asks there about Kiro settings for all your projects: it turns Kiro's
 Workflows feature off in Kiro IDE and in Kiro CLI (while it is on, AI-DLC's
 reviews and helpers do not run) and, when Command Prompt is Kiro's terminal on
 Windows, sets it to PowerShell. To turn Workflows back on, run
-`aidlc config trust --harness kiro-ide --kiro-workflows on --yes` (Kiro IDE) or
-`aidlc config trust --harness kiro-ide --kiro-cli-workflows on --yes` (Kiro CLI).
+`aidlc config trust --harness kiro --kiro-workflows on --yes` (Kiro IDE) or
+`aidlc config trust --harness kiro --kiro-cli-workflows on --yes` (Kiro CLI).
 
 Without `--harness`, it stops before writing anything:
 
 ```text
 $ aidlc config < /dev/null
-error: multiple harnesses are installed; pass --harness <claude|codex|copilot|cursor|kiro|kiro-ide|opencode>
+error: multiple harnesses are installed; pass --harness <claude|codex|copilot|cursor|kiro-v2|kiro|opencode>
 fix: aidlc config --harness <name>
 ```
 
@@ -647,8 +647,8 @@ The steps are the same everywhere; these differ:
 | Harness | Config value | Open | Invoke |
 | --- | --- | --- | --- |
 | Claude Code | `claude` | `claude` | `/aidlc` |
-| Kiro (Kiro IDE, Kiro CLI on v3) | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` in the project | `/aidlc` |
-| Kiro CLI (V2) | `kiro` | `kiro-cli chat` | `/aidlc` |
+| Kiro (Kiro IDE, Kiro CLI on v3) | `kiro` | Open the project, then choose **aidlc** in the chat panel's agent picker, or run `kiro-cli --v3` in the project (when Kiro asks whether you trust the folder and you know what is in it, choose **Trust, continue**) | `/aidlc` |
+| Kiro CLI (V2) | `kiro-v2` | `kiro-cli --v2` (before Kiro CLI 2.21.4: `kiro-cli`) | `/aidlc` |
 | Codex CLI | `codex` | `codex` | `$aidlc` |
 | Cursor | `cursor` | Open Cursor or run `agent` | `/aidlc` |
 | opencode | `opencode` | `opencode` | `/aidlc` |
@@ -659,8 +659,8 @@ After config, complete the one step config names for your tool:
 | Harness | Typical action |
 | --- | --- |
 | Claude Code | If Claude Code is already open in this folder, exit it and start it again |
-| Kiro (Kiro IDE, Kiro CLI on v3) | Open the configured project, then choose **aidlc** in the chat panel's agent picker, or start `kiro-cli` in the project |
-| Kiro CLI (V2) | Start `kiro-cli chat`; the project selects the AI-DLC agent |
+| Kiro (Kiro IDE, Kiro CLI on v3) | Open the configured project, then choose **aidlc** in the chat panel's agent picker, or start `kiro-cli --v3` in the project (when Kiro asks whether you trust the folder and you know what is in it, choose **Trust, continue**) |
+| Kiro CLI (V2) | Start `kiro-cli --v2` (before Kiro CLI 2.21.4: `kiro-cli`); the project selects the AI-DLC agent |
 | Codex CLI | Approve the hook trust prompt or apply the generated trust seed |
 | Cursor | Open the configured project or run `agent` |
 | opencode | Start `opencode` in the project |
@@ -669,8 +669,10 @@ After config, complete the one step config names for your tool:
 The welcome message is Claude Code's alone. AI-DLC draws its own status line
 on Claude Code; on Codex, setup offers Codex's built-in status line, with the
 task progress AI-DLC keeps current. For Kiro's v3 engine on Kiro CLI 2.24.1 or
-later, use `kiro-ide`, which pins it; `kiro` is Kiro CLI (V2)
-([Kiro CLI](harnesses/kiro-cli.md) says how an existing `kiro` project switches).
+later, use `kiro` and start `kiro-cli --v3` (when it asks to trust the folder and
+you know what is in it, choose **Trust, continue**); `kiro-v2` is Kiro CLI (V2)
+([Kiro CLI](harnesses/kiro-cli.md) says how an existing Kiro CLI (V2) project
+switches).
 
 In Kiro IDE, the **aidlc** agent appears in the agent picker only after you
 trust the folder and reload the window: if the Restricted Mode banner shows,

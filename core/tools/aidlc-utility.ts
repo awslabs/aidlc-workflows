@@ -530,6 +530,7 @@ import {
   runtimeHarnessDir,
   runtimeHarnessName,
   runtimeProjectDir,
+  typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { HARNESS_PRODUCT_NAMES } from "./aidlc-model-policy.ts";
 import { copyRuntimeUrl } from "./aidlc-release.ts";
@@ -3782,14 +3783,14 @@ export function harnessTreeVersionsCheck(projectDir: string): DoctorCheck | null
   // first records them at its own.
   const steps = behind.flatMap((tree) =>
     native
-      ? [`${tool} config --harness ${tree.distribution}${target}`]
+      ? [`${tool} config --harness ${typedHarnessName(tree.distribution)}${target}`]
       : pinned
-      ? [`${tool} config --harness ${tree.distribution} --download${target}`]
+      ? [`${tool} config --harness ${typedHarnessName(tree.distribution)} --download${target}`]
       : [
         ...(existsSync(join(tree.root, "tools", "data", "aidlc-manifest.json"))
           ? []
-          : [`${tool} config --harness ${tree.distribution} --download${target}`]),
-        `${tool} config --harness ${tree.distribution} --from <that file>${target}`,
+          : [`${tool} config --harness ${typedHarnessName(tree.distribution)} --download${target}`]),
+        `${tool} config --harness ${typedHarnessName(tree.distribution)} --from <that file>${target}`,
       ]
   );
   const run = `run ${steps.map((step) => `\`${step}\``).join(", then ")}`;
@@ -4184,7 +4185,7 @@ export async function collectDoctorReport(
           : `Project runtime stamp: ${stampVersion} (${distribution})`,
         fix: pinnedEngine
           ? `refresh the project to the pinned release with \`${aidlcInvocation()} config${
-              stamp.distribution ? ` --harness ${stamp.distribution}` : ""
+              stamp.distribution ? ` --harness ${typedHarnessName(stamp.distribution)}` : ""
             }\` or pin the project's release with \`${aidlcInvocation()} config --pin ${stampVersion}\``
           : `run \`${aidlcInvocation()} config\` or select the machine release with \`${aidlcInvocation()} use ${stampVersion}\``,
       });
@@ -4626,13 +4627,16 @@ export async function collectDoctorReport(
       results.push({
         pass: existsSync(cliSettingsPath),
         label: "settings/cli.json present (workspace default-agent activation)",
-        fix: `${projectedFileRepair("kiro", ".kiro/settings/cli.json")} (or use \`kiro-cli chat --agent aidlc\`)`,
+        fix: `${projectedFileRepair("kiro", ".kiro/settings/cli.json")} (or start Kiro CLI with \`kiro-cli --v2 --agent aidlc\`, or \`kiro-cli --agent aidlc\` before Kiro CLI 2.21.4)`,
       });
     }
     if (existsSync(markdownAgentPath)) {
-      // The Markdown conductor row pins Kiro CLI to the v3 engine and the aidlc
-      // agent here: the default engine runs no project hooks, so a missing or
-      // altered pin leaves gates and audit silently off on Kiro CLI.
+      // The Markdown conductor tree asks Kiro CLI for the v3 engine and the
+      // aidlc agent here: the v2 engine runs no project hooks, so a Kiro CLI
+      // that reads the pin and finds it missing or altered leaves gates and
+      // audit silently off. Kiro CLI 2.33.0 reads the engine only from the
+      // command line or the person's own settings, so the label names the
+      // start command rather than claiming the pin starts v3.
       const cliSettingsPath = join(projectDir, harness, "settings", "cli.json");
       let pinned = false;
       try {
@@ -4643,7 +4647,7 @@ export async function collectDoctorReport(
       }
       results.push({
         pass: pinned,
-        label: 'settings/cli.json pins "chat.agentEngine": "v3" and "chat.defaultAgent": "aidlc" (Kiro CLI hooks run only on v3)',
+        label: 'settings/cli.json sets "chat.agentEngine": "v3" and "chat.defaultAgent": "aidlc" (Kiro CLI hooks run only on v3: start it with `kiro-cli --v3`)',
         // Point at the two values first: the file may hold the project's own
         // Kiro CLI settings, which a whole-file restore would drop.
         fix: 'set "chat.agentEngine": "v3" and "chat.defaultAgent": "aidlc" in .kiro/settings/cli.json and keep its other keys; ' +

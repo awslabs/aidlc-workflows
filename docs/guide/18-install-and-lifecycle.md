@@ -64,7 +64,7 @@ packages. The upstream Bun tracking includes `oven-sh/bun#15829` and
 `oven-sh/bun#29681`.
 
 The installer includes every harness runtime (`claude`, `codex`, `copilot`,
-`cursor`, `kiro`, `kiro-ide`, and `opencode`) together:
+`cursor`, `kiro`, `kiro-v2`, and `opencode`) together:
 
 ```bash
 tmp="$(mktemp -d)"
@@ -345,7 +345,7 @@ harness that is on another release, with the one command that brings it to the
 release just written, whether or not work is open:
 
 ```
-  Kiro CLI (.kiro) is still on 2.9.0. To bring it to 2.10.0: `aidlc config --harness kiro`.
+  Kiro CLI (.kiro) is still on 2.9.0. To bring it to 2.10.0: `aidlc config --harness kiro-v2`.
 ```
 
 When the files passed to `--from` hold that harness, the command reuses them.
@@ -377,9 +377,9 @@ wizard names it and offers three choices: recommended defaults, six-step
 customization, or exit with nothing written. Multiple detected harnesses get a
 numbered harness picker first; no detected harness gets the complete picker
 without a default. A Kiro CLI at 2.24.1 or later counts for both Kiro
-harnesses. The picker lists `kiro` as Kiro CLI (V2): it pins no engine and is
-built for Kiro CLI's v2 engine. It lists `kiro-ide` as Kiro, for Kiro IDE and
-Kiro CLI on its v3 engine. Of the two, Kiro CLI (V2) comes first, so Enter
+harnesses. The picker lists Kiro CLI (V2) (`--harness kiro-v2`): it pins no
+engine and is built for Kiro CLI's v2 engine. It lists Kiro (`--harness kiro`),
+for Kiro IDE and Kiro CLI on its v3 engine. Of the two, Kiro CLI (V2) comes first, so Enter
 takes it unless an earlier detected harness leads the list or setup runs in a
 harness editor's own terminal, whose harness comes first.
 
@@ -397,13 +397,13 @@ removed is named instead); see
 Recommended defaults preserve the harness's current model provider.
 Customization walks Harness, Model provider, Model effort preset, Plugins, MCP
 servers, and the model-preset settings layer. The provider step offers keeping
-the current provider first and Amazon Bedrock second. On the `kiro` row, step
+the current provider first and Amazon Bedrock second. On the Kiro CLI (V2) row, step
 2 is Session model instead: it lists your Kiro account's models and saves the
 chosen model, with the preset's session effort, in your personal Kiro settings,
 last, after every AI-DLC step. Under Kiro auto, recommended defaults ask that
 one model question; see
 [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
-For the `kiro-ide` row, see [First run](harnesses/kiro-ide.md#first-run).
+For the Kiro row, see [First run](harnesses/kiro-ide.md#first-run).
 Every numbered prompt but that complete picker has
 a bracketed default, invalid input re-asks in place, and each answer is echoed.
 A check-your-answers table accepts Enter to apply or a step number to edit. No
@@ -715,7 +715,7 @@ check.
 The harness CLI check requires `claude`, `kiro-cli >= 2.6.0`, `codex >= 0.145.0`, or
 `opencode` for their matching harnesses. Copilot CLI and the Cursor `agent` CLI
 are advisory because those installs may be driven only by VS Code or the IDE.
-The `kiro-ide` distribution requires no separate CLI; `kiro-cli` is optional there, needed only to run AI-DLC from a terminal, and is checked against 2.24.1 when present.
+The Kiro distribution (`--harness kiro`) requires no separate CLI; `kiro-cli` is optional there, needed only to run AI-DLC from a terminal, and is checked against 2.24.1 when present.
 
 ### Provider Diagnostics
 
@@ -880,7 +880,7 @@ complete seed. Until then zero Codex hooks fire.
 `--dangerously-bypass-hook-trust` does not fire untrusted hooks, and appending
 a second seed set produces invalid TOML.
 
-For the `kiro-ide` distribution, trust ships in the conductor's `permissions`
+For the Kiro distribution, trust ships in the conductor's `permissions`
 (`.kiro/agents/aidlc-aidlc.md`), so the check adds nothing there; Kiro IDE 1.x no
 longer reads `.vscode/settings.json` `kiroAgent.trustedCommands`. `--show` lists
 the selected harness's trust and allowlist files.
@@ -1138,7 +1138,7 @@ Refresh preserves:
 - the agent files in `.kiro/agents` that Kiro CLI upgraded for its 3.0 engine
   (Kiro keeps each file it replaced beside it as `.json.bak`, then
   `.json.bak.1` and on): a refresh keeps them as Kiro left them, says so in one
-  line, and brings in the rest of the release; `aidlc config --harness kiro
+  line, and brings in the rest of the release; `aidlc config --harness kiro-v2
   --force` takes the release's versions, and Kiro upgrades them again the next
   time it starts on its 3.0 engine. When the release changes what such a file
   allows (it drops an allow entry or adds a deny entry the file Kiro upgraded
@@ -1259,14 +1259,17 @@ stays exclusive: pairing it with another harness that ships that block is refuse
 with `cannot coexist in one project`, regardless of which is installed first.
 Kiro CLI and Kiro IDE still share `.kiro/`, and OpenCode and Copilot share `.aidlc/`,
 so those pairs cannot coexist. Kiro CLI and Kiro IDE can replace each other
-instead: in a project that has one of them, `aidlc config --harness kiro-ide`
-(or `--harness kiro`) switches `.kiro/` to the other in place. The switch is a
+instead: in a project that has one of them, `aidlc config --harness kiro`
+(or `--harness kiro-v2`) switches `.kiro/` to the other in place. A plain
+`aidlc config` refresh keeps whichever Kiro harness the project has; on a Kiro
+CLI (V2) project, `--harness kiro` switches it to Kiro (at a terminal it asks
+first; with `--yes` it says so once and switches), so a script that refreshes
+a Kiro CLI (V2) project passes `--harness kiro-v2`. The switch is a
 refresh planned from the installed row's ownership baseline: it removes the files
 only that row shipped, keeps `aidlc/`, reports a locally modified file it would
 replace or remove as a conflict, and, like any refresh, is done while work is open.
-Switching to `kiro-ide` names every `.kiro/hooks/*.json` file AI-DLC does not
-own: Kiro runs those on its v3 engine, which the switch pins in
-`.kiro/settings/cli.json`, and in Kiro IDE. When there is one, the switch applies
+Switching to Kiro names every `.kiro/hooks/*.json` file AI-DLC does not
+own: Kiro runs those on its v3 engine (`kiro-cli --v3`) and in Kiro IDE. When there is one, the switch applies
 only with your approval of that exact set of files: answer the prompt in a
 terminal, or run the switch with `--dry-run`, review the files, and apply it with
 the `--plan-token` that dry run prints. A hook file added, removed, renamed, or
@@ -1379,8 +1382,8 @@ Successful config prints the host-specific next step:
 | Harness | Next step |
 |---------|-----------|
 | Claude Code | Open Claude Code in this project (if it is already open in this folder, exit it and start it again) and run `/aidlc --doctor` |
-| Kiro CLI | Run `kiro-cli chat`, then `/aidlc --doctor` |
-| Kiro IDE | Open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window and you know what is in this folder, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`) |
+| Kiro CLI | Run `kiro-cli --v2` (on Kiro CLI older than 2.21.4, plain `kiro-cli`), then `/aidlc --doctor` |
+| Kiro IDE | Open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window and you know what is in this folder, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli --v3` in the project instead; if Kiro asks whether you trust this workspace and you know what is in this folder, choose "Trust, continue"; then run `/aidlc --doctor`) |
 | Codex CLI | Run `codex` (when it asks about hooks, choose Trust all and continue), then `$aidlc --doctor` |
 | OpenCode | Run `opencode`, then `/aidlc --doctor` |
 

@@ -4,7 +4,7 @@
 // 2.0 agent files; Enter enables it) rewrites every agent JSON in .kiro/agents
 // into Kiro's own format, which has a `permissions` block, and keeps each file
 // it replaced beside it as `<name>.json.bak`. Measured on Kiro CLI 2.29.0: the
-// next `aidlc config --harness kiro` stopped on 15 "locally modified or
+// next `aidlc config --harness kiro-v2` stopped on 15 "locally modified or
 // unowned" conflicts and wrote nothing, so no other file of the release
 // arrived. A refresh keeps the files Kiro upgraded as they are, says so once
 // with the way to take this release's versions, and delivers the rest. A file
@@ -47,7 +47,7 @@ const kiroHome = (project: string): string => `${project}-kiro-home`;
 function config(project: string, extra: string[]): { status: number; out: string } {
   const result = spawnSync(process.execPath, [
     INIT, "config", "--project-dir", project, "--from", join(REPO_ROOT, "dist-release", "kiro"),
-    "--harness", "kiro", "--mcp", "none", ...extra,
+    "--harness", "kiro-v2", "--mcp", "none", ...extra,
   ], {
     cwd: project,
     encoding: "utf-8",
@@ -132,10 +132,10 @@ const snapshot = (project: string, rels: string[]): Map<string, string> =>
   new Map(rels.map((rel) => [rel, readFileSync(join(project, rel), "utf-8")]));
 
 const KEPT_CHANGED =
-  /^ {2}Note: 1 agent file in \.kiro\/agents that Kiro upgraded for its 3\.0 engine was kept and still allows what an older release allowed; `[^`]*config --harness kiro --force` takes this release's version\.$/m;
+  /^ {2}Note: 1 agent file in \.kiro\/agents that Kiro upgraded for its 3\.0 engine was kept and still allows what an older release allowed; `[^`]*config --harness kiro-v2 --force` takes this release's version\.$/m;
 
 const NOTE =
-  /^ {2}Note: Kiro upgraded 15 agent files in \.kiro\/agents for its 3\.0 engine and they were kept as they are; to take this release's versions run `[^`]*config --harness kiro --force`, and Kiro upgrades them again the next time it starts on its 3\.0 engine\.$/m;
+  /^ {2}Note: Kiro upgraded 15 agent files in \.kiro\/agents for its 3\.0 engine and they were kept as they are; to take this release's versions run `[^`]*config --harness kiro-v2 --force`, and Kiro upgrades them again the next time it starts on its 3\.0 engine\.$/m;
 
 describe("a refresh keeps the agent files Kiro upgraded for its 3.0 engine", () => {
   test("the files Kiro upgraded stay as they are, one line says so, and the rest of the release lands", () => {

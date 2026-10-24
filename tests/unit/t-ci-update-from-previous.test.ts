@@ -1,7 +1,8 @@
 // covers: file:scripts/ci-update-from-previous.ts
 // The update-from-the-last-release check finds each harness tree's hook
 // commands, installed or copied, and reads the hook phase trace to see that
-// the engine ran them.
+// the engine ran them. It passes each release's config the Kiro names that
+// release reads.
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,6 +13,7 @@ import {
   childEnvironment,
   copyRuntimeAsset,
   dispatched,
+  harnessArgFor,
   hookCommands,
   hookInput,
   hookRuns,
@@ -200,5 +202,18 @@ describe("ci-update-from-previous helpers", () => {
     expect(checksumMatches(file, `${digest.toUpperCase()}  aidlc-copy-runtime-2.11.0.tar.gz`)).toBe(true);
     expect(checksumMatches(file, `${"0".repeat(64)}  aidlc-copy-runtime-2.11.0.tar.gz\n`)).toBe(false);
     expect(checksumMatches(file, "")).toBe(false);
+  });
+});
+
+describe("the Kiro name each release's config reads", () => {
+  test("a release that names `kiro-v2` gets the typed names; an older one the ids", () => {
+    const typed = scratch();
+    mkdirSync(join(typed, "kiro-ide", ".kiro", "tools"), { recursive: true });
+    writeFileSync(join(typed, "kiro-ide", ".kiro", "tools", "aidlc-runtime-paths.ts"), 'const N = { kiro: "kiro-v2", "kiro-ide": "kiro" };\n');
+    const older = scratch();
+    mkdirSync(join(older, "kiro", ".kiro", "tools"), { recursive: true });
+    writeFileSync(join(older, "kiro", ".kiro", "tools", "aidlc-runtime-paths.ts"), "export const X = 1;\n");
+    expect(["kiro", "kiro-ide", "claude"].map((harness) => harnessArgFor(typed, harness))).toEqual(["kiro-v2", "kiro", "claude"]);
+    expect(["kiro", "kiro-ide", "claude"].map((harness) => harnessArgFor(older, harness))).toEqual(["kiro", "kiro-ide", "claude"]);
   });
 });
