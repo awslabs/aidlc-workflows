@@ -14,10 +14,12 @@
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { AIDLC_SRC, cleanupTestProject, createTestProject, seedAidlcMemory, seededStateFile, seedStateFile } from "../harness/fixtures.ts";
+import {
+  AIDLC_SRC, cleanupTestProject, createTestProject, seedAidlcMemory, seededAuditShard, seededStateFile, seedStateFile,
+} from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -96,6 +98,24 @@ function requirements(): string {
 describe("an answer with no message named takes a reply only for a question it can answer", () => {
   test("a question the agent logs after the reply another answer used does not take that reply", () => {
     const proj = requirements();
+    asks(proj, "Which database should the to-do app use?", "PostgreSQL,SQLite,Other");
+    const postgres = says(proj, "/aidlc postgres");
+    answers(proj, "PostgreSQL");
+    asks(proj, "Should a blank title be refused?", "Yes,No,Other");
+    answers(proj, "Yes");
+    expect(recorded(proj)).toEqual([
+      { details: "PostgreSQL", words: "postgres", message: postgres },
+      { details: "Yes", words: null, message: null },
+    ]);
+  });
+
+  test("in a team clone, a teammate's earlier question on a shard that sorts later does not let that reply through", () => {
+    const proj = requirements();
+    const mine = seededAuditShard(proj);
+    writeFileSync(join(dirname(mine), `zz-teammate-${basename(mine)}`), [
+      "## Decision Recorded", "**Timestamp**: 2026-01-01T00:00:00Z", "**Event**: DECISION_RECORDED",
+      `**Stage**: ${STAGE}`, "**Decision**: Which login provider?", "**Options**: GitHub,Google", "", "---", "",
+    ].join("\n"));
     asks(proj, "Which database should the to-do app use?", "PostgreSQL,SQLite,Other");
     const postgres = says(proj, "/aidlc postgres");
     answers(proj, "PostgreSQL");
