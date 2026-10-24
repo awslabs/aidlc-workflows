@@ -109,6 +109,7 @@ import {
   answeredBeforeShownStep,
   messageRetryStep,
   personRepliedSinceGateShown,
+  unshownGateReplyStands,
   personsGateReply,
   windowMessageIds,
   personsWordsText,
@@ -7370,8 +7371,12 @@ function verifyApprovalDecision(
     }
     if (!repliedSinceStageStart(pd, stage.slug, message)) refuseForAgent(stageStartFloorRefusal("approve", stage.slug, message));
     const gate = { stage: stage.slug, ...(unit !== undefined ? { unit } : {}) };
-    if (message === undefined && personRepliedSinceGateShown(pd, gate) === false) {
-      refuseGateShownAfterReply(pd, "approve", stage.slug);
+    const shown = message === undefined ? personRepliedSinceGateShown(pd, gate) : undefined;
+    if (shown === false) refuseGateShownAfterReply(pd, "approve", stage.slug);
+    // A stage gate the record never shows stands on this chat's reply, never
+    // on another chat's answer to something else.
+    if (shown === null && unit === undefined && !unshownGateReplyStands(pd, stage.slug)) {
+      refuseUnshownGate(pd, stage.slug);
     }
   }
   // The conductor reports the choice the person made; a report that names none
@@ -7397,6 +7402,20 @@ function refuseGateShownAfterReply(pd: string, verb: "approve" | "request change
     shown: "the gate",
     command: "report",
     why: "no new human reply has been received for this approval question since it was shown.",
+  });
+  refuseForAgent(step, { personDecided: named });
+}
+
+// An approval of a stage gate the record never shows, with no reply of theirs
+// in this chat to stand on: the agent names the message that answered it, or
+// shows the gate.
+function refuseUnshownGate(pd: string, slug: string): never {
+  const { step, named } = answeredBeforeShownStep(pd, slug, {
+    refused: `Cannot approve "${slug}"`,
+    question: `the "${slug}" gate`,
+    shown: "the gate",
+    command: "report",
+    why: "no reply of the person's in this chat since this stage last started answers this gate.",
   });
   refuseForAgent(step, { personDecided: named });
 }
