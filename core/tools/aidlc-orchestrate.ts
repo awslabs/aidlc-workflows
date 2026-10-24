@@ -179,6 +179,7 @@ import {
   CONSTRUCTION_POLICY_CHECKPOINT,
   VERIFICATION_COMMAND_CHECKPOINT,
   validConstructionPolicyChange,
+  swarmNeedsStageMajor,
   auditFilePath,
   REDO_REUSE_SOURCE,
   boltSlugForUnit,
@@ -3645,8 +3646,11 @@ function questionOptions(block: string): string[] {
 // from the question's own row, so a new chat, which never saw it asked, has
 // all it needs. `wordsKept`: the person's words go on the answer's row as
 // Person Reply (personsGateReply, personsWordsKept). `alone`: no other question
-// waits on the same reply (openStageQuestion).
-function openQuestionAnswer(stage: string, block: string, wordsKept: boolean, alone: boolean): string {
+// waits on the same reply (openStageQuestion). `stateContent`: whether a yes
+// to building the Units in parallel needs stage by stage first.
+function openQuestionAnswer(
+  stage: string, block: string, wordsKept: boolean, alone: boolean, stateContent: string,
+): string {
   const checkpoint = auditBlockField(block, "Checkpoint");
   const unit = auditBlockField(block, "Unit");
   const batch = auditBlockField(block, "Batch number");
@@ -3676,17 +3680,22 @@ function openQuestionAnswer(stage: string, block: string, wordsKept: boolean, al
   // several questions is recorded whole, as it answers each of them.
   const reading = options.length > 0 && (checkpoint !== null || (wordsKept && alone));
   // The verification command and a Construction policy question name their
-  // own flags and the setter an approval runs; the command itself stays in its
-  // file, never on a shell line.
+  // own flags and the setters an approval runs; the command itself stays in its
+  // file, never on a shell line. A policy setter names the message they
+  // answered in, and a yes to swarm while Construction builds one Unit at a
+  // time sets stage by stage first, as the Construction protocol says.
   const field = auditBlockField(block, "Field") ?? "";
   const value = auditBlockField(block, "Value") ?? "";
-  const [flags, setter] = checkpoint === VERIFICATION_COMMAND_CHECKPOINT
-    ? [" --checkpoint verification-command --command-file verification-command.txt",
-      "set-construction-verification-command --command-file verification-command.txt"]
-    : checkpoint === CONSTRUCTION_POLICY_CHECKPOINT && validConstructionPolicyChange(field, value)
-      ? [` --checkpoint construction-policy --field ${shellArg(field)} --value ${shellArg(value)}`,
-        `set-${field.toLowerCase().replaceAll(" ", "-")} ${shellArg(value)}`]
-      : [null, null];
+  const policy = checkpoint === CONSTRUCTION_POLICY_CHECKPOINT && validConstructionPolicyChange(field, value);
+  const setters = checkpoint === VERIFICATION_COMMAND_CHECKPOINT
+    ? ["set-construction-verification-command --command-file verification-command.txt"]
+    : !policy ? []
+    : field === "Construction Execution" && value === "swarm" && swarmNeedsStageMajor(stateContent)
+      ? ["set-construction-iteration stage-major --message <id>", "set-construction-execution swarm --message <id>"]
+      : [`set-${field.toLowerCase().replaceAll(" ", "-")} ${shellArg(value)} --message <id>`];
+  const flags = checkpoint === VERIFICATION_COMMAND_CHECKPOINT
+    ? " --checkpoint verification-command --command-file verification-command.txt"
+    : policy ? ` --checkpoint construction-policy --field ${shellArg(field)} --value ${shellArg(value)}` : null;
   return gate
     ? `${numbered}answer it through that checkpoint, never \`log answer\` (which would not approve it): ` +
       `run \`${gate} --action approve${target}\` or \`${gate} --action reject${target}\`` +
@@ -3695,8 +3704,10 @@ function openQuestionAnswer(stage: string, block: string, wordsKept: boolean, al
     : flags !== null
       ? `${numbered}record the choice they made with ` +
         `\`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)}${flags} ` +
-        `--details '<Approve or Request Changes>'\`; after an Approve, run \`${aidlcToolInvocation("state")} ${setter}\` and ` +
-        "say its notice line"
+        `--details '<Approve or Request Changes>'\`; after an Approve, run ` +
+        `${setters.map((setter) => `\`${aidlcToolInvocation("state")} ${setter}\``).join(" then ")}` +
+        `${policy ? ", with `<id>` the message they answered in," : ""} and ` +
+        `${setters.length > 1 ? "say their notice lines" : "say its notice line"}`
       : `${reading ? `${numberedChoices(options)}record the choice they made, as you read it from their reply, with` : "record it with"} ` +
         `\`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)} ` +
         `--details '${reading ? "<their choice>" : "<their exact reply>"}'\` ` +
@@ -3714,9 +3725,10 @@ function openQuestionReplyDirective(
   { stage, block, alone }: { stage: string; block: string; alone: boolean },
   requestId: string,
   { replies, wordsKept }: ReturnType<typeof chatReplies>,
+  stateContent: string,
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
-  const answer = openQuestionAnswer(stage, block, wordsKept, alone);
+  const answer = openQuestionAnswer(stage, block, wordsKept, alone, stateContent);
   const decision = auditBlockField(block, "Decision");
   const choices = questionOptions(block);
   const asked = decision
@@ -3786,6 +3798,7 @@ function recoveryQuestionAnsweredByWordsDirective(marker: ActiveDirectiveMarker)
 function openQuestionAgainDirective(
   projectDir: string,
   { stage, block, alone }: { stage: string; block: string; alone: boolean },
+  stateContent: string,
 ): PrintDirective | null {
   const checkpoint = auditBlockField(block, "Checkpoint");
   if (checkpoint !== null && checkpoint !== CONSTRUCTION_POLICY_CHECKPOINT) return null;
@@ -3803,7 +3816,7 @@ function openQuestionAgainDirective(
   if (!decision) return null;
   const choices = questionOptions(block);
   // Their reply is not in yet: whether it will be kept is read from the turn that ran this.
-  const answer = openQuestionAnswer(stage, block, personsWordsKept(projectDir), alone);
+  const answer = openQuestionAnswer(stage, block, personsWordsKept(projectDir), alone, stateContent);
   return printDirective(
     `Stage "${stage}" has a question you asked that the person has not answered yet. Show it to them again, word ` +
       `for word as it was asked, with its choices, and end your turn: ${JSON.stringify(decision)}` +
@@ -10960,7 +10973,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
-      emit(openQuestionReplyDirective(open, words.id, chatReplies(pd, open.stage)));
+      emit(openQuestionReplyDirective(open, words.id, chatReplies(pd, open.stage), stateContent));
       return;
     }
     // Words at the engine's recovery question, once it holds the person's
@@ -11013,7 +11026,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     !isTeamUnitOwnership(stateContent)
   ) {
     const open = openStageQuestion(pd, stateContent);
-    const again = open === null ? null : openQuestionAgainDirective(pd, open);
+    const again = open === null ? null : openQuestionAgainDirective(pd, open, stateContent);
     if (open !== null && again !== null) {
       pickUpStage = open.stage;
       leadsToSpeech.add(again);
