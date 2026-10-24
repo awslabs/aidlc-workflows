@@ -10,6 +10,7 @@ import {
   HUMAN_PRESENCE_NO_SWITCH,
   LAUNCHER_GLOBAL_FLAGS,
   launcherRouteUsesPin,
+  nextFlagTakesFollowing,
   parseDispatcherPluginCommand,
   parseDispatcherWorkspaceCommand,
   type RouteNamespaceName,
@@ -2169,24 +2170,23 @@ function canonicalizeLegacyCopilotHookArgv(argv: string[]): string[] {
  *
  * `route` is how many leading tokens the resolver read as the route (the
  * delegate's own argv is what is left), so the grammar decides the boundary and
- * nothing here mirrors it. A token after one of our flags is that flag's value,
- * never a word of theirs.
+ * nothing here mirrors it. `verbOnLine` is false for a shortcut that opens the
+ * line with one of `next`'s own flags (`aidlc --resume`), which stands for the
+ * route and the verb. A flag's value is never a word of theirs, and a flag
+ * `next` takes with no value takes no word: the rule nextArgsCarryRequestWords
+ * reads in aidlc-lib.ts (nextFlagTakesFollowing).
  */
-function theirWordsBegin(argv: readonly string[], route: number): number | undefined {
+function theirWordsBegin(argv: readonly string[], route: number, verbOnLine = true): number | undefined {
   let named = 0;
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
     if (token === "--") return i;
-    // A token after any flag is that flag's value, never a word of theirs: the
-    // same rule nextArgsCarryRequestWords reads in aidlc-lib.ts, so a line like
-    // `config --harness kiro --project-dir <dir>` still names this launcher's
-    // own directory.
     if (token.startsWith("-")) {
-      if (argv[i + 1] !== undefined && !argv[i + 1].startsWith("-")) i++;
+      if (nextFlagTakesFollowing(token, argv[i + 1])) i++;
       continue;
     }
     named++;
-    if (named > route + 1) return i;
+    if (named > route + (verbOnLine ? 1 : 0)) return i;
   }
   return undefined;
 }
@@ -2256,13 +2256,14 @@ function theirWordsOn(
   rawArgv: readonly string[],
   route: number | undefined,
   routeArgs: readonly string[] | undefined,
+  verbOnLine: boolean,
 ): number | undefined {
   if (route === undefined || routeArgs === undefined) return undefined;
   const [verb, ...rest] = routeArgs;
   if (verb !== "next") return undefined;
   const workspace = parseDispatcherWorkspaceCommand(rest).kind;
   if (workspace !== "not-workspace" && workspace !== "error") return undefined;
-  return theirWordsBegin(rawArgv, route);
+  return theirWordsBegin(rawArgv, route, verbOnLine);
 }
 
 interface ResolvedWithRoute {
@@ -2351,7 +2352,7 @@ function resolveActionFrom(
     : undefined;
   // Read before anything of ours is put back on the line below.
   const routeArgs = action.type === "delegate" ? [...action.args] : undefined;
-  const words = theirWordsOn(argv, route, routeArgs);
+  const words = theirWordsOn(argv, route, routeArgs, !(clean[0]?.startsWith("-") ?? false));
   if (action.type === "version" && globalFlags.includes("--json")) {
     action.json = true;
   }
