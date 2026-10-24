@@ -6518,6 +6518,40 @@ process.stdin.on("end", () => server.stop(true));
     }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  // The person asked for that edit in the chat: under strict the refusal names
+  // the step that records their words, and then the stage completes with it.
+  test("under strict, an edit after the last merge the person asked for completes the stage once allowed", () => {
+    const chat = { AIDLC_UNATTENDED: "0", AIDLC_SESSION_OVERRIDE: "t314-asked", AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
+    const proj = makeFixture();
+    finalizeKeptUnit(proj);
+    const merged = mergeKept(proj);
+    expect(merged.status, merged.out).toBe(0);
+    const path = seededStateFile(proj);
+    writeFileSync(path, readFileSync(path, "utf-8").replace(
+      /^- \*\*Construction Autonomy Mode\*\*: .*$/m, "- **Construction Autonomy Mode**: autonomous"));
+    const said = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8",
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t314-asked", prompt: "also add the notes file" }),
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+    });
+    expect(said.status, said.stderr).toBe(0);
+    const asked = [...readAllAuditShards(proj).matchAll(
+      /\*\*Event\*\*: HUMAN_TURN\n(?:\*\*[^\n]*\n)*?\*\*Message Id\*\*: ([0-9a-f]{8})/g)].at(-1)?.[1];
+    expect(asked).toBeDefined();
+    writeFileSync(join(proj, "notes.ts"), "export const notes = 2;\n", "utf-8");
+    const refused = guarded(proj, ["gate-start", "code-generation"], chat);
+    expect(refused.out).toContain("no longer matches the final reviewed swarm merge (notes.ts)");
+    expect(refused.out).toContain(`If their message ${asked} (sent `);
+    expect(refused.out).toContain("aidlc-swarm.ts allow-change notes.ts` with --message <id>");
+    const allowed = runSwarm(proj, ["allow-change", "notes.ts", "--message", asked as string], chat);
+    expect(allowed.rc, allowed.diagnostic).toBe(0);
+    const r = guarded(proj, ["gate-start", "code-generation"], chat);
+    expect(r.out).not.toContain("no longer matches the final reviewed swarm merge");
+    expect(r.out).not.toContain("Kept them.");
+    expect(readAllAuditShards(proj)).toMatch(new RegExp(
+      `\\*\\*Event\\*\\*: CHANGE_ACCEPTED\\n(?:\\*\\*[^\\n]*\\n)*?\\*\\*Message Id\\*\\*: ${asked}`));
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("with Guard Policy off, files a Unit changed outside its planned files are kept and named once", () => {
     for (const policy of ["strict", "off (set by you)"]) {
       const proj = makeFixture();
