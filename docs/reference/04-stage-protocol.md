@@ -471,7 +471,8 @@ short follow-up.
   harness's: on Claude Code `AskUserQuestion` takes at most 4 questions per call
   and 4 options per question; Codex's question tool takes 1-3 questions and 2-3
   options. See each harness's `question-rendering.md`.
-- Questions with more options than one call holds: split across calls.
+- A question from the questions file with more options than one call holds:
+  asked once as a numbered list in one message, never split across calls.
   User must see every option. File retains full option set.
 - Built-in "Other" takes an answer in the user's own words as their answer,
   or opens a discussion when they ask about the question. Tell user before
@@ -542,7 +543,7 @@ proceed with partial answers. The file is the authoritative record.
 |-----------|-------|-------|
 | Questions per call | Max 4 | 1-3 |
 | Options per question per call | Max 4 | 2-3 |
-| More options than one call holds | Split across calls | Split across calls |
+| More options than one call holds | One numbered list in chat | One numbered list in chat |
 
 ### Answer Analysis
 
