@@ -1378,7 +1378,16 @@ export type ReviewVerdictStep =
   | { kind: "next-pass"; request: string }
   | { kind: "unit"; next: string; complete?: string }
   | { kind: "learnings"; brief: string }
-  | { kind: "gate"; report: string; summary: boolean; brief: string };
+  | { kind: "gate"; report: string; summary: boolean; brief: string }
+  | {
+    kind: "reply-stands";
+    stage: string;
+    replies: ReadonlyArray<{ id: string; at: string }>;
+    approve: string;
+    reject: string;
+    report: string;
+    brief: string;
+  };
 const NO_FURTHER_PASS = "No further review pass follows: run stage-completion verification, then ";
 export function reviewVerdictNote(step: ReviewVerdictStep): string {
   switch (step.kind) {
@@ -1397,6 +1406,12 @@ export function reviewVerdictNote(step: ReviewVerdictStep): string {
         `which ends the turn. The approval gate comes after their answer, with the review brief that \`${step.brief}\` prints.`;
     case "gate":
       return `${NO_FURTHER_PASS}${step.summary ? "say the completion summary, then " : ""}run ` +
+        `\`${step.report}\`, then \`${step.brief}\`, printing its output as the review brief, and ask the approval ` +
+        "question in this turn.";
+    case "reply-stands":
+      return `${NO_FURTHER_PASS}record the person's reply at the "${step.stage}" gate, which still stands, without ` +
+        `asking them again: if their message ${step.replies.map((reply) => `${reply.id} (sent ${reply.at})`).join(" or ")} ` +
+        `approved it, run \`${step.approve}\`; if it asked for changes, run \`${step.reject}\`. Otherwise run ` +
         `\`${step.report}\`, then \`${step.brief}\`, printing its output as the review brief, and ask the approval ` +
         "question in this turn.";
   }
