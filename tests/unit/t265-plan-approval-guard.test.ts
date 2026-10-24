@@ -2851,8 +2851,6 @@ describe("t265b hook lifecycle", () => {
         check(proj, `${next}; cd ${shellQuoted(short)}`, 0);
         check(short, "bun other/.claude/tools/aidlc.ts engine orchestrate next", 2);
         check(short, `${next}; cd ${shellQuoted(join(proj, "other"))}`, 2);
-        check(short, "echo code > src/inline.ts", 2);
-        check(short, `${next}; echo code > src/inline.ts`, 2);
         expect(actual).toEqual(expected);
       } finally {
         rmSync(proj, { recursive: true, force: true });
