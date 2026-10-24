@@ -1838,6 +1838,28 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
     expect(stateOf(policy)).toMatch(/^- \*\*Guard Policy\*\*: off\b/m);
   });
 
+  test("a depth or review level the person set for the next work before it existed is left for creation to apply", () => {
+    // Set with no work selected ("make the next one comprehensive, with full
+    // reviews"), kept by the setter for the request; the plan's own depth and
+    // review level never go over it.
+    const proj = installedProject();
+    const id = compose(proj);
+    const echoed = validate(proj, { stages: plannedGrid(), scopeSettings: SETTINGS, guardPolicy: "relaxed", depth: "standard" }, ["--custom"]);
+    expect(echoed.creation_depth).toBe("standard");
+    expect(echoed.creation_settings).toMatchObject({ review: "advisory" });
+    recordCeremoniesAtCreation(proj, CHAT, { depth: "comprehensive", review: "adversarial" }, false);
+    const printed = nextInChat(proj, ["--scope", echoed.base_scope as string, ...lists(echoed.plan_changes as { skip: string[]; add: string[] }), "--request", id]);
+    const creation = creationOf(printed);
+    expect(creation).not.toContain("--depth");
+    expect(creation).not.toContain("--review");
+    expect(creation).toContain("--guard-policy relaxed");
+    const created = runCreation(proj, printed);
+    expect(created.status, created.out).toBe(0);
+    const state = stateOf(proj);
+    expect(state).toMatch(/^- \*\*Depth\*\*: Comprehensive\b/m);
+    expect(state).toContain("- **Review Override**: adversarial");
+  });
+
   test("a matched plan, the plain base after a Reject, and a kept value outside its words fill nothing", () => {
     // A matched plan has no list to tell an Approve from a plain pick of that
     // scope after a Reject, so its settings stay as typed.
