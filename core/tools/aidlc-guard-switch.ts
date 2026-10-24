@@ -1301,6 +1301,13 @@ export function planApprovalCreationGranted(
   }
 }
 
+/** Plan approval off asked for `request` in this chat before the work existed,
+ *  by a person in the session: what intent create applies, and what the plan
+ *  the person approved never fills over on its creation print. */
+export function planApprovalCreationAsked(projectDir: string, sessionId: string | null, request: string | null): boolean {
+  return planApprovalCreationGranted(projectDir, sessionId, request) && process.env.AIDLC_UNATTENDED !== "1";
+}
+
 /** Spent by the next piece of work this chat creates, whether or not it was the one asked for. */
 export function consumePlanApprovalCreationGrant(projectDir: string, sessionId: string | null): void {
   if (!sessionId) return;

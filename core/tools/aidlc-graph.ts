@@ -100,6 +100,7 @@ import {
   resolveProjectDir,
   resolveProjectFlag,
   resolveWorkflowSelection,
+  REVIEW_CLASSES,
   type ReviewClass,
   scalarField,
   type ScopeDefinition,
@@ -3658,9 +3659,11 @@ export function computeArs(
 // shows, with the project type that run was given. Creation of that plan takes
 // its stage changes, and its type when the composer planned for another type
 // than that scan's (the person's word, never a scan the folder has outgrown),
-// writes the scores on WORKFLOW_STARTED, then removes the record. It sits
-// beside the proposal, in the space's gitignored engine dir. Every step is
-// best-effort: a record that cannot be read or written records nothing.
+// writes the scores on WORKFLOW_STARTED, then removes the record. The plan
+// also keeps the depth, settings and Guard Policy the gate showed beside its
+// stages, so the creation that approves it runs at them. It sits beside the
+// proposal, in the space's gitignored engine dir. Every step is best-effort: a
+// record that cannot be read or written records nothing.
 export type ArsMethod = "codekb" | "fallback";
 type ProjectTypeWord = "brownfield" | "greenfield";
 interface ComposerScores {
@@ -3675,6 +3678,26 @@ interface KeptComposerPlan {
   scope: string;
   changes: PlanChanges;
   projectType?: ProjectTypeWord;
+  // Each only where it differs from the scope the plan runs on: creation_depth,
+  // creation_settings, and a Guard Policy above that scope's default.
+  depth?: CreationDepth;
+  settings?: SettingsChanges;
+  guardPolicy?: GuardPolicy;
+}
+type CreationDepth = NonNullable<ScopeValidation["creation_depth"]>;
+const CREATION_DEPTHS: readonly CreationDepth[] = ["minimal", "standard", "comprehensive"];
+
+/** A kept settings record whose every key is a setting and every value one of
+ *  its words, or null: a record edited by hand never reaches a command. */
+function keptSettings(value: unknown): SettingsChanges | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const settings: SettingsChanges = {};
+  for (const [key, word] of Object.entries(value)) {
+    if (key === "review" && (REVIEW_CLASSES as readonly unknown[]).includes(word)) settings.review = word as ReviewClass;
+    else if ((CEREMONY_KEYS as readonly string[]).includes(key) && (word === "on" || word === "off")) settings[key as CeremonyKey] = word;
+    else return null;
+  }
+  return settings;
 }
 
 const KEPT_SLUG = /^[a-z0-9][a-z0-9-]*$/;
@@ -3707,6 +3730,10 @@ function readComposerScores(projectDir: string): ComposerScores | null {
     if (typeof plan?.scope === "string" && KEPT_SLUG.test(plan.scope) && slugs(plan.changes?.skip) && slugs(plan.changes?.add)) {
       record.plan = { scope: plan.scope, changes: { skip: plan.changes.skip, add: plan.changes.add } };
       if (isProjectTypeWord(plan.projectType)) record.plan.projectType = plan.projectType;
+      if ((CREATION_DEPTHS as readonly unknown[]).includes(plan.depth)) record.plan.depth = plan.depth;
+      const settings = keptSettings(plan.settings);
+      if (settings !== null) record.plan.settings = settings;
+      if (plan.guardPolicy === "strict" || plan.guardPolicy === "relaxed") record.plan.guardPolicy = plan.guardPolicy;
     }
     return record;
   } catch {
@@ -3762,19 +3789,28 @@ function keepComposerPlan(projectDir: string, plan: KeptComposerPlan): void {
  *  creation of the approved plan carries, whatever list was typed for it, and
  *  the project type it was validated for when that is not the type the scan
  *  found as the dispatch opened the record: the composer plans on the scan's
- *  type unless the person said otherwise, so only their word is carried. Null
- *  when the record belongs to other work, keeps no plan (one an older version
- *  wrote), or its plan runs on another scope. */
+ *  type unless the person said otherwise, so only their word is carried. The
+ *  depth, settings and Guard Policy the gate showed ride with it. Null when the
+ *  record belongs to other work, keeps no plan (one an older version wrote), or
+ *  its plan runs on another scope. */
 export function approvedComposerPlan(
   projectDir: string,
   requests: readonly string[],
   scope: string,
-): { changes: PlanChanges; projectType?: ProjectTypeWord } | null {
+): ApprovedComposerPlan | null {
   const record = readComposerScores(projectDir);
   if (record?.plan === undefined || !requests.includes(record.request) || record.plan.scope !== scope) return null;
+  const { changes, depth, settings, guardPolicy } = record.plan;
   const theirs = record.plan.projectType !== undefined && record.scanned !== undefined && record.plan.projectType !== record.scanned;
-  return { changes: record.plan.changes, ...(theirs ? { projectType: record.plan.projectType } : {}) };
+  return {
+    changes,
+    ...(theirs ? { projectType: record.plan.projectType } : {}),
+    ...(depth ? { depth } : {}),
+    ...(settings ? { settings } : {}),
+    ...(guardPolicy ? { guardPolicy } : {}),
+  };
 }
+export type ApprovedComposerPlan = Omit<KeptComposerPlan, "scope">;
 
 /** The WORKFLOW_STARTED fields for a plan being created for `requests` (its
  *  request id and the one it was composed from): the composer's scores when
@@ -4127,10 +4163,15 @@ const COMMANDS: Record<string, Handler> = {
     if (r.valid && r.routing !== undefined) {
       const kept = r.routing === "matched" ? r.matched_scope : r.base_scope;
       if (kept !== undefined) {
+        const raised = r.guard_policy !== undefined && r.guard_policy !== scopeGuardPolicyDefault(kept) &&
+          guardPolicyAtLeast(r.guard_policy, scopeGuardPolicyDefault(kept));
         keepComposerPlan(resolveProjectDir(), {
           scope: kept,
           changes: r.plan_changes ?? { skip: [], add: [] },
           ...(projectType ? { projectType } : {}),
+          ...(r.creation_depth ? { depth: r.creation_depth } : {}),
+          ...(r.creation_settings && Object.keys(r.creation_settings).length > 0 ? { settings: r.creation_settings } : {}),
+          ...(raised ? { guardPolicy: r.guard_policy } : {}),
         });
       }
     }

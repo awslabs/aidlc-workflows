@@ -4,7 +4,7 @@
 // function:firstPlannedStageOfPhase, function:customPlanBase, function:customPlanStart,
 // function:guardPolicyAtLeast,
 // function:composerScoresPath, function:openComposerScores, function:takeComposerScores,
-// function:approvedComposerPlan,
+// function:approvedComposerPlan, function:planApprovalCreationAsked,
 // function:saveComposedScope, function:writeCompiledGraphLocked,
 // function:delegatedLifecycleCommand,
 // subcommand:aidlc-graph:validate-grid, subcommand:aidlc-utility:intent-create,
@@ -26,7 +26,9 @@
 // its first audit entry, and no other plan or work picks them up (#2575). The
 // stage changes that plan's approval creates are the ones the validator kept
 // for its request, whatever list was typed on Approve, and so is the project
-// type it was validated for when the person typed none.
+// type it was validated for when the person typed none. A custom plan approved
+// with its list also runs at the depth, settings and Guard Policy the gate
+// showed, filled where the command left them out.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
