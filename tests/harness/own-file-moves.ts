@@ -10,9 +10,6 @@
 // the stand-in takes it. The move passes when the person is asked again or the
 // work moves on; a refusal that comes back after its step (ScopeRunDeadlock),
 // a refusal with no step, or 40 steps without either is a failure.
-//
-// The copies keep each file's modification time to the fraction of a
-// millisecond: the engine binds the strict Reverse Engineering handoff to it.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import {

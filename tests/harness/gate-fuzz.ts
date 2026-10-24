@@ -262,7 +262,6 @@ function copyTree(src: string, dst: string, skip: ReadonlySet<string>, linkObjec
     else if (linkObjects && here.startsWith(".git/objects/")) linkSync(from, to);
     else {
       copyFileSync(from, to);
-      // The engine binds some evidence to a file's modification time (the strict Reverse Engineering handoff): a copy keeps it.
       utimesSync(to, stat.atimeMs / 1000, stat.mtimeMs / 1000);
     }
   }
