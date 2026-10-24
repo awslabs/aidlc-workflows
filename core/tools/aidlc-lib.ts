@@ -37646,8 +37646,9 @@ function pipelineReceiptArtifactIsCurrent(
   ) {
     return false;
   }
-  const root = recordDir(projectDir);
-  if (root === null) return false;
+  // The record the receipt was written in: with no work selected, an
+  // isolated run's is the space's own.
+  const root = docsRoot(projectDir);
   const path = resolvePath(projectDir, receipt.artifactPath);
   if (path !== root && !path.startsWith(`${root}${sep}`)) return false;
   try {
@@ -37829,12 +37830,11 @@ export function pipelineLinkEvidence(
 
 // The handoff files a Reverse Engineering developer receipt may name, the one
 // its command names first: a registered repo's own, or the project root's,
-// which may also carry the name codekb-path prints for the root. Null with no
-// active record.
-export function developerHandoffPaths(projectDir: string, repo: string | null): string[] | null {
-  const root = recordDir(projectDir);
-  if (root === null) return null;
-  const dir = join(root, "inception", "reverse-engineering");
+// which may also carry the name codekb-path prints for the root. With no work
+// selected they sit in the space's own record, where an isolated run's
+// directive names them.
+export function developerHandoffPaths(projectDir: string, repo: string | null): string[] {
+  const dir = join(docsRoot(projectDir), "inception", "reverse-engineering");
   return repo !== null
     ? [join(dir, `developer-scan-${repo}.md`)]
     : [join(dir, "developer-scan.md"), join(dir, `developer-scan-${codekbRepoName(projectDir)}.md`)];
@@ -37851,7 +37851,7 @@ export function pipelineLinkCommand(
 ): string {
   const words = [aidlcToolInvocation("log"), "link", "--stage", stage.slug, "--link", link];
   const handoff = stage.slug === "reverse-engineering" && link === stage.lead_agent
-    ? developerHandoffPaths(projectDir, repo)?.[0]
+    ? developerHandoffPaths(projectDir, repo)[0]
     : undefined;
   if (handoff !== undefined) words.push("--artifact", quoteCommandArgument(toPosix(relative(projectDir, handoff))));
   if (repo !== null) words.push("--repo", quoteCommandArgument(repo));
