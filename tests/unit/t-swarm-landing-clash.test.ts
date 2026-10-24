@@ -137,6 +137,8 @@ describe("a parallel landing that clashes with a Unit already landed", () => {
     git(pd, ["add", "src/shared.ts"]);
     // A second look at its own combination after `git add` is still the agent's to write.
     expect(guard(pd, "Write", write(join(pd, "src", "shared.ts"))).code).toBe(0);
+    // Nothing is unmerged now, but beta's cleanly merged file is still not the clash's: it waits.
+    expect(guard(pd, "Write", write(join(pd, "src", "beta.ts"))).code).toBe(2);
     const landed = land(pd, "beta");
     expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
     expect((JSON.parse(landed.out) as { notices?: string[] }).notices)
