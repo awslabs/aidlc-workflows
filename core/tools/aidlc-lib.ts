@@ -29996,21 +29996,54 @@ export interface GateReply {
   // one answered this gate.
   elsewhere: Array<{ id: string; at: string }>;
 }
+// The person's turns on this clone's shard that a decision at a stage gate may
+// stand on: after the later of the stage's floor (stageReplyFloor) and the last
+// decision that spent a reply here, and not spent by a decision on another
+// clone, which is ordered by its time (a turn in the same second is not spent
+// by it, as the message record reads a tie). `from` is where that window
+// starts in `mine`.
+function unspentStageTurns(
+  mine: readonly AuditShardEvent[],
+  others: readonly AuditShardEvent[],
+  stage: string,
+): { from: number; unspent: AuditShardEvent[] } {
+  let from = stageReplyFloor(mine, stage);
+  mine.forEach((row, index) => {
+    if (MESSAGE_SPENDING_EVENTS.has(row.event) && index > from) from = index;
+  });
+  const spentElsewhere = others.reduce<string | null>((latest, row) =>
+    MESSAGE_SPENDING_EVENTS.has(row.event) && (latest === null || row.timestamp > latest) ? row.timestamp : latest, null);
+  const unspent = mine.slice(from + 1).filter((row) =>
+    row.event === "HUMAN_TURN" && (spentElsewhere === null || row.timestamp >= spentElsewhere));
+  return { from, unspent };
+}
+
+const chatOf = (row: AuditShardEvent): string => auditBlockField(row.block, "Session") ?? "";
+
+// A stage gate the record never shows (the agent reports a choice for a stage
+// whose gate it did not open, and the engine backfills the showing) stands on
+// a reply in the chat that reports it, or on the replies of the one chat that
+// replied since: replies from several other chats answered something else, in
+// chats that never had this gate put to them. True when the chat cannot be
+// named or the record cannot be read, which leaves the bound to the checks
+// around it.
+export function unshownGateReplyStands(projectDir: string, stage: string): boolean {
+  const session = resolveInvokingSessionId(projectDir);
+  if (session === null) return true;
+  try {
+    const { mine, others } = ownShardRows(projectDir);
+    const chats = new Set(unspentStageTurns(mine, others, stage).unspent.filter((row) => isReplyTurn(row)).map(chatOf));
+    return chats.has(session) || chats.size === 1;
+  } catch {
+    return true;
+  }
+}
+
 export function personsGateReply(projectDir: string, session: string | null, stage: string): GateReply {
   const none: GateReply = { words: null, messageId: null, replies: [], elsewhere: [] };
   try {
     const { mine, others } = ownShardRows(projectDir);
-    let from = stageReplyFloor(mine, stage);
-    mine.forEach((row, index) => {
-      if (MESSAGE_SPENDING_EVENTS.has(row.event) && index > from) from = index;
-    });
-    // A decision on another clone is ordered by its time; a turn in the same
-    // second is not spent by it, as the message record reads a tie.
-    const spentElsewhere = others.reduce<string | null>((latest, row) =>
-      MESSAGE_SPENDING_EVENTS.has(row.event) && (latest === null || row.timestamp > latest) ? row.timestamp : latest, null);
-    const unspent = mine.slice(from + 1).filter((row) =>
-      row.event === "HUMAN_TURN" && (spentElsewhere === null || row.timestamp >= spentElsewhere));
-    const chatOf = (row: AuditShardEvent): string => auditBlockField(row.block, "Session") ?? "";
+    const { from, unspent } = unspentStageTurns(mine, others, stage);
     let turns = unspent.filter((row) => isReplyTurn(row));
     let held = unspent.filter((row) =>
       auditBlockField(row.block, OPEN_QUESTION_FIELD) !== null && auditBlockField(row.block, "Message Id") !== null);
