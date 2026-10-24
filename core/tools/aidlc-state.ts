@@ -113,6 +113,7 @@ import {
   shownLastWrittenAt,
   type ShownWriting,
   messageRetryStep,
+  personCommandedSinceGateShown,
   personRepliedSinceGateShown,
   unshownGateReplyStands,
   personsGateReply,
@@ -129,6 +130,7 @@ import {
   humanAuthorityState,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
+  COMMAND_TURN_SENTENCE,
   commandTurnHint,
   humanRepliedSinceGate,
   humanPresenceGuardDisabled,
@@ -7421,7 +7423,7 @@ function verifyApprovalDecision(
     if (!repliedSinceStageStart(pd, stage.slug, message)) refuseForAgent(stageStartFloorRefusal("approve", stage.slug, message));
     const gate = { stage: stage.slug, ...(unit !== undefined ? { unit } : {}) };
     const shown = message === undefined ? personRepliedSinceGateShown(pd, gate) : undefined;
-    if (shown === false) refuseGateShownAfterReply(pd, "approve", stage.slug);
+    if (shown === false) refuseGateShownAfterReply(pd, "approve", stage.slug, gate);
     // A stage gate the record never shows stands on this chat's reply, never
     // on another chat's answer to something else.
     if (shown === null && unit === undefined && !unshownGateReplyStands(pd, stage.slug)) {
@@ -7443,8 +7445,14 @@ function verifyApprovalDecision(
 }
 
 // A decision at a stage gate whose replies all came before the gate was shown:
-// the agent names the reply that already answered it, or shows the gate.
-function refuseGateShownAfterReply(pd: string, verb: "approve" | "request changes for", slug: string): never {
+// the agent names the reply that already answered it, or shows the gate. A
+// command the person typed after the gate is said to be one.
+function refuseGateShownAfterReply(
+  pd: string,
+  verb: "approve" | "request changes for",
+  slug: string,
+  gate: { stage: string; unit?: string },
+): never {
   const { step, named } = answeredBeforeShownStep(pd, slug, {
     refused: `Cannot ${verb} "${slug}"`,
     question: `the "${slug}" gate`,
@@ -7453,7 +7461,8 @@ function refuseGateShownAfterReply(pd: string, verb: "approve" | "request change
     why: "no new human reply has been received for this approval question since it was shown.",
     ...(verb === "approve" ? { shownWriting: gateOutputWriting(pd, slug) } : {}),
   });
-  refuseForAgent(step, { personDecided: named });
+  const command = personCommandedSinceGateShown(pd, gate) === true ? ` ${COMMAND_TURN_SENTENCE}` : "";
+  refuseForAgent(`${step}${command}`, { personDecided: named });
 }
 
 // An approval of a stage gate the record never shows, with no reply of theirs
@@ -8081,12 +8090,13 @@ function handleReject(args: string[]): void {
   // the agent names the message it read the request from. A stage still
   // running ("that's wrong, redo it" mid-stage) and a guard-recovery choice
   // (it binds its own reply above) need only the checks around this one.
+  const gate = { stage: slug, ...(teamGate ? { unit: teamGate.unit } : {}) };
   if (
     !autonomousDecision && !humanPresenceGuardDisabled() && repliedHere &&
     feedbackStatus === "not-applicable" && message === undefined &&
-    personRepliedSinceGateShown(pd, { stage: slug, ...(teamGate ? { unit: teamGate.unit } : {}) }) === false
+    personRepliedSinceGateShown(pd, gate) === false
   ) {
-    refuseGateShownAfterReply(pd, "request changes for", slug);
+    refuseGateShownAfterReply(pd, "request changes for", slug, gate);
   }
   if (
     (!autonomousDecision || recoveryResetNeedsHuman) &&

@@ -13391,11 +13391,11 @@ export function humanRepliedSinceGate(projectDir: string): boolean {
 
 // Said when a decision is refused for want of a reply, and the person's message
 // since the question was a command to AIDLC.
+export const COMMAND_TURN_SENTENCE = "The person's message since then was a command to AIDLC, not a reply to this " +
+  "question: carry out the command and leave the question open for their reply.";
+
 export function commandTurnHint(projectDir: string): string {
-  return humanActedSinceGate(projectDir)
-    ? " The person's message since then was a command to AIDLC, not a reply to this question: carry out the " +
-      "command and leave the question open for their reply."
-    : "";
+  return humanActedSinceGate(projectDir) ? ` ${COMMAND_TURN_SENTENCE}` : "";
 }
 
 // The person asked for what the agent runs now: their chat turn stands behind
@@ -30519,6 +30519,25 @@ export function personRepliedSinceGateShown(
   projectDir: string,
   gate: { stage: string; unit?: string },
 ): boolean | null {
+  return turnSinceGateShown(projectDir, gate, isReplyTurn);
+}
+
+// Whether the person sent a command to AIDLC after the stage's gate was first
+// shown in this attempt (a turn marked `Reply: command`): a decision refused for
+// want of a reply after the gate says so. Null as personRepliedSinceGateShown.
+export function personCommandedSinceGateShown(
+  projectDir: string,
+  gate: { stage: string; unit?: string },
+): boolean | null {
+  return turnSinceGateShown(projectDir, gate, (row) =>
+    row.event === "HUMAN_TURN" && auditBlockField(row.block, "Reply") === COMMAND_TURN_REPLY);
+}
+
+function turnSinceGateShown(
+  projectDir: string,
+  gate: { stage: string; unit?: string },
+  which: (row: { event: string; block: string }) => boolean,
+): boolean | null {
   let content: string;
   try {
     content = readAppendOnlyFileNoFollowOrThrow(auditFilePath(projectDir), "audit shard").toString("utf-8");
@@ -30528,7 +30547,7 @@ export function personRepliedSinceGateShown(
   const from = gatePresentationStart(content, gate, { firstShowing: true });
   if (from === null) return null;
   return auditShardBlocks(content.slice(from))
-    .some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+    .some((block) => which({ event: auditBlockField(block, "Event") ?? "", block }));
 }
 
 // The person's rows on this clone's own shard, in the order they were written.
