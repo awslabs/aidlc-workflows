@@ -1095,7 +1095,10 @@ function migrateExistingKiroAgent(
     );
     return "handled";
   }
-  writeComposeFile(ctx.dest, projectKiroNativeAgent(ctx));
+  const projected = projectKiroNativeAgent(ctx);
+  // An agent whose own keys leave nothing to add is already this copy.
+  if (committedText(ctx.installed).equals(committedText(Buffer.from(projected)))) return "compare";
+  writeComposeFile(ctx.dest, projected);
   return "written";
 }
 

@@ -4602,6 +4602,26 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       if (variant.permissions === "install") expect(fm, variant.label).toContain(installPermissions);
       else expect(fm, variant.label).not.toContain("      effect: deny");
     }
+
+    // An agent that declares all three keys gets nothing added, and a later
+    // compose leaves its copy as it is.
+    const plugin = "syn-keys-all";
+    const agent = `${plugin}-agent`;
+    const own = ['tools: ["read"]', "includeMcpJson: false", ...cases[1].own];
+    const { proj } = composeSynthetic(plugin, { [`agents/${agent}.md`]: pluginAgent(plugin, agent, own) }, "kiro-ide");
+    const installed = join(proj, ".kiro", "agents", `${agent}.md`);
+    expect(kiroFrontmatter(readFileSync(installed, "utf-8"))).toBe(
+      [`name: ${agent}`, "display_name: Synthetic Worker", `plugin: ${plugin}`, ...own, "model: sonnet"].join("\n"),
+    );
+    const before = statSync(installed).mtimeMs;
+    Bun.sleepSync(50);
+    const root = join(proj, `_plugin-${plugin}`);
+    const again = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
+      cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".kiro", AIDLC_HARNESS_NAME: "kiro-ide" },
+    });
+    expect(again.status, again.stderr).toBe(0);
+    expect(statSync(installed).mtimeMs).toBe(before);
   });
 
   test("Kiro IDE re-compose takes the dispatch lines into a plugin agent an older build composed without them", () => {
