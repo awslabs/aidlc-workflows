@@ -2101,7 +2101,46 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "alpha" });
     const unknown = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--unit", "gamma"]).stdout);
     expect(unknown.kind).toBe("error");
-    expect(unknown.message).toContain('"gamma" is not one of this work\'s units (alpha, beta)');
+    expect(unknown.message).toContain("gamma is not one of this work's units (alpha, beta).");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  const resumedReport = (p: string, args: string[]) => JSON.parse(tool(p, "orchestrate", [
+    "report", "--result", "resumed", ...args,
+  ]).stdout) as { kind: string; message: string };
+  const askedWhichUnit =
+    "Tell the person in one line: \"gamma is not one of this work's units (alpha, beta). Which one did you mean?\"";
+
+  test("a re-entry jump or redo naming a Unit this work does not have asks which one, never 'accepted' first", () => {
+    const p = betaBuilding();
+    const before = readFileSync(seededStateFile(p), "utf-8");
+    for (const choice of [["jump", "--target", "nfr-design"], ["redo"]]) {
+      const asked = resumedReport(p, ["--choice", ...choice, "--unit", "gamma"]);
+      expect(asked.kind, choice.join(" ")).toBe("print");
+      expect(asked.message, choice.join(" ")).not.toContain("accepted");
+      expect(asked.message, choice.join(" ")).toContain(askedWhichUnit);
+    }
+    // A Unit the work has still goes to the jump.
+    expect(resumedReport(p, ["--choice", "jump", "--target", "nfr-design", "--unit", "alpha"]).message)
+      .toContain("Jump accepted. Run `next --stage nfr-design --unit alpha`");
+    expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("past the per-unit steps, a re-entry jump naming a Unit this work does not have asks the same way", () => {
+    const p = gatesApprovedUntil("code-generation");
+    for (const result of ["awaiting-approval", "approved"]) {
+      const report = tool(p, "orchestrate", [
+        "report", "--stage", "code-generation", "--result", result, "--user-input", "Approve",
+      ]);
+      expect(report.status, report.out).toBe(0);
+    }
+    const before = readFileSync(seededStateFile(p), "utf-8");
+    expect(before).toContain("- **Current Stage**: build-and-test");
+    const refused = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--unit", "gamma"]).stdout);
+    expect(refused.message).toContain("gamma is not one of this work's units (alpha, beta).");
+    const asked = resumedReport(p, ["--choice", "jump", "--target", "nfr-design", "--unit", "gamma"]);
+    expect(asked.message).not.toContain("accepted");
+    expect(asked.message).toContain(askedWhichUnit);
+    expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a forward jump that drops no Unit's work, and a stage-major forward jump, still jump", () => {
