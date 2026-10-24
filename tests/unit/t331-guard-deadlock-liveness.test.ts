@@ -548,7 +548,9 @@ describe("bounded guard-remedy liveness", () => {
       const directive = JSON.parse(String(run.stdout ?? "").trim()) as {
         kind?: string;
       };
-      expect(["print", "run-stage"]).toContain(directive.kind ?? "");
+      // The restart is made by that `next`, which returns the step (its rules
+      // first, where the harness delivers them in parts).
+      expect(["print", "run-stage", "load-steering"]).toContain(directive.kind ?? "");
     }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 

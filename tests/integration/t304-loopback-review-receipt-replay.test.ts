@@ -262,26 +262,11 @@ describe("t304 loop-back refreshes per-unit Code Generation reviews", () => {
       "- **Current Stage**: build-and-test",
     );
 
-    const jumpPrint = next(["--stage", "code-generation"]);
-    expect(jumpPrint.kind).toBe("print");
-    const printed = jumpPrint.message ?? "";
-    const match = printed.match(
-      /aidlc-jump\.ts execute --target ([a-z][a-z0-9-]*) --direction (forward|backward|redo) --scope ([a-z][a-z0-9-]*)/,
-    );
-    expect(match).not.toBeNull();
-    const jumped = run(JUMP, [
-      "execute",
-      "--target",
-      match?.[1] ?? "",
-      "--direction",
-      match?.[2] ?? "",
-      "--scope",
-      match?.[3] ?? "",
-    ]);
-    expect(jumped.status, jumped.out).toBe(0);
+    // From Build and Test the loop-back's `next --stage code-generation` makes
+    // the backward jump itself and returns Code Generation's step.
+    const replayGate = next(["--stage", "code-generation"]);
     expect(audit()).toContain("**Event**: STAGE_JUMPED");
-
-    const replayGate = next();
+    expect(audit()).toContain("**Direction**: BACKWARD");
     expect(replayGate.kind).toBe("run-stage");
     expect(replayGate.stage).toBe("code-generation");
     expect(replayGate.unit).toBe("beta");
