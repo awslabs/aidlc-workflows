@@ -47,6 +47,40 @@ function named(message: string, pattern: RegExp): string[] {
   return [...message.matchAll(/`([^`]+)`/g)].map((match) => match[1]).filter((command) => pattern.test(command));
 }
 
+/** The questions file with `answer` to Q1 and the summary waiting for its answer. */
+function writeQuestions(proj: string, answer: string): string {
+  mkdirSync(stageFolder(proj), { recursive: true });
+  const questions = join(stageFolder(proj), "intent-capture-questions.md");
+  writeFileSync(questions, "# Intent Capture Questions\n\n## Q1. What would make this useful?\n\nA. Due dates, overdue first\n" +
+    "B. Due dates, whole list sorted by date\nX. Other\n\n" +
+    `[Answer]: ${answer}\n\n## Consolidated Summary Confirmation\n\n- Add a due date to a task; list it as answered.\n\n[Answer]: \n`, "utf-8");
+  return questions;
+}
+/** The summary shown, then (with `reply`) the person's "Looks correct" in that reply, recorded as the stage does. */
+async function confirmSummary(proj: string, questions: string, reply: string | null): Promise<void> {
+  const summary = ["--checkpoint", "summary-confirmation", "--stage", "intent-capture", "--questions-file", questions, "--project-dir", proj];
+  const shown = await exec([process.execPath, LOG, "decision", ...summary, "--decision", "Does this all look correct?",
+    "--options", "Looks correct,Request changes"], { cwd: proj, env: env(proj) });
+  expect(shown.status, `${shown.stdout}${shown.stderr}`).toBe(0);
+  await say(proj, reply ?? "can you switch this to the express plan?", "claude");
+  if (reply === null) return;
+  writeFileSync(questions, readFileSync(questions, "utf-8").replace(/\[Answer\]: \n$/, "[Answer]: Looks correct\n"), "utf-8");
+  const answered = await exec([process.execPath, LOG, "answer", ...summary, "--details", "Looks correct"], { cwd: proj, env: env(proj) });
+  expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
+}
+/** The two documents written from the confirmation through the host's write hook, so they carry its stamp. */
+async function writeDocuments(proj: string, body: string): Promise<void> {
+  for (const name of ["intent-statement.md", "stakeholder-map.md"]) {
+    const path = join(stageFolder(proj), name);
+    writeFileSync(path, `# ${name}\n\n${body}\n`, "utf-8");
+    const hooked = await exec([process.execPath, join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts")], {
+      cwd: proj, env: env(proj),
+      input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: path } }),
+    });
+    expect(hooked.status, `${hooked.stdout}${hooked.stderr}`).toBe(0);
+  }
+}
+
 /** A poc at Intent Capture, its questions answered and the consolidated summary shown; `confirm` records "Looks correct". */
 async function pocAtSummary(confirm: boolean): Promise<string> {
   const proj = createOrchestrationTestProject();
@@ -57,20 +91,8 @@ async function pocAtSummary(confirm: boolean): Promise<string> {
   expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
   await say(proj, "/aidlc", "claude");
   expect((await next(proj, [])).directive?.stage).toBe("intent-capture");
-  mkdirSync(stageFolder(proj), { recursive: true });
-  const questions = join(stageFolder(proj), "intent-capture-questions.md");
-  writeFileSync(questions, "# Intent Capture Questions\n\n## Q1. What would make this useful?\n\nA. Due dates, overdue first\nX. Other\n\n" +
-    "[Answer]: A\n\n## Consolidated Summary Confirmation\n\n- Add a due date to a task; list overdue ones first.\n\n[Answer]: \n", "utf-8");
-  const summary = ["--checkpoint", "summary-confirmation", "--stage", "intent-capture", "--questions-file", questions, "--project-dir", proj];
-  const shown = await exec([process.execPath, LOG, "decision", ...summary, "--decision", "Does this all look correct?",
-    "--options", "Looks correct,Request changes"], { cwd: proj, env: env(proj) });
-  expect(shown.status, `${shown.stdout}${shown.stderr}`).toBe(0);
-  await say(proj, confirm ? REPLY : "can you switch this to the express plan?", "claude");
-  if (confirm) {
-    writeFileSync(questions, readFileSync(questions, "utf-8").replace(/\[Answer\]: \n$/, "[Answer]: Looks correct\n"), "utf-8");
-    const answered = await exec([process.execPath, LOG, "answer", ...summary, "--details", "Looks correct"], { cwd: proj, env: env(proj) });
-    expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
-  }
+  const questions = writeQuestions(proj, "A");
+  await confirmSummary(proj, questions, confirm ? REPLY : null);
   expect(box(proj, "intent-capture")).toBe("- EXECUTE");
   return proj;
 }
@@ -119,10 +141,26 @@ describe("t-confirm-and-switch-plan: a confirmed summary's documents are written
 
   test("with the confirmed documents already written the switch keeps today's step", async () => {
     const proj = await pocAtSummary(true);
-    writeFileSync(join(stageFolder(proj), "intent-statement.md"), "# Intent Statement\n\nDue dates.\n", "utf-8");
-    writeFileSync(join(stageFolder(proj), "stakeholder-map.md"), "# Stakeholder Map\n\n- The owner.\n", "utf-8");
+    await writeDocuments(proj, "Due dates.");
     const message = await switchStep(proj, "express");
     expect(message).not.toContain("The person confirmed");
+  });
+
+  // The documents of an earlier confirmation are still on disk after a go-back; the changed answers confirmed now
+  // are not in them, so they are written again before the switch (the summary guard reads descent the same way).
+  test("after a go-back and changed answers, the earlier confirmation's documents are written again first", async () => {
+    const proj = await pocAtSummary(true);
+    await writeDocuments(proj, "Due dates, overdue first.");
+    await say(proj, "/aidlc --stage intent-capture", "claude");
+    const back = await next(proj, ["--stage", "intent-capture"]);
+    for (const command of named(String(back.directive?.message ?? ""), /aidlc-jump\.ts execute/)) await runNamed(proj, command);
+    expect((await next(proj, [])).directive?.stage).toBe("intent-capture");
+    const questions = writeQuestions(proj, "B");
+    await confirmSummary(proj, questions, REPLY);
+    const message = await switchStep(proj, "express");
+    expect(message).toContain("The person confirmed Intent Capture & Framing's summary");
+    expect(message).toContain("intent-statement.md");
+    expect(message).toContain("stakeholder-map.md");
   });
 
   test("a switch to a plan that runs the stage keeps today's step", async () => {
