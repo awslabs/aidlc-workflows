@@ -37,6 +37,7 @@ import {
   isReplyTurn,
   personAtOwnTerminal,
   personRepliedAfter,
+  personsGateReply,
   latestMainWorkflowStageRunFloorForProject,
   memoryStrictHoldsGuardPolicy,
   GUARD_RECOVERY_ASK_TYPE,
@@ -98,6 +99,7 @@ import {
   type PlanApprovalPickerQuestion,
 } from "./aidlc-testing-posture.ts";
 import { exactOptionPick, isNonAnswer, pickerOffersChoices } from "./aidlc-reply-reader.ts";
+import { readMessage } from "./aidlc-message-store.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import type {
@@ -751,9 +753,8 @@ function rejectionRevision(projectDir: string, unit: string | null, intentId: st
   }
   const floor = /^GATE_REJECTED:(.+)#\d+$/.exec(runFloor);
   if (floor === null) return null;
-  const rejection = rejectionAtRunFloor(
-    readAuditShardEvents(projectDir), STAGE, unit ?? undefined, runFloor,
-  );
+  const rows = readAuditShardEvents(projectDir);
+  const rejection = rejectionAtRunFloor(rows, STAGE, unit ?? undefined, runFloor);
   if (rejection !== undefined && auditBlockField(rejection.block, "Reopen") === "jump") return null;
   const dir = codeGenerationRecordDir(projectDir, unit);
   const plan = readText(join(dir, PLAN_FILE));
@@ -768,7 +769,27 @@ function rejectionRevision(projectDir: string, unit: string | null, intentId: st
   const feedback = rejection
     ? (auditBlockField(rejection.block, "Feedback") ?? auditBlockField(rejection.block, "Reason"))?.trim()
     : undefined;
-  return feedback ? { feedback } : {};
+  const said = [feedback, rejection ? wordsSinceRejection(projectDir, rows, rejection) : null]
+    .filter((part): part is string => !!part).join("\n");
+  return said ? { feedback: said } : {};
+}
+
+// What the person said after the rejection, in the chat that asked for it. A
+// bare Request Changes is recorded as it was picked, and their answer to "What
+// should change?" comes after it, on no decision; it is this revision's change
+// all the same. personsGateReply reads it, from the last decision on: this
+// rejection. The chat is the one the pick's own turn names on the record, which
+// lasts; the message store drops a used message after a day.
+function wordsSinceRejection(
+  projectDir: string,
+  rows: ReadonlyArray<{ event: string; block: string }>,
+  rejection: { block: string },
+): string | null {
+  const id = auditBlockField(rejection.block, "Message Id");
+  if (id === null) return null;
+  const turn = rows.findLast((row) => row.event === "HUMAN_TURN" && auditBlockField(row.block, "Message Id") === id);
+  const chat = (turn ? auditBlockField(turn.block, "Session") : null) ?? readMessage(projectDir, id)?.session ?? null;
+  return chat === null ? null : personsGateReply(projectDir, chat, STAGE).words;
 }
 
 function targetState(
