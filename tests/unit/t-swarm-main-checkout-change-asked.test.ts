@@ -268,6 +268,23 @@ describe("a change the person asks for in the main checkout while the Units are 
     expect(existsSync(wt(pd, "alpha"))).toBe(false);
   });
 
+  // A request recorded while another batch was out does not reach a file a Unit being built now names in its plan.
+  test("a file a listed Unit's plan names, asked for while another batch was out, still waits for that Unit", () => {
+    const pd = fixture(["alpha", "beta"]);
+    approvePlan(pd, "alpha", "alpha.ts");
+    const asked = says(pd, ASKED);
+    appendAuditEntry("MAIN_CHECKOUT_CHANGE_ALLOWED", {
+      Stage: "code-generation", "Run floor": mainCheckoutChangeRunFloor(pd), Paths: JSON.stringify(["src/alpha.ts"]),
+      "Message Id": asked,
+    }, pd);
+    const prepared = prepare(pd, ["alpha", "beta"]);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    const held = guard(pd, "Write", write(join(pd, "src", "alpha.ts")));
+    expect(held.code).toBe(2);
+    expect(held.err).toContain(LATER);
+    expect(held.err).not.toContain("allow-change");
+  });
+
   test("with no message from the person on record, the held write says when the change can be made", () => {
     const pd = batchOut();
     const held = guard(pd, "Write", write(join(pd, "README.md")));
