@@ -577,6 +577,22 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
 
+  test("SP4i: a jump to an initialization stage gets the refusal `next --stage` gives, never 'Jump accepted' first", () => {
+    const p = projWithState("state-jumped.md");
+    const before = readFileSync(statePath(p), "utf-8");
+    const report = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
+    for (const stage of ["workspace-scaffold", "workspace-detection", "state-init"]) {
+      const refused = nextDirective(p, ["--stage", stage]);
+      expect(refused.message, stage).toContain("Cannot jump to initialization stages");
+      // A redo of an initialization stage that ran is the jump back to it.
+      for (const choice of ["jump", "redo"]) {
+        expect(report("--choice", choice, "--target", stage), `${choice} ${stage}`).toEqual(refused);
+      }
+    }
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
+  });
+
   test("SP4f: a redo, jump, or fresh request at an open gate is that request, never a rejection", () => {
     const p = projWithState("state-mid-ideation.md");
     run(ORCHESTRATE, [
