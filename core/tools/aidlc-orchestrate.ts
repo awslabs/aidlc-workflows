@@ -595,6 +595,7 @@ import {
   notePlanApprovalOverrideOffered,
   promotableTestingPosture,
   setTestingPostureRoute,
+  stepNextCommand,
 } from "./aidlc-testing-posture.ts";
 import {
   checksAre,
@@ -2281,12 +2282,13 @@ function recordPlanBuiltWithoutAsking(projectDir: string, directive: Directive):
 
 // The record for a build just handed over. When it cannot be written, or plan
 // approval was turned back on or the plan changed meanwhile, the build is not
-// shown: `next` routes the current step again and writes the record then.
+// shown: the step's own `next` (an isolated run's is that run's) routes it again
+// and writes the record then.
 function recordHandedOverBuild(projectDir: string, directive: Directive): boolean {
   const notShown = (): false => {
     writePrepared(prepareEmission(errorDirective(
       "The plan could not be recorded as built without asking yet, so the build is not shown. " +
-        `Run \`${aidlcToolInvocation("orchestrate")} next\` to receive it.`,
+        `Run \`${stepNextCommand(projectDir, directive.kind === "run-stage" ? directive : null)}\` to receive it.`,
     )));
     return false;
   };

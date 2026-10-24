@@ -48,6 +48,8 @@ import {
   clearPlanApprovalReceipt,
   isolatedCodeGenerationTestStrategy,
   readActiveDirectiveMarker,
+  singleStageAttemptIsOpen,
+  singleStageAttemptScope,
   authorizedVerificationCommand,
   readIssuedDirectiveMarker,
   readAuditShardEvents,
@@ -2643,11 +2645,17 @@ const PART_RECEIPT_RE = /^[A-Za-z0-9_-]{8}$/;
  * ones. The run-stage may plan, build, or close a gate, so the line names the
  * step only as the stage's own. Null when no rules part is in flight.
  */
-export function codeGenerationRulesArrivingReason(marker: ActiveDirectiveMarker | null): string | null {
+export function codeGenerationRulesArrivingReason(
+  marker: ActiveDirectiveMarker | null,
+  projectDir?: string,
+): string | null {
   if (marker?.version !== 2 || marker.stage !== CODE_GENERATION_STAGE || marker.kind !== "load-steering") {
     return null;
   }
   const engine = aidlcToolInvocation("orchestrate");
+  // With the project known, the fresh `next` is the step's own: an isolated
+  // run's parts are started again by that run's `next` (stepNextCommand).
+  const next = projectDir === undefined ? `${engine} next` : stepNextCommand(projectDir, marker);
   const loaded = `The Code Generation rules are still arriving (part ${marker.part} of ${marker.parts} has been loaded). ` +
     `Run each command named here ${AS_ITS_OWN_COMMAND}.`;
   const after = "follow each part until the Code Generation step itself arrives; nothing is built or handed to a worker before then.";
@@ -2656,8 +2664,8 @@ export function codeGenerationRulesArrivingReason(marker: ActiveDirectiveMarker 
   const receipt = marker.continue_token;
   return receipt !== undefined && PART_RECEIPT_RE.test(receipt)
     ? `${loaded} Run \`${engine} continue ${receipt}\` and ${after} ` +
-      `If you do not have the earlier parts, run \`${engine} next\` instead.`
-    : `${loaded} Run \`${engine} next\` and ${after}`;
+      `If you do not have the earlier parts, run \`${next}\` instead.`
+    : `${loaded} Run \`${next}\` and ${after}`;
 }
 
 function refuseWhileRulesArrive(projectDir: string): void {
@@ -2667,7 +2675,7 @@ function refuseWhileRulesArrive(projectDir: string): void {
   } catch {
     return;
   }
-  const reason = codeGenerationRulesArrivingReason(marker);
+  const reason = codeGenerationRulesArrivingReason(marker, projectDir);
   if (reason !== null) throw new Error(reason);
 }
 
@@ -3230,17 +3238,40 @@ export function codeGenerationPlanWaits(projectDir: string, units: ReadonlyArray
 }
 
 /**
+ * An isolated Code Generation run's own `next`, with the scope it started
+ * with: a bare `next` routes the main workflow and, with no workflow, `next`
+ * takes the default scope, which the open attempt refuses. A recorded scope
+ * that is not a scope name is not put in a command.
+ */
+export function isolatedCodeGenerationNext(scope: string | null): string {
+  return `${aidlcToolInvocation("orchestrate")} next --stage code-generation --single` +
+    (scope !== null && isScopeName(scope) ? ` --scope ${scopeArg(scope)}` : "");
+}
+
+/**
+ * The `next` that issues a step again: an isolated Code Generation run's own
+ * while the step is that run's (its marker or directive says `single`) and its
+ * attempt is open, else the bare `next`. An audit that cannot be read keeps the
+ * bare `next`.
+ */
+export function stepNextCommand(projectDir: string, step: { single?: boolean; stage?: string } | null): string {
+  const workflow = `${aidlcToolInvocation("orchestrate")} next`;
+  if (step?.single !== true || step.stage !== CODE_GENERATION_STAGE) return workflow;
+  try {
+    if (!singleStageAttemptIsOpen(projectDir, CODE_GENERATION_STAGE)) return workflow;
+    return isolatedCodeGenerationNext(singleStageAttemptScope(projectDir, CODE_GENERATION_STAGE));
+  } catch {
+    return workflow;
+  }
+}
+
+/**
  * The step a completion gets while its plan waits: the plan's question is
- * `next`'s, and an isolated run's is its own `next` with the scope it started
- * with, since a bare `next` routes the main workflow and, with no workflow,
- * `next` takes the default scope, which the open attempt refuses. A recorded
- * scope that is not a scope name is not put in a command.
+ * `next`'s, and an isolated run's is its own (isolatedCodeGenerationNext).
  */
 export function codeGenerationPlanWaitsStep(isolated?: { scope: string }): string {
-  const next = isolated === undefined
-    ? "next"
-    : `next --stage code-generation --single${isScopeName(isolated.scope) ? ` --scope ${scopeArg(isolated.scope)}` : ""}`;
-  return `The code plan is not approved yet: run \`${aidlcToolInvocation("orchestrate")} ${next}\` and follow the step it prints.`;
+  const next = isolated === undefined ? `${aidlcToolInvocation("orchestrate")} next` : isolatedCodeGenerationNext(isolated.scope);
+  return `The code plan is not approved yet: run \`${next}\` and follow the step it prints.`;
 }
 
 function recordCodeGenerationContinuation(

@@ -166,6 +166,7 @@ import {
   planReviewAppendix,
   promptTestingContractMarkers,
   setAsideBuildUnderOff,
+  stepNextCommand,
   WORKER_BRIEF_SECTIONS,
 } from "../tools/aidlc-testing-posture.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
@@ -471,6 +472,23 @@ function promptCarriesReviewAppendix(
   return fold(promptText).includes(content);
 }
 
+// The step this call judged, so a refusal names that step's own `next`
+// (stepNextCommand): an isolated Code Generation run's while its attempt is
+// open, since a bare `next` routes the main workflow. Reset at the start of
+// every call, since an adapter can run several calls through this module
+// (runHookHere), and the command is worked out only when a refusal names it.
+let judgedStep: { projectDir: string; marker: ActiveDirectiveMarker | null; next?: string } | null = null;
+
+function workflowNext(): string {
+  return `${aidlcToolInvocation("orchestrate")} next`;
+}
+
+function stepNext(): string {
+  if (judgedStep === null) return workflowNext();
+  judgedStep.next ??= stepNextCommand(judgedStep.projectDir, judgedStep.marker);
+  return judgedStep.next;
+}
+
 // Every command a refusal names is spelled the way this install runs it, so
 // the agent can run it as printed (the native `aidlc engine ...`, or the
 // source tree's `bun <harness-dir>/tools/...`), and `next` is always named
@@ -478,7 +496,7 @@ function promptCarriesReviewAppendix(
 // a held jump's wait names is the invocation its claim is hashed over
 // (nextStageInvocation).
 function nextOnItsOwn(wayOn: EngineInvocation | null = null): string {
-  const command = wayOn === null ? `${aidlcToolInvocation("orchestrate")} next` : renderEngineInvocation(wayOn);
+  const command = wayOn === null ? stepNext() : renderEngineInvocation(wayOn);
   return `\`${command}\` ${AS_ITS_OWN_COMMAND}`;
 }
 
@@ -528,13 +546,15 @@ export function appendixBlockReason(mentioned: string[]): string {
 // tells the agent not to ask for an approval nobody wants. The agent repeats
 // these words to the person, so the clause names no engine part and no
 // switch: the command it follows is already named once, and "it" is enough.
+// An isolated run's build comes from that command again, never a bare `next`.
 function nextAfterPlanClause(planApprovalOff: boolean, handsOver: boolean): string {
   if (planApprovalOff) {
     return "plan approval is off for this work, so it starts the build without asking anyone; " +
       "do not ask the person to approve the plan.";
   }
+  const again = stepNext() === workflowNext() ? "the `next`" : "that command again";
   return handsOver
-    ? "the engine asks the person to approve the plan, and the `next` after their answer hands over the build."
+    ? `the engine asks the person to approve the plan, and ${again} after their answer hands over the build.`
     : "the engine asks the person to approve it before any code is written.";
 }
 
@@ -2051,6 +2071,7 @@ async function evaluate(
   input: string,
   workflow: ReturnType<typeof enterHookWorkflow>,
 ): Promise<number> {
+  judgedStep = null;
   // Runtime integrity is not a fence and cannot be disabled with this hook.
   if (refuseRuntimeIntegrityViolation(parsed)) return 2;
 
@@ -2270,6 +2291,7 @@ async function evaluate(
     state = readFileSync(statePath, "utf-8");
     const currentStage = getField(state, "Current Stage") ?? "";
     let activeDirective = readActiveDirectiveMarker(projectDir, state);
+    judgedStep = { projectDir, marker: activeDirective };
     const durableStage = normalizeStageName(currentStage);
     let directiveStage = normalizeStageName(activeDirective?.stage ?? "");
     setAside = (activeDirective === null && durableStage === GUARDED_STAGE) ||
@@ -2389,9 +2411,10 @@ async function evaluate(
       else {
         activeDirective = readIssuedDirectiveMarker(projectDir);
         directiveStage = normalizeStageName(activeDirective?.stage ?? "");
+        judgedStep = { projectDir, marker: activeDirective };
       }
     }
-    rulesArriving = codeGenerationRulesArrivingReason(activeDirective);
+    rulesArriving = codeGenerationRulesArrivingReason(activeDirective, projectDir);
     if (
       activeDirective?.version !== 2 ||
       directiveStage !== GUARDED_STAGE
