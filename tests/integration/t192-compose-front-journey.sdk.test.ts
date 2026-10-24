@@ -48,7 +48,7 @@ import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { driveAidlc } from "../harness/sdk-drive.ts";
+import { type AnswerScript, driveAidlc } from "../harness/sdk-drive.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
 const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
@@ -73,12 +73,15 @@ const APPROVE_ALL = {
   fallback: { labelContains: "Approve" },
 };
 // Take the save option at the plan gate, whatever its exact words ("Approve and
-// save" is the person's same pick); the name question that follows offers the
-// composer's suggested name first, and a menu without the label takes it.
-const APPROVE_AND_SAVE = {
-  kind: "byHeader" as const,
-  map: {},
-  fallback: { labelContains: "save" },
+// save", "Save as scope" are the person's same pick); the name question that
+// follows offers the composer's suggested name first, and a menu with no save
+// option takes the default pick.
+const APPROVE_AND_SAVE: AnswerScript = {
+  kind: "pick",
+  pick: (question) => {
+    const save = question.options.find((option) => /save/i.test(option.label));
+    return save === undefined ? undefined : { label: save.label };
+  },
 };
 
 const STOCK_SCOPES = new Set([
@@ -104,7 +107,7 @@ function planOf(state: string): Record<string, string> {
   return plan;
 }
 
-async function drive(proj: string, answerScript: typeof APPROVE_ALL, stopAfter: string, deadlineMs: number) {
+async function drive(proj: string, answerScript: AnswerScript, stopAfter: string, deadlineMs: number) {
   return driveAidlc(`/aidlc compose "${TASK}"`, {
     projectDir: proj,
     answerScript,

@@ -8024,7 +8024,6 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   // a name the save would refuse creates nothing and is asked for again.
   const saveAs = flags["save-as"];
   if (saveAs !== undefined) {
-    if (saveAs === "" || saveAs === "true") die("--save-as requires <name>.");
     const refusal = savedScopeNameRefusal(saveAs);
     if (refusal !== null) die(refusal);
     if (scopeNameTaken(saveAs)) die(`A scope named ${saveAs} already exists. Pick another name.`);

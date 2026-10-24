@@ -3164,7 +3164,8 @@ function carriedRoutingFlags(flags: ParsedFlags): RoutingCarried {
   if (flags.planChanges?.skip.length) stages.push(`--skip ${flags.planChanges.skip.join(",")}`);
   if (flags.planChanges?.add.length) stages.push(`--add ${flags.planChanges.add.join(",")}`);
   if (stages.length > 0 && flags.planName) stages.push(`--plan-name ${flags.planName}`);
-  if (stages.length > 0 && flags.saveAs) stages.push(`--save-as ${flags.saveAs}`);
+  // The save rides every new-work answer, as it rides the creation command.
+  if (flags.saveAs) stages.push(`--save-as ${flags.saveAs}`);
   return {
     creation: carriedCreationFlags(flags),
     newWork: existingWork,
@@ -3212,10 +3213,10 @@ function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boole
   if (kept.ceremony) flags.ceremony = { ...kept.ceremony, ...flags.ceremony };
   if (!existing && !flags.planChanges && kept.planChanges) {
     flags.planChanges = kept.planChanges;
-    // The plan's name and its save ride with its stage changes.
+    // The plan's name rides with its stage changes.
     flags.planName ??= kept.planName;
-    flags.saveAs ??= kept.saveAs;
   }
+  if (!existing) flags.saveAs ??= kept.saveAs;
   return true;
 }
 
