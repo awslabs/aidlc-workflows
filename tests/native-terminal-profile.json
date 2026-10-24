@@ -891,7 +891,8 @@
         "AIDLC_COPILOT_EXEC_LIVE": "0",
         "AIDLC_CURSOR_RUN_LIVE": "0",
         "AIDLC_KIRO_IDE_LIVE": "0",
-        "AIDLC_OPENCODE_RUN_LIVE": "0"
+        "AIDLC_OPENCODE_RUN_LIVE": "0",
+        "AIDLC_GROK_RUN_LIVE": "0"
       }
     },
     {
@@ -1746,7 +1747,8 @@
         "AIDLC_COPILOT_EXEC_LIVE": "0",
         "AIDLC_CURSOR_RUN_LIVE": "0",
         "AIDLC_KIRO_IDE_LIVE": "0",
-        "AIDLC_OPENCODE_RUN_LIVE": "0"
+        "AIDLC_OPENCODE_RUN_LIVE": "0",
+        "AIDLC_GROK_RUN_LIVE": "0"
       }
     },
     {
@@ -2629,7 +2631,8 @@
         "AIDLC_COPILOT_EXEC_LIVE": "0",
         "AIDLC_CURSOR_RUN_LIVE": "0",
         "AIDLC_KIRO_IDE_LIVE": "0",
-        "AIDLC_OPENCODE_RUN_LIVE": "0"
+        "AIDLC_OPENCODE_RUN_LIVE": "0",
+        "AIDLC_GROK_RUN_LIVE": "0"
       }
     },
     {
@@ -2666,7 +2669,8 @@
         "AIDLC_COPILOT_EXEC_LIVE": "0",
         "AIDLC_CURSOR_RUN_LIVE": "0",
         "AIDLC_KIRO_IDE_LIVE": "0",
-        "AIDLC_OPENCODE_RUN_LIVE": "0"
+        "AIDLC_OPENCODE_RUN_LIVE": "0",
+        "AIDLC_GROK_RUN_LIVE": "0"
       }
     }
   ]
