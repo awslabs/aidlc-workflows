@@ -15337,9 +15337,10 @@ function initStageDirective(base: string, projectDir: string): Directive {
   );
 }
 
-// The one check of a stage as a jump target, asked by `next --stage` and by the
-// re-entry report's jump before it says the jump is accepted, so the report
-// never accepts a target the jump then refuses.
+// The one check of an initialization stage as a jump target, asked by `next
+// --stage` and by the re-entry report's jump before it says the jump is
+// accepted, so the report never accepts an initialization stage the jump then
+// refuses.
 function initJumpRefusal(slug: string, projectDir: string): Directive | null {
   return nodeForSlug(slug)?.phase === "initialization" ? initStageDirective(INIT_JUMP_ERROR, projectDir) : null;
 }
