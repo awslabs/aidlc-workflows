@@ -27,8 +27,7 @@
 //   next   — resolve scope (state > flag > env > default), find the workflow's
 //            position, refresh only the exact-team derived projection, and emit
 //            one directive. Ordinary routing is otherwise read-only; `--single`
-//            records its isolated audit start, and keeps a copy of the stage's
-//            files the work's record already holds, before dispatch. LIVE.
+//            records its isolated audit start before dispatch. LIVE.
 //   report — commit a transition after the conductor acted on a directive.
 //            LIVE. A stage-aware dispatcher: it shells out to aidlc-state.ts
 //            transitions so the next `next` reads fresh state. Explicit
