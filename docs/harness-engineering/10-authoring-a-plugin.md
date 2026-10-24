@@ -370,7 +370,10 @@ projection remains deferred (doc 18 §9 Status).
   On Kiro IDE and Kiro CLI v3 (the `kiro-ide` projection), compose gives your
   agent the tools, MCP servers and rules AI-DLC's own personas have, so leave
   Kiro's `tools:` and `permissions:` out of the agent (Claude Code would read a
-  `tools:` line as its allowlist); your stages can dispatch it. This needs a
+  `tools:` line as its allowlist); your stages can dispatch it. Kiro asks the
+  person before the aidlc agent hands it work, until they pick Always allow, as
+  it asks before each MCP call (the aidlc agent allows only AI-DLC's own
+  personas by name). This needs a
   plugin built with this release or later: rebuild it and drop it in again.
   On Kiro CLI V2 (the `kiro` projection), a plugin's agent that a stage
   dispatches needs a hand-written agent file, `.kiro/agents/<agent>.json`

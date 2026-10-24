@@ -772,39 +772,42 @@ function installedNameRoster(dir: string): Map<string, string> {
   return out;
 }
 
+// Why a plugin's agent or scope file cannot join the installed ones, or null:
+// its plugin identity, or a name an installed file already has.
+function installedNameRefusal(
+  installedByName: ReadonlyMap<string, string>,
+  kind: "agents" | "scopes",
+  { file, dest, content }: { file: string; dest: string; content: string },
+): string | null {
+  // `aidlc-` is core's namespace: a scope declaring an aidlc--prefixed
+  // plugin: would generate a runner dir on core's `aidlc-<name>` path and
+  // silently clobber it. Reject the file, mirroring the compile-side guard.
+  const declaredPlugin = frontmatterScalar(content, "plugin");
+  if (declaredPlugin?.startsWith("aidlc-")) {
+    return `plugin "${PLUGIN_NAME}" ${kind} file "${relative(PLUGIN_ROOT, file)}" declares plugin "${declaredPlugin}"; the "aidlc-" prefix is reserved for core (it collides with core runner paths); not copied`;
+  }
+  if (declaredPlugin !== PLUGIN_NAME) {
+    return `plugin "${PLUGIN_NAME}" ${kind} file "${relative(PLUGIN_ROOT, file)}" declares ${declaredPlugin ? `plugin "${declaredPlugin}"` : "no plugin identity"}; owned plugin content must match the host manifest identity; not copied`;
+  }
+  const name = frontmatterName(content);
+  const collidingFile = name ? installedByName.get(name) : undefined;
+  if (collidingFile && collidingFile !== dest) {
+    return `plugin "${PLUGIN_NAME}" ${kind} file "${relative(PLUGIN_ROOT, file)}" declares name "${name}", colliding with installed file "${relative(PROJECT_DIR, collidingFile)}"; not copied`;
+  }
+  return null;
+}
+
 function installedNameCollisionPrecheck(dst: string, kind: "agents" | "scopes"): CopyPrecheck {
   const installedByName = installedNameRoster(dst);
-  return ({ file, dest, content }) => {
-    if (!file.endsWith(".md")) return true;
-    // `aidlc-` is core's namespace: a scope declaring an aidlc--prefixed
-    // plugin: would generate a runner dir on core's `aidlc-<name>` path and
-    // silently clobber it. Reject the file, mirroring the compile-side guard.
-    const declaredPlugin = frontmatterScalar(content, "plugin");
-    if (declaredPlugin?.startsWith("aidlc-")) {
-      recordDrop(
-        `plugin "${PLUGIN_NAME}" ${kind} file "${relative(PLUGIN_ROOT, file)}" declares plugin "${declaredPlugin}"; the "aidlc-" prefix is reserved for core (it collides with core runner paths); not copied`,
-        "degraded",
-      );
+  return (ctx) => {
+    if (!ctx.file.endsWith(".md")) return true;
+    const refusal = installedNameRefusal(installedByName, kind, ctx);
+    if (refusal) {
+      recordDrop(refusal, "degraded");
       return false;
     }
-    if (declaredPlugin !== PLUGIN_NAME) {
-      recordDrop(
-        `plugin "${PLUGIN_NAME}" ${kind} file "${relative(PLUGIN_ROOT, file)}" declares ${declaredPlugin ? `plugin "${declaredPlugin}"` : "no plugin identity"}; owned plugin content must match the host manifest identity; not copied`,
-        "degraded",
-      );
-      return false;
-    }
-    const name = frontmatterName(content);
-    if (!name) return true;
-    const collidingFile = installedByName.get(name);
-    if (collidingFile && collidingFile !== dest) {
-      recordDrop(
-        `plugin "${PLUGIN_NAME}" ${kind} file "${relative(PLUGIN_ROOT, file)}" declares name "${name}", colliding with installed file "${relative(PROJECT_DIR, collidingFile)}"; not copied`,
-        "degraded",
-      );
-      return false;
-    }
-    installedByName.set(name, dest);
+    const name = frontmatterName(ctx.content);
+    if (name) installedByName.set(name, ctx.dest);
     return true;
   };
 }
@@ -1058,7 +1061,7 @@ function olderKiroAgentCopy(installed: Buffer, content: string, file: string): b
   if (frontmatterScalar(content, "plugin") !== PLUGIN_NAME || frontmatterScalar(text, "plugin") !== PLUGIN_NAME) {
     return false;
   }
-  if (text === content) return disallowedToolsValues(content).length > 0;
+  if (text === content && disallowedToolsValues(content).length > 0) return true;
   if (pluginAgentLines().length === 0) return false;
   try {
     return committedText(installed).equals(
@@ -1473,21 +1476,15 @@ function pluginKiroAgentCopy(agentsDir: string, agent: string): string | null {
     return null;
   }
   if (kiroNativeAgentRefusal(rel, content) !== null) return null;
-  if (frontmatterScalar(content, "plugin") !== PLUGIN_NAME) return null;
-  const name = frontmatterName(content);
-  const colliding = name ? installedNameRoster(agentsDir).get(name) : undefined;
-  if (colliding && colliding !== dest) return null;
+  if (installedNameRefusal(installedNameRoster(agentsDir), "agents", { file: source, dest, content }) !== null) return null;
   const projected = projectKiroNativeAgent({ file: source, rel, content });
+  // The agents copy (copyTreeNoClobber with migrateExistingKiroAgent) keeps an
+  // installed file unless it is this plugin's own older or unchanged copy.
   if (existsSync(dest)) {
     const installed = readFileSync(dest);
-    const recorded = priorOwned().get(projectRelPosix(dest));
-    // The same calls the agents copy (copyTreeNoClobber) makes on that file.
-    const replaced = olderKiroAgentCopy(installed, content, source) ||
-      committedText(installed).equals(committedText(Buffer.from(projected))) ||
-      (recorded === undefined
-        ? sameButKnowledgePreflight(installed, Buffer.from(projected))
-        : recordedDigestMatches(installed, recorded));
-    if (!replaced) return null;
+    const kept = !olderKiroAgentCopy(installed, content, source) &&
+      !["same", "replace"].includes(installedCopyAction(installed, Buffer.from(projected), dest));
+    if (kept) return null;
   }
   return projected;
 }
@@ -1763,6 +1760,18 @@ async function installedStageSchemaPrecheck(): Promise<CopyPrecheck> {
   };
 }
 
+// What a copy does with a file already at its destination, given the copy it
+// would write there (null when it can write none): keep it ("same", the copy
+// as committed), replace it (this plugin's own copy, unchanged since it was
+// installed), or leave it, whether nothing records it as the plugin's
+// ("unrecorded") or the person changed it ("changed").
+function installedCopyAction(installed: Buffer, current: Buffer | null, dest: string): "same" | "replace" | "unrecorded" | "changed" {
+  if (current !== null && committedText(installed).equals(committedText(current))) return "same";
+  const recorded = priorOwned().get(projectRelPosix(dest));
+  if (recorded === undefined) return current !== null && sameButKnowledgePreflight(installed, current) ? "replace" : "unrecorded";
+  return recordedDigestMatches(installed, recorded) ? "replace" : "changed";
+}
+
 // No-clobber copy of one tree into another, with {{HARNESS_DIR}} substitution on
 // .md prose. Never overwrites core, another plugin, or a copy the person changed;
 // the one existing dest it replaces is this plugin's own earlier copy, unchanged
@@ -1822,18 +1831,17 @@ function copyTreeNoClobber(
           current = null;
         }
       }
-      if (current !== null && committedText(installed).equals(committedText(current))) {
+      const action = installedCopyAction(installed, current, dest);
+      if (action === "same") {
         composedPaths?.add(rel.replace(/\\/g, "/"));
         ownedThisRun.set(projectRelPosix(dest), sha256Of(installed));
         continue;
       }
-      const recorded = priorOwned().get(projectRelPosix(dest));
-      if (recorded === undefined) {
-        if (current === null || !sameButKnowledgePreflight(installed, current)) {
-          recordDrop(`${kind} "${rel}" collides with an existing file this plugin has no record of installing (core, another plugin, an older copy of this plugin, or a local edit); not overwritten - if it is this plugin's older copy, remove it and re-run compose; if it is core's or another plugin's, rename yours to a plugin-namespaced path`);
-          continue;
-        }
-      } else if (!recordedDigestMatches(installed, recorded)) {
+      if (action === "unrecorded") {
+        recordDrop(`${kind} "${rel}" collides with an existing file this plugin has no record of installing (core, another plugin, an older copy of this plugin, or a local edit); not overwritten - if it is this plugin's older copy, remove it and re-run compose; if it is core's or another plugin's, rename yours to a plugin-namespaced path`);
+        continue;
+      }
+      if (action === "changed") {
         recordDrop(`${kind} "${rel}" was changed after this plugin installed it; not overwritten - to take the plugin's current copy, move your change elsewhere, remove the file, and re-run compose`);
         continue;
       }

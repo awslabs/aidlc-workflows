@@ -4647,6 +4647,15 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     });
     expect(readFileSync(join(edited.proj, ".kiro", agentRel), "utf-8")).toBe(changed);
     expect(edited.drops).toContain("collides with an existing file");
+
+    // A source with no disallowedTools: its unrecorded copy is the source itself.
+    const plain = pluginAgent(plugin, agent).replace("disallowedTools: Task\n", "");
+    const unprojected = composeSynthetic(plugin, { [`agents/${agent}.md`]: plain }, "kiro-ide", (_proj, harnessDir) => {
+      writeFileSync(join(harnessDir, agentRel), plain);
+    });
+    expect(unprojected.drops).not.toContain("collides with an existing file");
+    expect(kiroFrontmatter(readFileSync(join(unprojected.proj, ".kiro", agentRel), "utf-8")))
+      .toContain(pluginAgentLines(unprojected.proj).join("\n"));
   });
 
   test("a CRLF Kiro IDE checkout composes a plugin agent with each dispatch line once", () => {
