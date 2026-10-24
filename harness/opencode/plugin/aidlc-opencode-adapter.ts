@@ -980,6 +980,8 @@ export default async ({
             hook_event_name: "PostToolUse",
             tool_name: "Write",
             tool_input: { file_path: absolutePath },
+            // The process names only the chat that started last; the write is its own chat's.
+            session_id: await owningSessionOrNone(input.sessionID),
           };
           // audit THEN sensors, mirroring the Claude settings.json order.
           await runCore("aidlc-write-audit-log.ts", payload, directory);
@@ -1011,6 +1013,7 @@ export default async ({
             hook_event_name: "PostToolUse",
             tool_name: "TaskUpdate",
             tool_input: { status: "in_progress", activeForm: active.content },
+            session_id: await owningSessionOrNone(input.sessionID),
           },
           directory,
         );

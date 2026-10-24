@@ -323,8 +323,8 @@ creation times, and parent PIDs identify the owning session within the same
 select a session.
 Shared-process harnesses still cannot distinguish chats that use one process,
 including Kiro IDE multi-chat. In multi-session opencode the shell commands carry
-their chat (item 2), but a file write's audit row and sensors, and the to-do
-list sync, still go by the process. Children of payload-bearing hooks follow
+their chat (item 2), and so do a file write's audit row and sensors and the to-do
+list sync. Children of payload-bearing hooks follow
 the payload session; tools without that parent still fall back to the shared
 cursors when ancestry is unavailable unless the harness process has a valid
 `AIDLC_SESSION_OVERRIDE`.

@@ -951,9 +951,9 @@ an idle machine, and on a busy one it finishes instead of losing the chat.
 Multiple Kiro IDE chats
 and opencode sessions can still share one process; process ancestry cannot
 distinguish those conversations. AI-DLC's opencode plugin gives each shell
-command its chat as `AIDLC_SESSION_OVERRIDE` (opencode's `shell.env` hook); a
-file write's audit and sensors, and the to-do list sync, still go by the
-process there. Spawned tools with unavailable or ambiguous
+command its chat as `AIDLC_SESSION_OVERRIDE` (opencode's `shell.env` hook), and
+forwards a file write's audit and sensors and the to-do list sync with the chat's
+session id. Spawned tools with unavailable or ambiguous
 ancestry use shared-cursor behavior unless a payload-bearing hook or the harness
 process supplies `AIDLC_SESSION_OVERRIDE`.
 
