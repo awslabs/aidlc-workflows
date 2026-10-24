@@ -14,6 +14,7 @@ import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import {
   AUDIT_TRAIL_REFUSAL,
@@ -286,6 +287,8 @@ describe("t349 audit trail guard: shell commands", () => {
       [`cd /work/audit-service && npm test > "$(mktemp)"`, "/work/audit-service"],
       [`npm audit --json > "$REPORT"`, CWD],
       [`npm audit --json > npm-audit-$(date +%F).json`, CWD],
+      [`npm audit --json > "$AUDIT/report.json"`, CWD],
+      [`AUDIT=$(mktemp -d); npm audit --json > "$AUDIT/report.json"`, CWD],
       [`cd C:\\work\\audit\\proj && npm test > "$TEST_LOG"`, "C:\\work\\audit\\proj"],
       [`echo x > C:/work/audit/proj/build/$(date +%s).log`, "C:\\work\\audit\\proj"],
       [`npm test > "${underAudit}/build/$(date +%s).log"`, underAudit],
@@ -309,6 +312,42 @@ describe("t349 audit trail guard: shell commands", () => {
     ]) {
       expect(bash(command, cwd), command).toBe("audit");
     }
+  });
+
+  test("the project's own folders spelled from the home folder are not the audit trail either", () => {
+    // The home folder the hook reads, as the shell expands `~` and $HOME.
+    const home = process.env.HOME || homedir();
+    const proj = join(home, "audit", "proj");
+    for (const command of [
+      "npm test > ~/audit/proj/build/test-$(date +%s).log",
+      "npm test > $HOME/audit/proj/build/test-$(date +%s).log",
+      "npm test > ${HOME}/audit/proj/build/test-$(date +%s).log",
+      'cd ~/audit/proj && npm test > "$TEST_LOG"',
+    ]) {
+      expect(bash(command, proj), command).toBeNull();
+    }
+    for (const command of [
+      `echo x >> ~/audit/proj/${AUDIT}/$(hostname).md`,
+      `echo x >> $HOME/audit/proj/${AUDIT}/$(hostname).md`,
+    ]) {
+      expect(bash(command, proj), command).toBe("audit");
+    }
+  });
+
+  test("a PowerShell write into the audit folder by a computed name stays refused", () => {
+    const command = 'Set-Location C:\\proj\\aidlc\\spaces\\default\\intents\\260925-login\\audit; ' +
+      'Add-Content -Path "$(Get-Date -Format yyyyMMdd).md" -Value x';
+    for (const shell of [undefined, "powershell"]) {
+      expect(runtimeIntegrityViolationKind({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command },
+        cwd: "C:\\proj",
+        ...(shell ? { aidlc_shell: shell } : {}),
+      } as never), shell ?? "posix").toBe("audit");
+    }
+    expect(bash("cd C:\\proj\\aidlc\\spaces\\default\\intents\\260925-login\\audit && echo x >> $(hostname).md", "C:\\proj"))
+      .toBe("audit");
   });
 
   test("an unrelated directory named intents is not the AIDLC workspace", () => {
