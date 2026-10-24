@@ -26,7 +26,7 @@ import {
   seededRecordDir, seededStateFile, setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import {
-  approvePlan, cleanupCheckpointFixtures, fixture as swarmFixture, prepare, wt,
+  approvePlan, cleanupCheckpointFixtures, fixtureWithSource, prepare, wt,
 } from "../harness/swarm-checkpoint.ts";
 
 import {
@@ -714,7 +714,7 @@ describe("t340 initial worktree approval preflight", () => {
   test.skipIf(process.platform === "win32").each([
     "an absolute file link outside the project", "a relative file link outside the project",
   ] as const)("%s: prepare forks the Unit and hands its worktree the approval", (link) => {
-    const pd = swarmFixture(["alpha"], undefined, false, null, (code) => addOutsideLink(code, link));
+    const pd = fixtureWithSource((code) => addOutsideLink(code, link));
     const prepared = prepare(pd);
     expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
     expect(existsSync(wt(pd))).toBe(true);
@@ -724,7 +724,7 @@ describe("t340 initial worktree approval preflight", () => {
   test.skipIf(process.platform === "win32").each([
     "an absolute file link outside the project", "a relative file link outside the project",
   ] as const)("%s: a kept worktree takes the plan approved again after main's code moved on", (link) => {
-    const pd = swarmFixture(["alpha"], undefined, false, null, (code) => addOutsideLink(code, link));
+    const pd = fixtureWithSource((code) => addOutsideLink(code, link));
     const first = prepare(pd);
     expect(first.code, `${first.out}\n${first.err}`).toBe(0);
     writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
