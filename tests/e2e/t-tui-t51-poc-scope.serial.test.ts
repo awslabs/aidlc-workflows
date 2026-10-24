@@ -20,6 +20,8 @@
 //       * <record>/ideation/ exists with a questions file carrying filled
 //         [Answer]: lines and at least one structured (heading-bearing) artifact,
 //       * MORE than 6 stages are marked complete `- [x]`,
+//       * the README.md the person brought (the greenfield stub) is byte for
+//         byte what they wrote: the build goes around it,
 //       * audit shards have substantial content,
 //   - RENDER (the tui-only value-add): the captured grid showed a gate menu
 //     (the highlighted-option caret + the `Enter to select` / `Submit answers`
@@ -74,6 +76,7 @@ function completedStartupProbe<T extends { error?: Error }>(result: T): T {
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
+const SEEDED_README = join(import.meta.dir, "..", "fixtures", "greenfield-todo", "README.md");
 const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
 // Hang-backstop, NOT a budget. The poc `Completed>6` milestone requires driving
@@ -280,6 +283,7 @@ describe("t-tui-t51-poc-scope (answering gates advances poc Ideation on disk)", 
         expect(stateMd).toMatch(/greenfield/i);
         const completed = stateMd.split("\n").filter((l) => /^- \[x\]/.test(l)).length;
         expect(completed).toBeGreaterThan(6);
+        expect(readFileSync(join(sandbox, "README.md"), "utf8")).toBe(readFileSync(SEEDED_README, "utf8"));
 
         // Ideation directory created (POC includes ideation).
         const ideationDir = join(recordDirFor(sandbox), "ideation");
