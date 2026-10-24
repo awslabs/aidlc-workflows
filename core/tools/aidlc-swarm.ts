@@ -84,7 +84,7 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS, EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -96,6 +96,7 @@ import {
   auditBlockField,
   auditShardDir,
   authorizedVerificationCommand,
+  boltWorktreeBaseCommit,
   unitPlainName,
   withdrawProtectedQuestions,
   boltSlugForUnit,
@@ -146,6 +147,7 @@ import {
   sourceClaimCovers,
   sourceListingEntriesEqual,
   type SourceClaimModel,
+  toPosix,
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
   verificationCommandDetails,
@@ -205,7 +207,7 @@ interface UnitResult {
   reason?: FailureReason;
   detail?: string;
   tampered?: boolean;
-  /** Lines for the person: a change kept under relaxed or off. */
+  /** Lines for the person: a change kept under relaxed or off, a record edit that could not be merged. */
   change_notices?: string[];
 }
 
@@ -230,8 +232,18 @@ interface ReviewedRecordSnapshotEntry {
   bytes: Buffer | null;
 }
 
+/** A record file the worker changed outside the stage folders, as it started and as the Unit left it. */
+interface RecordEdit {
+  logicalPath: string;
+  base: Buffer | null;
+  unit: Buffer | null;
+}
+
 interface ReviewedRecordSnapshot {
   entries: ReviewedRecordSnapshotEntry[];
+  edits: RecordEdit[];
+  /** The Unit's own stage folder, where a version that could not be merged is saved. */
+  stageFolder: string;
 }
 
 interface SwarmAttemptStamp {
@@ -828,6 +840,7 @@ function reviewerReceiptError(
 }
 
 function captureReviewedRecordSnapshot(
+  projectDir: string,
   identity: BoltIdentity,
   unit: string,
   stage: NonNullable<ReturnType<typeof resolveStage>>,
@@ -989,13 +1002,107 @@ function captureReviewedRecordSnapshot(
     );
   }
 
-  return { snapshot: { entries } };
+  const edits = workerRecordEdits(projectDir, wt, stage.slug);
+  if (edits === null) {
+    return { error: `cannot read the record edits unit "${unit}" made outside its stage folder` };
+  }
+  return { snapshot: { entries, edits, stageFolder: `construction/${unit}/${stage.slug}` } };
 }
 
+// The worker's edits to the rest of the intent's record, which an inline build
+// of the same plan would have made on main. Each Unit's stage folder lands
+// through its own snapshot, the state and the audit through their own merges,
+// and the runtime graph and `.aidlc-*` files are the engine's own. Git says
+// what changed, ignored records included (a team may ignore its records),
+// against the commit the Unit and the project share: prepare's approval
+// transfer may fast-forward a kept worktree past its recorded base commit, and
+// counting the project's own commits as the Unit's would clash where git
+// merges cleanly. The recorded base stands in where the project checkout is
+// not the Unit's repository (a workspace of several repositories).
+function workerRecordEdits(projectDir: string, wt: string, stageSlug: string): RecordEdit[] | null {
+  const record = recordDir(wt);
+  if (record === null || !existsSync(record)) return [];
+  const git = (args: string[]) => spawnSync("git", ["-C", record, ...args], { maxBuffer: 512 * 1024 * 1024 });
+  const projectHead = spawnSync("git", ["-C", projectDir, "rev-parse", "--verify", "HEAD^{commit}"], { encoding: "utf-8" });
+  const shared = projectHead.status === 0 ? git(["merge-base", "HEAD", projectHead.stdout.trim()]) : null;
+  const base = shared?.status === 0 ? shared.stdout.toString().trim() : boltWorktreeBaseCommit(wt);
+  if (!base) return [];
+  const changed = git(["diff", "--name-only", "-z", "--no-renames", "--relative", base, "--", "."]);
+  const added = git(["ls-files", "-z", "--others", "--", "."]);
+  if (changed.status !== 0 || added.status !== 0) return null;
+  const paths = new Set(`${changed.stdout.toString()}\0${added.stdout.toString()}`.split("\0").filter(Boolean));
+  const anchor = realpathSync(record);
+  const edits: RecordEdit[] = [];
+  for (const path of [...paths].sort()) {
+    const segments = path.split("/");
+    if (
+      path === "aidlc-state.md" || path === "runtime-graph.json" || segments[0] === "audit" ||
+      segments.some((segment) => segment.startsWith(".aidlc-")) ||
+      (segments[0] === "construction" && segments.length > 3 && segments[2] === stageSlug)
+    ) continue;
+    let baseBytes: Buffer | null = null;
+    if (git(["cat-file", "-e", `${base}:./${path}`]).status === 0) {
+      // As a checkout writes it, so a CRLF checkout compares and merges as on disk.
+      const shown = git(["cat-file", "--filters", `${base}:./${path}`]);
+      if (shown.status !== 0) return null;
+      baseBytes = shown.stdout;
+    }
+    let unitBytes: Buffer | null;
+    try {
+      unitBytes = presentRecordBytes(assertNoSymlinkInChainOrThrow(anchor, path), path);
+    } catch {
+      continue; // A link or folder in the record is no edit to carry.
+    }
+    if (sameRecordBytes(baseBytes, unitBytes)) continue;
+    edits.push({ logicalPath: path, base: baseBytes, unit: unitBytes });
+  }
+  return edits;
+}
+
+/** The file's bytes, null when nothing is there; throws when it is not a regular file. */
+function presentRecordBytes(path: string, logicalPath: string): Buffer | null {
+  try {
+    lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  return readRegularFileNoFollowOrThrow(path, `record file ${logicalPath}`);
+}
+
+function sameRecordBytes(left: Buffer | null, right: Buffer | null): boolean {
+  return left === null ? right === null : right !== null && left.equals(right);
+}
+
+// The project's copy with the Unit's edit merged in, line by line as git
+// merges: "same" when it already holds the Unit's version, null to remove it,
+// undefined when the two clash.
+function mergedRecord(edit: RecordEdit, current: Buffer | null): Buffer | null | "same" | undefined {
+  if (sameRecordBytes(current, edit.unit)) return "same";
+  if (sameRecordBytes(current, edit.base)) return edit.unit;
+  if (current === null || edit.unit === null) return undefined;
+  const dir = mkdtempSync(join(tmpdir(), "aidlc-record-merge-"));
+  try {
+    const [ours, base, theirs] = ["project", "base", "unit"].map((name) => join(dir, name));
+    writeFileSync(ours, current);
+    writeFileSync(base, edit.base ?? Buffer.alloc(0));
+    writeFileSync(theirs, edit.unit);
+    const merged = spawnSync("git", ["merge-file", "-p", ours, base, theirs], { maxBuffer: 512 * 1024 * 1024 });
+    return merged.status === 0 ? merged.stdout : undefined;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Lands the snapshot in the main record as one transaction and returns null, or
+// what failed. A worker's edit that cannot be merged leaves the project's copy as
+// it is, saves the Unit's version in its stage folder and adds a line for the
+// person to `notices`; that is not a failure.
 function mergeReviewedRecordSnapshot(
   projectDir: string,
   unit: string,
   snapshot: ReviewedRecordSnapshot,
+  notices: string[],
 ): string | null {
   const record = recordDir(projectDir);
   if (record === null) return `cannot resolve the main record directory for unit "${unit}"`;
@@ -1042,6 +1149,51 @@ function mergeReviewedRecordSnapshot(
         `${error instanceof Error ? error.message : String(error)}`
       );
     }
+  }
+
+  const shown = (logicalPath: string) => toPosix(relative(projectDir, join(record, logicalPath)));
+  const lines: string[] = [];
+  for (const edit of snapshot.edits) {
+    let target: string | null;
+    let current: Buffer | null = null;
+    try {
+      target = assertNoSymlinkInChainOrThrow(root, edit.logicalPath);
+      current = presentRecordBytes(target, edit.logicalPath);
+    } catch {
+      target = null; // Not a plain file in the project: it stays as it is.
+    }
+    const merged = target === null ? undefined : mergedRecord(edit, current);
+    if (merged === "same") continue;
+    if (merged !== undefined) {
+      operations.push({ target: target!, logicalPath: edit.logicalPath, next: merged, previous: current });
+      continue;
+    }
+    if (edit.unit === null) {
+      lines.push(
+        `The ${unitPlainName(unit)} Unit removed ${shown(edit.logicalPath)}, but your project's copy differs ` +
+          "from what the Unit started with, so it stays as it is.",
+      );
+      continue;
+    }
+    const savedPath = `${snapshot.stageFolder}/not-merged/${edit.logicalPath}`;
+    try {
+      const savedTarget = assertNoSymlinkInChainOrThrow(root, savedPath);
+      operations.push({
+        target: savedTarget,
+        logicalPath: savedPath,
+        next: edit.unit,
+        previous: presentRecordBytes(savedTarget, savedPath),
+      });
+    } catch (error) {
+      return (
+        `record artifact preflight failed for ${savedPath}: ` +
+        `${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+    lines.push(
+      `The ${unitPlainName(unit)} Unit's version of ${shown(edit.logicalPath)} could not be merged into your ` +
+        `project's copy, so your copy is unchanged; the Unit's version is saved at ${shown(savedPath)}.`,
+    );
   }
 
   const applied: typeof operations = [];
@@ -1100,6 +1252,7 @@ function mergeReviewedRecordSnapshot(
         : "")
     );
   }
+  notices.push(...lines);
   return null;
 }
 
@@ -3084,6 +3237,7 @@ function handleFinalize(rest: string[]): void {
         } else {
           const captured = stageDefinition
             ? captureReviewedRecordSnapshot(
+                projectDir,
                 identity,
                 unit,
                 stageDefinition,
@@ -3167,6 +3321,15 @@ function handleFinalize(rest: string[]): void {
   for (const unit of [...genuine].sort()) {
     const boltSlug = swarmBoltSlug(unit);
     const recordSnapshot = recordSnapshots.get(unit);
+    // A record edit that could not be merged is said on the Unit's row.
+    const landRecords = (): string | null => {
+      if (!recordSnapshot) return `reviewed record snapshot is missing for unit "${unit}"`;
+      const lines: string[] = [];
+      const error = mergeReviewedRecordSnapshot(projectDir, unit, recordSnapshot, lines);
+      const row = results.find((result) => result.unit === unit)!;
+      if (lines.length > 0) row.change_notices = [...(row.change_notices ?? []), ...lines];
+      return error;
+    };
     const mergedBack = mergedBackConvergence(projectDir, batch, unit, boltSlug, preparedAttempts.get(unit));
     if (mergedBack !== null) {
       const fresh = convergedRowFields(
@@ -3176,15 +3339,11 @@ function handleFinalize(rest: string[]): void {
         mergedBefore.add(unit);
         continue;
       }
-      const refreshError = recordSnapshot
-        ? mergeReviewedRecordSnapshot(projectDir, unit, recordSnapshot)
-        : `reviewed record snapshot is missing for unit "${unit}"`;
+      const refreshError = landRecords();
       if (refreshError !== null) mergeFailures.push({ unit, detail: refreshError });
       continue;
     }
-    const recordMergeError = recordSnapshot
-      ? mergeReviewedRecordSnapshot(projectDir, unit, recordSnapshot)
-      : `reviewed record snapshot is missing for unit "${unit}"`;
+    const recordMergeError = landRecords();
     if (recordMergeError !== null) {
       mergeFailures.push({ unit, detail: recordMergeError });
       continue;

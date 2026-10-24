@@ -22515,7 +22515,7 @@ function aidlcRootSettingsExcluded(path: string, carriesWorkspaceShell: boolean)
 }
 
 /** The base commit a Bolt worktree records, or null when `repoDir` records none. */
-function boltWorktreeBaseCommit(repoDir: string): string | null {
+export function boltWorktreeBaseCommit(repoDir: string): string | null {
   try {
     const meta = JSON.parse(readFileSync(join(repoDir, ".aidlc", "worktree-meta.json"), "utf-8")) as {
       baseCommit?: unknown;
