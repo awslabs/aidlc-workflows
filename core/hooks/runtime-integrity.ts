@@ -1170,13 +1170,14 @@ const AUDIT_DIRECTORY_TEXT = /(?:^|[^\w.-])audit[\\/]|[\\/]audit(?![\w.-])/i;
 // `audit` in their names (a project under ~/audit/) is never the trail, which
 // lies inside the project under aidlc/spaces; a cwd inside that workspace
 // fails closed on its own. Each spelling is cut only as a whole folder where a
-// word starts, so `/audit` inside `$R/audit/` is never taken for `/audit`.
+// word starts (a quote counts only when it opens the word), so `/audit` inside
+// `$R/audit/` or `"$R"/audit` is never taken for `/audit`.
 function withoutOwnFolders(text: string, cwd: string): string {
   let out = text;
   for (let folder = cwd; folder && folder !== "." && dirname(folder) !== folder; folder = dirname(folder)) {
     for (const spelling of new Set([folder, folder.replaceAll("\\", "/"), folder.replaceAll("/", "\\")])) {
       const escaped = spelling.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      out = out.replace(new RegExp(`(?<=^|[\\s"'=;&|(<>])${escaped}(?=[\\\\/\\s"';&|)]|$)`, "gi"), () => ".");
+      out = out.replace(new RegExp(`(?<=(?:^|[\\s=;&|(<>])["']?)${escaped}(?=[\\\\/\\s"';&|)]|$)`, "gi"), () => ".");
     }
   }
   return out;
