@@ -68,14 +68,6 @@ const TOOL = join(
   "tools",
   "aidlc-orchestrate.ts",
 );
-const JUMP_TOOL = join(
-  REPO_ROOT,
-  "dist",
-  "claude",
-  ".claude",
-  "tools",
-  "aidlc-jump.ts",
-);
 
 const tempDirs: string[] = [];
 
@@ -155,20 +147,17 @@ function emitScopeStage(scope: string, stage: string): EmitResult {
 }
 
 interface FingerprintLoopResult {
-  print: Directive; // STEP 1: the print naming `execute --target <fp> --direction forward`
-  printRaw: string;
-  runStage: Directive; // STEP 3: the run-stage the engine lands on after the commit
+  runStage: Directive; // the run-stage the one `next --stage <fp>` lands on
   runStageRaw: string;
+  currentStage: string | undefined; // Current Stage after that call
 }
 
-// Drive the FULL jump-commit loop for one scope's fingerprint. A WITH-STATE jump
-// is a MUTATION the conductor commits, so the loop is THREE steps:
-//   (1) `next --stage <fp>` emits a `print` naming `execute --target <fp>
-//       --direction forward` (Current Stage is pivoted to the last init stage
-//       state-init so every post-init fingerprint resolves forward, never redo);
-//   (2) run `aidlc-jump.ts execute` to commit the jump (mutating state);
-//   (3) bare `next` then reads the pivoted state and emits the run-stage for the
-//       fingerprint — the exact stage|phase|gate of the frozen golden.
+// Drive the jump for one scope's fingerprint. A WITH-STATE jump is a MUTATION
+// the person asked for, so `next --stage <fp>` makes it (Current Stage is
+// pivoted to the last init stage state-init first, so every post-init
+// fingerprint resolves forward, never redo) and routes on from the state it
+// wrote: the run-stage for the fingerprint, with the exact stage|phase|gate of
+// the frozen golden, comes back from that one call.
 function emitScopeFingerprintLoop(scope: string, fp: string): FingerprintLoopResult {
   const proj = createOrchestrationTestProject();
   tempDirs.push(proj);
@@ -182,25 +171,13 @@ function emitScopeFingerprintLoop(scope: string, fp: string): FingerprintLoopRes
   );
   md = md.replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: state-init");
   writeFileSync(statePath, md, "utf-8");
-  // STEP 1: the print naming the execute delegate.
-  const step1 = runOrchestrateNext(TOOL, proj, ["--stage", fp], {
-    env: cleanEnv(),
-  });
-  // STEP 2: commit the jump the print named (mutating state).
-  spawnSync(
-    BUN,
-    [JUMP_TOOL, "execute", "--target", fp, "--direction", "forward", "--scope", scope, "--project-dir", proj],
-    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: cleanEnv() },
-  );
-  // STEP 3: re-run `next` over the pivoted state — the landed run-stage.
-  const step3 = runOrchestrateNext(TOOL, proj, [], {
+  const step = runOrchestrateNext(TOOL, proj, ["--stage", fp], {
     env: cleanEnv(),
   });
   return {
-    print: parseDirective(step1.stdout),
-    printRaw: step1.out,
-    runStage: parseDirective(step3.stdout),
-    runStageRaw: step3.out,
+    runStage: parseDirective(step.stdout),
+    runStageRaw: step.out,
+    currentStage: /^- \*\*Current Stage\*\*: (.*)$/m.exec(readFileSync(statePath, "utf-8"))?.[1],
   };
 }
 
@@ -303,27 +280,22 @@ const GOLDEN: GoldenRow[] = [
 ];
 
 describe("t118 engine differential corpus — aidlc-orchestrate next (migrated from t118-engine-differential.sh, plan 24)", () => {
-  // --- Diff A: fingerprint stage in scope -> print->execute->run-stage (11 cases) ---
-  // A WITH-STATE jump is a MUTATION the conductor commits, so the differential runs
-  // END-TO-END through the loop (emitScopeFingerprintLoop):
-  //   A1: STEP 1 — `next --stage <fp>` emits a `print` naming `execute --target
-  //       <fp> --direction forward` (Current Stage pivoted to state-init so the
-  //       fingerprint resolves forward for every scope).
-  //   A2: after the conductor runs that execute and re-runs `next`, the engine
-  //       lands on the fingerprint run-stage with the exact stage|phase|GATE of
+  // --- Diff A: fingerprint stage in scope -> jump + run-stage in one call (11 cases) ---
+  // A WITH-STATE jump is a MUTATION the person asked for, which `next --stage <fp>`
+  // makes itself (emitScopeFingerprintLoop):
+  //   A1: the one call moves Current Stage forward to <fp> (pivoted to state-init
+  //       first so the fingerprint resolves forward for every scope).
+  //   A2: and returns the fingerprint run-stage with the exact stage|phase|GATE of
   //       the frozen golden. gate is true for every fingerprint (no scope's first
   //       post-init EXECUTE stage is an initialization stage).
   describe("diff A — per-scope fingerprint -> run-stage gate:true [golden diff]", () => {
     for (const row of GOLDEN) {
       test(`scope '${row.scope}' fingerprint -> run-stage ${row.fingerprint} (${row.phase}) gate:true`, () => {
         const r = emitScopeFingerprintLoop(row.scope, row.fingerprint);
-        // A1: STEP 1 print names the execute delegate (forward).
-        expect(r.print.kind).toBe("print");
-        expect(r.print.message ?? "").toContain(
-          `execute --target ${row.fingerprint} --direction forward --scope ${row.scope}`,
-        );
-        // A2: after the commit + re-run, the engine lands on the fingerprint.
-        expect(r.runStage.kind).toBe("run-stage");
+        // A1: the one call made the jump forward to the fingerprint.
+        expect(r.currentStage).toBe(row.fingerprint);
+        // A2: and landed on the fingerprint's run-stage.
+        expect(r.runStage.kind, r.runStageRaw).toBe("run-stage");
         expect(r.runStage.stage).toBe(row.fingerprint);
         expect(r.runStage.phase).toBe(row.phase);
         // Assert the real JSON boolean, not the rendered "true" token. gate is the

@@ -396,7 +396,9 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     expect(rerunDirective.kind).toBe("print");
     expect(String(rerunDirective.message)).toBe("Run the same `next` command again to carry on with the rest of the request.");
     expect(String(rerunDirective.narration)).toContain("Project type is now existing code, as you said");
-    expect(String(next(proj, jump).message)).toContain("execute --target reverse-engineering");
+    // With the type recorded, that same `next` makes the jump and returns its step.
+    expect(next(proj, jump).stage).toBe("reverse-engineering");
+    expect(readFileSync(statePath(proj), "utf-8")).toContain("- **Current Stage**: reverse-engineering");
     // With the type recorded, a setting typed with it goes to the setter.
     expect(String(next(proj, ["--project-type", "brownfield", "--depth", "minimal"]).message)).toContain("config set depth minimal");
     // Said with work in the same message, the work is kept: the type first, then

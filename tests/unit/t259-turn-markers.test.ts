@@ -369,12 +369,13 @@ describe("t259 the engine's last word ended the turn", () => {
         expect(atEnd.stdout, args.join(" ")).not.toContain('"decision":"block"');
       }
       writeFileSync(statePath, running);
-      // A jump's print hands the agent back to `next`, so the turn goes on.
+      // A jump returns the step of the stage it lands on, so the turn goes on
+      // into that stage's work.
       markHumanTurn(proj);
       await Bun.sleep(20);
       const jump = JSON.parse(run(["engine", "orchestrate", "next", "--stage", "requirements-analysis"]).stdout);
-      expect(jump.kind).toBe("print");
-      expect(jump.message).toMatch(/[Tt]hen re-run `next`/);
+      expect(jump.kind).toBe("run-stage");
+      expect(jump.stage).toBe("requirements-analysis");
       expect(existsSync(turnEndMarkerPath(proj))).toBe(false);
       if (!copilot) expect(stop().stdout).toContain('"decision":"block"');
     });

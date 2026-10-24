@@ -203,6 +203,12 @@ function next(proj: string, h: Harness, extra: Record<string, string> = {}, args
 }
 
 // What `next` returns when it stops for hooks that never ran.
+// The kept `next --stage requirements-analysis` ran: that `next` made the jump
+// and returned the step it lands on (its rules first, where they come in parts).
+function jumpedToRequirements(directive: Printed): boolean {
+  return directive.kind !== "print" && (directive as { stage?: unknown }).stage === "requirements-analysis";
+}
+
 function isStop(directive: Printed): boolean {
   return directive.kind === "print" && (directive.message ?? "").startsWith(RULES);
 }
@@ -796,9 +802,11 @@ describe("a next stopped inside a workflow is named in the restart line and runs
       beat(proj, "reviewer-scope");
       // The entry alone carries on where the work stands.
       expect(JSON.stringify(next(proj, h))).not.toContain("aidlc-jump");
-      const picked = next(proj, h, {}, ["--request", id]) as Printed & { narration?: string };
-      expect(picked.narration ?? "", JSON.stringify(picked)).toStartWith(LINE);
-      expect(picked.message ?? "").toContain("execute --target requirements-analysis");
+      // The kept jump is made by that `next`, which returns the step it lands on
+      // and says first that it carries on with the earlier request.
+      const picked = next(proj, h, {}, ["--request", id]) as Printed & { change_notices?: string[] };
+      expect(jumpedToRequirements(picked), JSON.stringify(picked)).toBe(true);
+      expect(picked.change_notices?.[0], JSON.stringify(picked)).toBe(LINE);
       expect(ran(next(proj, h, {}, ["--request", id]))).toBe(true);
     });
   }
@@ -874,7 +882,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     // Nothing ran: once that work is selected, the same command runs it.
     const switched = run(proj, [join(proj, OPENCODE.dir, "tools", "aidlc.ts"), "engine", "intent", "switch", first], attendedEnv());
     expect(switched.code, switched.stdout + switched.stderr).toBe(0);
-    expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+    expect(jumpedToRequirements(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
   });
 
   test("work renamed since is the same work, found by its uuid", () => {
@@ -889,7 +897,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     const registry = join(intents, "intents.json");
     writeFileSync(registry, readFileSync(registry, "utf-8").replaceAll(`"${before}"`, `"${after}"`), "utf-8");
     writeFileSync(join(intents, "active-intent"), `${after}\n`, "utf-8");
-    expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+    expect(jumpedToRequirements(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
   });
 
   test("anything beside the id runs nothing: the agent reads the kept request with it, then runs the id alone or not at all", () => {
@@ -916,7 +924,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     // Nothing was used or changed: the id alone still runs the kept command as it was kept.
     const kept = JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", "restarts", `${id}.json`), "utf-8")) as { args: string[] };
     expect(kept.args).toEqual(JUMP);
-    expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+    expect(jumpedToRequirements(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
   });
 
   test("a kept stop stopped again keeps its own id, even with work selected since", () => {
@@ -955,7 +963,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     // A plan named before it is a flag of the same line, so the id is still read as kept.
     const planned = next(proj, OPENCODE, {}, ["bugfix", "--request", id]);
     expect(planned.message ?? "", JSON.stringify(planned)).toContain("with nothing beside it");
-    expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+    expect(jumpedToRequirements(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
   });
 
   test("before any workflow, it runs in the space it was stopped in, and not once that space is gone", () => {
@@ -1031,7 +1039,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     const both = next(proj, OPENCODE, {}, ["--request", id, "--request", "0badc0de"]);
     expect(both.kind, JSON.stringify(both)).toBe("print");
     expect(both.message ?? "").toContain("Nothing ran.");
-    expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+    expect(jumpedToRequirements(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
   });
 
   // Windows: a folder's mode does not stop a write there; as root nothing does.
@@ -1046,7 +1054,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
       chmodSync(restarts, 0o500);
       try {
         const unmarked = next(proj, OPENCODE, {}, ["--request", id]) as Printed & { change_notices?: string[] };
-        expect(unmarked.message ?? "").toContain("execute --target requirements-analysis");
+        expect(jumpedToRequirements(unmarked), JSON.stringify(unmarked)).toBe(true);
         // With no chat to keep the line for, it rides the step's notices, which a stage in parts keeps too.
         expect(unmarked.change_notices ?? []).toContain(
           "AI-DLC could not mark it as run, so the same line would run it again.",
@@ -1152,7 +1160,7 @@ describe("claude: a .claude/settings.json that is missing or not valid JSON gets
     // Once the file is back and a hook has run, the new chat runs the kept command.
     writeFileSync(settings(proj), shipped, "utf-8");
     beat(proj, "reviewer-scope");
-    expect(next(proj, h, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+    expect(jumpedToRequirements(next(proj, h, {}, ["--request", id]))).toBe(true);
   });
 
   test("not valid JSON: the line names the file to correct, not config, which stops on it too", () => {

@@ -9,7 +9,8 @@
 // stage graph (data/stage-graph.json), then emits EXACTLY ONE typed Directive
 // (JSON) to stdout. Workflow routing through `next` is read-only for every
 // legacy/solo workflow. Explicit `next config set|get|list` requests execute
-// their terminal config command before returning its output. Exact
+// their terminal config command before returning its output, and a `--stage` or
+// `--phase` jump over running work is made before routing on from it. Exact
 // team ownership is the narrow exception: before routing it delegates a
 // guarded `refresh-unit-progress` projection to aidlc-state.ts so the derived
 // grid and aggregate Construction checkboxes cannot drift from audit receipts.
@@ -27,7 +28,8 @@
 //   next   — resolve scope (state > flag > env > default), find the workflow's
 //            position, refresh only the exact-team derived projection, and emit
 //            one directive. Ordinary routing is otherwise read-only; `--single`
-//            records its isolated audit start before dispatch. LIVE.
+//            records its isolated audit start before dispatch, and a jump the
+//            person asked for runs `aidlc-jump.ts execute` first. LIVE.
 //   report — commit a transition after the conductor acted on a directive.
 //            LIVE. A stage-aware dispatcher: it shells out to aidlc-state.ts
 //            transitions so the next `next` reads fresh state. Explicit
@@ -59,8 +61,10 @@
 // relayed unchanged rather than reconstructed — reconstruction would drift from
 // the tool the rest of the framework asserts on. The one read-only invariant
 // workflow routing keeps: it never spawns a subcommand that MUTATES. Explicit
-// typed config requests are terminal commands, not workflow routing. The jump
-// (resolve) and env-scope (resolve-env-scope) subcommands are pure reads; the
+// typed config requests are terminal commands, not workflow routing, and the
+// jump the person asked for (`execute`) runs before routing starts again from
+// the state it wrote. The jump's resolve and env-scope (resolve-env-scope)
+// subcommands are pure reads; the
 // init guard is spawned ONLY on the already-state-exists path, where the tool
 // dies at its guard before any scaffold write.
 //
@@ -204,6 +208,7 @@ import {
   type CheckboxLine,
   checkSummaryConfirmationEvidence,
   clearActiveDirectiveMarker,
+  codeGenerationIsTheStep,
   codekbRepoName,
   currentUnitLifecycleMode,
   constructionSkeletonOn,
@@ -2535,6 +2540,7 @@ function emit(requested: Directive): void {
           ...(withLegacyOffer.session
             ? { legacyPlanApprovalSession: withLegacyOffer.session }
             : {}),
+          ...(ownJumpMove ? { ownStateMove: ownJumpMove } : {}),
           resultSha256: prepared.resultSha256,
         });
         // An engine question whose marker another step's own machinery kept
@@ -8968,12 +8974,19 @@ let settledGates = 0;
 // over (prepareEmission). A run-stage delivered in parts carries them on its
 // steering payload, and `continue` restores them here (handleContinue).
 let settledNotices: string[] = [];
+// The jump this `next` made itself for the person's `--stage` or `--phase`
+// (emitJumpDirective): one at most, and the state digests it moved between,
+// which the step's publication binds a tracked Copilot claim over.
+let jumpsMade = 0;
+let ownJumpMove: { from: string; to: string } | null = null;
 
 function handleNext(args: string[], projectDir: string | undefined): void {
   routingPassActive = true;
   routingArgs = args;
   settledGates = 0;
   settledNotices = [];
+  jumpsMade = 0;
+  ownJumpMove = null;
   try {
     routeNext(args, projectDir);
   } finally {
@@ -8981,6 +8994,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     routingPassActive = false;
     routingArgs = null;
     settledNotices = [];
+    ownJumpMove = null;
   }
 }
 
@@ -9146,8 +9160,9 @@ function turnIsLatestRow(pd: string, messageId: string): boolean {
 // while Stop probes use a deterministic first-hop token and never publish the
 // prepared directive. Ordinary routing never mutates shared workflow state;
 // `--single` adds only its synthetic audit start and cannot move the main
-// workflow pointer. Typed config commands execute their requested operation;
-// observers only describe that command and never execute it.
+// workflow pointer. Typed config commands execute their requested operation,
+// and so does a `--stage` or `--phase` jump over running work (once, outside
+// Code Generation); observers only describe that command and never execute it.
 function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   activeStageValidityAdvisory = undefined;
   activeRedefinedStages = null;
@@ -10660,7 +10675,15 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   }
   if (flags.phase || flags.stage) {
     const target = flags.stage ?? flags.phase ?? "";
-    if (emitJumpDirective(flags, scope, pd, projectType) !== "route") return;
+    const jump = emitJumpDirective(flags, scope, pd, projectType);
+    if (jump === "jumped") {
+      // The jump is made: route as the bare `next` that came after it, on the
+      // state it wrote (this pass read the state before it).
+      routingArgs = [];
+      routeNext([], projectDir);
+      return;
+    }
+    if (jump !== "route") return;
     // The target is the step the unit-major walk is already on: routing it is
     // literally where the person asked to go, with nothing skipped. A parked
     // workflow is unparked first, as a plain --resume does, so the next plain
@@ -15294,14 +15317,15 @@ function skippedJumpDirective(target: string, direction: string, current: string
 //
 // A jump against an EXISTING workflow is a MUTATION: it marks intervening
 // stages [S] (forward), resets downstream stages (backward), emits STAGE_JUMPED,
-// and pivots Current Stage. `next` is read-only and never mutates, so — exactly
-// like the scope-change (Branch 5) and config-change branches, which emit a
-// `print` directive naming a CLI tool for the conductor to run — the WITH-STATE
-// jump path emits a `print` naming `aidlc-jump.ts execute`. The conductor runs
-// that mutating tool, then re-runs `next`; the next `next` reads the pivoted
-// state and naturally emits the run-stage for the now-current target. This
-// composes the existing CLI-only `execute` handler (no new directive field, no
-// jump vocabulary in `report`, and `next` stays read-only).
+// and pivots Current Stage, all in `aidlc-jump.ts execute`. The jump is the
+// person's explicit request, so, as with a typed config request, `next` runs
+// that command itself and routes on from the state it wrote: the person's first
+// step comes back from this one call, not after a print, the jump and another
+// `next`. Where the jump is not this `next`'s to make (jumpRunsInNext) or needs
+// steps or a line around it, the WITH-STATE path still emits a `print` naming
+// `execute` for the conductor to run before re-running `next`. Either way the
+// existing CLI-only `execute` handler does the jump (no new directive field and
+// no jump vocabulary in `report`).
 //
 // The conductor RELAYS the human's jump target; the engine SUPPLIES the
 // resolved facts. It shells out to `aidlc-jump.ts resolve` (a pure read) —
@@ -15359,14 +15383,36 @@ function unitChoiceRefusal(stateContent: string, targetSlug: string): string {
     `run \`next --stage ${targetSlug} --every-unit\`.`;
 }
 
+// Whether this `next` makes the jump itself: not on a read-only probe, at most
+// once per command, and not where Code Generation is the step on record, where
+// the plan-approval guard judges the `jump execute` the print names.
+function jumpRunsInNext(projectDir: string, stateContent: string): boolean {
+  return !isReadOnlyEngineProbe() && jumpsMade === 0 && !codeGenerationIsTheStep(
+    readActiveDirectiveMarker(projectDir, stateContent)?.stage ?? "",
+    getField(stateContent, "Current Stage") ?? "",
+  );
+}
+
+// The line the jump tool gives the person, when its output carries one.
+function jumpNotice(stdout: string): string | null {
+  try {
+    const notice = (JSON.parse(stdout.trim()) as { notice?: unknown }).notice;
+    return typeof notice === "string" && notice.trim().length > 0 ? notice : null;
+  } catch {
+    return null;
+  }
+}
+
 // Returns "route" without emitting when the target is the step a solo
 // unit-major walk is already on; the caller then routes like a plain `next`.
+// Returns "jumped" without emitting once it made the jump itself; the caller
+// then routes again as a bare `next`, on the state the jump wrote.
 function emitJumpDirective(
   flags: ParsedFlags,
   scope: string,
   projectDir: string,
   projectType: "brownfield" | "greenfield" | null = null,
-): "route" | undefined {
+): "route" | "jumped" | undefined {
   // --phase initialization is rejected up front (applies with or without state).
   if (flags.phase && canonicalisePhase(flags.phase) === "initialization") {
     emit(initStageDirective(INIT_JUMP_ERROR, projectDir));
@@ -15424,20 +15470,48 @@ function emitJumpDirective(
       emit(turnEndingPrint(unitChoiceRefusal(unitMajorState, targetSlug)));
       return;
     }
-    const everyUnitLine = flags.everyUnit && direction !== "forward"
-      ? ` Then tell the person in one line: "Reopened ${nodeForSlug(targetSlug)?.name || targetSlug}` +
-        `${direction === "backward" ? " and the steps after it" : ""} for every unit."`
+    const everyUnitSaid = flags.everyUnit && direction !== "forward"
+      ? `Reopened ${nodeForSlug(targetSlug)?.name || targetSlug}` +
+        `${direction === "backward" ? " and the steps after it" : ""} for every unit.`
       : "";
+    const everyUnitLine = everyUnitSaid ? ` Then tell the person in one line: "${everyUnitSaid}"` : "";
     const unitMajor = direction === "forward"
       ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug)
       : null;
     if (unitMajor === "route") return "route";
-    // Committing the jump is a MUTATION — name the move (print) and let the
-    // conductor run `execute`, exactly as scope-change/config-change do. The
-    // command carries the tool-resolved direction so `execute` skips/resets the
-    // right stages, emits STAGE_JUMPED, and pivots Current Stage. After the
-    // conductor runs it, the NEXT `next` sees the pivoted state and emits the
-    // run-stage for the now-current target.
+    // The jump the person asked for, with nothing to run or say around it, is
+    // made here with the command the print below names, and the caller routes
+    // on from the state it wrote, so their first step comes back from this
+    // call. Its own line rides that step.
+    if (!unitMajor?.before && !unitMajor?.flags && !unitMajor?.said && jumpRunsInNext(projectDir, unitMajorState)) {
+      const jumped = runTool("aidlc-jump.ts", [
+        "execute", "--target", targetSlug, "--direction", direction, "--scope", scope, "--project-dir", projectDir,
+      ]);
+      if (!jumped.ok) {
+        emit(errorDirective(toolErrorMessage(jumped)));
+        return;
+      }
+      jumpsMade++;
+      // A kept request this jump carries out says so with the step, before the
+      // jump's own line: the step it lands on may come in parts, and `continue`
+      // rebuilds it with this `next`'s settled lines, never its narration.
+      if (activeKeptRequestLine !== null) {
+        settledNotices.push(activeKeptRequestLine);
+        activeKeptRequestLine = null;
+      }
+      const notice = jumpNotice(jumped.stdout);
+      if (notice) settledNotices.push(notice);
+      if (everyUnitSaid) settledNotices.push(everyUnitSaid);
+      const after = loadStateFileIfPresent(projectDir);
+      if (after !== null) ownJumpMove = { from: stateDigest(unitMajorState), to: stateDigest(after) };
+      return "jumped";
+    }
+    // Everywhere else the jump is named (print) for the conductor to run with
+    // `execute`, then `next`: at Code Generation the plan-approval guard judges
+    // that command, a unit-major jump has steps or a line around it, and a
+    // read-only probe never moves the work. The command carries the
+    // tool-resolved direction so `execute` skips/resets the right stages, emits
+    // STAGE_JUMPED, and pivots Current Stage.
     emit(printDirective(
       // A unit-major forward jump already says how to go back for its Units.
       (direction === "forward" && !unitMajor?.said

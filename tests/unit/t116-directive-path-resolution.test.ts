@@ -37,9 +37,9 @@
 // .sh drove (`bun "$TOOL" next ... 2>&1` then python-parsed the JSON). An
 // in-process twin is IMPOSSIBLE here: the functions are unreachable from TS.
 //
-// VEHICLE (mirrors the .sh's emit_for, t116): a WITH-STATE jump now emits
-// a `print` naming aidlc-jump.ts execute (NOT a run-stage; pinned by t114/t117/
-// t118), so the path-resolution behaviour is reached via the Branch-10 happy
+// VEHICLE (mirrors the .sh's emit_for, t116): a WITH-STATE jump also moves the
+// workflow (aidlc-jump.ts execute; pinned by t114/t117/t118), so the
+// path-resolution behaviour is reached via the Branch-10 happy
 // path — seed a fixture, pivot Current Stage to the target slug AND mark its
 // checkbox in-flight ([-]), then run bare `next`. That emits a run-stage for the
 // in-flight stage with produces/consumes resolved. Scope MUST be one where the

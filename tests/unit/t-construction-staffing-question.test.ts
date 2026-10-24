@@ -37,7 +37,6 @@ resetAidlcEnv();
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
-const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 const STAGE_FILE = join(import.meta.dir, "..", "..", "core", "aidlc-common", "stages", "inception", "delivery-planning.md");
 
 const ENV: NodeJS.ProcessEnv = {
@@ -263,14 +262,11 @@ describe("who builds the Units is asked once as Inception ends", () => {
 
   test("a jump into Construction with nobody asked meets the same one question", () => {
     const proj = project({ at: "after-units" });
+    // The `next` that makes the jump returns the step it lands on: the question,
+    // with the jump's own line.
     const jump = next(proj, ["--stage", "code-generation"]);
-    const command = /`(bun \S*aidlc-jump\.ts execute [^`]+)`/.exec(String(jump.message))?.[1];
-    expect(command, JSON.stringify(jump)).toBeDefined();
-    const args = command!.replace(/^bun \S*aidlc-jump\.ts /, "").split(" ");
-    const ran = spawnSync(BUN, [JUMP, ...args, "--project-dir", proj], {
-      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: ENV,
-    });
-    expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
+    expect(isStaffingAsk(jump), JSON.stringify(jump)).toBe(true);
+    expect(jump.change_notices).toContain("Moved to Code Generation. You can go back to Units Generation any time.");
     expect(isStaffingAsk(next(proj))).toBe(true);
   });
 
