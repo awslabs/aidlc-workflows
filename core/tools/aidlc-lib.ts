@@ -27686,13 +27686,12 @@ function sourceKeyRegistryRoots(
     if (parsed.repo !== "") {
       return { root: repoDir(projectDir, parsed.repo), path: parsed.path, carriesWorkspaceShell: false, shown: parsed.repo };
     }
-    const named = namesSourceCheckout(parsed.path)
-      ? recordedCheckoutOfListingPath(parsed.path, (checkouts ??= readRecordedSourceCheckouts(projectDir, intent, space)))
-      : null;
-    if (named !== null) {
-      return { root: named.checkout.real, path: named.rest, carriesWorkspaceShell: true, shown: named.checkout.path.replace(/[\\/]+$/, "") };
-    }
-    return { root: projectDir, path: parsed.path, carriesWorkspaceShell: true, shown: "" };
+    const atRoot = { root: projectDir, path: parsed.path, carriesWorkspaceShell: true, shown: "" };
+    if (!namesSourceCheckout(parsed.path)) return atRoot;
+    checkouts ??= readRecordedSourceCheckouts(projectDir, intent, space);
+    const named = recordedCheckoutOfListingPath(parsed.path, checkouts);
+    if (named === null) return atRoot;
+    return { root: named.checkout.real, path: named.rest, carriesWorkspaceShell: true, shown: named.checkout.path.replace(/[\\/]+$/, "") };
   };
 }
 
