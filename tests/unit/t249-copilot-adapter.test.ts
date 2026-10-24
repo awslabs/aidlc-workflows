@@ -3325,11 +3325,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     );
   });
 
-  // The claim reads the launcher's folder where the dispatcher reads it, so a
-  // folder the dispatcher would run the work in is checked, whatever comes before it.
-  test("23c-dispatcher-folder: a folder the dispatcher takes after a flag and a word is still checked", () => {
+  // The claim checks a folder on the line wherever it sits: among the person's
+  // words, and where the dispatcher takes it as the folder to run the work in.
+  test("23c-dispatcher-folder: a folder after a flag that takes no value and a word, or after the dispatcher's own flag, is still checked", () => {
     const dir = orchestrationProject();
     const other = scratchProject(true);
+    // After a flag that takes no value the word is theirs, and the folder among their words.
     const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, "dispatcher-folder", `aidlc next --new-intent notes --project-dir ${JSON.stringify(other)}`, "dispatcher-folder"));
     expect(pre.stdout).toContain("targets a different physical project");
     // Its own flag in front of the words: the dispatcher takes every folder on the line.
