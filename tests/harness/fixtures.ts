@@ -384,6 +384,17 @@ export function seedBoltDag(
   );
 }
 
+// Each Unit's questions for a wave stage, answered in the chat before the wave
+// hands it to a builder: the evidence the engine's hold reads when the summary
+// guard is off (the runner's fixture profile).
+export function seedAnsweredUnitQuestions(proj: string, stage: string, units: readonly string[]): void {
+  for (const unit of units) {
+    const dir = join(seededRecordDir(proj), "construction", unit, stage);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${stage}-questions.md`), "# Questions\n\n## Q1. Who can see a saved item?\n\n[Answer]: Its owner\n", "utf-8");
+  }
+}
+
 /** Seed a Bolt DAG whose topological batches are already known. */
 export function seedBoltDagBatches(proj: string, batches: string[][]): void {
   seedBoltDag(proj, batches.flat(), batches);

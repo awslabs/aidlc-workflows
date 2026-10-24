@@ -2725,10 +2725,11 @@ function handleUnit(args: string[]): void {
     const routed = action === "complete"
       ? {}
       : readEngineUnitDirective(pd, slug, unit, action);
+    // A Unit's questions before the wave are the wave's own step.
     if (
       routed.kind === "run-stage" &&
       routed.stage === slug &&
-      routed.wave
+      (routed.wave || routed.questions_only === true)
     ) {
       throw new UnitWaveRouteRefusalError(
         `Refusing unit ${action} for "${unit}" of "${slug}": a wave is active for this stage ` +
@@ -2737,7 +2738,10 @@ function handleUnit(args: string[]): void {
           `\`aidlc-state.ts unit complete --wave --stage ${slug} --unit <name>\`. A bare ` +
           `\`${action}\` would append a serial receipt and ` +
           "drop the deterministic batch path for every remaining unit of the stage. " +
-          "Use `unit complete --wave` instead.",
+          (routed.wave
+            ? "Use `unit complete --wave` instead."
+            : `This step asks ${typeof routed.unit === "string" ? routed.unit : unit}'s questions before ` +
+              "the wave builds it: ask them, then run `next`."),
       );
     }
 
@@ -3004,6 +3008,7 @@ interface EngineUnitDirective {
   stage?: unknown;
   unit?: unknown;
   wave?: unknown;
+  questions_only?: unknown;
 }
 
 function readEngineUnitDirective(

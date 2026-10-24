@@ -14711,6 +14711,11 @@ export function checkSummaryConfirmationEvidence(
     scope?: string | null;
     unit?: string;
     selection?: WorkflowSelectionOptions;
+    // Only the confirmation itself (the questions file, its answer and a
+    // current receipt), not whether the outputs descend from it: a wave asks
+    // a Unit's questions before its builder writes, and the wave and the gate
+    // check the outputs.
+    confirmationOnly?: boolean;
   } = {},
 ): SummaryConfirmationEvidence {
   const failure = (
@@ -15204,6 +15209,7 @@ export function checkSummaryConfirmationEvidence(
         "stale",
       );
     }
+    if (options.confirmationOnly) continue;
 
     for (const artifact of summaryArtifactPaths(stage, question)) {
       const artifactAbs = resolvePath(artifact);

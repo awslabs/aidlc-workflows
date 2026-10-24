@@ -40,6 +40,7 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
@@ -229,6 +230,7 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
   test("1: a unit covered by required-only artifacts advances the iteration", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, ["alpha", "beta"]);
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED);
     const reviewOnly = runNext(proj);
     expect(reviewOnly.kind).toBe("run-stage");

@@ -201,6 +201,7 @@ import {
   ceremonyPolicyValues,
   learningsRitualRuns,
   summaryConfirmationOwed,
+  summaryQuestionFileRelative,
   effectiveSupportAgents,
   effectiveSupportAgentsForProject,
   supportAgentsAtOpenGate,
@@ -2932,7 +2933,7 @@ function narratePerUnitBeat(directive: RunStageDirective): string | null {
   const unit = directive.unit;
   if (unit === undefined || unit === UNIT_NAME_PLACEHOLDER) return null;
   const stageName = nodeForSlug(directive.stage)?.name ?? directive.stage;
-  return `Now working on ${unit}: the ${stageName} pass.`;
+  return `Now working on ${unit}: the ${stageName} ${directive.questions_only ? "questions" : "pass"}.`;
 }
 
 // True when `node` is the FIRST in-scope Construction stage, i.e. the stage the
@@ -6974,6 +6975,8 @@ type SteeringTokenPayload = {
   t?: true;
   // The gate is one question for several stages (approve_together).
   m?: true;
+  // A wave Unit's questions, asked before its build (questions_only).
+  Q?: true;
   h: string | null;
   // How the rules were cut into parts (steeringLayout). A part cut under one
   // limit is never continued with parts cut under another.
@@ -8604,6 +8607,7 @@ function markerSteeringPayload(
     (p.e !== undefined && p.e !== true) ||
     (p.t !== undefined && p.t !== true) ||
     (p.m !== undefined && p.m !== true) ||
+    (p.Q !== undefined && p.Q !== true) ||
     (p.h !== null && typeof p.h !== "string") ||
     (p.l !== undefined && typeof p.l !== "string") ||
     (p.N !== undefined && (!Array.isArray(p.N) || !p.N.every((line) => typeof line === "string")))
@@ -8655,6 +8659,7 @@ function steeringTokenPayload(
     e: directive.artifact_reuse ? true : undefined,
     t: directive.build_settled === true ? true : undefined,
     m: directive.approve_together !== undefined ? true : undefined,
+    Q: directive.questions_only === true ? true : undefined,
     h: route.stateHash,
     l: layout,
     ...(settledNotices.length > 0 ? { N: [...settledNotices] } : {}),
@@ -8830,6 +8835,11 @@ function transportRunStage(
   fitPipelineRecord(directive);
   listLeadPersonaUnlessItFits(directive);
   fitWave(directive);
+  // A wave Unit's diary is made once the step has its last size, so a Unit the
+  // fit leaves for a later step has none yet.
+  if (directive.wave !== undefined && directive.ceremony.learnings === "on") {
+    for (const entry of directive.wave.entries) bootstrapDirectiveMemory(entry.unit_memory_path, route.codekbCtx);
+  }
   const directiveHash = sha256(JSON.stringify(directive));
   const persona = personaSentAhead(directive);
   if (persona !== null) delete directive.conductor_persona;
@@ -12543,6 +12553,7 @@ function soloUnitReceiptStep(
 
 type ActiveWave =
   | { state: "active"; unit: string; wave: RunStageWave }
+  | { state: "questions"; unit: string }
   | { state: "settled" }
   | { state: "refusal"; refusal: RoutedGuardRefusal }
   | { state: "error"; message: string };
@@ -12580,6 +12591,8 @@ function summaryRefusalForRouting(
     userMessage: attached.userMessage,
     attempt: snapshot.attempt,
     humanAuthority: humanAuthorityState(projectDir),
+    // The reconfirm command names the Unit's questions file, as the check's own refusal did.
+    summary: { stage, isolated: false },
     ...(teamGate ? { teamGate } : {}),
   });
   return {
@@ -12657,7 +12670,6 @@ function waveEntry(
 function attachBoundedWave(
   directive: RunStageDirective,
   wave: RunStageWave,
-  codekbCtx: CodekbCtx,
 ): void {
   // A wave step lists the lead's persona as a file, as prepareEmission does
   // for every step whose body does not run here.
@@ -12668,11 +12680,48 @@ function attachBoundedWave(
   // fit one directive.
   fitWave(directive);
   directive.protocol_modules = [...(directive.protocol_modules ?? []), "wave"];
-  if (directive.ceremony.learnings === "on") {
-    for (const entry of directive.wave.entries) {
-      bootstrapDirectiveMemory(entry.unit_memory_path, codekbCtx);
-    }
+}
+
+// The summary refusals that mean a wave Unit's questions are still to ask or
+// answer (no file, no answer to its summary, no receipt). Any other is the
+// summary guard's own refusal, routed as for a built Unit.
+const UNASKED_SUMMARY_CODES: ReadonlySet<string> = new Set([
+  "SUMMARY_QUESTIONS_MISSING",
+  "SUMMARY_ANSWER_INVALID",
+  "SUMMARY_RECEIPT_MISSING",
+]);
+
+// Whether a wave Unit's questions were asked in the chat before a builder
+// takes it, with its questions file as a path from the project. With the
+// summary owed, the Unit's current confirmation is the evidence (its outputs
+// are the wave's and the gate's to check); otherwise its questions file with
+// no blank answer, which a Unit with nothing to ask writes too.
+function waveUnitQuestions(
+  projectDir: string,
+  node: GraphStage,
+  unit: string,
+  scope: string,
+  stateContent: string | null,
+):
+  | { state: "asked"; path: string | null }
+  | { state: "open" }
+  | Extract<ActiveWave, { state: "refusal" | "error" }> {
+  const path = summaryQuestionFileRelative(projectDir, node, stateContent, unit);
+  if (!summaryConfirmationOwed(node, { scope, stateContent })) {
+    const dir = dirname(stageQuestionsFile(projectDir, node.phase, node.slug, unit));
+    return path !== null && !hasBlankAnswer(dir) ? { state: "asked", path } : { state: "open" };
   }
+  const confirmation = checkSummaryConfirmationEvidence(projectDir, node, {
+    stateContent,
+    unit,
+    confirmationOnly: true,
+  });
+  if (confirmation.ok) return { state: "asked", path };
+  if (confirmation.refusal === undefined || UNASKED_SUMMARY_CODES.has(confirmation.refusal.code)) {
+    return { state: "open" };
+  }
+  const refusal = summaryRefusalForRouting(projectDir, stateContent ?? "", node, unit, confirmation);
+  return refusal !== undefined ? { state: "refusal", refusal } : { state: "error", message: confirmation.message };
 }
 
 // Resolve the first unsettled Bolt-DAG batch from one healed snapshot. A batch
@@ -12850,6 +12899,17 @@ function activePerUnitWave(
       }
     }
     if (firstPendingIndex !== -1) {
+      // A builder cannot talk to the person, so each Unit it would build has
+      // its questions asked in the chat first, one Unit at a time in batch
+      // order (the stage file's QUESTION-ONLY mode); the builders then work
+      // from the answered file.
+      for (const entry of entries) {
+        if (!entry.build_required) continue;
+        const questions = waveUnitQuestions(projectDir, node, entry.unit, scope, stateContent);
+        if (questions.state === "open") return { state: "questions", unit: entry.unit };
+        if (questions.state !== "asked") return questions;
+        if (questions.path !== null) entry.questions_file = questions.path;
+      }
       // Put the active unit first so the size-bounded prefix always contains
       // the parent directive's unit, then retain deterministic batch order.
       const ordered = [
@@ -13014,6 +13074,17 @@ function emitPerUnitRunStage(
       emit(routedRefusalDirective(projectDir, wave.refusal));
       return;
     }
+    if (wave.state === "questions") {
+      const directive = buildRunStageDirective(
+        node, projectType, wave.unit, scope, stateContent, recordPrefix, codekbCtx,
+        r.unitKinds?.get(wave.unit) ?? null,
+      );
+      directive.gate = false;
+      directive.unit = wave.unit;
+      directive.questions_only = true;
+      emit(directive);
+      return;
+    }
     if (wave.state === "active") {
       const unitKind = r.unitKinds?.get(wave.unit) ?? null;
       const directive = buildRunStageDirective(
@@ -13028,7 +13099,7 @@ function emitPerUnitRunStage(
       );
       directive.gate = false;
       directive.unit = wave.unit;
-      attachBoundedWave(directive, wave.wave, codekbCtx);
+      attachBoundedWave(directive, wave.wave);
       emit(directive);
       return;
     }
@@ -18973,6 +19044,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   if (payload.q !== undefined) directive.unit_gate = payload.q;
   if (payload.o === true) applyGateOnlyShape(directive, pd, liveState ?? "");
   if (payload.t === true) directive.build_settled = true;
+  if (payload.Q === true) directive.questions_only = true;
   if (payload.m === true) {
     const together = approveTogetherFor(pd, liveState, node, engineRelativeRecordDir(pd), codekbCtxFor(pd));
     if (together) directive.approve_together = together;
@@ -19014,7 +19086,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
         codekbCtx,
       );
       if (wave.state === "active" && wave.unit === payload.u) {
-        attachBoundedWave(directive, wave.wave, codekbCtx);
+        attachBoundedWave(directive, wave.wave);
       }
     }
   }

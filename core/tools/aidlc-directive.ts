@@ -176,6 +176,9 @@ export interface RunStageWaveEntry {
   consumes_absent: Array<{ path: string; expected: boolean }>;
   produces: string[];
   required_produces: string[];
+  // The Unit's questions file, answered in the chat before the wave: the
+  // builder writes from it and asks nothing (the stage file's ARTIFACT-ONLY mode).
+  questions_file?: string;
 }
 
 export interface RunStageWave {
@@ -481,6 +484,10 @@ export interface RunStageDirective {
   // the beat presents the stage gate with nothing left to plan or build. Set by
   // the engine only; the conductor handles the beat as before.
   build_settled?: true;
+  // A Unit's questions before the stage's wave builds it: the step asks them and
+  // confirms the summary, and writes none of the stage's documents (the stage
+  // file's QUESTION-ONLY mode). Set by the engine only.
+  questions_only?: true;
   // The per-Unit stages one late approval covers (unit-major, Unit checkpoints
   // off), in order with display names, the Units, and the engine's question.
   // Set by the engine only; the first stage is `stage`.
@@ -1039,6 +1046,7 @@ const RUN_STAGE_FIELDS = [
   "accept_as_is",
   "unit_record_step",
   "build_settled",
+  "questions_only",
   "approve_together",
   "conductor_persona",
   "next_stage",
@@ -1078,6 +1086,7 @@ const DISPATCH_SUBAGENT_FIELDS = [
       field !== "accept_as_is" &&
       field !== "unit_record_step" &&
       field !== "build_settled" &&
+      field !== "questions_only" &&
       field !== "approve_together" &&
       field !== "legacy_plan_approval_choices" &&
       field !== "plan_approval",
@@ -1320,6 +1329,15 @@ export function protocolNote(stageFile: string, modules: readonly string[]): str
   return `Unless this chat already holds them, read ${files.join(", ")} before this step's work: they say how it runs.`;
 }
 
+// The step before a wave that asks one Unit's questions in the chat, where the
+// person is; the builders the wave hands out cannot ask them.
+export function unitQuestionsNote(unit: string, invocation: string): string {
+  return `This step is only ${unit}'s questions for this stage (the stage file's QUESTION-ONLY mode): ask them ` +
+    "and take the person's answers into the questions file (with nothing to ask, write the file with a line saying " +
+    "so), confirm their summary when this step's notes ask for it, and write none of the stage's documents; the " +
+    `builders write them from the answers. ${unitStepNote(invocation)}`;
+}
+
 export function unitStepNote(invocation: string): string {
   return "This Unit's step has no gate of its own: do not report it or ask the person to approve it; when its " +
     `work for this stage is done, run \`${invocation} next\` and follow the step it returns.`;
@@ -1542,12 +1560,16 @@ export function briefNote(ceremony: Record<string, unknown>, modules: readonly s
 // stage that asks questions: worded as if every stage had answers, it had
 // opencode record an answer-mode question at a first Reverse Engineering scan,
 // which asks none, and show the gate again on every reply.
-export function ceremonyNote(state: "on" | "off"): string {
+// A Unit's question step before a wave writes no outputs, so off says the skip alone.
+export function ceremonyNote(state: "on" | "off", questionsOnly = false): string {
   return state === "on"
     ? "After this stage's questions are answered and before writing anything, confirm the summary of the answers " +
       "with the person (stage-protocol-summary.md)."
-    : "If this stage puts questions to the person, write the stage's outputs once their answers are in the questions " +
-      "file; skip the stage file's Consolidated Summary step and record nothing for it.";
+    : questionsOnly
+      ? "If this stage puts questions to the person, skip the stage file's Consolidated Summary step and record " +
+        "nothing for it."
+      : "If this stage puts questions to the person, write the stage's outputs once their answers are in the " +
+        "questions file; skip the stage file's Consolidated Summary step and record nothing for it.";
 }
 
 // --- The numbered rendering of a question ---
@@ -1741,7 +1763,7 @@ export function withAgentNotes<T extends object>(
       const consumes = Array.isArray(d.consumes) ? d.consumes.filter((p): p is string => typeof p === "string") : [];
       notes.context_note = contextNote(paths, consumes, isPlainObject(d.lead_persona));
       if (isPlainObject(d.ceremony) && (d.ceremony.summary_confirmation === "on" || d.ceremony.summary_confirmation === "off")) {
-        notes.ceremony_note = ceremonyNote(d.ceremony.summary_confirmation);
+        notes.ceremony_note = ceremonyNote(d.ceremony.summary_confirmation, d.questions_only === true);
       }
       if (isPlainObject(d.answer_mode) && typeof d.stage === "string") {
         notes.answer_mode_note = answerModeNote(d.answer_mode as unknown as StageAnswerMode, d.stage, logInvocation);
@@ -1774,6 +1796,8 @@ export function withAgentNotes<T extends object>(
       notes.gate_note = d.unit_record_step;
     } else if (showsGateAgain(d)) {
       notes.gate_note = gateOnlyNote();
+    } else if (d.questions_only === true && typeof d.unit === "string") {
+      notes.gate_note = unitQuestionsNote(d.unit, invocation);
     } else if (
       d.gate === false && typeof d.unit === "string" &&
       ![
@@ -2322,6 +2346,7 @@ function checkRunStageShared(
     checkOptionalRevisionCycle(o, kind, errors);
     checkOptionalString(o, "unit_record_step", kind, errors);
     checkOptionalTrue(o, "build_settled", kind, errors);
+    checkOptionalTrue(o, "questions_only", kind, errors);
     checkOptionalApproveTogether(o, kind, errors);
   }
   // unit: optional on a run-stage directive (present only on a per-unit
@@ -3314,6 +3339,7 @@ function checkOptionalWave(
     "consumes_absent",
     "produces",
     "required_produces",
+    "questions_file",
   ]);
   const units = new Set<string>();
   value.entries.forEach((item: unknown, i: number) => {
@@ -3377,6 +3403,9 @@ function checkOptionalWave(
       if (typeof item[key] !== "string") {
         errors.push(`${prefix}.${key} must be string, got ${describe(item[key])}`);
       }
+    }
+    if ("questions_file" in item && typeof item.questions_file !== "string") {
+      errors.push(`${prefix}.questions_file must be string, got ${describe(item.questions_file)}`);
     }
     for (const key of ["consumes", "produces", "required_produces"] as const) {
       const nested = item[key];
