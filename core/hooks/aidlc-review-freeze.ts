@@ -93,6 +93,7 @@ import {
 import { writeTargets } from "./review-freeze-command.ts";
 export {
   leadingDirectoryChange,
+  powerShellPathBoundWriter,
   shellCommandAltersExecutableResolution,
   shellCommandInvocationDetails,
   shellCommandInvocations,

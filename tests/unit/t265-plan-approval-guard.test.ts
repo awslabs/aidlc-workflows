@@ -3500,7 +3500,7 @@ describe("t265b hook lifecycle", () => {
         [`Get-ChildItem | Out-File ${rec}\\listing.txt`, proj],
         [`Get-ChildItem -Force ${rec} | Select-Object Name,Length`, proj],
         // Read from where the cd leads.
-        [`cd '${proj}'; New-Item -ItemType Directory -Force ${rec} | Out-Null`, join(proj, "other")],
+        [`cd '${proj}'; New-Item -ItemType File -Path '${rec}\\notes.ts' -Force`, join(proj, "other")],
         // The engine's own commands as the agent spells them there.
         ...(windows
           ? [
@@ -3522,8 +3522,8 @@ describe("t265b hook lifecycle", () => {
         // PowerShell 7 runs sc.exe for sc.
         [`sc ${rec}\\notes.md y`, proj],
         [`New-Item -ItemType Directory -Force ${rec}; Remove-Item src\\base.ts`, proj],
-        // Without the cd the same line names a folder under other.
-        [`New-Item -ItemType File -Path '${rec}\\code-generation-plan.md' -Force`, join(proj, "other")],
+        // Without the cd the same line names a file under other.
+        [`New-Item -ItemType File -Path '${rec}\\notes.ts' -Force`, join(proj, "other")],
       ] as const) {
         expect(pwsh(command, cwd).code, command).toBe(2);
       }

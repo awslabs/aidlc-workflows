@@ -54,12 +54,17 @@ export const LOCK_FOLDER_HELD_SAID_KEY = "lock folder held by a program";
 // The step for a program the agent, or the agent it sent (Code Generation's
 // developer), left running over the project to check the app (Vite, after a
 // kill that reached only npx). Only the agent knows whether it did: no tool
-// reads its conversation or picks a process, and AI-DLC stops nothing.
+// reads its conversation or picks a process, and AI-DLC stops nothing. Each
+// shell's spelling is a line the plan-approval guard reads, so under strict
+// the stop goes through with the folder held: a PowerShell line that finds
+// the process inline (a script block, a subexpression) is one it cannot read.
 const STOP_YOURS = "If you, or an agent you sent, started a dev server, a file watcher or another long-running " +
   "program over the project in this conversation, and the person did not ask to keep it running, stop it and " +
   "everything it started (on Windows, stopping an npx or npm parent leaves the server running: stop the whole " +
-  "process tree by its Windows process id, for example `taskkill //T //F //PID <pid>` in Git Bash, or the node " +
-  "process whose command line names the server)";
+  "process tree by its Windows process id, for example `taskkill //T //F //PID <pid>` in Git Bash or " +
+  "`taskkill /T /F /PID <pid>` in PowerShell, or the node process whose command line names the server, which " +
+  "PowerShell lists with `Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Select-Object " +
+  "ProcessId,CommandLine`)";
 
 // What the agent reads where an engine command stopped on the held folder
 // (`personLine` is the `stopped` line): it stops its program and runs the
