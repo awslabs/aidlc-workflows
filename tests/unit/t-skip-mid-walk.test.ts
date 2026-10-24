@@ -640,6 +640,16 @@ describe("a skip the person asks for at the walk's first stage, while a Unit is 
     expect(state).toContain("- [ ] nfr-requirements \u2014 SKIP");
     const after = next(proj);
     expect(`${after.kind} ${after.stage}/${after.unit}`, JSON.stringify(after)).toBe("run-stage nfr-design/alpha");
+    // The first step's own skip moved the work past NFR Requirements in the same
+    // request, so no undo window is offered for it, only the run on its own.
+    expect(segment(String(step.message), EVERY_FROM).message).toContain(
+      '"Skipped Functional Design and NFR Requirements for every Unit from here. Either one can still be run on its own with ' +
+        '`/aidlc --stage functional-design --single` or `/aidlc --stage nfr-requirements --single`."',
+    );
+    const undo = /If they later ask to undo skipping it for every Unit, run `([^`]*)`/.exec(String(step.message))?.[1] ?? "";
+    const late = runNamed(proj, undo);
+    expect(late.status).not.toBe(0);
+    expect(late.out).toContain("--stage nfr-requirements --single");
   });
 
   // Words that name another Unit are neither this Unit nor every Unit: that
