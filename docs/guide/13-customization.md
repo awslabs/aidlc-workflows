@@ -383,7 +383,7 @@ Guard Policy is one setting with three values, `strict`, `relaxed`, and `off`. I
 
 **When an approved input changed.** A reviewed document was edited after its review, or an output was saved without the current summary confirmation.
 
-- `strict` reopens the approval. The run stops with one plain sentence naming what changed and asks you again.
+- `strict` reopens the approval. The run stops with one plain sentence naming what changed and asks you again. When your confirmation is current and only a document the agent saved before it has not been saved again, and nothing has reviewed it yet, the agent saves it again first and asks you only if that does not clear it.
 - `relaxed` and `off` keep going. The change is recorded once in the audit trail as a `CHANGE_ACCEPTED` row, you hear one line about it, and the run continues. Nothing is deleted: the approval and its evidence stay exactly as they were.
 
 Other code moving after you approved a code plan (a `git pull`, another Unit landing) never asks again, on any value, with one exception below: approving a plan is about the plan and its test instructions. The build continues, you hear which files moved (for example `2 files changed since this plan was approved: src/api.ts, src/db.ts. Building auth now.`), and a `CHANGE_ACCEPTED` row records it. An AI-DLC update you took is not your change: its files are never named, and when they are all that moved, nothing is said or recorded and a build of Units in parallel starts without asking you to commit them.

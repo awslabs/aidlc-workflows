@@ -14549,6 +14549,44 @@ function plainSummaryHint(projectDir: string, stage: string, unit: string | null
     : "";
 }
 
+// Why an output does not descend from the current summary confirmation, said
+// of one output and of several.
+const UNSAVED_REASONS = {
+  unrecorded: { one: "has no recorded write", many: "have no recorded write" },
+  "other-confirmation": {
+    one: "was last saved under a different summary confirmation",
+    many: "were last saved under a different summary confirmation",
+  },
+  "before-answers": {
+    one: "was last saved before the confirmed answers",
+    many: "were last saved before the confirmed answers",
+  },
+} as const;
+type UnsavedReason = keyof typeof UNSAVED_REASONS;
+
+// The outputs the current summary confirmation does not authorize, in one
+// refusal sentence; one output reads as it always has.
+function unsavedOutputsMessage(
+  slug: string,
+  unsaved: ReadonlyArray<{ artifact: string; reason: UnsavedReason }>,
+): string {
+  if (unsaved.length === 1) {
+    return `Refusing to continue "${slug}": this stage's output document ${unsaved[0].artifact} ` +
+      `${UNSAVED_REASONS[unsaved[0].reason].one}. Save the document again, so its write descends from the current ` +
+      "confirmation, then continue.";
+  }
+  const reasons = new Set(unsaved.map((entry) => entry.reason));
+  const names = reasons.size === 1
+    ? unsaved.map((entry) => entry.artifact)
+    : unsaved.map((entry) => `${entry.artifact} (${UNSAVED_REASONS[entry.reason].one})`);
+  const list = `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  const why = reasons.size === 1
+    ? UNSAVED_REASONS[unsaved[0].reason].many
+    : "were not saved under the current confirmation";
+  return `Refusing to continue "${slug}": this stage's output documents ${list} ${why}. Save each ` +
+    "of them again, so each write descends from the current confirmation, then continue.";
+}
+
 export function checkSummaryConfirmationEvidence(
   projectDir: string,
   stage: SummaryConfirmationStage,
@@ -15052,6 +15090,9 @@ export function checkSummaryConfirmationEvidence(
       );
     }
 
+    // Every output the current confirmation does not authorize, so the refusal
+    // names them all and one round of saves clears it.
+    const unsaved: Array<{ artifact: string; reason: UnsavedReason }> = [];
     for (const artifact of summaryArtifactPaths(stage, question)) {
       const artifactAbs = resolvePath(artifact);
       const writes = events.filter((entry) => auditRowWritesFile(projectDir, entry, artifactAbs));
@@ -15108,19 +15149,14 @@ export function checkSummaryConfirmationEvidence(
           const stampedElsewhere = unauthorized.some(
             (entry) => auditBlockField(entry.block, SUMMARY_AUTHORIZATION_FIELD) !== null,
           );
-          return failure(
-            "SUMMARY_ARTIFACT_UNAUTHORIZED",
-            `Refusing to continue "${stage.slug}": this stage's output document ` +
-              `${artifact} ${
-                newestWrites.length === 0
-                  ? "has no recorded write"
-                  : stampedElsewhere
-                    ? "was last saved under a different summary confirmation"
-                    : "was last saved before the confirmed answers"
-              }. Save the document again, so its write descends from the current ` +
-              "confirmation, then continue.",
-            "stale",
-          );
+          unsaved.push({
+            artifact,
+            reason: newestWrites.length === 0
+              ? "unrecorded"
+              : stampedElsewhere
+                ? "other-confirmation"
+                : "before-answers",
+          });
         }
         continue;
       }
@@ -15173,6 +15209,9 @@ export function checkSummaryConfirmationEvidence(
           "stale",
         );
       }
+    }
+    if (unsaved.length > 0) {
+      return failure("SUMMARY_ARTIFACT_UNAUTHORIZED", unsavedOutputsMessage(stage.slug, unsaved), "stale");
     }
   }
 
@@ -33565,10 +33604,16 @@ export function evaluateGuardRefusal(
     }
     // The stage was reported before its outputs or its code exist: writing
     // them is the conductor's own step, which the refusal's sentence names.
-    // No review or reset produces them.
+    // No review or reset produces them. So is an output saved before the
+    // person's current summary confirmation while no review covers it or is
+    // under way: the confirmation stands, and saving the document again is
+    // the way on. A repeat still asks the person (guardRefusalStreakView).
     const missingOutput = input.code === "REQUIRED_ARTIFACTS_MISSING" ||
       input.code === "REQUIRED_SOURCE_WORK_MISSING";
-    if (missingOutput) {
+    const unsavedOutput = input.code === "SUMMARY_ARTIFACT_UNAUTHORIZED" &&
+      input.attempt.reviewCoverage === "missing" &&
+      !input.attempt.pendingReview && !input.attempt.repairReview && !input.attempt.nextReview;
+    if (missingOutput || unsavedOutput) {
       remedies.push({
         op: "produce-stage-output",
         action: input.userMessage,

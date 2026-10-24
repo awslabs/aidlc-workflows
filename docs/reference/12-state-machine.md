@@ -1579,7 +1579,11 @@ approval, the same approval runs again, so they are not asked twice); a stage
 reported before its outputs or its code exist (`REQUIRED_ARTIFACTS_MISSING`,
 `REQUIRED_SOURCE_WORK_MISSING`) offers `produce-stage-output`, the refusal's own
 sentence, which ends with the same report again (for missing code, the second
-report puts the approval question to the person with where AI-DLC looked); the source changed after its
+report puts the approval question to the person with where AI-DLC looked); an output saved before the
+person's current summary confirmation (`SUMMARY_ARTIFACT_UNAUTHORIZED`, under strict, or with no recorded
+write under any policy) while no review covers the outputs as they are, none is under way and none is out
+of date offers `produce-stage-output` too, the
+refusal's own sentence naming every such output, and only a repeat asks the person; the source changed after its
 review (`SOURCE_REVIEW_STALE`, the source still readable) offers the one
 `start-recovery-review`, as a changed output does, and that remedy names its
 exact request; and a review pass the cap refuses with nobody having asked for it
