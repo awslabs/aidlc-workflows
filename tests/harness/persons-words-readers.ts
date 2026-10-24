@@ -1061,6 +1061,9 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${POSTURE}#questionsFileHasPendingPlanApproval`]: { use: "decides", why: "the presence shape: whether the plan file's [Answer]: line is still blank (or underscores)" },
   [`${ASK}#onlyTheirAnswerDiffers`]: { use: "keeps", why: "the presence shape: the person's answer in the plan file stays while the same question stands (the engine never erases what they wrote)" },
   [`${ASK}#requestPlanApprovalReviewNow`]: { use: "keeps", why: "the presence shape: a recorded answer on the plan file's line is cleared when the person asks to review the plan again" },
+  [`${ASK}#answerLineAsFound`]: { use: "decides", why: "the engine's own line: the plan file's line is left out when it is exactly a mark the engine wrote there (the recorded answer's mark, either mark while the person edits, \"Plan approval off\"), so the engine's line is never kept as theirs; nothing else of theirs is read" },
+  [`${ASK}#approveTarget`]: { use: "keeps", why: "the audit writer: the approval row keeps the plan file's line as the person left it (Answer Line In File) before the engine writes its mark there" },
+  [`${ASK}#requestChangesFor`]: { use: "keeps", why: "the audit writer: as above, on the Request Changes answer row" },
   // The request the agent forwards to next (its free text) and the question store that keeps it: shown back, quoted
   // into a command, kept; each with its reason.
   "core/tools/aidlc-runtime-paths.ts#quoteCommandArgument": { use: "decides", why: "shell-quotes their words into a command the agent runs", from: [`${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`] },
