@@ -300,7 +300,9 @@ describe("t-approve-then-add-next: the approval recorded first, the add of the s
     const message = await approveThenAdd(proj, "requirements-analysis", "user-stories");
     const undo = /If they later ask to undo it, run `[^`]*?engine (recompose [^`]*)`/.exec(message)?.[1];
     expect(undo, message).toContain("--skip user-stories");
-    const undone = await tool(proj, join(AIDLC_SRC, "tools", "aidlc.ts"), ["engine", ...(undo as string).split(" ").map((arg) => arg.replace(/^'|'$/g, ""))]);
+    // The command's words as a shell reads them: a quoted reason is one argument.
+    const words = ((undo as string).match(/'[^']*'|"[^"]*"|\S+/g) ?? []).map((arg) => arg.replace(/^['"]|['"]$/g, ""));
+    const undone = await tool(proj, join(AIDLC_SRC, "tools", "aidlc.ts"), ["engine", ...words]);
     expect(undone.status, undone.stdout + undone.stderr).toBe(0);
     expect(state(proj)).toMatch(/^- \[ \] user-stories \u2014 SKIP/m);
     const after = await next(proj, []);
