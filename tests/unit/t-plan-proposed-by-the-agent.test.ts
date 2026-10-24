@@ -449,6 +449,43 @@ describe("t-plan-proposed-by-the-agent: work here but none selected", () => {
   });
 });
 
+// The routing question asks where the new words belong, so a bare "yes" picks
+// none of its options. An option worded "Yes, set it up alongside ..." answered
+// it anyway: a person's "yes" was taken for that option and new work started
+// that they never picked. No option, in any shape of the question, opens with a
+// word that answers yes or no.
+describe("t-plan-proposed-by-the-agent: the routing question's options answer only what it asks", () => {
+  const ANSWERS_YES_OR_NO = /^(?:yes|no|yeah|yep|sure|ok|okay|nope)\b/i;
+  const withRequest = (tools: string, words: string[]): Directive => {
+    const read = next(tools, proj, words);
+    return next(tools, proj, ["--request", REQUEST.exec(String(read.message))![1]]);
+  };
+  const shapes: Array<[string, () => Directive]> = [
+    ["beside active work, with a plan", () => { proj = activeProject(); return next(CLAUDE_TOOLS, proj, ["bugfix", "fix the login"]); }],
+    ["beside active work, no plan yet", () => { proj = activeProject(); return withRequest(CLAUDE_TOOLS, ["add CSV export"]); }],
+    ["a scope that differs from the active work's", () => { proj = activeProject(); return next(CLAUDE_TOOLS, proj, ["--scope", "bugfix", "fix the login flow"]); }],
+    ["work here but none selected, with a plan", () => { proj = cloneWithWork(KIRO_TOOLS); return follow(KIRO_TOOLS, proj, ["fix the login"], "bugfix").last; }],
+    ["work here but none selected, no plan yet", () => { proj = cloneWithWork(KIRO_TOOLS); return withRequest(KIRO_TOOLS, ["fix the login"]); }],
+  ];
+  for (const [shape, ask] of shapes) {
+    test(shape, () => {
+      const d = ask();
+      expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("new-work-routing");
+      expect(d.choices).toHaveLength(3);
+      for (const { label, detail } of d.choices!) {
+        expect(label).not.toMatch(ANSWERS_YES_OR_NO);
+        expect(detail ?? "", label).not.toMatch(ANSWERS_YES_OR_NO);
+      }
+      const numbered = String(d.numbered_prose_question).split("\n").flatMap((line) => /^\d+\. \*\*(.+?)\*\*(.*)$/.exec(line) ?? []);
+      expect(numbered.length).toBeGreaterThan(0);
+      for (const text of numbered) expect(text.replace(/^[^A-Za-z]+/, "")).not.toMatch(ANSWERS_YES_OR_NO);
+      const clauses = String(d.question).split(" - ").slice(1);
+      expect(clauses.length, String(d.question)).toBeGreaterThan(0);
+      for (const clause of clauses) expect(clause, String(d.question)).not.toMatch(ANSWERS_YES_OR_NO);
+    });
+  }
+});
+
 // #2359 F1 and F4: a line that opens with a plan's name and goes on in words
 // keeps every word, and the agent reads which they meant: the both-readings
 // print names the pick (`--scope <plan> -- '<rest>'`, which creates with no
