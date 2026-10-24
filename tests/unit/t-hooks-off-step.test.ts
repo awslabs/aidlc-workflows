@@ -1211,14 +1211,16 @@ describe("a chat started in a folder inside the project is told to start the too
   const CLAUDE = HARNESSES[0];
   const CODEX = HARNESSES[1];
   const entryOf = (h: Harness) => (h.name === "codex" ? "$aidlc" : "/aidlc");
-  const lineFor = (h: Harness, proj: string, entry: string) =>
+  // The engine names the folder the way this OS writes it, unless the project
+  // came in AIDLC_PROJECT_DIR, which it names as given.
+  const lineFor = (h: Harness, proj: string, entry: string, folder = normalize(proj)) =>
     h.name === "codex"
       ? `AI-DLC's hooks work only when Codex is started in the project folder. Exit Codex, start it again in ` +
-        `${normalize(proj)}, then type ${entry}.`
+        `${folder}, then type ${entry}.`
       : `Claude Code runs this project's hooks only when it is started in the project folder. Exit Claude Code, ` +
-        `start it again in ${normalize(proj)}, then type ${entry}.`;
-  const show = (h: Harness, proj: string, entry: string) =>
-    `Show the person this line and end your turn: "${lineFor(h, proj, entry)}"`;
+        `start it again in ${folder}, then type ${entry}.`;
+  const show = (h: Harness, proj: string, entry: string, folder?: string) =>
+    `Show the person this line and end your turn: "${lineFor(h, proj, entry, folder)}"`;
   const pad = (n: number) => String(n).padStart(2, "0");
 
   function scratch(prefix: string): string {
@@ -1358,7 +1360,7 @@ describe("a chat started in a folder inside the project is told to start the too
     try {
       const hint = unattendedHumanPresenceHint();
       expect(hint).toContain("do not ask them to answer again");
-      expect(hint).toContain(`${RULES} ${show(CLAUDE, proj, "/aidlc")}`);
+      expect(hint).toContain(`${RULES} ${show(CLAUDE, proj, "/aidlc", proj)}`);
       expect(hint).not.toContain("disableAllHooks");
     } finally {
       for (const [key, value] of Object.entries(saved)) {
