@@ -259,6 +259,53 @@ describe("t-kept-setting-follows-the-pick: the work the chat picks gets what was
   });
 });
 
+// Work here and none selected: a request's first question is which work it
+// belongs to, naming the plan, and "2" starts the new work with no plan
+// question in between. A setting kept "for the work you pick up or start next"
+// goes to that new work whether it was typed before the request, while the
+// question was open, or before words that only asked to go on.
+describe("t-kept-setting-follows-the-pick: the work started from the which-work question gets what was kept", () => {
+  const startSeparate = (routing: Record<string, unknown>): string => {
+    reply("2");
+    const command = String(routing.new_intent_command);
+    const creation = next(command.slice(command.indexOf(" next ") + 6).split(" "));
+    const id = /intent create --scope enterprise --request ([0-9a-f]{8})/.exec(String(creation.message))?.[1];
+    expect(id, JSON.stringify(creation).slice(0, 300)).toBeDefined();
+    const made = utility(["intent-create", "--scope", "enterprise", "--request", id!, "--label", "csv-export"], chat);
+    expect(made.status, made.out).toBe(0);
+    return records().find((name) => name.endsWith("-csv-export"))!;
+  };
+  const whichWork = (words: string): Record<string, unknown> => {
+    reply(words);
+    const reading = next(words.split(" "));
+    const request = /--request ([0-9a-f]{8})/.exec(String(reading.message))?.[1];
+    expect(request, JSON.stringify(reading).slice(0, 300)).toBeDefined();
+    const routing = next(["--request", request!, "--propose", "enterprise"]);
+    expect(routing.ask_type, JSON.stringify(routing).slice(0, 300)).toBe("new-work-routing");
+    return routing;
+  };
+
+  test("typed while the which-work question is open, then 2: the new work starts with it", () => {
+    workNoneSelected();
+    const routing = whichWork("add a CSV export");
+    // The person reads the question before typing the setting.
+    Bun.sleepSync(1100);
+    expect(typeSetting("/aidlc --guard.review-freeze off")).toContain("for the work you pick up or start next (set by you)");
+    expect(getField(state(startSeparate(routing)), "Guards Off") ?? "").toContain("review-freeze");
+  });
+
+  test("kept, then words that only ask to go on and no pick, then a request and 2: the new work starts with it", () => {
+    workNoneSelected();
+    typeSetting("/aidlc --guard.review-freeze off");
+    Bun.sleepSync(1100);
+    reply("carry on");
+    expect(next(["carry", "on"]).kind).toBe("print");
+    expect(next([]).ask_type).toBe("intent-pick");
+    const routing = whichWork("add a CSV export");
+    expect(getField(state(startSeparate(routing)), "Guards Off") ?? "").toContain("review-freeze");
+  });
+});
+
 describe("t-kept-setting-follows-the-pick: what is not carried to the picked work", () => {
   test("kept in another sitting: nothing is applied or said", () => {
     const [, picked] = workNoneSelected();
