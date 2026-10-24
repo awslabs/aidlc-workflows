@@ -191,6 +191,7 @@ import {
   reviewDraftRelativePath,
   reviewerCompletionAfter,
   reviewFileDigest,
+  reviewFileSigner,
   reviewRecordDigest,
   reviewRecordRelativePath,
   reviewRequestArtifactsCurrent,
@@ -4428,6 +4429,28 @@ function handleReview(args: string[]): void {
               `iteration ${iteration}. The reviewer writes its review to ` +
               `${readFrom.reviewerPath}; a retried ` +
               "incomplete attempt records --verdict NOT-READY without a review.",
+        );
+      }
+      // A review signed by another agent is that agent's (a live run: the
+      // product lead was asked for, the architecture reviewer ran). The step is
+      // the requested reviewer, never a Reviewer line to change; it is said
+      // before anything below marks or says something about this verdict.
+      const signer = body === null || incompleteFallback ? null : reviewFileSigner(body);
+      if (signer !== null && signer !== flags.reviewer) {
+        const signed = `Refusing REVIEW_COMPLETED for "${flags.stage}": ${readFrom.reviewerPath} is signed by ` +
+          `${signer}, and this review was requested from ${flags.reviewer}.`;
+        refuseReview(
+          pendingRequest.retried
+            ? `${signed} Its one retry is spent, so record --verdict NOT-READY: that records a review that did not finish.`
+            : `${signed} Run \`${renderReviewRequestCommand({
+                projectDir: pd,
+                stage: flags.stage,
+                reviewer: flags.reviewer,
+                ...(flags.unit ? { unit: flags.unit } : {}),
+                ...(flags.single === "true" ? { single: true } : {}),
+                iteration,
+                retryPending: true,
+              })}\` and dispatch the reviewer it names to write the review, then record the verdict again.`,
         );
       }
       // The review is the reviewer's: the bytes recorded now are compared with
