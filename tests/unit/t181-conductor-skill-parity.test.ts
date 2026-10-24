@@ -61,7 +61,7 @@ const BARE_INIT = /(^|[^-\w])--init\b/;
 
 // The workspace-anchor conductor vocabulary every shipped SKILL must define.
 const REQUIRED_TOKENS = [
-  "intent-create", // run-then-continue creation verb (replaced `init`)
+  "intent-create", // the creation verb a print names before `next` (replaced `init`)
   "offer a second intent", // P4-completion new-work conductor prose
   "intent and space verbs", // frontmatter utilities tail
 ];
@@ -557,6 +557,26 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       return [
         ...(body.includes(notice) ? [] : [`${rel}: change_notices`]),
         ...(body.includes(speech) ? [] : [`${rel}: speaking`]),
+      ];
+    });
+    expect(missing).toEqual([]);
+  });
+
+  // The agent repeats the names its instructions give a step: a live run read
+  // "This is a run-then-continue print.", "This is a load-steering transport"
+  // and "**SAY:** Let me get started on ..." to the person. The step is still
+  // described; it has no name of its own to repeat, and the first turn's line
+  // is an instruction with the sentence, no marker.
+  test("a step's shape and a rules part have no name to repeat, and the first turn's line has no marker", () => {
+    const firstTurn = "That turn, say one sentence about the user's own request and nothing about what is about to " +
+      'run: "Let me get started on [the user\'s request, in their own words]."';
+    const named = ["run-then-continue", "**terminal**", "directive is transport, not stage work", '**SAY:** "Let me get started'];
+    const missing = skills.flatMap((rel) => {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      return [
+        ...named.filter((words) => body.includes(words)).map((words) => `${rel}: still says ${words}`),
+        ...(body.includes(firstTurn) ? [] : [`${rel}: the first turn's line`]),
+        ...(body.includes("When it names a command to run and then `next`") ? [] : [`${rel}: a print that goes on`]),
       ];
     });
     expect(missing).toEqual([]);
@@ -1356,12 +1376,17 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "Say the step's numbered question as given",
         'a trailing "or tell me" does not replace it',
         "needs the piece of work named first",
-        "**Typed new-work Other response.**",
-        'ask exactly **"What would you like me to do instead?"**',
-        '`next "<human alternative>"`',
+        'is only `4` or `Other`, your whole message is **"What would you like me to do instead?"**: call no tool and end your turn',
+        '`next "<their words>"`',
         "with their words unchanged",
       ]) {
         if (!skill.includes(token)) missing.push(`${skillRel}  missing: ${token}`);
+      }
+      // Kiro read this paragraph's own words to the person ("A reply of only 4 or Other for a new-work-routing ask
+      // does not describe a route. I ask exactly the required follow-up"), and a label in its place came back as
+      // "The person picked Other with nothing more.": the paragraph has no label, and the question is the message.
+      for (const words of ["Typed new-work Other response", "does not describe a route", "`new-work-routing` ask"]) {
+        if (skill.includes(words)) missing.push(`${skillRel}  still says: ${words}`);
       }
       for (const token of [
         "## Questions AI-DLC asks",
@@ -1373,9 +1398,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         if (!annex.includes(token)) missing.push(`${annexRel}  missing: ${token}`);
       }
       // The Other-then-words forwarding through bare `next "<words>"` is the new-work routing question's route and
-      // lives in the skill's typed paragraph, scoped to that ask; the annex's section on every question never carries
+      // lives in the skill's Other paragraph, scoped to that ask; the annex's section on every question never carries
       // it, so an Other answer at a paused Unit or the project-type question is read for what it means, not forwarded.
-      if (annex.includes('`next "<human alternative>"`')) missing.push(`${annexRel}  carries the routing-only forwarding`);
+      if (annex.includes('`next "<their words>"`')) missing.push(`${annexRel}  carries the routing-only forwarding`);
     }
     expect(missing).toEqual([]);
   });
