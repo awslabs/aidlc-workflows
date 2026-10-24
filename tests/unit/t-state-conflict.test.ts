@@ -67,7 +67,7 @@ interface Clone {
 
 // Alex finishes Requirements Analysis and pushes. Blair, still in it, changes
 // the record too and brings Alex's commit in: the record is left conflicted.
-function conflictedClone(bring: Bring, cloneArgs: string[] = []): Clone {
+function conflictedClone(bring: Bring, cloneArgs: string[] = [], beforeBring?: (blair: string) => void): Clone {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "aidlc-state-conflict-")));
   roots.push(root);
   const env = gitEnv(root);
@@ -110,6 +110,7 @@ function conflictedClone(bring: Bring, cloneArgs: string[] = []): Clone {
   ok(alex, "commit", "-qam", "alex: Requirements Analysis approved");
   ok(alex, "push", "-q", "origin", "main");
   edit(blair, (text) => text.replace(/^(- \*\*Last Updated\*\*:) .*?(\r?)$/m, "$1 2025-07-16T09:30:00Z$2"));
+  beforeBring?.(blair);
   if (bring === "stash") {
     ok(blair, "stash", "-q");
     ok(blair, "pull", "-q", "--no-rebase", "origin", "main");
@@ -160,6 +161,16 @@ describe("a record of the work git left conflicted", () => {
     expect(state(clone)).toMatch(STASH_SIDE);
     const said = settleConflictedState(clone.blair, DEFAULT_RECORD_DIR, "default");
     expect(getField(state(clone), "Current Stage")).toBe("requirements-analysis");
+    expect(getField(state(clone), "Last Updated")).toBe("2025-07-16T09:30:00Z");
+    expect(said).toBe(line(`git checkout --ours -- ${STATE}`, true));
+  });
+
+  test("a stash popped with git's markers set longer than seven is still your stashed side", () => {
+    const clone = conflictedClone("stash", [], (blair) =>
+      writeFileSync(join(blair, ".git", "info", "attributes"), "aidlc-state.md conflict-marker-size=32\n", "utf-8"));
+    expect(state(clone)).toMatch(/^>{32} Stashed changes$/m);
+    const said = settleConflictedState(clone.blair, DEFAULT_RECORD_DIR, "default");
+    expect(state(clone)).not.toMatch(/^[<=>|]{7}/m);
     expect(getField(state(clone), "Last Updated")).toBe("2025-07-16T09:30:00Z");
     expect(said).toBe(line(`git checkout --ours -- ${STATE}`, true));
   });
@@ -233,6 +244,19 @@ describe("a record of the work git left conflicted", () => {
 });
 
 describe("the next step on a record git left conflicted", () => {
+  for (const flag of ["--status", "--help", "--version"]) {
+    test(`a read-only next ${flag} leaves the record and git's index as they are`, () => {
+      const clone = conflictedClone("merge");
+      const before = state(clone);
+      const env = { ...clone.env, CLAUDE_PROJECT_DIR: clone.blair, AIDLC_PROJECT_DIR: clone.blair, AIDLC_SESSION_OVERRIDE: SESSION };
+      const run = runOrchestrateNext(join(clone.blair, ".claude", "tools", "aidlc-orchestrate.ts"), clone.blair, [flag], { cwd: clone.blair, env });
+      expect(run.status, run.out).toBe(0);
+      expect(state(clone)).toBe(before);
+      expect(unmerged(clone)).toBe(3);
+      expect(run.out).not.toContain("Git left a conflict");
+    });
+  }
+
   for (const bring of ["merge", "rebase"] as const) {
     test(`after a pull that ${bring === "merge" ? "merges" : "rebases"}, next carries on at your own stage and says so once`, () => {
       const clone = conflictedClone(bring);

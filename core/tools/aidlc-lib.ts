@@ -32057,8 +32057,9 @@ export function settleConflictedState(projectDir: string, intent: string, space:
   const unmerged = git("ls-files", "-u", "--", shown).stdout?.trim();
   const rebasing = gitHas("REBASE_HEAD");
   const merging = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"].some(gitHas);
-  // git stash names the stashed side in its closing marker, added or not.
-  const stashed = !rebasing && !merging && /^>{7} Stashed changes\r?$/m.test(text);
+  // git stash names the stashed side in its closing marker, added or not, at
+  // whatever marker length the file's conflict-marker-size sets.
+  const stashed = !rebasing && !merging && /^>{7,} Stashed changes\r?$/m.test(text);
   const ownSecond = rebasing || stashed;
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const indexed = (stage: 2 | 3) => {

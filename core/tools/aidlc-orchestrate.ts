@@ -399,6 +399,7 @@ import {
   reviewAttemptWindow,
   setField,
   settleConflictedState,
+  isReadOnlyNextArgv,
   withoutEntryWord,
   sortAttemptEvents,
   stageJumpReaches,
@@ -19381,8 +19382,12 @@ export function main(argv: string[]): void {
     engineSelections.set(resolvedProjectDir, { ...resolvedSelection, intent: null, binding: null });
   }
   // Git left its conflict in the record (a pull, a rebase, a stash pop): the
-  // command carries on from the person's own side.
-  if (commandKind !== undefined && !unjoined && resolvedSelection.intent !== null && !isReadOnlyEngineProbe()) {
+  // command carries on from the person's own side. A read-only next (status,
+  // help, doctor, version, a workspace command) leaves the record as it is.
+  if (
+    commandKind !== undefined && !unjoined && resolvedSelection.intent !== null && !isReadOnlyEngineProbe() &&
+    !(commandKind === "next" && isReadOnlyNextArgv(subArgs))
+  ) {
     recordConflictLine = settleConflictedState(resolvedProjectDir, resolvedSelection.intent, resolvedSelection.space);
   }
   // A stopped `next` kept for this chat, named by its id, runs as if the
