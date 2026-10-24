@@ -30,7 +30,7 @@ afterAll(() => {
 
 const state = (proj: string): string => readFileSync(stateFilePath(proj), "utf-8");
 const box = (proj: string, slug: string): string =>
-  new RegExp(`^- \\[(.)\\] ${slug} — (EXECUTE|SKIP)`, "m").exec(state(proj))?.slice(1).join(" ") ?? "";
+  new RegExp(`^- \\[(.)\\] ${slug} \u2014 (EXECUTE|SKIP)`, "m").exec(state(proj))?.slice(1).join(" ") ?? "";
 const stageFolder = (proj: string): string => join(dirname(stateFilePath(proj)), "ideation", "intent-capture");
 
 /** A command a step names (`bun .claude/tools/<tool>.ts ...`), run from the shipped tree on this project. */
