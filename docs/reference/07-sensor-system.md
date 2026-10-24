@@ -323,7 +323,12 @@ flag, an unoffered/paraphrased choice, a missing human-backed receipt, or
 autonomous mode is refused. The recorded answer names its option by label or
 by its number on the offered list. Fix findings starts a new attempt the way
 Request Changes does: the reviewed outputs open for the fix, and the retried
-report needs a fresh review. A successful override records the sensor ids,
+report needs a fresh review. Where each Unit's review is its own (unit-major
+work, Construction checkpoints, team-owned Units), that is the pick's Unit when
+it was logged with one, and otherwise only the Units whose outputs the failing
+blocking check named in its latest result; a check that named no Unit's output,
+or stage-major work, starts every Unit again.
+A successful override records the sensor ids,
 optional detail paths, and evaluation reasons on `STAGE_AWAITING_APPROVAL`.
 Revalidating an already-open gate emits a fresh row with `Revalidated: true`,
 consuming the authorization receipt instead of leaving it reusable.
