@@ -1299,9 +1299,13 @@ export function showsGateAgain(d: Record<string, unknown>): boolean {
 // and an autonomy question the agent never knew about).
 // A change the person asks of the code plan goes after the choice, in every
 // step that names the plan question's answer: the recorder never takes it from
-// their words (recordPlanApprovalAnswer).
+// their words (recordPlanApprovalAnswer). An approval that asks for a change
+// binds the plan as it is when "Approve Plan" is recorded, so the change is
+// made first; recorded first, it binds the plan without their change.
 export const PLAN_CHANGE_DETAILS =
-  "(a change they ask for is Request Changes, with what to change after it: --details 'Request Changes: <what they asked>')";
+  "(a change they ask for instead of approving is Request Changes, with what to change after it: " +
+  "--details 'Request Changes: <what they asked>'; when they approve and ask for a change, make it in the plan " +
+  "first, then record 'Approve Plan')";
 
 // The plan question's answer is recorded as the person's choice, then the
 // step goes on; with no skill loaded nothing else names that command. `next`
