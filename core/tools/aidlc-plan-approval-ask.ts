@@ -801,10 +801,14 @@ function rejectionRevision(projectDir: string, unit: string | null, intentId: st
 // What the person said after the rejection, in the chat that asked for it. A
 // bare Request Changes is recorded as it was picked, and their answer to "What
 // should change?" comes after it, on no decision; it is this revision's change
-// all the same. personsGateReply reads it: its window starts at the rejection.
+// all the same. personsGateReply reads it, from the last decision on: this
+// rejection. The chat is the one the pick's own turn names on the record, which
+// lasts; the message store drops a used message after a day.
 function wordsSinceRejection(projectDir: string, rejection: { block: string }): string | null {
   const id = auditBlockField(rejection.block, "Message Id");
-  const chat = id === null ? null : readMessage(projectDir, id)?.session ?? null;
+  if (id === null) return null;
+  const turn = readAuditShardEvents(projectDir).findLast((row) => row.event === "HUMAN_TURN" && auditBlockField(row.block, "Message Id") === id);
+  const chat = (turn ? auditBlockField(turn.block, "Session") : null) ?? readMessage(projectDir, id)?.session ?? null;
   return chat === null ? null : personsGateReply(projectDir, chat, STAGE).words;
 }
 
