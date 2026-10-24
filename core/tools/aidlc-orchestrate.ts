@@ -6190,6 +6190,34 @@ function planNamedAloneStep(plan: string, flags: ParsedFlags, besideWork = false
   return step;
 }
 
+// A plan's name typed with no words beside unfinished work on another plan
+// (`/aidlc workshop` over bugfix work): no other branch reads the plan word
+// there, so the stage in hand would run with it dropped.
+function planTypedAloneBesideWork(flags: ParsedFlags, stateContent: string): boolean {
+  const plan = flags.positionalScope;
+  const current = (getField(stateContent, "Scope") ?? "").trim();
+  return plan !== undefined && flags.scope === undefined && !flags.intent && !flags.resume &&
+    flags.planChanges === undefined && !flags.compose && validScopes().has(plan) &&
+    plan !== current && !workflowFinished(stateContent, current);
+}
+
+// That plan word may ask for new work on the plan (planNamedAloneStep, through
+// Branch 4a) or for this work to move to it (Branch 5's scope change): the
+// agent reads which, with the settings typed with the plan on both commands.
+function planNamedBesideWorkStep(plan: string, flags: ParsedFlags, stateContent: string): PrintDirective {
+  const next = `${aidlcToolInvocation("orchestrate")} next --scope ${scopeArg(plan)}`;
+  const settings = typedSettingModifiers(flags).map((modifier) => ` --${modifier}`).join("");
+  const current = (getField(stateContent, "Scope") ?? "").trim();
+  return printDirective(
+    `The person typed the name of the \`${plan}\` plan with no words about the work, beside the work on ` +
+      `"${activeWorkLabel(stateContent)}" on the \`${current}\` plan. Read what they meant. For new work on the \`${plan}\` ` +
+      `plan, run \`${next} --new-intent${settings}\`: it asks them what the new work is for (once they have said, add ` +
+      "` -- <their words>` with their words as one shell-safe argument, which starts it). For this work to move to the " +
+      `\`${plan}\` plan, run \`${next}${settings}\` and follow what it returns. If you cannot tell which they meant, ask ` +
+      "them once in plain words, then run the command for their answer.",
+  );
+}
+
 // The optional line offering a clean chat for new work, in the host's own words.
 function cleanChatLine(projectDir: string): string {
   const skill = entrySkillInvocation();
@@ -10130,12 +10158,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   //      equals `Current Stage`. If the workflow has advanced past the parked
   //      slug (a stale marker), ignore it and fall through to the normal route.
   // A change the person typed to the parked work (another scope, stages to
-  // skip or add, a reshape, a setting) is made, and the work stays parked:
-  // answering it with the park would drop it.
+  // skip or add, a reshape, a setting, another plan's name alone) is made, and
+  // the work stays parked: answering it with the park would drop it.
   const parkedWorkChange = stateContent !== null && (
     (flags.scope !== undefined && flags.scope !== (getField(stateContent, "Scope") ?? "").trim()) ||
     flags.planChanges !== undefined || Boolean(flags.compose || flags.newScope || flags.report) ||
-    typedSettingModifiers(flags).length > 0
+    typedSettingModifiers(flags).length > 0 || planTypedAloneBesideWork(flags, stateContent)
   );
   if (
     stateContent &&
@@ -10546,6 +10574,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const verbatimThenStop = stillParked === null
       ? "print its output verbatim and stop."
       : `print its output verbatim followed by "${stillParked}", and stop.${resumeOnYes()}`;
+    if (!unitScope && flags.positionalScope && planTypedAloneBesideWork(flags, stateContent)) {
+      emit(planNamedBesideWorkStep(flags.positionalScope, flags, stateContent));
+      return;
+    }
     if (
       flags.scope &&
       validScopes().has(flags.scope) &&
