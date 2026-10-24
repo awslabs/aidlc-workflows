@@ -316,6 +316,7 @@ import {
   needsFlatMigration,
   nextInScopeStage,
   answerModeStageStartedFields,
+  scopeGridOnProject,
   stageReopenedByScopeChange,
   PHASES,
   parseArgs,
@@ -12085,15 +12086,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       const projectType = getField(content, "Project Type") || "Greenfield";
       reopened = stageReopenedByScopeChange(contentBefore, newScope);
 
-      // A scope's own stages on this project: a new project skips Reverse Engineering.
-      const gridFor = (def: { stages: Record<string, string> }): Record<string, string> => {
-        const grid = { ...def.stages };
-        if (projectType.toLowerCase() === "greenfield" && grid["reverse-engineering"] === "EXECUTE") {
-          grid["reverse-engineering"] = "SKIP";
-        }
-        return grid;
-      };
-      const adjustedMapping = gridFor(newScopeDef);
+      const adjustedMapping = scopeGridOnProject(newScopeDef, content);
 
       const executeStages: string[] = [];
       const skipStages: string[] = [];
@@ -12221,7 +12214,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       // Switching back writes the old scope's own stages, so it is the way back
       // only when the old plan ran those for every stage still to run: a plan
       // tailored to the work, or recomposed, ran others.
-      const back = oldScopeDef ? gridFor(oldScopeDef) : null;
+      const back = oldScopeDef ? scopeGridOnProject(oldScopeDef, content) : null;
       const switchBackRestores = back !== null && stagesStillToRun(contentBefore).every((stage) =>
         (back[stage.slug] === "EXECUTE") === (effectivePlanAction(stage.slug, oldScope, contentBefore) === "EXECUTE"));
       const oldExecuteCount = oldScopeDef

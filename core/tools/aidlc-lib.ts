@@ -42343,6 +42343,16 @@ export function nextInScopeStage(
   return null;
 }
 
+// The plan a scope gives this work, stage by stage: its own grid, where a new
+// project skips Reverse Engineering. The scope change writes it as each stage's
+// plan suffix, and `next` reads it for a stage change typed with the switch.
+export function scopeGridOnProject(def: { stages: Record<string, string> }, stateContent: string): Record<string, string> {
+  const grid = { ...def.stages };
+  const greenfield = (getField(stateContent, "Project Type") || "Greenfield").toLowerCase() === "greenfield";
+  if (greenfield && grid["reverse-engineering"] === "EXECUTE") grid["reverse-engineering"] = "SKIP";
+  return grid;
+}
+
 // The stage a scope change to `scope` starts on FINISHED work: the first stage
 // after the cursor that the scope runs and that is not already done or skipped
 // (with the greenfield reverse-engineering adjustment the plan grid applies).

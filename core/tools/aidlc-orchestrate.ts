@@ -335,6 +335,7 @@ import {
   scopeGuardPolicyDefault,
   nextInScopeStage,
   setStageSuffix,
+  scopeGridOnProject,
   stageReopenedByScopeChange,
   openPendingDecision,
   parseCheckboxes,
@@ -15817,13 +15818,15 @@ function planChangeDirective(
   };
   // A stage the plan already skips or runs is no change: it is said, not sent
   // to recompose, so the undo line names only what changed. After a scope
-  // change it is the plan that change leaves, read as scopeSwitchKeepsPlace
-  // reads it. A stage the work skipped where it stood does not run, whatever
-  // the plan says, so adding it puts it back.
+  // change it is the plan that change writes. A stage the work skipped where
+  // it stood does not run, whatever the plan says, so adding it puts it back.
   const switched = plan?.switchedTo;
+  const switchedGrid = plan === null || switched === undefined ? null
+    : scopeGridOnProject(loadScopeMapping()[switched] ?? { stages: {} }, plan.stateContent);
   const actionOf = (slug: string): "EXECUTE" | "SKIP" | undefined =>
     plan === null ? undefined
-      : effectivePlanAction(slug, switched ?? plan.scope, switched === undefined ? plan.stateContent : null);
+      : switchedGrid !== null ? switchedGrid[slug] as "EXECUTE" | "SKIP" | undefined
+      : effectivePlanAction(slug, plan.scope, plan.stateContent);
   const skippedWhereItStood = (slug: string): boolean => plan !== null && stageSkippedWhereItStood(plan.stateContent, slug);
   // A stage already done is recompose's to name, as it is without a switch.
   const done = (slug: string): boolean =>
