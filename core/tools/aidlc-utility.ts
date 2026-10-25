@@ -267,6 +267,7 @@ import {
   isPluginEnabled,
   isoTimestamp,
   isPackageJson,
+  leaveSayOnceNote,
   isValidRepoName,
   aidlcRootIntegrations,
   codekbDir,
@@ -13064,8 +13065,16 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   // line reaches the person, so a check of theirs switched off from the chat is
   // said by the agent or not at all; the order says the lines are theirs. A step
   // of the engine's that has the agent print the output as it is passes
-  // --verbatim, so the person never reads the order.
-  const said = checkOffInTheirName && flags.verbatim !== "true" ? [SAY_SETTER_LINES] : [];
+  // --verbatim, so the person never reads the order. Codex and opencode draw
+  // this output's first lines in their tool panel, so where the host hands the
+  // model a note the person does not see, the order rides it with the lines
+  // (leaveSayOnceNote) and the output is the lines alone.
+  const due = checkOffInTheirName && flags.verbatim !== "true";
+  const said = due && !leaveSayOnceNote(projectDir, selection.sessionId, {
+    say: [SAY_SETTER_LINES, ...lines].join("\n"),
+    printed: lines.join("\n"),
+    ...(named.message ? { message: named.message.id } : {}),
+  }) ? [SAY_SETTER_LINES] : [];
   process.stdout.write(`${[...said, ...lines].join("\n")}\n`);
 }
 

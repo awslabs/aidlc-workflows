@@ -45815,12 +45815,18 @@ export function engineErrorRelayText(message: string): string {
   return `${ENGINE_ERROR_RELAY_LABEL}\n> ${message}`;
 }
 
-/** The relay line for `harness`, or null where no channel would show it. */
+/**
+ * The relay line for `harness`, or null where no channel would show it. On
+ * opencode it carries no note: the plugin hands a line's note to the model, and
+ * the toast is gone in seconds (and never drawn headless), so the opencode skill
+ * prints the error itself and must not read that the person was shown it.
+ */
 export function engineErrorRelayLine(
   message: string,
   harness: string = runtimeHarnessName(),
 ): string | null {
   if (!ENGINE_ERROR_RELAY_HARNESSES.has(harness)) return null;
+  if (harness === "opencode") return `${JSON.stringify({ systemMessage: engineErrorRelayText(message) })}\n`;
   return `${JSON.stringify({
     systemMessage: engineErrorRelayText(message),
     hookSpecificOutput: {
@@ -45828,6 +45834,101 @@ export function engineErrorRelayLine(
       additionalContext: ENGINE_ERROR_RELAY_NOTE,
     },
   })}\n`;
+}
+
+/**
+ * Harnesses whose Bash PostToolUse hook hands the model a note the person does
+ * not see: Claude Code reads `additionalContext` as hook context and Codex as a
+ * developer message, and neither draws it; the opencode plugin puts it in the
+ * tool result the model reads, while its panel draws the command's own output
+ * (`metadata.output`). Measured with a probe hook on Claude Code 2.1.310, Codex
+ * 0.164.0 and opencode 1.19.4. Kiro CLI has no such note, and Copilot, Cursor
+ * and Kiro IDE keep the setter's order in its own output.
+ */
+export const SAY_ONCE_NOTE_HARNESSES: ReadonlySet<string> = new Set(["claude", "codex", "opencode"]);
+
+/** What the setter leaves for its call's hook: the order with its lines, the lines it printed, and the message it stood on. */
+export interface SayOnceNote {
+  say: string;
+  printed: string;
+  message?: string;
+}
+
+function sayOnceNotePath(projectDir: string, sessionId: string | null): string {
+  const recordPath = sessionId === null ? "" : sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.say-once` : "";
+}
+
+/**
+ * Leave the note for this chat's next shell call hook, where the harness hands
+ * the model one; true when it is left, and the setter then prints its lines
+ * alone. False on any doubt, and the order stays in the setter's own output.
+ */
+export function leaveSayOnceNote(
+  projectDir: string,
+  sessionId: string | null,
+  note: SayOnceNote,
+  harness: string = runtimeHarnessName(),
+): boolean {
+  if (!SAY_ONCE_NOTE_HARNESSES.has(harness)) return false;
+  const path = sayOnceNotePath(projectDir, sessionId);
+  if (!path) return false;
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileAtomic(path, `${JSON.stringify(note)}\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Whether the shell command names `--message <id>` as whole words.
+function commandNamesMessage(command: string, id: string): boolean {
+  const words = command.split(/\s+/).map((word) => word.replace(/^['"]|['"]$/g, ""));
+  return words.some((word, i) => word === `--message=${id}` || (word === "--message" && words[i + 1] === id));
+}
+
+/**
+ * The PostToolUse line that hands this chat's note to the model, taken once,
+ * or null. It is the setter's call when its output carries the lines the
+ * setter printed (CRLF read as LF) or its command names the note's message (a
+ * shell can re-encode the person's quoted words, as PowerShell does); another
+ * call that ends first leaves the note for it.
+ */
+export function sayOnceNoteLine(
+  projectDir: string,
+  sessionId: string | undefined,
+  command: string,
+  toolResponse: unknown,
+  harness: string = runtimeHarnessName(),
+): string | null {
+  if (!SAY_ONCE_NOTE_HARNESSES.has(harness)) return null;
+  const path = sayOnceNotePath(projectDir, validSessionId(sessionId));
+  if (!path || !existsSync(path)) return null;
+  let note: Partial<SayOnceNote>;
+  try {
+    note = JSON.parse(readFileSync(path, "utf-8")) as Partial<SayOnceNote>;
+  } catch {
+    return null;
+  }
+  if (typeof note.say !== "string" || note.say === "") return null;
+  const output = shellToolResponseText(toolResponse)?.replace(/\r\n/g, "\n") ?? "";
+  const itsCall = (typeof note.printed === "string" && note.printed !== "" && output.includes(note.printed)) ||
+    (typeof note.message === "string" && note.message !== "" && commandNamesMessage(command, note.message));
+  if (!itsCall) return null;
+  // Taken by a rename, so two deliveries of one call cannot both hand it over.
+  const taken = `${path}.${process.pid}`;
+  try {
+    renameSync(path, taken);
+  } catch {
+    return null;
+  }
+  try {
+    unlinkSync(taken);
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+  return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: note.say } })}\n`;
 }
 
 /**
@@ -45844,10 +45945,12 @@ export function hookContextLine(event: "SessionStart" | "UserPromptSubmit", cont
   })}\n`;
 }
 
-/** Hand an engine `error` directive's exact message to the human where possible. */
-export function writeEngineErrorRelay(message: string): void {
+/** Hand an engine `error` directive's exact message to the human where possible; true when a line was written. */
+export function writeEngineErrorRelay(message: string): boolean {
   const line = engineErrorRelayLine(message);
-  if (line !== null) process.stdout.write(line);
+  if (line === null) return false;
+  process.stdout.write(line);
+  return true;
 }
 
 /**

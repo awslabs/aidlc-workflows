@@ -12,7 +12,9 @@
 // The engine's own steps that already have the agent print the setter's output
 // as it is name --verbatim, so the person never reads the order line; at the
 // person's own terminal there is no agent and no order line. The agent is no
-// longer asked to word the news itself, so it is said once.
+// longer asked to word the news itself, so it is said once. On Claude Code,
+// Codex and opencode the order rides the shell call's PostToolUse note instead
+// (t-say-once-note), so there the output is the setter's line alone.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -115,16 +117,23 @@ function project(tree: Tree = "claude") {
 }
 
 describe("from a chat, the setter's own result says its line is the person's", () => {
-  test.each(["claude", "copilot"] as const)("%s: the summary confirmation off on their \"1\": the order line, then the setter's line", (tree) => {
-    const { said, set } = project(tree);
+  test("copilot: the summary confirmation off on their \"1\": the order line, then the setter's line", () => {
+    const { said, set } = project("copilot");
     const id = said("1");
     const lines = set(["summary-confirmation", "off", "--message", id]);
     expect(lines[0]).toBe(ORDER);
     expect(lines[1]).toStartWith(`${SUMMARY_OFF}, because you said: "1". You can turn it back on any time.`);
   });
 
+  test("claude: the same setter prints its line alone, the order riding the hook's note", () => {
+    const { said, set } = project("claude");
+    const lines = set(["summary-confirmation", "off", "--message", said("1")]);
+    expect(lines).not.toContain(ORDER);
+    expect(lines[0]).toStartWith(`${SUMMARY_OFF}, because you said: "1". You can turn it back on any time.`);
+  });
+
   test("a check and the Guard Policy turned off from their words: the same order line first", () => {
-    const { said, set } = project();
+    const { said, set } = project("copilot");
     const freeze = set(["guard.review-freeze", "off", "--message", said("turn the review freeze check off")]);
     expect(freeze[0]).toBe(ORDER);
     expect(freeze[1]).toContain("is off for this piece of work, because you said: \"turn the review freeze check off\".");

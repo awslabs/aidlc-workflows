@@ -1,4 +1,4 @@
-// covers: hook:aidlc-rebuild-stage-graph, subcommand:aidlc-utility:config-change, function:engineErrorRelayLine
+// covers: hook:aidlc-rebuild-stage-graph, subcommand:aidlc-utility:config-change, function:engineErrorRelayLine, function:SAY_ONCE_NOTE_HARNESSES, function:leaveSayOnceNote, function:sayOnceNoteLine
 //
 // A check of the person's switched off in their name from a chat is said to
 // them once, in the setter's own line, and the order that tells the agent so
@@ -106,7 +106,7 @@ function project(tree: Tree) {
     // The Bash PostToolUse hook as the host delivers it after that call.
     postToolUse: (command: string, stdout: string, callId = "call-setter"): string => {
       if (tree === "claude") {
-        const run = spawn([join(proj, ".claude", "hooks", "aidlc-rebuild-stage-graph.ts")], chatEnv(proj),
+        const run = spawn([tool("aidlc.ts"), "engine", "hook", "rebuild-stage-graph"], chatEnv(proj),
           JSON.stringify({
             hook_event_name: "PostToolUse", session_id: SESSION, tool_name: "Bash", tool_input: { command },
             tool_response: { stdout, stderr: "", interrupted: false },
@@ -173,6 +173,23 @@ describe("where the host hands the model a note the person does not see, the ord
     const out = set(id);
     expect(postToolUse("git status --short", "")).toBe("");
     expect(noteOf(postToolUse(setter(id), out))).toBe(`${ORDER}\n${out.trimEnd()}`);
+  });
+
+  test("claude: a call in another chat takes nothing, and output a shell re-encoded is still the setter's call by its message", () => {
+    const { proj, said, set, setter, postToolUse } = project("claude");
+    const id = said("turn the summary confirmation off \u00e9t\u00e9");
+    const out = set(id);
+    const other = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "rebuild-stage-graph"], {
+      cwd: proj, env: chatEnv(proj), encoding: "utf-8",
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse", session_id: "01995000-7a11-7000-8000-0000000051c3", tool_name: "Bash",
+        tool_input: { command: setter(id) }, tool_response: { stdout: out, stderr: "", interrupted: false },
+      }),
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(other.stdout ?? "").toBe("");
+    const mangled = out.replace(/\u00e9/g, "\u0102\u00a9").replace(/\n/g, "\r\n");
+    expect(noteOf(postToolUse(setter(id), mangled))).toBe(`${ORDER}\n${out.trimEnd()}`);
   });
 
   test("opencode: the panel keeps the setter's own lines, and the result the model reads is the order then the lines", async () => {
