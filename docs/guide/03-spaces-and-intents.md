@@ -526,8 +526,10 @@ characters break something AI-DLC relies on, so a folder whose name has one is
 left out of the work, and the first step says which folder and why: `<` `>`
 `:` `"` `|` `?` `*` (Windows cannot hold them in a folder name), `&` `^` `%`
 (AI-DLC's commands on Windows), `(` `)` `[` `]` `{` `}` `;` `$` and a backtick
-(AI-DLC's commands on Cursor), a comma (it separates repo names), a name that
-is `-` or starts with `--`, ends with `@checkout`, or starts or ends with a space.
+(AI-DLC's commands on Cursor), a comma (it separates repo names), an apostrophe
+together with `!` (no one quoting reads both alike in PowerShell and Git Bash on
+Windows), a name that is `-` or starts with `--`, ends with `@checkout`, or starts
+or ends with a space.
 
 ```
 my-project/

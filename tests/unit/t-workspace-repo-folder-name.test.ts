@@ -144,6 +144,11 @@ describe("a repo name is its folder's name as the person gave it", () => {
       ["-", 'is "-", which AI-DLC\'s records use for no repo'],
       ["--lib", 'starts with "--", which AI-DLC\'s commands read as an option'],
       ["x@checkout", 'ends with "@checkout"'],
+      // No one quoting reads an apostrophe beside these the same in PowerShell
+      // and Git Bash, the two shells an agent on Windows runs.
+      ["it's!", "which AI-DLC cannot quote one way for both PowerShell and Git Bash on Windows"],
+      ["it\u2019s!", "which AI-DLC cannot quote one way for both PowerShell and Git Bash on Windows"],
+      ["it's \u201cnew\u201d", "which AI-DLC cannot quote one way for both PowerShell and Git Bash on Windows"],
     ];
     for (const [name, reason] of reasons) {
       expect(repoNameProblem(name) ?? "", JSON.stringify(name)).toContain(reason);
@@ -232,6 +237,18 @@ describe("work in a workspace whose repo folder has a space or another character
     // A name inside a longer folder name is not that repo.
     writeFileSync(join(dir, "code-generation-plan.md"), "# Plan\n\n- Touches: notmy lib/src/greet.py\n");
     expect(codeGenerationPlanNamedPaths(proj, null) ?? []).not.toContain("my lib/src/greet.py");
+  });
+
+  test("beside a repo whose name ends another's, a plan's file in \"my lib\" is not also one in \"lib\"", () => {
+    const proj = workspace("my lib", "lib");
+    created(proj);
+    const record = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents", readIntentRegistry(proj)[0]?.dirName ?? "");
+    const dir = join(record, "construction", "code-generation");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "code-generation-plan.md"), "# Plan\n\n- Touches: `my lib/src/greet.py` and lib/README.md\n");
+    const named = codeGenerationPlanNamedPaths(proj, null) ?? [];
+    expect(named).toEqual(expect.arrayContaining(["my lib/src/greet.py", "lib/README.md"]));
+    expect(named).not.toContain("lib/src/greet.py");
   });
 });
 

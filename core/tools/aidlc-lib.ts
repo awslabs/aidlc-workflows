@@ -23415,6 +23415,14 @@ export function repoNameProblem(name: string): string | null {
   if (name === "-") return 'is "-", which AI-DLC\'s records use for no repo';
   if (name.startsWith("--")) return 'starts with "--", which AI-DLC\'s commands read as an option';
   if (name.endsWith("@checkout")) return 'ends with "@checkout", which names a checkout AI-DLC records';
+  // On Windows the agent's shell is PowerShell or Git Bash, and only double
+  // quotes read an apostrophe alike in both (quoteCommandArgument); these end
+  // or act inside them.
+  const apostrophe = /['\u2018-\u201b]/.exec(name);
+  const alongside = /[!\u201c-\u201e]/.exec(name);
+  if (apostrophe && alongside) {
+    return `has "${apostrophe[0]}" with "${alongside[0]}", which AI-DLC cannot quote one way for both PowerShell and Git Bash on Windows`;
+  }
   return null;
 }
 

@@ -598,14 +598,15 @@ function plansNamedPaths(projectDir: string, units: Array<string | null>): strin
   for (const unit of units) {
     const dir = codeGenerationRecordDir(projectDir, unit);
     for (const file of [PLAN_FILE, INSTRUCTIONS_FILE]) {
-      const text = readText(join(dir, file)).replace(/^## Testing Contract[^\n]*\n\s*```json[\s\S]*?\n```/m, "");
+      const written = readText(join(dir, file)).replace(/^## Testing Contract[^\n]*\n\s*```json[\s\S]*?\n```/m, "");
+      const { words: qualified, rest: text } = repoQualifiedWords(written, repos);
+      for (const word of qualified) named.add(word);
       for (const raw of text.split(new RegExp(`${PLAN_WORD_BREAK.source}+`))) {
         const word = raw.replace(/\\/g, "/").replace(/^\.\//, "").replace(/[.:!?]+$/, "");
         if (word.length > 300 || word.startsWith("..") || word.includes("//") || !PLAN_PATH_WORD_RE.test(word)) continue;
         if (own.some((prefix) => word.startsWith(prefix)) || [PLAN_FILE, INSTRUCTIONS_FILE, QUESTIONS_FILE].includes(word)) continue;
         if (word.includes("/") || /\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(word)) named.add(word);
       }
-      for (const word of repoQualifiedWords(text, repos)) named.add(word);
     }
   }
   return [...named];
@@ -615,15 +616,18 @@ function plansNamedPaths(projectDir: string, units: Array<string | null>): strin
 // above stops at a space or a bracket and keeps ASCII words only, and a repo's
 // folder name may hold either. Each recorded name is found by plain string
 // search, without case on Windows as the guard compares (isPlanWaitSideWrite),
-// and kept as the work records it.
-function repoQualifiedWords(text: string, repos: readonly string[]): string[] {
+// and kept as the work records it. Where two names match at one place, the
+// span that starts first and is longest wins, so "my lib/x" is not also
+// "lib/x"; the text comes back with the spans taken blanked out, for the
+// word split.
+function repoQualifiedWords(text: string, repos: readonly string[]): { words: string[]; rest: string } {
   const slashed = text.replace(/\\/g, "/");
   const folding = process.platform === "win32" && slashed.toLowerCase().length === slashed.length;
   const haystack = folding ? slashed.toLowerCase() : slashed;
   const boundary = (at: number): boolean =>
     at === 0 || PLAN_WORD_BREAK.test(slashed[at - 1]) ||
     (slashed.slice(at - 2, at) === "./" && (at === 2 || PLAN_WORD_BREAK.test(slashed[at - 3])));
-  const words: string[] = [];
+  const found: Array<{ at: number; end: number; word: string }> = [];
   for (const repo of repos) {
     const needle = folding ? `${repo}/`.toLowerCase() : `${repo}/`;
     for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
@@ -632,10 +636,20 @@ function repoQualifiedWords(text: string, repos: readonly string[]): string[] {
       while (end < slashed.length && !PLAN_WORD_BREAK.test(slashed[end])) end++;
       const rest = slashed.slice(at + needle.length, end).replace(/[.:!?]+$/, "");
       if (rest.length > 300 || rest.startsWith("..") || rest.includes("//") || !/^[A-Za-z0-9_.@~/+-]*$/.test(rest)) continue;
-      words.push(`${repo}/${rest}`);
+      found.push({ at, end, word: `${repo}/${rest}` });
     }
   }
-  return words;
+  found.sort((a, b) => a.at - b.at || b.end - a.end);
+  const words: string[] = [];
+  let rest = text;
+  let taken = -1;
+  for (const span of found) {
+    if (span.at < taken) continue;
+    words.push(span.word);
+    rest = `${rest.slice(0, span.at)}${" ".repeat(span.end - span.at)}${rest.slice(span.end)}`;
+    taken = span.end;
+  }
+  return { words, rest };
 }
 
 // What the person reads when their own edit broke the generated block and the
