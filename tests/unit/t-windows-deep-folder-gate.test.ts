@@ -250,16 +250,16 @@ describe("the Units Generation gate", () => {
     expect(JSON.stringify(again)).not.toContain(ANY_SAID);
   });
 
-  test("under Copilot CLI the gate says it with Git's long paths on too, since Copilot's own check refuses", async () => {
+  test("under Copilot CLI the gate says it with Git's long paths on too, since Copilot's own check stops such a path", async () => {
     const { UNIT_RECORD_SUFFIX } = await import(HELPER);
     const { proj } = project((depth, record) => [`u1-${"o".repeat(Math.min(61, Math.max(1, 260 - depth - record - UNIT_RECORD_SUFFIX - 3)))}`]);
-    const git = mkdtempSync(join(tmpdir(), "dg-git-"));
+    const git = mkdtempSync(join(shortTemporaryRoot(), "dg-git-"));
     made.push(git);
     writeFileSync(join(git, ".gitconfig"), "[core]\n\tlongpaths = true\n");
     const opened = openGate(proj, { AIDLC_HARNESS_NAME: "copilot", GIT_CONFIG_GLOBAL: join(git, ".gitconfig") });
     expect(String(opened.message), JSON.stringify(opened)).toContain(`Recorded awaiting-approval for "${STAGE}"`);
     const narration = String(opened.narration ?? "");
-    expect(times(narration, "characters deep; Copilot CLI refuses paths over 260 characters"), narration)
+    expect(times(narration, "characters deep; Copilot CLI asks before every read of a path over 260 characters"), narration)
       .toBe(WINDOWS ? 1 : 0);
   });
 

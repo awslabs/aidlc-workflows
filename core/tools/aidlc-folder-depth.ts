@@ -9,12 +9,16 @@ import { join, win32 } from "node:path";
 // Without Windows long paths (LongPathsEnabled, off by default) PowerShell and
 // cmd refuse a longer path; Git for Windows refuses one unless its
 // core.longpaths is on, whatever Windows says; Node and Bun take it either way.
-// Copilot CLI's own permission check refuses one with both on.
 const WINDOWS_PATH_LIMIT = 260;
 
-// The harnesses whose own check refuses a longer path whatever the machine
-// says, by distribution name: under them only a shorter folder helps.
-const REFUSES_ON_ITS_OWN = new Map([["copilot", "Copilot CLI"]]);
+// The harnesses whose own check stops a longer path whatever the machine says,
+// by distribution name, with what the person meets: Copilot CLI asks before
+// every read of one and `copilot -p` refuses it, with Windows long paths on or
+// off, and no narrow setting lets it through. Under them only a shorter folder
+// helps.
+const OWN_PATH_CHECK = new Map([
+  ["copilot", `Copilot CLI asks before every read of a path over ${WINDOWS_PATH_LIMIT} characters (copilot -p refuses it),`],
+]);
 
 const LONG_PATHS_KEY = "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem";
 const WINDOWS_WAY = `set LongPathsEnabled to 1 in ${LONG_PATHS_KEY} as an administrator`;
@@ -90,7 +94,7 @@ export interface DeepFolder {
  * On Windows, a project folder deep enough that AI-DLC's records would pass
  * 260 characters; null on any other platform, for a folder short enough, and
  * when the machine takes long paths (both settings on) and none of `harnesses`
- * refuses one on its own. With the work's Unit names, their per-Unit records
+ * stops one on its own. With the work's Unit names, their per-Unit records
  * are counted too, under the work's own record folder (relative to the
  * project) when it is given. Reads the path, and the machine's two settings
  * only once the folder is too deep and no such harness is named.
@@ -110,16 +114,16 @@ export function deepFolder(
     : RECORD_DEPTH;
   if (depth + 1 + adds <= WINDOWS_PATH_LIMIT) return null;
   const shorter = `move the project to a shorter folder (for example C:\\src\\${win32.basename(folder)})`;
-  const own = machine.harnesses?.map((name) => REFUSES_ON_ITS_OWN.get(name ?? "")).find(Boolean);
-  let refuses: string;
+  const own = machine.harnesses?.map((name) => OWN_PATH_CHECK.get(name ?? "")).find(Boolean);
+  let limit: string;
   let fix: string;
   if (own) {
-    refuses = `${own} refuses`;
+    limit = own;
     fix = shorter;
   } else {
     const on = (machine.longPaths ?? readLongPaths)(folder);
     if (on.windows && on.git) return null;
-    refuses = on.windows ? "Git refuses" : "Windows tools refuse";
+    limit = `${on.windows ? "Git refuses" : "Windows tools refuse"} paths over ${WINDOWS_PATH_LIMIT} characters`;
     fix = `${shorter}, or ${
       on.windows
         ? `turn Git's long paths on: ${GIT_WAY}`
@@ -128,7 +132,6 @@ export function deepFolder(
         : `turn long paths on: ${WINDOWS_WAY}, then ${GIT_WAY}`
     }`;
   }
-  const facts = `${depth} characters deep; ${refuses} paths over ${WINDOWS_PATH_LIMIT} characters ` +
-    `and AI-DLC's records add about ${adds}`;
+  const facts = `${depth} characters deep; ${limit} and AI-DLC's records add about ${adds}`;
   return { depth, adds, facts, fix, note: `This project folder is ${facts}, so ${fix}.` };
 }

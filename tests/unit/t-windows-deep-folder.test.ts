@@ -1,13 +1,14 @@
 // covers: file:core/tools/aidlc-folder-depth.ts, file:core/tools/aidlc-init.ts, file:core/tools/aidlc-doctor.ts
 //
 // On Windows a project folder deep enough that AI-DLC's records cross 260
-// characters breaks: Copilot CLI's own permission check refuses the reviewer's
-// review file and the stage's questions file, and Git without long paths
-// refuses the committed question files. `aidlc config` says so once, in one
-// line, and `aidlc doctor` shows the same as a row, from one helper and one
-// number. The line reads the machine: with Windows long paths and Git's
-// core.longpaths both on it is silent, except under Copilot CLI, whose own
-// check refuses either way; otherwise it names a shorter folder and the setting
+// characters breaks: Copilot CLI asks before every read of the reviewer's
+// review file and the stage's questions file (copilot -p refuses them), and
+// Git without long paths refuses the committed question files. `aidlc config`
+// says so once, in one line, and `aidlc doctor` shows the same as a row, from
+// one helper and one number. The line reads the machine: with Windows long
+// paths and Git's core.longpaths both on it is silent, except under Copilot
+// CLI, whose own check asks before each read of a longer path (copilot -p
+// refuses it) either way; otherwise it names a shorter folder and the setting
 // still off. Nothing on Linux or macOS, nothing for a short folder, and nothing
 // of the person's is changed. The Windows cases run on Windows Server.
 
@@ -35,7 +36,8 @@ const WINDOWS = process.platform === "win32";
 // paths off, with only Git's off, and under Copilot CLI.
 const SAID = "characters deep; Windows tools refuse paths over 260 characters and AI-DLC's records add about";
 const GIT_SAID = "characters deep; Git refuses paths over 260 characters and AI-DLC's records add about";
-const COPILOT_SAID = "characters deep; Copilot CLI refuses paths over 260 characters and AI-DLC's records add about";
+const COPILOT_SAID = "characters deep; Copilot CLI asks before every read of a path over 260 characters " +
+  "(copilot -p refuses it), and AI-DLC's records add about";
 const ANY_SAID = "characters deep;";
 const KEY = "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem";
 const BOTH_WAY = `, or turn long paths on: set LongPathsEnabled to 1 in ${KEY} as an administrator, ` +
