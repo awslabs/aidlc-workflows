@@ -9367,10 +9367,11 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 // Kiro CLI). A plan the agent names beside it is its reading of their words (a
 // switch), and its step stands. Nothing happens without a
 // chat identity (no record is read), on a read-only probe (an observer learns the
-// directive and never asks), once anything is recorded after their line, or with
-// any other message last (plain words with no question open, a utility). Returns
-// their line's arguments when it took them, for the readings that look at the
-// command as typed.
+// directive and never asks), once anything but the host's session rows is
+// recorded after their line (latestOwnRow), or with any other message last
+// (plain words with no question open, a utility). Returns their line's
+// arguments when it took them, for the readings that look at the command as
+// typed.
 //
 // When the agent's command does carry their request, it routes as passed, and
 // the words it is recorded with (the question copy, the work's description and
@@ -9548,8 +9549,7 @@ function chatLatestMessage(pd: string, session: string): ReturnType<typeof lates
   const latest = latestMessage(pd, session);
   if (latest === null) return null;
   try {
-    const own = basename(auditFilePath(pd));
-    const last = readAuditShardEvents(pd).filter((row) => basename(row.shard) === own).at(-1);
+    const last = latestOwnRow(pd);
     const id = last?.event === "HUMAN_TURN" ? auditBlockField(last.block, "Message Id") : null;
     if (id === null || id === latest.id) return latest;
     const turn = readMessage(pd, id);

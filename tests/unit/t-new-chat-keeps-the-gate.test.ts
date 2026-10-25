@@ -215,6 +215,18 @@ for (const tree of TREES) {
       readsTheirReply(next(tree, proj, SECOND));
     });
 
+    test("the same, with the host's session row recorded after their reply (Copilot CLI's order)", () => {
+      const proj = scanned(tree);
+      newChat(tree, proj, SECOND);
+      says(tree, proj, SECOND, REPLY);
+      const id = auditBlockField(rows(proj, "HUMAN_TURN").at(-1)!.block, "Message Id")!;
+      appendAuditEntry("SESSION_RESUMED", { Source: "resume", Session: SECOND }, proj);
+      const dir = join(proj, "aidlc", ".aidlc-sessions", "messages");
+      const kept = JSON.parse(readFileSync(join(dir, `${id}.json`), "utf-8")) as Record<string, unknown>;
+      writeFileSync(join(dir, "ffffffff.json"), `${JSON.stringify({ ...kept, id: "ffffffff", text: "older words", words: "older words" })}\n`);
+      readsTheirReply(next(tree, proj, SECOND));
+    });
+
     test("in the same chat, a bare next before their answer is logged reads their reply", () => {
       const proj = scanned(tree);
       says(tree, proj, FIRST, REPLY);
