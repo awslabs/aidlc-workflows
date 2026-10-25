@@ -3108,7 +3108,7 @@ function stageBox(state: string, stage: string): string | undefined {
 // of the work ended its turn before the approval gate, and on a host that
 // ignores the Stop hook (Kiro IDE) nothing put it back on track. Whether
 // another pass follows is the engine's own terminal rule (terminalReviewVerdict),
-// whether the learnings question comes first is the run-stage's own rule
+// whether the stage has the learnings step is the run-stage's own rule
 // (learningsRitualRuns), and the gate's command is the report the stage
 // protocol names. A review the person asked for past the budget (even with
 // reviews off) and the one bounded stale-receipt recovery are one-off passes:
@@ -3122,8 +3122,10 @@ function stageBox(state: string, stage: string): string | undefined {
 // directive names: no note. `next` names the same step between the verdict
 // and the gate's report (aidlc-orchestrate.ts finishedReviewStep), where the
 // person's words go with the step `next` hands (their branch would name `next`
-// again) and a learnings question answered since the stage started is not
-// asked again; `endsTurn` says the step ends the turn at the learnings question.
+// again) and a learnings question answered since the stage started (since the
+// Request Changes, for a stage being revised) is not asked again. Whether the
+// step asks one is the agent's reading of the person's words, so the note names
+// it beside the gate's report, and either may end the turn.
 export function reviewVerdictStep(
   pd: string,
   flags: Record<string, string>,
@@ -3138,7 +3140,7 @@ export function reviewVerdictStep(
   },
   selection: { intent: string | null; space: string },
   request: { personAsked: boolean; recovery: boolean },
-  fromNext: { learningsAnswered: boolean; endsTurn?: boolean } | null = null,
+  fromNext: { learningsAnswered: boolean } | null = null,
 ): string | null {
   const { state, node, reviewClass } = context;
   const unit = flags.unit;
@@ -3193,16 +3195,11 @@ export function reviewVerdictStep(
   const stale = request.recovery ||
     backwardJumpBoundary(reviewInvalidationAttemptView(readAuditShardEvents(pd), flags.stage).floor) !== undefined;
   const brief = stageReviewBriefCommand(flags.stage, stale ? "stale" : box === "revising" ? "revision" : "first");
+  const learnings = fromNext?.learningsAnswered !== true &&
+    learningsRitualRuns(ceremonyPolicyValues(getField(state, "Scope"), state).learnings);
   if (box === "in-progress") {
-    if (
-      fromNext?.learningsAnswered !== true &&
-      learningsRitualRuns(ceremonyPolicyValues(getField(state, "Scope"), state).learnings, state, flags.stage)
-    ) {
-      if (fromNext !== null) fromNext.endsTurn = true;
-      return reviewVerdictNote({ kind: "learnings", brief });
-    }
     return reviewVerdictNote({
-      kind: "gate",
+      kind: learnings ? "learnings" : "gate",
       report: stageGateReportCommand(flags.stage, "awaiting-approval"),
       summary: true,
       brief,
@@ -3234,7 +3231,7 @@ export function reviewVerdictStep(
     }
   }
   return reviewVerdictNote({
-    kind: "gate",
+    kind: box === "revising" && learnings ? "learnings" : "gate",
     report: stageGateReportCommand(flags.stage, box === "revising" ? "revised" : "awaiting-approval"),
     summary: false,
     brief,

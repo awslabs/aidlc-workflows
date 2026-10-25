@@ -361,6 +361,8 @@ import {
   type FreshReviewReceipts,
   type ReviewClass,
   isLearningsNoteDecision,
+  LEARNINGS_CORRECTION_ASK,
+  LEARNINGS_CORRECTION_CHOICES,
   LEARNINGS_KEEP_NONE,
   LEARNINGS_KEEP_QUESTION,
   LEARNINGS_NOTE_CHOICES,
@@ -3645,8 +3647,11 @@ function unitMajorStopStage(projectDir: string, stateContent: string, currentSlu
 // autonomous Construction the person who is there answers it; an unattended
 // driver has nobody to answer a plain one. `alone`: no other plain question
 // logged with it waits on the same reply (openDecisionMenu; `log answers` pairs
-// one reply with each). Null outside a [-] stage, or when the state or audit
-// cannot be read (never fail `next`).
+// one reply with each). A stage being revised ([R]) has its questions after its
+// latest Request Changes (stageQuestionBoundary), such as the learnings
+// question about the change asked for there; the Stop hook lets a turn end at
+// [R] already (isHumanWaitStop). Null outside a [-] or [R] stage, or when the
+// state or audit cannot be read (never fail `next`).
 function openStageQuestion(
   projectDir: string,
   stateContent: string,
@@ -3655,10 +3660,11 @@ function openStageQuestion(
     // `**Current Stage**:` with or without the bold markers or backticks, as the hook reads it.
     const stage = (stateContent.match(/Current Stage\*{0,2}:?\s*`?([^\n`]*)`?/)?.[1] ?? "").trim();
     if (stage.length === 0) return null;
-    if (parseCheckboxes(stateContent).find((row) => row.slug === stage)?.state !== "in-progress") return null;
+    const box = parseCheckboxes(stateContent).find((row) => row.slug === stage)?.state;
+    if (box !== "in-progress" && box !== "revising") return null;
     const waits = (block: string | undefined): block is string => block !== undefined && decisionWaitsOnPerson(stateContent, block);
     const alone = (menu: string[]) => menu.filter((row) => auditBlockField(row, "Checkpoint") === null).length <= 1;
-    const menu = openDecisionMenu(projectDir, stage, "STAGE_STARTED");
+    const menu = openDecisionMenu(projectDir, stage, stageQuestionBoundary(box));
     const block = menu.at(-1);
     if (waits(block)) return { stage, block, alone: alone(menu) };
     const ahead = unitMajorStopStage(projectDir, stateContent, stage);
@@ -3671,6 +3677,13 @@ function openStageQuestion(
   } catch {
     return null;
   }
+}
+
+// Where a stage's open questions are read from: its start, or for a stage
+// being revised its latest Request Changes, so a question the person moved past
+// with their reply at the gate is not taken up again.
+function stageQuestionBoundary(box: string | undefined): "STAGE_STARTED" | "GATE_REJECTED" {
+  return box === "revising" ? "GATE_REJECTED" : "STAGE_STARTED";
 }
 
 // The stage whose approval gate is open in a solo walk: the current stage is
@@ -8264,7 +8277,7 @@ function buildRunStageDirective(
   if (node.slug === "code-generation" || node.slug === "build-and-test") {
     protocolModules.push("loopback");
   }
-  if (learningsRitualRuns(ceremony.learnings, stateContent, node.slug)) protocolModules.push("learnings");
+  if (learningsRitualRuns(ceremony.learnings)) protocolModules.push("learnings");
   if (protocolModules.length > 0) {
     directive.protocol_modules = protocolModules;
   }
@@ -12763,10 +12776,10 @@ function stageReviewStep(
 // repeats per Unit, on stage-level files too, keeps its own route after the
 // review (its code plan question, its settled gate). So does a stage with a
 // question still open (a re-entry shows the question again), and one with a
-// note the person picked at the learnings question not written yet (the ritual
+// note the person picked at the learnings question not written yet (the step
 // can run again there). Past that, a learnings question asked since the stage
-// started has its answer, so the step goes on to the gate and never asks it
-// twice.
+// started (since its latest Request Changes, for a stage being revised) has its
+// answer, so the step goes on to the gate and never asks it twice.
 function finishedReviewStep(
   projectDir: string,
   node: GraphStage,
@@ -12777,10 +12790,10 @@ function finishedReviewStep(
   if (isPerUnit(node)) return null;
   const box = parseCheckboxes(stateContent).find((row) => row.slug === node.slug)?.state;
   if (review.stageVerdict === null || (box !== "in-progress" && box !== "revising")) return null;
-  if (openDecisionMenu(projectDir, node.slug, "STAGE_STARTED").length > 0) return null;
-  const learnings = learningsSinceStageStart(projectDir, node.slug);
+  if (openDecisionMenu(projectDir, node.slug, stageQuestionBoundary(box)).length > 0) return null;
+  const learnings = learningsSinceStageStart(projectDir, node.slug, box);
   if (!learnings.settled) return null;
-  const fromNext = { learningsAnswered: learnings.asked, endsTurn: false };
+  const fromNext = { learningsAnswered: learnings.asked };
   const text = reviewVerdictStep(
     projectDir,
     { stage: node.slug, reviewer: node.reviewer as string },
@@ -12791,24 +12804,40 @@ function finishedReviewStep(
     { personAsked: false, recovery: review.stageRecovery === true },
     fromNext,
   );
-  return text === null ? null : { text, endsTurn: fromNext.endsTurn, finished: true };
+  // The step may end the turn at the learnings question or go on to the gate.
+  return text === null ? null : { text, endsTurn: false, finished: true };
 }
 
-// The stage's learnings question since the stage last started (the boundary
-// openStageQuestion reads its open questions from): whether it was logged, and
+// The stage's learnings question since the boundary openStageQuestion reads
+// its open questions from (stageQuestionBoundary): whether it was logged, and
 // whether what the person picked there is done. It is done when every answer
-// to it, and to its question of which notes to keep, picks nothing to add and
-// keeps no note, or when a note was written after the last answer (a
-// RULE_LEARNED or SENSOR_PROPOSED row for the stage). Read are the exact labels
-// the agent recorded and the replies the question box carried back, never the
-// person's words; anything else reads as not done.
-function learningsSinceStageStart(projectDir: string, slug: string): { asked: boolean; settled: boolean } {
+// to it picks No (or, in a record from before, nothing to add and no note
+// kept), or when a note was written after the last answer (a RULE_LEARNED or
+// SENSOR_PROPOSED row for the stage). Read are the exact labels the agent
+// recorded and the replies the question box carried back, never the person's
+// words; anything else reads as not done.
+function learningsSinceStageStart(
+  projectDir: string,
+  slug: string,
+  box: string | undefined,
+): { asked: boolean; settled: boolean } {
   const rows = sortAttemptEvents(readAuditShardEvents(projectDir));
+  const boundary = stageQuestionBoundary(box);
   const start = rows.findLastIndex((row) =>
-    row.event === "STAGE_STARTED" && auditBlockField(row.block, "Stage") === slug &&
+    row.event === boundary && auditBlockField(row.block, "Stage") === slug &&
     auditBlockField(row.block, "Workflow")?.startsWith("single-stage:") !== true);
   const nothing = (picks: string[]) => picks.every((pick) =>
-    offeredChoiceLabel(pick.replace(/^\s*Q\d+:\s*/, ""), [LEARNINGS_NOTE_CHOICES[0], LEARNINGS_KEEP_NONE])?.rest === "");
+    offeredChoiceLabel(pick.replace(/^\s*Q\d+:\s*/, ""),
+      [LEARNINGS_NOTE_CHOICES[0], LEARNINGS_KEEP_NONE, LEARNINGS_CORRECTION_CHOICES[2]])?.rest === "");
+  // The question about a correction carries the person's words, so its box
+  // reply is known by the question's own ending or by the options it offered.
+  const learningsReply = (block: string) => {
+    const question = auditBlockField(block, "Question") ?? "";
+    if (question === LEARNINGS_NOTE_QUESTION || question === LEARNINGS_KEEP_QUESTION) return true;
+    if (question.endsWith(` ${LEARNINGS_CORRECTION_ASK}`)) return true;
+    const options = auditBlockField(block, "Options") ?? "";
+    return LEARNINGS_CORRECTION_CHOICES.every((choice) => options.includes(JSON.stringify(choice)));
+  };
   let asked = false;
   let picked = false;
   let answered = -1;
@@ -12817,8 +12846,7 @@ function learningsSinceStageStart(projectDir: string, slug: string): { asked: bo
   for (let index = start + 1; start >= 0 && index < rows.length; index++) {
     const { event, block } = rows[index];
     if (event === "QUESTION_REPLIED") {
-      const question = auditBlockField(block, "Question");
-      if (question !== LEARNINGS_NOTE_QUESTION && question !== LEARNINGS_KEEP_QUESTION) continue;
+      if (!learningsReply(block)) continue;
       answered = index;
       if (!nothing((auditBlockField(block, "Reply") ?? "").split(", "))) picked = true;
       continue;

@@ -1405,8 +1405,7 @@ export type ReviewVerdictStep =
   | { kind: "person-wrote"; next: string }
   | { kind: "next-pass"; request: string }
   | { kind: "unit"; next: string; complete?: string }
-  | { kind: "learnings"; brief: string }
-  | { kind: "gate"; report: string; summary: boolean; brief: string }
+  | { kind: "learnings" | "gate"; report: string; summary: boolean; brief: string }
   | {
     kind: "reply-stands";
     stage: string;
@@ -1430,8 +1429,10 @@ export function reviewVerdictNote(step: ReviewVerdictStep): string {
       return `No further review pass follows: ${step.complete === undefined ? "" : `record this Unit's completion with \`${step.complete}\`, then `}` +
         `run \`${step.next}\` and follow the step it returns, in this turn.`;
     case "learnings":
-      return `${NO_FURTHER_PASS}say the completion summary, then run the learnings ritual and ask its questions, ` +
-        `which ends the turn. The approval gate comes after their answer, with the review brief that \`${step.brief}\` prints.`;
+      return `${NO_FURTHER_PASS}${step.summary ? "say the completion summary, then " : ""}take the learnings step ` +
+        "(stage-protocol-learnings.md): when it has a question for the person, ask it and end the turn there. After " +
+        `their answer, or now when it has none, run \`${step.report}\`, then \`${step.brief}\`, printing its output ` +
+        "as the review brief, and ask the approval question.";
     case "gate":
       return `${NO_FURTHER_PASS}${step.summary ? "say the completion summary, then " : ""}run ` +
         `\`${step.report}\`, then \`${step.brief}\`, printing its output as the review brief, and ask the approval ` +
