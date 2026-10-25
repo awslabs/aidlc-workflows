@@ -199,7 +199,7 @@ describe("t-changed-before-codegen: what the agent changed before Code Generatio
     agentRuns(proj, "echo 'fixed greeting' >> CHANGELOG.md");
     expect(said(approved(proj))).toBe(
       "During Requirements Analysis, src/app.js and CHANGELOG.md were changed; " +
-        "`git checkout -- src/app.js CHANGELOG.md` puts them back as last committed.",
+        "`git checkout HEAD -- src/app.js CHANGELOG.md` puts them back as last committed.",
     );
     expect(said(next(proj))).toBeNull();
     // What they held before, kept with the work, so a file put back is nobody's change in Code Generation's accounting.
@@ -222,7 +222,7 @@ describe("t-changed-before-codegen: what the agent changed before Code Generatio
     expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
     const step = `${r.stdout}`.includes("src/app.js was changed") ? r.stdout.trim().split("\n").at(-1) ?? "" : next(proj);
     expect(said(step)).toBe(
-      "During Requirements Analysis, src/app.js was changed; `git checkout -- src/app.js` puts it back as last committed.",
+      "During Requirements Analysis, src/app.js was changed; `git checkout HEAD -- src/app.js` puts it back as last committed.",
     );
   });
 
@@ -267,7 +267,7 @@ describe("t-changed-before-codegen: what the agent changed before Code Generatio
     expect(said(next(proj))).toBeNull();
     run(proj, ["revise", "requirements-analysis"], GATE_SETUP);
     expect(said(approved(proj))).toBe(
-      "During Requirements Analysis, src/app.js was changed; `git checkout -- src/app.js` puts it back as last committed.",
+      "During Requirements Analysis, src/app.js was changed; `git checkout HEAD -- src/app.js` puts it back as last committed.",
     );
   });
 
@@ -275,12 +275,12 @@ describe("t-changed-before-codegen: what the agent changed before Code Generatio
     proj = bugfixAtRequirements("reverse-engineering");
     agentWrites(proj, "src/app.js", FIXED);
     expect(said(approved(proj, "reverse-engineering"))).toBe(
-      "During Reverse Engineering, src/app.js was changed; `git checkout -- src/app.js` puts it back as last committed.",
+      "During Reverse Engineering, src/app.js was changed; `git checkout HEAD -- src/app.js` puts it back as last committed.",
     );
     agentRuns(proj, "echo 'fixed greeting' >> CHANGELOG.md");
     run(proj, ["gate-start", "requirements-analysis"], GATE_SETUP);
     expect(said(approved(proj))).toBe(
-      "During Requirements Analysis, CHANGELOG.md was changed; `git checkout -- CHANGELOG.md` puts it back as last committed.",
+      "During Requirements Analysis, CHANGELOG.md was changed; `git checkout HEAD -- CHANGELOG.md` puts it back as last committed.",
     );
 
     cleanupTestProject(proj);
@@ -294,7 +294,7 @@ describe("t-changed-before-codegen: what the agent changed before Code Generatio
     run(proj, ["gate-start", "requirements-analysis"], GATE_SETUP);
     expect(said(approved(proj))).toBe(
       "During Reverse Engineering and Requirements Analysis, src/app.js and CHANGELOG.md were changed; " +
-        "`git checkout -- src/app.js CHANGELOG.md` puts them back as last committed.",
+        "`git checkout HEAD -- src/app.js CHANGELOG.md` puts them back as last committed.",
     );
   });
 
@@ -386,7 +386,7 @@ describe("t-changed-before-codegen: what the agent changed before Code Generatio
     host("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt: "Approve" });
     state(["approve", stage, "--user-input", "Approve"]);
     expect(said(engine([]))).toBe(
-      "During Reverse Engineering, src/app.js was changed; `git checkout -- src/app.js` puts it back as last committed.",
+      "During Reverse Engineering, src/app.js was changed; `git checkout HEAD -- src/app.js` puts it back as last committed.",
     );
   });
 });

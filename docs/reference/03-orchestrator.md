@@ -539,7 +539,7 @@ Another comes from an approval. While the work is still before Code Generation
 at a stage that writes only AI-DLC's own records, the guard keeps the agent's
 writes with the work (`.aidlc-engine/during-work.json`), and `approve` names
 the kept files that still differ, once, with the same way back: "During
-Requirements Analysis, src/app.js was changed; `git checkout -- src/app.js`
+Requirements Analysis, src/app.js was changed; `git checkout HEAD -- src/app.js`
 puts it back as last committed." Their earlier content joins
 `before-pick.json`. Writes once Code Generation is the step are its own
 accounting's, and are never named this way.
