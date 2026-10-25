@@ -28448,8 +28448,7 @@ export function currentStageSourceBaseline(
   );
 }
 
-// The project type a state field or the person's word names, as every reader
-// compares it; null for anything else.
+// The project type a state field or the person's word names; null for anything else.
 export function declaredProjectType(value: string | undefined): "Greenfield" | "Brownfield" | null {
   const word = value?.trim().toLowerCase();
   if (word === "greenfield") return "Greenfield";

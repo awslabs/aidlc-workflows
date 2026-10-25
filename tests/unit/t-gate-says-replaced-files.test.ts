@@ -301,6 +301,21 @@ describe("t-gate-says-replaced-files", () => {
     expect(said(openGate(proj))).toContain("To put it back, run `git checkout HEAD -- README.md`.");
   });
 
+  test("more than ten, the build committed its own: the line names only what it looked up", () => {
+    const brought: Record<string, string> = { "NOTES.md": "my notes\n" };
+    for (let i = 1; i <= 12; i++) brought[`docs/page-${String(i).padStart(2, "0")}.md`] = `page ${i}\n`;
+    const proj = atBuild({ git: true, brought, uncommitted: ["NOTES.md"] });
+    const theirs = git(proj, ["rev-parse", "--short", "HEAD"]).trim();
+    write(proj, Object.fromEntries(Object.keys(brought).map((path) => [path, "# Replaced\n"])));
+    git(proj, ["add", "-A", "--", "docs"]);
+    git(proj, ["commit", "-qm", "the build"]);
+    const line = said(openGate(proj));
+    expect(line).toContain("The build changed or deleted 13 files you had before this work started: NOTES.md, docs/page-01.md,");
+    expect(line).toContain(`To put back the ones found in git, run \`git checkout ${theirs} -- docs/page-01.md`);
+    expect(line).toContain("; NOTES.md has no committed copy to put back.");
+    expect(line).not.toContain("the others");
+  });
+
   test("a path with a space is quoted the way every shell reads it", () => {
     const proj = atBuild({ git: true, brought: { "docs/how to run.md": "steps\n" } });
     write(proj, { "docs/how to run.md": "# Replaced\n" });

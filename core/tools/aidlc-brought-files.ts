@@ -206,21 +206,25 @@ export function broughtFilesLine(ordered: readonly ChangedFile[]): string {
   const commands = andList([...groups].map(([command, paths]) => `\`${command} ${paths.join(" ")}\``));
   const noCopy = named.filter((file) => file.ref === null);
   const noCommand = named.filter((file) => file.ref !== null && quoted(file.path) === null);
+  // Past the named ones, only HEAD is read, so nothing is said of the rest
+  // that git may hold further back.
   if (fromGit.length === 0 && noCommand.length === 0) {
+    if (more > 0) return `${what} Of the files named here, none has a committed copy to put back.`;
     return `${what} ${one ? "There is no committed copy to put back." : "There are no committed copies to put back."}`;
   }
   const whole = noCopy.length === 0 && noCommand.length === 0 && ordered.every((file) => file.ref !== null);
-  const which = whole ? (one ? "it" : "them") : more > 0 ? "the ones git holds" : andList(fromGit.map(shown));
+  const back = whole ? `To put ${one ? "it" : "them"} back` : more > 0
+    ? "To put back the ones found in git"
+    : `To put ${andList(fromGit.map(shown))} back`;
   // Every clause opens with fixed words, so no file name is ever capitalized.
   const clauses = [
-    fromGit.length > 0 ? `To put ${which} back, run ${commands}` : "",
+    fromGit.length > 0 ? `${back}, run ${commands}` : "",
     noCommand.length > 0
       ? `${fromGit.length > 0 ? "git also holds" : "Git holds"} ${andList(noCommand.map(shown))}`
       : "",
-    noCopy.length > 0 && more === 0
+    noCopy.length > 0
       ? `${andList(noCopy.map(shown))} ${noCopy.length === 1 ? "has" : "have"} no committed copy to put back`
       : "",
-    noCopy.length > 0 && more > 0 ? "the others have no committed copy to put back" : "",
   ].filter(Boolean);
   return `${what} ${clauses.join("; ")}.`;
 }
