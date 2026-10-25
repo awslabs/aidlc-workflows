@@ -13367,16 +13367,28 @@ export function rowsAfterMark(projectDir: string, mark: AuditMark): ((row: Audit
   }
 }
 
-// Their latest reply after the mark, as personRepliedAfter counts one, by the
-// message its turn names: that message and its words as the store keeps them,
-// for a decision's row. Null when there is none, or its message is not on record.
-export function latestReplyAfter(projectDir: string, mark: AuditMark): { messageId: string; words: string | null } | null {
+// Their replies after the mark, as personRepliedAfter counts them, oldest
+// first: the message each turn names (null when it names none) and its time.
+// Empty when there is none, or the mark is another shard's.
+export function repliesAfter(projectDir: string, mark: AuditMark): Array<{ messageId: string | null; at: string }> {
   try {
     const shardPath = auditFilePath(projectDir);
-    if (projectRelativePath(projectDir, shardPath) !== mark.shard) return null;
+    if (projectRelativePath(projectDir, shardPath) !== mark.shard) return [];
     const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(mark.offset).toString("utf-8");
-    const turn = auditShardBlocks(after).findLast((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
-    const id = turn === undefined ? null : auditBlockField(turn, "Message Id");
+    return auditShardBlocks(after)
+      .filter((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }))
+      .map((block) => ({ messageId: auditBlockField(block, "Message Id"), at: auditBlockField(block, "Timestamp") ?? "" }));
+  } catch {
+    return [];
+  }
+}
+
+// Their latest reply after the mark, by the message its turn names: that
+// message and its words as the store keeps them, for a decision's row. Null
+// when there is none, or its message is not on record.
+export function latestReplyAfter(projectDir: string, mark: AuditMark): { messageId: string; words: string | null } | null {
+  try {
+    const id = repliesAfter(projectDir, mark).at(-1)?.messageId ?? null;
     if (id === null) return null;
     const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
     const message = readMessage(projectDir, id);

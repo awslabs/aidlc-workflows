@@ -157,6 +157,7 @@ import {
   isRequestTurn,
   CONFIG_KEYS,
   latestReplyAfter,
+  repliesAfter,
   personsGateReply,
   settingsBesideDecision,
   personRepliedSinceGateShown,
@@ -1789,6 +1790,14 @@ function answerEnginePlanApproval(
   if (settings.length > 0) {
     if (choice !== "approve") settingRidesOnlyApprovePlan(settings[0][0]);
     const shown = planApprovalAsk().planQuestionShown(pd);
+    // Several replies: the agent names the one that asked, so the setting
+    // carries their words for it and no other reply's.
+    const replies = flags.message !== undefined || shown === null || shown === "due" ? [] : repliesAfter(pd, shown);
+    if (replies.length > 1) {
+      error(`Their replies since the plan question was shown, oldest first: ` +
+        `${replies.map((one) => `${one.messageId ?? "(no record)"} (${one.at})`).join(", ")}. ` +
+        "Record their choice again with --message <id>, the one that asked for the setting; nothing was recorded.");
+    }
     const reply = flags.message ?? (shown === null || shown === "due" ? null : latestReplyAfter(pd, shown)?.messageId ?? null);
     const set = settingsBesideDecision(pd, resolveInvokingSessionId(pd), settings, reply);
     if ("refusal" in set) error(`${set.refusal} Nothing was recorded: record their choice again without the setting.`);
