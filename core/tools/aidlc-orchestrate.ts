@@ -501,6 +501,7 @@ import {
   type WorkspaceNoun,
   type WorkflowSelection,
   withdrawProtectedReplyWords,
+  withTypedSpacing,
   writeActiveDirectiveMarker,
   writeEngineFileNoFollow,
   type PlanApprovalLegacyOfferCandidate,
@@ -9382,9 +9383,11 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 // word is also a plan's name, all of them when the agent routes on no plan and
 // the rest after that word when it routes on that plan. Any other reading keeps
 // the agent's words, and so does a line with a flag `next` does not take (a
-// mistyped one the agent corrected is not part of the request). Only the
-// request's words change: every other flag and the command's arguments stay
-// the agent's.
+// mistyped one the agent corrected is not part of the request). Whichever
+// words stand, the spacing between them is the one their line typed
+// (withTypedSpacing): Kiro CLI's call carries one argument per word, so the
+// parse joined their "Hello,  World!" with one space. Only the request's words
+// change: every other flag and the command's arguments stay the agent's.
 function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   if (engineSessionId === undefined || isReadOnlyEngineProbe()) return null;
   if (flags.request !== undefined) return null;
@@ -9394,6 +9397,7 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
     const typed = aidlcEntryWords(personsWordsText(message.text));
     if (typed === null || typed.length === 0 || lineHandedOut(pd, engineSessionId, message.id)) return null;
     if (loadStateFileIfPresent(pd) !== null && !turnIsLatestRow(pd, message.id)) return null;
+    flags.intent = withTypedSpacing(flags.intent, typed);
     const own = parseNextFlags(splitKiroCommandArgs(typed));
     if (own.parseError || own.intent === undefined || own.untakenFlag !== undefined) return null;
     const plan = flags.scope ?? flags.positionalScope ?? null;
@@ -9451,6 +9455,7 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   // a question and marked the message) is not read again: the bare `next` the
   // agent runs after that step goes on from it.
   if (own.intent !== undefined && lineHandedOut(pd, engineSessionId, message.id)) return null;
+  if (own.intent !== undefined) own.intent = withTypedSpacing(own.intent, typed);
   for (const key of Object.keys(flags)) delete (flags as unknown as Record<string, unknown>)[key];
   Object.assign(flags, own);
   return argv;

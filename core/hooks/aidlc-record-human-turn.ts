@@ -99,6 +99,7 @@ import {
   type TurnOrigin,
   validSessionId,
   withAuditLock,
+  withTypedSpacing,
   writeProjectHookStatusFile,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
@@ -143,6 +144,8 @@ async function messageParse(typedPrompt: string): Promise<MessageParse> {
     if (flags.parseError) return { words, settings: [], route, command: true };
     // What they said, not what the engine acts on: a flag-shaped token `next`
     // does not take is still one of their words (personWords in the parse).
+    // The parse joins the words with one space; the record keeps the spacing
+    // they typed between them.
     const said = (flags.personWords ?? flags.intent)?.trim() || null;
     const modifiers = typedSettingModifiers(flags);
     const routed = {
@@ -160,7 +163,7 @@ async function messageParse(typedPrompt: string): Promise<MessageParse> {
     const routes = routed.newIntent || routed.scope !== null || routed.projectType !== null ||
       routed.skip.length > 0 || routed.add.length > 0;
     return {
-      words: said,
+      words: said === null ? null : withTypedSpacing(said, entryWords),
       settings: modifiers.map((modifier) => {
         const space = modifier.indexOf(" ");
         return { key: modifier.slice(0, space), value: modifier.slice(space + 1) };

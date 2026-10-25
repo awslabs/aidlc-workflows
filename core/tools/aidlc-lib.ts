@@ -1627,15 +1627,26 @@ function apostropheIsLetter(raw: string, i: number): boolean {
 }
 
 export function splitKiroCommandArgs(raw: string): string[] {
-  const tokens: string[] = [];
+  return commandArgSpans(raw).map((token) => token.text);
+}
+
+// Each token of the split with where it sits on the line: `start` is its first
+// character, `end` the whitespace that ends it (or the line's end), so only
+// whitespace lies between one token's end and the next one's start.
+interface CommandArgSpan { text: string; start: number; end: number }
+
+function commandArgSpans(raw: string): CommandArgSpan[] {
+  const tokens: CommandArgSpan[] = [];
   let current = "";
   let quote: "'" | '"' | null = null;
   let started = false;
+  let from = 0;
   for (let i = 0; i < raw.length; i++) {
     const ch = raw[i];
+    if (!started) from = i;
     if (ch === "\\") {
       const next = raw[i + 1];
-      const outputValueToken = tokens[tokens.length - 1] === "--output";
+      const outputValueToken = tokens[tokens.length - 1]?.text === "--output";
       const windowsPathToken =
         /^[A-Za-z]:$/.test(current) ||
         current.includes("\\");
@@ -1703,7 +1714,7 @@ export function splitKiroCommandArgs(raw: string): string[] {
     }
     if (/\s/.test(ch)) {
       if (started) {
-        tokens.push(current);
+        tokens.push({ text: current, start: from, end: i });
         current = "";
         started = false;
       }
@@ -1712,8 +1723,51 @@ export function splitKiroCommandArgs(raw: string): string[] {
     current += ch;
     started = true;
   }
-  if (started) tokens.push(current);
+  if (started) tokens.push({ text: current, start: from, end: raw.length });
   return tokens;
+}
+
+// The person's own spacing between the words of a line read through
+// splitKiroCommandArgs. The split reads argv, and the engine joins the word
+// tokens it keeps with one space (parseNextFlags), so a run of spaces typed
+// between two words was gone from the record and the request: Kiro CLI hands
+// its hooks a quoted phrase with the quotes removed and the spaces kept, so
+// "Hello,  World!" arrives as two tokens. `words` is some of the line's tokens
+// in order, separated by whitespace; each separator between two tokens that
+// stand next to each other on the line becomes the spaces and tabs typed
+// between them. Any other gap (a line break, a no-break or other Unicode
+// space) stays one plain space, as the split hands it on.
+// A token lines up only whole, at a whitespace boundary in `words`, and
+// `words` is never split again, so the words never change; words that do not
+// line up with the line's tokens come back as they are.
+export function withTypedSpacing(words: string, raw: string): string {
+  const tokens = commandArgSpans(raw);
+  const taken: Array<{ token: number; from: number; to: number }> = [];
+  let at = 0;
+  while (at < words.length && /\s/.test(words[at])) at++;
+  for (let k = 0; k < tokens.length && at < words.length; k++) {
+    const text = tokens[k].text;
+    if (text.length === 0 || !words.startsWith(text, at)) continue;
+    const to = at + text.length;
+    if (to < words.length && !/\s/.test(words[to])) continue;
+    taken.push({ token: k, from: at, to });
+    at = to;
+    while (at < words.length && /\s/.test(words[at])) at++;
+  }
+  if (at < words.length || taken.length === 0) return words;
+  let spaced = words.slice(0, taken[0].from);
+  for (let n = 0; n < taken.length; n++) {
+    const piece = taken[n];
+    spaced += words.slice(piece.from, piece.to);
+    const after = taken[n + 1];
+    if (after === undefined) {
+      spaced += words.slice(piece.to);
+      break;
+    }
+    const typed = raw.slice(tokens[piece.token].end, tokens[after.token].start);
+    spaced += after.token === piece.token + 1 && /^[ \t]+$/.test(typed) ? typed : words.slice(piece.to, after.from);
+  }
+  return spaced;
 }
 
 export const RESERVED_RECORD_NAME_LIST = Object.freeze(
