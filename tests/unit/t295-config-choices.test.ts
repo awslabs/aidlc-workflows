@@ -973,19 +973,24 @@ describe("t295 flags section", () => {
   test("a clear aimed at the shared file with the message it was asked in says the file that keeps the check off", () => {
     const { flags, local, shared, recorded } = heldOffLocally();
     // The command the agent ran in a live run: the id it is handed for every
-    // typed message changes nothing a clear does, and neither does --verbose.
-    for (const extra of [["--message", "e60e556c"], ["--verbose"]]) {
+    // typed message changes nothing a clear does, and neither does --verbose
+    // or the harness the project has.
+    for (const extra of [["--message", "e60e556c"], ["--verbose"], ["--harness", "claude"]]) {
       const named = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes", "--project", ...extra);
       expect(named.status, named.stdout + named.stderr).toBe(0);
       expect(named.stdout.trim(), extra.join(" ")).toBe(STILL_OFF_LOCALLY);
       expect(existsSync(shared), extra.join(" ")).toBe(false);
       expect(readFileSync(local, "utf-8")).toBe(recorded);
     }
+    const other = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--project", "--harness", "codex", "--yes");
+    expect(other.status).toBe(2);
+    expect(other.stdout + other.stderr).toContain("project uses claude; refusing codex");
   });
 
   test("a clear that also changes something else names the file that still keeps the check off", () => {
     const { project, flags, local, recorded } = heldOffLocally();
-    for (const extra of [["--question-retention-days", "3"], ["--harness", "claude"]]) {
+    // The second writes nothing: the shared file already holds it.
+    for (const extra of [["--question-retention-days", "3"], ["--question-retention-days", "3"], ["--harness", "claude"]]) {
       const beside = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--project", ...extra, "--yes");
       expect(beside.status, beside.stdout + beside.stderr).toBe(0);
       expect(beside.stdout, extra.join(" ")).toContain(STILL_OFF_LOCALLY);
