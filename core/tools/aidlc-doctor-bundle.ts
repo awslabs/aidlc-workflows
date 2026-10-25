@@ -74,6 +74,7 @@ import {
   stateFilePath,
   stopHookDir,
 } from "./aidlc-lib.ts";
+import { SECRET_SHAPES } from "./aidlc-audit.ts";
 import { aidlcToolInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
@@ -195,14 +196,14 @@ export function newRedactionContext(projectDir: string): RedactionContext {
   };
 }
 
-// Secret-like token shapes. Deliberately broad: AWS keys, bearer/JWT-ish
-// blobs, generic `key=`/`token=`/`secret=`/`password=` assignments, and long
-// hex/base64 runs. A false positive redacts a harmless string (acceptable); a
-// miss leaks a secret (not). Applied to every emitted string.
+// Secret-like token shapes: the shapes AI-DLC's committed record masks
+// (SECRET_SHAPES, aidlc-audit.ts), then this bundle's broader rules, since a
+// bundle leaves the machine: any Bearer run, any value after a secret's name,
+// and long hex/base64 runs. A false positive redacts a harmless string
+// (acceptable); a miss leaks a secret (not). Applied to every emitted string.
 const SECRET_PATTERNS: Array<{ rule: string; re: RegExp; replace: string }> = [
-  { rule: "aws-access-key", re: /\b(AKIA|ASIA)[A-Z0-9]{16}\b/g, replace: "<redacted-aws-key>" },
+  ...SECRET_SHAPES.map(({ rule, re, doctor }) => ({ rule, re, replace: doctor })),
   { rule: "bearer-token", re: /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}\b/g, replace: "Bearer <redacted-token>" },
-  { rule: "jwt", re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, replace: "<redacted-jwt>" },
   {
     // Matches `password=hunter2`, JSON-shaped `"password": "hunter2"`, AND the
     // JSON-ESCAPED form `{\"password\":\"hunter2\"}` that arises when a secret

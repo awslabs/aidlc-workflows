@@ -8,8 +8,10 @@ Each piece of work keeps two committed records that together provide full tracea
 
 Each intent has its own state file at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/aidlc-state.md` (under the intent's record dir) — the single source of truth for that intent's workflow progress. The engine reads the active intent's state file on every session start to determine what has been completed, what is in progress, and what comes next.
 
-The exact initial description is stored beside it in
-`project-description.json` as one JSON string. `aidlc-state.md` names that
+The initial description is stored beside it in
+`project-description.json` as one JSON string, exactly as typed except that
+anything shaped like a key, token or password is masked (see
+[Keys and passwords you type](#keys-and-passwords-you-type)). `aidlc-state.md` names that
 committed source and keeps only a safe single-line
 `Project` preview, so multiline user input cannot introduce additional state
 fields. Pre-2.6.115 records without the source marker continue to use the
@@ -232,6 +234,26 @@ for paired earlier questions and answers. One reply pairs with every question
 logged for the menu it answered. Open questions and the rare ambiguous answer
 (no question before it, or writers tied at one second) are reported apart.
 Neither command changes files or takes a lock.
+
+### Keys and passwords you type
+
+The state file, `project-description.json` and the audit shards are committed
+with your work, so AI-DLC masks anything shaped like a key, token or password
+before it writes them: a vendor token (GitHub, GitLab, Slack, Stripe, OpenAI,
+Anthropic, Google, npm, Hugging Face, an AWS access key), a private key block,
+a JWT or `Bearer` token, the password in an address
+(`postgres://app:[masked]@db`), and a value set after a secret's name
+(`password=`, `DB_PASSWORD=`, `GITHUB_TOKEN:`) when the value has a letter and
+a digit or symbol in it (after a password's name, words joined by `-`, `.` or
+`_` count too). A reference such as `$DB_PASSWORD` stays, and so does a
+placeholder such as `your-api-key-here`. The rest of your words stay as you typed them, for
+example `**Person Reply**: Approve, the deploy key is [masked]`. Your whole
+message stays only in `aidlc/.aidlc-sessions/`, which AI-DLC's `.gitignore`
+block keeps out of commits. When your message held one, AI-DLC says so once in
+the chat: the chat itself still received it, so change the key where it was
+issued if it is real. Masking goes by shape only, so a secret written another
+way (`my password is hunter2`) is kept as typed, and the doctor bundle masks
+the same shapes and more.
 
 ### Audit event flow
 

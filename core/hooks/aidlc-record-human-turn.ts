@@ -102,7 +102,7 @@ import {
   withAuditLock,
   writeProjectHookStatusFile,
 } from "../tools/aidlc-lib.ts";
-import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
+import { appendAuditEntryUnlocked, maskSecretShapes, saySecretMaskedOnce } from "../tools/aidlc-audit.ts";
 import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import {
@@ -689,6 +689,15 @@ try {
   // the conversational marker still land, as under AIDLC_UNATTENDED=1.
   const workerWorktree = swarmWorkerWorktreeMeta(projectDir) !== null;
   const personHere = mintAllowed && !workerWorktree;
+  // Their message held what looks like a key: the committed record never
+  // keeps it whole, and they hear that once, with the engine's next step. A
+  // shape check only (SECRET_SHAPES), never a reading of the words.
+  const sayIfKeyShaped = (): void => {
+    const theirText = [humanResponseText, ...picked].join("\n");
+    if (!sessionId || !personHere || turnOrigin.kind === "host" || maskSecretShapes(theirText) === theirText) return;
+    const session = sessionId;
+    forThePerson.push(() => saySecretMaskedOnce(projectDir, session));
+  };
   // A help request the person typed is answered here, before any work exists
   // or this chat joins one, on every host that hands this hook's line to the
   // agent (Claude Code, Codex). A host's own turn never gets it.
@@ -755,6 +764,7 @@ try {
     // kept, it would read as the person's prompt where their message is the
     // proof before any work exists (intent creation).
     if (turnOrigin.kind !== "host") keepMessage();
+    sayIfKeyShaped();
     return 0;
   }
   // A field-only rename preserves the stored and effective value, so it carries
@@ -807,6 +817,7 @@ try {
   // The message record (keepMessage above). A setting typed on the line is in
   // it as the engine's own parser read it; nothing is applied here.
   const messageId = keepMessage();
+  sayIfKeyShaped();
   if (existsSync(stateFilePath(projectDir))) {
     // Inside a workflow it lands in the record, before the mint branch and
     // apart from it, so a hook that ran but withheld its mint (AIDLC_UNATTENDED=1,

@@ -958,6 +958,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${HOOK}#pickedLabels`]: { use: "decides", why: "a question box's payload, host structure: the labels the box reports picked, for the HUMAN_TURN row's Picked", from: [`${HOOK}#respond`] },
   [`${HOOK}#carriesSeveralPicks`]: { use: "decides", why: "a question box's payload, host structure: whether the box reports more than one pick", from: [`${HOOK}#respond`] },
   [`${LIB}#emptyPickerResult`]: { use: "decides", why: "a question box's payload, host structure: whether a dismissed box carried any answer", from: [`${HOOK}#respond`] },
+  "core/tools/aidlc-audit.ts#maskSecretShapes": { use: "keeps", why: "key shapes only: whether the turn held one, for the one line about it (saySecretMaskedOnce); the words are kept whole in the message record", from: [`${HOOK}#respond`] },
   [`${LIB}#boxPicksAddANote`]: { use: "decides", why: "a question box's pick, host structure (reading-lead, S7a answers Q3): the latest box reply's labels, never typed words" },
   [`${LIB}#recordGateWords`]: { use: "keeps", why: "the gate-words record's writer: keeps a typed message for the stage gate's record" },
   [`${LIB}#readGateWords`]: { use: "keeps", why: "the gate-words record's own read: checks the file's shape" },

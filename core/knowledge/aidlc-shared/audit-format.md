@@ -453,7 +453,7 @@ The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the can
 - Every entry's timestamp is stamped by the emitting tool or hook; nothing is hand-dated
 - Tool-owned: agents never write a shard directly (a PreToolUse guard refuses it); every row arrives through the owning command
 - Append-only: NEVER modify or delete existing entries
-- No sensitive data (credentials, PII, secrets)
+- No sensitive data (credentials, PII, secrets); the tool masks key, token and password shapes in every value as `[masked]`, the work's description included, and the whole message stays in the git-ignored message record
 - Human decisions recorded verbatim: NEVER summarize
 
 ### Free-form note format (`append-raw`)

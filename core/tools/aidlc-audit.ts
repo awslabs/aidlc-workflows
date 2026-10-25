@@ -18,6 +18,7 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   acquireAuditLock,
+  addPendingPersonLines,
   assertNoSymlinkInChainOrThrow,
   auditFilePath,
   auditBlockField,
@@ -35,9 +36,13 @@ import {
   GIT_PLATFORM_ARGS,
   hasUnsafeSingleLineCharacter,
   isoTimestamp,
+  isReadOnlyEngineProbe,
+  markPersonLineHeardThisTurn,
   mergeReviewRecordsFromDelta,
   parseFieldArgs,
   holdsAuditLock,
+  pendingPersonLines,
+  personLineHeardThisTurn,
   redactProjectDirPrefix,
   relativeRecordDir,
   readRegularFileNoFollowOrThrow,
@@ -45,9 +50,11 @@ import {
   releaseAuditLock,
   requireLiveClaimForTeamUnit,
   resolveBoltIdentity,
+  resolveInvokingSessionId,
   resolveProjectDir,
   resolveWorkflowSelection,
   validateBoltSlug,
+  validSessionId,
   validateLiveUnitScope,
   worktreeClaimBoundaryMatches,
   worktreeAuditFilePath,
@@ -721,6 +728,147 @@ function validateAuditEntry(entry: AuditEntryInput): void {
   }
 }
 
+// What looks like a key, a token or a password, by its shape alone: a vendor's
+// own token prefix, a private key block, a password in an address, or a name
+// that ends in a secret's word set to a value with a letter and a digit or a
+// symbol in it (so `token_limit: 128000`, `cache_key: user-123` and
+// `PASSWORD=$DB_PASSWORD` are a setting, a key name and a reference). AI-DLC's
+// committed record and the doctor bundle share this one list;
+// the bundle adds its broader rules after it. No bare long hex or base64 shape:
+// commit ids, fingerprints and hashes fill the record. A Bearer run or a value
+// with no digit or symbol ("Bearer authentication", "password: required") stays
+// as typed. `record` keeps what names the secret (`STRIPE_KEY=`, `Bearer `);
+// `doctor` is the bundle's own marker. `[masked]` matches no shape, so masking
+// twice changes nothing.
+export const SECRET_MASK = "[masked]";
+export interface SecretShape {
+  rule: string;
+  re: RegExp;
+  record: string;
+  doctor: string;
+}
+// A `$NAME`, `${NAME}` or Windows `%NAME%` reference in a value's place stays.
+const SECRET_REFERENCE = "(?!\\$|%[A-Za-z_][A-Za-z0-9_]*%)";
+const SECRET_VALUE =
+  `${SECRET_REFERENCE}(?=[A-Za-z0-9!@#$%^&*._~+/=:-]*[A-Za-z])(?=[A-Za-z0-9!@#$%^&*._~+/=:-]*[0-9!@#$%^&*~+=])[A-Za-z0-9!@#$%^&*._~+/=:-]{6,}(?<!\\.)`;
+// A password is chosen by a person and can be three or more words
+// ("correct-horse-battery-staple"); one hyphenated word after its name is prose
+// ("case-sensitive", and "case-sensitive." at a sentence's end). A value's
+// closing period is the sentence's, never masked. A token or key is made by a machine and has digits, so a
+// placeholder such as `api_key: your-api-key-here` stays.
+const PASSWORD_VALUE =
+  `${SECRET_REFERENCE}(?=[A-Za-z0-9!@#$%^&*._~+/=:-]*[A-Za-z])` +
+  "(?=[A-Za-z0-9!@#$%^&*._~+/=:-]*[0-9!@#$%^&*~+=]|[A-Za-z0-9!@#$%^&*._~+/=:-]*[._-][A-Za-z0-9!@#$%^&*._~+/=:-]*[._-](?=[A-Za-z0-9]))" +
+  "[A-Za-z0-9!@#$%^&*._~+/=:-]{6,}(?<!\\.)";
+const PASSWORD_NAME = "(?:[A-Za-z0-9]+[_.-])*(?:password|passwd|pwd|passphrase)";
+const SECRET_NAME = "(?:[A-Za-z0-9]+[_.-])*" +
+  "(?:(?:api|access|secret|private|encryption|signing|session|master|license|app)[_-]?key|secret[_-]?key[_-]?base|secret|token)";
+export const SECRET_SHAPES: readonly SecretShape[] = [
+  {
+    // The header, its own `Name: value` lines, one or more base64 runs, and
+    // the END line when the paste has one; a header named in prose stays.
+    rule: "private-key",
+    re: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:(?:\r?\n|\\n)[ \t]*[A-Za-z-]+: [^\r\n\\]*)*(?:[\s\\n]*[A-Za-z0-9+/=]{40,})+(?:[A-Za-z0-9+/=\s\\]*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----)?/g,
+    record: SECRET_MASK,
+    doctor: "<redacted-private-key>",
+  },
+  {
+    rule: "github-token",
+    re: /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})\b/g,
+    record: SECRET_MASK,
+    doctor: "<redacted-token>",
+  },
+  { rule: "gitlab-token", re: /\bglpat-[A-Za-z0-9_-]{20,}/g, record: SECRET_MASK, doctor: "<redacted-token>" },
+  { rule: "slack-token", re: /\bxox[abposr]-[A-Za-z0-9-]{10,}/g, record: SECRET_MASK, doctor: "<redacted-token>" },
+  { rule: "stripe-key", re: /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,}\b/g, record: SECRET_MASK, doctor: "<redacted-key>" },
+  { rule: "anthropic-key", re: /\bsk-ant-(?:api|admin)\d{2}-[A-Za-z0-9_-]{20,}/g, record: SECRET_MASK, doctor: "<redacted-key>" },
+  {
+    // A project key's body runs to 100 or more characters; 40 keeps a slug
+    // such as sk-proj-management-dashboard out. The legacy body has no dash.
+    rule: "openai-key",
+    re: /\bsk-(?:(?:proj|svcacct|admin)-[A-Za-z0-9_-]{40,}|[A-Za-z0-9]{32,}\b)/g,
+    record: SECRET_MASK,
+    doctor: "<redacted-key>",
+  },
+  { rule: "google-api-key", re: /\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])/g, record: SECRET_MASK, doctor: "<redacted-key>" },
+  { rule: "npm-token", re: /\bnpm_[A-Za-z0-9]{36}\b/g, record: SECRET_MASK, doctor: "<redacted-token>" },
+  { rule: "huggingface-token", re: /\bhf_[A-Za-z0-9]{34,}\b/g, record: SECRET_MASK, doctor: "<redacted-token>" },
+  {
+    // A `$NAME`, `${NAME}`, `%NAME%` or `{{ ... }}` reference, or a `<password>`
+    // placeholder, in its place stays.
+    rule: "address-password",
+    re: /\b([A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s:/?#@]*:)(?!\$|\{\{|%[A-Za-z_][A-Za-z0-9_]*%|<)[^\s/?#@]+@/g,
+    record: `$1${SECRET_MASK}@`,
+    doctor: "$1<redacted>@",
+  },
+  { rule: "aws-access-key", re: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, record: SECRET_MASK, doctor: "<redacted-aws-key>" },
+  {
+    rule: "bearer-token",
+    re: /\bBearer\s+(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{12,}\b/g,
+    record: `Bearer ${SECRET_MASK}`,
+    doctor: "Bearer <redacted-token>",
+  },
+  {
+    rule: "jwt",
+    re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+    record: SECRET_MASK,
+    doctor: "<redacted-jwt>",
+  },
+  {
+    // `password=x`, `"db_password": "x"`, and the JSON-escaped
+    // `\"password\":\"x\"` a nested value takes; then the same for
+    // `GITHUB_TOKEN=x`, `AWS_SECRET_ACCESS_KEY=x` and the other names.
+    rule: "assignment-secret",
+    re: new RegExp(String.raw`(?<lead>\b(?<name>${PASSWORD_NAME})\b\\?['"]?\s*[:=]\s*\\?['"]?)${PASSWORD_VALUE}`, "gi"),
+    record: `$<lead>${SECRET_MASK}`,
+    doctor: "$<name>=<redacted>",
+  },
+  {
+    rule: "assignment-secret",
+    re: new RegExp(String.raw`(?<lead>\b(?<name>${SECRET_NAME})\b\\?['"]?\s*[:=]\s*\\?['"]?)${SECRET_VALUE}`, "gi"),
+    record: `$<lead>${SECRET_MASK}`,
+    doctor: "$<name>=<redacted>",
+  },
+];
+
+export function maskSecretShapes(text: string): string {
+  let out = text;
+  for (const { re, record } of SECRET_SHAPES) {
+    re.lastIndex = 0;
+    out = out.replace(re, record);
+  }
+  return out;
+}
+
+// The person's message held what looks like a key (SECRET_SHAPES): AI-DLC's
+// committed record keeps it masked (renderAuditBlock, append-raw, the work's
+// description), and they hear this once, with the next step the agent speaks
+// from. The human-turn hook queues it for the message it keeps; creation
+// queues it for a request whose words no hook kept. Rows that mask an agent's
+// own text, or words the engine reads back later, say nothing.
+export const SECRET_MASKED_LINE =
+  "Your message looked like it held a key or password. AI-DLC keeps it out of its committed record, " +
+  "but this chat still received it, so if it is real, change it where it was issued.";
+
+// Queue SECRET_MASKED_LINE for the chat (`session`, else the chat running
+// this command), unless it is already waiting or this turn heard it. No chat
+// named, no line; never throws, since a line the person may miss never blocks
+// a write or their turn.
+export function saySecretMaskedOnce(projectDir: string, session?: string): void {
+  if (isReadOnlyEngineProbe()) return;
+  try {
+    const chat = validSessionId(session) ?? resolveInvokingSessionId(projectDir);
+    if (chat === null) return;
+    if (personLineHeardThisTurn(projectDir, chat, SECRET_MASKED_LINE) ||
+      pendingPersonLines(projectDir, chat).lines.includes(SECRET_MASKED_LINE)) return;
+    if (addPendingPersonLines(projectDir, chat, [SECRET_MASKED_LINE])) {
+      markPersonLineHeardThisTurn(projectDir, chat, SECRET_MASKED_LINE);
+    }
+  } catch {
+    // Only the line is lost.
+  }
+}
+
 function renderAuditBlock(
   entry: AuditEntryInput,
   timestamp: string,
@@ -734,10 +882,12 @@ function renderAuditBlock(
     // The emitter already wrote these above; re-rendering one would put a
     // second identically-marked line in the block (issue #715).
     if (EMITTER_OWNED_FIELD_KEYS.has(key)) continue;
-    // Escape every JavaScript line terminator in values so a malicious or
-    // malformed input cannot forge a second audit field or event line.
+    // Key shapes are masked before the committed shard keeps a value
+    // (SECRET_SHAPES), whoever wrote it. Escape every JavaScript line
+    // terminator in values so a malicious or malformed input cannot forge a
+    // second audit field or event line.
     const safeValue = redactProjectDirPrefix(
-      String(value),
+      maskSecretShapes(String(value)),
       projectDir,
     ).replace(/\r\n?|\n|\u2028|\u2029/g, "\\n");
     block += `**${key}**: ${safeValue}\n`;
@@ -1196,10 +1346,10 @@ function handleAppendRaw(
   // go through `append`, which validates ownership); non-taxonomy Event lines
   // (custom diagnostics) stay allowed — no query resolves them to authority.
   const expandedBody = redactProjectDirPrefix(
-    body.replace(/\\n/g, "\n"),
+    maskSecretShapes(body.replace(/\\n/g, "\n")),
     projectDir,
   );
-  const safeHeading = redactProjectDirPrefix(heading, projectDir);
+  const safeHeading = redactProjectDirPrefix(maskSecretShapes(heading), projectDir);
   for (const raw of expandedBody.split(/\r\n?|\n|\u2028|\u2029/)) {
     // The same optional bullet the field readers accept (exactAuditField).
     const line = raw.replace(/^-[ \t]*/, "");
