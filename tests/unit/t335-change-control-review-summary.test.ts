@@ -70,9 +70,9 @@ import {
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 
-// The stage's checks run before each review and gate (completionChecksStep,
-// t-checks-before-review); this file's fixture documents are not written for
-// them and its subject is not them, so they stay off here.
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
 process.env.AIDLC_DISABLE_SENSORS = "1";
 
 // The person's message, kept as the prompt hook keeps it: its id is what a

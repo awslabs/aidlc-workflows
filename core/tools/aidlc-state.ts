@@ -7153,10 +7153,9 @@ function failedCheckLines(
 
 // The stage's advisory gate checks run when its documents are written and
 // handed on, before their review, so the agent fixes its own slips and the
-// gate says only what is left. The
-// hand-offs every harness shares: the review request (`log review`, through
-// the `completion-checks` command) and, when no review took them first, the
-// report that opens the gate. The first of them in an attempt fires each check
+// gate says only what is left. The hand-offs every harness shares: the review
+// request (`log review`, through the `completion-checks` command) and, when no
+// review took them first, the report that opens the gate. The first of them in an attempt fires each check
 // on the scope's documents; when one reports findings, the hand-off records
 // nothing and this is the agent's step, with the same command to run again.
 // Its own fires end the hold, so the next call goes on. The gate fires every
