@@ -28,6 +28,7 @@ import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
+  BLOCKING_SENSOR_OVERRIDE_CHOICE,
   readAuditShardEvents,
   personsWordsText,
   setGuardPolicyLine,
@@ -237,6 +238,32 @@ describe("t-gate-shown-again", () => {
     await personSays(proj, "where are we?");
     expect(step(proj, ["next"])).toMatchObject({ kind: "run-stage", gate_only: true });
   });
+
+  // A nightly Codex run: at the open gate the agent fixed a file for a check's
+  // finding and reported it `revised`, which re-enters only a gate a rejection
+  // closed. The engine's error named no step, so the turn ended with no
+  // question shown.
+  for (const override of [false, true]) {
+    test(`a change at the open gate reported as revised${override ? " with the person's override" : ""} names the report that checks the gate again`, async () => {
+      const proj = project("off");
+      openGate(proj);
+      await personSays(proj, "also make an empty name print hello there");
+      askedChange(proj);
+      const extra = override ? ["--override-blocking-sensors", "--user-input", BLOCKING_SENSOR_OVERRIDE_CHOICE] : [];
+      const revised = step(proj, ["report", "--stage", STAGE, "--result", "revised", ...extra]);
+      expect(revised.kind).toBe("print");
+      const recheck = ["report", "--stage", STAGE, "--result", "awaiting-approval"];
+      expect(revised.message).toContain(override
+        ? `${recheck.join(" ")} --override-blocking-sensors --user-input "${BLOCKING_SENSOR_OVERRIDE_CHOICE}"`
+        : `${recheck.join(" ")}\``);
+      const shown = step(proj, [...recheck, ...extra]);
+      expect(shown.message).toBe(`Stage "${STAGE}" is already awaiting approval; gate evidence revalidated.`);
+      const events = readAuditShardEvents(proj).map((row) => row.event);
+      expect(events).not.toContain("GATE_REJECTED");
+      expect(events).not.toContain("STAGE_REVISING");
+      expect(step(proj, ["next"])).toMatchObject({ kind: "run-stage", gate_only: true });
+    });
+  }
 
   test("strict: the changed work at the open gate gets what it got before, not the report step", async () => {
     const proj = project("strict");
