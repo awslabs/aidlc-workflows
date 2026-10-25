@@ -92,7 +92,7 @@ interface BoltInstance {
 interface SensorFiring {
   id: string;
   fire_id: string;                // 8-hex correlator (four random bytes) the sensor dispatcher stamps on every row of one fire
-  result: "passed" | "failed" | "budget-override" | "incomplete"; // the dispatcher's three terminal rows, plus incomplete for a FIRED row with no terminal (in a still-open window, only once the newest stage-start or sensor row is 60 s past it)
+  result: "passed" | "failed" | "could-not-run" | "budget-override" | "incomplete"; // the dispatcher's four terminal rows, plus incomplete for a FIRED row with no terminal (in a still-open window, only once the newest stage-start or sensor row is 60 s past it)
   ts: string;                     // FIRED row's timestamp
   detail_path?: string;
 }

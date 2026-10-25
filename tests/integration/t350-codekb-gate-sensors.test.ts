@@ -153,8 +153,9 @@ describe("t350 reverse-engineering gate sensors reach the CodeKB", () => {
     expect(fired.map(({ pair }) => pair).sort()).toEqual(
       ["required-sections:business-overview.md", "upstream-coverage:business-overview.md"],
     );
-    // A script error or missing tool also lands as SENSOR_PASSED, carrying a
-    // Note; only a Note-free pass means the sensor actually evaluated the file.
+    // A missing tool also lands as SENSOR_PASSED, carrying a Note, and a script
+    // error as SENSOR_COULD_NOT_RUN; only a Note-free pass means the sensor
+    // actually evaluated the file.
     const passed = auditBlocks(project, "SENSOR_PASSED");
     expect(passed).toHaveLength(fired.length);
     expect(passed.map((block) => field(block, "Note")).filter(Boolean)).toEqual([]);

@@ -27,13 +27,17 @@ is fixed or the human-backed override flow above completes. Autonomous mode
 cannot override a blocking sensor.
 
 Failed checks emit a `SENSOR_FAILED` audit row and write findings to
-`<record>/.aidlc-engine/sensors/<stage-slug>/<sensor>-<fire-id>.md`.
+`<record>/.aidlc-engine/sensors/<stage-slug>/<sensor>-<fire-id>.md`. A check
+whose script crashed or could not start emits `SENSOR_COULD_NOT_RUN`: it checked
+nothing.
 
 When a gate opens, or is shown again, the engine's reply names each check that
-still fails on a declared output in its `narration`
+still fails on a declared output, and in one line the checks that could not run,
+in its `narration`
 on its own line after what the stage produced: say it to the person with the
 approval question, never claim coverage a
-check reports against (every requirement traced, every section present), and
+check reports against or could not run (every requirement traced, every section
+present, the code type-checks), and
 when they ask for changes, correct from that detail file. A Unit's own gate
 names that Unit's outputs only; with Sensors off,
 nothing is said about checks.

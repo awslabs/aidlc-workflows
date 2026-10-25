@@ -714,6 +714,31 @@ describe("t311 gate-bound sensor enforcement", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A check whose script crashed checked nothing: it is recorded as could not
+  // run, never as a pass. A blocking one still needs a verified pass, so the
+  // gate stops as it always has and names why; an advisory one stops nothing.
+  test("a check whose script crashes is recorded as could not run; blocking stops the gate, advisory does not", () => {
+    for (const severity of ["blocking", "advisory"] as const) {
+      const fixture = setupFixture(severity);
+      writeFileSync(join(fixture.scripts, "aidlc-sensor-gate-probe.ts"), 'process.stderr.write("boom\\n");\nprocess.exit(1);\n', "utf-8");
+      const result = gate(fixture);
+      const trail = audit(fixture.project);
+      expect(eventCount(trail, "SENSOR_COULD_NOT_RUN"), trail).toBe(2);
+      expect(eventCount(trail, "SENSOR_PASSED")).toBe(0);
+      expect(eventCount(trail, "SENSOR_FAILED")).toBe(0);
+      expect(trail).toContain("**Note**: script-error: exit-1");
+      if (severity === "blocking") {
+        expect(result.status, result.out).toBe(1);
+        expect(result.out).toContain("Blocking gate sensor evaluation did not pass");
+        expect(result.out).toContain("could not run (script-error: exit-1)");
+        expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain("- [-] probe");
+      } else {
+        expect(result.status, result.out).toBe(0);
+        expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain("- [?] probe");
+      }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // The executable fixture requires /bin/sh, which native Windows cannot launch.
   test.skipIf(process.platform === "win32")("compiled dispatch fires sensors through the engine namespace", () => {
     const fixture = setupFixture("blocking", "**/*", true);

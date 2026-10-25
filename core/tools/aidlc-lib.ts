@@ -13059,16 +13059,19 @@ export function blockingSensorPicks(
 }
 
 // The latest terminal result of each of a stage's sensors on each output, by
-// `id@path` (the Output path its row records), from the SENSOR_PASSED and
-// SENSOR_FAILED rows given; nothing is re-fired. A pass that carries a note
-// (the tool was unavailable, the script failed) evaluated nothing: it does not
-// clear the failure recorded before it. The gate's own account of its checks
-// (aidlc-state.ts latestCheckResults) and the Units a Fix findings pick starts
-// again (blockingSensorFixes) read this one fold.
+// `id@path` (the Output path its row records), from the SENSOR_PASSED,
+// SENSOR_FAILED and SENSOR_COULD_NOT_RUN rows given; nothing is re-fired. A
+// check that could not run, or a pass that carries a note (the tool was
+// unavailable), evaluated nothing: it does not clear the failure recorded
+// before it. The gate's own account of its checks (aidlc-state.ts
+// latestCheckResults) and the Units a Fix findings pick starts again
+// (blockingSensorFixes) read this one fold.
 export interface LatestSensorResult {
   id: string;
   output: string;
-  kind: "passed" | "failed";
+  kind: "passed" | "failed" | "could-not-run";
+  // The Unit the write that fired it was for, when its row names one.
+  unit: string | null;
   ts: string;
   pos: number;
   findings: string;
@@ -13078,7 +13081,14 @@ export interface LatestSensorResult {
 export function latestSensorResults(rows: ReadonlyArray<AuditShardEvent>, slug: string): Map<string, LatestSensorResult> {
   const latest = new Map<string, LatestSensorResult>();
   for (const row of rows) {
-    if (row.event !== "SENSOR_PASSED" && row.event !== "SENSOR_FAILED") continue;
+    const kind: LatestSensorResult["kind"] | null = row.event === "SENSOR_PASSED"
+      ? "passed"
+      : row.event === "SENSOR_FAILED"
+        ? "failed"
+        : row.event === "SENSOR_COULD_NOT_RUN"
+          ? "could-not-run"
+          : null;
+    if (kind === null) continue;
     if (auditBlockField(row.block, "Stage slug") !== slug) continue;
     const id = auditBlockField(row.block, "Sensor ID");
     const output = auditBlockField(row.block, "Output path");
@@ -13086,11 +13096,15 @@ export function latestSensorResults(rows: ReadonlyArray<AuditShardEvent>, slug: 
     const key = `${id}@${output}`;
     const seen = latest.get(key);
     if (seen && (seen.ts > row.timestamp || (seen.ts === row.timestamp && seen.pos > row.pos))) continue;
-    if (row.event === "SENSOR_PASSED" && seen?.kind === "failed" && auditBlockField(row.block, "Note") !== null) continue;
+    if (
+      seen?.kind === "failed" &&
+      (kind === "could-not-run" || (kind === "passed" && auditBlockField(row.block, "Note") !== null))
+    ) continue;
     latest.set(key, {
       id,
       output,
-      kind: row.event === "SENSOR_PASSED" ? "passed" : "failed",
+      kind,
+      unit: auditBlockField(row.block, "Unit"),
       ts: row.timestamp,
       pos: row.pos,
       findings: auditBlockField(row.block, "Findings count") ?? "?",

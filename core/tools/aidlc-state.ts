@@ -3739,7 +3739,7 @@ interface SensorFireVerdict {
   sensor_id: string;
   stage: string;
   output_path: string;
-  result: "passed" | "failed" | "budget-override";
+  result: "passed" | "failed" | "could-not-run" | "budget-override";
   detail_path: string | null;
   note?: string;
 }
@@ -3874,6 +3874,7 @@ function parseSensorFireVerdict(stdout: string): SensorFireVerdict | null {
         typeof value.output_path === "string" &&
         (value.result === "passed" ||
           value.result === "failed" ||
+          value.result === "could-not-run" ||
           value.result === "budget-override") &&
         (value.detail_path === null || typeof value.detail_path === "string") &&
         (value.note === undefined || typeof value.note === "string")
@@ -4149,9 +4150,11 @@ function fireGateSensors(
         reason:
           verdict.result === "passed"
             ? verdict.note ?? "invalid passed verdict"
-            : verdict.result === "budget-override"
-              ? "sensor execution exceeded its budget"
-              : "failed verdict omitted its detail path",
+            : verdict.result === "could-not-run"
+              ? `could not run (${verdict.note ?? "no reason recorded"})`
+              : verdict.result === "budget-override"
+                ? "sensor execution exceeded its budget"
+                : "failed verdict omitted its detail path",
       });
     }
   }
@@ -6941,26 +6944,44 @@ function latestGateBriefDigest(pd: string, stage: GateStage, unit: string | unde
 // The latest terminal result of every applicable sensor for every declared
 // artifact on disk, from the audit shards (latestSensorResults); nothing is
 // re-fired here. A failure keeps what the gate row and the spoken line need
-// (the findings count and the detail file); a pass or a check that never ran
-// is its `id@path` key with its state, in the order the gate row spells them.
+// (the findings count and the detail file); a pass, a check that could not run
+// or a check that never ran is its `id@path` key with its state, in the order
+// the gate row spells them. A check that could not run is also kept for the
+// spoken line, and so is one that fires on the stage's writes (the code it
+// writes, never a declared output) whose latest row on a file still there is
+// could-not-run: at a Unit's gate, that Unit's writes only.
 type LatestCheckResults = {
   failed: Array<{ id: string; rel: string; findings: string; detail: string | null; failedOutputs: string | null }>;
+  couldNotRun: Array<{ id: string; rel: string }>;
   rest: string[];
 };
 function latestCheckResults(pd: string, stage: GateStage, unit: string | null = null): LatestCheckResults {
-  const results: LatestCheckResults = { failed: [], rest: [] };
+  const results: LatestCheckResults = { failed: [], couldNotRun: [], rest: [] };
   const sensors = stage.sensors_applicable ?? [];
+  if (sensors.length === 0) return results;
   const paths = declaredOutputsForGate(pd, stage, unit);
-  if (sensors.length === 0 || paths.length === 0) return results;
   const latest = latestSensorResults(readAuditShardEvents(pd), stage.slug);
+  const declared = new Set<string>();
   for (const sensor of sensors) {
     for (const { outputPath: path } of gateSensorOutputs(sensor, paths, stage.slug)) {
       const rel = relative(pd, path).split(sep).join("/");
-      const result = latest.get(`${sensor.id}@${rel}`);
-      if (result === undefined) results.rest.push(`${sensor.id}@${rel}=not-run`);
-      else if (result.kind === "passed") results.rest.push(`${sensor.id}@${rel}=passed`);
-      else results.failed.push({ id: sensor.id, rel, findings: result.findings, detail: result.detail, failedOutputs: result.failedOutputs });
+      const key = `${sensor.id}@${rel}`;
+      declared.add(key);
+      const result = latest.get(key);
+      if (result === undefined) results.rest.push(`${key}=not-run`);
+      else if (result.kind === "passed") results.rest.push(`${key}=passed`);
+      else if (result.kind === "could-not-run") {
+        results.rest.push(`${key}=could-not-run`);
+        results.couldNotRun.push({ id: sensor.id, rel });
+      } else results.failed.push({ id: sensor.id, rel, findings: result.findings, detail: result.detail, failedOutputs: result.failedOutputs });
     }
+  }
+  const onWrites = new Set(sensors.flatMap((sensor) => (sensor.fire_on === "gate" ? [] : [sensor.id])));
+  for (const [key, result] of latest) {
+    if (declared.has(key) || result.kind !== "could-not-run" || !onWrites.has(result.id)) continue;
+    if (unit !== null && stage.for_each === "unit-of-work" && result.unit !== unit) continue;
+    if (!existsSync(isAbsolute(result.output) ? result.output : join(pd, result.output))) continue;
+    results.couldNotRun.push({ id: result.id, rel: result.output });
   }
   return results;
 }
@@ -6983,8 +7004,8 @@ function declaredOutputsForGate(pd: string, stage: GateStage, unit: string | nul
   return paths.filter((path) => pathIsWithin(unitDir, path));
 }
 
-// The gate-open row's field: `id@path=passed|failed(<n>) [detail: <path>]|not-run`,
-// failures first, at most 20 entries spelled out.
+// The gate-open row's field: `id@path=passed|failed(<n>) [detail: <path>]|could-not-run|not-run`
+// for the declared outputs, failures first, at most 20 entries spelled out.
 function sensorStateAtGate(pd: string, stage: GateStage): string {
   // Spelled out here, not at module level: this file runs its command before
   // later module-level declarations are initialized.
@@ -7020,15 +7041,18 @@ function failedCheckWhere(stage: GateStage, rel: string, failedOutputs: string |
 // What the person hears when a gate opens, or is shown again, while a check
 // still fails on a declared output (#2201): one line per failing check, in
 // plain words (the agent corrects from the detail file the sensors protocol
-// module names), at most three lines and then a count. The orchestrator carries
-// them in the gate reply's `narration`, beside what the stage produced, which
-// every harness's agent says to the person with the approval question. Nothing
-// is re-fired; a check that passed later, or never ran, says nothing, and an
-// unreadable record says nothing about the checks. A team's Unit gate speaks
-// for that Unit's outputs only.
+// module names), at most three lines and then a count; then one line, however
+// many, for the checks that could not run (their script crashed or did not
+// start, so they checked nothing). The orchestrator carries them in the gate
+// reply's `narration`, beside what the stage produced, which every harness's
+// agent says to the person with the approval question. Nothing is re-fired; a
+// check that passed later, or never ran, says nothing, and an unreadable record
+// says nothing about the checks. A team's Unit gate speaks for that Unit's
+// outputs and writes only.
 export function failedCheckNotices(pd: string, stage: GateStage, unit: string | null = null): string[] {
   const FAILED_CHECK_LINES = 3;
   let failed: LatestCheckResults["failed"];
+  let couldNotRun: LatestCheckResults["couldNotRun"];
   try {
     // Sensors the person switched off, the scope leaves off, or the project
     // recorded a bypass for say nothing: a check that will not run again is not
@@ -7037,17 +7061,29 @@ export function failedCheckNotices(pd: string, stage: GateStage, unit: string | 
     // checks from running in that process, not the record from being read.
     const stateContent = readStateFile(pd);
     if (resolveCeremony("sensors", getField(stateContent, "Scope"), stateContent, {}, pd).value === "off") return [];
-    failed = latestCheckResults(pd, stage, unit).failed;
+    ({ failed, couldNotRun } = latestCheckResults(pd, stage, unit));
   } catch {
     return [];
   }
+  const checkName = (id: string): string => (id.endsWith("check") ? id : `${id} check`);
   const lines = failed.slice(0, FAILED_CHECK_LINES).map(({ id, rel, findings, failedOutputs }) => {
-    const check = id.endsWith("check") ? id : `${id} check`;
     const count = /^\d+$/.test(findings) ? `${findings} finding${findings === "1" ? "" : "s"}` : "findings";
-    return `The ${check} reports ${count} in ${failedCheckWhere(stage, rel, failedOutputs)}.`;
+    return `The ${checkName(id)} reports ${count} in ${failedCheckWhere(stage, rel, failedOutputs)}.`;
   });
   const more = failed.length - lines.length;
   if (more > 0) lines.push(`${more} more check${more === 1 ? " reports" : "s report"} findings on this stage's outputs.`);
+  if (couldNotRun.length > 0) {
+    const checks = [...new Set(couldNotRun.map(({ id }) => checkName(id)))];
+    const files = [...new Set(couldNotRun.map(({ rel }) => rel))];
+    const who = checks.length === 1
+      ? `The ${checks[0]}`
+      : checks.length === 2
+        ? `The ${checks[0]} and the ${checks[1]}`
+        : `${checks.length} checks`;
+    const others = files.length - 1;
+    const where = `${failedCheckWhere(stage, files[0], null)}${others > 0 ? ` and ${others} other file${others === 1 ? "" : "s"}` : ""}`;
+    lines.push(`${who} could not run on ${where}.`);
+  }
   return lines;
 }
 

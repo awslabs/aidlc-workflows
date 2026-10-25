@@ -280,6 +280,8 @@ const VALID_EVENT_TYPES = new Set([
   "SENSOR_FIRED",
   "SENSOR_PASSED",
   "SENSOR_FAILED",
+  // A check whose script crashed, could not start or gave no verdict.
+  "SENSOR_COULD_NOT_RUN",
   "SENSOR_BUDGET_OVERRIDE",
   "GUARDRAIL_LOADED",
   // Learning Loop (MEMORY_EMPTY emitter wired by aidlc-runtime.ts compile;
@@ -418,6 +420,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   SENSOR_FIRED: "Sensor Fired",
   SENSOR_PASSED: "Sensor Passed",
   SENSOR_FAILED: "Sensor Failed",
+  SENSOR_COULD_NOT_RUN: "Sensor Could Not Run",
   SENSOR_BUDGET_OVERRIDE: "Sensor Budget Override",
   GUARDRAIL_LOADED: "Guardrail Loaded",
   MEMORY_EMPTY: "Memory Empty",

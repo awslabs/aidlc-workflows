@@ -9,7 +9,10 @@
 // line after what the stage produced (which stays whole), and the agent says it
 // to the person with the approval question. The change lines stay what changed (the guard matrix counts them).
 // Nothing is refused and nothing is re-fired: a check that passed later, or
-// never ran, says nothing. The gate-open audit row's `Sensor State` is unchanged.
+// never ran, says nothing. A check whose script crashed or did not start (the
+// dispatcher's could-not-run row) is one line for all of them, after the
+// failures, including a check on the code the stage wrote; the gate-open row's
+// `Sensor State` says `could-not-run` for a declared output.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -91,7 +94,7 @@ function outputPath(absolute: string): string {
 }
 
 function sensorRow(
-  event: "SENSOR_PASSED" | "SENSOR_FAILED",
+  event: "SENSOR_PASSED" | "SENSOR_FAILED" | "SENSOR_COULD_NOT_RUN",
   fireId: string,
   outputRel: string,
   findings = 1,
@@ -103,10 +106,21 @@ function sensorRow(
     "Sensor ID": sensorId,
     "Stage slug": STAGE,
     "Output path": outputRel,
-    ...(event === "SENSOR_PASSED"
-      ? { "Duration ms": "12", ...(note ? { Note: note } : {}) }
-      : { "Detail path": DETAIL(fireId), "Findings count": String(findings) }),
+    ...(event === "SENSOR_FAILED"
+      ? { "Detail path": DETAIL(fireId), "Findings count": String(findings) }
+      : { "Duration ms": "12", ...(note ? { Note: note } : {}) }),
   }, proj);
+}
+
+// The dispatcher's row for a check whose script crashed or did not start.
+function couldNotRun(fireId: string, outputRel: string, sensorId = "required-sections"): void {
+  sensorRow("SENSOR_COULD_NOT_RUN", fireId, outputRel, 0, sensorId, "script-error: exit-1");
+}
+
+function gateRowSensorState(): string {
+  const row = readAuditShardEvents(proj).filter((r) => r.event === "STAGE_AWAITING_APPROVAL").at(-1);
+  expect(row).toBeDefined();
+  return auditBlockField(row!.block, "Sensor State") ?? "";
 }
 
 // The gate shown again. The fixture has no hook heartbeat (no chat ran here), so
@@ -215,6 +229,67 @@ describe("t-gate-names-failed-checks: a check that still fails is said with the 
     const again = shownAgain();
     expect(again.gate_only, JSON.stringify(again)).toBe(true);
     expect(String(again.narration ?? "")).not.toContain("check reports");
+  });
+
+  // A check whose script crashed or did not start checked nothing: the gate
+  // says so in one line, never as a pass, and asks nothing more.
+  test("a check that could not run is said once, in one line, and the gate row says could-not-run", () => {
+    const rel = outputPath(writeArtifact("feasibility-assessment"));
+    couldNotRun("aaaa0005", rel);
+    const opened = openGate();
+    const narration = String(opened.narration ?? "");
+    expect(narration).toContain("The required-sections check could not run on feasibility-assessment.md.");
+    expect(narration.match(/could not run/g) ?? []).toHaveLength(1);
+    expect(narration).not.toContain("check reports");
+    expect(opened.change_notices).toBeUndefined();
+    expect(gateRowSensorState()).toContain(`required-sections@${rel}=could-not-run`);
+    expect(gateRowSensorState()).not.toContain(`required-sections@${rel}=passed`);
+    const shown = shownAgain();
+    expect(shown.gate_only, JSON.stringify(shown)).toBe(true);
+    expect(String(shown.narration ?? "")).toContain("The required-sections check could not run on feasibility-assessment.md.");
+  });
+
+  test("checks that could not run on several files are one line, after the failing checks", () => {
+    const assessment = outputPath(writeArtifact("feasibility-assessment"));
+    const register = outputPath(writeArtifact("constraint-register"));
+    const raid = outputPath(writeArtifact("raid-log"));
+    couldNotRun("aaaa0006", assessment);
+    couldNotRun("aaaa0007", register);
+    // upstream-coverage reads the folder once, on its first document.
+    couldNotRun("aaaa000e", assessment, "upstream-coverage");
+    sensorRow("SENSOR_FAILED", "aaaa0008", raid, 2);
+    const narration = String(openGate().narration ?? "");
+    expect(narration).toContain(
+      "The required-sections check reports 2 findings in raid-log.md. " +
+        "The required-sections check and the upstream-coverage check could not run on feasibility-assessment.md and 1 other file.",
+    );
+    expect(narration.match(/could not run/g) ?? []).toHaveLength(1);
+  });
+
+  test("a check that could not run leaves the failure before it said, and after a pass it is said", () => {
+    const assessment = outputPath(writeArtifact("feasibility-assessment"));
+    const register = outputPath(writeArtifact("constraint-register"));
+    sensorRow("SENSOR_FAILED", "aaaa0009", assessment, 3);
+    couldNotRun("aaaa000a", assessment);
+    sensorRow("SENSOR_PASSED", "aaaa000b", register);
+    couldNotRun("aaaa000c", register);
+    const narration = String(openGate().narration ?? "");
+    expect(narration).toContain("The required-sections check reports 3 findings in feasibility-assessment.md.");
+    expect(narration).toContain("The required-sections check could not run on constraint-register.md.");
+    expect(narration).not.toContain("could not run on feasibility-assessment.md");
+    expect(gateRowSensorState()).toContain(`required-sections@${register}=could-not-run`);
+  });
+
+  test("with Sensors switched off, a check that could not run says nothing; the record keeps it", () => {
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace("- **Scope**: feature\n", "- **Scope**: feature\n- **Sensors**: off (set by you)\n"),
+    );
+    const rel = outputPath(writeArtifact("feasibility-assessment"));
+    couldNotRun("aaaa000d", rel);
+    expect(String(openGate().narration ?? "")).not.toContain("could not run");
+    expect(gateRowSensorState()).toContain(`required-sections@${rel}=could-not-run`);
   });
 
   // A sentence that told the agent to correct every failing check had a Kiro
@@ -347,6 +422,48 @@ describe("t-gate-names-failed-checks: a team's Unit gate names that Unit's outpu
     const shown = (again.directive ?? {}) as Record<string, unknown>;
     expect(shown.unit, JSON.stringify(again)).toBe("alpha");
     expect(String(shown.narration ?? "")).not.toContain("5 findings");
+  });
+
+  // A check that fires on the stage's writes (type-check, linter) runs on the
+  // code the stage writes, never a declared output: when it could not run, the
+  // gate still says so, for the files still there and that Unit's writes only.
+  test("alpha's gate says the type-check could not run on alpha's code, not beta's, and nothing for a file that is gone", () => {
+    const written = (rel: string): string => {
+      const path = join(proj, ...rel.split("/"));
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, "export const v: number = 1;\n");
+      return rel;
+    };
+    const couldNotRunOn = (fireId: string, unit: string, outputRel: string): void => {
+      appendAuditEntry("SENSOR_COULD_NOT_RUN", {
+        "Fire id": fireId,
+        "Sensor ID": "type-check",
+        "Stage slug": UNIT_STAGE,
+        Unit: unit,
+        "Output path": outputRel,
+        "Duration ms": "40",
+        Note: "script-error: exit-1",
+      }, proj);
+    };
+    const opened = runOrchestrateNext(ORCHESTRATE, proj, [], { env: envFor(TEAM_ENV) });
+    expect(((opened.directive ?? {}) as Record<string, unknown>).unit, JSON.stringify(opened)).toBe("alpha");
+    const started = run(STATE, ["unit", "start", "--stage", UNIT_STAGE, "--unit", "alpha"], TEAM_ENV);
+    expect(started.rc, started.out).toBe(0);
+    for (const name of UNIT_PRODUCES) unitArtifact("alpha", name);
+    couldNotRunOn("bbbb0001", "alpha", written("src/alpha.ts"));
+    couldNotRunOn("bbbb0002", "alpha", written("src/alpha.test.ts"));
+    couldNotRunOn("bbbb0003", "alpha", "src/gone.ts");
+    couldNotRunOn("bbbb0004", "beta", written("src/beta.ts"));
+    const completed = run(STATE, ["unit", "complete", "--stage", UNIT_STAGE, "--unit", "alpha"], TEAM_ENV);
+    expect(completed.rc, completed.out).toBe(0);
+    for (const name of UNIT_PRODUCES) unitArtifact("beta", name);
+    const gate = reply(ORCHESTRATE, ["report", "--stage", UNIT_STAGE, "--unit", "alpha", "--result", "awaiting-approval"], TEAM_ENV);
+    expect(gate.kind, JSON.stringify(gate)).toBe("print");
+    const narration = String(gate.narration ?? "");
+    expect(narration).toContain("The type-check could not run on alpha.ts and 1 other file.");
+    expect(narration.match(/could not run/g) ?? []).toHaveLength(1);
+    expect(narration).not.toContain("beta.ts");
+    expect(narration).not.toContain("gone.ts");
   });
 });
 
