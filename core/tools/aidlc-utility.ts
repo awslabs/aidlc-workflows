@@ -335,6 +335,7 @@ import {
   addedStagesPassedOver,
   addReachesPassedOver,
   stageAddedBack,
+  stageSkippedWhereItStood,
   constructionHasStarted,
   reverseEngineeringOwedBehindCursor,
   planWithChanges,
@@ -12551,8 +12552,10 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       const state = checkboxMap.get(slug);
       // A stage the work skipped where it stood, added, goes back on the line
       // not started (stageAddedBack) wherever the checks below say the work
-      // still reaches it; anywhere else it is refused as before.
-      const putBack = !skipping && state === "skipped";
+      // still reaches it; anywhere else it is refused as before, and so is one
+      // every Unit skipped.
+      const putBack = !skipping && state === "skipped" &&
+        stageSkippedWhereItStood(projectDir, content, slug, flags.intent, flags.space);
       const frozen = `its checkbox is not pending ([${state}]), so the plan can no longer change it.`;
       if (state === "completed" || state === "in-progress" || (state === "skipped" && !putBack) ||
           state === "awaiting-approval" || state === "revising") {
@@ -12569,7 +12572,8 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       // an add (the skip's undo) puts it back where `next` runs it.
       const owedRe = slug === "reverse-engineering" &&
         (skipping || declaredProjectType(getField(content, "Project Type") ?? "") === "Brownfield") &&
-        reverseEngineeringOwedBehindCursor(skipping ? content : stageAddedBack(content, slug),
+        reverseEngineeringOwedBehindCursor(
+          skipping ? content : addList.reduce((probe, each) => stageAddedBack(probe, each), content),
           recordDir(projectDir, flags.intent, flags.space));
       // A stage the work has just passed over, while nothing after it has
       // started, is one `next` goes back to (addedStagesPassedOver): the add
@@ -12577,7 +12581,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       // its undo takes it off again before `next` gets there.
       const passedOver = skipping
         ? addedStagesPassedOver(content, projectDir, flags.intent, flags.space).includes(slug)
-        : addReachesPassedOver(content, slug, recordDir(projectDir, flags.intent, flags.space));
+        : addReachesPassedOver(content, slug, recordDir(projectDir, flags.intent, flags.space), addList);
       if (!owedRe && !passedOver && currentIdx !== -1 && idx !== -1 && idx <= currentIdx) {
         if (putBack) reject(slug, `${frozen} ${runAlone(slug)}`);
         const instead = idx === currentIdx

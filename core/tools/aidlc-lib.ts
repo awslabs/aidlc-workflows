@@ -42377,16 +42377,38 @@ export function stageAddedBack(content: string, slug: string): string {
     : added;
 }
 
+// A stage the work skipped where it stood: marked skipped as a whole. One a
+// Unit walk marked skipped because every Unit skipped it is not: its Units'
+// skips (unitSkippedUnits), not its mark, say which Unit still owes it.
+export function stageSkippedWhereItStood(
+  projectDir: string,
+  content: string,
+  slug: string,
+  intent?: string,
+  space?: string,
+): boolean {
+  return parseCheckboxes(content).some((c) => c.slug === slug && c.state === "skipped") &&
+    unitSkippedUnits(projectDir, slug, readAuditShardEvents(projectDir, intent, space), content).size === 0;
+}
+
 // Whether an add of `slug` puts back a stage the work has just passed over
 // (stagesPassedOverJustNow): one its scope skips, or one the work skipped where
 // it stood. A stage the scope runs that the work passed another way (behind
-// the cursor after a scope change) stays as it is. Recompose takes such an
-// add, and the step that names it carries on into the stage.
-export function addReachesPassedOver(content: string, slug: string, workRecordDir: string | null | undefined): boolean {
+// the cursor after a scope change) stays as it is. It is read with every stage
+// the same add puts back (`together`), so stages skipped one after another come
+// back together. Recompose takes such an add, and the step that names it
+// carries on into the stage.
+export function addReachesPassedOver(
+  content: string,
+  slug: string,
+  workRecordDir: string | null | undefined,
+  together: readonly string[] = [],
+): boolean {
   const scopeRuns = loadScopeMapping()[getField(content, "Scope")?.trim() ?? ""]?.stages[slug] === "EXECUTE";
   const skippedWhereItStood = parseCheckboxes(content).some((c) => c.slug === slug && c.state === "skipped");
   if (scopeRuns && !skippedWhereItStood) return false;
-  return stagesPassedOverJustNow(stageAddedBack(content, slug), workRecordDir).includes(slug);
+  const added = [...new Set([slug, ...together])].reduce((state, each) => stageAddedBack(state, each), content);
+  return stagesPassedOverJustNow(added, workRecordDir).includes(slug);
 }
 
 // The stages the person put back on the plan after the work had just passed
