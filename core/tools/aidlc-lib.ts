@@ -3939,14 +3939,15 @@ function mainCheckoutRepoName(projectDir: string): string | null {
 
 // A folder's name as a repo name, for a name the engine records on its own (a
 // project root no repo is registered for, a checkout the work found), never a
-// name the person typed: those are checked as they are. A name the rule takes
-// comes back byte for byte. Otherwise accents are dropped first, so a macOS
-// (NFD) and a Windows or Linux (NFC) spelling of one name agree, each run of
-// characters the rule does not take becomes "-", and anything before the first
-// letter or digit and any trailing "-" go: "portal app" is portal-app. Empty
-// when no letter or digit is left; the caller names its fallback.
+// name the person typed: those are checked as they are. A name already in the
+// shape the engine coins (REPO_NAME_REGEX) comes back byte for byte. Otherwise
+// accents are dropped first, so a macOS (NFD) and a Windows or Linux (NFC)
+// spelling of one name agree, each run of other characters becomes "-", and
+// anything before the first letter or digit and any trailing "-" go: "portal
+// app" is portal-app. Empty when no letter or digit is left; the caller names
+// its fallback.
 export function folderRepoName(folder: string): string {
-  if (isValidRepoName(folder)) return folder;
+  if (REPO_NAME_REGEX.test(folder)) return folder;
   return folder
     .normalize("NFKD")
     .replace(/\p{M}+/gu, "")
@@ -23382,9 +23383,9 @@ export function legacyParkedRefPrefix(slug: string): string {
 // repoDir resolves the on-disk dir for a repo name; it does NOT validate that the
 // dir exists or is a git repo (the caller does, where the git op runs).
 
-// The shape of a name the engine coins itself: letters, digits, ".", "_" and
-// "-", starting with a letter or digit. A repo folder's own name is read as the
-// person named it (repoNameProblem).
+// The shape of a name the engine coins itself (folderRepoName): letters,
+// digits, ".", "_" and "-", starting with a letter or digit. A repo folder's own
+// name is read as the person named it (repoNameProblem).
 export const REPO_NAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 // A repo is named by its folder directly in the workspace, as the person named

@@ -133,7 +133,7 @@ level up, in the space-level per-repo CodeKB —
 `aidlc/spaces/<space>/codekb/<repo>/` — one store per repo rather than a copy
 per intent. When the project folder is itself the repo, `<repo>` starts as the
 folder's name (the main checkout's name in a linked git worktree), with each
-character a repo name cannot hold made a hyphen (`portal app` is `portal-app`;
+character other than a letter, a digit, `.`, `_` or `-` made a hyphen (`portal app` is `portal-app`;
 the folder keeps its name), and stays with the store: a moved, renamed or copied project folder keeps reading the same
 store. The exception is a space holding two or more stores that no intent
 records as its repo: there the current folder name is used, and the next step
