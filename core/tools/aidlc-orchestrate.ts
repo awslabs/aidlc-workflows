@@ -3755,6 +3755,12 @@ function replyIdsNote(replies: Array<{ id: string; at: string }>, command: strin
     `and not the others, add \`--message <id>\` to the ${command}.`;
 }
 
+// The step an agent reads as it shows a gate: a setting asked in the same
+// reply as the approval rides the approval report, since a message that
+// already gave an approval does not also change a setting.
+const SETTING_RIDES_APPROVAL = "When their reply approves and also asks for a setting, add that setting's " +
+  "`config set` flag to the approval report (`--result approved --user-input \"Approve\" --plan-approval off`).";
+
 // Words while a stage's approval gate is open: the conductor reads whether
 // they answer it, the same split as openQuestionReplyDirective.
 function openGateReplyDirective(
@@ -19279,6 +19285,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     if (flags.result === "awaiting-approval" || flags.result === "revised") {
       leadsToSpeech.add(gateReply);
       if (gateReply.kind === "print") {
+        gateReply.message = `${gateReply.message} ${SETTING_RIDES_APPROVAL}`;
         const listed = approvesTogetherFromToolOutput(res.stdout);
         const next = nextInScopeStage(listed.at(-1) ?? slug, scope, loadStateFileIfPresent(pd) ?? undefined);
         gateReply.next_stage = next ? next.name : null;
