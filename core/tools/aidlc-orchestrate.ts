@@ -625,7 +625,14 @@ import {
   runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { terminalDispatcherArgv } from "./aidlc.ts";
-import { appendAuditEntries, appendAuditEntry, type AuditEntryInput, SESSION_EVENT_TYPES } from "./aidlc-audit.ts";
+import {
+  appendAuditEntries,
+  appendAuditEntry,
+  type AuditEntryInput,
+  maskSecretShapes,
+  saySecretMaskedOnce,
+  SESSION_EVENT_TYPES,
+} from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
 import {
@@ -16273,6 +16280,10 @@ function ensureSingleStageStarted(
 ): { error: string } | { settings: SingleRunSettings; restarted: false | "settings" | "request"; kept: KeptCopy | null } {
   let settings = typed;
   let restarted: false | "settings" | "request" = false;
+  // The committed record keeps key shapes masked (SECRET_SHAPES), as a piece of
+  // work's project-description.json does; the whole message stays in the
+  // git-ignored message record.
+  const words = request === null ? null : maskSecretShapes(request);
   let kept: KeptCopy | null = null;
   if (singleStageAttemptIsOpen(projectDir, node.slug)) {
     const recordedScope = singleStageAttemptScope(projectDir, node.slug);
@@ -16293,8 +16304,8 @@ function ensureSingleStageStarted(
     // With no work, other words than the ones its start kept are a new request:
     // the run starts over with them, as it does with a setting typed differently.
     const keptRequest = singleStageAttemptField(projectDir, node.slug, SINGLE_RUN_REQUEST_FIELD);
-    const newRequest = request !== null && keptRequest !== null && loadStateFileIfPresent(projectDir) === null &&
-      singleRunRequestDigest(request) !== keptRequest;
+    const newRequest = words !== null && keptRequest !== null && loadStateFileIfPresent(projectDir) === null &&
+      singleRunRequestDigest(words) !== keptRequest;
     if (!changed && !newRequest) {
       // A start with no Kept Copy keeps its copy now, so an attempt opened
       // before an upgrade does not write over the work's files with no way
@@ -16318,9 +16329,10 @@ function ensureSingleStageStarted(
   // this start are the run's own (singleRunRequest). A copy that cannot be
   // kept leaves the run with none, and the agent asks.
   let requestDigest: string | null = null;
-  if (request !== null && loadStateFileIfPresent(projectDir) === null) {
+  if (words !== null && loadStateFileIfPresent(projectDir) === null) {
     try {
-      requestDigest = keepSingleRunRequest(projectDir, node.slug, request);
+      requestDigest = keepSingleRunRequest(projectDir, node.slug, words);
+      if (words !== request) saySecretMaskedOnce(projectDir);
     } catch {
       requestDigest = null;
     }

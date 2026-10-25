@@ -37041,9 +37041,9 @@ export function runRecordDir(projectDir: string): string | null {
 
 // The words typed after the flags of a stage run on its own with no work: its
 // description, where a piece of work keeps project-description.json. Kept
-// whole in the space's own record, one file a stage, committed as that file is
-// (so a team clone has them), and bound to the start that kept them by their
-// digest on its STAGE_STARTED row.
+// in the space's own record with key shapes masked as that file masks them,
+// one file a stage, committed as that file is (so a team clone has them), and
+// bound to the start that kept them by their digest on its STAGE_STARTED row.
 const SINGLE_RUN_REQUEST_DIR = "single-stage-request";
 export const SINGLE_RUN_REQUEST_FIELD = "Request SHA-256";
 

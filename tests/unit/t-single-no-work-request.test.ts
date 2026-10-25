@@ -6,8 +6,9 @@
 // person's request with `project-description`, which then failed with ENOENT
 // on the missing aidlc-state.md, and Codex stopped the stage there and told the
 // person to run --doctor. The run's start now keeps the words typed after the
-// flags, whole, and `project-description` returns them while that run is open,
-// or no description (exit 0) when none were typed, so the agent asks once.
+// flags (a key shape masked, as the work's own description masks it), and
+// `project-description` returns them while that run is open, or no description
+// (exit 0) when none were typed, so the agent asks once.
 
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -20,7 +21,7 @@ import {
   seedAidlcMemory,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { cpSync, mkdtempSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -130,6 +131,16 @@ describe("the request of a stage run on its own with no work", () => {
     const clone = mkdtempSync(join(tmpdir(), "aidlc-test-clone-"));
     cpSync(proj, clone, { recursive: true, filter: (from) => !/[\\/]\.aidlc-engine([\\/]|$)/.test(from) });
     expect(projectDescription(clone).json).toEqual({ description: "add due dates to each todo", source: `single-stage:${STAGE}` });
+  });
+
+  test("a key typed with the request is kept masked, as a piece of work's description keeps it", () => {
+    const proj = noWorkProject();
+    // Put together at run time, so no line of this file is shaped like a key.
+    const key = `sk_live_${"aB3dE5gH7jK9mN1pQ3sT5vW7".repeat(2).slice(0, 28)}`;
+    startIsolated(proj, [`add payments, my .env has STRIPE_KEY=${key}`]);
+    expect(projectDescription(proj).json?.description).toBe("add payments, my .env has STRIPE_KEY=[masked]");
+    const kept = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", "single-stage-request", `${STAGE}.json`), "utf-8");
+    expect(kept).not.toContain(key);
   });
 
   test("inside work the work's own description is read, as before", () => {
