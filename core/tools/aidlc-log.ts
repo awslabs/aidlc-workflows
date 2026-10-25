@@ -11,6 +11,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { CONFIG_KEYS } from "./aidlc-guard-switch.ts";
 import { prepareReviewCopy, removeReviewCopy } from "./aidlc-kiro-review-copy.ts";
 import {
   chatsSince,
@@ -155,7 +156,9 @@ import {
   readAuditShardEvents,
   backgroundAgentOutSince,
   isRequestTurn,
+  latestReplyAfter,
   personsGateReply,
+  settingsBesideDecision,
   personRepliedSinceGateShown,
   windowMessageIds,
   personSpokeSinceReviewRequest,
@@ -565,9 +568,11 @@ const DECISION_OPTIONS: ReadonlySet<string> = new Set([
 // --on-instruction: a stage question the person left to the agent, with
 // --message naming the message that left it.
 // --ends-turn: their reply also asked something, which the agent answers.
+// The `config set` keys: a setting the same reply asked for, beside an Approve
+// Plan (settingsBesideDecision).
 const ANSWER_OPTIONS: ReadonlySet<string> = new Set([
   ...LOG_INTERACTION_OPTIONS, "--details", "--units", "--reason", "--park", "--on-instruction",
-  "--details-file", "--on-instruction-file", "--ends-turn",
+  "--details-file", "--on-instruction-file", "--ends-turn", ...CONFIG_KEYS.map((key) => `--${key}`),
 ]);
 
 // The person has said something in this piece of work: a turn that can carry a
@@ -1716,6 +1721,15 @@ function answerLegacyPlanApprovalRecovery(pd: string, flags: Record<string, stri
 // themselves, for every Unit asked about or the ones named in --unit/--units.
 // What to change is the person's own words unless --reason says it. --park
 // records that they also asked to stop for now.
+// A setting the person asked for in their reply rides only an Approve Plan
+// (settingsBesideDecision); beside any other answer it is run on its own first.
+function settingRidesOnlyApprovePlan(setting: string): never {
+  return error(
+    `A setting (--${setting}) rides only an Approve Plan: run the setter on its own first ` +
+      `(\`${aidlcDispatcherInvocation("config set")}\` with --message <id>, the message they asked in), then this answer without it.`,
+  );
+}
+
 function answerEnginePlanApproval(
   pd: string,
   flags: Record<string, string>,
@@ -1766,6 +1780,20 @@ function answerEnginePlanApproval(
       opening = { words: personsWordsText(proof.message.words), at: proof.message.at };
     }
   }
+  // A setting the same reply asked for ("approve the plan, and turn plan
+  // approval off from here") is written first, on their reply since the plan
+  // question was shown, so the answer after it leaves it standing
+  // (settingsBesideDecision).
+  const settings = CONFIG_KEYS.filter((key) => flags[key] !== undefined).map((key) => [key, flags[key]] as const);
+  let said = "";
+  if (settings.length > 0) {
+    if (choice !== "approve") settingRidesOnlyApprovePlan(settings[0][0]);
+    const shown = planApprovalAsk().planQuestionShown(pd);
+    const reply = flags.message ?? (shown === null || shown === "due" ? null : latestReplyAfter(pd, shown)?.messageId ?? null);
+    const set = settingsBesideDecision(pd, settings, reply);
+    if ("refusal" in set) error(`${set.refusal} Nothing was recorded: record their choice again without the setting.`);
+    if (set.lines.length > 0) said = `Say to the person, as it is: "${set.lines.join(" ")}" `;
+  }
   let result: { message: string; complete: boolean };
   try {
     result = recordPlanApprovalAnswer(pd, resolveInvokingSessionId(pd) ?? "", {
@@ -1777,7 +1805,7 @@ function answerEnginePlanApproval(
   } catch (e) {
     error(errorMessage(e));
   }
-  const message = result.message;
+  const message = `${said}${result.message}`;
   if (flags.park === "true") {
     // The person replied to this question and asked to stop: their stop wins
     // over an autonomous grant. Loaded on demand: the state tool's module graph
@@ -1912,11 +1940,15 @@ function handleAnswer(args: string[]): void {
   refusePlainSummaryConfirmation(flags, "answer");
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
   const planCheckpoint = flags.checkpoint === "plan-approval";
+  // A setting rides only the engine's Plan Approval question, below.
+  const setting = CONFIG_KEYS.find((key) => flags[key] !== undefined);
   // The engine's own Plan Approval question, or the person asking to review a
   // plan before it is built: the conductor records the choice the person made.
   // A break-glass override keeps its own path below: the engine does not ask
   // when the workspace source cannot be bound, which is when the override exists.
+  if (setting !== undefined && !planCheckpoint) settingRidesOnlyApprovePlan(setting);
   if (planCheckpoint && offeredChoiceLabel(flags.details, [LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE]) !== null) {
+    if (setting !== undefined) settingRidesOnlyApprovePlan(setting);
     answerLegacyPlanApprovalRecovery(resolveActiveProjectDir(projectDir), flags);
     return;
   }
@@ -1928,6 +1960,7 @@ function handleAnswer(args: string[]): void {
       return;
     }
   }
+  if (setting !== undefined) settingRidesOnlyApprovePlan(setting);
   const verificationCheckpoint = flags.checkpoint === "verification-command";
   const policyCheckpoint = flags.checkpoint === "construction-policy";
   const policyFields = policyCheckpoint ? constructionPolicyFields(resolveActiveProjectDir(projectDir), flags) : null;

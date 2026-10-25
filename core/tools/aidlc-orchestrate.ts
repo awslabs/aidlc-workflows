@@ -344,6 +344,7 @@ import {
   MESSAGE_FILL,
   MESSAGE_SLOT,
   messageFill,
+  settingsBesideDecision,
   plannedStages,
   resolveGuardPolicy,
   guardPolicyAcceptsChanges,
@@ -663,7 +664,7 @@ import {
   inspectStageValidity, stageDefinitionChangedFields, stageDefinitionChangedLine, stageLabel, staleStageNote,
   stageOutputAmendedFields, type StageValidityInspection,
 } from "./aidlc-validity.ts";
-import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
+import { CONFIG_KEYS, VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
 import { markSwitchOffNoticesSaid, type SwitchOffNotice, switchOffNotices } from "./aidlc-recorded-switches.ts";
 import { kiroHooksOffNotices, markKiroHooksOffSaid } from "./aidlc-kiro-hooks-off.ts";
 import {
@@ -3765,7 +3766,8 @@ function openGateReplyDirective(
   const named = replyIdsNote(replies, "report");
   return printDirective(
     `Stage "${stage}" is waiting for the person's approval, and their reply may answer it. Read it. If it ` +
-      `approves, run \`${orchestrate} report --stage ${shellArg(stage)} --result approved --user-input "Approve"\`; ` +
+      `approves, run \`${orchestrate} report --stage ${shellArg(stage)} --result approved --user-input "Approve"\`, ` +
+      "with the `config set` flag of any setting it also asks for on that same command (`--plan-approval off`); " +
       `if it asks for changes, run \`${orchestrate} report --stage ${shellArg(stage)} --result rejected ` +
       `--user-input "Request Changes"\`. Then follow what it returns. If it asks about what the stage found or ` +
       `produced, answer it from the files in ${folder ? `${folder}/` : "the stage's folder"}, then ask the approval ` +
@@ -16733,6 +16735,9 @@ interface ReportFlags {
   unit?: string; // --unit <name>: required for team-owned per-unit gates
   park?: boolean; // --park: the person also asked to stop here for now
   message?: string; // --message <id>: the one message of the person's the agent read the decision from
+  // --<setting> <value>: a `config set` setting the same reply asked for, written
+  // before the approval (settingsBesideDecision).
+  settings?: Array<[string, string]>;
   // A re-entry request (--result resumed): the choice the conductor read from
   // the person's words, the stage they named for a jump, and the Units it is
   // for when they named one (--unit) or said every Unit (--every-unit).
@@ -16862,10 +16867,17 @@ function parseReportFlags(args: string[]): ReportFlags {
     } else if (a === "--target") {
       missingValue(a, "a stage name");
 
+    } else if (a.startsWith("--") && (CONFIG_KEYS as readonly string[]).includes(a.slice(2))) {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        (flags.settings ??= []).push([a.slice(2), args[i + 1]]);
+        i++;
+      } else {
+        missingValue(a, "the value the person asked for");
+      }
     } else if (a !== "--") {
       refuse(
-        `report does not accept "${a}". It accepts ${REPORT_FLAGS.join(", ")}. ` +
-          `Rejection feedback belongs in --reason.`,
+        `report does not accept "${a}". It accepts ${REPORT_FLAGS.join(", ")}, and with an approval the ` +
+          `\`config set\` settings the same reply asked for (--plan-approval off). Rejection feedback belongs in --reason.`,
       );
     }
   }
@@ -18423,6 +18435,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     emit(errorDirective(flags.parseError));
     return;
   }
+  if (flags.settings !== undefined && (flags.result !== "approved" || flags.single || flags.unit !== undefined)) {
+    emit(errorDirective(
+      `A setting (--${flags.settings[0][0]}) rides only a stage's approval: run the setter on its own first ` +
+        `(\`${aidlcDispatcherInvocation("config set")}\` with --message <id>, the message they asked in), then this report without it.`,
+    ));
+    return;
+  }
 
   // Runtime state-version guard (see staleStateVersionError): `report` commits a
   // lifecycle transition, so a pre-v8 state must be refused here too — before any
@@ -19453,6 +19472,22 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     ?.push(...approvesTogetherArgs(pd, stateContent, node));
   const committed: string[] = [];
   const changeNotices: string[] = [];
+  // A setting the same reply asked for is written first, on the message the
+  // approval binds, so the approval after it leaves it standing
+  // (settingsBesideDecision). The setter's lines are the person's to hear,
+  // also when the approval is then refused.
+  const settingLines: string[] = [];
+  if (flags.settings !== undefined) {
+    const set = settingsBesideDecision(
+      pd, flags.settings, flags.message ?? personsGateReply(pd, resolveInvokingSessionId(pd), slug).messageId,
+    );
+    if ("refusal" in set) {
+      emit(errorDirective(`${set.refusal} Nothing was approved: run this report again without the setting to record the approval.`));
+      return;
+    }
+    settingLines.push(...set.lines);
+    changeNotices.push(...set.lines);
+  }
   for (const subArgs of sequence) {
     const res = spawnState(pd, subArgs);
     if (res.exitCode !== 0) {
@@ -19461,10 +19496,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       const detail = (res.stderr || res.stdout).trim();
       const guardAsk = guardRecoveryAskFromToolOutput(detail);
       if (guardAsk !== null) {
-        emit(guardAsk);
+        emit(withChangeNotices(guardAsk, settingLines));
         return;
       }
-      emit(stateRefusalDirective(`Could not complete "${slug}"`, `"${slug}"`, detail));
+      emit(withChangeNotices(stateRefusalDirective(`Could not complete "${slug}"`, `"${slug}"`, detail), settingLines));
       return;
     }
     committed.push(subArgs[0]);

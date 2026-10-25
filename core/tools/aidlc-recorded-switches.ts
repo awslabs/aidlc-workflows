@@ -649,7 +649,7 @@ export function recordSwitchChange(
   let said: StoredMessage | null = null;
   if (added.length > 0 && message !== undefined && !commandAtPersonsTerminal()) {
     try {
-      const proof = proveMessage(projectDir, message, "setting", { request: true });
+      const proof = proveMessage(projectDir, message, "setting", { request: true, lowers: true });
       said = "message" in proof ? proof.message : null;
     } catch {
       said = null;

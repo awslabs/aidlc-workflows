@@ -459,11 +459,11 @@ export function planApprovalOffWaitsStep(messageId?: string): string {
 // from before it that a decision has followed (it arrived before the last
 // approval or decision) is not offered: a live Copilot CLI run took their
 // "Approve" for the stage before from this list and turned plan approval off,
-// set by them, with the question unanswered. Before the question it is
-// offered, as "approve, and turn plan approval off" needs where the agent
-// learns ids only from these steps, and so is any other request (going back to
-// the plan their approval was for). For turning plan approval off, only what
-// can stand for it is offered (planApprovalOffStands).
+// set by them, with the question unanswered. For a setting, only what the
+// setting's proof accepts is offered (messageReach), so no step names a message
+// that already gave an approval or a decision; for turning plan approval off,
+// only what can stand for it (planApprovalOffStands). Any other request still
+// is offered such a message (going back to the plan their approval was for).
 export function requestMessages(pd: string, kind: RequestKind = "any"): Array<{ id: string; at: string }> {
   try {
     const rows = readAuditShardEvents(pd);
@@ -477,7 +477,7 @@ export function requestMessages(pd: string, kind: RequestKind = "any"): Array<{ 
     const planApprovalOff = kind === "plan-approval-off";
     return listMessages(pd)
       .filter((message) => message.session === chat && offered(message) &&
-        "message" in messageProof(pd, message.id, "request", { request: true, planApprovalOff }))
+        "message" in messageProof(pd, message.id, kind === "any" ? "request" : "setting", { request: true, planApprovalOff }))
       .map((message) => ({ id: message.id, at: message.at }))
       .reverse();
   } catch {
@@ -526,11 +526,10 @@ function windowChat(
 }
 
 // Whether the decisions recorded after `message` are the one decision it
-// backed itself, so what else it asked for still stands: a setting, a check
-// turned off, a cap lifted or a grant beside the approval it gave ("approve,
-// and turn plan approval off"), in either order. One decision is one row, the
-// stages approved together with it, or the plan approvals of every Unit, and
-// the run's own approvals are none; a row
+// backed itself, so what else it asked for still stands: a stop, a cap lifted
+// or a choice it left to the agent beside the approval it gave, in either
+// order. One decision is one row, the stages approved together with it, or the
+// plan approvals of every Unit, and the run's own approvals are none; a row
 // that names a message earlier than this one was not backed by it, and a row
 // that names none was the decision its window held. It reads
 // ids, times and the engine's own rows, never words or what kind of reply it
@@ -543,16 +542,40 @@ function onlyItsOwnDecisionAfter(
   message: Pick<StoredMessage, "id" | "at" | "session">,
   after: (row: AuditShardEvent) => boolean = (row) => row.timestamp > message.at,
 ): boolean {
+  return messageReach(pd, rows, message, after, false) === "stands";
+}
+
+// What a message still stands for after the decisions since it: "stands",
+// "spent" (as onlyItsOwnDecisionAfter reads it), or, for a setting, "backed".
+// Arden's rule for every setting change: a message that already backed an
+// approval or another decision does not also stand for a setting, so their
+// "Approve" never turns one of their checks off later (live Copilot CLI runs
+// turned learnings and the summary confirmation off that way, recorded as
+// theirs). A decision that names this message, or names none, is one it
+// backed; one that names a later message of theirs is that message's. For a
+// setting, a routing answer (it carries the settings before it to the work it
+// names, as settingTheirs reads it) and a question box closed with nothing
+// picked are no decision at all. A setting asked for beside an approval goes
+// first, or rides the approval's own command (settingsBesideDecision).
+function messageReach(
+  pd: string,
+  rows: readonly AuditShardEvent[],
+  message: Pick<StoredMessage, "id" | "at" | "session">,
+  after: (row: AuditShardEvent) => boolean,
+  setting: boolean,
+): "stands" | "spent" | "backed" {
   const decisions = new Set<string>();
   // One jump over several Units is one decision, as one plan answer over
   // several Units is.
   let jump: { key: string; units: Set<string> } | null = null;
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index];
-    if (!after(row)) continue;
+    // A row that names this message came from it, whatever its second.
+    if (!after(row) && !(setting && auditBlockField(row.block, "Message Id") === message.id)) continue;
     // A grant of autonomous Construction uses up the message that gave it.
-    if (row.event === "AUTONOMY_MODE_SET" && auditBlockField(row.block, "Mode") === "autonomous") return false;
+    if (row.event === "AUTONOMY_MODE_SET" && auditBlockField(row.block, "Mode") === "autonomous") return "spent";
     if (!MESSAGE_SPENDING_EVENTS.has(row.event)) continue;
+    if (setting && (row.event === "REQUEST_ROUTED" || row.event === "QUESTION_UNANSWERED")) continue;
     // A stage approved together with another is part of that one approval;
     // the run's own approval (no User Input, or Autonomous) is no decision of
     // theirs, so a stop typed while the run approves its own gates still stands.
@@ -562,9 +585,10 @@ function onlyItsOwnDecisionAfter(
         auditBlockField(row.block, "User Input") === null || auditBlockField(row.block, "Autonomous") === "true")
     ) continue;
     const named = auditBlockField(row.block, "Message Id");
+    if (setting && (named === null || named === message.id)) return "backed";
     if (named !== null && named !== message.id) {
       const backing = readMessage(pd, named);
-      if (backing === null || backing.at < message.at || backing.session !== message.session) return false;
+      if (backing === null || backing.at < message.at || backing.session !== message.session) return "spent";
     }
     const reopen = reopenOf(row);
     const unit = auditBlockField(row.block, "Unit") ?? "";
@@ -575,7 +599,16 @@ function onlyItsOwnDecisionAfter(
     jump = reopen === null ? null : { key: reopen, units: new Set([unit]) };
     decisions.add(row.event === "PLAN_APPROVAL_RECORDED" ? "plan" : String(index));
   }
-  return decisions.size <= 1;
+  return decisions.size <= 1 ? "stands" : "spent";
+}
+
+// The refusal for a setting on a message that already backed a decision: it
+// names no message (no refusal offers one), and its step is one that works.
+function settingOnDecidedMessage(lowers: boolean): string {
+  return "Cannot record this setting on that message: it already gave an approval or another decision, so it " +
+    (lowers
+      ? "does not also turn a check off. It stays on; run it on the message they ask in."
+      : "does not also stand for a setting. If their words asked for it, run the same command with no --message.");
 }
 
 // Whether the only decision recorded after `message` is one redo or jump back
@@ -616,16 +649,18 @@ function reopenOf(row: AuditShardEvent): string | null {
 // settles a race between chats. A same-second tie with a spending row favours
 // the message: one message can give an approval and the answers beside it. With
 // `request`, the message backs what it asks for beside a decision
-// (onlyItsOwnDecisionAfter): a setting, a lowering, a cap lifted, a grant, or a
-// choice it left to the agent. With `reopened`, a message whose only decision
-// since is the reopen it asked for (onlyItsReopenAfter) still answers the
-// question that reopen brought up. With `planApprovalOff`, it also stands for
-// turning plan approval off (planApprovalOffStands).
+// (onlyItsOwnDecisionAfter): a cap lifted, a stop, or a choice it left to the
+// agent; a setting (`what` "setting") only when it backed no decision itself
+// (messageReach), and `lowers` says whether it turns a check off. With
+// `reopened`, a message whose only decision since is the reopen it asked for
+// (onlyItsReopenAfter) still answers the question that reopen brought up. With
+// `planApprovalOff`, it also stands for turning plan approval off
+// (planApprovalOffStands).
 export function proveMessage(
   pd: string,
   id: string,
   what: "answer" | "decision" | "approval" | "change request" | "setting" | "request",
-  options: { request?: boolean; reopened?: boolean; planApprovalOff?: boolean } = {},
+  options: { request?: boolean; reopened?: boolean; planApprovalOff?: boolean; lowers?: boolean } = {},
 ): { message: StoredMessage } | { refusal: string } {
   const proof = messageProof(pd, id, what, options);
   // A request's refusal leads with the messages that can stand behind it: the
@@ -640,7 +675,7 @@ function messageProof(
   pd: string,
   id: string,
   what: "answer" | "decision" | "approval" | "change request" | "setting" | "request",
-  options: { request?: boolean; reopened?: boolean; planApprovalOff?: boolean },
+  options: { request?: boolean; reopened?: boolean; planApprovalOff?: boolean; lowers?: boolean },
 ): { message: StoredMessage } | { refusal: string } {
   const message = isMessageId(id) ? readMessage(pd, id) : null;
   if (message === null) {
@@ -677,17 +712,22 @@ function messageProof(
         "or a message with no words), so it answers nothing. Name a message that carries their reply.",
     };
   }
-  const spent = options.request === true
-    ? !onlyItsOwnDecisionAfter(pd, rows, message)
-    : !(options.reopened === true && onlyItsReopenAfter(rows, message)) && spentAt !== null && message.at < spentAt;
-  if (spent) {
+  // The waiting plan question is a setting's second boundary, and its step to
+  // show that question leads.
+  if (options.planApprovalOff === true && !planApprovalOffStands(pd, id)) return { refusal: planApprovalOffWaitsStep(id) };
+  const reach = options.request === true
+    ? messageReach(pd, rows, message, (row) => row.timestamp > message.at, what === "setting")
+    : !(options.reopened === true && onlyItsReopenAfter(rows, message)) && spentAt !== null && message.at < spentAt
+      ? "spent"
+      : "stands";
+  if (reach === "backed") return { refusal: settingOnDecidedMessage(options.lowers === true) };
+  if (reach === "spent") {
     return {
       refusal: `Cannot record this ${what}: message ${id} arrived before the last approval or decision` +
         `${spentAt === null ? "" : ` (${spentAt})`}, ` +
         "so it is spent. Only a message the person sent after it can answer this question.",
     };
   }
-  if (options.planApprovalOff === true && !planApprovalOffStands(pd, id)) return { refusal: planApprovalOffWaitsStep(id) };
   return { message };
 }
 

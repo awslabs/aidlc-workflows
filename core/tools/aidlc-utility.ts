@@ -483,6 +483,7 @@ import {
   OWN_TERMINAL_PRESENCE_STEP,
   personAtOwnTerminal,
   personAskedForThisLowering,
+  turnsPersonsCheckOff,
   turnsPlanApprovalOff,
   personAskedSinceGate,
   personSaidProjectType,
@@ -7939,7 +7940,9 @@ function answerAlreadyStarted(projectDir: string, questionId: string, sessionId?
 // the CREATED intent's record (the active-intent cursor set first makes the
 // default-resolving state/audit helpers resolve there).
 function handleIntentCreate(projectDir: string, flags: Record<string, string>): void {
-  const named = setterMessage(projectDir, flags, false, { newWork: true });
+  // New work's settings are its own, carried with the request that starts it,
+  // so a decision on the work in hand does not spend them.
+  const named = setterMessage(projectDir, flags, false, { newWork: true, request: true });
   // An engine question's answer names its request by id. The copy is removed
   // once the answer starts work, so look for that work before the copy.
   const questionId = flags.request;
@@ -11669,7 +11672,7 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
   // The message the person said it in (--message), proved: recorded beside the
   // change, and read by the check below. Words from the form before --message
   // are the agent's own text, recorded as such.
-  const named = setterMessage(projectDir, flags, true);
+  const named = setterMessage(projectDir, flags, true, { request: true });
   // What the folder is, is the person's word: it is recorded as theirs only
   // once they have said something since the last decision (an answer to the
   // question, or the command they typed), after the question when it was asked,
@@ -12031,7 +12034,7 @@ function stagesStillToRun(content: string): StageEntry[] {
 function handleScopeChange(projectDir: string, flags: Record<string, string>): void {
   const newScope = flags.scope;
   if (!newScope) die("--scope is required for scope-change");
-  const named = setterMessage(projectDir, flags);
+  const named = setterMessage(projectDir, flags, false, { request: Object.keys(intentSettingsFromFlags(flags)).length === 0 });
   const selection = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
@@ -12512,7 +12515,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       settings[name as ConfigKey] = { value, source: "you" };
     }
   }
-  const asked = setterMessage(projectDir, named);
+  const asked = setterMessage(projectDir, named, false, { request: Object.keys(settings).length === 0 });
   const skipList = [...flips.skip];
   const addList = [...flips.add];
   if (skipList.length === 0 && addList.length === 0) {
@@ -13023,15 +13026,18 @@ function readPersonWordsFile(projectDir: string, flags: Record<string, string>, 
 
 // The message the agent named as the one the person asked in (--message),
 // proved by the message proof's request form: the setting is then theirs
-// (settingTheirs) and a lowering stands on it, beside the approval the same
-// message gave. A message that does not prove refuses with the proof's own
-// words. Words passed the way from before --message (--person-words,
-// --person-words-file) are the agent's own text: kept as such, proving nothing.
+// (settingTheirs) and a lowering stands on it. A message that already gave an
+// approval or another decision does not also stand for a setting (messageReach);
+// `request` is a caller that changes no setting (what the folder is, or a scope
+// or stage change that carries none), proved as any request is. A message that
+// does not prove refuses with the proof's own words. Words passed the way from
+// before --message (--person-words, --person-words-file) are the agent's own
+// text: kept as such, proving nothing.
 function setterMessage(
   projectDir: string,
   flags: Record<string, string>,
   unreadableIsNone = false,
-  { newWork = false } = {},
+  { newWork = false, request = false } = {},
 ): { message?: StoredMessage; agentText?: string } {
   readPersonWordsFile(projectDir, flags, unreadableIsNone);
   const words = flags["person-words"];
@@ -13039,7 +13045,8 @@ function setterMessage(
   if (flags.message === undefined) return { agentText };
   // New work's own plan approval leaves the plan question that waits now as it is.
   const planApprovalOff = !newWork && Object.entries(flags).some(([key, value]) => turnsPlanApprovalOff(key, value));
-  const proof = proveMessage(projectDir, flags.message, "setting", { request: true, planApprovalOff });
+  const lowers = Object.entries(flags).some(([key, value]) => turnsPersonsCheckOff(key, value));
+  const proof = proveMessage(projectDir, flags.message, request ? "request" : "setting", { request: true, planApprovalOff, lowers });
   if ("refusal" in proof) die(proof.refusal);
   return { message: proof.message, agentText };
 }

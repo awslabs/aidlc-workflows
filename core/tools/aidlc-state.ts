@@ -50,7 +50,7 @@ import {
   withdrawProtectedQuestions,
   VERIFICATION_COMMAND_CHECKPOINT,
   verificationCommandRecovery,
-  constructionPolicyChangeAuthority,
+  constructionPolicyReceipt,
   CONSTRUCTION_POLICY_RECOVERY,
   swarmNeedsStageMajor,
   leftOutLine,
@@ -272,7 +272,7 @@ import {
   sourceWalkReach,
 } from "./aidlc-lib.js";
 import {
-  personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn, type StoredMessage,
+  personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
@@ -1428,33 +1428,35 @@ function withMessageArg(args: string[]): { values: string[]; message?: string } 
   return { values: [...args.slice(0, at), ...args.slice(at + 2)], message };
 }
 
-// During Construction a policy change is the person's: the agent names the
-// message they asked for it in (--message, proved), or they chose it at an
-// older policy question. Returns that message, for the record, or null.
+// During Construction a policy change is the person's: they chose it at an
+// older policy question (its receipt, read first, so the yes they gave there is
+// never refused for having answered that question), or the agent names the
+// message they asked for it in (--message, proved). Returns their words and
+// message, for the record, or null.
 function requireHumanConstructionPolicyChange(
   pd: string, content: string, field: string, value: string, message: string | undefined,
 ): PolicyAsk | null {
   if (getField(content, "Lifecycle Phase")?.toLowerCase() !== "construction") return null;
+  const receipt = constructionPolicyReceipt(pd, content, field, value);
   // An unattended run never changes it on its own, whatever presence bypass is
   // in force: only a choice the person recorded earlier counts there.
-  if (process.env.AIDLC_UNATTENDED === "1" && constructionPolicyChangeAuthority(pd, content, field, value, false) !== "receipt") {
+  if (process.env.AIDLC_UNATTENDED === "1" && receipt === null) {
     error(`An unattended run does not change ${field}: it changes when the person asks for it. ` + CONSTRUCTION_POLICY_RECOVERY);
   }
   if (humanPresenceGuardDisabled()) return null;
-  let named: StoredMessage | undefined;
-  if (message !== undefined) {
-    const proof = proveMessage(pd, message, "setting", { request: true });
-    if ("refusal" in proof) error(proof.refusal);
-    named = proof.message;
+  if (receipt !== null) {
+    const id = auditBlockField(receipt.block, PERSONS_MESSAGE_FIELD);
+    return id === null ? null : { words: auditBlockField(receipt.block, PERSONS_WORDS_FIELD), message: id };
   }
-  const authority = constructionPolicyChangeAuthority(pd, content, field, value, named !== undefined);
-  if (authority === null) {
+  if (message === undefined) {
     error(
       requestMessageStep(pd, `No message of the person's that asks to change ${field} is named. Change it only ` +
         "when they ask for it, never to clear a refusal or on your own.", "setting") + ` ${CONSTRUCTION_POLICY_RECOVERY}`,
     );
   }
-  return authority === "asked" && named !== undefined ? { words: personsWordsText(named.words ?? named.text), message: named.id } : null;
+  const proof = proveMessage(pd, message, "setting", { request: true, lowers: field === "Construction Checkpoints" && value === "disabled" });
+  if ("refusal" in proof) error(proof.refusal);
+  return { words: personsWordsText(proof.message.words ?? proof.message.text), message: proof.message.id };
 }
 
 // set-skeleton-stance <on|off|scope-dependent> — record the conductor's

@@ -649,8 +649,8 @@ export function applyIntentSettings(
   }
   // Lowering a fence is the person's call. Their typed switch carries it out,
   // and so does this setter when the agent names the message they asked in
-  // (--message, proved by the caller; the approval they gave in that same
-  // message leaves the rest of it standing): the conductor runs what they asked
+  // (--message, proved by the caller; one that already gave an approval or
+  // another decision does not stand): the conductor runs what they asked
   // for, and the record names their message.
   // A command the person ran at their own terminal carries itself: this rule
   // protects them from a worker lowering a check on their behalf, and it has no
