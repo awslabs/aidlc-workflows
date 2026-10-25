@@ -535,6 +535,15 @@ reach no hook and are never named. The work keeps what those files held before
 (`.aidlc-engine/before-pick.json`), so a file the person puts back reads as
 nobody's change when Code Generation accounts for its Units.
 
+Another comes from an approval. While the work is still before Code Generation
+at a stage that writes only AI-DLC's own records, the guard keeps the agent's
+writes with the work (`.aidlc-engine/during-work.json`), and `approve` names
+the kept files that still differ, once, with the same way back: "During
+Requirements Analysis, src/app.js was changed; `git checkout -- src/app.js`
+puts it back as last committed." Their earlier content joins
+`before-pick.json`. Writes once Code Generation is the step are its own
+accounting's, and are never named this way.
+
 ### Inline Execution
 
 Inline stages run directly in the orchestrator conversation. The user can interact with the stage in real time. Twenty-nine of 33 stages are inline; the other four are dispatched (practices-discovery and code-generation subagents, reverse-engineering pipeline, user-stories mob).

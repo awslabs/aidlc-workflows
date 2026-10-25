@@ -1894,6 +1894,13 @@ plan checks, in a chat that joined no work too, and it refuses nothing; a write
 it cannot read goes unkept. AI-DLC's own files are never kept. The pick says the
 ones that still differ once, with the way back
 ([Lines carried to the next spoken step](03-orchestrator.md#lines-carried-to-the-next-spoken-step)).
+Once the work has started, the same call keeps the agent's writes with that
+work while a chat taking part in it writes before Code Generation: the stage
+the work is on (its Unit Stage under unit-major Construction, else its Current
+Stage) declares no `workspace_requires` and comes before code-generation, and
+the step the engine last issued is not a Code Generation step. Each approval of
+the work names the kept files that still differ, once, and spends the record;
+an approval of a stage that declares `workspace_requires` spends it unsaid.
 
 ---
 
