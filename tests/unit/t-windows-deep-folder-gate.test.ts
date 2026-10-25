@@ -202,12 +202,13 @@ function project(units: (depth: number, record: number) => string[]): { proj: st
   return { proj, units: names };
 }
 
-function openGate(proj: string): Record<string, unknown> {
+function openGate(proj: string, extra: Record<string, string> = {}): Record<string, unknown> {
   const env = { ...process.env };
   delete env.AWS_AIDLC_DEFAULT_SCOPE;
   // Git's long paths off, the box image's system config left out.
   env.GIT_CONFIG_NOSYSTEM = "1";
   env.GIT_CONFIG_GLOBAL = join(proj, "no-global.gitconfig");
+  Object.assign(env, extra);
   const r = spawnSync(BUN, [ORCH, "report", "--stage", STAGE, "--result", "awaiting-approval", "--project-dir", proj], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
@@ -247,6 +248,19 @@ describe("the Units Generation gate", () => {
     }
     const again = openGate(proj);
     expect(JSON.stringify(again)).not.toContain(ANY_SAID);
+  });
+
+  test("under Copilot CLI the gate says it with Git's long paths on too, since Copilot's own check refuses", async () => {
+    const { UNIT_RECORD_SUFFIX } = await import(HELPER);
+    const { proj } = project((depth, record) => [`u1-${"o".repeat(Math.min(61, Math.max(1, 260 - depth - record - UNIT_RECORD_SUFFIX - 3)))}`]);
+    const git = mkdtempSync(join(tmpdir(), "dg-git-"));
+    made.push(git);
+    writeFileSync(join(git, ".gitconfig"), "[core]\n\tlongpaths = true\n");
+    const opened = openGate(proj, { AIDLC_HARNESS_NAME: "copilot", GIT_CONFIG_GLOBAL: join(git, ".gitconfig") });
+    expect(String(opened.message), JSON.stringify(opened)).toContain(`Recorded awaiting-approval for "${STAGE}"`);
+    const narration = String(opened.narration ?? "");
+    expect(times(narration, "characters deep; Copilot CLI refuses paths over 260 characters"), narration)
+      .toBe(WINDOWS ? 1 : 0);
   });
 
   test("short Unit names: the gate says nothing about the folder", async () => {

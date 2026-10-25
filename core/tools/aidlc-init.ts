@@ -8921,7 +8921,9 @@ function renderFirstRunEnding(
     writeMenuRow("  Note: ", `${warning}.`);
     process.stdout.write("\n");
   }
-  const deep = deepFolder(projectDir);
+  const deep = deepFolder(projectDir, process.platform, undefined, {
+    harnesses: [choices.candidate.stamp.distribution],
+  });
   if (deep) {
     writeMenuRow("  Note: ", deep.note);
     process.stdout.write("\n");
@@ -13589,7 +13591,7 @@ export async function main(
     // A Windows folder too deep for AI-DLC's records is named the same way, in
     // one line; the folder stays where the person keeps it.
     const deepProject = !choicesContext && !diagnosticsContext && !modelsContext
-      ? deepFolder(projectDir)?.note
+      ? deepFolder(projectDir, process.platform, undefined, { harnesses: [stamp.distribution] })?.note
       : undefined;
     if (deepProject) prepared.notes.push(deepProject);
     // Kiro's v3 engine and Kiro IDE run every hook JSON file in the hooks

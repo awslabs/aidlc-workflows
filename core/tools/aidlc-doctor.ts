@@ -151,9 +151,12 @@ function windowsGitBashLauncherCheck(): DoctorCheck | null {
 }
 
 // A Windows project folder too deep for AI-DLC's records: advisory, as config
-// says it; moving the folder is the person's call.
+// says it; moving the folder is the person's call. Every harness installed in
+// the project counts, since one that refuses a long path on its own keeps it.
 function projectFolderDepthCheck(projectDir: string): DoctorCheck | null {
-  const deep = deepFolder(projectDir);
+  const deep = deepFolder(projectDir, process.platform, undefined, {
+    harnesses: discoverProjectHarnesses(projectDir).map((harness) => harness.distribution),
+  });
   return deep && { pass: false, severity: "warn", label: `Project folder: ${deep.facts}`, fix: deep.fix };
 }
 
