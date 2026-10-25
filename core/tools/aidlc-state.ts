@@ -100,6 +100,8 @@ import {
   firstPlannedStageOfPhase,
   formatReceivedReply,
   freshReviewReceipts,
+  unchangedChangeRequest,
+  REVIEW_KEPT_FIELD,
   getField,
   guardRecoveryAnswerAdmits,
   readActiveDirectiveMarker,
@@ -4257,12 +4259,13 @@ function verifyGateOpeningGuards(
   content: string,
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
   personCall?: PersonApproval,
+  keptReview?: KeptReview,
 ): void {
   verifyStageArtifacts(pd, stage, "present-approval-gate", personCall !== undefined);
   verifySummaryConfirmationPrecondition(pd, content, stage);
   verifyPipelineLinkPrecondition(pd, stage);
   if (!reviewerGateGuardDisabled()) {
-    verifyReviewerPrecondition(pd, content, stage, "present-approval-gate", true, personCall);
+    verifyReviewerPrecondition(pd, content, stage, "present-approval-gate", true, personCall, keptReview);
   }
   sayEditedReview(pd, content, stage);
 }
@@ -5189,6 +5192,7 @@ function verifyReviewerPrecondition(
   action: ReviewerPreconditionAction = "complete",
   requireReceiptExistence = true,
   personCall?: PersonApproval,
+  keptReview?: KeptReview,
 ): void {
   if (!stage.reviewer) return; // stage declares no reviewer — nothing to enforce
 
@@ -5222,7 +5226,11 @@ function verifyReviewerPrecondition(
   // resolved here (an invalid memory value errors; a memory edit that moved it
   // is recorded), the rows for what the scan accepted under relaxed are written,
   // and the human is told once.
-  const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
+  // A Request Changes that changed nothing brings the gate back with the
+  // review it was made on; the revise that shows it records which.
+  const unchanged = unchangedChangeRequest(pd, content, stage, reviewClass);
+  if (unchanged !== null && keptReview !== undefined) keptReview.rejection = unchanged.rejection;
+  const receipts = unchanged?.receipts ?? freshReviewReceipts(pd, content, stage, { reviewClass });
   observeChangeControl(pd, content, receipts);
   const perUnit =
     stage.for_each === "unit-of-work" &&
@@ -6733,7 +6741,14 @@ export type StageAdmissionOptions = {
   entrypoint?: "approve" | "advance" | "finalize" | "complete-workflow";
   // The person's own approval (gate opening for it, or approve itself).
   personCall?: PersonApproval;
+  // Filled when the gate opens on the review a Request Changes that changed
+  // nothing was made on (unchangedChangeRequest).
+  keptReview?: KeptReview;
 };
+
+export interface KeptReview {
+  rejection?: AuditShardEvent;
+}
 
 function verifyConstructionCheckpointPrecondition(
   pd: string,
@@ -6803,7 +6818,7 @@ function admitStageAction(
     }
 
     if (options.action !== "complete") {
-      verifyGateOpeningGuards(pd, stateContent, stage, options.personCall);
+      verifyGateOpeningGuards(pd, stateContent, stage, options.personCall, options.keptReview);
       verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
       return;
     }
@@ -8403,7 +8418,8 @@ function handleRevise(args: string[]): void {
     return;
   }
   validateSlugInState(content, slug, "revising");
-  admitStageAction(pd, content, stage, { action: "revise" });
+  const keptReview: KeptReview = {};
+  admitStageAction(pd, content, stage, { action: "revise", keptReview });
   verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
 
   const together = approvesTogetherFlag(args.slice(1), content, slug);
@@ -8415,6 +8431,7 @@ function handleRevise(args: string[]): void {
     const fields: Record<string, string> = {
       Stage: slug,
       Details: "Re-entering gate after revision",
+      ...(keptReview.rejection ? { [REVIEW_KEPT_FIELD]: keptReview.rejection.timestamp } : {}),
       ...approvesTogetherFields(together),
       ...gateAskFields(pd, stage, content, undefined, together),
     };

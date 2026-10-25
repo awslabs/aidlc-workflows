@@ -551,7 +551,7 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
     openFirstGate(first);
     expect(brief(first)).toContain(
       "Approve accepts the open review finding R-01 (An empty cart is not covered) as risk; you can also approve and " +
-        "ask for it to be fixed.",
+        "ask for it to be fixed, or reject it as not applying, saying why.",
     );
   });
 

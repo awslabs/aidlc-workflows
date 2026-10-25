@@ -215,7 +215,7 @@ Review outcome: Concerns remain for your decision.
 
 Approve accepts the open review findings R-01 (...), R-02 (...) and R-03 (The table carries a
 single, binary success metric ("at least one real...) as risk; you can also approve and ask for
-one to be fixed.
+one to be fixed, or reject one as not applying, saying why.
 
 Decision options:
 - Approve - continue.
@@ -234,7 +234,9 @@ continue with every open finding accepted as risk (the line under the findings
 names them), or **Request Changes** to return to the listed artifacts. To decide
 one differently, say so in your own words: approving and asking for R-03 to
 be fixed records that you asked for the fix, so the next check looks at it
-again. When rejecting an open finding as inapplicable, give its ID and reason. If
+again; rejecting R-03 as not applying records it that way, with your reason,
+and brings the same gate back with the review as it stands, since nothing else
+changed. When rejecting an open finding as inapplicable, give its ID and reason. If
 a reviewer marks one fixed and you disagree, request changes
 with that ID and explain why it is not fixed; the engine reopens it for the
 next check. Ordinary revision feedback changes no finding decision. After a

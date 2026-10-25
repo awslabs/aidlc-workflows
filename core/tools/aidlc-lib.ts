@@ -20762,11 +20762,41 @@ export interface AttemptFrontierView {
   floor: AuditShardEvent[];
 }
 
+// The field on a gate's re-entry row (STAGE_AWAITING_APPROVAL) that says the
+// gate came back with the review its Request Changes was made on: nothing of
+// the stage changed after it. Its value is that rejection's timestamp. `revise`
+// writes it when unchangedChangeRequest holds.
+export const REVIEW_KEPT_FIELD = "Review Kept";
+
+// The person's Request Changes rows for `slug` whose gate came back with the
+// review as it stood: each is the last stage-level rejection definitely before
+// a re-entry row that names it in REVIEW_KEPT_FIELD. None begins a new review
+// attempt, in the review window, its accounting or the brief's invalidation
+// view. A tie for the last rejection keeps none, which asks for the review again.
+export function keptReviewRejections(
+  rows: ReadonlyArray<AuditShardEvent>,
+  slug: string,
+): Set<AuditShardEvent> {
+  const kept = new Set<AuditShardEvent>();
+  for (const row of rows) {
+    if (row.event !== "STAGE_AWAITING_APPROVAL" || auditBlockField(row.block, "Stage") !== slug) continue;
+    const at = auditBlockField(row.block, REVIEW_KEPT_FIELD);
+    if (at === null) continue;
+    const last = maximalAttemptEvents(rows.filter((candidate) =>
+      candidate.event === "GATE_REJECTED" && auditBlockField(candidate.block, "Stage") === slug &&
+      auditBlockField(candidate.block, "Unit") === null && attemptEventDefinitelyBefore(candidate, row)
+    ));
+    if (last.length === 1 && last[0].timestamp === at) kept.add(last[0]);
+  }
+  return kept;
+}
+
 export function reviewInvalidationAttemptView(
   rows: ReadonlyArray<AuditShardEvent>,
   stageSlug: string,
 ): AttemptFrontierView {
   const events = sortAttemptEvents(rows);
+  const kept = keptReviewRejections(events, stageSlug);
   const floor = maximalAttemptEvents(
     events.filter(
       (event) =>
@@ -20774,7 +20804,7 @@ export function reviewInvalidationAttemptView(
         (event.event === "STAGE_JUMPED" && stageJumpReaches(event.block, stageSlug)) ||
         ((event.event === "GATE_APPROVED" ||
           event.event === "GATE_REJECTED") &&
-          auditBlockField(event.block, "Stage") === stageSlug),
+          auditBlockField(event.block, "Stage") === stageSlug && !kept.has(event)),
     ),
   );
   return { events, floor };
@@ -20854,12 +20884,16 @@ export function reviewAttemptWindow(
   stateContent: string,
   stage: SensorFixStage,
   auditRows?: AuditShardEvent[],
+  // The Request Changes `revise` is deciding to keep (unchangedChangeRequest).
+  keep?: AuditShardEvent,
 ): AttemptView {
   const allEvents = auditRows ?? readAuditShardEvents(projectDir);
   const sensorFixes = blockingSensorFixes(allEvents, stage);
   const events = sortAttemptEvents(
     allEvents.filter((row) => REVIEW_RECEIPT_EVENTS.has(row.event) || sensorFixes.has(row)),
   );
+  const kept = keptReviewRejections(allEvents, stage.slug);
+  if (keep !== undefined) kept.add(keep);
   const perUnit = stage.for_each === "unit-of-work";
   const artifactPerUnit =
     perUnit &&
@@ -20884,6 +20918,7 @@ export function reviewAttemptWindow(
   let floorIdx = -1;
   for (let i = 0; i < events.length; i++) {
     const event = events[i];
+    if (kept.has(event)) continue;
     let boundary = event.event === "WORKFLOW_STARTED" ||
       (event.event === "STAGE_JUMPED" && stageJumpReaches(event.block, stage.slug));
     if (!boundary && auditBlockField(event.block, "Stage") === stage.slug) {
@@ -21159,6 +21194,7 @@ export function reviewAttemptAccounting(
   } = {},
 ): ReviewAttemptAccounting {
   const { sensorFixes } = attemptView;
+  const kept = keptReviewRejections(attemptView.allEvents, stage.slug);
   const events = sortAttemptEvents(
     attemptView.allEvents.filter(
       (row) =>
@@ -21285,6 +21321,7 @@ export function reviewAttemptAccounting(
       boltSlug = null;
       continue;
     }
+    if (kept.has(entry)) continue;
     if (entry.event === "GATE_REJECTED" || sensorFixes.has(entry)) {
       const gateStages = (
         auditBlockField(entry.block, "Gate Stages") ??
@@ -21955,6 +21992,46 @@ export function candidateReviewCoverageProjection(
         options.expectedFingerprint;
   }
   return ready;
+}
+
+// A person's Request Changes that changed nothing of the stage: the stage is
+// revising from it (a stage-level change request, not a fresh attempt, not
+// backfilled), no review was asked or recorded for the stage after it, and the
+// review it was made on still covers the documents and source byte for byte
+// (a verdict with nothing stale, pending or changed). The gate then comes back
+// with that review as it stands; returns the rejection and the receipts that
+// see past it. A change Guard Policy kept after the review is not told apart
+// from one made after the rejection: either keeps the attempt the rejection
+// began.
+export function unchangedChangeRequest(
+  projectDir: string,
+  stateContent: string,
+  stage: Parameters<typeof freshReviewReceipts>[2],
+  reviewClass: ReviewClass,
+): { rejection: AuditShardEvent; receipts: FreshReviewReceipts } | null {
+  if (!stage.reviewer || reviewClass === "none") return null;
+  if (parseCheckboxes(stateContent).find((entry) => entry.slug === stage.slug)?.state !== "revising") return null;
+  const window = reviewAttemptWindow(projectDir, stateContent, stage);
+  const rejection = window.events[window.floorIdx];
+  if (
+    rejection?.event !== "GATE_REJECTED" ||
+    auditBlockField(rejection.block, "Stage") !== stage.slug ||
+    auditBlockField(rejection.block, "Unit") !== null ||
+    auditBlockField(rejection.block, "Recovered") !== null ||
+    rejectionIsFreshAttempt(rejection.block)
+  ) return null;
+  if (window.events.slice(window.floorIdx + 1).some((row) =>
+    (row.event === "REVIEW_REQUESTED" || row.event === "REVIEW_COMPLETED") &&
+    auditBlockField(row.block, "Stage") === stage.slug
+  )) return null;
+  const receipts = freshReviewReceipts(projectDir, stateContent, stage, {
+    reviewClass,
+    attemptWindow: reviewAttemptWindow(projectDir, stateContent, stage, window.allEvents, rejection),
+  });
+  const reviewed = receipts.stageVerdict !== null || receipts.unitVerdicts.size > 0;
+  const unchanged = !receipts.stageStale && receipts.unitStale.size === 0 && !receipts.sourceStale &&
+    receipts.stagePending === null && receipts.unitPending.size === 0 && receipts.acceptedChanges.length === 0;
+  return reviewed && unchanged ? { rejection, receipts } : null;
 }
 
 export function freshReviewReceipts(

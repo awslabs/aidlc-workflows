@@ -597,7 +597,7 @@ Review outcome: Concerns remain for your decision.
 
 Approve accepts the open review findings R-01 (...), R-02 (...) and R-03 (The table carries a
 single, binary success metric ("at least one real...) as risk; you can also approve and ask for
-one to be fixed.
+one to be fixed, or reject one as not applying, saying why.
 
 Decision options:
 - Approve - continue.

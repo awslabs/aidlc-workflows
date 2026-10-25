@@ -1324,8 +1324,10 @@ change. See
    is 1, engine-enforced). At a stage's gate, one line after the findings names
    the open findings Approve records as `Accepted risk`, each with the start of
    its text (and its Unit when they span Units), and says, in plain words, that
-   the person can instead approve and ask for one to be fixed (`--fix-finding`);
-   the Approve option then does not say it again. The ids come from the builder
+   the person can instead approve and ask for one to be fixed (`--fix-finding`)
+   or reject one as not applying, with their reason (`--reject-finding` on a
+   Request Changes, whose gate comes back with the review as it stands when
+   nothing else changed); the Approve option then does not say it again. The ids come from the builder
    `GATE_APPROVED` writes through. A Unit's own approval (`--unit`, below), and
    a gate whose one approval also covers later stages with open findings of
    their own, show no such line. The final gate of a per-Unit stage renders every Unit

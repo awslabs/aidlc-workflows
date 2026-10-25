@@ -1565,10 +1565,11 @@ function findingGist(text: string): string {
 
 // The other ways to decide an open finding, in plain words the person answers
 // in their own (no exact words to type): a fix asked as they approve is
-// --fix-finding on the approval. `{it}` is the finding, or one of them. A
-// rejection (--reject-finding on a change request) is not offered: a change
-// request that changes nothing is refused when the gate is shown again.
-const DECIDE_ONE_WAYS = ["approve and ask for {it} to be fixed"] as const;
+// --fix-finding on the approval, and a rejection is --reject-finding on a
+// change request, whose gate comes back with the review as it stands when
+// nothing else changed (unchangedChangeRequest). A rejection carries their
+// reason, so it asks for one. `{it}` is the finding, or one of them.
+const DECIDE_ONE_WAYS = ["approve and ask for {it} to be fixed", "reject {it} as not applying, saying why"] as const;
 
 // The #2099 line: the open findings a person's Approve at this stage's gate
 // records as `Accepted risk` (the builder approve writes through, so a finding
