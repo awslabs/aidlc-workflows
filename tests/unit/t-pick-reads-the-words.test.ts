@@ -13,9 +13,10 @@
 // `next --request-file <that file>` after the switch, so the words get the
 // reading they get with that work selected (go on, redo, jump, start fresh, an
 // answer to what is open) with no shell on the way: a line break, a quote or a
-// character cmd.exe reads in the kept words comes through as kept. Nothing else changes:
-// another chat's words, a later message, parked work and a pick with no words
-// before it keep the step they had.
+// character cmd.exe reads in the kept words comes through as kept. Parked work
+// keeps its `next --resume`, with the same file after it (the resume unparks it
+// first: t-resume-reads-the-words). Nothing else changes: another chat's words,
+// a later message and a pick with no words before it keep the step they had.
 //
 // Spawns the real engine and Claude Code's own human-turn hook, as
 // tests/unit/t-next-takes-the-persons-line does.
@@ -40,7 +41,7 @@ const WORDS = "redo reverse engineering, the scan missed the src/legacy folder";
 const PIECE = "fixture-8000000000000001";
 const READING = "the person's words may ask to redo";
 // The step after the switch, as the pick step names it.
-const THEN = /then run `[^`]* next( --resume| --request-file \S+| -- [^`]+)?` and follow what it returns/;
+const THEN = /then run `[^`]* next( --resume(?: --request-file \S+)?| --request-file \S+| -- [^`]+)?` and follow what it returns/;
 const REQUEST_FILE = /^--request-file (aidlc\/\.aidlc-request-text\/[^/\s]+)$/;
 
 /** A teammate's clone of a bug fix at Requirements Analysis: the record is there, the git-ignored selection is not. */
@@ -176,11 +177,21 @@ describe("the words that led to a pick are read against the piece picked", () =>
     });
   }
 
-  test("parked work picked that way still picks up through --resume", async () => {
+  test("parked work picked that way picks up through --resume, the words after it", async () => {
     // Parked in another chat; this one never joined it.
     const proj = await clone("parked");
     const here: RunOptions = { session: SECOND_SESSION };
     await typed(proj, WORDS, here);
+    const picked = await next(proj, ["--pick", PIECE], here);
+    const step = stepAfterSwitch(picked.directive);
+    expect(step, picked.out).toStartWith("--resume --request-file ");
+    expect(carried(proj, step.replace(/^--resume /, "")).words).toBe(WORDS);
+  });
+
+  test("parked work picked with no words before it picks up through a bare --resume", async () => {
+    const proj = await clone("parked");
+    const here: RunOptions = { session: SECOND_SESSION };
+    await say(proj, "/aidlc", "claude", here);
     const picked = await next(proj, ["--pick", PIECE], here);
     expect(stepAfterSwitch(picked.directive), picked.out).toBe("--resume");
   });

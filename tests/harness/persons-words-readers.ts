@@ -1021,8 +1021,11 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#planProposalDirective`]: { use: "decides", why: "keeps the request as a question and previews it; reuses the question the words came through without comparing them", from: [`${ORCH}#freshWorkRoute`, `${ORCH}#routeNext`] },
   [`${ORCH}#saveReadingQuestion`]: { use: "keeps", why: "keeps the words as a routing question with the message they came in", from: [`${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#routeNext`] },
   [`${ORCH}#takePersonsOwnLine`]: { use: "keeps", why: "the /aidlc parse of the person's own line; already read is the message id" },
-  [`${ORCH}#keptWordsStep`]: { use: "decides", why: "the pick step's command: the words a reading step kept from this message go to its request file as kept, or quoted onto the line when that file cannot be written" },
-  [`${LIB}#writeRecordFileNoFollow`]: { use: "keeps", why: "writes the pick step's request file with the words as kept", from: [`${ORCH}#keptWordsStep`] },
+  [`${ORCH}#keptWordsStep`]: { use: "decides", why: "the pick step's command: the words a reading step kept from this message, handed on as kept (wordsForNextStep)" },
+  [`${ORCH}#resumeWithWords`]: { use: "keeps", why: "a resume with words beside it: whether words are there, then the line read again without --resume" },
+  [`${ORCH}#resumeAgain`]: { use: "decides", why: "the unpark step's re-run: the words typed with the resume, handed on as typed (wordsForNextStep)" },
+  [`${ORCH}#wordsForNextStep`]: { use: "decides", why: "a step's command: the words go to a request file of their own as given, or quoted onto the line when that file cannot be written", from: [`${ORCH}#keptWordsStep`, `${ORCH}#resumeAgain`] },
+  [`${LIB}#writeRecordFileNoFollow`]: { use: "keeps", why: "writes a step's request file with the words as given", from: [`${ORCH}#wordsForNextStep`] },
   [`${LIB}#writeBufferAtomic`]: { use: "keeps", why: "the atomic write under writeRecordFileNoFollow", from: [`${LIB}#writeRecordFileNoFollow`] },
   [`${ORCH}#emit`]: { use: "decides", why: "the words the person said belong to the work in progress are kept once as the code plan question's reply (keepRoutedPlanApprovalReply), and leave it by their message id" },
   [`${ORCH}#withParkedReply`]: { use: "keeps", why: "the resume re-show: the words they parked the work with" },
@@ -1073,7 +1076,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ASK}#requestChangesFor`]: { use: "keeps", why: "the audit writer: as above, on the Request Changes answer row" },
   // The request the agent forwards to next (its free text) and the question store that keeps it: shown back, quoted
   // into a command, kept; each with its reason.
-  "core/tools/aidlc-runtime-paths.ts#quoteCommandArgument": { use: "decides", why: "shell-quotes their words into a command the agent runs", from: [`${ORCH}#keptWordsStep`, `${ORCH}#reshapeReplyArgument`, `${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`] },
+  "core/tools/aidlc-runtime-paths.ts#quoteCommandArgument": { use: "decides", why: "shell-quotes their words into a command the agent runs", from: [`${ORCH}#reshapeReplyArgument`, `${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`, `${ORCH}#wordsForNextStep`] },
   [`${LIB}#parseLiteralShellInvocation`]: { use: "decides", why: "as above", from: [`${LIB}#isTerminalConfigurationDispatch`] },
   [`${LIB}#isTerminalConfigurationDispatch`]: { use: "decides", why: "reads the engine's own step message (which may quote their request) for a configuration command" },
   [`${LIB}#addPendingPersonLines`]: { use: "keeps", why: "keeps a step's narration, or a setter's lines, for the person's next line", from: [`${ORCH}#sayPendingPersonLines`, `core/tools/aidlc-utility.ts#handleScopeChange`] },

@@ -3241,10 +3241,15 @@ export function typedSettingModifiers(flags: ParsedFlags): string[] {
   return modifiers;
 }
 
-// The `next --resume` an unpark print names, with the settings typed beside
-// the resume (`--depth comprehensive`), so none of them is dropped on the re-run.
-function resumeAgain(flags: ParsedFlags): string {
-  return ["next --resume", ...typedSettingModifiers(flags).map((modifier) => `--${modifier}`)].join(" ");
+// The `next --resume` an unpark print names, with what was typed beside the
+// resume (`--depth comprehensive`, `--skip <stage>`, the person's words), so
+// none of it is dropped on the re-run.
+function resumeAgain(flags: ParsedFlags, pd: string): string {
+  const settings = ["next --resume", ...typedSettingModifiers(flags).map((modifier) => `--${modifier}`)].join(" ");
+  // A file per chat, so another chat's resume never reads these words.
+  const chat = (engineSessionId ?? "").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+  const words = flags.intent?.trim() ? wordsForNextStep(pd, chat ? `resume-${chat}` : "resume", flags.intent) : "";
+  return `${settings}${carriedRoutingFlags(flags).planChanges}${words}`;
 }
 
 // The jump a scope or setting was typed with, named after the change so the
@@ -4325,15 +4330,26 @@ function unselectedWordsReplyDirective(
   );
 }
 
+// The person's words on a step the engine names next: a file of their own in
+// the request folder, read as any request file is (nextArgsWithRequestFile),
+// so no shell on the way changes a line break or a character cmd.exe reads;
+// on the line only when that file cannot be written.
+function wordsForNextStep(pd: string, name: string, text: string): string {
+  const file = `${REQUEST_TEXT_DIR}/${name}.txt`;
+  try {
+    if (!isReadOnlyEngineProbe()) writeRecordFileNoFollow(pd, file, text);
+    return ` --request-file ${file}`;
+  } catch {
+    return ` -- ${quoteCommandArgument(text)}`;
+  }
+}
+
 // The step after the switch for the words the reading step above kept from
 // the message it reads now (readingMessage), when the piece picked is one it
 // listed: its own copy (no digest, unlike the routing question asked with
-// options, whose answer already said where the words go). They go through a
-// file of their own in the request folder, read as any request file is
-// (nextArgsWithRequestFile), so no shell on the way changes a line break or a
-// character cmd.exe reads; on the line only when that file cannot be written.
-// "" (a bare `next`) for a later message of theirs, another chat's, or a read
-// that fails.
+// options, whose answer already said where the words go), through
+// wordsForNextStep. "" (a bare `next`) for a later message of theirs, another
+// chat's, or a read that fails.
 function keptWordsStep(pd: string, record: string): string {
   let kept: StoredQuestion | undefined;
   try {
@@ -4345,14 +4361,7 @@ function keptWordsStep(pd: string, record: string): string {
   } catch {
     return "";
   }
-  if (kept === undefined) return "";
-  const file = `${REQUEST_TEXT_DIR}/pick-${kept.id}.txt`;
-  try {
-    if (!isReadOnlyEngineProbe()) writeRecordFileNoFollow(pd, file, kept.text);
-    return ` --request-file ${file}`;
-  } catch {
-    return ` -- ${quoteCommandArgument(kept.text)}`;
-  }
+  return kept === undefined ? "" : wordsForNextStep(pd, `pick-${kept.id}`, kept.text);
 }
 
 // The pieces of work in the space, newest first, the selected one marked: exact
@@ -9771,6 +9780,24 @@ function chatLatestMessage(pd: string, session: string): ReturnType<typeof lates
   }
 }
 
+// `--resume` with words beside it: the agent's own addition to the person's
+// `/aidlc <words>`, or their own `/aidlc --resume redo the scan`. The readings
+// of words below leave a resume out (a bare one carries the work on), so the
+// line is read as it is without `--resume`: the readings of words over work, a
+// workspace command such as `space default`, the pick where none is selected.
+// What the resume keeps is the unpark of parked work first, whose re-run
+// carries the words (resumeAgain). A jump or a single run keeps its own route.
+// Returns the line without `--resume`, its flags read into `flags`; null
+// leaves both as they are.
+function resumeWithWords(flags: ParsedFlags, args: string[]): string[] | null {
+  if (flags.resume !== true || !flags.intent?.trim() || flags.stage || flags.phase || flags.single) return null;
+  const options = beforeDelimiter(args).length;
+  const line = [...args.slice(0, options).filter((arg) => arg !== "--resume"), ...args.slice(options)];
+  for (const key of Object.keys(flags)) delete (flags as unknown as Record<string, unknown>)[key];
+  Object.assign(flags, parseNextFlags(line));
+  return line;
+}
+
 // The `next` handler reads workflow state and emits exactly one directive. A
 // normal rule-transport request may lazily mint its machine-local MAC key.
 // Internal observer modes are strictly read-only: route checks bypass transport,
@@ -9785,7 +9812,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   activeRedefinedStages = null;
   activeRetiredGuardPolicyNotice = null;
   const flags = parseNextFlags(agentArgs);
-  const args = takePersonsOwnLine(flags, resolveProjectDir(projectDir)) ?? agentArgs;
+  const taken = takePersonsOwnLine(flags, resolveProjectDir(projectDir)) ?? agentArgs;
+  const withoutResume = resumeWithWords(flags, taken);
+  const args = withoutResume ?? taken;
+  // Only the park branches still see a resume that carried words.
+  const resuming = flags.resume === true || withoutResume !== null;
   handOutSettingsLine(flags, resolveProjectDir(projectDir));
   pickingUp = flags.resume === true;
 
@@ -10381,11 +10412,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // plain `next` would answer the park, since the turns that asked came
     // before any work was selected and are not in its record. Words the
     // reading step kept for the piece picked (keptWordsStep) are passed on as
-    // typed there, so they get that work's own reading.
+    // typed there, so they get that work's own reading, after the unpark when
+    // it is parked (resumeWithWords).
     if (flags.carryOn && command.kind === "switch") {
       const statePath = stateFilePath(resolveProjectDir(projectDir), command.name);
       const parked = existsSync(statePath) && parkedWhereItStands(readFileSync(statePath, "utf-8"));
-      const then = parked || flags.pickedUp ? " --resume" : keptWordsStep(resolveProjectDir(projectDir), command.name);
+      const then = `${parked || flags.pickedUp ? " --resume" : ""}${keptWordsStep(resolveProjectDir(projectDir), command.name)}`;
       // Picked up by --resume: the person's one line, and the --resume they typed.
       const print = printDirective(
         `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, ${flags.pickedUp ? "" : "print its output verbatim, "}then run ` +
@@ -10730,7 +10762,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
 
   if (
     unitScope &&
-    !flags.resume &&
+    !resuming &&
     !flags.stage &&
     !flags.phase &&
     existsSync(unitParkedPath(pd))
@@ -10745,14 +10777,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   }
   if (
     unitScope &&
-    flags.resume &&
+    resuming &&
     !flags.stage &&
     !flags.phase &&
     existsSync(unitParkedPath(pd))
   ) {
     emit(printDirective(
       `Run \`${aidlcToolInvocation("state")} unpark\` to clear this checkout's Unit park marker, ` +
-        `then re-run \`${resumeAgain(flags)}\`.`,
+        `then re-run \`${resumeAgain(flags, pd)}\`.`,
     ));
     return;
   }
@@ -10781,7 +10813,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   if (
     stateContent &&
     !unitScope &&
-    !flags.resume &&
+    !resuming &&
     !flags.stage &&
     !flags.phase &&
     !parkedWorkChange &&
@@ -10824,14 +10856,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   if (
     stateContent &&
     !unitScope &&
-    flags.resume &&
+    resuming &&
     !flags.stage &&
     !flags.phase &&
     (getField(stateContent, "Parked") ?? "").trim().length > 0
   ) {
     emit(printDirective(
       `This workflow is parked. Run \`${aidlcToolInvocation("state")} unpark\` ` +
-        `to clear the park marker, then re-run \`${resumeAgain(flags)}\` to continue.`,
+        `to clear the park marker, then re-run \`${resumeAgain(flags, pd)}\` to continue.`,
     ));
     return;
   }
@@ -11640,8 +11672,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // and stops - the classification stays with the human, the same split as
   // every other ask. Explicit forms are untouched: prose with a differing
   // --scope, jumps, compose, --new-intent, and --single returned in earlier
-  // branches, as did new work over a finished workflow (Branch 4d); --resume
-  // is excluded here and continues the current workflow. A same-scope
+  // branches, as did new work over a finished workflow (Branch 4d); a bare
+  // --resume continues the current workflow (words typed with it arrive here
+  // without it: resumeWithWords). A same-scope
   // `--scope` names no new target (Branch 5 returned a differing one as a
   // scope-change), and a positional scope names the plan new work would get,
   // so both are asked about like scope-less prose rather than reaching Branch
