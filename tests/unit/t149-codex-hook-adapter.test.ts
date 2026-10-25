@@ -716,7 +716,7 @@ describe("t149 Codex async question box", () => {
   }
 
   function keptTexts(dir: string): string[] {
-    return listMessages(dir).map((record) => record.text);
+    return listMessages(dir).map((record) => personsWordsText(record.text));
   }
 
   test("an answer in Codex's async question box is the person's turn, kept and read at the gate as their own words", () => {
@@ -733,7 +733,7 @@ describe("t149 Codex async question box", () => {
       expect(humanTurnCount(dir)).toBe(1);
       const [record] = listMessages(dir);
       expect(record.source).toBe("prompt");
-      expect(record.text).toBe(ANSWER);
+      expect(personsWordsText(record.text)).toBe(ANSWER);
       expect(record.words && personsWordsText(record.words)).toBe(ANSWER);
       expect(personsGateReply(dir, SESSION, stage).words).toBe(ANSWER);
       expect(readAudit(dir)).not.toContain(OPEN);
