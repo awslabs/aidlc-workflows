@@ -1,6 +1,6 @@
 // covers: function:routeCodeGenerationPlanApproval, function:publishPlanApprovalAsk, function:notePlanApprovalAskReply, function:recordPlanApprovalAnswer, function:requestPlanApprovalReviewNow, function:codeGenerationPlanReadiness, function:planSummaryLines,
 // function:PLAN_APPROVAL_ASK_TYPE, function:planApprovalRuntimeFile, function:readPlanApprovalRuntimeRecord,
-// function:writePlanApprovalRuntimeRecord, function:removePlanApprovalRuntimeRecord, function:releaseTakenGuardRecoveryReply,
+// function:writePlanApprovalRuntimeRecord, function:removePlanApprovalRuntimeRecord, function:releaseTakenGuardRecoveryReply, function:runStateContent,
 // function:keepPlanApprovalAskOverStateWrite, function:planNote, function:preparePlanRecordFolders
 //
 // The engine asks for Plan Approval itself. These cases drive the real `next`,

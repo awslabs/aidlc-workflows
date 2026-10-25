@@ -100,6 +100,7 @@ import {
   resolveProjectDir,
   stalePlanApprovalReceiptsForTarget,
   resolveWorkflowSelection,
+  runStateContent,
   stateFilePath,
   stateDigest,
   swarmConvergedUnits,
@@ -2714,11 +2715,11 @@ function codeGenerationAuthority(
   issued?: CodeGenerationIssuance,
 ): CodeGenerationAuthority {
   const target = normalizeCodeGenerationTarget(requestedTarget);
-  const statePath = stateFilePath(projectDir);
-  if (!existsSync(statePath)) {
+  // With no work selected, an isolated run's: the empty state its step binds.
+  const state = runStateContent(projectDir);
+  if (state === null) {
     throw new Error("Code Generation approval authority requires an active workflow state");
   }
-  const state = readFileSync(statePath, "utf-8");
   // While `next` asks about the step it is about to issue, a state write since
   // the engine's last step (a Construction setting, the walking-skeleton
   // stance, the verification command) made that step out of date, not the

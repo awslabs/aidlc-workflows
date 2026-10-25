@@ -55,6 +55,7 @@ import {
   rejectionAtRunFloor,
   rejectionIsFreshAttempt,
   removePlanApprovalRuntimeRecord,
+  runStateContent,
   renderChangedPaths,
   sourceChangedOutsideAidlc,
   stalePlanApprovalReceiptsForTarget,
@@ -1326,12 +1327,8 @@ function currentPlanApprovalAsk(
   projectDir: string,
   answered: "none" | "some" | "all" = "none",
 ): { marker: ActiveDirectiveMarker; record: PlanApprovalAskRecord } | null {
-  let state: string;
-  try {
-    state = readFileSync(stateFilePath(projectDir), "utf-8");
-  } catch {
-    return null;
-  }
+  const state = runStateContent(projectDir);
+  if (state === null) return null;
   const marker = readActiveDirectiveMarker(projectDir, state);
   if (marker?.version !== 2 || marker.kind !== "ask" || marker.ask_type !== PLAN_APPROVAL_ASK_TYPE) return null;
   const record = readPlanApprovalAsk(projectDir, marker.intent_uuid ?? "bare-space");
@@ -2326,12 +2323,8 @@ function atCompletionGate(projectDir: string, unit: string | null): boolean {
  */
 export function requestPlanApprovalReviewNow(projectDir: string): string | null {
   return withAuditLock(projectDir, () => {
-    let state: string;
-    try {
-      state = readFileSync(stateFilePath(projectDir), "utf-8");
-    } catch {
-      return null;
-    }
+    const state = runStateContent(projectDir);
+    if (state === null) return null;
     const marker = readActiveDirectiveMarker(projectDir, state);
     const current = marker?.version === 2 ? marker : null;
     if ((current?.stage ?? getField(state, "Current Stage")?.trim()) !== STAGE) return null;

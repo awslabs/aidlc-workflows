@@ -1730,6 +1730,15 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 
 The redo `jump execute` that `next` names to run Reverse Engineering, which the person put back on the plan behind the cursor before Construction started (Code Generation only just entered, nothing of it written), passes too, by the same check `next` prints it from: it is their change carried out, it leaves the finished stages and Code Generation as they are, and the work comes back to Code Generation after it.
 
+**A Code Generation run on its own with no work.** With no work selected,
+`next --stage code-generation --single` records the run's start in the space's
+own record, and its plan question is the open step there, bound to the empty
+state the run's steps are issued on (`runStateContent`): the person's reply,
+the choice the agent records, the receipt and `PLAN_APPROVAL_RECORDED` land
+beside that start, and the approved plan builds as it does inside work. The
+hook itself passes every call while there is no workflow state, as before; the
+run's `report --single` still waits for the approved plan.
+
 **What the plan never governs.** At any point of Code Generation, under every
 Guard Policy and whatever the current step (the plan being written, the engine's
 plan question open, the rules still arriving, a swarm batch, a step gone out of

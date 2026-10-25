@@ -6391,16 +6391,15 @@ export const PLAN_APPROVAL_ASKED_BY_ENGINE =
   "Plan Approval is asked by the engine now. Run next, show the person the question it returns, and end the turn.";
 
 // The engine's Plan Approval question while it is open for the selected work
-// (or the work named): its step marker, which names the Unit or Units it asks
-// about; null otherwise.
+// (or the work named, or with no work selected an isolated run's): its step
+// marker, which names the Unit or Units it asks about; null otherwise.
 export function openPlanApprovalAsk(projectDir: string, intent?: string, space?: string): ActiveDirectiveMarker | null {
   try {
-    const marker = readActiveDirectiveMarker(
-      projectDir,
-      readFileSync(stateFilePath(projectDir, intent, space), "utf-8"),
-      intent,
-      space,
-    );
+    const state = intent === undefined && space === undefined
+      ? runStateContent(projectDir)
+      : readFileSync(stateFilePath(projectDir, intent, space), "utf-8");
+    if (state === null) return null;
+    const marker = readActiveDirectiveMarker(projectDir, state, intent, space);
     return marker?.version === 2 && marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE ? marker : null;
   } catch {
     return null;
@@ -36409,6 +36408,19 @@ export function isolatedRunWithoutWork(
 // otherwise, as recordDir.
 export function runRecordDir(projectDir: string): string | null {
   return recordDir(projectDir) ?? (isolatedRunWithoutWork(projectDir) ? docsRoot(projectDir) : null);
+}
+
+// The state a stage's run is issued on: the selected work's state file, or with
+// no work selected and an isolated run open, none, which that run's steps bind
+// as the empty state (activeDirectiveContext). Null otherwise; a state file
+// that exists but cannot be read is never taken for none.
+export function runStateContent(projectDir: string): string | null {
+  try {
+    return readFileSync(stateFilePath(projectDir), "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+  }
+  return isolatedRunWithoutWork(projectDir) ? "" : null;
 }
 
 // The words typed after the flags of a stage run on its own with no work: its

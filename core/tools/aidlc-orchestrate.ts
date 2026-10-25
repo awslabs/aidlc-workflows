@@ -472,6 +472,7 @@ import {
   toPosix,
   DOCUMENT_INPUT_REQUEST_FILE,
   stateDigest,
+  runStateContent,
   readActiveDirectiveMarker,
   type ActiveDirectiveMarker,
   EngineModeViolationError,
@@ -1886,11 +1887,15 @@ function prepareEmission(directive: Directive): PreparedEmission {
   }
   // The engine's Plan Approval question is the active directive while it is
   // open: it names the target(s) it stands in for, so the guard, the Stop hook,
-  // and the human-turn hook all read the same question.
+  // and the human-turn hook all read the same question. With no work selected,
+  // an isolated run's question binds the empty state its step was issued on.
+  const planAskState = transported.kind === "ask" && transported.ask_type === PLAN_APPROVAL_ASK_TYPE
+    ? askState ?? (engineProjectDir ? runStateContent(engineProjectDir) : null)
+    : null;
   if (
     transported.kind === "ask" &&
     transported.ask_type === PLAN_APPROVAL_ASK_TYPE &&
-    askState !== null
+    planAskState !== null
   ) {
     const units = transported.plan_approval.targets
       .map((target) => target.unit)
@@ -1902,7 +1907,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
       ...(typeof transported.unit === "string"
         ? { unit: transported.unit }
         : units.length > 1 ? { units } : {}),
-      state_sha256: stateDigest(askState),
+      state_sha256: stateDigest(planAskState),
     };
   }
   // Every other question the engine asks (where the work belongs, which plan,
