@@ -1323,11 +1323,12 @@ change. See
    concrete upstream/downstream invalidation paths (`reviewer_max_iterations`
    is 1, engine-enforced). At a stage's gate, one line after the findings names
    the open findings Approve records as `Accepted risk`, each with the start of
-   its text (and its Unit when they span Units), and says that "approve, and
-   fix R-01" (`--fix-finding`) or "reject R-01" (`--reject-finding`) decides one
-   differently; the Approve option then does not say it again. The ids come from
-   the builder `GATE_APPROVED` writes through. A Unit's own approval (`--unit`,
-   below) shows no such line. The final gate of a per-Unit stage renders every Unit
+   its text (and its Unit when they span Units), and says, in plain words, that
+   the person can instead approve and ask for one to be fixed (`--fix-finding`);
+   the Approve option then does not say it again. The ids come from the builder
+   `GATE_APPROVED` writes through. A Unit's own approval (`--unit`, below), and
+   a gate whose one approval also covers later stages with open findings of
+   their own, show no such line. The final gate of a per-Unit stage renders every Unit
    covered by that single approval. A Unit's own approval (its Construction
    checkpoint or team Unit gate) passes `--unit "<unit>"` and shows only that
    Unit's review; reviewer dispatch context is always Unit-filtered.

@@ -4597,13 +4597,13 @@ describe("t304 protocol and harness projections use the deterministic renderer",
   });
 });
 
-// Arden's #2099 call: at a gate with open review findings the brief says, in one
-// line beside the findings, that Approve accepts them as risk and how to decide
-// one differently (#3115's --fix-finding, and --reject-finding with a change
-// request). The ids are the findings Approve records as Accepted risk, from the
-// one builder approve writes through, each with its text; the Approve option
-// no longer says it a second time. Nothing at a Unit's own approval, whose
-// command takes no finding flag.
+// #2099, the one line: at a gate with open review findings the brief says, in
+// one line beside the findings, that Approve accepts them as risk and that they
+// can instead approve and ask for one to be fixed (#3115's --fix-finding), in
+// plain words. The ids are the findings Approve records as Accepted risk, from
+// the one builder approve writes through, each with its text; the Approve
+// option no longer says it a second time. Nothing at a Unit's own approval,
+// whose command takes no finding flag.
 describe("t304 the gate brief says once what Approve accepts", () => {
   const STAGE = "requirements-analysis";
   const lineOf = (brief: string): string[] => brief.split("\n").filter((line) => line.startsWith("Approve accepts"));
@@ -4613,7 +4613,7 @@ describe("t304 the gate brief says once what Approve accepts", () => {
     const brief = renderReviewBrief(project.proj, findStageBySlug(STAGE)!, "first");
     const line =
       "Approve accepts the open review findings R-01 (Concern 1), R-02 (Concern 2) and R-03 (Concern 3) as risk; " +
-      'to decide one differently, say "approve, and fix R-01" or "reject R-01".';
+      'you can also approve and ask for one to be fixed.';
     expect(lineOf(brief)).toEqual([line]);
     expect(brief.indexOf(line)).toBeGreaterThan(brief.indexOf("> R-03 Suggested change: Fix concern 3"));
     expect(brief.indexOf(line)).toBeLessThan(brief.indexOf("**Decision options:**"));
@@ -4634,7 +4634,7 @@ describe("t304 the gate brief says once what Approve accepts", () => {
     const brief = renderReviewBrief(project.proj, findStageBySlug(STAGE)!, "first");
     expect(lineOf(brief)).toEqual([
       "Approve accepts the open review finding R-01 (Concern 1) as risk; " +
-        'to decide it differently, say "approve, and fix R-01" or "reject R-01".',
+        'you can also approve and ask for it to be fixed.',
     ]);
   });
 
@@ -4652,7 +4652,7 @@ describe("t304 the gate brief says once what Approve accepts", () => {
     const brief = renderReviewBrief(project.proj, findStageBySlug(STAGE)!, "revision");
     expect(lineOf(brief)).toEqual([
       "Approve accepts the open review findings R-02 (Concern 2) and R-03 (Concern 3) as risk; " +
-        'to decide one differently, say "approve, and fix R-02" or "reject R-02".',
+        'you can also approve and ask for one to be fixed.',
     ]);
   });
 
@@ -4678,7 +4678,7 @@ describe("t304 the gate brief says once what Approve accepts", () => {
     const brief = renderReviewBrief(project.proj, findStageBySlug(STAGE)!, "first");
     expect(lineOf(brief)).toEqual([
       "Approve accepts the open review finding R-01 (FR1.1 and FR1.2 state behavioral obligations but carry no " +
-        'explicit pass/fail...) as risk; to decide it differently, say "approve, and fix R-01" or "reject R-01".',
+        'explicit pass/fail...) as risk; you can also approve and ask for it to be fixed.',
     ]);
     expect(brief).toContain("the inception guardrail requires every requirement to have one");
   });
@@ -4691,7 +4691,7 @@ describe("t304 the gate brief says once what Approve accepts", () => {
     const brief = renderReviewBrief(proj, findStageBySlug("functional-design")!, "first");
     expect(lineOf(brief)).toEqual([
       "Approve accepts the open review findings unit-a R-01 (unit-a concern) and unit-b R-01 (unit-b concern) as risk; " +
-        'to decide one differently, say "approve, and fix unit-a R-01" or "reject unit-a R-01".',
+        'you can also approve and ask for one to be fixed.',
     ]);
   });
 
@@ -4711,7 +4711,7 @@ describe("t304 the gate brief says once what Approve accepts", () => {
     const brief = renderReviewBrief(proj, findStageBySlug("functional-design")!, "first");
     expect(lineOf(brief)).toEqual([
       "Approve accepts the open review finding R-02 (unit-b concern) as risk; " +
-        'to decide it differently, say "approve, and fix R-02" or "reject R-02".',
+        'you can also approve and ask for it to be fixed.',
     ]);
     expect(brief).toContain("- **Approve** - continue with the work as changed after review.");
   });
@@ -4739,7 +4739,7 @@ describe("t304 the gate brief says once what Approve accepts", () => {
     expect(printed.status, printed.out).toBe(0);
     const line =
       "Approve accepts the open review findings R-01 (Concern 1) and R-02 (Concern 2) as risk; " +
-      'to decide one differently, say "approve, and fix R-01" or "reject R-01".';
+      'you can also approve and ask for one to be fixed.';
     expect(lineOf(printed.stdout)).toEqual([line]);
     const briefs = join(seededRecordDir(project.proj), ".aidlc-engine", "reviews", STAGE, "stage", "briefs");
     const { digest } = JSON.parse(readFileSync(join(briefs, "latest.json"), "utf-8")) as { digest: string };

@@ -19,6 +19,7 @@ import {
   constructionCheckpointsApply,
   errorMessage,
   extractMarkdownSection,
+  approvesTogetherStages,
   findStageBySlug,
   isAutonomousConstructionGate,
   isTeamUnitOwnership,
@@ -1562,25 +1563,37 @@ function findingGist(text: string): string {
   return `${(word > 0 ? cut.slice(0, word) : cut).replace(/[\s,;:]+$/, "")}...`;
 }
 
-// What the person can say, before a finding's id, to decide it differently
-// (Arden's words): "approve, and fix" is --fix-finding on the approval, and
-// "reject" is --reject-finding on a change request.
-const DECIDE_ONE_WAYS = ["approve, and fix", "reject"] as const;
+// The other ways to decide an open finding, in plain words the person answers
+// in their own (no exact words to type): a fix asked as they approve is
+// --fix-finding on the approval. `{it}` is the finding, or one of them. A
+// rejection (--reject-finding on a change request) is not offered: a change
+// request that changes nothing is refused when the gate is shown again.
+const DECIDE_ONE_WAYS = ["approve and ask for {it} to be fixed"] as const;
 
-// Arden's #2099 line: the open findings a person's Approve at this stage's gate
+// The #2099 line: the open findings a person's Approve at this stage's gate
 // records as `Accepted risk` (the builder approve writes through, so a finding
 // it records as `Changed after review` is not named), and DECIDE_ONE_WAYS.
 // Each Unit's review numbers from R-01, so when the findings named span Units
-// each is labelled with its Unit. Null when none is named, or when
-// Construction approves the gate on its own.
+// each is labelled with its Unit. Null when none is named, when Construction
+// approves the gate on its own, or when a stage the one approval covers after
+// this one (approvesTogetherStages) has open findings it accepts too: a fix
+// asked reaches only this stage's, so the line could not name all it accepts.
 function approveAcceptsLine(projectDir: string, stage: ReviewFingerprintStage): string | null {
+  const acceptedRisk = (of: ReviewFingerprintStage): ApprovalDecision[] =>
+    approvalDecisions(projectDir, of, undefined, "person", [])
+      .filter(({ disposition }) => disposition.status === "Accepted risk");
   try {
-    if (isAutonomousConstructionGate(readFileSync(stateFilePath(projectDir), "utf-8"), stage, projectDir)) return null;
+    const state = readFileSync(stateFilePath(projectDir), "utf-8");
+    if (isAutonomousConstructionGate(state, stage, projectDir)) return null;
+    const followers = (approvesTogetherStages(state, stage.slug) ?? []).slice(1);
+    if (followers.some((slug) => {
+      const follower = findStageBySlug(slug);
+      return follower !== undefined && follower.reviewer !== undefined && acceptedRisk(follower).length > 0;
+    })) return null;
   } catch {
-    // No state to read: nothing is approving on its own.
+    // No state to read: nothing is approving on its own or with this stage.
   }
-  const accepted = approvalDecisions(projectDir, stage, undefined, "person", [])
-    .filter(({ disposition }) => disposition.status === "Accepted risk");
+  const accepted = acceptedRisk(stage);
   if (accepted.length === 0) return null;
   const byUnit = new Set(accepted.map(({ unit }) => unit)).size > 1;
   const label = ({ finding, unit }: ApprovalDecision): string =>
@@ -1588,10 +1601,9 @@ function approveAcceptsLine(projectDir: string, stage: ReviewFingerprintStage): 
   const named = accepted.map((decision) => `${label(decision)} (${findingGist(decision.finding.finding)})`);
   const one = named.length === 1;
   const list = one ? named[0] : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
-  const first = label(accepted[0]);
-  const ways = DECIDE_ONE_WAYS.map((way) => `"${way} ${first}"`).join(" or ");
-  return `Approve accepts the open review finding${one ? "" : "s"} ${list} as risk; ` +
-    `to decide ${one ? "it" : "one"} differently, say ${ways}.`;
+  const ways = DECIDE_ONE_WAYS.map((way) => way.replace("{it}", one ? "it" : "one"));
+  const also = ways.length === 1 ? ways[0] : `${ways.slice(0, -1).join(", ")}, or ${ways.at(-1)}`;
+  return `Approve accepts the open review finding${one ? "" : "s"} ${list} as risk; you can also ${also}.`;
 }
 
 // The flags that name a gate's findings. A fix asked for carries no reason:
