@@ -14,6 +14,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { basename, delimiter, join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { shortTemporaryRoot } from "../lib/e2e-workers.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -36,15 +37,15 @@ afterAll(() => {
   for (const path of temporary) rmSync(path, { recursive: true, force: true });
 });
 
-function temp(prefix: string): string {
-  const path = mkdtempSync(join(tmpdir(), prefix));
+function temp(prefix: string, root = tmpdir()): string {
+  const path = mkdtempSync(join(root, prefix));
   temporary.push(path);
   return path;
 }
 
 // A project folder `length` characters deep, with a .git of its own.
-function projectFolder(length: number): string {
-  const base = temp("aidlc-t-deep-");
+function projectFolder(length: number, root = tmpdir()): string {
+  const base = temp("aidlc-t-deep-", root);
   const dir = length > base.length + 1 ? join(base, "p".repeat(length - base.length - 1)) : base;
   mkdirSync(join(dir, ".git"), { recursive: true });
   writeFileSync(join(dir, ".git", "config"), "[core]\n\trepositoryformatversion = 0\n");
@@ -255,9 +256,8 @@ describe("config and doctor in a project folder", () => {
 
   test("a short folder: neither config nor doctor says anything about it", async () => {
     const { RECORD_DEPTH } = await import(HELPER);
-    const project = projectFolder(0);
-    // On Windows short only because the runner's temp folder is (run-tests picks the shorter of the user's and
-    // the system's): a TEMP deeper than that is the rig, not AI-DLC. Elsewhere any depth says nothing.
+    const project = projectFolder(0, shortTemporaryRoot());
+    // Short on Windows whatever the runner's TEMP; elsewhere any depth says nothing.
     if (WINDOWS) expect(project.length, project).toBeLessThanOrEqual(260 - 1 - RECORD_DEPTH);
     const env = machineEnv(false);
     const setup = configure(project, env);

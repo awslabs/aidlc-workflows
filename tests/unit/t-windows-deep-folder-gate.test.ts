@@ -10,7 +10,6 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import {
   AIDLC_SRC,
@@ -27,6 +26,7 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { shortTemporaryRoot } from "../lib/e2e-workers.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 resetAidlcEnv();
@@ -81,6 +81,14 @@ describe("the helper with the Unit names", () => {
     expect(said?.facts).toBe(`70 ${SAID} ${team.length + UNIT_RECORD_SUFFIX + 3}`);
     // So does a second intent of the same day and label.
     expect(deepFolder(folder, "win32", { names: ["api"], recordFolder: `${capped}-2` })?.adds).toBe(UNIT_RECORD_DEPTH + 5);
+  });
+
+  test("the shared short temp folder is never deeper than the user's, and is it off Windows", async () => {
+    const { realpathSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const root = shortTemporaryRoot();
+    if (WINDOWS) expect(realpathSync(root).length).toBeLessThanOrEqual(realpathSync(tmpdir()).length);
+    else expect(root).toBe(tmpdir());
   });
 
   test("on Linux and macOS the names change nothing", async () => {
@@ -157,7 +165,7 @@ ${row(" ", "build-and-test")}
 // units block naming `units`, which are picked from the folder's depth and the
 // length of the work's record folder under it.
 function project(units: (depth: number, record: number) => string[]): { proj: string; units: string[] } {
-  const base = mkdtempSync(join(tmpdir(), "dg-"));
+  const base = mkdtempSync(join(shortTemporaryRoot(), "dg-"));
   made.push(base);
   // createTestProject adds `/aidlc-test-XXXXXX` (18) under TMPDIR.
   const room = 70 - 18 - base.length - 1;
@@ -216,8 +224,8 @@ describe("the Units Generation gate", () => {
       const length = Math.min(64, Math.max(4, 260 - depth - records));
       return ["u2-billing", `u1-${"o".repeat(length - 3)}`];
     });
-    // On Windows the folder is one config stays silent for (run-tests puts fixtures under the shorter temp
-    // folder); elsewhere any depth says nothing.
+    // On Windows the folder is one config stays silent for (it sits under shortTemporaryRoot());
+    // elsewhere any depth says nothing.
     if (WINDOWS) expect(proj.length + 1 + RECORD_DEPTH, proj).toBeLessThanOrEqual(260);
     const longest = Math.max(...units.map((name) => name.length));
     const opened = openGate(proj);
