@@ -195,6 +195,18 @@ describe.each(POLICIES)("Guard Policy %s: a message that gave an approval or a d
 
   // Several replies since the last decision and no message named: the setting
   // would carry the words of whichever came last, so the agent names the one that asked.
+  // The agent reads it as it shows the gate, before the person replies.
+  test("the step that opens the gate says a setting asked beside the approval rides the approval report", () => {
+    const proj = project();
+    const slug = getField(stateOf(proj), "Current Stage") as string;
+    const started = run(proj, [STATE, "checkbox", `${slug}=in-progress`, "--project-dir", proj], GATE_ENV);
+    expect(started.status, started.out).toBe(0);
+    const opened = report(proj, ["--stage", slug, "--result", "awaiting-approval"]);
+    expect(opened.status, opened.out).toBe(0);
+    expect(opened.out).toContain("add that setting's `config set` flag to the approval report");
+    expect(opened.out).toContain("--plan-approval off");
+  });
+
   test("two replies and no message named: the report names both and records nothing; naming the one that asked, both stand", () => {
     const proj = project();
     const slug = openGate(proj);

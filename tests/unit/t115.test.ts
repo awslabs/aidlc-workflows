@@ -1420,7 +1420,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(result.status).toBe(0);
     const printed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
     expect(printed.kind).toBe("print");
-    expect(printed.message).toBe('Recorded awaiting-approval for "requirements-analysis".');
+    expect(printed.message).toStartWith('Recorded awaiting-approval for "requirements-analysis".');
     expect(typeof printed.next_stage).toBe("string");
     expect(String(printed.narration)).toMatch(
       /^Requirements Analysis is ready for your review\. (It produced .+, in|Its output goes in) aidlc\//,
