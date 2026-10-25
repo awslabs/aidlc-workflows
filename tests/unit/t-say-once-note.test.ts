@@ -184,6 +184,15 @@ describe("where the host hands the model a note the person does not see, the ord
     expect(noteOf(postToolUse("git status --short", ""))).toBe(`${ORDER}\n${out.trimEnd()}`);
   });
 
+  test("claude: a setter naming their earlier message, after a later one, still hands the order on its own call", () => {
+    const { said, set, setter, postToolUse } = project("claude");
+    const asked = said("turn the summary confirmation off");
+    said("for this piece of work");
+    const out = set(asked);
+    expect(out).not.toContain(ORDER);
+    expect(noteOf(postToolUse(setter(asked), out))).toBe(`${ORDER}\n${out.trimEnd()}`);
+  });
+
   test("claude: once the person has written again, the note is dropped, never said late", () => {
     const { said, set, setter, postToolUse } = project("claude");
     const id = said("turn the summary confirmation off");

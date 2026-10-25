@@ -45847,10 +45847,24 @@ export function engineErrorRelayLine(
  */
 export const SAY_ONCE_NOTE_HARNESSES: ReadonlySet<string> = new Set(["claude", "codex", "opencode"]);
 
-/** What the setter leaves for the chat's next shell call: the order with its lines, and the message they stand on. */
+/** What the setter leaves for the chat's next shell call: the order with its lines, and the chat's newest messages then. */
 export interface SayOnceNote {
   say: string;
-  messageId: string;
+  newest: ChatNewest;
+}
+
+/** A chat's newest messages: when the latest was sent, and every message sent then. */
+interface ChatNewest {
+  at: string;
+  ids: string[];
+}
+
+function chatNewest(projectDir: string, sessionId: string | null): ChatNewest | null {
+  const { listMessages } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  const chats = listMessages(projectDir).filter((message) => message.session === sessionId);
+  if (chats.length === 0) return null;
+  const at = chats[chats.length - 1].at;
+  return { at, ids: chats.filter((message) => message.at === at).map((message) => message.id) };
 }
 
 function sayOnceNotePath(projectDir: string, sessionId: string | null): string {
@@ -45861,25 +45875,24 @@ function sayOnceNotePath(projectDir: string, sessionId: string | null): string {
 /**
  * Leave `say` for this chat's next shell call hook, where the harness hands the
  * model a note; true when it is left, and the setter then prints its lines
- * alone. It stands on `messageId` (the message the agent named, or else the
- * chat's latest). False on any doubt, and the order stays in the output.
+ * alone. It stands on the chat's newest messages now, whichever message the
+ * setting stood on, which may be an earlier one. False on any doubt, and the
+ * order stays in the output.
  */
 export function leaveSayOnceNote(
   projectDir: string,
   sessionId: string | null,
   say: string,
-  messageId?: string,
   harness: string = runtimeHarnessName(),
 ): boolean {
   if (!SAY_ONCE_NOTE_HARNESSES.has(harness)) return false;
   const path = sayOnceNotePath(projectDir, sessionId);
   if (!path) return false;
   try {
-    const { latestMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
-    const standsOn = messageId ?? latestMessage(projectDir, sessionId)?.id;
-    if (standsOn === undefined) return false;
+    const newest = chatNewest(projectDir, sessionId);
+    if (newest === null) return false;
     mkdirSync(sessionsDir(projectDir), { recursive: true });
-    const note: SayOnceNote = { say, messageId: standsOn };
+    const note: SayOnceNote = { say, newest };
     writeFileAtomic(path, `${JSON.stringify(note)}\n`);
     return true;
   } catch {
@@ -45891,8 +45904,8 @@ export function leaveSayOnceNote(
  * The PostToolUse line that hands this chat's note to the model, taken once by
  * the chat's next shell call (the setter's own, as a rule; the note carries the
  * lines, so another call that ends first hands over the same words), or null.
- * A note whose message is no longer the chat's latest is dropped: the person
- * has written again since, and the line is never said late.
+ * A note the chat has a newer message than is dropped: the person has written
+ * again since, and the line is never said late.
  */
 export function sayOnceNoteLine(
   projectDir: string,
@@ -45901,7 +45914,7 @@ export function sayOnceNoteLine(
 ): string | null {
   if (!SAY_ONCE_NOTE_HARNESSES.has(harness)) return null;
   const valid = validSessionId(sessionId);
-  // The chat the setter named: a Codex helper thread's id maps to its root, as resolveChat maps it.
+  // The setter's chat: a Codex helper thread's id maps to its root, as resolveChat maps it.
   const chat = valid === null ? null : helperSessionRoot(projectDir, valid) ?? valid;
   const path = sayOnceNotePath(projectDir, chat);
   if (!path || !existsSync(path)) return null;
@@ -45923,9 +45936,11 @@ export function sayOnceNoteLine(
   } catch {
     /* per-user runtime state; best-effort */
   }
-  if (typeof note?.say !== "string" || note.say === "" || typeof note.messageId !== "string") return null;
-  const { latestMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
-  if (latestMessage(projectDir, chat)?.id !== note.messageId) return null;
+  if (typeof note?.say !== "string" || note.say === "") return null;
+  const then = note.newest;
+  const now = chatNewest(projectDir, chat);
+  if (now === null || typeof then?.at !== "string" || !Array.isArray(then.ids)) return null;
+  if (now.at !== then.at || now.ids.some((id) => !then.ids.includes(id))) return null;
   return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: note.say } })}\n`;
 }
 

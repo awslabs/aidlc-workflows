@@ -1340,8 +1340,8 @@ alone and leaves the order with its lines for this chat
 (`leaveSayOnceNote`, `aidlc/.aidlc-sessions/<session>.say-once`), and this
 hook hands it to the model once, as PostToolUse `additionalContext`, on the
 chat's next shell call, which is the setter's own as a rule
-(`sayOnceNoteLine`). The note stands on the message the setting stood on: once
-the person has sent another message, it is dropped, never said late. Claude
+(`sayOnceNoteLine`). The note stands on the chat's newest messages when it is
+left: once the person has sent another message, it is dropped, never said late. Claude
 Code reads it as hook context and Codex as a developer message, and neither
 draws it; the opencode plugin puts it after the result the model reads
 (`output`), while the TUI draws the call from `metadata.output`. Kiro CLI,
