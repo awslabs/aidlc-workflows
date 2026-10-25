@@ -19385,8 +19385,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         ].filter(Boolean).join("\n");
         if (narration) gateReply.narration = narration;
         // On Windows, the Unit names Units Generation just wrote can deepen their
-        // records past what config counted: config's line, said once, last, the
-        // first time this gate opens.
+        // records past what config counted: config's line, said once, after the
+        // stage's own lines, the first time this gate opens.
         const dag = slug === "units-generation" && flags.result === "awaiting-approval" && !revalidatingOpenGate
           ? resolveBoltDag(pd)
           : null;

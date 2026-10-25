@@ -83,7 +83,7 @@ describe("the helper with the Unit names", () => {
     expect(deepFolder(folder, "win32", { names: ["api"], recordFolder: `${capped}-2` })?.adds).toBe(UNIT_RECORD_DEPTH + 5);
   });
 
-  test("the shared short temp folder is never deeper than the user's, and is it off Windows", async () => {
+  test("the shared short temp folder is never deeper than the user's, and is tmpdir off Windows", async () => {
     const { realpathSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
     const root = shortTemporaryRoot();
