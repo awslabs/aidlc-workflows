@@ -536,31 +536,6 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
     expect(recorded.status, recorded.out).toBe(0);
   });
 
-  test("a yes to building the Units in parallel, shown again while they are built one at a time, applies both setters it names", () => {
-    const p = askedInOldChat("Construction policy");
-    const shown = bare(p, NEW);
-    expect(shown.kind, JSON.stringify(shown)).toBe("print");
-    const setters = namedSetters(shown.message);
-    expect(setters).toEqual([
-      "set-construction-iteration stage-major --message <id>", "set-construction-execution swarm --message <id>",
-    ]);
-    person(p, "that's right", NEW);
-    const id = auditBlockField(readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN").at(-1)!.block, "Message Id");
-    expect(id).not.toBeNull();
-    const recorded = answer(p, "Construction policy", NEW);
-    expect(recorded.status, recorded.out).toBe(0);
-    for (const setter of setters) {
-      const ran = tool(p, "state", setter.replace("<id>", id!).split(" "));
-      expect(ran.status, ran.out).toBe(0);
-    }
-    const state = readFileSync(seededStateFile(p), "utf-8");
-    expect(getField(state, "Construction Iteration")).toBe("stage-major");
-    expect(getField(state, "Construction Execution")).toBe("swarm");
-    const set = readAuditShardEvents(p).filter((row) => row.event === "CONSTRUCTION_POLICY_SET");
-    expect(set.map((row) => auditBlockField(row.block, "Field"))).toEqual(["Construction Iteration", "Construction Execution"]);
-    expect(auditBlockField(set[0].block, "Message Id")).toBe(id);
-  });
-
   // Copilot CLI runs its session-start hook beside the prompt hook in no fixed
   // order, so the chat's own session rows can land after the person's line.
   const HOST_ROWS: Array<[string, Array<[string, Record<string, string>]>]> = [
@@ -605,6 +580,31 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
     // The chat that typed it still reads it, past the other chat's session row.
     const here = nextIn(NEW);
     expect(here.kind, JSON.stringify(here)).toBe("print");
+  });
+
+  test("a yes to building the Units in parallel, shown again while they are built one at a time, applies both setters it names", () => {
+    const p = askedInOldChat("Construction policy");
+    const shown = bare(p, NEW);
+    expect(shown.kind, JSON.stringify(shown)).toBe("print");
+    const setters = namedSetters(shown.message);
+    expect(setters).toEqual([
+      "set-construction-iteration stage-major --message <id>", "set-construction-execution swarm --message <id>",
+    ]);
+    person(p, "that's right", NEW);
+    const id = auditBlockField(readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN").at(-1)!.block, "Message Id");
+    expect(id).not.toBeNull();
+    const recorded = answer(p, "Construction policy", NEW);
+    expect(recorded.status, recorded.out).toBe(0);
+    for (const setter of setters) {
+      const ran = tool(p, "state", setter.replace("<id>", id!).split(" "));
+      expect(ran.status, ran.out).toBe(0);
+    }
+    const state = readFileSync(seededStateFile(p), "utf-8");
+    expect(getField(state, "Construction Iteration")).toBe("stage-major");
+    expect(getField(state, "Construction Execution")).toBe("swarm");
+    const set = readAuditShardEvents(p).filter((row) => row.event === "CONSTRUCTION_POLICY_SET");
+    expect(set.map((row) => auditBlockField(row.block, "Field"))).toEqual(["Construction Iteration", "Construction Execution"]);
+    expect(auditBlockField(set[0].block, "Message Id")).toBe(id);
   });
 
   test("a question its stage's questions file still holds is asked again by the stage's own step, from the file", () => {
