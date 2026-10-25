@@ -75,7 +75,7 @@ import {
 } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
-import { keepWritesBeforePick } from "../tools/aidlc-before-pick.ts";
+import { keepWritesBeforePick, keepWritesDuringWork, workBeforeCodeGeneration } from "../tools/aidlc-before-pick.ts";
 import { openPlanQuestion } from "../tools/aidlc-question-store.ts";
 import { CONFIG_SECTIONS } from "../tools/aidlc-command.ts";
 import { commandPath, readActiveExecutable } from "../tools/aidlc-install-paths.ts";
@@ -2088,24 +2088,33 @@ async function mutationIntent(
 
 // The agent's write while this chat's plan question for new work is open, kept
 // with what each file was just before, so the pick can say what changed and
-// how to undo it (aidlc-before-pick.ts). It reads the targets this guard reads
-// and refuses nothing; a failure keeps nothing, and the write goes unnamed.
+// how to undo it; otherwise, while the work this chat takes part in is before
+// Code Generation at a stage that writes only AI-DLC's records, kept with that
+// work for its next approval to say (aidlc-before-pick.ts). It reads the
+// targets this guard reads and refuses nothing; a failure keeps nothing, and
+// the write goes unnamed.
 async function keepWriteBeforePick(
   parsed: ClaudeCodeHookInput,
   workflow: ReturnType<typeof enterHookWorkflow>,
 ): Promise<void> {
   try {
     const toolName = parsed.tool_name ?? "";
-    const chat = workflow.selection?.sessionId;
-    if ((toolName !== "Bash" && !WRITE_TOOLS.has(toolName)) || !chat) return;
+    const selection = workflow.selection;
+    const chat = selection?.sessionId;
+    if ((toolName !== "Bash" && !WRITE_TOOLS.has(toolName)) || !selection || !chat) return;
     const projectDir = workflow.projectDir;
     const question = openPlanQuestion(projectDir, chat);
-    if (question === null) return;
+    const work = question === null && selection.intent !== null && workflow.participation === "participant"
+      ? { intent: selection.intent, space: selection.space, stage: workBeforeCodeGeneration(projectDir, selection) }
+      : null;
+    if (question === null && !work?.stage) return;
     const cwd = typeof parsed.cwd === "string" ? parsed.cwd : projectDir;
     const { targets } = await mutationIntent(
       projectDir, toolName, parsed.tool_input, cwd, parsed.aidlc_shell === "powershell",
     );
-    keepWritesBeforePick(projectDir, chat, question, targets.filter((target) => !isOutsideProject(projectDir, target)));
+    const inside = targets.filter((target) => !isOutsideProject(projectDir, target));
+    if (question !== null) keepWritesBeforePick(projectDir, chat, question, inside);
+    else if (work?.stage) keepWritesDuringWork(projectDir, work, work.stage, inside);
   } catch {
     // Unkept.
   }
