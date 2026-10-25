@@ -1,11 +1,14 @@
-// covers: file:aidlc-common/protocols/stage-protocol.md
+// covers: file:aidlc-common/protocols/stage-protocol.md, file:skills/aidlc/SKILL.md, function:planOfferQuestionNote
 //
 // t-lone-letter-reading: at a question shown with numbers or in a box, a lone
 // letter ("a", "b") or "..." is no pick; the agent asks once which they meant.
 // A letter names a choice only where the question showed letters (a questions
 // file's lettered options). The agent reads the reply and no tool does, so the
 // subject is the sentence every harness's agent reads, and the answers corpus
-// that measures the reading must say the same.
+// that measures the reading must say the same. The sentence lives in the
+// protocol alone, so the skill's gate step and the plan offer, where a reply is
+// read with no stage step in front of the agent (a gate shown again on resume,
+// the plan offer before any stage), name its section by heading and path.
 //
 // Read from the generated dist/ trees: the protocol is a projection, so the
 // bytes that ship are the subject.
@@ -22,10 +25,18 @@ const HARNESS_NAMES = readdirSync(join(REPO_ROOT, "harness"), { withFileTypes: t
   .map((entry) => entry.name)
   .sort();
 
+async function manifestOf(name: string): Promise<HarnessManifest> {
+  return (await import(join(REPO_ROOT, "harness", name, "manifest.ts"))).default as HarnessManifest;
+}
+
 async function protocolOf(name: string): Promise<string> {
-  const manifest = (await import(join(REPO_ROOT, "harness", name, "manifest.ts"))).default as HarnessManifest;
+  const manifest = await manifestOf(name);
   return readFileSync(join(REPO_ROOT, "dist", name, manifest.harnessDir, "aidlc-common", "protocols", "stage-protocol.md"), "utf-8");
 }
+
+const SECTION = "Reading the person's reply at a checkpoint";
+const asTheSection = (harnessDir: string): string =>
+  `their reply as \`${harnessDir}/aidlc-common/protocols/stage-protocol.md\` section "${SECTION}" says`;
 
 // The "They chose" bullet of "Reading the person's reply at a checkpoint", as one line.
 function theyChose(protocol: string): string {
@@ -60,4 +71,26 @@ describe("a lone letter is a pick only where the question showed letters", () =>
         .toEqual({ id: item.id, recorded: false, asks: 0 });
     }
   });
+});
+
+describe("where a reply is read outside a stage step, the protocol's section is named", () => {
+  for (const name of HARNESS_NAMES) {
+    test(`${name}: the skill's summary and gate steps name it, and say the rule no second way`, async () => {
+      const manifest = await manifestOf(name);
+      expect(manifest.orchestratorSkillPath, "the shipped skill").toBeDefined();
+      const skill = readFileSync(join(REPO_ROOT, "dist", name, manifest.orchestratorSkillPath ?? ""), "utf-8");
+      expect(skill.split(`Otherwise read ${asTheSection(manifest.harnessDir)}`).length - 1).toBe(2);
+      expect(skill).not.toContain("ask one short question only when their intent is genuinely unclear");
+      expect(await protocolOf(name)).toContain(`\n### ${SECTION}\n`);
+    });
+
+    test(`${name}: the plan offer's step names it in this install, with a plan proposed and with none`, async () => {
+      const manifest = await manifestOf(name);
+      const directive = await import(join(REPO_ROOT, "dist", name, manifest.harnessDir, "tools", "aidlc-directive.ts"));
+      for (const ask_type of ["scope-confirm", "compose-offer"]) {
+        const step = directive.withAgentNotes({ kind: "ask", ask_type, response_route: "next", question: "q" }, "bun x.ts");
+        expect(String(step.question_note), ask_type).toContain(` Read ${asTheSection(manifest.harnessDir)}.`);
+      }
+    });
+  }
 });
