@@ -50,9 +50,10 @@
 //     makes each plan's record folder first, so a file tool that makes no
 //     folders writes the plan; a route check makes nothing.
 //   - an isolated Code Generation run in a project with no work: its plan
-//     question, the choice the agent records and the receipt sit beside the
-//     run's start, so Approve Plan builds and the run finishes; Request Changes,
-//     editing the files and "review the plan" go as inside work.
+//     question is asked and answered as inside work, PLAN_APPROVAL_RECORDED
+//     lands beside the run's start, and Approve Plan builds and the run
+//     finishes; Request Changes, editing the files and "review the plan" go as
+//     inside work.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -2939,9 +2940,10 @@ describe("an isolated Code Generation run's plan steps name that run's own next"
 });
 
 // An isolated Code Generation run in a project with no work: its start is in
-// the space's own record, and so are its plan question, the person's reply,
-// the choice the agent records and the receipt, bound to the empty state its
-// step was issued on, so the run builds and finishes as it does inside work.
+// the space's own record, and its plan question is the open step there, bound
+// to the empty state its step was issued on, so the person's answer records
+// (PLAN_APPROVAL_RECORDED beside the start) and the run builds and finishes as
+// it does inside work.
 describe("an isolated Code Generation run in a project with no work", () => {
   const SINGLE = ["--stage", "code-generation", "--single", "--scope", "enterprise"];
   const OWN_NEXT = "bun .claude/tools/aidlc-orchestrate.ts next";
