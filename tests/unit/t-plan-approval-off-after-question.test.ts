@@ -4,7 +4,8 @@
 // While the code plan question waits for the person, turning plan approval off
 // stands only on a message they sent since that question was shown (Arden's
 // call): by its place on the record after the question's own boundary, the
-// one its answer reads. In three live Copilot runs an agent turned plan
+// one its answer reads. A plan written whose question is not shown yet waits
+// for it too, and no message stands until it is shown. In three live Copilot runs an agent turned plan
 // approval off on a message that had approved something else before the plan
 // was shown, and the plan was built without the person, recorded as theirs.
 // The setter, the recorded plan-approval switch and the plan guard's admission
@@ -122,6 +123,12 @@ function approveRequirements(proj: string, message?: string): void {
 
 /** The code plan written and the plan question put to the person. */
 function planQuestionShown(proj: string): void {
+  planWritten(proj);
+  expect(next(proj)).toEqual({ kind: "ask", ask_type: "plan-approval" });
+}
+
+/** The code plan written, its question not yet asked. */
+function planWritten(proj: string): void {
   const dir = join(seededRecordDir(proj), "construction", "code-generation");
   mkdirSync(dir, { recursive: true });
   writeFileSync(
@@ -132,7 +139,6 @@ function planQuestionShown(proj: string): void {
     "utf-8",
   );
   writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `npm test`.\n", "utf-8");
-  expect(next(proj)).toEqual({ kind: "ask", ask_type: "plan-approval" });
 }
 
 function next(proj: string): { kind?: string; ask_type?: string } {
@@ -204,6 +210,32 @@ describe("while the code plan question waits, plan approval goes off only on a m
       expect(next(proj)).toEqual({ kind: "ask", ask_type: "plan-approval" });
     });
   }
+
+  // The live Copilot run on Windows: the plan written, its question never
+  // shown, code writes refused, then plan approval off on the earlier Approve.
+  test("the plan written and its question not yet shown: the earlier Approve does not turn it off", () => {
+    const proj = bugfixAtRequirements();
+    const approve = said(proj, "Approve");
+    approveRequirements(proj, approve);
+    // The plan step, as `next` gives it; the agent writes the plan and goes on without running next.
+    expect(["run-stage", "load-steering"]).toContain(next(proj).kind ?? "");
+    planWritten(proj);
+    expect(guardAdmits(proj, "echo built > src/app.js")).not.toBe(0);
+    const bare = planApprovalOff(proj);
+    expect(bare.rc).not.toBe(0);
+    expect(bare.out).not.toContain(approve);
+    const refused = planApprovalOff(proj, approve);
+    expect(refused.rc, refused.out).not.toBe(0);
+    expect(refused.out).toContain("plan question");
+    expect(refused.out).toContain(LINE);
+    expect(stateField(proj, "Plan Approval")).toBe("on (from scope bugfix)");
+    expect(ceremonySets(proj)).toHaveLength(0);
+    expect(next(proj)).toEqual({ kind: "ask", ask_type: "plan-approval" });
+    const reply = said(proj, "skip plan approval for this work");
+    const off = planApprovalOff(proj, reply);
+    expect(off.rc, off.out).toBe(0);
+    expect(stateField(proj, "Plan Approval")).toBe("off (set by you)");
+  });
 
   test("asked before the plan was shown, the person is asked once; their reply since then turns it off", () => {
     const proj = bugfixAtRequirements();
