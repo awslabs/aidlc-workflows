@@ -1630,7 +1630,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
     const projectDir = unit || directive.single === true ? undefined : emissionProjectDir(directive);
     const state = projectDir ? loadStateFileIfPresent(projectDir) : null;
     const count = state && projectDir
-      ? stageOfPlan("code-generation", getField(state, "Scope")?.trim() ?? "", state, recordDir(projectDir))
+      ? stageOfPlan("code-generation", getField(state, "Scope")?.trim() ?? "", state, { projectDir })
       : "";
     directive.narration = `Writing the code plan for Code Generation${unit}${count} first; the developer builds from it.`;
   }
@@ -2910,9 +2910,9 @@ function narrateStageEntry(
   isFirst: boolean,
   gate: GateValue,
   stateContent: string | null,
-  workRecordDir: string | null,
+  work: { projectDir: string } | null,
 ): string {
-  const stageName = `${node.name}${stageOfPlan(node.slug, scope, stateContent, workRecordDir)}`;
+  const stageName = `${node.name}${stageOfPlan(node.slug, scope, stateContent, work)}`;
   if (isFirst) {
     // Said again wherever the work is picked up, by someone who may not have
     // approved it, so it names the plan, not who approved it.
@@ -2978,10 +2978,10 @@ function narrateSpecialistStage(
   node: GraphStage,
   scope: string,
   stateContent: string | null,
-  workRecordDir: string | null,
+  work: { projectDir: string } | null,
 ): string {
   const role = roleInWords(node.lead_agent);
-  const stageName = `${node.name}${stageOfPlan(node.slug, scope, stateContent, workRecordDir)}`;
+  const stageName = `${node.name}${stageOfPlan(node.slug, scope, stateContent, work)}`;
   return role
     ? `Bringing in the ${role} to work on ${stageName}.`
     : `Now working on ${stageName}.`;
@@ -8305,11 +8305,11 @@ function buildRunStageDirective(
   // first-of-workflow facts are in hand; emit() drops it again on a per-unit
   // iteration beat, because callers set `unit` after this builder returns.
   const countProject = codekbCtx?.projectDir ?? engineProjectDir;
-  const workDir = stateContent && countProject ? recordDir(countProject) : null;
+  const work = stateContent && countProject ? { projectDir: countProject } : null;
   directive.narration =
     node.mode === "subagent" || node.mode === "pipeline"
-      ? narrateSpecialistStage(node, scope, stateContent, workDir)
-      : narrateStageEntry(node, scope, firstOfWorkflow, directive.gate, stateContent, workDir);
+      ? narrateSpecialistStage(node, scope, stateContent, work)
+      : narrateStageEntry(node, scope, firstOfWorkflow, directive.gate, stateContent, work);
   // A stage that writes once per repo says how many it covers.
   if (isCodekb(node) && codekbCtx && codekbCtx.repos.length > 1) {
     directive.narration = directive.narration.replace(/\.$/, `, across the ${codekbCtx.repos.length} repositories this work covers.`);
@@ -18133,21 +18133,21 @@ function approvalProgressLine(
   stateContent: string,
   approvedSlug: string,
   scope: string,
-  workRecordDir: string | null,
+  work: { projectDir: string } | null,
 ): string | null {
   const approved = loadGraph().find((stage) => stage.slug === approvedSlug && stage.enabled !== false);
   const next = nextInScopeStage(approvedSlug, scope, stateContent);
   if (!approved || approved.phase === "initialization" || !next) return null;
   const boxes = parseCheckboxes(stateContent);
-  const planned = plannedStages(stateContent, scope, workRecordDir);
+  const planned = plannedStages(stateContent, scope, work);
   const done = planned.filter((stage) => checkboxStateOf(boxes, stage.slug) === "completed").length;
   return `Progress: ${done} of ${planned.length} stages done. Next: ${next.name}.`;
 }
 
 // " (stage 3 of 9)" for a stage the plan runs, "" for one it does not.
-function stageOfPlan(slug: string, scope: string, stateContent: string | null, workRecordDir: string | null): string {
+function stageOfPlan(slug: string, scope: string, stateContent: string | null, work: { projectDir: string } | null): string {
   if (!stateContent) return "";
-  const planned = plannedStages(stateContent, scope, workRecordDir);
+  const planned = plannedStages(stateContent, scope, work);
   const at = planned.findIndex((stage) => stage.slug === slug);
   return at < 0 ? "" : ` (stage ${at + 1} of ${planned.length})`;
 }
@@ -19282,7 +19282,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     return;
   }
   const approvedState = flags.result === "approved" ? loadStateFileIfPresent(pd) : null;
-  const progress = approvedState === null ? null : approvalProgressLine(approvedState, slug, scope, recordDir(pd));
+  const progress = approvedState === null ? null : approvalProgressLine(approvedState, slug, scope, { projectDir: pd });
   emit(
     withChangeNotices(
       {

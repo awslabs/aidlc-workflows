@@ -2087,8 +2087,8 @@ To get started:
   // is. Initialization's setup, done when the work was created, keeps its row
   // below and stays out of the count.
   const checkboxes = parseCheckboxes(content);
-  const workDir = selection.intent === null ? null : recordDir(projectDir, selection.intent, selection.space);
-  const planned = new Set(plannedStages(content, scope, workDir).map((s) => s.slug));
+  const work = selection.intent === null ? null : { projectDir, intent: selection.intent, space: selection.space };
+  const planned = new Set(plannedStages(content, scope, work).map((s) => s.slug));
   const setup = new Set(graph.filter((s) => s.phase === "initialization").map((s) => s.slug));
   const scopedCheckboxes = checkboxes.filter((c) =>
     planned.has(c.slug) ||
@@ -12222,12 +12222,12 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       // The stages the work runs on the new plan, the one list each stage's
       // start, the progress line and status count; the row says the same
       // counts as the line, and its delta is from the count the old plan gave.
-      const workDir = recordDir(projectDir, intent, space);
+      const work = { projectDir, intent, space };
       const boxes = new Map(updatedCheckboxes.map((c) => [c.slug, c.state]));
-      const shown = plannedStages(content, newScope, workDir);
+      const shown = plannedStages(content, newScope, work);
       const shownDone = shown.filter((stage) => boxes.get(stage.slug) === "completed").length;
       const shownGates = gridCostSummary(Object.fromEntries(shown.map((stage) => [stage.slug, "EXECUTE" as const]))).gates;
-      const stageDelta = shown.length - plannedStages(contentBefore, oldScope, workDir).length;
+      const stageDelta = shown.length - plannedStages(contentBefore, oldScope, work).length;
       const deltaStr = stageDelta >= 0 ? `+${stageDelta}` : String(stageDelta);
       const effectiveDepth = getField(content, "Depth") || "unknown";
       auditEntries.unshift(

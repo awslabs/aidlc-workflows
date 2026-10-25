@@ -82,7 +82,7 @@ describe("poc on a new project, User Stories added while the work is paused afte
   test("status counts the stage the work goes back to, and that stage's start says the same count", () => {
     let added = false;
     let completion = "";
-    let started: string | null = null;
+    let started = null as string | null;
     const run = runScope("poc", {
       shape: "empty",
       afterApproval: (stage: string, agent: AgentStandIn) => {

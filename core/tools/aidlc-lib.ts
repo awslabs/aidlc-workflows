@@ -42169,19 +42169,28 @@ export function effectivePlanAction(
 // The stages the plan runs after Initialization, in run order: every one that
 // finished, and every one not skipped that the plan executes, less each one the
 // work has passed without starting (a plan change put it behind the cursor, and
-// it never runs unless the person goes back to it). Reverse Engineering owed
-// there stays, since `next` runs it; `workRecordDir` lets that rule read the
-// work's own files, as `next` does. A plan switch's line and its audit row,
-// status, the progress line and each stage's start line count from this one list.
-export function plannedStages(stateContent: string, scope: string, workRecordDir?: string | null): StageEntry[] {
+// it never runs unless the person goes back to it). A stage `next` goes back to
+// stays (stagesOwedBehindCursor, read for `work`, the piece of work the record
+// is; with none, nothing behind the cursor counts). A plan switch's line and its
+// audit row, status, the progress line and each stage's start line count from
+// this one list.
+export function plannedStages(
+  stateContent: string,
+  scope: string,
+  work?: { projectDir: string; intent?: string; space?: string } | null,
+): StageEntry[] {
   const boxes = parseCheckboxes(stateContent);
   const stateOf = (slug: string) => boxes.find((c) => c.slug === slug)?.state;
   const runs = (slug: string) =>
     stateOf(slug) === "completed" ||
     (stateOf(slug) !== "skipped" && effectivePlanAction(slug, scope, stateContent) === "EXECUTE");
+  let goesBackTo: Set<string> | null = null;
+  const owed = (slug: string): boolean => {
+    goesBackTo ??= new Set(work ? stagesOwedBehindCursor(stateContent, work.projectDir, work.intent, work.space) : []);
+    return goesBackTo.has(slug);
+  };
   const passedOver = (slug: string) =>
-    (stateOf(slug) ?? "pending") === "pending" && cursorPastStage(stateContent, slug) &&
-    !(slug === "reverse-engineering" && reverseEngineeringOwedBehindCursor(stateContent, workRecordDir));
+    (stateOf(slug) ?? "pending") === "pending" && cursorPastStage(stateContent, slug) && !owed(slug);
   return loadStageGraph().filter((stage) =>
     stage.phase !== "initialization" && runs(stage.slug) && !passedOver(stage.slug));
 }
@@ -42408,6 +42417,17 @@ export function addedStagesPassedOver(content: string, projectDir: string, inten
   return passed.filter((slug) => addedSince.has(slug));
 }
 
+// The stages on the plan the work has passed and not run that `next` goes back
+// to, in the order it goes: Reverse Engineering owed behind the cursor, then
+// each stage the person added after the work had just passed over it. The
+// stage count keeps them (plannedStages); owedJumpBack goes back to the first.
+export function stagesOwedBehindCursor(content: string, projectDir: string, intent?: string, space?: string): string[] {
+  return [
+    ...(reverseEngineeringOwedBehindCursor(content, recordDir(projectDir, intent, space)) ? ["reverse-engineering"] : []),
+    ...addedStagesPassedOver(content, projectDir, intent, space),
+  ];
+}
+
 // The move `next` names to go back to a stage on the plan the work has passed
 // and not run: Reverse Engineering owed behind the cursor runs with a redo,
 // which leaves the finished stages alone and returns to the current stage; a
@@ -42421,11 +42441,9 @@ export function owedJumpBack(
   intent?: string,
   space?: string,
 ): { target: string; direction: "redo" | "backward" } | null {
-  if (reverseEngineeringOwedBehindCursor(content, recordDir(projectDir, intent, space))) {
-    return { target: "reverse-engineering", direction: "redo" };
-  }
-  const passed = addedStagesPassedOver(content, projectDir, intent, space)[0];
-  return passed === undefined ? null : { target: passed, direction: "backward" };
+  const [target] = stagesOwedBehindCursor(content, projectDir, intent, space);
+  if (target === undefined) return null;
+  return { target, direction: target === "reverse-engineering" ? "redo" : "backward" };
 }
 
 // A per-unit stage runs per Unit only once Units exist, and otherwise uses one
