@@ -23,7 +23,9 @@ import {
   cleanupTestProject, seedBoltDag, seededRecordDir, seededStateFile, setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
-import { guardRecoveryAskFromRefusalText } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  auditBlockField, guardRecoveryAskFromRefusalText, readAuditShardEvents,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -395,14 +397,20 @@ class Work {
     this.next();
   }
 
-  // The person asks for a stage; the agent runs the jump the step prints.
+  // The person asks for a stage. The step makes the jump and starts the stage,
+  // or names the jump for the agent to run.
   jump(target: string, direction: "backward" | "forward" | "redo"): void {
     this.said(`/aidlc --stage ${target}`);
     const step = this.json(this.tool("orchestrate", ["next", "--stage", target]), `next --stage ${target}`);
-    const command = /Run `(bun [^`]+aidlc-jump\.ts execute [^`]+)`/.exec(String(step.message))?.[1];
-    expect(command, JSON.stringify(step)).toBeDefined();
-    expect(command).toContain(`--direction ${direction}`);
-    this.ok(this.printed(command!), `the jump to ${target}`);
+    const command = /Run `(bun [^`]+aidlc-jump\.ts execute [^`]+)`/.exec(String(step.message ?? ""))?.[1];
+    if (command !== undefined) {
+      expect(command).toContain(`--direction ${direction}`);
+      this.ok(this.printed(command), `the jump to ${target}`);
+      return;
+    }
+    expect(step, JSON.stringify(step)).toMatchObject({ kind: "run-stage", stage: target });
+    const jumped = readAuditShardEvents(this.dir).filter((row) => row.event === "STAGE_JUMPED").at(-1);
+    expect(auditBlockField(jumped?.block ?? "", "Direction")).toBe(direction.toUpperCase());
   }
 
   questionsText(): string {
@@ -469,8 +477,8 @@ describe("t-jump-back-asks-summary-once: going back to a confirmed stage asks it
       const work = new Work({ policy });
       work.firstAttempt();
       work.approve();
-      work.jump(STAGE, "backward");
       const since = work.outputs.length;
+      work.jump(STAGE, "backward");
       work.followStep(work.next(), "Modify");
       work.expectNoGuardQuestion(since);
       expect(work.summaryAsks).toBe(2);
@@ -481,9 +489,9 @@ describe("t-jump-back-asks-summary-once: going back to a confirmed stage asks it
   test("a restart of the stage asks the summary once and reaches the gate", () => {
     const work = new Work();
     work.firstAttempt();
-    work.jump(STAGE, "redo");
     const before = work.questionsText();
     const since = work.outputs.length;
+    work.jump(STAGE, "redo");
     const step = work.next();
     expectOnlySummaryCleared(before, work.questionsText());
     work.followStep(step, "Modify");
@@ -496,9 +504,9 @@ describe("t-jump-back-asks-summary-once: going back to a confirmed stage asks it
     const work = new Work();
     work.firstAttempt();
     work.approve();
-    work.jump(STAGE, "backward");
     const before = work.questionsText();
     const since = work.outputs.length;
+    work.jump(STAGE, "backward");
     const step = work.next(["--resume"]);
     expectOnlySummaryCleared(before, work.questionsText());
     work.followStep(step, "Modify");
@@ -531,8 +539,8 @@ describe("t-jump-back-asks-summary-once: going back to a confirmed stage asks it
     work.firstAttempt();
     work.approve();
     work.typedSetting("/aidlc --summary-confirmation off", ["--summary-confirmation", "off"]);
-    work.jump(STAGE, "backward");
     const before = work.questionsText();
+    work.jump(STAGE, "backward");
     const step = work.next();
     expect(step, JSON.stringify(step)).toMatchObject({ kind: "run-stage", stage: STAGE });
     expect((step.ceremony as Json).summary_confirmation).toBe("off");
@@ -568,8 +576,8 @@ describe("t-jump-back-asks-summary-once: going back to a confirmed stage asks it
     const work = new Work();
     work.firstAttempt();
     work.approve();
-    work.jump(STAGE, "backward");
     const since = work.outputs.length;
+    work.jump(STAGE, "backward");
     work.next();
     work.confirmSummary();
     work.picked("Requirements Analysis already has documents. What should I do with them?",
