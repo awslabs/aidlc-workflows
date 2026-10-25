@@ -4536,8 +4536,10 @@ describe("t243 project initialization", () => {
     expect(merged.startsWith(original)).toBe(true);
     expect(merged.match(/BEGIN AI-DLC:gitignore/g)).toHaveLength(1);
 
-    // Quiet output is one message, and the finding is part of it.
-    const quietProject = temp("aidlc-t243-hidden-records-quiet-");
+    // Quiet output is one message, and the finding is part of it. The folder's
+    // name is short: on Windows a project folder 75 characters deep gets
+    // config's own warning that it is too deep for AI-DLC's records.
+    const quietProject = temp("aidlc-t243-quiet-");
     expect(spawnSync("git", ["init", "-q", quietProject]).status).toBe(0);
     writeFileSync(join(quietProject, ".gitignore"), original);
     for (const flags of [["--dry-run", "--quiet"], ["--quiet"]]) {
