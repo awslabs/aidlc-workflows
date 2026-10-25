@@ -4,12 +4,12 @@
 // records (a contract, a business rule) brings those edits home when it lands,
 // merged line by line into the project's own copy, as an inline build of the
 // same plan leaves them. When the project's copy cannot take them (another Unit
-// changed the same lines first, or the record was never committed so the Unit
-// wrote its own), the project's copy stays as it is, the Unit's version is saved
-// beside its Code Generation documents, and finalize says so in one line. A clash
-// never fails the landing. The state, the audit and AI-DLC's engine files keep
-// their own merges, and nothing comes home from a workspace of several
-// repositories, whose records stay at its roof.
+// or the person changed the same lines first), the project's copy stays as it
+// is, the Unit's version is saved beside its Code Generation documents, and
+// finalize says so in one line. A clash never fails the landing. The state, the
+// audit and AI-DLC's engine files keep their own merges, and in a workspace of
+// several repositories a worker that writes only its stage's documents brings
+// nothing home this way.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -191,14 +191,15 @@ describe("a side-by-side Unit's record edits come home when it lands", () => {
     ]);
   });
 
-  test("a record never committed, which the worker wrote afresh in its worktree: the project's copy stays and the Unit's is saved", () => {
+  test("a record never committed whose same lines the person changed since the Unit started: the project's copy stays and the Unit's is saved", () => {
     const pd = fixture(["alpha"]);
     write(pd, CONTRACTS, "# Contracts\n\n- C1: one\n");
     prepared(pd);
-    expect(existsSync(record(wt(pd), CONTRACTS))).toBe(false);
+    expect(read(wt(pd), CONTRACTS)).toBe("# Contracts\n\n- C1: one\n");
+    write(pd, CONTRACTS, "# Contracts\n\n- C1: one, as the person put it\n");
     const finalized = build(pd, ["alpha"], (_unit, child) => write(child, CONTRACTS, "# Contracts\n\n- C2: two\n"));
     expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
-    expect(read(pd, CONTRACTS)).toBe("# Contracts\n\n- C1: one\n");
+    expect(read(pd, CONTRACTS)).toBe("# Contracts\n\n- C1: one, as the person put it\n");
     expect(read(pd, saved("alpha", CONTRACTS))).toBe("# Contracts\n\n- C2: two\n");
     expect(notices(finalized.envelope, "alpha")).toEqual([
       `The alpha Unit's version of ${shown(pd, CONTRACTS)} could not be merged into your project's copy, so your copy ` +
@@ -291,12 +292,12 @@ describe("what other merges own, and a workspace of several repositories", () =>
     expect(read(pd, CONTRACTS)).toBe("# Contracts\n\n- C1: one\n- C2: two\n");
   });
 
-  test("in a workspace of several repositories nothing comes home this way and nothing is said", () => {
+  test("in a workspace of several repositories a worker that writes only its stage's documents brings nothing home and nothing is said", () => {
     const pd = fixture(["alpha"], undefined, false, "repo-a");
     const prepared = swarm(pd, ["prepare", "--batch", "1", "--units", "alpha", "--base", "main"]);
     expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
     const finalized = build(pd, ["alpha"], (unit, child) => {
-      // The records stay at the workspace roof: the worker writes the stage's documents in its worktree.
+      // The worker writes the stage's documents in its worktree, as the swarm protocol has it.
       cpSync(codeGenerationRecordDir(pd, unit), codeGenerationRecordDir(child, unit), { recursive: true, force: false });
     });
     expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
