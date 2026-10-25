@@ -701,7 +701,10 @@ function parseSelectionsFile(path: string): SelectionsFile {
   if (!Array.isArray(selectionsRaw)) {
     fail("selections-json is malformed: expected { stage_slug, space, intent, selections[] }", 1);
   }
-  const rawSelections: unknown[] = selectionsRaw;
+  // An entry marked `keep: false` is a candidate the person did not keep (an
+  // agent may list every candidate with its pick): left out before its shape is
+  // read, so a declined note is never written or recorded as learned.
+  const rawSelections: unknown[] = selectionsRaw.filter((raw) => !(isRecord(raw) && raw.keep === false));
   return {
     stage_slug: parsed.stage_slug,
     space: parsed.space,

@@ -1,5 +1,6 @@
 // covers: function:planChangesBetween, function:planWithChanges,
 // function:splitSlugList, function:composedPlanLabel, function:PLAN_NAME_PATTERN,
+// function:savedScopeNameRefusal,
 // function:firstPlannedStageOfPhase, function:customPlanBase, function:customPlanStart,
 // function:guardPolicyAtLeast,
 // function:composerScoresPath, function:openComposerScores, function:takeComposerScores,
@@ -15,9 +16,10 @@
 // its own stage changes (`plan_changes`); creation writes those changes as the
 // state file's EXECUTE/SKIP suffixes and a `Plan` line, and no scope file is
 // written, so composing never grows the scope library. The person keeps a plan
-// they like with `scope save --name <name>` (at the gate, "Approve and save as
-// scope", or later, "save this plan as quick-fix"), which writes the running
-// work's plan as a durable scope record and projects it. Approved stage changes
+// they like with `scope save --name <name>` (later, "save this plan as
+// quick-fix"), or at the gate ("Approve and save as scope") through the
+// creation's `--save-as <name>`, which runs the same save; it writes the work's
+// plan as a durable scope record and projects it. Approved stage changes
 // and settings land in one recompose write, so a mixed approval is never left
 // half-applied, and next checks every depth, test-strategy, and stage value it
 // echoes into a command. The plan the composer validated keeps its scores on
@@ -42,9 +44,12 @@ import {
   loadScopeMapping,
   planChangesBetween,
   planWithChanges,
+  MESSAGE_SLOT,
+  personsWordsText,
   scopeGuardPolicyDefault,
   splitSlugList,
 } from "../../core/tools/aidlc-lib.ts";
+import { listMessages } from "../../core/tools/aidlc-message-store.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -100,8 +105,10 @@ function installedProject(): string {
 
 /** Run one of the project's OWN tools, with no fixture seams leaking in, so
  *  writes and reads follow the real resolution ladder into this project. */
-function runTool(proj: string, tool: string, args: string[]): { status: number; out: string } {
-  const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+function runTool(
+  proj: string, tool: string, args: string[], extra: Record<string, string> = {},
+): { status: number; out: string } {
+  const env: Record<string, string | undefined> = { ...process.env, ...extra, CLAUDE_PROJECT_DIR: proj };
   delete env.AIDLC_SCOPE_MAPPING;
   delete env.AIDLC_SCOPE_GRID;
   delete env.AIDLC_SCOPES_DIR;
@@ -141,6 +148,12 @@ const savedRecords = (proj: string): string[] =>
 
 function suffixOf(state: string, slug: string): string | undefined {
   return new RegExp(`^- \\[.\\] ${slug} \u2014 (EXECUTE|SKIP)`, "m").exec(state)?.[1];
+}
+
+/** A named command, word for word, from `engine` on. */
+function engine(command: string): string[] {
+  const words = (command.match(/'[^']*'|\S+/g) ?? []).map((word) => word.replace(/^'(.*)'$/, "$1"));
+  return words.slice(words.indexOf("engine"));
 }
 
 function nextDirective(proj: string, args: string[]): { kind: string; message: string } {
@@ -381,8 +394,8 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
     expect(validated.status, validated.stdout + validated.stderr).toBe(0);
     const echoed = JSON.parse(validated.stdout) as { base_scope: string; plan_changes: { skip: string[]; add: string[] } };
     expect(withEnvAndFreshCaches(POLICY_ENV, () => scopeGuardPolicyDefault(echoed.base_scope))).toBe("off");
-    // What the conductor runs on approval, naming the person's approval. The
-    // presence bypass is off, so a lowering would be refused.
+    // What the conductor runs on approval, naming the message the person
+    // approved in. The presence bypass is off, so a lowering would be refused.
     const session = "01995000-7a11-7000-8000-000000000351";
     const env = {
       ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0",
@@ -393,9 +406,11 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
       input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, cwd: proj, prompt: "Approve" }),
     });
     expect(approved.status, approved.stderr).toBe(0);
+    const [message] = listMessages(proj);
+    expect(message && personsWordsText(message.text)).toBe("Approve");
     const args = [
       "intent-create", "--scope", echoed.base_scope, "--guard-policy", "relaxed", "--arguments", "x", "--label", "relaxed-plan",
-      "--person-words", "Approve",
+      "--message", message.id,
     ];
     if (echoed.plan_changes.skip.length > 0) args.push("--skip", echoed.plan_changes.skip.join(","));
     if (echoed.plan_changes.add.length > 0) args.push("--add", echoed.plan_changes.add.join(","));
@@ -562,7 +577,8 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(command.endsWith("engine recompose --skip team-formation --reason 'the person asked to skip it'"), d.message).toBe(true);
     expect(d.message).toContain('"Skipped Team Formation. You can undo that any time."');
     expect(d.message).toContain("If they later ask to undo it, run `");
-    expect(d.message.endsWith("recompose --add team-formation`."), d.message).toBe(true);
+    expect(d.message.endsWith("recompose --add team-formation --reason 'the person asked to undo skipping it'`."), d.message)
+      .toBe(true);
     // The one line is all the person hears: recompose's counts stay out of the reply.
     expect(d.message).toContain("do not show its output");
     expect(d.message).not.toContain("print its output verbatim");
@@ -586,7 +602,8 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(setting, both.message).toBeGreaterThan(-1);
     expect(setting).toBeLessThan(both.message.indexOf("engine recompose --add team-formation"));
     expect(both.message).toContain("You can undo that any time.");
-    expect(both.message.endsWith("recompose --skip team-formation`."), both.message).toBe(true);
+    expect(both.message.endsWith("recompose --skip team-formation --reason 'the person asked to skip it'`."), both.message)
+      .toBe(true);
     // The setting's own line is still shown; recompose's counts are not.
     expect(both.message).toMatch(/config set depth minimal[^`]*` and print its output verbatim, then run `[^`]*engine recompose --add team-formation` to change this workflow's remaining stages as the person asked, and do not show its output/);
 
@@ -594,6 +611,66 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(combined.kind).toBe("error");
     expect(combined.message).toContain("Cannot combine --skip or --add");
     expect(combined.message).not.toContain("at creation");
+  });
+
+  // A live run on Claude Code: on a bugfix plan, "add the CI pipeline stage to
+  // the plan", then "actually, undo that". The undo the add's step named
+  // carried no reason, so recompose's strict check refused it (Deployment
+  // Pipeline needs what CI Pipeline makes) right after the person read "You
+  // can undo that any time".
+  test("an added stage's undo, run as named, goes through when a later stage needs what it makes", () => {
+    const proj = installedProject();
+    expect(runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix"]).status).toBe(0);
+    expect(suffixOf(stateOf(proj), "ci-pipeline")).toBe("SKIP");
+    const d = nextDirective(proj, ["--add", "ci-pipeline"]);
+    expect(d.kind).toBe("print");
+    expect(d.message).toContain('"Added CI Pipeline. You can undo that any time."');
+    const add = runTool(proj, "aidlc.ts", engine(/Run `([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? ""));
+    expect(add.status, add.out).toBe(0);
+    expect(suffixOf(stateOf(proj), "ci-pipeline")).toBe("EXECUTE");
+    const undo = runTool(proj, "aidlc.ts", engine(/If they later ask to undo it, run `([^`]*)`/.exec(d.message)?.[1] ?? ""));
+    expect(undo.status, undo.out).toBe(0);
+    expect(suffixOf(stateOf(proj), "ci-pipeline")).toBe("SKIP");
+    expect(auditOf(proj)).toContain("**Reason**: the person asked to skip it");
+  });
+
+  // A live run on Claude Code: on a bugfix plan, "skip the Deployment Pipeline
+  // stage", then "actually, undo that". The undo the skip's step named carried
+  // no reason, so recompose's strict check refused to put the stage back
+  // (bugfix leaves out the stages that make its inputs) right after the person
+  // read "You can undo that any time".
+  test("a skipped stage's undo, run as named, goes through when it needs what the plan leaves out", () => {
+    const proj = installedProject();
+    expect(runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix"]).status).toBe(0);
+    expect(suffixOf(stateOf(proj), "deployment-pipeline")).toBe("EXECUTE");
+    const d = nextDirective(proj, ["--skip", "deployment-pipeline"]);
+    expect(d.kind).toBe("print");
+    expect(d.message).toContain('"Skipped Deployment Pipeline. You can undo that any time."');
+    const skip = runTool(proj, "aidlc.ts", engine(/Run `([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? ""));
+    expect(skip.status, skip.out).toBe(0);
+    expect(suffixOf(stateOf(proj), "deployment-pipeline")).toBe("SKIP");
+    const undo = runTool(proj, "aidlc.ts", engine(/If they later ask to undo it, run `([^`]*)`/.exec(d.message)?.[1] ?? ""));
+    expect(undo.status, undo.out).toBe(0);
+    expect(suffixOf(stateOf(proj), "deployment-pipeline")).toBe("EXECUTE");
+    expect(auditOf(proj)).toContain("**Reason**: the person asked to undo skipping it");
+  });
+
+  // Only the undo the step names carries its reason: an add of the person's
+  // own, a stage the plan leaves out or a skipped one put back by a fresh add,
+  // is checked as before.
+  test("a person's own add carries no reason and is still checked", () => {
+    const proj = installedProject();
+    expect(runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix"]).status).toBe(0);
+    const d = nextDirective(proj, ["--skip", "deployment-pipeline"]);
+    expect(runTool(proj, "aidlc.ts", engine(/Run `([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? "")).status).toBe(0);
+    const back = /Run `([^`]*engine recompose [^`]*)`/.exec(nextDirective(proj, ["--add", "deployment-pipeline"]).message)?.[1] ?? "";
+    expect(back.endsWith("engine recompose --add deployment-pipeline"), back).toBe(true);
+    const own = /Run `([^`]*engine recompose [^`]*)`/.exec(nextDirective(proj, ["--add", "observability-setup"]).message)?.[1] ?? "";
+    expect(own.endsWith("engine recompose --add observability-setup"), own).toBe(true);
+    const add = runTool(proj, "aidlc.ts", engine(own));
+    expect(add.status).not.toBe(0);
+    expect(add.out).toContain("Recompose rejected by the strict validator");
+    expect(suffixOf(stateOf(proj), "observability-setup")).toBe("SKIP");
   });
 
   // A live run on Claude Code: "approve build and test. and skip the deployment
@@ -821,6 +898,79 @@ describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
   });
 });
 
+// "Approve and save as scope" at the gate: the creation command the engine
+// names for that pick saves the plan, so the save never waits on a second
+// command after the work has started.
+describe("t351 (5b) the creation for Approve and save as scope saves the plan", () => {
+  test("next carries --save-as onto the creation command, and a name scope save refuses is refused first", () => {
+    const proj = installedProject();
+    const d = nextDirective(proj, ["--scope", "bugfix", "--add", ADD, "--skip", SKIP, "--plan-name", "quick-fix", "--save-as", "quick-fix", "--", "fix the parser"]);
+    expect(d.kind).toBe("print");
+    const creation = [...d.message.matchAll(/`([^`]*)`/g)].map((m) => m[1]).find((span) => span.includes("intent create"));
+    expect(creation, d.message).toContain("--plan-name quick-fix --save-as quick-fix");
+    for (const name of ["1fix", "Quick_Fix", "$(touch /tmp/t351-pwn)", `a${"b".repeat(40)}`]) {
+      const refused = nextDirective(proj, ["--scope", "bugfix", "--save-as", name, "--", "fix the parser"]);
+      expect(refused.kind, name).toBe("error");
+      expect(refused.message, name).toContain(`"${name}" cannot name a scope`);
+    }
+    expect(existsSync("/tmp/t351-pwn")).toBe(false);
+  });
+
+  test("the creation saves the new work's plan and says so once", () => {
+    const proj = installedProject();
+    const created = createComposed(proj, ["--plan-name", "quick-fix", "--save-as", "quick-fix"]);
+    expect(created.status, created.out).toBe(0);
+    expect(created.out).toContain("Intent created: ");
+    expect(created.out).toContain("Plan: quick-fix\n");
+    expect(created.out).not.toContain("no scope file written");
+    expect(created.out.split("Saved as scope quick-fix (").length).toBe(2);
+    expect(created.out).toContain('Next time: /aidlc --scope quick-fix "<what to build>"');
+    expect(stateOf(proj)).toContain("- **Plan**: quick-fix\n");
+    expect(savedRecords(proj)).toEqual(["quick-fix.md"]);
+    expect(scopeFiles(proj)).toContain("aidlc-quick-fix.md");
+    const grid = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "scope-grid.json"), "utf-8")) as Record<
+      string,
+      { stages: Record<string, string> }
+    >;
+    expect(grid["quick-fix"].stages[ADD]).toBe("EXECUTE");
+    expect(grid["quick-fix"].stages["deployment-pipeline"]).toBe("SKIP");
+    expect(readFileSync(join(proj, "aidlc", "scopes", "quick-fix.md"), "utf-8")).toContain("keywords: []");
+    expect(auditOf(proj)).toContain("**Saved as**: quick-fix");
+  });
+
+  test("a taken or malformed name creates nothing", () => {
+    const proj = installedProject();
+    for (const [name, message] of [
+      ["bugfix", "A scope named bugfix already exists. Pick another name."],
+      ["Quick_Fix", '"Quick_Fix" cannot name a scope'],
+    ]) {
+      const refused = createComposed(proj, ["--save-as", name]);
+      expect(refused.status, name).not.toBe(0);
+      // Refusals print one JSON error line.
+      expect(String((JSON.parse(refused.out) as { error?: unknown }).error), name).toContain(message);
+    }
+    expect(existsSync(join(proj, "aidlc", "spaces", "default", "intents"))).toBe(false);
+    expect(savedRecords(proj)).toEqual([]);
+  });
+
+  test("beside work in another space, the plan saved is the one just created", () => {
+    const proj = installedProject();
+    expect(runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix", "--arguments=other work", "--label", "other work"]).status).toBe(0);
+    expect(runTool(proj, "aidlc-utility.ts", ["space-create", "foo"]).status).toBe(0);
+    expect(runTool(proj, "aidlc-utility.ts", ["space", "default"]).status).toBe(0);
+    const created = createComposed(proj, ["--space", "foo", "--save-as", "quick-fix"]);
+    expect(created.status, created.out).toBe(0);
+    const record = readFileSync(join(proj, "aidlc", "scopes", "quick-fix.md"), "utf-8");
+    const fooRecord = readFileSync(join(proj, "aidlc", "spaces", "foo", "intents", "active-intent"), "utf-8").trim();
+    expect(record).toContain(`description: Plan saved from ${fooRecord}, based on bugfix`);
+    const grid = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "scope-grid.json"), "utf-8")) as Record<
+      string,
+      { stages: Record<string, string> }
+    >;
+    expect(grid["quick-fix"].stages[ADD]).toBe("EXECUTE");
+  });
+});
+
 describe("t351 (6) approved stage changes and settings land in one recompose write", () => {
   function running(): { proj: string; statePath: string } {
     const proj = createTestProject();
@@ -904,6 +1054,8 @@ describe("t351 (7) every conductor surface offers the save and never writes scop
       const text = read(surface);
       expect(text, surface).toContain("Approve / Approve and save as scope / Edit the plan / Reject");
       expect(text, surface).toContain("{{INVOKE}} engine scope save --name <name>");
+      // The save at the gate rides the creation, never a command after it.
+      expect(text, surface).toContain("add `--save-as <name>` to step 3's `next` command");
       expect(text, surface).toContain('"save this plan as quick-fix"');
       expect(text, surface).toContain("on Approve all run ONE recompose carrying the stage changes and the settings as its flags");
       expect(text, surface).not.toContain("author the two files");
@@ -938,6 +1090,7 @@ describe("t351 (7) every conductor surface offers the save and never writes scop
     expect(d.kind).toBe("print");
     expect(d.message).toContain("Approve / Approve and save as scope / Edit the plan / Reject");
     expect(d.message).toContain("scope save --name <name>");
+    expect(d.message).toContain("pass --save-as <name> with those flags: the creation then saves the plan as that scope");
     expect(d.message).toContain("create it with --scope <baseScope> plus --skip <changes.skip> and --add <changes.add>");
   });
 });
@@ -1290,12 +1443,24 @@ describe("t351 (10) the plan the person approved is the plan created", () => {
     expect(span, printed.message).toBeDefined();
     return span as string;
   }
+  // The creation as the agent runs it on the person's Approve: a setting the
+  // print asks their message for names the message the hook kept for it.
   function runCreation(proj: string, printed: Printed): { status: number; out: string } {
-    const args = creationOf(printed).split(" intent create ")[1]
-      .replace(/--label "[^"]*"/, "--label hardening")
-      .replace(/--person-words '[^']*'/, "--person-words Approve")
-      .split(/\s+/).filter(Boolean);
-    return runTool(proj, "aidlc-utility.ts", ["intent-create", ...args]);
+    let args = creationOf(printed).split(" intent create ")[1].replace(/--label "[^"]*"/, "--label hardening");
+    const chat = { AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000000352" };
+    if (args.includes(`--message '${MESSAGE_SLOT}'`)) {
+      const kept = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+        cwd: proj, encoding: "utf-8", env: { ...process.env, ...chat, CLAUDE_PROJECT_DIR: proj },
+        input: JSON.stringify({
+          hook_event_name: "UserPromptSubmit", session_id: chat.AIDLC_SESSION_OVERRIDE, cwd: proj, prompt: "Approve",
+        }),
+      });
+      expect(kept.status, kept.stderr).toBe(0);
+      const message = listMessages(proj).findLast((entry) => personsWordsText(entry.text) === "Approve");
+      expect(message).toBeDefined();
+      args = args.replace(`--message '${MESSAGE_SLOT}'`, `--message ${message!.id}`);
+    }
+    return runTool(proj, "aidlc-utility.ts", ["intent-create", ...args.split(/\s+/).filter(Boolean)], chat);
   }
   const lists = (changes: { skip: string[]; add: string[] }): string[] => [
     ...(changes.skip.length > 0 ? ["--skip", changes.skip.join(",")] : []),

@@ -129,7 +129,7 @@ const AUDIT_TOOL_STUB = `export function appendAuditEntry(_k: string, _d: unknow
 const LIB_TOOL_STUB = `import { join } from "node:path";
 // The engine's own reading of a line is pure, so the rig uses the real one, and
 // the real in-process hook runner, which runs the stub guards beside it.
-export { beforeDelimiter, boundDirectiveMessage, ENGINE_OWNED_STATE_TRANSITIONS, nextLineFlags, readOrchestratorLauncherOptions, runHookHere } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
+export { beforeDelimiter, boundDirectiveMessage, ENGINE_OWNED_STATE_TRANSITIONS, nextLineFlags, readOrchestratorLauncherOptions, runHookHere, sessionsDir, validSessionId } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
 export function decideFence(): { decision: "hold" | "stand-aside" } {
   return { decision: process.env.T250_STATE_TRANSITION_STANDS_ASIDE === "1" ? "stand-aside" : "hold" };
 }
@@ -455,6 +455,9 @@ const STUB_ATTEMPT = "--aidlc-attempt-id 00000000-0000-4000-8000-000000000001";
 const PROMPTED_PROSE_FAMILIES = new Set([
   "engine worktree discard", "engine worktree merge", "engine worktree purge", "engine swarm finalize",
   "unit land", "engine intent archive", "engine recompose", "engine bolt set-autonomy",
+  // Adding a repo can clone it from the network and changes which repos the
+  // work covers: the host's own Allow prompt is the door before it.
+  "engine intent add-repo",
   "engine state set-construction-checkpoints", "unit claim", "engine gen runners", "engine config set",
   // The knowledge skill names the engine route for `onboard`, because the copy
   // of a document the person named happens at the command layer. Onboarding
@@ -2043,6 +2046,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       for (const command of [
         "aidlc engine state set-construction-checkpoints disabled",
         "bun .aidlc/tools/aidlc-state.ts set-construction-checkpoints disabled",
+        // The message they asked in beside it, which the setter proves.
+        "aidlc engine state set-construction-checkpoints disabled --message 0a1b2c3d",
       ]) {
         // The setter's own check passes for exactly this value: no second confirmation.
         expect(decision(command, "Construction Checkpoints=disabled"), command).toBe("allow");
@@ -2073,7 +2078,10 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         // Not asked for: the host still asks.
         expect(decision(command), command).toBeUndefined();
       }
-      // The person's words beside the switch (--person-words) are still that switch.
+      // The message they asked in beside the switch (--message, the setter proves it) is still that
+      // switch, and so is the words form from before it.
+      expect(decision("aidlc engine config set plan-approval off --message 0a1b2c3d", "plan-approval=off")).toBe("allow");
+      expect(decision("aidlc engine config set plan-approval off --message 0a1b2c3d")).toBeUndefined();
       expect(decision("aidlc engine config set guard.review-freeze off --person-words 'turn the review freeze off'",
         "guard.review-freeze=off")).toBe("allow");
       expect(decision("aidlc engine config set guard.review-freeze off --person-words-file .aidlc-engine/answer-text/answer.txt",
@@ -2160,7 +2168,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           expect(decision("aidlc engine log answers --stage a\\b", shell), String(shell)).toBe("allow");
           expect(decision('aidlc engine log answers --stage "a\\"; calc; \\"b"', shell), String(shell)).toBe("deny");
         }
-        // A tool named for its shell is that shell, wherever the hook runs.
+        // The Copilot CLI's `Bash` gets no allow decision on any host: its own
+        // --allow-tool rules decide.
         const named = (command: string, toolName: string) =>
           shellDecision(runAdapter(s, "guard-tool-call", shellCall(command, "S-ALLOW", toolName))).hookSpecificOutput?.permissionDecision;
         expect(named("aidlc engine knowledge summarize --text-file docs\\notes.txt", "Bash")).toBeUndefined();
@@ -2238,10 +2247,52 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           expect(call(`cd ${root}; aidlc engine orchestrate next`, shell, "run_in_terminal", { aidlc_shell: "powershell" }), String(shell)).toEqual({});
           expect(guardShell(), String(shell)).toBeUndefined();
         }
-        expect(call(`cd ${root}; aidlc engine orchestrate next`, undefined, "Bash")).toEqual({});
-        expect(guardShell()).toBeUndefined();
+        // The Copilot CLI names its shell tool `Bash` on every host; on Windows
+        // that tool is PowerShell, so there the cd-led command runs like the
+        // bare one (the rewrite, no permission decision), elsewhere it keeps
+        // today's answer.
+        const cli = call(`cd ${root}; aidlc engine orchestrate next`, undefined, "Bash");
+        if (process.platform === "win32") {
+          expect(cli.hookSpecificOutput?.permissionDecision).toBeUndefined();
+          expect(cli.hookSpecificOutput?.updatedInput?.command).toBe(`cd ${root}; aidlc engine orchestrate next ${STUB_ATTEMPT}`);
+          expect(guardShell()).toBe("powershell");
+        } else {
+          expect(cli).toEqual({});
+          expect(guardShell()).toBeUndefined();
+        }
       } finally {
         rmSync(outside, { recursive: true, force: true });
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("27m: the Copilot CLI's shell call reaches the plan-approval guard read as PowerShell on Windows, and as POSIX elsewhere", () => {
+    // The CLI hands its shell tool to the PascalCase hooks as `Bash` with the
+    // model's own arguments and no shell field (its own record names the tool
+    // `powershell` on Windows Server, 1.0.103), and on Windows that tool runs
+    // PowerShell. A shell the call names still wins.
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const guardShell = () => capturedInputs(s.captureDir, "aidlc-plan-approval-guard.ts").at(-1)?.aidlc_shell;
+      const command = "New-Item -ItemType Directory -Force aidlc\\spaces\\default\\intents\\x\\construction\\code-generation | Out-Null";
+      for (const toolName of ["Bash", "bash"]) {
+        runAdapter(s, "guard-tool-call", {
+          hook_event_name: "PreToolUse",
+          session_id: "S-ALLOW",
+          tool_name: toolName,
+          tool_input: { command, description: "Create the code generation folder", mode: "sync", initial_wait: 30 },
+        });
+        expect(guardShell(), toolName).toBe(process.platform === "win32" ? "powershell" : undefined);
+        runAdapter(s, "guard-tool-call", {
+          hook_event_name: "PreToolUse",
+          session_id: "S-ALLOW",
+          tool_name: toolName,
+          tool_input: { command, shell: "C:\\Program Files\\Git\\bin\\bash.exe" },
+        });
+        expect(guardShell(), `${toolName} in Git Bash`).toBeUndefined();
       }
     } finally {
       s.cleanup();

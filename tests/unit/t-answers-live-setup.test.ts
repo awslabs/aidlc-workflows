@@ -19,6 +19,7 @@ import {
   ANSWERS, ASKED_IN_CHAT, NOT_LIVE, SESSION, STAGE, buildQuestion, env, exec, liveReply, next, say, workCarriedOn,
 } from "../harness/aidlc-answers-corpus.ts";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
+import { seedWait } from "../harness/live-gate-fuzz.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -96,17 +97,20 @@ describe("the live answers check in a fresh chat", () => {
 
   test("the work carrying on after a routing reply is counted from the reply, not from the chat's opening rows", async () => {
     const proj = project();
-    await buildQuestion(proj, "routing");
+    // Seeded as the live check seeds it: the open work, before the person types the line that asks the routing question.
+    await seedWait(proj, "routing");
     const start = readAuditShardEvents(proj).length;
     const records = listIntents(proj).length;
     // The chat opens: the shipped session-start hook writes its row before the person says anything.
     await opens(proj, SESSION);
     await say(proj, "/aidlc fix the login", "claude");
     const read = await next(proj, ["fix", "the", "login"]);
+    // The line is the person's request, not a reply: the routing question opens from it, in this chat.
+    expect(String(read.directive?.message ?? ""), read.out).not.toContain("has not answered");
     const request = /--request ([0-9a-f]+)/.exec(String(read.directive?.message ?? ""))?.[1];
     expect(request).toBeDefined();
     const asked = await next(proj, ["--request", request!, "--propose", "bugfix"]);
-    expect(asked.directive?.kind).toBe("ask");
+    expect(asked.directive?.ask_type, asked.out).toBe("new-work-routing");
     expect(readAuditShardEvents(proj).slice(start).map((row) => row.event)).toContain("SESSION_STARTED");
     // The person replies now: nothing has carried on yet, though rows were written since the drive began.
     const reply = readAuditShardEvents(proj).length;

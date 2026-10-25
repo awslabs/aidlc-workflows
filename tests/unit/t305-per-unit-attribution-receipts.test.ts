@@ -3775,6 +3775,7 @@ describe("t305 stage and protocol source-attribution requirements", () => {
     const reviewerUnit=readFileSync(join(PROTOCOL,"stage-protocol-reviewer-unit.md"),"utf-8"); expect(reviewerUnit).toContain("differentially at those paths"); expect(reviewer).toContain("source-manifest.json"); expect(reviewerUnit).toContain("claimed source paths");
     expect(swarm).toContain("before the in-Bolt review"); expect(swarm).toContain("worktree-relative and omit `repo`"); expect(definition).toContain("source-manifest.json"); expect(definition).toContain("stage-entry source baseline");
     expect(swarm).toContain("Post-finalize source landing"); expect(swarm).toContain("cleanup-only reconciliation"); expect(swarm).toContain("SWARM_SOURCE_MERGED");
+    expect(swarm).toContain("--target <that row's landing_branch>"); expect(swarm).not.toContain("the same base branch used by");
   });
 
   // The review request needs every Step 5 file (aidlc-log.ts review), so the

@@ -4483,6 +4483,251 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     }
   });
 
+  // A plugin's own agent on Kiro gets the lines the install gives its personas
+  // (tools/data/plugin-agent.md): on Kiro IDE and Kiro CLI v3 its shell, file
+  // and MCP tools with the personas' rules, the deny included (#2892).
+  const kiroFrontmatter = (text: string): string => text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/)?.[1] ?? "";
+  const kiroBody = (text: string): string => text.slice(text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/)?.[0].length ?? 0);
+  const pluginAgentLines = (proj: string): string[] =>
+    kiroFrontmatter(readFileSync(join(proj, ".kiro", "tools", "data", "plugin-agent.md"), "utf-8")).split("\n");
+  const subagentStage = (plugin: string, agent: string): string => [
+    "---",
+    `slug: ${plugin}-stage`,
+    `plugin: ${plugin}`,
+    "phase: inception",
+    "execution: ALWAYS",
+    "condition: always",
+    `lead_agent: ${agent}`,
+    "support_agents: []",
+    "mode: subagent",
+    "produces: []",
+    "consumes: []",
+    "requires_stage: []",
+    "inputs: x",
+    "outputs: y",
+    "---",
+    "",
+    `# ${plugin}`,
+    "",
+  ].join("\n");
+  const pluginAgent = (plugin: string, agent: string, own: string[] = []): string => [
+    "---",
+    `name: ${agent}`,
+    "display_name: Synthetic Worker",
+    `plugin: ${plugin}`,
+    ...own,
+    "disallowedTools: Task",
+    "model: sonnet",
+    "---",
+    "",
+    "# Synthetic Worker",
+    "",
+  ].join("\n");
+  const sha256OfText = (text: string): string => `sha256:${createHash("sha256").update(text).digest("hex")}`;
+
+  test("Kiro IDE gives a plugin's own agent its personas' dispatch lines, and a stage that hands it work composes", () => {
+    for (const surface of ["kiro-ide", "kas-as-kiro"] as const) {
+      const plugin = `syn-own-${surface}`;
+      const agent = `${plugin}-agent`;
+      const { drops, proj } = composeSynthetic(
+        plugin,
+        {
+          [`stages/inception/${plugin}-stage.md`]: subagentStage(plugin, agent),
+          [`agents/${agent}.md`]: pluginAgent(plugin, agent),
+        },
+        surface,
+      );
+      expect(existsSync(join(proj, ".kiro", "aidlc-common", "stages", "inception", `${plugin}-stage.md`)), surface).toBe(true);
+      expect(drops, surface).not.toContain(`agent "${agent}"`);
+      const lines = pluginAgentLines(proj);
+      expect(lines.join("\n"), surface).toContain("      effect: deny");
+      const own = [`name: ${agent}`, "display_name: Synthetic Worker", `plugin: ${plugin}`, "model: sonnet"];
+      const composed = readFileSync(join(proj, ".kiro", "agents", `${agent}.md`), "utf-8");
+      expect(kiroFrontmatter(composed), surface).toBe([...own, ...lines].join("\n"));
+      // The lead reading the persona in its own chat reads it without them.
+      const copy = readFileSync(join(proj, ".kiro", "aidlc-common", "personas", `${agent}.md`), "utf-8");
+      expect(kiroFrontmatter(copy), surface).toBe(own.join("\n"));
+      expect(kiroBody(copy), surface).toBe(kiroBody(composed));
+      const record = JSON.parse(
+        readFileSync(join(proj, ".kiro", "tools", "data", `plugin-owned-${plugin}.json`), "utf-8"),
+      ) as { files: Array<{ path: string }> };
+      expect(record.files.map((file) => file.path), surface).toEqual(expect.arrayContaining([
+        `.kiro/agents/${agent}.md`,
+        `.kiro/aidlc-common/personas/${agent}.md`,
+      ]));
+    }
+
+    // A copy already in the persona folder that this plugin never wrote stays.
+    const plugin = "syn-own-copy-kept";
+    const agent = `${plugin}-agent`;
+    const theirs = "---\nname: someone-else\n---\n\n# Theirs\n";
+    const kept = composeSynthetic(
+      plugin,
+      { [`agents/${agent}.md`]: pluginAgent(plugin, agent) },
+      "kiro-ide",
+      (_proj, harnessDir) => {
+        mkdirSync(join(harnessDir, "aidlc-common", "personas"), { recursive: true });
+        writeFileSync(join(harnessDir, "aidlc-common", "personas", `${agent}.md`), theirs);
+      },
+    );
+    expect(readFileSync(join(kept.proj, ".kiro", "aidlc-common", "personas", `${agent}.md`), "utf-8")).toBe(theirs);
+    expect(kept.drops).toContain("collides with an existing file this plugin has no record of installing");
+  });
+
+  test("a plugin agent's own frontmatter keys stay its own on Kiro IDE, and shell never comes without the deny", () => {
+    const cases = [
+      { label: "own-tools", own: ['tools: ["read"]'], tools: 'tools: ["read"]', permissions: "install" },
+      {
+        label: "own-permissions",
+        own: ["permissions:", "  rules:", "    - capability: shell", "      effect: allow", "      match:", '        - "echo *"'],
+        tools: undefined,
+        permissions: "own",
+      },
+    ] as const;
+    for (const variant of cases) {
+      const plugin = `syn-keys-${variant.label}`;
+      const agent = `${plugin}-agent`;
+      const { proj } = composeSynthetic(
+        plugin,
+        { [`agents/${agent}.md`]: pluginAgent(plugin, agent, [...variant.own]) },
+        "kiro-ide",
+      );
+      const lines = pluginAgentLines(proj);
+      const fm = kiroFrontmatter(readFileSync(join(proj, ".kiro", "agents", `${agent}.md`), "utf-8"));
+      const keys = fm.split("\n").filter((line) => /^[A-Za-z_][\w-]*:/.test(line)).map((line) => line.split(":")[0]);
+      expect(new Set(keys).size, variant.label).toBe(keys.length);
+      expect(fm.match(/^tools:.*$/m)?.[0], variant.label).toBe(variant.tools);
+      expect(fm, variant.label).toContain("includeMcpJson: true");
+      const installPermissions = lines.slice(lines.indexOf("permissions:")).join("\n");
+      if (variant.permissions === "install") expect(fm, variant.label).toContain(installPermissions);
+      else expect(fm, variant.label).not.toContain("      effect: deny");
+    }
+
+    // An agent that declares all three keys gets nothing added, and a later
+    // compose leaves its copy as it is.
+    const plugin = "syn-keys-all";
+    const agent = `${plugin}-agent`;
+    const own = ['tools: ["read"]', "includeMcpJson: false", ...cases[1].own];
+    const { proj } = composeSynthetic(plugin, { [`agents/${agent}.md`]: pluginAgent(plugin, agent, own) }, "kiro-ide");
+    const installed = join(proj, ".kiro", "agents", `${agent}.md`);
+    expect(kiroFrontmatter(readFileSync(installed, "utf-8"))).toBe(
+      [`name: ${agent}`, "display_name: Synthetic Worker", `plugin: ${plugin}`, ...own, "model: sonnet"].join("\n"),
+    );
+    const before = statSync(installed).mtimeMs;
+    Bun.sleepSync(50);
+    const root = join(proj, `_plugin-${plugin}`);
+    const again = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
+      cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".kiro", AIDLC_HARNESS_NAME: "kiro-ide" },
+    });
+    expect(again.status, again.stderr).toBe(0);
+    expect(statSync(installed).mtimeMs).toBe(before);
+  });
+
+  test("Kiro IDE re-compose takes the dispatch lines into a plugin agent an older build composed without them", () => {
+    const plugin = "syn-own-older";
+    const agent = `${plugin}-agent`;
+    const files = { [`agents/${agent}.md`]: pluginAgent(plugin, agent) };
+    const older = `---\nname: ${agent}\ndisplay_name: Synthetic Worker\nplugin: ${plugin}\nmodel: sonnet\n---\n\n# Synthetic Worker\n`;
+    const agentRel = join("agents", `${agent}.md`);
+
+    // Recorded: an older build's compose wrote and recorded it.
+    const recorded = composeSynthetic(plugin, files, "kiro-ide");
+    const recordPath = join(recorded.proj, ".kiro", "tools", "data", `plugin-owned-${plugin}.json`);
+    const record = JSON.parse(readFileSync(recordPath, "utf-8")) as { files: Array<{ path: string; sha256: string }> };
+    writeFileSync(join(recorded.proj, ".kiro", agentRel), older);
+    for (const file of record.files) if (file.path === `.kiro/agents/${agent}.md`) file.sha256 = sha256OfText(older);
+    writeFileSync(recordPath, `${JSON.stringify(record, null, 2)}\n`);
+    const root = join(recorded.proj, `_plugin-${plugin}`);
+    const again = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
+      cwd: recorded.proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: root,
+        CLAUDE_PROJECT_DIR: recorded.proj,
+        AIDLC_HARNESS_DIR: ".kiro",
+        AIDLC_HARNESS_NAME: "kiro-ide",
+      },
+    });
+    expect(again.status, again.stderr).toBe(0);
+    expect(kiroFrontmatter(readFileSync(join(recorded.proj, ".kiro", agentRel), "utf-8")))
+      .toContain(pluginAgentLines(recorded.proj).join("\n"));
+
+    // Unrecorded (composed before the record existed): the same older copy is
+    // the plugin's own; one with the person's change in it stays theirs.
+    const unrecorded = composeSynthetic(plugin, files, "kiro-ide", (_proj, harnessDir) => {
+      writeFileSync(join(harnessDir, agentRel), older);
+    });
+    expect(unrecorded.drops).not.toContain("collides with an existing file");
+    expect(kiroFrontmatter(readFileSync(join(unrecorded.proj, ".kiro", agentRel), "utf-8")))
+      .toContain(pluginAgentLines(unrecorded.proj).join("\n"));
+    const changed = `${older}\nOur team's note.\n`;
+    const edited = composeSynthetic(plugin, files, "kiro-ide", (_proj, harnessDir) => {
+      writeFileSync(join(harnessDir, agentRel), changed);
+    });
+    expect(readFileSync(join(edited.proj, ".kiro", agentRel), "utf-8")).toBe(changed);
+    expect(edited.drops).toContain("collides with an existing file");
+
+    // A source with no disallowedTools: its unrecorded copy is the source itself.
+    const plain = pluginAgent(plugin, agent).replace("disallowedTools: Task\n", "");
+    const unprojected = composeSynthetic(plugin, { [`agents/${agent}.md`]: plain }, "kiro-ide", (_proj, harnessDir) => {
+      writeFileSync(join(harnessDir, agentRel), plain);
+    });
+    expect(unprojected.drops).not.toContain("collides with an existing file");
+    expect(kiroFrontmatter(readFileSync(join(unprojected.proj, ".kiro", agentRel), "utf-8")))
+      .toContain(pluginAgentLines(unprojected.proj).join("\n"));
+  });
+
+  test("a CRLF Kiro IDE checkout composes a plugin agent with each dispatch line once", () => {
+    const plugin = "syn-own-crlf";
+    const agent = `${plugin}-agent`;
+    const lf = composeSynthetic(plugin, { [`agents/${agent}.md`]: pluginAgent(plugin, agent) }, "kiro-ide");
+    const crlf = composeSynthetic(
+      plugin,
+      { [`agents/${agent}.md`]: pluginAgent(plugin, agent).replace(/\n/g, "\r\n") },
+      "kiro-ide",
+      (_proj, harnessDir) => {
+        const template = join(harnessDir, "tools", "data", "plugin-agent.md");
+        writeFileSync(template, `\uFEFF${readFileSync(template, "utf-8").replace(/\n/g, "\r\n")}`);
+      },
+    );
+    const fmOf = (proj: string): string => kiroFrontmatter(readFileSync(join(proj, ".kiro", "agents", `${agent}.md`), "utf-8"));
+    expect(fmOf(crlf.proj)).not.toContain("\r");
+    expect(fmOf(crlf.proj)).toBe(fmOf(lf.proj));
+  });
+
+  test("Kiro IDE still drops a stage whose plugin agent compose cannot install", () => {
+    const unsupported = "syn-own-unsupported";
+    const unsupportedAgent = `${unsupported}-agent`;
+    const refused = composeSynthetic(
+      unsupported,
+      {
+        [`stages/inception/${unsupported}-stage.md`]: subagentStage(unsupported, unsupportedAgent),
+        [`agents/${unsupportedAgent}.md`]: pluginAgent(unsupported, unsupportedAgent).replace("disallowedTools: Task", "disallowedTools: WebSearch"),
+      },
+      "kiro-ide",
+    );
+    expect(existsSync(join(refused.proj, ".kiro", "aidlc-common", "stages", "inception", `${unsupported}-stage.md`))).toBe(false);
+    expect(refused.drops).toContain(`agent "${unsupportedAgent}"`);
+
+    const colliding = "syn-own-colliding";
+    const collidingAgent = `${colliding}-agent`;
+    const collided = composeSynthetic(
+      colliding,
+      {
+        [`stages/inception/${colliding}-stage.md`]: subagentStage(colliding, collidingAgent),
+        [`agents/${collidingAgent}.md`]: pluginAgent(colliding, collidingAgent),
+      },
+      "kiro-ide",
+      (_proj, harnessDir) => {
+        writeFileSync(join(harnessDir, "agents", "someone-elses-agent.md"), `---\nname: ${collidingAgent}\n---\n\n# Theirs\n`);
+      },
+    );
+    expect(existsSync(join(collided.proj, ".kiro", "agents", `${collidingAgent}.md`))).toBe(false);
+    expect(existsSync(join(collided.proj, ".kiro", "aidlc-common", "stages", "inception", `${colliding}-stage.md`))).toBe(false);
+    expect(collided.drops).toContain(`agent "${collidingAgent}"`);
+  });
+
   // A core reviewer is the dispatch target every harness ships. Core's own
   // Kiro IDE personas carry an ask rule (the engine commands that change a
   // setting keep asking the person), so the dispatch check must read their
@@ -4972,6 +5217,11 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(drops).toContain('mode "subagent"');
     expect(drops).toContain("agent-v1 JSON");
     expect(drops).toContain("toolsSettings.subagent.trustedAgents");
+    // Its prompt carries the two lines Kiro CLI's personas carry (#2892); no
+    // persona copy, as a tools line is no weight to keep from the lead.
+    const composed = readFileSync(join(proj, ".kiro", "agents", "syn-kiro-subagent-agent.md"), "utf-8");
+    expect(composed).toContain('---\nname: syn-kiro-subagent-agent\ndisplay_name: Synthetic Kiro Subagent\nplugin: syn-kiro-subagent\ntools: ["read", "write", "shell"]\nincludeMcpJson: true\n---\n');
+    expect(existsSync(join(proj, ".kiro", "aidlc-common", "personas", "syn-kiro-subagent-agent.md"))).toBe(false);
   });
 
   test("Kiro keeps a plugin persona shared by a rejected mob and accepted inline stage", () => {

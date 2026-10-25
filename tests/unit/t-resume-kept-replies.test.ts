@@ -6,8 +6,10 @@
 // hand those replies back, so the agent records them instead of asking the
 // person again. Live: Kiro CLI, Guide me, the person picked 1 for the first
 // question, the agent said "Recorded" and wrote nothing, and the chat ended.
-// The engine reads no meaning into the replies: it hands them back in order,
-// and the agent reads them against the questions.
+// The engine reads no meaning into the replies: it hands back, in order,
+// every reply no decision has used yet (an answer uses none), with the stage's
+// questions and answers on record, unpaired, and the agent reads which reply
+// answers which question.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
@@ -25,6 +27,7 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -48,9 +51,9 @@ function env(session: string): Record<string, string | undefined> {
   return e;
 }
 
-function log(proj: string, args: string[]): void {
+function log(proj: string, args: string[], session = SESSION): void {
   const r = spawnSync(BUN, [LOG, ...args, "--project-dir", proj], {
-    env: env(SESSION), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    env: env(session), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
 }
@@ -152,12 +155,13 @@ describe("a stage resumed with blank answers hands back what the person already 
   test("the first question's reply, never written or logged, comes back on resume", () => {
     says(proj, "1");
     const kept = resumed(proj).directive.kept_replies as
-      | { answered: Array<{ question: string; answer: string }>; replies: string[]; note: string }
+      | { questions: string[]; answers: string[]; replies: string[]; note: string }
       | undefined;
-    expect(kept?.replies).toEqual(["1"]);
-    // What came before it is on record, so the later chat reads "1" as the
-    // first question's answer, not as the way to answer.
-    expect(kept?.answered).toEqual([{ question: "How would you like to answer the questions?", answer: "Guide me" }]);
+    // The "1" that chose the way to answer comes back too: which reply answers
+    // which question is the later chat's to read, beside what is on record.
+    expect(kept?.replies).toEqual(["1", "1"]);
+    expect(kept?.questions).toEqual(["How would you like to answer the questions?"]);
+    expect(kept?.answers).toEqual(["Guide me"]);
     expect(kept?.note).toContain("record");
     expect(kept?.note).toContain("ask them again what they already answered");
   });
@@ -167,27 +171,45 @@ describe("a stage resumed with blank answers hands back what the person already 
     inflateRules(proj);
     const { directive, parts } = resumed(proj);
     expect(parts).toBeGreaterThan(0);
-    expect((directive.kept_replies as { replies: string[] }).replies).toEqual(["1"]);
+    expect((directive.kept_replies as { replies: string[] }).replies).toEqual(["1", "1"]);
   });
 
   test("several replies come back in the order the person gave them", () => {
     says(proj, "1");
     says(proj, "B, every year counts on its own though");
     expect((resumed(proj).directive.kept_replies as { replies: string[] }).replies)
-      .toEqual(["1", "B, every year counts on its own though"]);
+      .toEqual(["1", "1", "B, every year counts on its own though"]);
   });
 
   // Live (Kiro CLI, Guide me): eight guided answers in a row, none of them logged.
   test("a whole run of guided answers comes back, every one in order", () => {
     const answers = ["1", "A", "B", "2", "A, and keep it small", "X: round to one decimal", "A", "1"];
     for (const answer of answers) says(proj, answer);
-    expect((resumed(proj).directive.kept_replies as { replies: string[] }).replies).toEqual(answers);
+    expect((resumed(proj).directive.kept_replies as { replies: string[] }).replies).toEqual(["1", ...answers]);
   });
 
-  test("a reply whose answer was logged is not handed back", () => {
+  // An answer uses no reply, so a recorded one comes back beside its answer;
+  // the step asks the agent to record only what the answers do not hold, so
+  // nothing is recorded or asked twice.
+  test("a reply whose answer was logged comes back beside that answer, and nothing asks to record it again", () => {
     says(proj, "1");
     log(proj, ["answer", "--stage", STAGE, "--details", "Q1: A"]);
-    expect(resumed(proj).directive.kept_replies).toBeUndefined();
+    const kept = resumed(proj).directive.kept_replies as { answers: string[]; replies: string[]; note: string };
+    expect(kept.replies).toEqual(["1", "1"]);
+    expect(kept.answers).toEqual(["Guide me", "Q1: A"]);
+    expect(kept.note).toContain("record with `log answer` only what `answers` does not hold yet");
+  });
+
+  // In the later chat the window is that chat's: an answer recorded there for
+  // a reply kept in the earlier chat keeps none of its words and names no
+  // message, and is not refused.
+  test("an answer recorded in the later chat for a reply kept in the earlier one keeps no words of it", () => {
+    says(proj, "1");
+    log(proj, ["answer", "--stage", STAGE, "--details", "Q1: A"], LATER);
+    const answer = readAuditShardEvents(proj).filter((row) => row.event === "QUESTION_ANSWERED").at(-1)!;
+    expect(auditBlockField(answer.block, "Details")).toBe("Q1: A");
+    expect(auditBlockField(answer.block, "Person Reply")).toBeNull();
+    expect(auditBlockField(answer.block, "Message Id")).toBeNull();
   });
 
   test("with every answer written, nothing is handed back", () => {
@@ -201,27 +223,50 @@ describe("a stage resumed with blank answers hands back what the person already 
   // chat asked the same question again.
   test("a pick in the question box, never written or logged, comes back on resume as the label picked", () => {
     picks(proj, { [Q1]: SHOP });
-    const kept = resumed(proj).directive.kept_replies as { replies: string[]; answered: unknown[] } | undefined;
-    expect(kept?.replies).toEqual([SHOP]);
-    expect(kept?.answered).toEqual([{ question: "How would you like to answer the questions?", answer: "Guide me" }]);
+    const kept = resumed(proj).directive.kept_replies as { replies: string[]; answers: string[] } | undefined;
+    expect(kept?.replies).toEqual(["1", SHOP]);
+    expect(kept?.answers).toEqual(["Guide me"]);
   });
 
   test("a pick and a typed reply come back in the order they were given", () => {
     picks(proj, { [Q1]: SHOP });
     says(proj, "B, every year counts on its own though");
     expect((resumed(proj).directive.kept_replies as { replies: string[] }).replies)
-      .toEqual([SHOP, "B, every year counts on its own though"]);
+      .toEqual(["1", SHOP, "B, every year counts on its own though"]);
   });
 
   test("a box that asked two questions hands back both picks, in order", () => {
     picks(proj, { [Q1]: SHOP, [Q2]: "A) By year-month" });
-    expect((resumed(proj).directive.kept_replies as { replies: string[] }).replies).toEqual([SHOP, "A) By year-month"]);
+    expect((resumed(proj).directive.kept_replies as { replies: string[] }).replies)
+      .toEqual(["1", SHOP, "A) By year-month"]);
   });
 
-  test("a pick whose answer was logged is not handed back", () => {
+  test("a pick whose answer was logged comes back beside that answer", () => {
     picks(proj, { [Q1]: SHOP });
     log(proj, ["answer", "--stage", STAGE, "--details", "Q1: A"]);
-    expect(resumed(proj).directive.kept_replies).toBeUndefined();
+    const kept = resumed(proj).directive.kept_replies as { answers: string[]; replies: string[] };
+    expect(kept.replies).toEqual(["1", SHOP]);
+    expect(kept.answers).toEqual(["Guide me", "Q1: A"]);
+  });
+
+  // A decision that used their replies (the stage's gate shown and answered in
+  // an earlier attempt, a routing answer) ends what comes back.
+  test("replies a routing answer took are not handed back", () => {
+    says(proj, "1");
+    appendAuditEntry("REQUEST_ROUTED", { Request: "0000beef" }, proj);
+    says(proj, "B, every year counts on its own though");
+    expect((resumed(proj).directive.kept_replies as { replies: string[] }).replies)
+      .toEqual(["B, every year counts on its own though"]);
+  });
+
+  // A record from before the hook named each message (2.11.0 and older), updated
+  // mid-stage: that turn's words are not on the message record, and the replies
+  // after it still come back.
+  test("a turn an older release kept with no message record leaves the later replies standing", () => {
+    appendAuditEntry("HUMAN_TURN", { Session: SESSION, Origin: "person", Source: "typed" }, proj);
+    says(proj, "B, every year counts on its own though");
+    expect((resumed(proj).directive.kept_replies as { replies: string[] }).replies)
+      .toEqual(["1", "B, every year counts on its own though"]);
   });
 });
 
@@ -242,10 +287,10 @@ describe("a chat that only picked in the question box, with nothing typed, hands
   });
   afterEach(() => cleanupTestProject(proj));
 
-  test("the picks come back, and the way to answer is on record before them", () => {
+  test("the picks come back, and the way to answer is on record beside them", () => {
     picks(proj, { [Q1]: SHOP });
-    const kept = resumed(proj).directive.kept_replies as { replies: string[]; answered: unknown[] } | undefined;
-    expect(kept?.replies).toEqual([SHOP]);
-    expect(kept?.answered).toEqual([{ question: "How would you like to answer the questions?", answer: "Guide me" }]);
+    const kept = resumed(proj).directive.kept_replies as { replies: string[]; answers: string[] } | undefined;
+    expect(kept?.replies).toEqual(["Guide me", SHOP]);
+    expect(kept?.answers).toEqual(["Guide me"]);
   });
 });

@@ -35,6 +35,7 @@ import {
   copilotAdapter, copilotRuns, copilotStep, namedCommands, SHAPES, type Step,
 } from "../harness/code-generation-states.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { guardOperationInvocation } from "../../dist/claude/.claude/tools/aidlc-guard-operation.ts";
 import {
   codeGenerationRecordDir, renderTestingContract, resolveTestingPosture,
@@ -229,8 +230,16 @@ function approve(p: string, unit: string, kind: "unit" | "skeleton" = "unit") {
   expect(invoke(["--action", "approve", "--session", "t342-checkpoint", "--user-input", "Approve"]).approved).toBe(true);
 }
 
+// A command that names the person's message runs in the chat that sent it, as
+// the agent's command does.
+function inNamedChat(p: string, args: string[], env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const at = args.indexOf("--message");
+  const chat = at === -1 ? null : readMessage(p, args[at + 1] ?? "")?.session ?? null;
+  return chat === null ? env : { ...env, AIDLC_SESSION_OVERRIDE: chat };
+}
+
 function policyCli(p: string, tool: string, args: string[]) {
-  const env = { ...process.env };
+  const env = inNamedChat(p, args, { ...process.env });
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   delete env.AIDLC_UNATTENDED;
   return spawnSync(process.execPath, [join(AIDLC_SRC, `tools/aidlc-${tool}.ts`), ...args, "--project-dir", p], {
@@ -249,6 +258,13 @@ function policyHuman(p: string, prompt: string, session = "t342-policy") {
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
   });
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  return lastMessageId(p);
+}
+
+// The id of the message the latest person turn kept: what a setter names with --message.
+function lastMessageId(p: string): string {
+  const turn = readAuditShardEvents(p).findLast((row) => row.event === "HUMAN_TURN");
+  return auditBlockField(turn!.block, "Message Id")!;
 }
 
 // The person picks `choice` in the question box the agent showed (Claude Code's
@@ -268,6 +284,7 @@ function policyPick(p: string, question: string, options: string[], choice: stri
     }),
   });
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  return lastMessageId(p);
 }
 
 const policySetRows = (p: string) => readAuditShardEvents(p).filter((row) => row.event === "CONSTRUCTION_POLICY_SET");
@@ -969,11 +986,14 @@ describe("t342 Construction checkpoint routing", () => {
     expect(`${refused.stdout}${refused.stderr}`).toContain("only when they ask");
     expect(readFileSync(seededStateFile(p))).toEqual(before);
     // The answer they gave in their message is not a second decision: the rest of
-    // the message, read by the agent as this request, still stands, with their words.
+    // the message, read by the agent as this request and named, still stands, with their words.
     expect(policyCli(p, "log", ["decision", "--stage", "functional-design", "--decision", "Which name?", "--options", "A,B"]).status).toBe(0);
-    policyHuman(p, "A");
+    const id = policyHuman(p, "A");
     expect(policyCli(p, "log", ["answer", "--stage", "functional-design", "--details", "A"]).status).toBe(0);
-    const changed = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
+    const unnamed = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
+    expect(unnamed.status).not.toBe(0);
+    expect(`${unnamed.stdout}${unnamed.stderr}`).toContain(`If their message ${id} (sent `);
+    const changed = policyCli(p, "state", ["set-construction-checkpoints", "disabled", "--message", id]);
     expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
     expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Construction Checkpoints**: disabled");
     expect(auditBlockField(policySetRows(p)[0].block, "Person Reply")).toBe("A");
@@ -981,8 +1001,8 @@ describe("t342 Construction checkpoint routing", () => {
 
   test("the person's own request changes a Construction setting at once, with their words and one line", () => {
     const p = fixture();
-    policyHuman(p, "from here on, turn checkpoints off");
-    const applied = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
+    const id = policyHuman(p, "from here on, turn checkpoints off");
+    const applied = policyCli(p, "state", ["set-construction-checkpoints", "disabled", "--message", id]);
     expect(applied.status, `${applied.stdout}${applied.stderr}`).toBe(0);
     expect(JSON.parse(applied.stdout).notice).toBe(
       "Construction checkpoints (a stop after each Unit for you to check and approve it) are off for this work now " +
@@ -992,22 +1012,38 @@ describe("t342 Construction checkpoint routing", () => {
     const row = readAuditShardEvents(p).findLast((r) => r.event === "CONSTRUCTION_POLICY_SET")!;
     expect(auditBlockField(row.block, "Person Reply")).toBe("from here on, turn checkpoints off");
     expect(readAuditShardEvents(p).some((r) => r.event === "DECISION_RECORDED")).toBe(false);
+    expect(auditBlockField(row.block, "Message Id")).toBe(id);
     // Several changes in one message each apply: a change does not spend the turn.
-    const iteration = policyCli(p, "state", ["set-construction-iteration", "stage-major"]);
+    const iteration = policyCli(p, "state", ["set-construction-iteration", "stage-major", "--message", id]);
     expect(iteration.status, `${iteration.stdout}${iteration.stderr}`).toBe(0);
     expect(JSON.parse(iteration.stdout).notice).toBe(
       "Construction now goes stage by stage (it built one Unit at a time). You can switch back any time.",
     );
     // Asking for what is already in force changes nothing and says so.
     const rows = readAuditShardEvents(p).length;
-    const same = policyCli(p, "state", ["set-construction-iteration", "stage-major"]);
+    const same = policyCli(p, "state", ["set-construction-iteration", "stage-major", "--message", id]);
     expect(same.status).toBe(0);
     expect(JSON.parse(same.stdout).notice).toBe("Construction already goes stage by stage.");
-    const off = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
+    const off = policyCli(p, "state", ["set-construction-checkpoints", "disabled", "--message", id]);
     expect(JSON.parse(off.stdout).notice).toBe(
       "Construction checkpoints (a stop after each Unit for you to check and approve it) are already off for this work.",
     );
     expect(readAuditShardEvents(p)).toHaveLength(rows);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("asked for the Units in parallel while they are built one at a time, the two lines read as one change", () => {
+    const p = fixture();
+    const id = policyHuman(p, "let's build the units in parallel");
+    // Parallel needs stage by stage first: the agent runs both setters and says both lines, in this order.
+    const order = policyCli(p, "state", ["set-construction-iteration", "stage-major", "--message", id]);
+    expect(order.status, `${order.stdout}${order.stderr}`).toBe(0);
+    const parallel = policyCli(p, "state", ["set-construction-execution", "swarm", "--message", id]);
+    expect(parallel.status, `${parallel.stdout}${parallel.stderr}`).toBe(0);
+    expect([JSON.parse(order.stdout).notice, JSON.parse(parallel.stdout).notice]).toEqual([
+      "Construction now goes stage by stage (it built one Unit at a time). You can switch back any time.",
+      "Construction now builds the Units in parallel, stage by stage (it built the Units one after another). " +
+        "You can switch back any time.",
+    ]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an unattended run never changes a Construction setting, even after a person turn", () => {
@@ -1038,13 +1074,14 @@ describe("t342 Construction checkpoint routing", () => {
     const before = readFileSync(seededStateFile(p));
     expect(policyChoice(p, "decision", "Construction Checkpoints", "disabled").status).toBe(0);
     expect(policyCli(p, "log", ["decision", "--stage", "functional-design", "--decision", "Approve the design?", "--options", "Approve,Request Changes"]).status).toBe(0);
-    policyHuman(p, "Approve");
+    const id = policyHuman(p, "Approve");
     expect(policyChoice(p, "answer", "Construction Checkpoints", "disabled").status).not.toBe(0);
     expect(policyCli(p, "log", ["answer", "--stage", "functional-design", "--details", "Approve"]).status).toBe(0);
     expect(readFileSync(seededStateFile(p))).toEqual(before);
     // Which question their "Approve" answered is the agent's reading; the engine
-    // proves a person spoke, and the answer recorded from it is not a second decision.
-    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).toBe(0);
+    // proves the message it names, and the answer recorded from it is not a second decision.
+    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
+    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled", "--message", id]).status).toBe(0);
     expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Construction Checkpoints**: disabled");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1053,10 +1090,10 @@ describe("t342 Construction checkpoint routing", () => {
     const question = "Parallel workspaces still fail after the commit; build one unit at a time instead?";
     const offered = ["Build one unit at a time", "Stop here for now"];
     expect(policyCli(p, "log", ["decision", "--stage", "functional-design", "--decision", question, "--options", offered.join(",")]).status).toBe(0);
-    policyPick(p, question, offered, offered[0]);
+    const id = policyPick(p, question, offered, offered[0]);
     const answered = policyCli(p, "log", ["answer", "--stage", "functional-design", "--details", offered[0]]);
     expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
-    const changed = policyCli(p, "state", ["set-construction-execution", "serial"]);
+    const changed = policyCli(p, "state", ["set-construction-execution", "serial", "--message", id]);
     expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
     expect(JSON.parse(changed.stdout).notice).toBe(
       "Construction now builds the Units one after another (it built the Units in parallel). You can switch back any time.",
@@ -1070,9 +1107,9 @@ describe("t342 Construction checkpoint routing", () => {
   test("the same answer typed to the agent's question switches the build the same way, with their words", () => {
     const p = fixture({ execution: "swarm" });
     expect(policyCli(p, "log", ["decision", "--stage", "functional-design", "--decision", "Build one unit at a time instead?", "--options", "Build one unit at a time,Stop here for now"]).status).toBe(0);
-    policyHuman(p, "yes, one at a time please");
+    const id = policyHuman(p, "yes, one at a time please");
     expect(policyCli(p, "log", ["answer", "--stage", "functional-design", "--details", "Build one unit at a time"]).status).toBe(0);
-    const changed = policyCli(p, "state", ["set-construction-execution", "serial"]);
+    const changed = policyCli(p, "state", ["set-construction-execution", "serial", "--message", id]);
     expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
     expect(auditBlockField(policySetRows(p)[0].block, "Person Reply")).toBe("yes, one at a time please");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -1124,17 +1161,18 @@ describe("t342 Construction checkpoint routing", () => {
     expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
     expect(policyChoice(p, "answer", field, "enabled", "other-session").status).not.toBe(0);
     expect(policyChoice(p, "answer", field, "disabled", "other-session").status).toBe(0);
-    // Free words are the agent's to read; an exact pick binds the proposal it answered.
+    // A reply answers the proposal it was shown with: an answer for another value is refused.
     expect(policyChoice(p, "decision", field, "disabled").status).toBe(0);
     policyHuman(p, "Approve");
     expect(policyChoice(p, "answer", field, "enabled").status).not.toBe(0);
-    // Re-presenting a proposal invalidates the old hook response.
+    // The typed reply is the agent's to read; its Request Changes records no change.
     expect(policyChoice(p, "decision", field, "disabled").status).toBe(0);
-    expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
     policyHuman(p, "Request Changes");
-    expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
     expect(policyChoice(p, "answer", field, "disabled", "t342-policy", "Request Changes").status).toBe(0);
     expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
+    // That reply is used now: the proposal shown again waits for a new one.
+    expect(policyChoice(p, "decision", field, "disabled").status).toBe(0);
+    expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
     expect(readFileSync(seededStateFile(p))).toEqual(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1172,8 +1210,8 @@ describe("t342 Construction checkpoint routing", () => {
     const before = readFileSync(seededStateFile(p));
     expect(policyCli(p, "state", ["set-construction-iteration", "stage-major"]).status).not.toBe(0);
     expect(readFileSync(seededStateFile(p))).toEqual(before);
-    policyHuman(p, "let's do each stage for both units together");
-    expect(policyCli(p, "state", ["set-construction-iteration", "stage-major"]).status).toBe(0);
+    const id = policyHuman(p, "let's do each stage for both units together");
+    expect(policyCli(p, "state", ["set-construction-iteration", "stage-major", "--message", id]).status).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("public audit append cannot mint policy authority", () => {
@@ -1240,11 +1278,11 @@ describe("t342 Construction checkpoint routing", () => {
     const unasked = policyCli(p, "state", [command, value]);
     expect(unasked.status, `${unasked.stdout}${unasked.stderr}`).not.toBe(0);
     expect(readFileSync(file)).toEqual(before);
-    appendAuditEntry("HUMAN_TURN", {}, p);
+    const id = policyHuman(p, "change how construction runs, as you said");
     assertGenericRefused();
-    // The typed setter is the person's route: their turn since the last decision applies it.
+    // The typed setter is the person's route: the message they asked in applies it.
     const changed = spawnSync(process.execPath, [
-      join(AIDLC_SRC, "tools/aidlc-state.ts"), command, value, "--project-dir", p,
+      join(AIDLC_SRC, "tools/aidlc-state.ts"), command, value, "--message", id, "--project-dir", p,
     ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
     expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
     expect(readFileSync(file, "utf-8")).toContain(`- **${field}**: ${value}`);
@@ -1380,7 +1418,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   function tool(p: string, name: string, args: string[], env: NodeJS.ProcessEnv = process.env) {
     const result = spawnSync(process.execPath, [
       join(AIDLC_SRC, `tools/aidlc-${name}.ts`), ...args, "--project-dir", p,
-    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: inNamedChat(p, args, env) });
     return { status: result.status, stdout: result.stdout, out: `${result.stdout}${result.stderr}` };
   }
 
@@ -1955,10 +1993,12 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     const p = fixture({ iteration: "stage-major" });
     for (const unit of ["alpha", "beta"]) cover(p, unit, stages.slice(0, 1));
     const said = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "functional-design", "--every-unit"]).stdout);
-    expect(said.kind, JSON.stringify(said)).toBe("print");
-    expect(said.message).toContain("jump.ts execute --target functional-design --direction redo");
-    expect(said.message).toContain('"Reopened Functional Design for every unit."');
-    expect(said.message).not.toContain("/aidlc --");
+    // The same `next` makes the redo and returns the step, saying what it reopened.
+    expect(said.kind, JSON.stringify(said)).not.toBe("print");
+    expect(said.stage).toBe("functional-design");
+    expect(said.change_notices).toContain("Reopened Functional Design for every unit.");
+    expect(JSON.stringify(said)).not.toContain("/aidlc --");
+    expect(jumped(p)).toBe(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("with Construction Checkpoints off, a stage approved for every unit is reopened for every unit only", () => {
@@ -1974,12 +2014,11 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
     expect(jumped(p)).toBe(0);
     const every = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--every-unit"]).stdout);
-    expect(every.kind, JSON.stringify(every)).toBe("print");
-    expect(every.message).toContain('"Reopened NFR Design and the steps after it for every unit."');
-    const command = /`[^`]*aidlc-jump\.ts (execute [^`]+)`/.exec(every.message)?.[1];
-    expect(command, every.message).toBe("execute --target nfr-design --direction backward --scope feature");
-    const ran = tool(p, "jump", command!.split(" "));
-    expect(ran.status, ran.out).toBe(0);
+    // The same `next` makes the backward jump and returns the step, saying what
+    // it reopened.
+    expect(every.kind, JSON.stringify(every)).not.toBe("print");
+    expect(every.stage).toBe("nfr-design");
+    expect(every.change_notices).toContain("Reopened NFR Design and the steps after it for every unit.");
     expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Current Stage**: nfr-design");
     expect(jumped(p)).toBe(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -2102,19 +2141,63 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "alpha" });
     const unknown = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--unit", "gamma"]).stdout);
     expect(unknown.kind).toBe("error");
-    expect(unknown.message).toContain('"gamma" is not one of this work\'s units (alpha, beta)');
+    expect(unknown.message).toContain("gamma is not one of this work's units (alpha, beta).");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  const resumedReport = (p: string, args: string[]) => JSON.parse(tool(p, "orchestrate", [
+    "report", "--result", "resumed", ...args,
+  ]).stdout) as { kind: string; message: string };
+  const askedWhichUnit =
+    "Tell the person in one line: \"gamma is not one of this work's units (alpha, beta). Which one did you mean?\"";
+
+  test("a re-entry jump or redo naming a Unit this work does not have asks which one, never 'accepted' first", () => {
+    const p = betaBuilding();
+    const before = readFileSync(seededStateFile(p), "utf-8");
+    for (const choice of [["jump", "--target", "nfr-design"], ["redo"]]) {
+      const asked = resumedReport(p, ["--choice", ...choice, "--unit", "gamma"]);
+      expect(asked.kind, choice.join(" ")).toBe("print");
+      expect(asked.message, choice.join(" ")).not.toContain("accepted");
+      expect(asked.message, choice.join(" ")).toContain(askedWhichUnit);
+    }
+    // A Unit the work has still goes to the jump.
+    expect(resumedReport(p, ["--choice", "jump", "--target", "nfr-design", "--unit", "alpha"]).message)
+      .toContain("Jump accepted. Run `next --stage nfr-design --unit alpha`");
+    expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("past the per-unit steps, a re-entry jump naming a Unit this work does not have asks the same way", () => {
+    const p = gatesApprovedUntil("code-generation");
+    for (const result of ["awaiting-approval", "approved"]) {
+      const report = tool(p, "orchestrate", [
+        "report", "--stage", "code-generation", "--result", result, "--user-input", "Approve",
+      ]);
+      expect(report.status, report.out).toBe(0);
+    }
+    const before = readFileSync(seededStateFile(p), "utf-8");
+    expect(before).toContain("- **Current Stage**: build-and-test");
+    const refused = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--unit", "gamma"]).stdout);
+    expect(refused.message).toContain("gamma is not one of this work's units (alpha, beta).");
+    const asked = resumedReport(p, ["--choice", "jump", "--target", "nfr-design", "--unit", "gamma"]);
+    expect(asked.message).not.toContain("accepted");
+    expect(asked.message).toContain(askedWhichUnit);
+    expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a forward jump that drops no Unit's work, and a stage-major forward jump, still jump", () => {
+    // A unit-major jump with a line to say about the steps it skips is named
+    // for the agent, line and all.
     const fresh = fixture();
     const clear = JSON.parse(tool(fresh, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
     expect(clear.kind, JSON.stringify(clear)).toBe("print");
     expect(clear.message).toContain("--target code-generation --direction forward");
+    // Stage by stage there is nothing to say or run around it, so the `next`
+    // makes the jump itself and returns the step it lands on.
     const stageMajor = fixture({ iteration: "stage-major" });
     cover(stageMajor, "alpha", stages.slice(0, 4));
     const jump = JSON.parse(tool(stageMajor, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
-    expect(jump.kind, JSON.stringify(jump)).toBe("print");
-    expect(jump.message).toContain("--target code-generation --direction forward");
+    expect(jump.kind, JSON.stringify(jump)).not.toBe("print");
+    expect(jump.stage).toBe("code-generation");
+    expect(jumped(stageMajor)).toBe(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit start records the Unit's stage and a new chat names it", () => {
@@ -2207,6 +2290,26 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(next(p).artifact_reuse).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // The engine hands a Unit's redo out as agent work too (the redo-unit-step
+  // remedy), and the re-entry report reads none of the person's words: the row
+  // says what was redone, never that the person asked for it.
+  test("a Unit redo with no reply of the person's on record is not recorded as their request", () => {
+    const p = betaBuilding();
+    cover(p, "beta", ["code-generation"]);
+    // The person's last turn was alpha's approval; nothing of theirs since.
+    const rows = readAuditShardEvents(p);
+    const approvedAt = rows.map((row) => row.event).lastIndexOf("GATE_APPROVED");
+    expect(approvedAt).toBeGreaterThanOrEqual(0);
+    expect(rows.slice(approvedAt + 1).filter((row) => row.event === "HUMAN_TURN")).toHaveLength(0);
+    const command = /`[^`]*aidlc-jump\.ts (reopen [^`]+)`/.exec(redo(p))?.[1];
+    const reopened = tool(p, "jump", command!.split(" "));
+    expect(reopened.status, reopened.out).toBe(0);
+    const rejected = readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED").at(-1)!;
+    expect(auditBlockField(rejected.block, "Reopen")).toBe("redo");
+    expect(auditBlockField(rejected.block, "Feedback")).toBe("Redid Code Generation for unit beta (redo on re-entry).");
+    expect(rejected.block).not.toContain("the person's request");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // Audit rows are read in time order across shards (a teammate's shard, or a
   // second session's), not file by file, and a Redo answer whose order against
   // another shard's row in the same second cannot be known is not used.
@@ -2253,7 +2356,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(next(p).artifact_reuse).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("unit-major Redo at a Unit checkpoint in a parked workflow unparks first and credits the person's Redo", () => {
+  test("unit-major Redo at a Unit checkpoint in a parked workflow unparks first and records the redo", () => {
     const p = betaBuilding();
     cover(p, "beta", ["code-generation"]);
     expect(next(p).construction_checkpoint?.unit).toBe("beta");
@@ -2270,9 +2373,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     }
     expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
     const rejected = readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED").at(-1)!;
-    expect(auditBlockField(rejected.block, "Feedback")).toBe(
-      "Redid Code Generation for unit beta at the person's request (redo on re-entry).",
-    );
+    expect(auditBlockField(rejected.block, "Feedback")).toBe("Redid Code Generation for unit beta (redo on re-entry).");
     // The Redo answers the step's re-use question with the Source the engine reads back.
     const reused = readAuditShardEvents(p).filter((row) => row.event === "ARTIFACT_REUSED").at(-1)!;
     expect(auditBlockField(reused.block, "Source")).toBe(REDO_REUSE_SOURCE);
@@ -2343,12 +2444,14 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(resumed.narration).toBe("Picking up beta's code at step 3 of 4 (1-2 done).");
   }
 
-  // beta does its Code Generation again from the start: its plan is redone and
-  // comes back for approval, and the old build is not picked up.
+  // beta does its Code Generation again from the start: its plan comes back
+  // for approval as it stands, and once approved the old build is not picked up.
   function redoneFromStart(p: string, label: string) {
+    expect(next(p), label).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit: "beta" });
+    approveCurrentPlan(p);
     const beat = next(p);
     expect(beat, label).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta" });
-    expect(beat.plan_approval?.status, label).not.toBe("approved");
+    expect(beat.plan_approval, label).toEqual({ status: "approved" });
     expect(beat.narration ?? "", label).not.toContain("Picking up");
     return beat;
   }
@@ -2379,7 +2482,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
         ));
         expect(message).toContain(
           'tell the person in one line: "Redoing Code Generation for unit beta from the start, plan included. ' +
-            'Its new plan comes back to you for approval."',
+            'Its plan comes back to you for approval."',
         );
         expect(message).not.toContain("unit resume");
         for (const [, name, rest] of message.matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
@@ -2426,7 +2529,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       );
       expect(answered.message).toContain(
         'tell the person in one line: "Redoing Code Generation for unit beta from the start, plan included. ' +
-          'Its new plan comes back to you for approval."',
+          'Its plan comes back to you for approval."',
       );
       for (const [, name, rest] of answered.message.matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
         if (name === "orchestrate" && rest === "park --person-asked") continue;
@@ -2507,6 +2610,20 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       expect(message).not.toContain("code-generation");
     }
     expect(redoNamed(p, "code-generation")).toContain('Redo accepted at "code-generation" for unit "beta"');
+    // The --stage of the agent's gate reports, kept on the redo: beta's own
+    // step is that redo, and a step beta already did moves nothing until the
+    // agent names it with --target.
+    const kept = (stage: string) => JSON.parse(tool(p, "orchestrate", [
+      "report", "--result", "resumed", "--choice", "redo", "--stage", stage,
+    ]).stdout) as { kind: string; message: string };
+    expect(kept("code-generation").message).toBe(redoNamed(p, "code-generation"));
+    for (const stage of ["functional-design", "nfr-design"]) {
+      const named = kept(stage);
+      expect(named.kind, stage).toBe("print");
+      expect(named.message, stage).toContain("--target <the stage they named>");
+      expect(named.message, stage).not.toContain("next --stage");
+      expect(named.message, stage).not.toContain("reopen");
+    }
     const said = reopenFor(p, ["--stage", "functional-design"]);
     expect(said).toContain(
       "reopen --target functional-design --stages functional-design,nfr-requirements,nfr-design,infrastructure-design,code-generation --units beta ",
@@ -2725,9 +2842,9 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
         "Bolt names": unit, "Batch number": "1", "Walking skeleton": "false", "Bolt slug": unit,
       }, p);
     }
-    policyHuman(p, "build them one at a time instead");
+    const id = policyHuman(p, "build them one at a time instead");
     for (const args of [["set-construction-execution", "serial"], ["set-construction-iteration", "unit-major"]]) {
-      const changed = policyCli(p, "state", args);
+      const changed = policyCli(p, "state", [...args, "--message", id]);
       expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
     }
     for (const slug of stages) {
@@ -3163,9 +3280,12 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       policyHuman(p, "ok");
       const afterOk = tool(p, "log", codeReview("alpha", 2));
       expect(afterOk.status).not.toBe(0);
-      expect(afterOk.out).toContain("If the person asked for this review, run the same command again with --person-asked.");
-      policyHuman(p, "Please review alpha's code again");
-      const asked = reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked"]);
+      expect(afterOk.out).toContain("If the person asked for this review, run the same command again with --person-asked --message <id>");
+      const id = policyHuman(p, "Please review alpha's code again");
+      const unnamed = tool(p, "log", [...codeReview("alpha", 2), "--person-asked"]);
+      expect(unnamed.status).not.toBe(0);
+      expect(unnamed.out).toContain("allows 1 review pass");
+      const asked = reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked", "--message", id]);
       expect(asked.status, asked.out).toBe(0);
       const again = tool(p, "log", codeReview("alpha", 3));
       expect(again.status).not.toBe(0);
@@ -3174,8 +3294,8 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
       writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
         .replace(/^- \[ \] code-generation/m, "- [x] code-generation"));
-      policyHuman(p, "Please review alpha again, and count it as AI-DLC's own review");
-      const finished = reviewThroughLog(p, [...codeReview("alpha", 3), "--person-asked"]);
+      const againId = policyHuman(p, "Please review alpha again, and count it as AI-DLC's own review");
+      const finished = reviewThroughLog(p, [...codeReview("alpha", 3), "--person-asked", "--message", againId]);
       expect(finished.status, finished.out).toBe(0);
       expect(readAuditShardEvents(p).filter((row) =>
         row.event === "REVIEW_COMPLETED" && auditBlockField(row.block, "Unit") === "alpha" &&
@@ -3377,15 +3497,17 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       expect(approved(p, "alpha")).toBe(true);
       const own = tool(p, "log", codeReview("alpha", 2));
       expect(own.out).toContain("allows 1 review pass");
-      policyHuman(p, "Please review Unit 1 (alpha) again, and count it as AI-DLC's own review");
-      const asked = reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked"]);
+      const id = policyHuman(p, "Please review Unit 1 (alpha) again, and count it as AI-DLC's own review");
+      const asked = reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked", "--message", id]);
       expect(asked.status, asked.out).toBe(0);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  // An answer to another question is not a request for a review: the cap
-  // still holds, --person-asked or not, until the person asks in their own words.
-  test("a picker answer to another question does not count as asking for a review", () => {
+  // The cap is lifted on the message the agent names: with none it holds,
+  // --person-asked or not. An answer to another question spends no message, so
+  // the agent that names it for the review lifts the cap, and the record shows
+  // the misread beside their words.
+  test("a picker answer to another question lifts the cap only when the agent names it", () => {
     const p = policyFixture("classic", "off (set by you)");
     buildReviewed(p, "alpha");
     approve(p, "alpha");
@@ -3394,14 +3516,13 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       "--session", "t342-pick",
     ]);
     expect(decided.status, `${decided.stdout}${decided.stderr}`).toBe(0);
-    policyHuman(p, "No", "t342-pick");
+    const id = policyHuman(p, "No", "t342-pick");
     const answered = policyCli(p, "log", ["answer", "--stage", "code-generation", "--details", "No", "--session", "t342-pick"]);
     expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
     const own = tool(p, "log", [...codeReview("alpha", 2), "--person-asked"]);
     expect(own.status).not.toBe(0);
     expect(own.out).toContain("allows 1 review pass");
-    policyHuman(p, "Please review alpha again", "t342-pick");
-    expect(reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked"]).status).toBe(0);
+    expect(reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked", "--message", id]).status).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // With checkpoints on, a re-check of a Unit's changed code is its one
@@ -3594,8 +3715,8 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
 
   // A team member's Request Changes at a team Unit's gate is a new attempt for
   // that Unit too.
-  function teamUnits(): string {
-    const p = checkpointsOff("strict");
+  function teamUnits(policy = "strict"): string {
+    const p = checkpointsOff(policy);
     writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
       .replace("- **Unit Ownership**: solo", "- **Unit Ownership**: team\n- **Unit Gate Rhythm**: unit-end"));
     return p;
@@ -3629,6 +3750,81 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(again.status).not.toBe(0);
     expect(again.out).toContain(SPENT);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Under relaxed and off a change after the review is accepted and no further
+  // review is owed (stage-protocol-reviewer.md 12a). A review the agent starts
+  // on its own past the one recovery is still refused, to the agent alone, and
+  // the step it names takes the Unit on to its approval: never a question for
+  // the person, a redo of the Unit or a restart of the stage. The change line
+  // the refused request recorded rides on the refusal, so it is said once.
+  function carriesOn(refused: { status: number | null; out: string }) {
+    expect(refused.status, refused.out).not.toBe(0);
+    for (const strictWayOn of [
+      '"ask_type":"guard-recovery"', "reopen --target", "Restart the stage", "changed again afterward", "on the human's behalf",
+    ]) expect(refused.out).not.toContain(strictWayOn);
+    expect(refused.out).toContain("the change is accepted");
+    expect(refused.out).toMatch(/`[^`]*orchestrate next`/);
+    const line = refused.out.split(/\r?\n/).find((entry) => entry.startsWith('{"error"'));
+    expect(JSON.parse(line ?? "{}").change_notices, refused.out).toEqual([ALPHA_EDIT_LINE]);
+  }
+
+  for (const policy of ["off", "relaxed"]) {
+    test(`${policy}, checkpoints off: after a redo of a Unit's Code Generation, a change and the agent's own review carry on`, () => {
+      const p = checkpointsOff(policy);
+      buildReviewed(p, "alpha", alphaAt(p, 1));
+      reopenCodeGeneration(p, "alpha", 2);
+      expect(reviewThroughLog(p, codeReview("alpha", 1)).request?.recovery).toBe("stale-receipt");
+      alphaAt(p, 3)();
+      carriesOn(tool(p, "log", codeReview("alpha", 2)));
+      expect(next(p)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha" });
+      cover(p, "alpha", ["code-generation"]);
+      expect(next(p)).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "beta" });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`${policy}, team: after a team Unit is sent back and rebuilt, a change and the agent's own review carry on to its gate`, () => {
+      const p = teamUnits(policy);
+      buildReviewed(p, "alpha", alphaAt(p, 1));
+      teamSendBack(p, "alpha", "Return a clear error for an empty name");
+      expect(buildReviewed(p, "alpha", alphaAt(p, 2)).request?.recovery).toBe("stale-receipt");
+      alphaAt(p, 3)();
+      carriesOn(tool(p, "log", codeReview("alpha", 2)));
+      expect(next(p)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha", gate: true });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`${policy}: on a Unit's first build, a second change and the agent's own review carry on to the Unit's completion`, () => {
+      const p = checkpointsOff(policy);
+      for (const slug of stages.slice(0, 4)) {
+        cover(p, "alpha", [slug], false);
+        expect(reviewThroughLog(p, [
+          "review", "--stage", slug, "--reviewer", findStageBySlug(slug)!.reviewer!, "--unit", "alpha", "--iteration", "1",
+        ]).status).toBe(0);
+        appendAuditEntry("UNIT_COMPLETED", {
+          Stage: slug, Unit: "alpha", Mode: "wave", "Run floor": latestMainWorkflowStageRunFloorForProject(p, slug, true, "alpha"),
+          "Artifact Fingerprint": reviewArtifactFingerprint(p, findStageBySlug(slug)!, "alpha", { requireRequiredArtifacts: true })!,
+        }, p);
+      }
+      const started = tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "alpha"]);
+      expect(started.status, started.out).toBe(0);
+      const plan = planApproved(p, "alpha");
+      writeFileSync(plan, readFileSync(plan, "utf-8").replaceAll("- [ ] Step", "- [x] Step"));
+      const built = join(seededRecordDir(p), "construction", "alpha", "code-generation");
+      for (const name of ["code-summary", "traceability"]) writeFileSync(join(built, artifactFilename(name)), `# alpha ${name}\n`);
+      writeFileSync(join(built, "source-manifest.json"), JSON.stringify({
+        stage: "code-generation", unit: "alpha", version: 1, writes: [{ path: "src/alpha.ts" }],
+      }));
+      alphaAt(p, 1)();
+      expect(reviewThroughLog(p, codeReview("alpha", 1)).status).toBe(0);
+      alphaAt(p, 2)();
+      expect(reviewThroughLog(p, codeReview("alpha", 2)).request?.recovery).toBe("stale-receipt");
+      alphaAt(p, 3)();
+      const refused = tool(p, "log", codeReview("alpha", 3));
+      carriesOn(refused);
+      expect(refused.out).toContain("state unit complete --stage code-generation --unit alpha");
+      const completed = tool(p, "state", ["unit", "complete", "--stage", "code-generation", "--unit", "alpha"]);
+      expect(completed.status, completed.out).toBe(0);
+      expect(next(p)).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "beta" });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 });
 
 // The walking skeleton gates the per-unit stages. Once they are all done or

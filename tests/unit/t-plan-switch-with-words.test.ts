@@ -197,7 +197,7 @@ describe("t-plan-switch-with-words: a switch typed with the person's reply to th
     reply(proj, "/aidlc --guard-policy relaxed rename slugify to toSlug first");
     expect(configSet(proj, ["guard-policy", "relaxed"]).status).toBe(0);
     expect(policy(proj)).toBe("relaxed (set by you)");
-    expect(answer(proj, "Request Changes").message).toContain('Recorded "Request Changes"');
+    expect(answer(proj, "Request Changes: rename slugify to toSlug first").message).toContain('Recorded "Request Changes"');
     expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "rename slugify to toSlug first" });
   });
 

@@ -290,7 +290,9 @@ describe("t-rules-travel-with-steps: the notes and their checks", () => {
     expect(plan.startsWith(questionNote("bun x/aidlc-orchestrate.ts").replace(/\.$/, ""))).toBe(true);
     expect(plan).toContain(
       "record the choice they made with `bun x/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval " +
-        "--details '<their choice>'`, then run `bun x/aidlc-orchestrate.ts next`",
+        "--details '<their choice>'` (a change they ask for instead of approving is Request Changes, with what to " +
+        "change after it: --details 'Request Changes: <what they asked>'; when they approve and ask for a change, " +
+        "make it in the plan first, then record 'Approve Plan'), then run `bun x/aidlc-orchestrate.ts next`",
     );
   });
 

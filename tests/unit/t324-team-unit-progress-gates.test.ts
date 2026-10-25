@@ -1299,6 +1299,39 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     ]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // At a team Unit gate the agent logs the blocking-check question and the
+  // person's Fix findings pick with --unit (stage-protocol-construction.md), and
+  // the pick starts a new attempt for that Unit only, as its Request Changes
+  // does. A teammate's question for the same stage, in their own shard between
+  // the two, does not take the pick's place.
+  test("a Unit's Fix findings pick at a blocking check floors only that Unit's review receipt", () => {
+    const proj = seedProject({ ownership: "team" });
+    for (const unit of ["alpha", "beta"]) {
+      coverUnit(proj, unit, "functional-design");
+      logReviewReady(proj, "functional-design", unit, "aidlc-architecture-reviewer-agent");
+    }
+    const stage = findStageBySlug("functional-design")!;
+    const reviewed = () => [...freshReviewReceipts(proj, state(proj), stage).unitVerdicts.keys()].sort();
+    expect(reviewed()).toEqual(["alpha", "beta"]);
+    const log = (args: string[]) => {
+      const r = spawnSync(BUN, [LOG, ...args, "--stage", "functional-design", "--unit", "alpha", "--project-dir", proj], {
+        env: ENV, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    };
+    log(["decision", "--decision", "Blocking gate sensor failure", "--options", "Fix findings,Override blocking sensors"]);
+    const asked = readAuditShardEvents(proj).findLast((row) => row.event === "DECISION_RECORDED")!;
+    writeFileSync(
+      join(seededAuditDir(proj), "zzzz-teammate.md"),
+      `## DECISION_RECORDED\n**Timestamp**: ${asked.timestamp}\n**Event**: DECISION_RECORDED\n` +
+        "**Stage**: functional-design\n**Unit**: beta\n**Decision**: Which entities does beta own?\n**Options**: A,B\n\n---\n",
+    );
+    Bun.sleepSync(1100);
+    appendAuditEntry("HUMAN_TURN", { Session: "t324-fix-findings" }, proj);
+    log(["answer", "--details", "Fix findings"]);
+    expect(reviewed()).toEqual(["beta"]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("legacy unitless rejection remains stage-global under team ownership", () => {
     const proj = seedProject({ ownership: "team" });
     for (const unit of ["alpha", "beta"]) {

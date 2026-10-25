@@ -181,7 +181,9 @@ export function addSubmodule(pd: string): void {
 
 // With `repo`, a workspace of several repositories: its roof holds the records
 // and is no repository, and the Units' code is in that one recorded sibling.
-export function fixture(units = ["alpha"], command: string | null = CHECK, withSubmodule = false, repo: string | null = null): string {
+export function fixture(
+  units = ["alpha"], command: string | null = CHECK, withSubmodule = false, repo: string | null = null, policy = "strict",
+): string {
   const pd = setupWorktreeFixture();
   projects.push(pd);
   const code = repo === null ? pd : join(pd, repo);
@@ -211,7 +213,7 @@ export function fixture(units = ["alpha"], command: string | null = CHECK, withS
 - **Skeleton Stance**: off
 - **Unit Ownership**: solo
 - **Review Override**: adversarial
-- **Change Control**: strict
+- **Change Control**: ${policy}
 - **Bolt Refs**: [empty list]
 - **Worktree Path**: -
 ## Scope Configuration
@@ -246,6 +248,7 @@ export function fixture(units = ["alpha"], command: string | null = CHECK, withS
   mkdirSync(join(code, "src"), { recursive: true });
   for (const unit of units) writeFileSync(join(code, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
   if (withSubmodule) addSubmodule(pd);
+  addSourceBeforeBaseline?.(code);
   const baseline = writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!);
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
   appendAuditEntry("STAGE_STARTED", { Stage: STAGE, "Source Baseline": baseline }, pd);
@@ -256,6 +259,19 @@ export function fixture(units = ["alpha"], command: string | null = CHECK, withS
   git(code, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "swarm fixture"]);
   for (const unit of units) approvePlan(pd, unit);
   return pd;
+}
+
+// More of the person's code, written by fixtureWithSource before the source
+// baseline so the approved plan covers it; null for every other fixture.
+let addSourceBeforeBaseline: ((code: string) => void) | null = null;
+
+export function fixtureWithSource(addSource: (code: string) => void, units = ["alpha"]): string {
+  addSourceBeforeBaseline = addSource;
+  try {
+    return fixture(units);
+  } finally {
+    addSourceBeforeBaseline = null;
+  }
 }
 
 export function prepare(pd: string, units = ["alpha"], resume = false) {
@@ -379,7 +395,9 @@ export function writeUnitSource(pd: string, unit: string, value: number): void {
   writeFileSync(join(wt(pd, unit), "src", `${unit}.ts`), `export const ${unit} = ${value};\n`);
 }
 
-export function checkReviewFinalizeAndLand(pd: string, values: Record<string, number>): void {
+// Lands each Unit as the swarm protocol says: on the landing_branch finalize
+// names for its row, which must be `target`.
+export function checkReviewFinalizeAndLand(pd: string, values: Record<string, number>, target = "main"): void {
   const units = Object.keys(values);
   for (const unit of units) {
     const checked = swarm(pd, ["check", unit]);
@@ -389,9 +407,12 @@ export function checkReviewFinalizeAndLand(pd: string, values: Record<string, nu
   const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", units.join(","),
     "--claimed", units.join(",")]);
   expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
+  const rows = JSON.parse(finalized.out).units as Array<{ unit: string; landing_branch?: string }>;
   for (const unit of units) {
+    const landingBranch = rows.find((row) => row.unit === unit)?.landing_branch;
+    expect(landingBranch, finalized.out).toBe(target);
     const merged = runCheckpointTool(pd, "tools/aidlc-worktree.ts", [
-      "merge", "--slug", boltSlugForUnit(unit), "--target", "main", "--strategy", "squash", "--project-dir", pd,
+      "merge", "--slug", boltSlugForUnit(unit), "--target", landingBranch as string, "--strategy", "squash", "--project-dir", pd,
     ]);
     expect(merged.code, `${merged.out}\n${merged.err}`).toBe(0);
     expect(existsSync(wt(pd, unit))).toBe(false);

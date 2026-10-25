@@ -125,7 +125,8 @@ function childSource(root: string, options: Options): string {
         if (!onMount(p) && /^\\.aidlc-.*\\.lock$/.test(basename(p)))
           out.gates.push(p);
         if (armed && onMount(p) && cfg.fault === "lock-mkdir" && basename(p) === ${JSON.stringify(LOCK)}) fail();
-        if (armed && inProbe(p) && cfg.fault === "workflow" && basename(p) === "workflow-lock") fail();
+        // The workflow lock is built under a private candidate name and renamed into place.
+        if (armed && inProbe(p) && cfg.fault === "workflow" && basename(p).startsWith("workflow-lock.candidate.")) fail();
         return fs.mkdirSync(p, ...args);
       },
       openSync(p, flags, ...args) {
@@ -171,6 +172,9 @@ function childSource(root: string, options: Options): string {
         return fs.readFileSync(p, ...args);
       },
       renameSync(source, destination) {
+        // A local gate lock is published by renaming its stamped candidate into place.
+        if (!onMount(destination) && /^\\.aidlc-.*\\.lock$/.test(basename(destination)))
+          out.gates.push(destination);
         if (armed && inProbe(source) && fs.existsSync(source)) {
           if (cfg.fault === "directory-rename" && fs.lstatSync(source).isDirectory()) fail();
           if (cfg.fault === "file-rename" && !fs.lstatSync(source).isDirectory()) fail();
@@ -474,6 +478,39 @@ describe("t330 lock ownership", () => {
       }
     });
   }
+
+  // A command killed between making the lock folder and finishing its stamp
+  // leaves no owner, an empty one or a cut-off one. Within the grace a live
+  // holder may still be stamping it; past it, the next command clears it.
+  for (const state of ["missing", "empty", "cut-off"]) {
+    test(`directory owner ${state} is cleared once past the grace`, () => {
+      const root = project(), lock = join(root, LOCK);
+      mkdirSync(lock);
+      if (state === "empty") writeFileSync(join(lock, "owner.json"), "");
+      if (state === "cut-off") writeFileSync(join(lock, "owner.json"), '{"schemaVersion":1,"pid":');
+      const fresh = observe(root, { fallback: "EMLINK" });
+      expect(fresh.error?.message).toContain("cannot verify");
+      expect(fresh.stderr).not.toContain(CLEARED);
+      expectProject(root, false, [LOCK]);
+      utimesSync(lock, LONG_AGO, LONG_AGO);
+      const aged = observe(root, { fallback: "EMLINK" });
+      expect(aged.error).toBeNull();
+      expect(aged.stderr).toContain(CLEARED);
+      expectProject(root, true);
+    });
+  }
+
+  test("a directory stamp that parses but names no valid owner stays refused past the grace", () => {
+    const root = project(), lock = join(root, LOCK), raw = '{"schemaVersion":1}';
+    mkdirSync(lock);
+    writeFileSync(join(lock, "owner.json"), raw);
+    utimesSync(lock, LONG_AGO, LONG_AGO);
+    const out = observe(root, { fallback: "EMLINK" });
+    expect(out.error?.message).toContain("cannot verify incomplete directory transaction lock");
+    expect(out.stderr).not.toContain(CLEARED);
+    expect(readFileSync(join(lock, "owner.json"), "utf8")).toBe(raw);
+    expectProject(root, false, [LOCK]);
+  });
 
   test("fallback probe and acquisition preserve a live legacy file lock", () => {
     const root = project(), lock = join(root, LOCK);

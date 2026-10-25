@@ -1,8 +1,8 @@
 // covers: function:applyIntentSettings, subcommand:aidlc-utility:intent-create
 //
 // What a setting's label says about who set it. A check the person asked in
-// the chat to turn off is theirs, whoever ran the setter; a setter run with no
-// word of theirs behind it says a command set it.
+// the chat to turn off is theirs when the setter names the message they asked
+// in; a setter run with no message of theirs named says a command set it.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -11,7 +11,9 @@ import { join } from "node:path";
 import {
   AIDLC_SRC, cleanupTestProject, createOrchestrationTestProject, createTestProject, removeWorkspaceRecord,
 } from "../harness/fixtures.ts";
-import { getField, hooksHealthDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  auditBlockField, getField, hooksHealthDir, readAuditShardEvents,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -38,13 +40,19 @@ function run(proj: string, tool: string, args: string[], env: NodeJS.ProcessEnv 
   return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
-function reply(proj: string, prompt: string): void {
+// The person types `prompt`; the human-turn hook keeps it. Returns the id of
+// the message it kept.
+function reply(proj: string, prompt: string): string {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
     env: { ...process.env, ...CLEAR, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
   });
   expect(result.status, result.stderr).toBe(0);
+  const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
 }
 
 function stateField(proj: string, name: string): string | null {
@@ -74,10 +82,8 @@ function emptyProject(): string {
 describe("t-setting-source-labels: who a setting's label says set it", () => {
   test("a check the person asked in the chat to turn off is theirs", () => {
     const proj = openWork();
-    reply(proj, "skip the summary confirmation for this work");
-    const off = run(proj, DISPATCHER, [
-      "engine", "config", "set", "summary-confirmation", "off", "--person-words", "skip the summary confirmation for this work",
-    ]);
+    const id = reply(proj, "skip the summary confirmation for this work");
+    const off = run(proj, DISPATCHER, ["engine", "config", "set", "summary-confirmation", "off", "--message", id]);
     expect(off.status, off.out).toBe(0);
     expect(stateField(proj, "Summary Confirmation")).toBe("off (set by you)");
   });

@@ -69,6 +69,10 @@ const VALID_EVENT_TYPES = new Set([
   // A finished stage AI-DLC itself now does differently: the row carries its
   // receipt for the new definition (aidlc-validity.ts).
   "STAGE_DEFINITION_CHANGED",
+  // A finished stage's own documents changed before the person's next message
+  // after the one that approved it: the row carries its receipt for the files
+  // as they are (aidlc-validity.ts).
+  "STAGE_OUTPUT_AMENDED",
   // A code-producing stage's source-work check found no new code where it
   // looked, and what it did: the agent's first report refused, the approval
   // question put to the person, or Guard Policy off standing aside.
@@ -306,6 +310,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   STAGE_REVISING: "Stage Revising",
   STAGE_COMPLETED: "Stage Completion",
   STAGE_DEFINITION_CHANGED: "Stage Definition Changed",
+  STAGE_OUTPUT_AMENDED: "Stage Output Amended",
   SOURCE_WORK_NOT_FOUND: "Source Work Not Found",
   STAGE_JUMPED: "Stage Jump",
   STAGE_SKIPPED: "Stage Skip",
@@ -516,6 +521,7 @@ export interface AuditEntryInput {
 export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "STAGE_COMPLETED",
   "STAGE_DEFINITION_CHANGED",
+  "STAGE_OUTPUT_AMENDED",
   // The check's own record of a first refusal opens the gate on the next
   // report; a forged one would skip the agent's refusal.
   "SOURCE_WORK_NOT_FOUND",

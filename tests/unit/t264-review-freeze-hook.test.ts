@@ -1,4 +1,4 @@
-// covers: hook:aidlc-review-freeze, file:hooks/aidlc-kiro-adapter.ts, hook:review-freeze-command, function:freshReviewReceipts, function:producesArtifactFile, function:producesArtifactUnit, audit:REVIEW_FREEZE_BLOCKED, function:guardRefusalHookNote, function:pendingGuardRecoveryAsk
+// covers: hook:aidlc-review-freeze, file:hooks/aidlc-kiro-adapter.ts, hook:review-freeze-command, function:leadingDirectoryChange, function:freshReviewReceipts, function:producesArtifactFile, function:producesArtifactUnit, audit:REVIEW_FREEZE_BLOCKED, function:guardRefusalHookNote, function:pendingGuardRecoveryAsk, function:blockingSensorPicks
 //
 // t264 - the deterministic PreToolUse enforcement of the §12a terminal-receipt
 // ordering (the receipt-invalidation loop's hook half; the prose half is
@@ -14,8 +14,8 @@
 //       DIST tree) - stage-level and per-unit freeze/no-freeze cases;
 //   (b) the SHIPPED hook as a subprocess over a REAL audit ledger written by
 //       the real aidlc-log/audit tools: allow before receipt, block after
-//       READY or terminal advisory NOT-READY, release on GATE_REJECTED, allow for
-//       non-produces paths, fail-open with no ledger, off-switch, and the
+//       READY or terminal advisory NOT-READY, release on GATE_REJECTED and on
+//       a Fix findings pick at a blocking sensor, allow for non-produces paths, fail-open with no ledger, off-switch, and the
 //       REVIEW_FREEZE_BLOCKED audit row on a genuine block;
 //   (c) registration pins per harness: Claude settings.json (third entry in
 //       the shared PreToolUse group), Codex emit wiring + adapter target,
@@ -53,6 +53,7 @@ import { basename, dirname, join, relative, relative as relativePath, resolve } 
 import {
   blockReason,
   judgeFreeze,
+  leadingDirectoryChange,
   REVIEW_FREEZE_FALLBACK_GUIDANCE,
   reviewFreezeRecoveryGuidance,
   shellCommandAltersExecutableResolution,
@@ -60,7 +61,14 @@ import {
   shellCommandInvocations,
   writeTargets,
 } from "../../dist/claude/.claude/hooks/aidlc-review-freeze.ts";
-import { readAllAuditShards, setGuardPolicyLine } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  auditBlockField,
+  MESSAGE_FILL,
+  MESSAGE_SLOT,
+  readAllAuditShards,
+  readAuditShardEvents,
+  setGuardPolicyLine,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { KIRO_HOOK_GROUPS } from "../../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 import {
   cleanupTestProject,
@@ -671,6 +679,65 @@ describe("t264 (a) judgeFreeze decision table", () => {
       .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""))).not.toContain("/p/.kiro/hooks/y.json");
   });
 
+  // The plan-approval guard reads the rest of a line from where its first `cd`
+  // leads only when the shell is certain to be there when the rest runs.
+  test("leadingDirectoryChange follows only a first move it is certain of", () => {
+    const root = createTestProject();
+    tempDirs.push(root);
+    const dir = join(root, "proj");
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(root, "file.txt"), "x\n");
+    const q = (word: string) => `'${word}'`;
+    const move = (command: string, shell: "posix" | "powershell" = "posix") =>
+      leadingDirectoryChange(command, root, shell);
+    for (const [command, shell] of [
+      [`cd ${q(dir)} && aidlc doctor`, "posix"],
+      [`cd -- ${q(dir)}; aidlc doctor`, "posix"],
+      [`cd ${q(dir)}\naidlc doctor`, "posix"],
+      // A drive letter in either case names the same drive.
+      [`cd ${q(dir.replace(/^[A-Z](?=:)/, (drive) => drive.toLowerCase()))} && aidlc doctor`, "posix"],
+      [`Set-Location -LiteralPath ${q(dir)} ; aidlc doctor`, "powershell"],
+      [`sl ${q(dir)} ; aidlc doctor`, "powershell"],
+      [`Push-Location ${q(dir)} ; aidlc doctor`, "powershell"],
+    ] as const) {
+      const followed = move(command, shell);
+      expect(followed?.dir.toLowerCase(), command).toBe(resolve(dir).toLowerCase());
+      expect(followed?.rest.trim(), command).toBe("aidlc doctor");
+    }
+    // Folders the lexer would name but the shell would not enter: bash drops a
+    // backslash-newline inside quotes, and does not split a word at U+00A0.
+    if (process.platform !== "win32") mkdirSync(join(root, "a\nb"));
+    mkdirSync(`${dir}\u00a0`);
+    // A relative or computed folder, one that is missing or a file, a second
+    // operand or an option, a group, a redirect, a join that runs the rest
+    // anyway or elsewhere, a wrapper, POSIX pushd, nothing after the join, and
+    // a line whose continuations or blanks the lexer reads differently.
+    for (const command of [
+      "cd proj && aidlc doctor",
+      `cd ${q(`${dir}/src/..`)} && aidlc doctor`,
+      `cd ${q(join(root, "missing"))}; aidlc doctor`,
+      `cd ${q(join(root, "file.txt"))}; aidlc doctor`,
+      `cd ${q(dir)} ${q(dir)} && aidlc doctor`,
+      `cd -P ${q(dir)} && aidlc doctor`,
+      'cd "$HOME" && aidlc doctor',
+      `cd ${q(`${dir}*`)} && aidlc doctor`,
+      `(cd ${q(dir)} && aidlc doctor)`,
+      `{ cd ${q(dir)}; aidlc doctor; }`,
+      `cd ${q(dir)} 2>/dev/null && aidlc doctor`,
+      `cd ${q(dir)} || aidlc doctor`,
+      `cd ${q(dir)} | aidlc doctor`,
+      `cd ${q(dir)} & aidlc doctor`,
+      `builtin cd ${q(dir)} && aidlc doctor`,
+      `pushd ${q(dir)} && aidlc doctor`,
+      `cd ${q(dir)} && `,
+      `cd ${q(dir)}`,
+      `cd "${join(root, "a\\\nb")}" && aidlc doctor`,
+      `cd ${q(dir)}\u00a0 && aidlc doctor`,
+    ]) {
+      expect(move(command), command).toBeNull();
+    }
+  });
+
   test("writeTargets: a PowerShell command is read as PowerShell (#1639)", () => {
     const targets = (command: string): string[] =>
       writeTargets("Bash", { command }, "/p", "powershell")
@@ -1115,6 +1182,55 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     // Stage now [x]: its produces paths are permanent record, not frozen.
     expect(runHook(p, writePayload(raArtifact(p))).code).toBe(0);
   });
+
+  // The person's pick at the "Blocking gate sensor failure" question, as
+  // stage-protocol-sensors.md has the agent record it.
+  function pickAtBlockingSensor(p: string, details: string): void {
+    logTool(p, [
+      "decision", "--stage", "requirements-analysis", "--decision", "Blocking gate sensor failure",
+      "--options", "Fix findings,Override blocking sensors",
+    ]);
+    personSays(p, "fix them first");
+    logTool(p, ["answer", "--stage", "requirements-analysis", "--details", details]);
+  }
+
+  test("Fix findings at a blocking sensor opens the reviewed document; the gate then needs a fresh review", () => {
+    const p = projBeforeGate();
+    const file = raArtifact(p);
+    recordReview(p, "READY");
+    expect(runHook(p, writePayload(file)).code).toBe(2);
+
+    pickAtBlockingSensor(p, "Fix findings");
+    expect(runHook(p, writePayload(file)).code).toBe(0);
+
+    // The review before the fix no longer covers the document, so the retried
+    // report hands the agent a fresh review, at the first pass again.
+    const retried = spawnSync(
+      BUN,
+      [ORCH_TOOL, "report", "--stage", "requirements-analysis", "--result", "awaiting-approval", "--project-dir", p],
+      {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+      },
+    );
+    const step = JSON.parse((retried.stdout ?? "").trim().split("\n").at(-1) ?? "{}") as Record<string, unknown>;
+    expect(step.agent_work, `${retried.stdout}${retried.stderr}`).toBe(true);
+    expect(opsOf(step)).toEqual(["request-review"]);
+    expect(JSON.stringify(step.remedies)).toContain("--iteration 1");
+    recordReview(p, "READY");
+    openGate(p);
+    expect(runHook(p, writePayload(file)).code).toBe(2);
+  });
+
+  test("a pick recorded as its number reads as the option it names", () => {
+    for (const [details, code] of [["1", 0], ["2", 2]] as const) {
+      const p = projBeforeGate();
+      recordReview(p, "READY");
+      pickAtBlockingSensor(p, details);
+      expect(runHook(p, writePayload(raArtifact(p))).code, details).toBe(code);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1424,8 +1540,9 @@ const PERSON = {
   AIDLC_UNATTENDED: "0",
 };
 
-// The person's message, as the human-turn hook records it.
-function personSays(p: string, prompt: string): void {
+// The person's message, as the human-turn hook records it; returns the id of
+// the message it kept.
+function personSays(p: string, prompt: string): string {
   const said = spawnSync(BUN, [join(DIST_CLAUDE, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
     cwd: p,
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: PERSON.AIDLC_SESSION_OVERRIDE, prompt }),
@@ -1434,6 +1551,10 @@ function personSays(p: string, prompt: string): void {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   expect(said.status, said.stderr).toBe(0);
+  const turn = readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
 }
 
 function logTool(p: string, args: string[]): void {
@@ -1451,6 +1572,7 @@ function logTool(p: string, args: string[]): void {
 const sentenceAroundTarget = (stderr: string) => stderr.replace(/review-freeze: "[^"]*"/, 'review-freeze: "<file>"');
 
 const opsOf = (directive: Record<string, unknown>) => (directive.remedies as { op: string }[]).map((remedy) => remedy.op);
+const AFTER_THE_REVIEW = { kind: "print", message: expect.stringContaining("No further review pass follows") };
 
 describe("t264 (d) the refusal names next; next asks the recovery question", () => {
   test("the refusal says what was refused and the step to take, with no JSON line", () => {
@@ -1476,7 +1598,8 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
       reason_codes: ["REVIEW_FREEZE_ACTIVE"],
     });
     expect(opsOf(own)).toEqual(["present-findings-at-gate"]);
-    expect(nextDirective(p)).toMatchObject({ kind: "run-stage", stage: "requirements-analysis" });
+    // The review is final, so the step after it is the one its verdict named: on to the gate.
+    expect(nextDirective(p)).toMatchObject(AFTER_THE_REVIEW);
     refusedWrite(p);
     const asked = nextDirective(p);
     expect(asked).toMatchObject({
@@ -1488,7 +1611,7 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
     });
     expect(asked.agent_work).toBeUndefined();
     expect(opsOf(asked)).toEqual(["request-changes", "lower-fence"]);
-    expect(nextDirective(p)).toMatchObject({ kind: "run-stage", stage: "requirements-analysis" });
+    expect(nextDirective(p)).toMatchObject(AFTER_THE_REVIEW);
   });
 
   // The person spoke since the last decision, or answered the agent's question
@@ -1599,8 +1722,8 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
   });
 
   // The person picks "Turn this check off" by its number. The choice tells the
-  // agent to run its command with that reply as their words, so the check is
-  // recorded as theirs.
+  // agent to run its command naming the message that reply came in, so the
+  // check is recorded as theirs.
   test("the turn-it-off choice picked by its number: the check is off, set by you", () => {
     const p = projBeforeGate();
     recordReview(p, "READY");
@@ -1610,11 +1733,12 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
     const remedies = asked.remedies as { op: string; action: string }[];
     const at = remedies.findIndex((remedy) => remedy.op === "lower-fence");
     expect(at, JSON.stringify(asked)).toBeGreaterThan(-1);
-    expect(remedies[at].action).toContain("--person-words '<their words>'");
+    expect(remedies[at].action).toContain(`\`--message '${MESSAGE_SLOT}'\` added${MESSAGE_FILL}`);
+    expect(remedies[at].action).not.toContain("--person-words");
     const dispatcher = join(DIST_CLAUDE, "tools", "aidlc.ts");
-    personSays(p, String(at + 1));
+    const picked = personSays(p, String(at + 1));
     const off = spawnSync(BUN, [
-      dispatcher, "engine", "config", "set", "guard.review-freeze", "off", "--person-words", String(at + 1), "--project-dir", p,
+      dispatcher, "engine", "config", "set", "guard.review-freeze", "off", "--message", picked, "--project-dir", p,
     ], {
       cwd: p,
       env: { ...process.env, ...PERSON, CLAUDE_PROJECT_DIR: p },

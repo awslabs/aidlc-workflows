@@ -41,6 +41,7 @@ import {
 import {
   artifactFilename,
   consumeSharedDirectiveAsk,
+  recordGuardRecoveryChoice,
   evaluateGuardRefusal,
   guardRecoveryAskForRefusal,
   unitCompletedReceipts,
@@ -174,8 +175,9 @@ describe("a Unit done without its receipts is offered recording them", () => {
       operation: { kind: "record-unit-completion", stage: SLUG, unit: "alpha" },
     });
 
-    // The person picks it, as the human-turn hook records their reply.
+    // The person picks it; the hook keeps their reply, and the agent records the remedy it read.
     expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
+    expect(recordGuardRecoveryChoice(proj, "record-unit-completion", false).op).toBe("record-unit-completion");
     const env = engineEnv();
     delete env.AIDLC_SKIP_ARTIFACT_GUARD;
     const done = spawnSync(

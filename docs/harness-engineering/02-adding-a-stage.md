@@ -295,7 +295,8 @@ topology, reviewer, and completion checks, reports once with
 not run workflow learnings or open a workflow approval gate.
 A `--single` run is deliberately isolated: it **never touches the main workflow's
 `Current Stage`** — the tool refuses to advance the main workflow from a single
-run, so running one stage on its own can never derail an in-flight workflow.
+run. It writes the stage's documents where the work keeps them, after keeping a
+copy of the files already there under the record's `archive/` folder.
 
 ### The runner skill is optional packaging
 

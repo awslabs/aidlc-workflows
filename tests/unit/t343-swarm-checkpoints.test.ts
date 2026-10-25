@@ -564,9 +564,6 @@ describe("t343 completed swarm batch checkpoints", () => {
     converge(pd);
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("requires the person's reply to this question");
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("--action ask");
-    // An exact pick is the person's: the conductor cannot record the other choice.
-    human(pd, "Request Changes");
-    expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow('picked "Request Changes"');
     // The conductor read their approval; the receipt carries their own words.
     human(pd, "both look good");
     expect(approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint").approved).toBe(true);
@@ -601,12 +598,11 @@ describe("t343 completed swarm batch checkpoints", () => {
     converge(pd);
     approveSwarmCheckpoint(pd, 1, BATCH);
     expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please fix the API", "t343-checkpoint")).toThrow("--action ask");
-    human(pd, "Approve");
-    expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please fix the API", "t343-checkpoint")).toThrow('picked "Approve"');
     human(pd, "Request Changes");
-    // A reason with no words, or more than one line, is refused; a word such as
-    // "DISMISSED" is what the conductor read from the person, and is a reason.
-    for (const reason of ["", " ", "first\nsecond"]) {
+    // A reason on more than one line is refused (with none passed, the person's
+    // own words are the reason); a word such as "DISMISSED" is what the
+    // conductor read from the person, and is a reason.
+    for (const reason of ["first\nsecond"]) {
       expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", reason, "t343-checkpoint")).toThrow("reason");
     }
     const rejected = rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please fix the API", "t343-checkpoint");
@@ -924,16 +920,16 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
   });
 
   // A batch asked with Request Changes alone is shown as "1. Request Changes"
-  // where choices are numbered, so a typed number picks from that one choice.
+  // where choices are numbered; the agent reads a typed number against it.
   for (const typed of ["1", "/aidlc 1"]) {
-    test(`"${typed}" at a batch offering Request Changes alone sends it back, with no second question`, () => {
+    test(`"${typed}" at a batch offering Request Changes alone: the agent's Request Changes sends it back, with no second question`, () => {
       const pd = fixture(true);
       converge(pd);
       writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
       const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
       expect(asked.code, asked.out).toBe(0);
       choice(pd, "t343-checkpoint", typed);
-      expect(readProtectedResponse(pd, "t343-checkpoint")?.choice).toBe("Request Changes");
+      expect(readProtectedResponse(pd, "t343-checkpoint")?.choice).toBeUndefined();
       const rejected = tool(pd, "bolt", ["swarm-checkpoint", "--action", "reject", "--batch", "1", "--units", BATCH.join(","),
         "--user-input", typed, "--reason", "Please rework the changed source", "--session", "t343-checkpoint"]);
       expect(rejected.code, rejected.out).toBe(0);
@@ -956,14 +952,14 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     }
   });
 
-  test("at a batch offering both choices, \"1\" is Approve and \"2\" is Request Changes", () => {
+  test("at a batch offering both choices, a typed number is no pick; the agent's reading is recorded", () => {
     const pd = fixture();
     converge(pd);
     human(pd, "2");
     expect(readProtectedQuestion(pd, "t343-checkpoint")?.options).toHaveLength(2);
-    expect(readProtectedResponse(pd, "t343-checkpoint")?.choice).toBe("Request Changes");
+    expect(readProtectedResponse(pd, "t343-checkpoint")?.choice).toBeUndefined();
     human(pd, "1");
-    expect(readProtectedResponse(pd, "t343-checkpoint")?.choice).toBe("Approve");
+    expect(readProtectedResponse(pd, "t343-checkpoint")?.choice).toBeUndefined();
     expect(approveSwarmCheckpoint(pd, 1, BATCH, "1", "t343-checkpoint").approved).toBe(true);
   });
 
@@ -1189,7 +1185,7 @@ describe("t343 response-bound swarm decisions", () => {
     for (const id of [session, "other-swarm-session"]) {
       expect(tool(pd, "bolt", [...route(id), "--action", "ask"]).code).toBe(0);
       choice(pd, id, "Approve");
-      expect(readProtectedResponse(pd, id)?.choice).toBe("Approve");
+      expect(readProtectedResponse(pd, id)?.words).toBe("Approve");
     }
     // Even a finalize run that declines all Units starts a new verification boundary.
     const finalized = tool(pd, "swarm", ["finalize", "--batch", "1", "--units", BATCH.join(",")]);
@@ -1275,7 +1271,7 @@ describe("t343 response-bound swarm decisions", () => {
     expect(accepted.code, accepted.out).toBe(0);
   });
 
-  test("autonomous approval needs no challenge but rejection requires Request Changes", () => {
+  test("autonomous approval needs no challenge but rejection needs the person's reply", () => {
     const pd = fixture(true);
     converge(pd);
     const reject = () => tool(pd, "bolt", [...route(), "--action", "reject", "--user-input", "Request Changes", "--reason", "Fix the API"]);
@@ -1284,8 +1280,7 @@ describe("t343 response-bound swarm decisions", () => {
     const approved = tool(pd, "bolt", ["swarm-checkpoint", "--batch", "1", "--units", BATCH.join(","), "--action", "approve"]);
     expect(approved.code, approved.out).toBe(0);
     expect(tool(pd, "bolt", [...route(), "--action", "ask"]).code).toBe(0);
-    choice(pd, session, "Approve");
-    expect(reject().code).not.toBe(0);
+    // Their reply is the agent's to read; it records the Request Changes it read.
     choice(pd, session, "Request Changes");
     const rejected = reject();
     expect(rejected.code, rejected.out).toBe(0);

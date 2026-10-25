@@ -88,6 +88,13 @@ function moveAt(
   const said: string[] = [];
   for (const line of lines) {
     const answer = agent.personTypes(line);
+    // A jump the line asks for is made by that `next`, which answers with the
+    // step it lands on and the jump's own line.
+    if (answer.kind !== "print" && line.includes("--stage")) {
+      expect(["run-stage", "load-steering", "ask"], JSON.stringify(answer)).toContain(String(answer.kind));
+      said.push([...((answer.change_notices as string[] | undefined) ?? []), String(answer.narration ?? "")].join("\n"));
+      continue;
+    }
     expect(answer.kind, JSON.stringify(answer)).toBe("print");
     // The step the line names, run as the agent runs it; its reply is what the person is shown.
     const step = /`(bun \.claude\/tools\/[^`]+)`/.exec(String(answer.message ?? ""))?.[1];
@@ -95,6 +102,15 @@ function moveAt(
     const ran = agent.host.bash(step!);
     expect(ran.status, ran.stdout + ran.stderr).toBe(0);
     said.push(ran.stdout);
+    // A jump typed with the change is the `next` the step says to run and
+    // follow after it, and the jump that `next` names is made as the agent
+    // makes it. A `next --resume` offered "if they say yes" waits for them.
+    const jump = /run `bun \.claude\/tools\/aidlc-orchestrate\.ts next ([^`]+)` and follow what it returns/
+      .exec(String(answer.message ?? ""))?.[1];
+    if (jump) {
+      const jumped = agent.next(...jump.split(" "));
+      if (jumped.kind === "print") agent.actOnPrint(jumped);
+    }
   }
   agent.host.stop();
   resumed = true;
@@ -169,9 +185,14 @@ describe("a jump past Units Generation that never ran", () => {
   }, SCOPE_RUN_TIMEOUT_MS);
 
   test("the guide's /aidlc --scope enterprise --stage code-generation, from a bugfix at its Requirements Analysis gate", () => {
-    const { run, rows, after, later } = moveAt("bugfix", RA, ["/aidlc --scope enterprise --stage code-generation"], { after: 1 });
+    const { run, rows, after, later, said } = moveAt("bugfix", RA, ["/aidlc --scope enterprise --stage code-generation"], { after: 1 });
     expect(run.agent.refusalsMet).toEqual([]);
     expect(unitFolders(after)).toEqual([]);
+    // Both halves of the line: the scope changes first, then the jump is made in it.
+    expect(said).toContain("Switched to enterprise");
+    expect(state(run)).toMatch(/^- \*\*Scope\*\*: enterprise\b/m);
+    expect(rows.filter((e) => e.event === "SCOPE_CHANGED")).toHaveLength(1);
+    expect(rows.filter((e) => e.event === "STAGE_JUMPED")).toHaveLength(1);
     expect(approvals(rows, CG)).toHaveLength(1);
     expect(later).toEqual([CG, "build-and-test"]);
   }, SCOPE_RUN_TIMEOUT_MS);

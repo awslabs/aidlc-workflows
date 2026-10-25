@@ -160,7 +160,7 @@ describe("t-claude-guard-group settings.json wiring", () => {
     const foldRow = pre.find((group) =>
       group.hooks.some((hook) => hook.command.endsWith(" engine hook fold-usage"))
     );
-    expect(foldRow?.matcher).toBe("");
+    expect(foldRow?.matcher).toBe("*");
     const rulesRow = pre.find((group) =>
       group.hooks.some((hook) => hook.command.endsWith(" engine hook deliver-stage-rules"))
     );

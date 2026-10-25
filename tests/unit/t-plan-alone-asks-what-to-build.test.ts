@@ -8,19 +8,26 @@
 // once and in plain words, what the work is for, creates nothing, and names
 // the one command their answer runs (that plan, the settings typed with it,
 // and their words), which starts the work with their words as its request.
+// Beside work in progress on another plan, the same plan typed alone was
+// dropped and the stage in hand ran ("Starting the bugfix plan ..."): the
+// agent now reads whether they meant new work on that plan or this work moved
+// to it, with one command for each, and asks once only when it cannot tell.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
-import { splitKiroCommandArgs, validScopes } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { getField, splitKiroCommandArgs, validScopes } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
+  REPO_ROOT,
   cleanupTestProject,
+  createOrchestrationTestProject,
   createTestProject,
   removeWorkspaceRecord,
   runOrchestrateNext,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -48,8 +55,8 @@ function fresh(): string {
   return proj;
 }
 
-function next(proj: string, args: string[]): Directive {
-  const r = runOrchestrateNext(ORCH, proj, args, { cwd: proj, env: { ...process.env } });
+function next(proj: string, args: string[], orch = ORCH): Directive {
+  const r = runOrchestrateNext(orch, proj, args, { cwd: proj, env: { ...process.env } });
   expect(r.directive, r.out.slice(0, 400)).not.toBeNull();
   return r.directive as Directive;
 }
@@ -186,5 +193,110 @@ describe("`/aidlc-init --scope <plan>` with nothing else asks what the work is f
     expect(creation.kind, JSON.stringify(creation).slice(0, 400)).toBe("print");
     expect(String(creation.message)).toMatch(/intent create --scope bugfix --request [0-9a-f]{8}/);
     expect(String(creation.message)).toContain("--depth minimal");
+  });
+});
+
+// Work in progress on the bugfix plan, and the person types another plan's name
+// with nothing else (`/aidlc workshop`, the facilitator guide's start line).
+describe("a plan typed alone beside work on another plan is read, not dropped", () => {
+  const KIRO_ORCH = join(REPO_ROOT, "dist", "kiro", ".kiro", "tools", "aidlc-orchestrate.ts");
+  const STAGE = /Current Stage\*\*: (\S+)/;
+
+  function besideBugfix(): string {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    seedStateFile(proj, "state-mid-inception.md");
+    return proj;
+  }
+  const state = (proj: string) => readFileSync(seededStateFile(proj), "utf-8");
+  /** The command the print names for a reading (new work or the move), as the agent runs it. */
+  function command(message: unknown, reading: "new" | "move"): string[] {
+    const found = [...String(message).matchAll(/`([^`]* next --scope [^`]*)`/g)].map((m) => m[1])
+      .find((c) => c.includes(" --new-intent") === (reading === "new"));
+    expect(found, String(message)).toBeDefined();
+    return splitKiroCommandArgs(found!.slice(found!.indexOf(" next ") + 6));
+  }
+
+  for (const [host, orch] of [["claude", ORCH], ["kiro", KIRO_ORCH]] as const) {
+    test(`${host}: \`/aidlc workshop\` gets the reading step with both commands, and no stage runs`, () => {
+      const proj = besideBugfix();
+      const before = { records: records(proj), state: state(proj) };
+      const d = next(proj, ["workshop"], orch);
+      expect(d.kind, JSON.stringify(d).slice(0, 400)).toBe("print");
+      const message = String(d.message);
+      expect(message).toContain("next --scope workshop --new-intent`");
+      expect(message).toContain("next --scope workshop`");
+      expect(message).toContain("ask them once");
+      expect(message).not.toContain("intent create");
+      expect(records(proj)).toEqual(before.records);
+      expect(state(proj)).toBe(before.state);
+      expect(questionCount(proj)).toBe(0);
+    });
+  }
+
+  test("new work: the command asks what it is for and creates nothing; the move: the command is the scope change", () => {
+    const proj = besideBugfix();
+    const before = records(proj);
+    const d = next(proj, ["workshop"]);
+    const asks = next(proj, command(d.message, "new"));
+    expect(asks.kind, JSON.stringify(asks).slice(0, 400)).toBe("print");
+    expect(asks.narration).toBe(asked("workshop"));
+    expect(String(asks.message)).toContain(`next --scope workshop --new-intent -- ${THEIR_WORDS}`);
+    expect(records(proj)).toEqual(before);
+    const moved = next(proj, command(d.message, "move"));
+    expect(moved.kind, JSON.stringify(moved).slice(0, 400)).toBe("print");
+    expect(String(moved.message)).toContain("scope change --scope workshop");
+    expect(getField(state(proj), "Scope")).toBe("bugfix");
+    // Their answer may already say what the new work is for: the step names
+    // where their words go, so they are not asked for them a second time.
+    expect(String(d.message)).toContain(`\` -- ${THEIR_WORDS}\``);
+    const starts = next(proj, [...command(d.message, "new"), "--", WORDS]);
+    expect(starts.kind, JSON.stringify(starts).slice(0, 400)).toBe("print");
+    expect(String(starts.message)).toMatch(/intent create --scope workshop --request [0-9a-f]{8}/);
+  });
+
+  test("settings typed with the plan ride both commands and are not applied to the bugfix work", () => {
+    const proj = besideBugfix();
+    const before = state(proj);
+    const d = next(proj, ["workshop", "--learnings", "off", "--depth", "comprehensive"]);
+    expect(d.kind, JSON.stringify(d).slice(0, 400)).toBe("print");
+    for (const reading of ["new", "move"] as const) {
+      const args = command(d.message, reading).join(" ");
+      expect(args, reading).toContain("--learnings off");
+      expect(args, reading).toContain("--depth comprehensive");
+    }
+    expect(state(proj)).toBe(before);
+    const asks = next(proj, command(d.message, "new"));
+    expect(asks.narration).toBe(asked("workshop"));
+    const answer = answerWith(asks.message, WORDS).join(" ");
+    expect(answer).toContain("--learnings off");
+    expect(answer).toContain("--depth comprehensive");
+  });
+
+  test("parked work gets the same reading step, and stays parked", () => {
+    const proj = besideBugfix();
+    const parked = spawnSync(process.execPath, [join(TOOLS, "aidlc-state.ts"), "park", "--project-dir", proj], {
+      cwd: proj,
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" },
+    });
+    expect(parked.status, `${parked.stdout}${parked.stderr}`).toBe(0);
+    const before = state(proj);
+    expect((getField(before, "Parked") ?? "").trim().length).toBeGreaterThan(0);
+    const d = next(proj, ["workshop"]);
+    expect(d.kind, JSON.stringify(d).slice(0, 400)).toBe("print");
+    expect(String(d.message)).toContain("next --scope workshop --new-intent`");
+    expect(state(proj)).toBe(before);
+  });
+
+  test("the work's own plan typed alone carries on, and `--scope workshop` is the scope change, as before", () => {
+    const proj = besideBugfix();
+    const stage = STAGE.exec(state(proj))?.[1];
+    const same = next(proj, ["bugfix"]);
+    expect(same.kind, JSON.stringify(same).slice(0, 400)).toBe("run-stage");
+    expect(same.stage).toBe(stage);
+    const flag = next(proj, ["--scope", "workshop"]);
+    expect(flag.kind, JSON.stringify(flag).slice(0, 400)).toBe("print");
+    expect(String(flag.message)).toContain("scope change --scope workshop");
   });
 });

@@ -43,6 +43,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
 import {
   asksForHelp,
   boltAbortedFields,
@@ -54,10 +55,8 @@ import {
   findStageBySlug,
   getField,
   holdsAuditLock,
-  commandTurnHint,
   humanPresenceGuardDisabled,
   keepActiveDirectiveOverAutonomyWrite,
-  personSpokeSinceGate,
   readAuditShardEvents,
   recordHookDrop,
   unattendedHumanPresenceHint,
@@ -1237,22 +1236,26 @@ function handleSetAutonomy(args: string[]): void {
       );
     }
     // Human-presence guard on ESCALATION only. Switching to autonomous is the
-    // human's ladder-prompt grant and consumes that turn through the emitted
-    // AUTONOMY_MODE_SET row. De-escalation restores gates without presence.
-    // The approval given in the same message ("approve the plan, and run on
-    // its own from here") leaves the rest of it standing, as for the switches.
-    if (
-      flags.mode === "autonomous" &&
-      !humanPresenceGuardDisabled() &&
-      !personSpokeSinceGate(pd, { replies: true, outlivesApproval: true })
-    ) {
-      error(
-        "Refusing to switch Construction to autonomous: no reply from the person is on record since " +
-          "the last gate resolution, and autonomous mode is granted only by their answer to the ladder " +
-          "prompt (it waives every later gate, so the grant itself needs their reply). Run it after " +
-          "they choose it. Do not log the ladder choice via aidlc-log answer; the choice is recorded " +
-          `by set-autonomy itself.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
-      );
+    // person's grant: the agent names the message they chose it in (--message),
+    // proved, and the AUTONOMY_MODE_SET row uses it up. De-escalation restores
+    // gates without presence. The approval given in the same message ("approve
+    // the plan, and run on its own from here") leaves the rest of it standing,
+    // as for the switches.
+    let grantedBy: string | undefined;
+    if (flags.mode === "autonomous" && !humanPresenceGuardDisabled()) {
+      if (flags.message !== undefined) {
+        const proof = proveMessage(pd, flags.message, "request", { request: true });
+        if ("refusal" in proof) error(proof.refusal);
+        grantedBy = proof.message.id;
+      } else {
+        error(
+          "Refusing to switch Construction to autonomous: it waives every later gate, so it is granted only by the " +
+            "person's answer to the ladder prompt, named with --message <id>. " +
+            requestMessageStep(pd, "Run it with --message <id> after they choose it.") +
+            " Do not log the ladder choice via aidlc-log answer; the choice is recorded by set-autonomy itself." +
+            unattendedHumanPresenceHint(pd),
+        );
+      }
     }
 
     // Validate state-file shape before the audit-first mutation.
@@ -1282,6 +1285,7 @@ function handleSetAutonomy(args: string[]): void {
     try {
       emitAudit(pd, "AUTONOMY_MODE_SET", {
         Mode: flags.mode,
+        ...(grantedBy !== undefined ? { "Message Id": grantedBy } : {}),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -1373,18 +1377,22 @@ async function handleCheckpoint(args: string[]): Promise<void> {
       break;
     case "verify":
       result = await verifyConstructionCheckpoint(
-        pd, flags.unit, checkpointKind, { overUnfinishedReview, timeoutMs: flags["timeout-ms"] === undefined ? undefined : Number(flags["timeout-ms"]) },
+        pd, flags.unit, checkpointKind, {
+          overUnfinishedReview, message: flags.message,
+          timeoutMs: flags["timeout-ms"] === undefined ? undefined : Number(flags["timeout-ms"]),
+        },
       );
       break;
     case "approve":
       result = approveConstructionCheckpoint(
         pd, flags.unit, checkpointKind, flags["user-input"], checkpointSession(pd, flags.session, flags["user-input"] !== undefined),
-        checkpointFindingDispositions(pd),
+        checkpointFindingDispositions(pd), flags.message,
       );
       break;
     case "reject":
       result = rejectConstructionCheckpoint(
         pd, flags.unit, checkpointKind, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true),
+        flags.message,
       );
       break;
     default:
@@ -1412,11 +1420,13 @@ function handleSwarmCheckpoint(args: string[]): void {
     case "approve":
       result = approveSwarmCheckpoint(
         pd, batch, units, flags["user-input"], checkpointSession(pd, flags.session, flags["user-input"] !== undefined),
-        checkpointFindingDispositions(pd),
+        checkpointFindingDispositions(pd), flags.message,
       );
       break;
     case "reject":
-      result = rejectSwarmCheckpoint(pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true));
+      result = rejectSwarmCheckpoint(
+        pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true), flags.message,
+      );
       break;
     default:
       error(`swarm-checkpoint --action must be one of: ${SWARM_CHECKPOINT_ACTIONS.join(", ")}`);
@@ -1468,12 +1478,14 @@ function boltUsage(subcommand: string | undefined): string {
       `${invoke("checkpoint")} --unit <name> [--action ${CHECKPOINT_ACTIONS.join("|")}]`,
       "  The Unit's Construction checkpoint. Required: --unit. --action defaults to status.",
       `  --kind: ${CHECKPOINT_KINDS.join(", ")} (default unit). --over-unfinished-review and --timeout-ms <milliseconds> go with --action verify.`,
-      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject)",
+      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject),",
+      "  --message <id> (approve, reject: the person's message the choice was read from)",
     ],
     "swarm-checkpoint": [
       `${invoke("swarm-checkpoint")} --batch <n> --units <unit,unit> [--action ${SWARM_CHECKPOINT_ACTIONS.join("|")}]`,
       "  A swarm batch's checkpoint. Required: --batch, --units. --action defaults to status.",
-      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject)",
+      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject),",
+      "  --message <id> (approve, reject: the person's message the choice was read from)",
     ],
     "dispatch-event": [
       `${invoke("dispatch-event")} --event ${DISPATCH_EVENTS.join("|")} --slug <kebab-slug>`,

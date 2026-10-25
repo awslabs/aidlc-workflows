@@ -33,9 +33,18 @@
 // (AIDLC_ROUTE_CHECK=1) and reads the answer off its pipe. That `next` skips
 // the rules delivery, so it prints the whole step: the conductor persona on the
 // workflow's opening stage, and a lead persona the agent's step lists as a file
-// once a team has grown it. No host shows that print, so the last cases pin
+// once a team has grown it. No host shows that print, so the next cases pin
 // that a step the agent was handed whole starts its Unit, on Copilot and past
 // the common limit on Claude.
+//
+// Building the Units in parallel (swarm) hands a wave of them out on one step,
+// as many as the step can hold. The conductor persona goes ahead of that step
+// when it does not fit beside it, and the step lists the lead's persona as a
+// file, so neither takes room from the Units: on the opening stage the wave
+// holds both of the fixture's Units, and a step too long for even one is the
+// size error that says what to change. A wave picked up again with the
+// person's kept replies holds fewer Units, so the step that carries their
+// words still goes out.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -60,6 +69,7 @@ import {
   createTestProject,
   FIXTURES_DIR,
   REPO_ROOT,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
@@ -102,6 +112,9 @@ type Printed = {
   conductor_persona?: string;
   inline_context_paths?: string[];
   message?: string;
+  wave?: { entries: Array<{ unit: string }> };
+  kept_replies?: unknown;
+  questions_only?: boolean;
 };
 type Delivery = {
   stage: string;
@@ -807,6 +820,14 @@ function reply(proj: string, prompt: string): void {
   expect(status, out).toBe(0);
 }
 
+// The agent's record of the choice it read from the person's reply.
+function agentRecords(proj: string, choice: string): void {
+  const { status, out } = copilotTool(proj, ["tools", "aidlc-log.ts"], [
+    "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", choice, "--project-dir", proj,
+  ]);
+  expect(status, out).toBe(0);
+}
+
 // The agent writes the code the plan names; the plan approval guard decides.
 function writeCode(proj: string): { status: number; out: string } {
   return copilotTool(proj, ["hooks", "aidlc-plan-approval-guard.ts"], [], JSON.stringify({
@@ -863,6 +884,7 @@ describe("t-copilot-directive-budget: Code Generation's rules in parts keep Plan
       expect(asked.at(-1), JSON.stringify(asked.at(-1))).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
       expect(buildAllowed(proj)).toBe(false);
       reply(proj, "1");
+      agentRecords(proj, "Approve Plan");
       const approved = () => readFileSync(join(codeGenerationDir(proj), "code-generation-questions.md"), "utf-8");
       expect(approved()).toContain("[Answer]: A. Approve Plan");
       // Even the stock rules do not fit beside the build under the budget.
@@ -975,11 +997,17 @@ describe("t-copilot-directive-budget: Code Generation's rules in parts keep Plan
   }
 });
 
-// A feature at Construction with two Units, built one at a time, Functional
-// Design for alpha next. "opening": no stage before it has finished, so its step
-// carries the conductor persona; "after-inception": Units Generation is done,
-// as in a run that got here.
-function unitProject(root: string, harnessDir: string, shape: "opening" | "after-inception", policy = "off"): string {
+// A feature at Construction with two Units, built one at a time (or, with
+// "swarm", stage by stage and in parallel), Functional Design for alpha next.
+// "opening": no stage before it has finished, so its step carries the conductor
+// persona; "after-inception": Units Generation is done, as in a run that got here.
+function unitProject(
+  root: string,
+  harnessDir: string,
+  shape: "opening" | "after-inception",
+  policy = "off",
+  execution: "serial" | "swarm" = "serial",
+): string {
   const proj = createTestProject();
   projects.push(proj);
   cpSync(join(root, harnessDir), join(proj, harnessDir), { recursive: true });
@@ -996,10 +1024,10 @@ function unitProject(root: string, harnessDir: string, shape: "opening" | "after
     "## Runtime State",
     "- **Revision Count**: 0",
     "- **Skeleton Stance**: off",
-    "- **Construction Iteration**: unit-major",
+    `- **Construction Iteration**: ${execution === "swarm" ? "stage-major" : "unit-major"}`,
     "- **Unit Ownership**: solo",
     "- **Construction Checkpoints**: enabled",
-    "- **Construction Execution**: serial",
+    `- **Construction Execution**: ${execution}`,
     "- **Construction Autonomy Mode**: gated",
     "- **Review Override**: none",
     `- **Guard Policy**: ${policy}`,
@@ -1077,5 +1105,60 @@ describe("t-copilot-directive-budget: a Unit whose step is longer than one comma
     const proj = unitProject(CLAUDE_ROOT, ".claude", "after-inception");
     growPersona(proj, ".claude", "aidlc-architect-agent", 300);
     await startAlpha(proj, ".claude", 28 * 1024);
+  });
+});
+
+describe("t-copilot-directive-budget: building the Units in parallel hands them out within the budget", () => {
+  test("the workflow's opening stage lists both Units in its wave, and every part fits", async () => {
+    const proj = unitProject(COPILOT_ROOT, ".aidlc", "opening", "off", "swarm");
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
+    const delivery = await deliverIn(proj, ".aidlc", "functional-design");
+    expectWholeDeliveries([delivery]);
+    expect(delivery.final.wave?.entries.map(({ unit }) => unit)).toEqual(["alpha", "beta"]);
+    // On a part of its own or on the step itself, whichever fits, and once.
+    const personas = delivery.results.flatMap(({ directive }) => directive.conductor_persona ?? []);
+    expect(personas.length).toBe(1);
+    expect(personas[0]).toContain("conductor");
+  });
+
+  test("a wave step too long for even one Unit is the size error that says what to change", async () => {
+    const own = 9_000;
+    const proj = unitProject(COPILOT_ROOT, ".aidlc", "opening", "off", "swarm");
+    addKnowledge(proj, ".aidlc", "aidlc-architect-agent", 110);
+    const path = join(proj, ".aidlc", "tools", "data", "harness.json");
+    writeFileSync(path, `${JSON.stringify({ ...shippedHarnessData(join(proj, ".aidlc")), directiveMaxBytes: own }, null, 2)}\n`);
+    const { results, final } = await deliverIn(proj, ".aidlc", "functional-design");
+    expect(results.map(({ directive }) => directive.kind)).toEqual(["error"]);
+    for (const { stdout } of results) expect(Buffer.byteLength(stdout, "utf-8")).toBeLessThanOrEqual(own);
+    expect(final.message).toContain(`GitHub Copilot shows at most ${own} bytes`);
+    expect(final.message).toContain("knowledge files");
+  });
+
+  test("a Unit's questions picked up with the person's kept replies still go out before its wave", async () => {
+    const proj = unitProject(COPILOT_ROOT, ".aidlc", "after-inception", "off", "swarm");
+    const units = Array.from({ length: 12 }, (_, index) => `unit-${String(index).padStart(2, "0")}`);
+    seedBoltDag(proj, units);
+    seedAnsweredUnitQuestions(proj, "functional-design", units);
+    const first = await deliverIn(proj, ".aidlc", "functional-design");
+    expectWholeDeliveries([first]);
+    const handedOut = first.final.wave?.entries.length ?? 0;
+    expect(handedOut).toBeGreaterThan(1);
+    expect(handedOut).toBeLessThan(units.length);
+    // The first Unit's question is still blank: the person answered it in a
+    // chat that ended before the answer was written.
+    const dir = join(seededRecordDir(proj), "construction", "unit-00", "functional-design");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "functional-design-questions.md"),
+      "# Functional Design questions\n\n## Question 1\nWho runs it?\n\nA) A shop owner\nB) A developer\nX) Other\n\n[Answer]:\n",
+    );
+    reply(proj, `A, the shop owner. ${"They run it monthly from the terminal and want totals by month, refunds apart. ".repeat(15)}`);
+    const resumed = await deliverIn(proj, ".aidlc", "functional-design");
+    expectWholeDeliveries([resumed]);
+    expect(JSON.stringify(resumed.final.kept_replies ?? null)).toContain("A, the shop owner.");
+    // The open answer is unit-00's question step's, asked before the wave builds it.
+    expect(resumed.final.unit).toBe("unit-00");
+    expect(resumed.final.questions_only).toBe(true);
+    expect(resumed.final.wave).toBeUndefined();
   });
 });

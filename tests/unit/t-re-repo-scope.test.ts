@@ -22,7 +22,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
-import { readAuditShardEvents, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { codekbSourceSize, readAuditShardEvents, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
@@ -236,5 +236,88 @@ describe("a set named at creation", () => {
       expect(row(proj).repos).toEqual(["repo-a", "repo-b"]);
       expect(row(proj).repos_named === true).toBe(named);
     }
+  });
+});
+
+// Each repository a real Git checkout holding `lines` lines of source, beside
+// what the analysis never reads: a dependency folder and a binary file.
+function gitRepos(proj: string, repos: string[], lines: number): void {
+  for (const repo of repos) {
+    const dir = join(proj, repo);
+    const init = spawnSync("git", ["init", "-q", dir], { encoding: "utf-8" });
+    if (init.status !== 0) throw new Error(`git init ${repo}: ${init.stderr}`);
+    writeFileSync(join(dir, "main.py"), "print('hello')\n".repeat(lines));
+    mkdirSync(join(dir, "node_modules", "left-out"), { recursive: true });
+    writeFileSync(join(dir, "node_modules", "left-out", "index.js"), "module.exports = 1;\n".repeat(500));
+    writeFileSync(join(dir, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0a, 0x00, 0x0a]));
+  }
+}
+
+const MINUTES = { low: 4, high: 7 };
+
+describe("what reading many repositories takes, said with the question or the step", () => {
+  test("the question carries the repositories, git's line count and the minutes a repository, the time as a note", () => {
+    const { proj, repos } = workspace(12);
+    gitRepos(proj, repos, 100);
+    const asked = next(proj);
+    expect(asked.ask_type, said(asked)).toBe("repo-scope");
+    expect(asked.question).toBe(
+      "Reverse Engineering will read the 12 repositories this work covers, about 1,200 lines of code. Analysing all " +
+        "12 may take significant time and consume many tokens. Read all 12, or only the ones this work needs?",
+    );
+    expect(asked.repo_facts).toEqual({ repositories: 12, lines: 1200, minutes_per_repository: MINUTES });
+    expect(String(asked.estimate_note)).toContain("each takes about 4 to 7 minutes at this depth");
+    expect(String(asked.estimate_note)).toContain("with the question");
+    expect(String(asked.question)).not.toContain("minutes");
+  });
+
+  test("a set the person named starts with the facts on the step, and the cost line names the size", () => {
+    const { proj, repos } = workspace(12, true);
+    gitRepos(proj, repos, 100);
+    const step = next(proj);
+    expect(step.kind, said(step)).toBe("run-stage");
+    expect(step.repo_facts).toEqual({ repositories: 12, lines: 1200, minutes_per_repository: MINUTES });
+    expect(String(step.estimate_note)).toContain("before the analysis starts");
+    expect(said(step)).toContain(
+      "Analysing all 12 (about 1,200 lines of code) may take significant time and consume many tokens: say which " +
+        "repositories matter to narrow the scope.",
+    );
+    // A resume reads the same facts, counted once.
+    expect(next(proj).repo_facts).toEqual(step.repo_facts);
+  });
+
+  test("a folder that is not a Git checkout gives no line count, and the words say none", () => {
+    const { proj } = workspace(12);
+    const asked = next(proj);
+    expect(asked.repo_facts).toEqual({ repositories: 12, minutes_per_repository: MINUTES });
+    expect(String(asked.question)).not.toContain("lines of code");
+    expect(String(asked.estimate_note)).not.toContain("lines");
+  });
+
+  test("under ten repositories the step carries no facts", () => {
+    const step = next(workspace(3).proj);
+    expect(step.kind, said(step)).toBe("run-stage");
+    expect("repo_facts" in step || "estimate_note" in step).toBe(false);
+  });
+});
+
+describe("the line count reads what the analysis reads", () => {
+  test("text files only, dependency folders and binaries left out, untracked files counted", () => {
+    const proj = createTestProject();
+    projects.push(proj);
+    gitRepos(proj, ["one"], 40);
+    mkdirSync(join(proj, "one", "src"), { recursive: true });
+    writeFileSync(join(proj, "one", "src", "app.ts"), "export const a = 1;\nexport const b = 2;\n");
+    expect(codekbSourceSize(join(proj, "one"))).toEqual({ files: 2, lines: 42 });
+  });
+
+  test("an empty checkout counts nothing, and a folder that is not one gives no count", () => {
+    const proj = createTestProject();
+    projects.push(proj);
+    expect(spawnSync("git", ["init", "-q", join(proj, "empty")]).status).toBe(0);
+    expect(codekbSourceSize(join(proj, "empty"))).toEqual({ files: 0, lines: 0 });
+    mkdirSync(join(proj, "plain"), { recursive: true });
+    writeFileSync(join(proj, "plain", "main.py"), "print('hello')\n");
+    expect(codekbSourceSize(join(proj, "plain"))).toBeNull();
   });
 });

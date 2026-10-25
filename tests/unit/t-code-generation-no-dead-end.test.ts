@@ -364,8 +364,9 @@ describe("the guard judges only the build: records and engine commands pass, the
   });
 
   // Under relaxed and off the opening retired the step, not the person's
-  // approval: the build's calls go on from it, each with one row, while another
-  // completion still waits for a current step.
+  // approval: the build's calls go on from it, each with one row. Another
+  // completion is the engine's own command, with no row: the gate it reports
+  // into stays open for the person.
   test.each(["relaxed", "off"] as const)("S11a %s: at the open gate the build's calls go on from the approved plan, one row each", async (policy) => {
     const proj = openCodeGenerationGate(policy);
     created.push(proj);
@@ -381,10 +382,13 @@ describe("the guard judges only the build: records and engine commands pass, the
       expect(verdict.code, `${describeCall(call)} -> ${verdict.said}`).toBe(0);
     }
     expect(rows() - before).toBe(passes.length);
-    const completed = await claude.call(proj, SESSION, {
-      tool: "Bash", command: "bun .claude/tools/aidlc-orchestrate.ts report --stage code-generation --result completed",
-    });
-    expect(completed.code, completed.said).toBe(2);
+    const completed = "bun .claude/tools/aidlc-orchestrate.ts report --stage code-generation --result completed";
+    const admitted = await claude.call(proj, SESSION, { tool: "Bash", command: completed });
+    expect(admitted.code, admitted.said).toBe(0);
+    expect(rows() - before).toBe(passes.length);
+    // The engine, checking for the person's reply as in a run, keeps the gate open.
+    runNamed(proj, completed, { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(/^- \[\?\] code-generation /m);
   });
 
   // The gate's own report showing it again passes the guard under strict too;
@@ -480,19 +484,28 @@ describe("the guard judges only the build: records and engine commands pass, the
       shape.install(state.proj);
       const refused = await shape.call(state.proj, state.session, { tool: "Write", path: planPath });
       expect(refused.code, `[${shape.name}] the plan file passed while the person's edit mode is open`).toBe(2);
-      const handBack = namedCommands(refused.said).find((command) => command.includes('--details "Request Changes"'));
+      const handBack = namedCommands(refused.said)
+        .find((command) => command.includes("--details") && command.includes("Request Changes: <what they asked of the plan>"))
+        ?.replace("<what they asked of the plan>", "finish the plan");
       expect(handBack, `[${shape.name}] the refusal names no answer: ${refused.said}`).toBeDefined();
-      const admitted = await shape.call(state.proj, state.session, { tool: "Bash", command: respell(handBack as string, ".claude") });
-      expect(admitted.code, `[${shape.name}] ${handBack} -> ${admitted.said}`).toBe(0);
+      // As the agent types it: opencode's shell on Windows is cmd.exe unless its settings name another, and in
+      // cmd.exe the skill puts the person's words in double quotes.
+      const typed = shape.name === "opencode" && process.platform === "win32" ? inCmd(handBack as string) : (handBack as string);
+      const admitted = await shape.call(state.proj, state.session, { tool: "Bash", command: respell(typed, ".claude") });
+      expect(admitted.code, `[${shape.name}] ${typed} -> ${admitted.said}`).toBe(0);
+      if (shape.name === "opencode") {
+        expect(await openCodeUnderCmd(state.proj, state.session, respell(inCmd(handBack as string), ".aidlc"))).toBe("");
+      }
     }
-    // The answer, the write, next: the plan is the agent's, with their words, and no second edit-mode question.
-    const recorded = runNamed(state.proj, 'bun .claude/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --details "Request Changes"');
+    // The answer, the write, next: the plan is the agent's, with what they asked as the agent read it, and no
+    // second edit-mode question.
+    const recorded = runNamed(state.proj, "bun .claude/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --details 'Request Changes: finish the plan'");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     const write = await claude.call(state.proj, state.session, { tool: "Write", path: planPath });
     expect(write.code, write.said).toBe(0);
     const step = next(state.proj);
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
-    expect(step.plan_approval, JSON.stringify(step)).toEqual({ status: "revise", feedback: "you finish it" });
+    expect(step.plan_approval, JSON.stringify(step)).toEqual({ status: "revise", feedback: "finish the plan" });
   });
 
   test("S6: while the person edits the plan files, the agent's write to them is refused with that sentence", async () => {
@@ -508,6 +521,27 @@ describe("the guard judges only the build: records and engine commands pass, the
     expect(notes.code, notes.said).toBe(0);
   });
 });
+
+// A command as the skills say to type it in cmd.exe, which does not group single quotes: the person's words in
+// double quotes instead.
+const inCmd = (command: string): string => command.replace(/'([^']*)'/g, '"$1"');
+
+// The shipped opencode plugin with cmd.exe as its shell: "" when it lets the command run, else its refusal.
+async function openCodeUnderCmd(proj: string, session: string, command: string): Promise<string> {
+  const { default: createAdapter } = await import("../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts");
+  const client = {
+    session: { get: async () => ({ data: {} }), prompt: async () => {} },
+    config: { get: async () => ({ data: { shell: "cmd.exe" } }) },
+  };
+  const adapter = await createAdapter({ client: client as never, directory: proj } as never);
+  const before = (adapter as Record<string, (a: unknown, b: unknown) => Promise<void>>)["tool.execute.before"];
+  try {
+    await before({ tool: "bash", sessionID: session, callID: "cmd-hand-back" }, { args: { command } });
+    return "";
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
 
 describe("the six plan-answer cases from the hook's gate, at the open question", () => {
   const cases: Array<{ words: string; followUp?: string; builds: boolean }> = [
@@ -831,7 +865,7 @@ describe("the person's jump at an open recovery question goes through on the fir
     expect(reopen.refused, "the Unit reopen the person asked for was refused on Copilot").toBeNull();
   });
 
-  test("still refused: a jump nobody asked for, whose way past is admitted, and a jump after the person picked Request Changes", async () => {
+  test("still refused: a jump nobody asked for, whose way past is admitted, and a jump after their Request Changes is recorded", async () => {
     const proj = question();
     const jump = "bun .claude/tools/aidlc-jump.ts execute --target requirements-analysis --direction backward --scope poc";
     const unasked = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
@@ -843,13 +877,19 @@ describe("the person's jump at an open recovery question goes through on the fir
       expect(way.code, `${command} -> ${way.said}`).toBe(0);
     }
     expect(reply(proj, "Request Changes").status).toBe(0);
+    // The agent records the Request Changes it read from their reply.
+    const recorded = runNamed(proj, "bun .claude/tools/aidlc-log.ts answer --stage code-generation --checkpoint guard-recovery --details request-changes");
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     const picked = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
     expect(picked.code, "a jump went through against the person's pick").toBe(2);
   });
 
-  test("the person's next words after an exact pick lift it: the jump they then ask for runs", async () => {
+  test("the person's next words after their recorded pick lift it: the jump they then ask for runs", async () => {
     const proj = question();
     expect(reply(proj, "Request Changes").status).toBe(0);
+    // The agent records the Request Changes it read from their reply.
+    const recorded = runNamed(proj, "bun .claude/tools/aidlc-log.ts answer --stage code-generation --checkpoint guard-recovery --details request-changes");
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     expect(reply(proj, ASK).status).toBe(0);
     const verdict = await claude.call(proj, SESSION, { tool: "Bash", command: jumpFor(proj, "requirements-analysis") });
     expect(verdict.code, verdict.said).toBe(0);

@@ -165,7 +165,7 @@ know.
 
 PROACTIVE: Always generate clarifying questions unless requirements are exceptionally clear and complete across all six dimensions.
 
-Create `<record>/inception/requirements-analysis/requirements-analysis-questions.md` using the [Answer]: tag format from stage-protocol.md. Include context-appropriate questions with A-E options. Every ordinary clarifying question MUST end with `X. Other (please specify)` as the final option; the later Consolidated Summary Confirmation is the unlettered exception. Leave all [Answer]: tags blank.
+Create `<record>/inception/requirements-analysis/requirements-analysis-questions.md` using the [Answer]: tag format from stage-protocol.md. Include context-appropriate questions with {{OPTION_LETTERS}} options. Every ordinary clarifying question MUST end with `X. Other (please specify)` as the final option; the later Consolidated Summary Confirmation is the unlettered exception. Leave all [Answer]: tags blank.
 
 Then follow the unified question flow from stage-protocol.md section 3: offer the user a choice between guided (interactive) and self-guided (file edit) modes. In either case, ensure all answers are written to the file before proceeding.
 

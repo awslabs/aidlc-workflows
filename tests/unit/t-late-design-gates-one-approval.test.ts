@@ -22,6 +22,7 @@
 //   6. checkpoints on, stage-major, and a lone remaining stage keep today's flow;
 //   7. no shipped prose still describes the late per-stage cascade;
 //   8. a reply another question used, or a question put since, approves nothing;
+//  8b. a message sent before a listed stage's output was last written approves nothing;
 //   9. autonomous Construction and team-owned Units keep one turn, one gate;
 //  10. the learnings question surfaces each listed stage; any other stage is still refused;
 //  11. "skip Functional Design and approve the rest": the skip step names the approval of the
@@ -33,11 +34,12 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
+  recordArtifactWriteViaHook,
   REPO_ROOT,
   resetAidlcEnv,
   runOrchestrateNext,
@@ -210,7 +212,9 @@ function coverUnit(proj: string, unit: string, slug: string): void {
   }
 }
 
-function logReviewReady(proj: string, stage: string, unit: string): void {
+// With `finding`, the review is READY with that one Minor finding, written to
+// the record slot the request names.
+function logReviewReady(proj: string, stage: string, unit: string, finding?: string): void {
   const reviewer = "aidlc-architecture-reviewer-agent";
   const artifact = join(
     seededRecordDir(proj),
@@ -235,12 +239,26 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
   if ((request.status ?? -1) !== 0) {
     throw new Error(`review request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
   }
-  appendFileSync(
-    artifact,
-    "\n## Review\n\n**Verdict:** READY\n" +
-      `**Reviewer:** ${reviewer}\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`,
-    "utf-8",
-  );
+  if (finding === undefined) {
+    appendFileSync(
+      artifact,
+      "\n## Review\n\n**Verdict:** READY\n" +
+        `**Reviewer:** ${reviewer}\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`,
+      "utf-8",
+    );
+  } else {
+    const { reviewFile } = JSON.parse(request.stdout) as { reviewFile: string };
+    const draft = join(proj, reviewFile);
+    mkdirSync(dirname(draft), { recursive: true });
+    writeFileSync(
+      draft,
+      `## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Iteration:** 1\n\n### Findings\n\n` +
+        "**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n" +
+        `| Minor | ${relative(proj, artifact).replaceAll("\\", "/")} > section | ${finding} | Say how |\n` +
+        "\n### Summary\n\nReady.\n",
+      "utf-8",
+    );
+  }
   const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], opts);
   if ((verdict.status ?? -1) !== 0) {
     throw new Error(`review verdict failed: ${verdict.stdout ?? ""}${verdict.stderr ?? ""}`);
@@ -466,6 +484,45 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
     }
   });
 
+  // "Approve, but make sure R-01 gets handled": the question showed the first
+  // stage's review, so the fix asked is its finding. A stage approved with it
+  // keeps its own R-01 (a different finding) as the approval records it, and
+  // is never refused midway for an id only the first stage's review carries.
+  test.each(["R-01", "functional-spec#R-01"])(
+    "3c: --fix-finding %s is the first stage's; every stage approved with it approves and records no fix of its own",
+    (selector) => {
+      const proj = seedBuiltProject({ checkpoints: "disabled" }, [
+        ["functional-design", "alpha"],
+        ["nfr-requirements", "alpha"],
+      ]);
+      logReviewReady(proj, "functional-design", "alpha", "An empty cart is not covered");
+      logReviewReady(proj, "nfr-requirements", "alpha", "No rate limit is said");
+      openFirstGate(proj);
+      personReplies(proj);
+      const done = runReport(proj, [
+        "--stage", "functional-design", "--result", "approved", "--user-input", "Approve",
+        "--fix-finding", selector,
+      ]);
+      expect(done.kind, JSON.stringify(done).slice(0, 400)).toBe("done");
+      const approved = rows(proj, "GATE_APPROVED");
+      expect(approved.map((r) => r.stage)).toEqual(BLOCK);
+      const recorded = (stage: string) => {
+        const block = approved.find((r) => r.stage === stage)?.block ?? "";
+        const field = auditBlockField(block, "Review Finding Dispositions");
+        const envelope = JSON.parse(field ?? '{"dispositions":[]}') as {
+          dispositions: { artifact: string; id: string; status: string }[];
+        };
+        return envelope.dispositions.map((d) => [d.artifact.split("/").slice(-3).join("/"), d.id, d.status]);
+      };
+      expect(recorded("functional-design")).toEqual([
+        ["alpha/functional-design/functional-spec.md", "R-01", "Fix requested"],
+      ]);
+      expect(recorded("nfr-requirements")).toEqual([
+        ["alpha/nfr-requirements/security-requirements.md", "R-01", "Accepted risk"],
+      ]);
+    },
+  );
+
   test("4: a change request approves nothing", () => {
     const proj = seedBuiltProject({ checkpoints: "disabled" });
     openFirstGate(proj);
@@ -544,6 +601,31 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
     const later = runReport(since, ["--stage", "nfr-design", "--result", "approved", "--user-input", "Approve"]);
     expect(later.kind).not.toBe("done");
     expect(rows(since, "GATE_APPROVED").length).toBe(2);
+  });
+
+  // The one approval stands on a reply sent after every listed stage's output
+  // was last written: a message from earlier in the walk did not see the later
+  // stages' work (the gate's rule; t-gate-reply-before-document pins the rest).
+  test("8b: a message sent before a listed stage's output was last written does not approve the one gate", () => {
+    const proj = seedBuiltProject({ checkpoints: "disabled" }, [["code-generation", "beta"]]);
+    Bun.sleepSync(1100);
+    says(proj, "use Purchase for the order entity");
+    const early = auditBlockField(rows(proj, "HUMAN_TURN").at(-1)?.block ?? "", "Message Id") as string;
+    Bun.sleepSync(1100);
+    // Beta's code, the last listed stage, is written after it (the write hook's row), then reviewed.
+    const code = join(seededRecordDir(proj), "construction", "beta", "code-generation");
+    for (const name of PRODUCES["code-generation"]) recordArtifactWriteViaHook(proj, join(code, artifactFilename(name)));
+    logReviewReady(proj, "code-generation", "beta");
+    openFirstGate(proj);
+    const refused = runReport(proj, [
+      "--stage", "functional-design", "--result", "approved", "--user-input", "Approve", "--message", early,
+    ]);
+    expect(rows(proj, "GATE_APPROVED").length, JSON.stringify(refused)).toBe(0);
+    expect(String(refused.message ?? "")).toContain(`their message ${early} came before`);
+    says(proj, "approve");
+    const done = runReport(proj, ["--stage", "functional-design", "--result", "approved", "--user-input", "Approve"]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    expect(rows(proj, "GATE_APPROVED").map((r) => r.stage)).toEqual(BLOCK);
   });
 
   test("9: autonomous Construction and team-owned Units keep one turn, one gate", () => {

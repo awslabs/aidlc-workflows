@@ -15,7 +15,11 @@
 // .claude/tools/aidlc-orchestrate.ts, which here is a one-line mock):
 //   1. marker present + pending run-stage        -> ALLOW (the carve-out)
 //   2. marker ABSENT + pending run-stage         -> BLOCK (nothing weakened)
-//   3. marker present + AUTONOMOUS construction  -> BLOCK (autonomy guard)
+//   3. marker present + AUTONOMOUS construction, a run nobody attends
+//                                                -> BLOCK (nobody answers the gate)
+//   3b. marker present + AUTONOMOUS construction, a person there
+//                                                -> ALLOW (they answer it; without
+//                                                   the marker -> BLOCK)
 //   4. marker deleted after the gate resolves    -> BLOCK again (one-shot)
 //
 // STALENESS BOUND (hardening): the conductor owns the write/delete, but a crash
@@ -115,9 +119,10 @@ function seedActive(proj: string, opts: { autonomy?: string } = {}): void {
 
 const markerPath = composeMarkerPath;
 
-// A run nobody attends: there the block and this carve-out still decide (an
-// attended, gated run ends its turn whether or not a compose gate is open).
-function runHook(proj: string): { rc: number; out: string } {
+// A run nobody attends by default: there the block and this carve-out still
+// decide (an attended, gated run ends its turn whether or not a compose gate is
+// open). Under autonomous Construction a person who is there decides with it.
+function runHook(proj: string, unattended = true): { rc: number; out: string } {
   const res = spawnSync(BUN, [HOOK_TS], {
     input: JSON.stringify({ stop_hook_active: false }),
     encoding: "utf-8",
@@ -125,7 +130,7 @@ function runHook(proj: string): { rc: number; out: string } {
       ...(process.env as Record<string, string>),
       CLAUDE_PROJECT_DIR: proj,
       CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: "",
-      AIDLC_UNATTENDED: "1",
+      AIDLC_UNATTENDED: unattended ? "1" : "0",
     },
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
@@ -149,12 +154,24 @@ describe("t195 pending-compose Stop-hook carve-out (tier 2b)", () => {
     expect(r.out).toContain('"decision":"block"');
   });
 
-  test("3: marker present under AUTONOMOUS construction -> BLOCK (autonomy guard)", () => {
+  test("3: marker present under AUTONOMOUS construction in a run nobody attends -> BLOCK", () => {
     const proj = makeProject();
     seedActive(proj, { autonomy: "autonomous" });
     writeFileSync(markerPath(proj), "pending\n", "utf-8");
     const r = runHook(proj);
     expect(r.out).toContain('"decision":"block"');
+  });
+
+  // The person asked to reshape the plan while Construction runs by itself:
+  // the composer's proposal waits for their answer, so the turn ends at it.
+  test("3b: marker present under AUTONOMOUS construction with a person there -> ALLOW", () => {
+    const proj = makeProject();
+    seedActive(proj, { autonomy: "autonomous" });
+    expect(runHook(proj, false).out).toContain('"decision":"block"');
+    writeFileSync(markerPath(proj), "pending\n", "utf-8");
+    const r = runHook(proj, false);
+    expect(r.rc).toBe(0);
+    expect(r.out).not.toContain('"decision":"block"');
   });
 
   test("4: marker deleted after the gate resolves -> BLOCK again (one-shot signal)", () => {

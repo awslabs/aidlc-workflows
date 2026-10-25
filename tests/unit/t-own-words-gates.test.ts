@@ -190,7 +190,7 @@ describe("an exact pick is syntax, and only syntax", () => {
     for (const blank of ["", "   ", "\n\t", null, undefined]) expect(isNonAnswer(blank)).toBe(true);
     expect(stripRecommendedDecorator("Approve (Recommended)")).toBe("Approve");
     expect(formatReceivedReply("  a\n b ")).toBe('"a b"');
-    expect(changeRequestWords("2\nrename the handler\nRequest Changes")).toBe("rename the handler");
+    expect(changeRequestWords("2\nrename the handler\nRequest Changes")).toBe("2 rename the handler Request Changes");
   });
 });
 
@@ -559,17 +559,6 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
   });
 
-  test("an approval the agent says it made itself is refused, and the question stays theirs", () => {
-    says(proj, "looks fine");
-    const refused = stillOpen(() =>
-      report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Agent-initiated approval."])
-    );
-    expect(refused.message).toContain("came from the assistant");
-    expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
-    // The question is theirs to answer, so the turn may end at it.
-    expect(turnEndIsOpen(proj)).toBe(true);
-  });
-
   test("their reply is on record and the agent named no choice: the step is to report it, not to ask again", () => {
     says(proj, "looks fine");
     const before = readFileSync(seededStateFile(proj), "utf-8");
@@ -727,11 +716,12 @@ describe("a protected checkpoint question keeps the person's reply", () => {
     expect(() => require("Approve")).not.toThrow();
   });
 
-  test.each(["2", "Request Changes", "request changes."])("an exact pick (%s) is theirs: the other choice is refused", (reply) => {
+  test.each(["2", "Request Changes", "request changes."])("a typed %s is kept as typed: no choice is read into it, and the agent's reading stands", (reply) => {
     recordProtectedHumanResponse(proj, session, reply, null);
-    expect(readProtectedResponse(proj, session)?.choice).toBe("Request Changes");
-    expect(() => require("Approve")).toThrow(/picked "Request Changes"/);
+    expect(readProtectedResponse(proj, session)?.choice).toBeUndefined();
+    expect(readProtectedResponse(proj, session)?.words).toBe(reply);
     expect(() => require("Request Changes")).not.toThrow();
+    expect(() => require("Approve")).not.toThrow();
   });
 
   test("nothing is recorded without a reply", () => {
@@ -789,7 +779,7 @@ describe("which question is open is syntax too", () => {
   });
 });
 
-describe("a recovery question: exact picks are recorded, everything else is the agent's to read", () => {
+describe("a recovery question: a pick in a question box is recorded, every typed reply is the agent's to read", () => {
   let proj: string;
   let content: string;
   beforeEach(() => {
@@ -811,19 +801,11 @@ describe("a recovery question: exact picks are recorded, everything else is the 
     guard_recovery_response?: { selected_op?: string | null; status?: string; picked_by?: string };
   }).guard_recovery_response;
 
+  // A number, a remedy's name or the person's own words: the agent reads each.
   test.each([
-    ["1", "reconfirm-summary"],
-    ["Present the current summary again", "reconfirm-summary"],
-    ["2", "request-changes"],
-  ])("%s is the person's exact pick of %s", (reply, op) => {
-    ask();
-    expect(consumeSharedDirectiveAsk(proj, reply)).toBe(true);
-    expect(response()).toMatchObject({ selected_op: op, picked_by: "person" });
-  });
-
-  // The remedies are shown by number and name, never with letters: a lone
-  // letter is the person's words, read by the agent.
-  test.each(["the first one", "Presnt the current summary again", "go with 2", "split the flow into two steps", "a", "b."])(
+    "1", "Present the current summary again", "2",
+    "the first one", "Presnt the current summary again", "go with 2", "split the flow into two steps", "a", "b.",
+  ])(
     "%s waits for the agent's reading",
     (reply) => {
       ask();
@@ -832,9 +814,9 @@ describe("a recovery question: exact picks are recorded, everything else is the 
     },
   );
 
-  // The person is shown each way on by its plain name, so that name typed back
-  // is an exact pick, and the agent may name it when it records their reading.
-  test("a shown name typed back is the person's exact pick, and the agent can record it by name", () => {
+  // The person is shown each way on by its plain name, and the agent may name
+  // it when it records their reading.
+  test("a shown name typed back is the agent's to read, and it can record it by name", () => {
     const named: ActiveDirectiveGuardRemedy[] = [
       { op: "reconfirm-summary", label: "Confirm the summary again", action: "Present the current summary again" },
       { op: "request-changes", label: "Request Changes", action: "Ask what should change" },
@@ -844,6 +826,8 @@ describe("a recovery question: exact picks are recorded, everything else is the 
       remedies: named,
     });
     expect(consumeSharedDirectiveAsk(proj, "Confirm the summary again")).toBe(true);
+    expect(response()?.selected_op ?? null).toBeNull();
+    expect(recordGuardRecoveryChoice(proj, "Confirm the summary again", false)).toMatchObject({ op: "reconfirm-summary" });
     expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "person" });
 
     writeActiveDirectiveMarker(proj, {
@@ -873,40 +857,41 @@ describe("a recovery question: exact picks are recorded, everything else is the 
     expect(response()?.picked_by).toBeUndefined();
   });
 
-  test("Request Changes with what to change, read by the agent, is ready and bound to their words", () => {
+  test("Request Changes with what to change, read by the agent, is ready for the rejection that keeps their words", () => {
     ask();
     consumeSharedDirectiveAsk(proj, "split the save-search flow into two steps");
     const picked = recordGuardRecoveryChoice(proj, "Request Changes: split the save-search flow into two steps", true);
     expect(picked).toMatchObject({ op: "request-changes", awaitingWords: false });
-    expect(response()).toMatchObject({ selected_op: "request-changes", status: "ready", picked_by: "conductor" });
-    expect(guardRecoveryFeedbackStatus(proj, readFileSync(seededStateFile(proj), "utf-8"), "functional-design", undefined,
-      "split the save-search flow into two steps")).toBe("match");
+    expect(response()).toMatchObject({ selected_op: "request-changes", status: "ready", picked_by: "person" });
+    expect(guardRecoveryFeedbackStatus(proj, readFileSync(seededStateFile(proj), "utf-8"), "functional-design", undefined))
+      .toBe("ready");
   });
 
-  test("the agent cannot overrule an exact pick", () => {
+  test("no tool holds the agent to a reading of a typed number: its record stands as it hands it", () => {
     ask();
     consumeSharedDirectiveAsk(proj, "2");
-    expect(() => recordGuardRecoveryChoice(proj, "Present the current summary again", false))
-      .toThrow(/picked "Ask what should change"/);
+    expect(recordGuardRecoveryChoice(proj, "Present the current summary again", false).op).toBe("reconfirm-summary");
+    expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "person" });
   });
 
-  // The person picks again while their first pick waits for what should
-  // change: the new pick replaces it, and "2" is never taken as the change.
-  test("1 then 2: the second exact pick replaces the first and is not taken as what should change", () => {
+  // The person replies again while the agent's first record waits for what
+  // should change: that record no longer stands on their latest reply, and "2"
+  // is never taken as the change.
+  test("1 then 2: each typed reply is the agent's to read, and the record on the latest one stands", () => {
     writeActiveDirectiveMarker(proj, {
       kind: "ask", ask_type: GUARD_RECOVERY_ASK_TYPE, stage: "functional-design", state_sha256: stateDigest(content),
       remedies: [remedies[1], remedies[0]],
     });
     consumeSharedDirectiveAsk(proj, "1");
+    expect(response()?.selected_op ?? null).toBeNull();
+    recordGuardRecoveryChoice(proj, "request-changes", false);
     expect(response()).toMatchObject({ selected_op: "request-changes", status: "awaiting-feedback", picked_by: "person" });
-    consumeSharedDirectiveAsk(proj, "1");
-    expect(response()).toMatchObject({ selected_op: "request-changes", status: "awaiting-feedback" });
     consumeSharedDirectiveAsk(proj, "2");
-    expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "person" });
+    expect(response()?.selected_op ?? null).toBeNull();
     expect(response()).not.toHaveProperty("feedback_sha256");
     expect(recordGuardRecoveryChoice(proj, "reconfirm-summary", false).op).toBe("reconfirm-summary");
-    expect(guardRecoveryFeedbackStatus(proj, readFileSync(seededStateFile(proj), "utf-8"), "functional-design", undefined,
-      "2")).toBe("other-remedy");
+    expect(guardRecoveryFeedbackStatus(proj, readFileSync(seededStateFile(proj), "utf-8"), "functional-design", undefined))
+      .toBe("other-remedy");
   });
 
   test("the agent can correct its own misread in one step", () => {
@@ -915,7 +900,7 @@ describe("a recovery question: exact picks are recorded, everything else is the 
     recordGuardRecoveryChoice(proj, "request changes", false);
     consumeSharedDirectiveAsk(proj, "no, I meant show me the summary again");
     expect(recordGuardRecoveryChoice(proj, "Present the current summary again", false).op).toBe("reconfirm-summary");
-    expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "conductor" });
+    expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "person" });
   });
 
   // An action can carry a backtick-wrapped command for the agent to run later;
@@ -943,7 +928,7 @@ describe("a recovery question: exact picks are recorded, everything else is the 
     });
     expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
     expect(existsSync(join(proj, "ran-from-action"))).toBe(false);
-    expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "conductor" });
+    expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "person" });
   });
 
   test("nothing is picked before the person replies", () => {

@@ -142,8 +142,8 @@ in this repository is judged by what a person sees and does in a normal run.
   agent asks once, in plain words.
 
 An explicit request means the person's own words, never the agent's account
-of them. Exact answers such as "Approve", an option number, or a slash command
-are shortcuts the tools may read; anything else is the agent's to understand.
+of them. A slash command is a shortcut the tools may read; anything else,
+"Approve" and an option number included, is the agent's to understand.
 Gates exist to collect the person's judgement, so when the person decides
 (approve, change, skip, jump, or switch a check off), the flow records that
 decision through its own mechanism instead of refusing it. A tool that judges

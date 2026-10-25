@@ -14,9 +14,8 @@ what they say, in their own words and in context, and do it.
   colleague would. A question they ask is answered, and their next reply
   decides.
 - Never make them repeat themselves, retype an option, or confirm what they
-  already said. A reply that is exactly one option ("1", "Approve Plan") is
-  already recorded where the engine asks; recording the same choice again is
-  fine.
+  already said. A pick in a question box is already recorded where the engine
+  asks; recording the same choice again is fine.
 - If they say you recorded the wrong choice, fix it in one step and say so.
   After a wrong Request Changes at a gate, `{{INVOKE}} engine orchestrate report
   --stage <slug> --result revised` shows the gate again. After a wrong approval,
@@ -27,7 +26,7 @@ what they say, in their own words and in context, and do it.
   approval, "Review the plan" brings the question back.
 - When they ask to turn a check off for this piece of work, in their own words
   or by picking a guard's turn-it-off choice, run the setter yourself (that
-  choice's `command`, or `{{INVOKE}} engine config set guard.<fence> off --person-words '<their words>'`) and
+  choice's `command`, or `{{INVOKE}} engine config set guard.<fence> off --message <id>`, with `<id>` the message they asked in) and
   say in one line that it is off for this piece of work, comes back on for the
   next one, and that they can ask you to turn it back on. Never hand them a
   command to type.
@@ -181,7 +180,7 @@ question MUST use unordered bullets, never numbered items.
 ### Critical Compliance Checklist (most commonly missed steps)
 Before and during EVERY stage, verify:
 1. [ ] **Use the engine for every lifecycle transition** — before the prompt, `aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`; after the response, report `approved` or `rejected`; after revision work, report `revised`. A blocking-sensor refusal is a separate logged non-gate decision: offer Fix findings / Override blocking sensors, and only retry with the override after the exact human-backed answer receipt exists. Autonomous mode never offers or accepts that override. When the active stage's own condition proves it does not apply, report `skipped --reason "<reason>"`. Never call lifecycle verbs on `aidlc-state.ts` directly. The engine emits the correct audit events and routes only on approval, completion, or a justified skip. Do NOT call `aidlc-audit.ts append` separately. (§2)
-2. [ ] **Log non-gate questions via `aidlc-log.ts`**: before presenting a structured question that is not an approval gate: `{{INVOKE}} engine log decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `{{INVOKE}} engine log answer --stage <slug> --details '<exact choice>'`. Log every question a menu shows before you show the menu, and put all of one reply's answers in a single `log answer` (`--details 'Q1: <choice>; Q2: <choice>'` when it answered both, `--details 'Q2: <choice>'` when it answered Q2 alone: only the questions the reply really answered go in it, never a slot filled with words that answered something else), even when the reply came before the log. When you log a question after the person already replied, name the message that answered it: `--message <id>` on the `log decision` or on each `log answer` (a refused answer names the id in its hint); the person is never asked to say it again. Approval choices go only through `aidlc-orchestrate.ts report`. (§2, §3)
+2. [ ] **Log non-gate questions via `aidlc-log.ts`**: before presenting a structured question that is not an approval gate: `{{INVOKE}} engine log decision --stage <slug> --decision '<summary>' --options '<A,B,C>'` (`"|<A>|<B>|<C>"` when a choice holds a comma). After response: `{{INVOKE}} engine log answer --stage <slug> --details '<exact choice>'`. Log every question a menu shows before you show the menu, and put all of one reply's answers in a single `log answer` (`--details 'Q1: <choice>; Q2: <choice>'` when it answered both, `--details 'Q2: <choice>'` when it answered Q2 alone: only the questions the reply really answered go in it, never a slot filled with words that answered something else), even when the reply came before the log. A question you log after the person already replied takes that reply: record their answer and never ask them to say it again. Add `--message <id>` (on the `log decision` or on each `log answer`) only when the reply that answered it came while another engine question was open. Approval choices go only through `aidlc-orchestrate.ts report`. (§2, §3)
 3. [ ] **Record the choice the person made**: read their reply and record their choice; the human-turn hook keeps their exact words with it. Never choose for them unless they leave the choice to you (§3, `--on-instruction`), and never paraphrase their words in an answer or note. (§1, §2, §3)
 4. [ ] **Task transitions + state sync** — Mark previous task `completed`, then `TaskUpdate({ ..., status: "in_progress", activeForm: "Running [Stage] [slug]" })`. The `[slug]` suffix triggers the PostToolUse hook that syncs the state file. Only when `TaskCreate`/`TaskUpdate`, or the plan or todo tool your skill maps them to, is in your tool list; otherwise skip task transitions silently. `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input '<exact choice>'` auto-advances to the next in-scope stage (or completes the workflow on the final stage) — do NOT call `advance` separately after approval. (§4)
 5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings (only when the directive lists the `learnings` protocol module) → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes only when the directive lists the `learnings` protocol module. EXCEPTION: the Build-and-Test failure loop-back in the loop-back protocol module (`aidlc-common/protocols/stage-protocol-loopback.md`) jumps back from a deliberately in-flight failed stage; its §13 learnings ritual defers to the eventual passing run.
@@ -301,11 +300,16 @@ stage, jump to a stage, or start fresh is not a gate answer: report it as the
 recovery protocol's Session resume says, never as Request Changes.
 
 - **They chose:** record that choice by its label (`--user-input "Approve"`,
-  `--details "Request Changes"`, `--details "Approve Plan"`). A number, a letter,
-  "approved", "looks good", or a typo all name a choice: you know which.
+  `--details "Request Changes"`, `--details "Approve Plan"`). A number,
+  "approved", "looks good", or a typo all name a choice: you know which. A
+  letter names one only where the question showed letters; a lone letter at a
+  question shown with numbers or in a box, or "...", is unclear: ask once which
+  they meant.
 - **They approved and asked for something** ("looks fine but rename the
   handler"): record the approval, do what they asked, and say in one line what
-  you changed. No second question.
+  you changed. At Plan Approval the change comes first: make it in the plan,
+  then record "Approve Plan", so the approval covers the plan as it stands then.
+  No second question.
 - **They asked for something with no approval in it** ("from here on, build
   one unit at a time; I'll approve the design after"): it is not the gate's
   answer. Do the request, say in one line what you did, and keep the gate open
@@ -319,7 +323,7 @@ recovery protocol's Session resume says, never as Request Changes.
 - **Their intent is genuinely unclear:** ask one short question, as a colleague
   would, and end the turn.
 - **Their words on a command line:** where the engine keeps their words (a
-  stage gate's Request Changes, Plan Approval), pass only the choice; their
+  stage gate's Request Changes), pass only the choice; their
   words are attached for you. Where their own words still travel (what to change
   at the summary or a recovery question, a `--reason`), put them in single
   quotes, never double quotes, so no shell runs a `$(...)`, a backtick, or a
@@ -329,9 +333,8 @@ recovery protocol's Session resume says, never as Request Changes.
   text holds any of `$`, a backtick, a quote, `%`, `&`, `|`, `<`, `>`, `^`, `!`
   or a line break goes in a file instead, so no shell reads it at all: write it
   with your file tool to `<record>/.aidlc-engine/answer-text/answer.txt` and
-  pass `--details-file .aidlc-engine/answer-text/answer.txt` (or
-  `--on-instruction-file` for their words that left a choice to you); the
-  engine reads the file and removes it.
+  pass `--details-file .aidlc-engine/answer-text/answer.txt`; the engine reads
+  the file and removes it.
 - **They also asked to stop for now:** record their choice with `--park`, or run
   `park --person-asked`, and tell them how to resume.
 
@@ -387,7 +390,7 @@ Entering the gate:
    - When the directive lists the `sensors` module, a blocking gate sensor can refuse this report; that module says what to do then.
 3. Present Part 3 (the approval question). This is a lifecycle gate, not an interview question: do not call `aidlc-log.ts decision` or `aidlc-log.ts answer` for it. Word it per the voice contract at the top of this file: what you produced, what to look at, what happens next.
 4. Based on the user response:
-   - **Approve** → `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "Approve"`. When they approved and asked for something in the same reply ("looks fine but rename the handler"), record the approval, then do what they asked and say in one line what you changed. When they also asked to stop for now, add `--park`. That call emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
+   - **Approve** → `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "Approve"`. When they approved and asked for something in the same reply ("looks fine but rename the handler"), record the approval, then do what they asked and say in one line what you changed. On a reviewer-backed gate, when what they asked is that an open finding be fixed ("approve, but make sure R-03 gets handled"), add `--fix-finding "<review-artifact>#R-NN"` once for each such finding, so the approval records the fix they asked for and the next review re-checks it. When they also asked to stop for now, add `--park`. That call emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
    - **Request Changes** → `{{INVOKE}} engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"`. Where the human-turn hook kept what they typed in this chat, the engine records their words as the feedback, keeps any `--reason` you add beside them as the Conductor Summary, and its returned `print` says so: revise from what they asked for. Where it kept nothing, pass what they asked for in `--reason`. Ask "What should change?" only when they did not say. On a reviewer-backed gate, add the reviewer module's `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` once for each open finding the human explicitly rejects as inapplicable. When the human says a `Resolved (reviewer)` finding is not fixed, add `--reopen-finding "<review-artifact>#R-NN=<exact human reason>"`. Never pass the same ID in both flags; ordinary change requests carry no disposition flag. That call emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt - a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised - fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (When the directive lists the `learnings` module, its §13 ritual runs once at the initial gate and is not re-run for gate revisions.) Then call `{{INVOKE}} engine orchestrate report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` - always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
    - **Accept as-is** (offered when the gate's reply carries `accept_as_is: "offered"`) → same as Approve, with `--user-input "Accept as-is"`.
 
@@ -409,9 +412,9 @@ Structured bullet-point summary of what was produced:
   | requirements.md | 6 FR groups (18 sub-requirements), 4 NFRs |
   | requirements-analysis-questions.md | 5 questions, all answered |
   ```
-- For the FIRST completion message of a session (typically Requirements Analysis or Workspace Detection), include:
-  "**Project depth**: [Minimal/Standard/Comprehensive]: how much detail I write into each document.
-  **Test strategy**: [Minimal/Standard/Comprehensive]: how many tests I write.
+- For the FIRST completion message of a session (typically Requirements Analysis or Workspace Detection), include these lines with the levels the run-stage carries as `depth` and `test_strategy`, leaving out a line whose level it does not carry:
+  "**Project depth**: [depth]: how much detail I write into each document.
+  **Test strategy**: [test_strategy]: how many tests I write.
   Ask me to change either one at any approval gate."
 
 ### Part 3: Review + Approval (mandatory)
@@ -458,7 +461,7 @@ starts the questions afresh (`artifact_reuse`, or **Redo from scratch** under
 "Artifact Re-use").
 
 **Step 1: Create the questions file** in the appropriate `<record>/` directory with full [Answer]: tag format:
-- Include options A-E as appropriate for each question
+- Include options {{OPTION_LETTERS}} as appropriate for each question
 - EVERY ordinary question MUST end with `X. Other (please specify)` as the final
   option. The dedicated Consolidated Summary Confirmation added in Step 3a is
   the sole exception: its two semantic options are intentionally unlettered.
@@ -545,26 +548,26 @@ back an answer that names none, so the person is never asked again because of
 how they worded it. If their reply leaves the mode unclear, ask one short
 follow-up instead of guessing. When their request already said how they want to
 answer ("guide me through it"), do not ask it again: record the question as the
-step names it, then their choice with `--on-instruction '<their words>'` (in
-single quotes, as **Their words on a command line** above says), and say
+step names it, then their choice with `--on-instruction --message <id>`, with
+`<id>` the message that said it, and say
 **SAY:** "You asked to be guided, so I'll ask the questions here. Say if you'd
 rather edit the file or chat." The tool stamps the row.
 Never write the audit shard yourself.
 
 When the person asks for a different way at any stage ("let me just edit the
 file"), switch for this stage (see "Users can switch modes mid-stage" below) and
-record the new choice the same way, with `--on-instruction '<their words>'`, so
+record the new choice the same way, with `--on-instruction --message <id>`, so
 the later stages use it too.
 
 **Step 3a: If "Guide me" (interactive mode):**
 - Present questions as structured questions in batches, each with the trade its heading names in front of its text (Step 1; none when the heading has none; batching limits are harness-specific — see the question-rendering annex)
 - Where the tool shows questions as a numbered list, number every option and never ask for a file letter: a batch ends with "Reply with each question's number and the number of your choice (for example Q1: 2, Q2: 1), or just tell me." and a single question with "Reply with a number (or just tell me)."
-- For questions with 5+ options (single-select or multi-select): present ALL answer options, splitting across multiple structured questions if the harness's per-question option limit requires it (e.g., options A-D first, then options E+ in a follow-up). The user must see every option to make an informed choice. The file retains the full option set as the authoritative record.
+- A question from the questions file with more options than the harness's question tool takes (its question-rendering annex gives the limit) is still one question, asked once with every option: ask it on its own as a numbered list in one message, numbered and ended as the numbered-list bullet above says, never split across calls or into more questions. The file retains the full option set as the authoritative record.
 - Every structured question offers an "Other" escape (built into the harness UI or rendered as an explicit option per the annex). In interactive mode, when the user selects "Other" and answers in their own words, those words are their answer for that question. When they select it to ask about the question or talk it through, engage in conversation, then record what they settle on before continuing the batch. Explicitly tell the user this before the first batch, naming the escape the way their tool labels it (Claude Code's picker: "Type something"; Codex's question tool: "None of the above"; a numbered list: "Other"; the question-rendering annex gives it too): "Pick "[the escape's label]" on any question to answer in your own words or talk it through."
-- Before you show each batch, record it, and record its answers once they come, through the same log pair: `{{INVOKE}} engine log decision --stage <slug> --decision "<question numbers presented>" --options "<csv of the options shown>"` before the batch and `{{INVOKE}} engine log answer --stage <slug> --details '<the exact selections>'` after it. The tool stamps every row with its own fresh timestamp; there is no `date -u` call and no hand-written entry.
+- Before you show each batch, record it, and record its answers once they come, through the same log pair: `{{INVOKE}} engine log decision --stage <slug> --decision '<question numbers presented>' --options '<the options shown, separated by commas>'` (when one holds a comma, start the list with `|` and separate them with it) before the batch and `{{INVOKE}} engine log answer --stage <slug> --details '<the exact selections>'` after it. The tool stamps every row with its own fresh timestamp; there is no `date -u` call and no hand-written entry.
 - After each batch of answers, IMMEDIATELY write the answers back to the questions file (update each `[Answer]:` tag)
 - Continue until all questions are answered
-- When the `run-stage` directive carries `kept_replies`, the person already replied to these questions in a chat that ended before their answers were written down: do what its `note` says, recording each answer they gave before asking anything, and never ask them again what they already answered
+- When the `run-stage` directive carries `kept_replies`, the person already replied to these questions, and a chat may have ended before their answers were written down: do what its `note` says, recording each answer they gave that is not on record yet before asking anything, and never ask them again what they already answered
 - **Consolidated summary before generation**: only when the step asks for the summary confirmation; the summary module, which the engine names then, says how. When it does not, generate directly from the answers with no confirmation prompt, confirmation entry, or receipt.
 
 **Step 3b: If "I'll edit the file" (self-guided mode):**
@@ -630,7 +633,7 @@ Construction, where the loop is meant to keep running without you.
 ### Error handling for invalid/missing answers
 When processing user answers from question files:
 - **Missing answers**: If any [Answer]: tag is still blank or contains only underscores, list the unanswered questions and ask the user to complete them before proceeding.
-- **Invalid answers**: If an answer does not match any provided option (A-E, X) and is not a clear free-text response for "Other", ask the user to clarify which option they intended.
+- **Invalid answers**: If an answer does not match any provided option ({{OPTION_LETTERS}}, X) and is not a clear free-text response for "Other", ask the user to clarify which option they intended.
 - **Ambiguous answers**: If an answer like "maybe B" or "either A or C" is given, ask the user to commit to a single choice and explain their reasoning.
 
 ### Contradiction detection (MANDATORY)
@@ -655,7 +658,7 @@ When contradictions are detected:
   - Answers that dodge the question or change the subject
   - Relaxing, lowering, or disabling a previously defined quality target (e.g.
     a test coverage threshold) instead of meeting it
-- When a user leaves a choice to you ("up to you", "whatever you think is best", or "choose the recommended answers" for this stage), decide: pick the option that best fits what they have said so far and record it with `{{INVOKE}} engine log answer --stage <slug> --details '<your choice>' --on-instruction '<their words that left it to you>'`, each in single quotes as **Their words on a command line** above says (a choice's text can come from the project), so the record shows you chose it as they asked. Then say one line. For one question: **SAY:** "You left <the question> to me, so I chose <the choice>. Say if you want something else." For several: **SAY:** "You left <Stage>'s <N> questions to me, so I chose the recommended answers: <question: choice; ...>. Say if you want any of them changed." The first time in a piece of work, also say once: **SAY:** "Approvals are still yours: I'll stop at each stage for you to approve." A checkpoint or an approval is never left to you: ask the person.
+- When a user leaves a choice to you ("up to you", "whatever you think is best", or "choose the recommended answers" for this stage), decide: pick the option that best fits what they have said so far and record it with `{{INVOKE}} engine log answer --stage <slug> --details '<your choice>' --on-instruction --message <id>`, with `<id>` the message of theirs that left it to you and the choice in single quotes as **Their words on a command line** above says (a choice's text can come from the project), so the record names their message and shows you chose it, reading it. Then say one line. For one question: **SAY:** "You left <the question> to me, so I chose <the choice>. Say if you want something else." For several: **SAY:** "You left <Stage>'s <N> questions to me, so I chose the recommended answers: <question: choice; ...>. Say if you want any of them changed." The first time in a piece of work, also say once: **SAY:** "Approvals are still yours: I'll stop at each stage for you to approve." A checkpoint or an approval is never left to you: ask the person. Outside an isolated `--single` run, when the message that left the questions to you also says not to ask them anything ("finish the stage, do not ask me anything"), it waives the summary confirmation and the learnings step (which asks what to keep for next time) for this piece of work: run `{{INVOKE}} engine config set summary-confirmation off --learnings off --message <id>` with that message's id, say in one line that both are off for this piece of work and that they can ask you to turn either back on, and generate.
 
 ---
 
@@ -692,7 +695,7 @@ At each approval gate — see §2 Part 0 for the full flow. Summary:
 These `report` calls are the approval gate's only logging path. Never call `aidlc-log.ts decision` or `aidlc-log.ts answer` for an approval choice.
 
 At each non-gate question interaction:
-1. BEFORE presenting the question: `{{INVOKE}} engine log decision --stage <slug> --decision "<summary>" --options "<A,B,C>"` (emits `DECISION_RECORDED`).
+1. BEFORE presenting the question: `{{INVOKE}} engine log decision --stage <slug> --decision '<summary>' --options '<A,B,C>'` (emits `DECISION_RECORDED`). When a choice holds a comma, start the list with `|` and separate the choices with it (`"|<A>|<B>|<C>"`), so the question comes back with each choice whole.
 2. AFTER response: `{{INVOKE}} engine log answer --stage <slug> --details '<summary of answers>'` (emits `QUESTION_ANSWERED`).
 
 This pair is also a deterministic human-wait signal for the forwarding-loop Stop
@@ -700,7 +703,7 @@ hook, including learning prompts that do not add a blank tag to the stage
 questions file. Once `decision` succeeds, render that question and END THE TURN.
 If you showed the question before recording it, the person already has it: end
 the turn without showing it again.
-If they already replied, log the question now naming their message (`--message <id>`; a refused answer names the id), then put all of that reply's answers in a single `log answer`: an answer that names no message is refused when their reply came before the question was logged.
+If they already replied, log the question now, then put all of that reply's answers in a single `log answer`: their reply answers it, so they are not asked again. Add `--message <id>` only when the reply that answered it came while another engine question was open.
 Never interpret hook feedback, a continuation reminder, or silence as its
 answer; only the human's next interaction may be followed by `answer`.
 

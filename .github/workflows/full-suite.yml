@@ -337,12 +337,13 @@ jobs:
           - {name: unit-14, tier: unit, shard: "14/16"}
           - {name: unit-15, tier: unit, shard: "15/16"}
           - {name: unit-16, tier: unit, shard: "16/16"}
-          # The scope runs (tests/integration/t-scope-run-*), the scope runs
-          # on every harness tree (t-scope-host-*) and the guard matrix
-          # (t-guard-matrix-*, in two halves) run in their own integration jobs,
-          # here on every OS.
+          # The scope runs (tests/integration/t-scope-run-*, the classic
+          # own-file move walks apart), the scope runs on every harness tree
+          # (t-scope-host-*) and the guard matrix (t-guard-matrix-*, in two
+          # halves) run in their own integration jobs, here on every OS.
           - {name: integration, tier: integration, exclude: '^t-(scope-run|scope-host|guard-matrix)-'}
-          - {name: scope-runs, tier: integration, filter: '^t-scope-run-'}
+          - {name: scope-runs, tier: integration, filter: '^t-scope-run-', exclude: '^t-scope-run-moves-own-file-classic-'}
+          - {name: own-file-moves, tier: integration, filter: '^t-scope-run-moves-own-file-classic-'}
           - {name: scope-hosts, tier: integration, filter: '^t-scope-host-'}
           - {name: guard-matrix-1, tier: integration, filter: '^t-guard-matrix-', partition: '1/2'}
           - {name: guard-matrix-2, tier: integration, filter: '^t-guard-matrix-', partition: '2/2'}
@@ -376,7 +377,8 @@ jobs:
       max-parallel: 3
       matrix:
         suite:
-          - {name: scope-runs, filter: '^t-scope-run-'}
+          - {name: scope-runs, filter: '^t-scope-run-', exclude: '^t-scope-run-moves-own-file-classic-'}
+          - {name: own-file-moves, filter: '^t-scope-run-moves-own-file-classic-'}
           - {name: scope-hosts, filter: '^t-scope-host-'}
           - {name: guard-matrix-1, filter: '^t-guard-matrix-', partition: '1/2'}
           - {name: guard-matrix-2, filter: '^t-guard-matrix-', partition: '2/2'}
@@ -393,6 +395,7 @@ jobs:
       tier: integration
       filter: ${{ matrix.suite.filter }}
       integration-shard: ${{ matrix.suite.partition || '' }}
+      exclude: ${{ matrix.suite.exclude || '' }}
       artifact-label: full-suite-${{ matrix.suite.name }}
   production_guards:
     name: "Linux / production-guards"

@@ -26,8 +26,9 @@
 //     stage-level artifacts; that unit's receipt for a per-unit write), or a
 //     stale-receipt recovery request is pending for it.
 // Everything the freeze must release on releases it automatically because
-// the scan is shared with the engine: GATE_REJECTED, STAGE_JUMPED, and
-// WORKFLOW_STARTED reset the floor (so post-rejection revisions are never
+// the scan is shared with the engine: GATE_REJECTED, STAGE_JUMPED,
+// WORKFLOW_STARTED and the person's Fix findings pick at a blocking gate
+// sensor reset the floor (so post-rejection revisions and that fix are never
 // frozen), a below-cap adversarial NOT-READY remains nonterminal so its repair
 // loop can edit, and non-produces writes (diary, questions, contributions,
 // the reviewer's own review file under `.aidlc-engine/reviews/`) never match.
@@ -91,6 +92,8 @@ import {
 } from "../tools/aidlc-lib.ts";
 import { writeTargets } from "./review-freeze-command.ts";
 export {
+  leadingDirectoryChange,
+  powerShellPathBoundWriter,
   shellCommandAltersExecutableResolution,
   shellCommandInvocationDetails,
   shellCommandInvocations,

@@ -10,8 +10,9 @@ import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readSync, rmdi
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { proveMessage, readMessage } from "./aidlc-message-store.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
-import { APPROVAL_GATE_CHOICES, protectedQuestionPick } from "./aidlc-reply-reader.ts";
+import { APPROVAL_GATE_CHOICES } from "./aidlc-reply-reader.ts";
 import {
   activeIntentUuid,
   attemptEventDefinitelyBefore,
@@ -39,26 +40,29 @@ import {
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
   changeRequestWords,
+  personsWordsText,
+  protectedResponseFields,
   readProtectedResponse,
   requireProtectedResponse,
   protectedTargetDigest,
   gateWordsSinceUnitReview,
+  protectedReplyFloor,
+  isoTimestamp,
   markProtectedQuestionReplied,
   mintProtectedQuestion,
+  PROTECTED_RESPONSE_REPLIES_MAX,
   PROTECTED_RESPONSE_WORDS_MAX_CHARS,
   writeProtectedResponse,
   isAutonomousMode,
   constructionCheckpointsApply,
   isNonAnswer,
   latestMainWorkflowStageRunFloorForProject,
-  latestPersonTurn,
   leftOutLine,
   reviewCheckOffer,
   loadStageGraph,
   maximalAttemptEvents,
   personMayApproveOverUnfinishedReview,
   parseCheckboxes,
-  personSpokeSinceGate,
   readAuditShardEvents,
   readRegularFileNoFollowOrThrow,
   readStateFile,
@@ -77,7 +81,6 @@ import {
   reviewAttemptEventMatchesCurrentClaim,
   reviewAttemptWindow,
   reviewRequestBindingFromBlock,
-  selfAttributedDecisionMarker,
   setField,
   sortAttemptEvents,
   sourceListingChangedPaths,
@@ -574,6 +577,8 @@ interface Snapshot {
   /** The stages whose unfinished review the person let the Unit go on
    *  without, which its verification records. */
   waivedStages: string[];
+  /** The message the person said to go on without the review in, as the latest verification recorded it. */
+  waiverMessage: string | null;
 }
 
 interface ApprovedStageEvidence {
@@ -1296,6 +1301,7 @@ function snapshot(
   const unfinishedStages = stages.filter((slug) => notFinished.includes(slug) || endedUnfinished.includes(slug));
   return {
     root, rows, state, verificationCommand: shared.verificationCommand, accepted,
+    waiverMessage: verification ? auditBlockField(verification.block, "Message Id") : null,
     approvedEvidence: JSON.stringify(approvedEvidence),
     overAllowed: rereview?.unfinished !== undefined && unfinishedMayGoOn && overAllowed(),
     waivedStages: notFinished,
@@ -1383,8 +1389,9 @@ function requireReady(current: Snapshot): void {
         : ` The ${reviewsNamed([step.stage])} for ${result.unit} ` +
           `${step.unfinished === "no-verdict" ? "did not finish" : "is NOT-READY with a pass left"}. ` +
           (current.overAllowed
-            ? `If the person said to approve ${result.unit} as it is (their words since the last question), verify ` +
-              `with --over-unfinished-review; otherwise finish the review: ${finish}.`
+            ? `If the person said to approve ${result.unit} as it is, verify with --over-unfinished-review ` +
+              "--message <id>, the id of the message they said it in; " +
+              `otherwise finish the review: ${finish}.`
             : `Finish it first, without asking the person: ${finish}.`);
     throw new Error(`Construction checkpoint is not ready: ${result.errors.join(" ")}${rereview}`);
   }
@@ -1431,11 +1438,18 @@ export async function verifyConstructionCheckpoint(
   projectDir: string,
   unit: string,
   kind: ConstructionCheckpointKind,
-  options: { overUnfinishedReview?: boolean; timeoutMs?: number } = {},
+  options: { overUnfinishedReview?: boolean; timeoutMs?: number; message?: string } = {},
 ): Promise<ConstructionCheckpoint> {
+  // The person's "approve it as it is": the message the agent names
+  // (--message), proved, is what lets the Unit go on without its review.
+  let over: string | null = null;
+  if (options.overUnfinishedReview === true && options.message !== undefined) {
+    const proof = proveMessage(projectDir, options.message, "request", { request: true });
+    if ("refusal" in proof) throw new Error(proof.refusal);
+    over = proof.message.id;
+  }
   // A check that formats or regenerates the Unit's files changes what it
   // checked, so it runs once more against the files as they are now.
-  const over = options.overUnfinishedReview === true;
   const timeoutMs = verificationTimeoutMs(options.timeoutMs);
   const first = await verifyOnce(projectDir, unit, kind, false, over, timeoutMs);
   if (!first.rerun) return first.result;
@@ -1454,12 +1468,11 @@ async function verifyOnce(
   unit: string,
   kind: ConstructionCheckpointKind,
   secondRun: boolean,
-  overUnfinishedReview: boolean,
+  // The message the person said to approve it as it is in, proved; null when they said nothing of it now.
+  overUnfinishedReview: string | null,
   timeoutMs: number,
 ): Promise<{ result: ConstructionCheckpoint; rerun: boolean }> {
-  // The agent passes on the person's "approve it as it is"; their words since
-  // the last decision are what let the Unit go on without its review.
-  const personAllows = overUnfinishedReview && personSpokeSinceGate(projectDir, { requests: true });
+  const personAllows = overUnfinishedReview !== null;
   const before = locked(projectDir, () => {
     withdrawProtectedQuestions(projectDir, "*");
     const current = snapshot(projectDir, unit, kind, undefined, undefined, personAllows);
@@ -1556,6 +1569,8 @@ async function verifyOnce(
     proof.verified = passed && proof.error === null && proof.evidence_unchanged;
     writeRecordFileNoFollow(before.root, proofRelativePath(unit, kind), `${JSON.stringify(proof, null, 2)}\n`);
     if (after.root !== before.root) throw new Error("Active intent changed during Construction verification.");
+    // The waiver it records stands on the message the person said it in: named now, or carried from the last one.
+    const waiverMessage = overUnfinishedReview ?? before.waiverMessage;
     appendAuditEntryUnlocked("CHECKPOINT_VERIFICATION_RECORDED", {
       Unit: unit,
       Kind: kind,
@@ -1570,6 +1585,7 @@ async function verifyOnce(
       ...(before.waivedStages.length > 0 ? {
         "Review Not Finished": JSON.stringify(Object.fromEntries(before.waivedStages
           .map((stage) => [stage, before.result.run_floors[stage]]))),
+        ...(waiverMessage ? { "Message Id": waiverMessage } : {}),
       } : {}),
       ...claimAttemptFields(projectDir, unit),
     }, projectDir);
@@ -1635,7 +1651,8 @@ export function askConstructionCheckpoint(
     // The person may have answered while the Unit's review ran: their words
     // typed in this chat after it was asked for and before any other question
     // was asked (gateWordsSinceUnitReview), read before this question's own
-    // row, are its reply, kept as a reply typed after it is.
+    // row, are its reply, kept as a reply typed after it is, for the conductor
+    // to read.
     const earlier = gateWordsSinceUnitReview(projectDir, session, unit, current.result.stages);
     withdrawProtectedQuestions(projectDir, session);
     appendAuditEntryUnlocked("DECISION_RECORDED", {
@@ -1660,17 +1677,25 @@ export function askConstructionCheckpoint(
       ...(offer === null ? {} : { check_offer: offer.offer }),
     };
     if (earlier === null) return result;
-    const words = earlier.join("\n").slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
-    const pick = protectedQuestionPick(question, earlier.at(-1));
+    const words = earlier.map((reply) => reply.words).join("\n").slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
     markProtectedQuestionReplied(projectDir, question);
     writeProtectedResponse(projectDir, {
       version: 1, session, challengeId: question.challengeId,
-      ...(pick === null ? {} : { choice: pick }),
       responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
       words,
+      at: isoTimestamp(),
+      replies: earlier.slice(-PROTECTED_RESPONSE_REPLIES_MAX),
     });
     return { ...result, earlier_reply: words };
   });
+}
+
+// A Unit checkpoint's reply the agent names: after the Unit's review was
+// requested in the checkpoint's stages, else after their start.
+function namedReply(
+  projectDir: string, stages: readonly string[], unit: string, message: string | undefined,
+): { message: string; floor: string | null } | undefined {
+  return message === undefined ? undefined : { message, floor: protectedReplyFloor(projectDir, stages, [unit]) };
 }
 
 export function approveConstructionCheckpoint(
@@ -1680,6 +1705,8 @@ export function approveConstructionCheckpoint(
   reply?: string,
   session = "",
   findingDispositions?: ApprovalFindingDispositions,
+  // The message the agent read the approval from, when it names one.
+  message?: string,
 ): ConstructionCheckpoint {
   // The conductor read the person's reply and reports their approval. The
   // receipt records it beside the person's own words, kept by the human-turn
@@ -1694,16 +1721,21 @@ export function approveConstructionCheckpoint(
     // The person's "approve it as it is", which the verification took, is the
     // approval; nothing more is asked of them.
     const inWords = current.result.review_not_finished?.approved_in_words === true;
-    let words: string | undefined;
+    let theirs: Record<string, string> = {};
     if (humanRequired && inWords) {
       // Already approved from their words: an approve run again records nothing more.
       if (current.result.approved) return current.result;
-      words = latestPersonTurn(projectDir)?.words ?? undefined;
+      // Their words are the message the verification took their approval from.
+      const named = current.waiverMessage === null ? null : readMessage(projectDir, current.waiverMessage);
+      theirs = {
+        ...(named?.words ? { "Person Reply": personsWordsText(named.words) } : {}),
+        ...(current.waiverMessage ? { "Message Id": current.waiverMessage } : {}),
+      };
     } else if (humanRequired) {
       requireProtectedResponse(projectDir, session, {
         kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: "Approve",
-      });
-      words = readProtectedResponse(projectDir, session)?.words;
+      }, namedReply(projectDir, current.result.stages, unit, message));
+      theirs = protectedResponseFields(readProtectedResponse(projectDir, session));
     } else if (current.result.approved) {
       return current.result;
     }
@@ -1730,7 +1762,7 @@ export function approveConstructionCheckpoint(
       "Approved Evidence": rechecked.approvedEvidence,
       ...(humanRequired ? { Session: session } : {}),
       ...(humanRequired ? { "User Input": "Approve" } : { Autonomous: "true" }),
-      ...(words ? { "Person Reply": words } : {}),
+      ...theirs,
       ...(notFinished ? { Review: "not finished" } : {}),
       ...findingDispositions?.(
         gate["Gate Stages"].split(", ").filter(Boolean), [unit], humanRequired ? "person" : "nobody",
@@ -1773,6 +1805,7 @@ export function rejectConstructionCheckpoint(
   _reply: string,
   givenReason: string,
   session = "",
+  message?: string,
 ): ConstructionCheckpoint {
   // The conductor read the person's reply as a change request. What they said
   // to change is the reason: the conductor's --reason when given, otherwise the
@@ -1784,12 +1817,11 @@ export function rejectConstructionCheckpoint(
     }
     requireProtectedResponse(projectDir, session, {
       kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: "Request Changes",
-    });
-    const words = readProtectedResponse(projectDir, session)?.words;
-    const reason = givenReason.trim() || changeRequestWords(words);
+    }, namedReply(projectDir, current.result.stages, unit, message));
+    const response = readProtectedResponse(projectDir, session);
+    const reason = givenReason.trim() || changeRequestWords(response?.words);
     const userInput = "Request Changes";
-    if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason) ||
-      selfAttributedDecisionMarker(reason, "rejection")) {
+    if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason)) {
       throw new Error("Request Changes needs what the person asked to change, on one line, in --reason.");
     }
     const rechecked = snapshot(projectDir, unit, kind);
@@ -1800,7 +1832,7 @@ export function rejectConstructionCheckpoint(
       ...gateFields(projectDir, rechecked.result, rechecked.state),
       Session: session,
       "User Input": userInput, Feedback: reason, Reason: reason,
-      ...(words ? { "Person Reply": words } : {}),
+      ...protectedResponseFields(response),
     }, projectDir);
     consumeProtectedQuestion(projectDir, session);
     return resolveConstructionCheckpoint(projectDir, unit, kind);

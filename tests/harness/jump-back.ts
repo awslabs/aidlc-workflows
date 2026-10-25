@@ -85,6 +85,13 @@ export function followPrint(agent: AgentStandIn, d: Directive): { ran: string; s
   return { ran: command!, said: message, next: agent.next() };
 }
 
+/** The targets of the stage-wide jumps recorded since the marks. */
+export function jumpedTo(agent: AgentStandIn, marks: Marks): string[] {
+  return auditEvents(agent.host.proj)
+    .filter((row) => row.event === "STAGE_JUMPED" && !marks.rows.has(rowKey(row)))
+    .map((row) => field(row.block, "Target") ?? "");
+}
+
 export function approved(agent: AgentStandIn, unit: string): boolean {
   const res = agent.host.engine("bolt", "checkpoint", "--action", "status", "--unit", unit, "--kind", "unit");
   return (JSON.parse(res.stdout.trim()) as { approved?: boolean }).approved === true;

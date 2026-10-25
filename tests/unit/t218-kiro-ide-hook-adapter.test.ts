@@ -318,6 +318,36 @@ function runIde(
   };
 }
 
+// The agent's record of the person's yes to the legacy recovery question, the
+// command its one choice runs: the hook takes no typed phrase as that yes.
+function recordRecoveryYes(
+  projectDir: string,
+  envOverrides: Record<string, string | undefined> = {},
+): { stdout: string; stderr: string; code: number } {
+  const r = spawnSync(
+    "bun",
+    [
+      join(projectDir, ".kiro", "tools", "aidlc-log.ts"),
+      "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+      "--details", "Recover Plan Approval", "--project-dir", projectDir,
+    ],
+    {
+      cwd: projectDir,
+      input: "",
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: projectDir,
+        VSCODE_IPC_HOOK: `test-ipc:${projectDir}`,
+        VSCODE_PID: "218",
+        ...envOverrides,
+      } as NodeJS.ProcessEnv,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    },
+  );
+  return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? -1 };
+}
+
 function legacySessionId(
   projectDir: string,
   ipc = `test-ipc:${projectDir}`,
@@ -1658,6 +1688,31 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(readFileSync(seededStateFile(dir), "utf-8")).not.toContain("- **Guards Off**: review-freeze");
       expect(readAudit(dir)).not.toContain("GUARD_DISABLED");
       expect(readAudit(dir)).toContain("HUMAN_TURN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The core hook names the kept message to the agent while a decision is
+  // open; Kiro IDE draws a chat card for every command hook, and what it shows
+  // of the output is unmeasured, so this adapter keeps that line off.
+  test("8d12b: at an open question the message-id line stays off the IDE's context", () => {
+    const dir = scratchProject(true);
+    try {
+      appendStageStarted(dir, "requirements-analysis", "2026-10-23T01:00:00Z");
+      const shard = join(seededAuditDir(dir), pinnedShardName());
+      writeFileSync(shard, readFileSync(shard, "utf-8") + "\n## Decision\n**Timestamp**: 2026-10-23T01:00:01Z\n" +
+        "**Event**: DECISION_RECORDED\n**Stage**: requirements-analysis\n**Decision**: Which database?\n" +
+        "**Options**: PostgreSQL,SQLite\n\n---\n", "utf-8");
+      const result = runIdeStdin(dir, "record-human-turn", JSON.stringify({
+        session_id: "sess_open_question_ids",
+        hook_event_name: "UserPromptSubmit",
+        cwd: dir,
+        prompt: "postgres please",
+      }), GUARD_SWITCH_ENV);
+      expect(result.code, result.stderr).toBe(0);
+      expect(readAudit(dir)).toContain("**Message Id**:");
+      expect(result.stdout).not.toContain("on record as");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -3250,12 +3305,12 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
             code: toolName === "execute_pwsh" ? 0 : 2,
           },
           // A plain native engine command is the engine's own to judge: the
-          // state tool refuses a bare advance itself. A completion report
-          // waits for the plan: the report tool does not check it.
+          // state tool refuses a bare advance itself, and `report` holds a
+          // completion while the plan waits.
           { command: "aidlc engine state advance", code: 0 },
           {
             command: "aidlc engine orchestrate report --stage code-generation --result completed",
-            code: 2,
+            code: 0,
           },
           { command: "echo blocked > src/blocked.ts", code: 2 },
           { command: "aidlc engine orchestrate next | Out-File src/blocked.ts", code: 2 },
@@ -4182,6 +4237,19 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
           ).code,
           target,
         ).toBe(0);
+        // The phrase typed is a reply like any other: only the agent's record
+        // of the yes it read recovers.
+        const typedPhrase = runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "execute_bash", toolArgs: {} }),
+        );
+        expect(typedPhrase.code, target).toBe(2);
+        expect(typedPhrase.stderr, target).toContain(
+          "recovery requires a human response",
+        );
+        const yes = recordRecoveryYes(dir);
+        expect(yes.code, `${target} ${yes.stdout}${yes.stderr}`).toBe(0);
         const recovered = runIde(
           dir,
           "plan-approval-guard",
@@ -4204,7 +4272,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
-  test("legacy offer corruption or deletion requires exact human recovery before replacement", () => {
+  test("legacy offer corruption or deletion requires human recovery before replacement", () => {
     for (const mode of ["corrupt", "delete"] as const) {
       const dir = scratchProject(true);
       try {
@@ -4266,10 +4334,12 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
           runIde(
             dir,
             "record-human-turn",
-            JSON.stringify({ prompt: "Recover Plan Approval" }),
+            JSON.stringify({ prompt: "Yes, bring it back." }),
           ).code,
           mode,
         ).toBe(0);
+        const yes = recordRecoveryYes(dir);
+        expect(yes.code, `${mode} ${yes.stdout}${yes.stderr}`).toBe(0);
         const recovered = runIde(
           dir,
           "plan-approval-guard",
@@ -4350,10 +4420,12 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         runIde(
           dir,
           "record-human-turn",
-          JSON.stringify({ prompt: "Recover Plan Approval" }),
+          JSON.stringify({ prompt: "Yes, bring it back." }),
           recoveryHost,
         ).code,
       ).toBe(0);
+      const yes = recordRecoveryYes(dir, recoveryHost);
+      expect(yes.code, yes.stdout + yes.stderr).toBe(0);
       const recovered = runIde(
         dir,
         "plan-approval-guard",

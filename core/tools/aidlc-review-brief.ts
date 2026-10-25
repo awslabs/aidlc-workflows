@@ -96,6 +96,7 @@ export interface ReviewFindingDisposition {
     | "Accepted risk"
     | "Changed after review"
     | "Approved autonomously"
+    | "Fix requested"
     | `Rejected: ${string}`
     | `Reopened: ${string}`;
   decided_at_severity?: string;
@@ -762,8 +763,8 @@ function applyDisposition(
     return;
   }
   if (!findingIsOpen(finding)) return;
-  // `Changed after review` and `Approved autonomously` are no decision: the
-  // finding stays open, so the next review re-checks it.
+  // `Changed after review`, `Approved autonomously` and `Fix requested` are no
+  // decision: the finding stays open, so the next review re-checks it.
   const status = disposition.status === "Accepted risk" ||
       disposition.status.startsWith("Rejected: ")
     ? disposition.status as ReviewFindingStatus
@@ -1189,6 +1190,7 @@ function parseDispositionField(
         row.status === "Accepted risk" ||
         row.status === "Changed after review" ||
         row.status === "Approved autonomously" ||
+        row.status === "Fix requested" ||
         /^Rejected: \S[\s\S]*$/.test(row.status ?? "") ||
         /^Reopened: \S[\s\S]*$/.test(row.status ?? "")
       ) &&
@@ -1309,7 +1311,8 @@ export function hydrateReviewArtifactContexts(
       }
       if (
         disposition.status === "Changed after review" ||
-        disposition.status === "Approved autonomously"
+        disposition.status === "Approved autonomously" ||
+        disposition.status === "Fix requested"
       ) {
         return finding;
       }
@@ -1390,12 +1393,71 @@ function reviewedWorkChanged(
   ).length > 0;
 }
 
+interface ReviewedContext {
+  stage: ReviewFingerprintStage;
+  context: ReviewArtifactContext;
+}
+
+interface GateFinding {
+  context: ReviewArtifactContext;
+  finding: ReviewFinding;
+}
+
+// The current lists of a gate's reviewed stages, for the Units it covers.
+function reviewedContexts(
+  projectDir: string,
+  stages: ReviewDispositionStages,
+  scopes: ReadonlyArray<string | undefined>,
+): ReviewedContext[] {
+  return dispositionStages(stages).flatMap((stage) =>
+    stage.reviewer
+      ? scopes.flatMap((unit) => readReviewArtifactContexts(projectDir, stage, unit))
+        .map((context) => ({ stage, context }))
+      : []
+  );
+}
+
+function gateFindings(reviewed: readonly ReviewedContext[]): GateFinding[] {
+  return reviewed.flatMap(({ context }) =>
+    context.findings.map((finding) => ({ context, finding }))
+  );
+}
+
+// The open findings the person asked to have fixed as they approved
+// (--fix-finding), by key. Only a person's approval asks for one.
+function fixRequestedKeys(
+  reviewed: readonly ReviewedContext[],
+  specs: readonly string[],
+  decider: ApprovalDecider,
+): Set<string> {
+  if (specs.length === 0) return new Set();
+  if (decider === "nobody") {
+    throw new Error(
+      "Cannot record --fix-finding: Construction is approving this gate on its own, so no person asked for a fix. " +
+        "Run the approval without it.",
+    );
+  }
+  const findings = gateFindings(reviewed);
+  return new Set(specs.map((raw) => {
+    const { finding } = selectGateFinding(findings, raw, "fix").selected;
+    if (!findingIsOpen(finding)) {
+      throw new Error(
+        `Cannot ask a fix for ${finding.artifact}#${finding.id}: current status is ${finding.status}.`,
+      );
+    }
+    return dispositionKey(finding);
+  }));
+}
+
 // What an approval records for each open finding: `Accepted risk` when the
-// person approved, `Approved autonomously` when nobody did (no decision: the
-// finding stays open for the next review), and, whoever approved, `Changed
-// after review` when the work its review covered changed afterwards and no
-// finished review has seen the change (the change the brief names), so a
-// finding the work was changed to fix never reads as a risk the person accepted.
+// person approved, `Approved autonomously` when nobody did, and, whoever
+// approved, `Changed after review` when the work its review covered changed
+// afterwards and no finished review has seen the change (the change the brief
+// names), so a finding the work was changed to fix never reads as a risk the
+// person accepted. A finding the person asked to have fixed (`fixRequested`,
+// the --fix-finding selectors) is `Fix requested` whatever else holds. Only
+// `Accepted risk` is a decision: under the others the finding stays open for
+// the next review.
 // `units` are the Units a Unit's own approval covers. A stage's approval
 // nobody gave leaves each Unit's findings to the Unit's own approval: it
 // records nothing for a finding that approval recorded as it is now, and a
@@ -1408,6 +1470,7 @@ export function approvalDispositionField(
   stages: ReviewDispositionStages,
   units: string | readonly string[] | undefined,
   decider: ApprovalDecider,
+  fixRequested: readonly string[] = [],
 ): string | undefined {
   const scopes: ReadonlyArray<string | undefined> = units === undefined
     ? [undefined]
@@ -1420,69 +1483,96 @@ export function approvalDispositionField(
       .filter((event) => event.event === "GATE_APPROVED");
     return approvals;
   };
-  const dispositions = dispositionStages(stages).flatMap((stage) => {
-    if (!stage.reviewer) return [];
-    return scopes.flatMap((unit) =>
-      readReviewArtifactContexts(projectDir, stage, unit)
-    ).flatMap((context) => {
-      const open = context.findings.filter((finding) =>
-        finding.status === "New" || finding.status === "Unresolved"
-      );
-      if (open.length === 0) return [];
-      const changed = reviewedWorkChanged(projectDir, stage, context);
-      const own = units === undefined && decider === "nobody" &&
-          stage.for_each === "unit-of-work" && context.unit !== undefined
-        ? latestUnitApproval(unitApprovals(), stage.slug, context.unit)
-        : null;
-      const decidedBy = own !== null && own.recorded === null &&
-          reviewedBefore(projectDir, stage, context, own.row)
-        ? own.decider
-        : decider;
-      return open.flatMap((finding): ReviewFindingDisposition[] => {
-        if (
-          own?.recorded?.some((recorded) =>
-            recorded.artifact === finding.artifact &&
-            recorded.id === finding.id &&
-            recorded.fingerprint === finding.fingerprint
-          )
-        ) {
-          return [];
-        }
-        return [{
-          artifact: finding.artifact,
-          id: finding.id,
-          fingerprint: finding.fingerprint,
-          status: changed
+  const reviewed = reviewedContexts(projectDir, stages, scopes);
+  const fixKeys = fixRequestedKeys(reviewed, fixRequested, decider);
+  const dispositions = reviewed.flatMap(({ stage, context }) => {
+    const open = context.findings.filter((finding) =>
+      finding.status === "New" || finding.status === "Unresolved"
+    );
+    if (open.length === 0) return [];
+    const changed = reviewedWorkChanged(projectDir, stage, context);
+    const own = units === undefined && decider === "nobody" &&
+        stage.for_each === "unit-of-work" && context.unit !== undefined
+      ? latestUnitApproval(unitApprovals(), stage.slug, context.unit)
+      : null;
+    const decidedBy = own !== null && own.recorded === null &&
+        reviewedBefore(projectDir, stage, context, own.row)
+      ? own.decider
+      : decider;
+    return open.flatMap((finding): ReviewFindingDisposition[] => {
+      if (
+        own?.recorded?.some((recorded) =>
+          recorded.artifact === finding.artifact &&
+          recorded.id === finding.id &&
+          recorded.fingerprint === finding.fingerprint
+        )
+      ) {
+        return [];
+      }
+      return [{
+        artifact: finding.artifact,
+        id: finding.id,
+        fingerprint: finding.fingerprint,
+        status: fixKeys.has(dispositionKey(finding))
+          ? "Fix requested"
+          : changed
             ? "Changed after review"
             : decidedBy === "person"
               ? "Accepted risk"
               : "Approved autonomously",
-          decided_at_severity: finding.severity,
-          ...(context.reviewRecord
-            ? { reviewed_record: context.reviewRecord }
-            : {}),
-        }];
-      });
+        decided_at_severity: finding.severity,
+        ...(context.reviewRecord
+          ? { reviewed_record: context.reviewRecord }
+          : {}),
+      }];
     });
   });
   return serializeReviewFindingDispositions(dispositions);
 }
 
+// The flags that name a gate's findings. A fix asked for carries no reason:
+// the person's words are already on the approval row.
+const FINDING_FLAGS = {
+  reject: {
+    flag: "--reject-finding",
+    verb: "reject",
+    listed: "rejectable",
+    none: "This gate has no New or Unresolved review findings to reject.",
+  },
+  reopen: {
+    flag: "--reopen-finding",
+    verb: "reopen",
+    listed: "reopenable",
+    none: "This gate has no Resolved (reviewer) findings to reopen.",
+  },
+  fix: {
+    flag: "--fix-finding",
+    verb: "ask a fix for",
+    listed: "open",
+    none: "This gate has no New or Unresolved review findings to fix.",
+  },
+} as const;
+
+type FindingFlagKind = keyof typeof FINDING_FLAGS;
+
 function parseFindingDispositionSpec(
   spec: string,
-  flag: "--reject-finding" | "--reopen-finding",
+  kind: FindingFlagKind,
 ): { artifact: string; id: string; reason: string } {
-  const match = /^(?:(.*)#)?(R-[0-9]+)=(\S[\s\S]*)$/.exec(spec.trim());
+  const match = kind === "fix"
+    ? /^(?:(.*)#)?(R-[0-9]+)$/.exec(spec.trim())
+    : /^(?:(.*)#)?(R-[0-9]+)=(\S[\s\S]*)$/.exec(spec.trim());
   if (!match) {
     throw new Error(
-      `Invalid ${flag} ${JSON.stringify(spec)}. Expected <review-artifact>#R-NN=<human reason>; ` +
+      `Invalid ${FINDING_FLAGS[kind].flag} ${JSON.stringify(spec)}. ` +
+        `Expected <review-artifact>#R-NN${kind === "fix" ? "" : "=<human reason>"}; ` +
         "the artifact may be its file name, or left out when one current finding carries the id.",
     );
   }
   return {
     artifact: toPosix((match[1] ?? "").trim()),
     id: match[2],
-    reason: match[3].trim(),
+    reason: (match[3] ?? "").trim(),
   };
 }
 
@@ -1492,6 +1582,51 @@ function selectorNamesArtifact(selector: string, artifact: string): boolean {
   if (selector === "" || selector === artifact) return true;
   const file = selector.endsWith(".md") ? selector : `${selector}.md`;
   return artifact === file || artifact.endsWith(`/${file}`);
+}
+
+// A selector is resolved to its finding before anything is compared or
+// recorded, so the file name and the full path name the same finding once.
+// One current finding matching is the one meant; two are named back.
+function selectGateFinding(
+  findings: readonly GateFinding[],
+  raw: string,
+  kind: FindingFlagKind,
+): { spec: ReturnType<typeof parseFindingDispositionSpec>; selected: GateFinding } {
+  const { verb, listed, none } = FINDING_FLAGS[kind];
+  const spec = parseFindingDispositionSpec(raw, kind);
+  const asked = spec.artifact ? `${spec.artifact}#${spec.id}` : spec.id;
+  const exact = findings.find(({ finding }) =>
+    finding.artifact === spec.artifact && finding.id === spec.id
+  );
+  const matches = exact ? [exact] : findings.filter(({ finding }) =>
+    finding.id === spec.id && selectorNamesArtifact(spec.artifact, finding.artifact)
+  );
+  if (matches.length > 1) {
+    throw new Error(
+      `Cannot ${verb} ${asked}: it names ${matches.length} current review findings at this gate: ` +
+        `${matches.map(({ finding }) => `${finding.artifact}#${finding.id}`).sort().join(", ")}. ` +
+        "Pass the one that is meant.",
+    );
+  }
+  const selected = matches[0];
+  if (!selected) {
+    // Name the accepted selectors: a stem-vs-full-path mismatch is otherwise invisible.
+    const available = findings
+      .filter(({ finding }) =>
+        kind === "reopen" ? finding.resolvedByReviewer === true : findingIsOpen(finding)
+      )
+      .map(({ finding }) => `${finding.artifact}#${finding.id}`)
+      .sort();
+    throw new Error(
+      `Cannot ${verb} ${asked}: it is not a current review finding for this gate. ` +
+        (available.length > 0
+          ? `Current ${listed} findings: ${available.join(", ")}.`
+          : findings.length > 0
+            ? none
+            : "This gate has no current review findings."),
+    );
+  }
+  return { spec, selected };
 }
 
 export function rejectedFindingDispositionField(
@@ -1512,63 +1647,9 @@ export function rejectedFindingDispositionField(
         `the ${stageList.length === 1 ? "stage" : "gate"} has no reviewer.`,
     );
   }
-  const findings = stageList.flatMap((stage) => {
-    if (!stage.reviewer) return [];
-    return readReviewArtifactContexts(projectDir, stage, unit).flatMap(
-      (context) => context.findings.map((finding) => ({ context, finding })),
-    );
-  });
-  // A selector is resolved to its finding before anything is compared or
-  // recorded, so the file name and the full path name the same finding once.
-  // One current finding matching is the one meant; two are named back.
-  const select = (
-    raw: string,
-    kind: "reject" | "reopen",
-  ): { spec: ReturnType<typeof parseFindingDispositionSpec>; selected: (typeof findings)[number] } => {
-    const flag = kind === "reject"
-      ? "--reject-finding"
-      : "--reopen-finding";
-    const spec = parseFindingDispositionSpec(raw, flag);
-    const asked = spec.artifact ? `${spec.artifact}#${spec.id}` : spec.id;
-    const exact = findings.find(({ finding }) =>
-      finding.artifact === spec.artifact && finding.id === spec.id
-    );
-    const matches = exact ? [exact] : findings.filter(({ finding }) =>
-      finding.id === spec.id && selectorNamesArtifact(spec.artifact, finding.artifact)
-    );
-    if (matches.length > 1) {
-      throw new Error(
-        `Cannot ${kind} ${asked}: it names ${matches.length} current review findings at this gate: ` +
-          `${matches.map(({ finding }) => `${finding.artifact}#${finding.id}`).sort().join(", ")}. ` +
-          "Pass the one that is meant.",
-      );
-    }
-    const selected = matches[0];
-    if (!selected) {
-      // Name the accepted selectors: a stem-vs-full-path mismatch is otherwise invisible.
-      const available = findings
-        .filter(({ finding }) =>
-          kind === "reject"
-            ? finding.status === "New" || finding.status === "Unresolved"
-            : finding.resolvedByReviewer === true
-        )
-        .map(({ finding }) => `${finding.artifact}#${finding.id}`)
-        .sort();
-      throw new Error(
-        `Cannot ${kind} ${asked}: it is not a current review finding for this gate. ` +
-          (available.length > 0
-            ? `Current ${kind === "reject" ? "rejectable" : "reopenable"} findings: ${available.join(", ")}.`
-            : findings.length > 0
-              ? kind === "reject"
-                ? "This gate has no New or Unresolved review findings to reject."
-                : "This gate has no Resolved (reviewer) findings to reopen."
-              : "This gate has no current review findings."),
-      );
-    }
-    return { spec, selected };
-  };
-  const rejected = specs.map((raw) => select(raw, "reject"));
-  const reopened = reopenSpecs.map((raw) => select(raw, "reopen"));
+  const findings = gateFindings(reviewedContexts(projectDir, stageList, [unit]));
+  const rejected = specs.map((raw) => selectGateFinding(findings, raw, "reject"));
+  const reopened = reopenSpecs.map((raw) => selectGateFinding(findings, raw, "reopen"));
   const duplicate = (finding: { artifact: string; id: string }): never => {
     throw new Error(
       `Finding ${finding.artifact}#${finding.id} cannot appear more than once across ` +
@@ -1584,7 +1665,7 @@ export function rejectedFindingDispositionField(
   const dispositions: ReviewFindingDisposition[] = [];
   const seen = new Set<string>();
   const addDisposition = (
-    { spec, selected }: ReturnType<typeof select>,
+    { spec, selected }: ReturnType<typeof selectGateFinding>,
     kind: "reject" | "reopen",
   ): void => {
     const { context, finding } = selected;

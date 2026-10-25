@@ -1,9 +1,10 @@
-// covers: cli:aidlc-bolt(set-autonomy), function:personSpokeSinceGate, function:keepActiveDirectiveOverAutonomyWrite
+// covers: cli:aidlc-bolt(set-autonomy), function:proveMessage, function:keepActiveDirectiveOverAutonomyWrite
 //
 // "Approve the plan, and run Construction on its own from here": one message
 // asks for both, so both are carried out in whichever order the agent runs
-// them, under every Guard Policy, and the plan is never asked again. The plan
-// stays the person's to approve: running on its own approves no plan.
+// them, the grant naming that message (--message), under every Guard Policy,
+// and the plan is never asked again. The plan stays the person's to approve:
+// running on its own approves no plan.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -19,6 +20,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(120_000);
 
@@ -33,9 +35,12 @@ afterEach(() => {
   while (created.length > 0) cleanupTestProject(created.pop());
 });
 
-// The person's checks as a shipped run has them: no presence bypass.
+// The person's checks as a shipped run has them: no presence bypass, and
+// every command run from the one chat the person types in.
 function attended(proj: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0", AIDLC_SESSION_OVERRIDE: SESSION,
+  };
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   return env;
 }
@@ -77,7 +82,9 @@ function next(proj: string): Record<string, unknown> {
   return result.directive as Record<string, unknown>;
 }
 
-function reply(proj: string, prompt: string): void {
+// The person types `prompt`; the shipped human-turn hook keeps it. Returns the
+// id of the message it kept.
+function reply(proj: string, prompt: string): string {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj,
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
@@ -86,6 +93,10 @@ function reply(proj: string, prompt: string): void {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   expect(result.status, result.stderr).toBe(0);
+  const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
 }
 
 // The plan-approval hook's verdict on a shell command, then the command as the
@@ -138,7 +149,7 @@ describe("approve the plan and run Construction on its own, in one message", () 
     const proj = project(policy);
     const asked = next(proj);
     expect(asked, JSON.stringify(asked)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
-    reply(proj, "Approve the plan, and run Construction on its own from here.");
+    const id = reply(proj, "Approve the plan, and run Construction on its own from here.");
     const steps = order === "approve first" ? ["approve", "switch"]
       : order === "switch first" ? ["switch", "approve"] : ["approve", "next", "switch"];
     for (const step of steps) {
@@ -146,7 +157,7 @@ describe("approve the plan and run Construction on its own, in one message", () 
         expect(next(proj).kind).not.toBe("ask");
         continue;
       }
-      const argv = step === "approve" ? APPROVE : SWITCH;
+      const argv = step === "approve" ? APPROVE : [...SWITCH, "--message", id];
       const ran = guardedRun(proj, spelled(argv), argv);
       expect(ran.code, ran.out).toBe(0);
       if (step === "approve") expect(ran.out).toContain('"recorded":"approve"');
@@ -163,8 +174,9 @@ describe("approve the plan and run Construction on its own, in one message", () 
   test("running on its own approves no plan: the plan question is still the open step", () => {
     const proj = project("off");
     next(proj);
-    reply(proj, "Run Construction on its own from here.");
-    const ran = guardedRun(proj, spelled(SWITCH), SWITCH);
+    const id = reply(proj, "Run Construction on its own from here.");
+    const grant = [...SWITCH, "--message", id];
+    const ran = guardedRun(proj, spelled(grant), grant);
     expect(ran.code, ran.out).toBe(0);
     const still = next(proj);
     expect(still, JSON.stringify(still)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
