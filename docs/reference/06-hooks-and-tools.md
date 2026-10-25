@@ -2366,6 +2366,32 @@ recurrence keeps its ID and decision. The tool is read-only: accepted, rejected,
 decisions are stored atomically on `GATE_APPROVED`/`GATE_REJECTED`, and
 reviewed artifacts remain receipt-frozen.
 
+### `aidlc-brought-files.ts`: the person's files a build changed
+
+A library module, run by no command of its own. At the gate that approves Code
+Generation (the reply `report --result awaiting-approval` or `revised` returns,
+the gate shown again, a team Unit gate) and at a Unit's checkpoint question
+(`bolt checkpoint --action ask` returns it as `changed_files`), it names the
+files the person had before the work started that the build changed or
+deleted. It compares three listings the engine already keeps, so it reads the
+same on every harness, with or without git, and sees a helper's or a shell's
+write like the lead's: the `Source Baseline` on the work's `WORKFLOW_STARTED`
+row (what the person brought: a file a teammate or an earlier stage added later
+is not in it), the Code Generation attempt's baseline
+(`currentStageSourceBaseline`, what the build started from) and the workspace
+now. On a brownfield project a changed file is named only when the source walk
+does not read it as code by its name (`isSourceFileName`: a README, LICENSE,
+docs, `.env`), so the code the work changes on purpose is not; a deleted file
+always is. For each file git holds the content the build replaced (HEAD, else
+one of the last 20 commits that touched it), the line gives the
+`git checkout <commit> -- <path>` that puts it back; otherwise it says there is
+no committed copy. It says nothing when a listing is not on this machine (the
+copies are AI-DLC's ignored files: a teammate's clone) or cannot be read. The
+line is said once per build attempt in a chat (the person-lines said record,
+keyed with the attempt's starting listing), counted as heard only when a step
+that carries it is written. With Construction Checkpoints the Unit's checkpoint
+says it and the stage gate the engine settles after the last Unit does not.
+
 ### `aidlc-testing-posture.ts` — Code Generation Testing Contract
 
 `resolve`/`render` read the active space's org/team/project Testing Posture

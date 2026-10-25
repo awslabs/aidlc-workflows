@@ -188,7 +188,7 @@ nothing (a question of theirs, talk about something else), present the question
 as below and wait; their reply counts together with those words.
 
 Then present the choices and wait for the human. When `ask` returns
-`left_out` or `check_offer`, say each as written just before the question. Show the complete recorded
+`left_out`, `changed_files` or `check_offer`, say each as written just before the question. Show the complete recorded
 command, never abbreviated, in the approval question: "Verified with
 `<full command>` (exit 0). Approve this completed <unit>?" Use the full
 `verification_command` from the current tool output, with a code-span delimiter

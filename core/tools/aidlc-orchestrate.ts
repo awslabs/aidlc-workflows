@@ -535,6 +535,7 @@ import {
   type ConstructionCheckpointKind,
   type ConstructionEvidence,
 } from "./aidlc-construction-checkpoints.ts";
+import { unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
 import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
 import {
   cachedUnitClaimOverview,
@@ -706,6 +707,19 @@ function producedLine(node: GraphStage, unit: string | null, unitFolders: boolea
   if (names.length === 0) return `${node.name} is ready for your review. Its output goes in ${folder}/.`;
   const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
   return `${node.name} is ready for your review. It produced ${list}, in ${folder}/.`;
+}
+
+// The files the person brought that the build changed or deleted, said with the
+// gate that approves Code Generation (aidlc-brought-files.ts). Counted as heard
+// when a step that carries the line is written (writePrepared): a rules part
+// that goes out first carries none, and a read-only probe is shown to nobody.
+const broughtFilesLines: { key: string; line: string }[] = [];
+function broughtFilesGateLine(projectDir: string, node: { slug: string }, stateContent: string | null): string | null {
+  if (node.slug !== "code-generation") return null;
+  const unheard = unheardBroughtFilesLine(projectDir, stateContent, engineSessionId);
+  if (unheard === null) return null;
+  if (!isReadOnlyEngineProbe()) broughtFilesLines.push(unheard);
+  return unheard.line;
 }
 
 // " (3 questions, 2 answered)" for a questions file: its `[Answer]:` lines
@@ -1954,6 +1968,12 @@ function legacyKiroPlanApprovalSession(projectDir: string): string | null {
 function writePrepared(prepared: PreparedEmission): void {
   writeFileSync(1, `${prepared.serialized}\n`, "utf-8");
   prepared.personLinesSaid?.();
+  const narration = (prepared.transported as { narration?: unknown }).narration;
+  for (const { key, line } of broughtFilesLines.splice(0)) {
+    if (engineProjectDir && engineSessionId && typeof narration === "string" && narration.includes(line)) {
+      markPersonLinesHeard(engineProjectDir, engineSessionId, [key]);
+    }
+  }
   // What a run-stage handed the chat (the text, inline or after its parts, or
   // a pointer), so the next step can tell whether the chat still holds it.
   if (
@@ -11701,12 +11721,13 @@ function applyGateOnlyShape(
     const unitFolders = isPerUnit(gateNode) && !usesStageLevelPerUnitArtifacts(scope, stateContent);
     const unit = directive.unit ?? null;
     const line = producedLine(gateNode, unit, unitFolders, projectDir);
-    // What the person left out of the build, and a check that still fails on
-    // a declared output, are said with the gate, each on its own line after
-    // what the stage produced: the narration is the person's line, and the
-    // produced sentence stays whole.
+    // What the person left out of the build, the files of theirs it changed,
+    // and a check that still fails on a declared output, are said with the
+    // gate, each on its own line after what the stage produced: the narration
+    // is the person's line, and the produced sentence stays whole.
     const narration = [
-      line, leftOutNotice(projectDir, gateNode, unit), failedCheckNotices(projectDir, gateNode, unit).join(" "),
+      line, leftOutNotice(projectDir, gateNode, unit), broughtFilesGateLine(projectDir, gateNode, stateContent),
+      failedCheckNotices(projectDir, gateNode, unit).join(" "),
     ].filter(Boolean).join("\n");
     if (narration) directive.narration = narration;
     addReviewCheckOffer(directive, projectDir, gateNode, unit);
@@ -18402,11 +18423,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
               : `Recorded ${flags.result} for unit "${unit}" of "${slug}".` +
                 personsFeedbackSentence(personsFeedback),
           );
-      // What the person left out of the Unit's build, and a check that still
-      // fails on a declared output, are said with the gate, as the person's
-      // lines beside the question, never as a change line.
+      // What the person left out of the Unit's build, the files of theirs it
+      // changed, and a check that still fails on a declared output, are said
+      // with the gate, as the person's lines beside the question, never as a
+      // change line.
       if (unitReply.kind === "print" && (flags.result === "awaiting-approval" || flags.result === "revised")) {
-        const lines = [leftOutNotice(pd, node, unit), failedCheckNotices(pd, node, unit).join(" ")].filter(Boolean);
+        const lines = [
+          leftOutNotice(pd, node, unit), broughtFilesGateLine(pd, node, loadStateFileIfPresent(pd)),
+          failedCheckNotices(pd, node, unit).join(" "),
+        ].filter(Boolean);
         if (lines.length > 0) unitReply.narration = lines.join("\n");
       }
       const unitGate = withChangeNotices(unitReply, changeNotices);
@@ -18674,13 +18699,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         const gateState = loadStateFileIfPresent(pd);
         const unitFolders = isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, gateState);
         const line = producedLine(node, unit, unitFolders, pd);
-        // What the person left out of the build, and a check that still fails
-        // on a declared output, are said with the gate, each on its own line
-        // after what the stage produced: the narration is the person's line
-        // (the produced sentence stays whole), and the change lines stay what
-        // changed.
-        const narration = [line, leftOutNotice(pd, node, unit), failedCheckNotices(pd, node, unit).join(" ")]
-          .filter(Boolean).join("\n");
+        // What the person left out of the build, the files of theirs it
+        // changed, and a check that still fails on a declared output, are said
+        // with the gate, each on its own line after what the stage produced:
+        // the narration is the person's line (the produced sentence stays
+        // whole), and the change lines stay what changed.
+        const narration = [
+          line, leftOutNotice(pd, node, unit), broughtFilesGateLine(pd, node, gateState),
+          failedCheckNotices(pd, node, unit).join(" "),
+        ].filter(Boolean).join("\n");
         if (narration) gateReply.narration = narration;
         addReviewCheckOffer(gateReply, pd, node, unit);
         addContextParkOffer(gateReply, pd);

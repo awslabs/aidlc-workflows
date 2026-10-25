@@ -4372,13 +4372,22 @@ export function sourceKeysChangedOutsideAidlcSince(
 ): Set<string> | null {
   const recorded = listing === undefined ? null : readBaselineSourceSnapshot(projectDir, stageSlug, listing, intent, space);
   if (recorded === null) return null;
+  return sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, recorded, current), current.listing);
+}
+
+// A kept listing as the walk would list it now, to compare with `current`.
+export function recordedSourceListingForCompare(
+  projectDir: string,
+  recorded: ReadonlyMap<string, string>,
+  current: WorkspaceSourceState,
+): WorkspaceSourceListing {
   const before = recordedSourceListingUnderCurrentBoundary(recorded, current.listing);
   // A path the registry's exclude list now leaves out of the walk (a cache
   // excluded after the listing was kept) is nobody's change, as on the per-Unit
   // unclaimed check.
   const excluded = registryExcludedSourceKeys(projectDir, [...before.keys()].filter((key) => !current.listing.has(key)));
   for (const key of excluded) before.delete(key);
-  return sourceKeysChangedOutsideAidlc(projectDir, before, current.listing);
+  return before;
 }
 
 // Whether the main checkout moved from a kept listing only in AI-DLC's own
@@ -25140,6 +25149,16 @@ function gitHeadOid(worktreeDir: string): string | null {
     : null;
 }
 
+// The file names the source walk counts as code by name alone: a symlinked
+// external tree keeps only these, and the snapshot always takes them.
+const SOURCE_FILE_EXTENSION =
+  /\.(?:astro|c|cc|cmake|cpp|cs|css|dart|erl|ex|exs|go|gql|graphql|h|hcl|hpp|hrl|html|java|js|jsx|json|kt|kts|lua|m|mm|php|proto|ps1|psd1|psm1|py|r|rb|rs|scala|sh|sol|sql|svelte|swift|tf|tfvars|toml|ts|tsx|vue|xml|ya?ml|zig)$/i;
+const SOURCE_FILE_BASENAME =
+  /^(?:BUILD|CMakeLists\.txt|Dockerfile(?:\..+)?|Gemfile|Justfile|Makefile|Procfile|Tiltfile|WORKSPACE)$/i;
+export function isSourceFileName(name: string): boolean {
+  return SOURCE_FILE_EXTENSION.test(name) || SOURCE_FILE_BASENAME.test(name);
+}
+
 function filesystemSourceIdentity(
   root: string,
   carriesWorkspaceShell: boolean,
@@ -25169,10 +25188,8 @@ function filesystemSourceIdentity(
   const maxBytes = 4 * 1024 * 1024 * 1024;
   const sourceOnlyMaxFiles = 10_000;
   const sourceOnlyMaxBytes = 64 * 1024 * 1024;
-  const sourceExtension =
-    /\.(?:astro|c|cc|cmake|cpp|cs|css|dart|erl|ex|exs|go|gql|graphql|h|hcl|hpp|hrl|html|java|js|jsx|json|kt|kts|lua|m|mm|php|proto|ps1|psd1|psm1|py|r|rb|rs|scala|sh|sol|sql|svelte|swift|tf|tfvars|toml|ts|tsx|vue|xml|ya?ml|zig)$/i;
-  const sourceBasename =
-    /^(?:BUILD|CMakeLists\.txt|Dockerfile(?:\..+)?|Gemfile|Justfile|Makefile|Procfile|Tiltfile|WORKSPACE)$/i;
+  const sourceExtension = SOURCE_FILE_EXTENSION;
+  const sourceBasename = SOURCE_FILE_BASENAME;
   const lines: string[] = [];
   // The raw form of a file line, by its index in `lines`, where line endings made it differ.
   const rawLines = new Map<number, string>();
@@ -28426,6 +28443,41 @@ export function currentStageSourceBaseline(
     readStageBaseline(projectDir, stageSlug, field, intent, space),
     allEvents,
     fieldEvent,
+    intent,
+    space,
+  );
+}
+
+// What the project held when this work started: the Source Baseline its
+// WORKFLOW_STARTED row kept (a jump's is a later moment, never this one), with
+// the repos joined since, as a stage's own baseline has them.
+export function workStartSourceBaseline(
+  projectDir: string,
+  stageSlug: string,
+  intent?: string,
+  space?: string,
+  auditRows?: readonly AuditShardEvent[],
+): SourceBaselineResult {
+  const allEvents = auditRows ?? readAuditShardEvents(projectDir, intent, space);
+  const started = allEvents
+    .filter((row) =>
+      row.event === "WORKFLOW_STARTED" && !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")
+    )
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+  const event = started.at(-1);
+  const field = event === undefined ? null : auditBlockField(event.block, "Source Baseline");
+  if (event === undefined || field === null) return { state: "legacy" };
+  if (field === UNBINDABLE_FINGERPRINT) return { state: "unbindable" };
+  return withRepoBaselineAdditions(
+    projectDir,
+    stageSlug,
+    readStageBaseline(projectDir, stageSlug, field, intent, space),
+    allEvents,
+    event,
     intent,
     space,
   );

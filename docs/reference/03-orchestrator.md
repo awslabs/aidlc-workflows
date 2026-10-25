@@ -763,9 +763,10 @@ asked for, and before any other question was asked, are the reply, so run the
 action they chose without presenting the
 question (or present it when they answer nothing). When `ask` returns
 `left_out` (the Unit's `Deferred` traceability items: what the person asked to
-leave out of its build) or `check_offer` (a stage's review passes are spent and
-its reviewed work changed after the last review), say each line just before the
-question. The human's reply
+leave out of its build), `changed_files` (the files the person brought that the
+build changed or deleted, with the way back) or `check_offer` (a stage's review
+passes are spent and its reviewed work changed after the last review), say each
+line just before the question. The human's reply
 to this checkpoint question authorizes the action the conductor reads from it, in that chat or a
 new one: with no question of its own, a new chat's reply is kept for the
 checkpoint question another chat asked, while it is the newest question asked

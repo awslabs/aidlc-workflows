@@ -289,6 +289,14 @@ the build goes on without it and its approval says what was left out, for
 example "Left out of this build: AC2.1.1, AC2.1.2 and AC2.2.1." The Unit's
 `traceability.json` keeps each of those items as `Deferred`, with your words.
 
+When the build changes or deletes a file you had before the work started (a
+README, LICENSE, docs or configs; on existing code, those and any file it
+deletes, not the code the work changes), its approval says so once, with the
+command that puts each one back when git holds your copy, for example "The
+build changed README.md, a file you had before this work started. To put it
+back, run `git checkout HEAD -- README.md`.", or that there is no committed
+copy to put back.
+
 If no autonomy choice is already recorded, the workflow then asks how to continue building the remaining work: **Continue automatically** or **Review each checkpoint**.
 
 Skeleton-off offers this choice at Construction entry instead. Your answer is

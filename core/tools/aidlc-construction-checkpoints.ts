@@ -19,6 +19,7 @@ import {
   constructionSkeletonOn,
   auditBlockField,
   authorizedVerificationCommand,
+  markPersonLinesHeard,
   verificationCommandRecovery,
   type VerificationCommand,
   claimAttemptFields,
@@ -106,6 +107,7 @@ import {
   rawFingerprintForm,
   committedTextSha256,
 } from "./aidlc-lib.ts";
+import { unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
 import type { ApprovalDecider } from "./aidlc-review-brief.ts";
 
 
@@ -213,6 +215,9 @@ export interface ConstructionCheckpoint {
   /** From ask: what the person left out of this Unit's build, said once just
    *  before the question. */
   left_out?: string;
+  /** From ask: the files the person brought that this build changed or
+   *  deleted, with the way back, said once just before the question. */
+  changed_files?: string;
   /** From ask: the one check offered when a stage's review passes are spent
    *  and its reviewed work changed after the last review, said with
    *  `left_out` just before the question. */
@@ -1671,9 +1676,14 @@ export function askConstructionCheckpoint(
       .map((slug) => join(current.root, "construction", unit, slug, "traceability.json")));
     const offer = current.result.stages.map((slug) => findStageBySlug(slug))
       .map((stage) => stage ? reviewCheckOffer(projectDir, stage, unit) : null).find((found) => found !== null) ?? null;
+    const changedFiles = current.result.stages.includes("code-generation")
+      ? unheardBroughtFilesLine(projectDir, readStateFile(projectDir), session, true)
+      : null;
+    if (changedFiles !== null) markPersonLinesHeard(projectDir, session, [changedFiles.key]);
     const result = {
       ...current.result,
       ...(leftOut === null ? {} : { left_out: leftOut }),
+      ...(changedFiles === null ? {} : { changed_files: changedFiles.line }),
       ...(offer === null ? {} : { check_offer: offer.offer }),
     };
     if (earlier === null) return result;

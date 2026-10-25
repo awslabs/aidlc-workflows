@@ -2279,6 +2279,9 @@ Read them and run the action they chose, with no question shown; when they
 answer nothing, present the question and wait as below. When `ask` returns
 `left_out`, what the person asked to leave out of the Unit's build, it is said just
 before the question, for example "Left out of this build: AC2.1.1 and AC2.2.1."
+So is `changed_files`, the files the person brought that the Unit's build
+changed or deleted, with the way back: "The build changed README.md, a file you
+had before this work started. To put it back, run `git checkout HEAD -- README.md`."
 So is `check_offer`, when a stage's review passes are spent and its reviewed work
 changed after the last review: "Do you want me to have the new approach checked
 before you decide?"
