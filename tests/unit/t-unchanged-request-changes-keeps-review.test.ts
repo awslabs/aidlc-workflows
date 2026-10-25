@@ -197,6 +197,19 @@ describe("a Request Changes that changed something still gets its review", () =>
     expect(lastRow(proj, "STAGE_AWAITING_APPROVAL")?.block).not.toContain("Review Kept");
   });
 
+  // An edit no write hook saw (the person's own editor, a harness without one) is caught by the review's own
+  // fingerprint of the document.
+  test("a document edited with no record of the edit is not taken for unchanged", async () => {
+    const proj = await gateOpen();
+    await changeRequested(proj, "Add FR-9: the check is case-sensitive.", false);
+    const doc = requirements(proj);
+    writeFileSync(doc, `${readFileSync(doc, "utf-8")}- FR-9: the check is case-sensitive.\n`, "utf-8");
+    const early = await report(proj, "revised");
+    expect(early.directive?.kind, early.out).toBe("ask");
+    expect(early.directive?.reason_codes, early.out).toContain("REVIEW_EVIDENCE_MISSING");
+    expect(lastRow(proj, "STAGE_AWAITING_APPROVAL")?.block).not.toContain("Review Kept");
+  });
+
   test("an agent that runs the review anyway after a rejection that changed nothing gets its first pass, and the gate", async () => {
     const proj = await gateOpen();
     await changeRequested(proj, `reject R-02, ${REASON}`, true);
