@@ -1733,11 +1733,11 @@ The redo `jump execute` that `next` names to run Reverse Engineering, which the 
 **A Code Generation run on its own with no work.** With no work selected,
 `next --stage code-generation --single` records the run's start in the space's
 own record, and its plan question is the open step there, bound to the empty
-state the run's steps are issued on (`runStateContent`): the person's reply,
-the choice the agent records, the receipt and `PLAN_APPROVAL_RECORDED` land
-beside that start, and the approved plan builds as it does inside work. The
-hook itself passes every call while there is no workflow state, as before; the
-run's `report --single` still waits for the approved plan.
+state the run's steps are issued on (`runStateContent`): the person's reply and
+the choice the agent records are taken as inside work, `PLAN_APPROVAL_RECORDED`
+lands beside that start, and the approved plan builds. The hook itself passes
+every call while there is no workflow state, as before; the run's
+`report --single` still waits for the approved plan.
 
 **What the plan never governs.** At any point of Code Generation, under every
 Guard Policy and whatever the current step (the plan being written, the engine's
