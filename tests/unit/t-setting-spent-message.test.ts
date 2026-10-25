@@ -43,7 +43,7 @@ const CLEAR = {
 const GATE_ENV = {
   AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
 };
-const POLICIES = ["off", "strict"] as const;
+const POLICIES: Array<"off" | "strict"> = ["off", "strict"];
 
 const created: string[] = [];
 afterEach(() => {

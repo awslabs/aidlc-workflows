@@ -16869,7 +16869,8 @@ function parseReportFlags(args: string[]): ReportFlags {
 
     } else if (a.startsWith("--") && (CONFIG_KEYS as readonly string[]).includes(a.slice(2))) {
       if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
-        (flags.settings ??= []).push([a.slice(2), args[i + 1]]);
+        flags.settings ??= [];
+        flags.settings.push([a.slice(2), args[i + 1]]);
         i++;
       } else {
         missingValue(a, "the value the person asked for");
