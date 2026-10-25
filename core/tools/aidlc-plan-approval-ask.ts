@@ -750,8 +750,9 @@ export function isPlanApprovalBeat(directive: Directive): directive is RunStageD
  * Called when a step that has the agent write a plan is published: the record
  * folder of each plan it writes is made first, so the plan is one plain file
  * write with no folder to make. The Copilot CLI's file tool makes no folders,
- * and while the plan waits the plan-approval guard cannot tell a PowerShell
- * folder command from a change to the person's code. Never through a link.
+ * and while the plan waits the plan-approval guard refuses a shell command it
+ * cannot read as a record write (a folder in a variable, python, `cmd /c
+ * mkdir`). Never through a link.
  */
 export function preparePlanRecordFolders(projectDir: string, directive: Directive): void {
   if (!isPlanApprovalBeat(directive) || directive.plan_approval === undefined) return;
