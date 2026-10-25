@@ -1257,7 +1257,8 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(r.stdout).toContain(
         "Say this to the person first, word for word, with nothing in front of it:\n\nPicking up where we left off.\n\n" +
           "Say this to the person once, as written (only a verb's tense may change to fit when you say it), as your " +
-          "own sentence with nothing in front of it, in the last message you write before they reply:\n\n" +
+          "own sentence with nothing in front of it, in the last message you write before they reply (when you end " +
+          "your turn with a question, the text you write just before it):\n\n" +
           "Guard Policy is relaxed for this piece of work.\n\n",
       );
       expect(r.stdout.indexOf("Picking up")).toBeLessThan(r.stdout.indexOf(handOver));

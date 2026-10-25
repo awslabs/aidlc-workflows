@@ -497,7 +497,8 @@ directive the agent speaks from (ahead of its own): an `ask`, `present-gate`,
 (`withPhaseRulesAddedLine`) ride the same field of the step they come with.
 `change_notices` is the one field for a line the person must hear, and its
 `change_notices_note` the one order: once, as written, in the last message the
-agent writes before the person replies. That is the message every host shows:
+agent writes before the person replies (before the question, when the turn ends with one). That is the message
+every host shows:
 Copilot CLI headless writes one message in most turns and `claude -p` prints
 only the last, so a line said as its step came was lost there. Kiro CLI's
 hand-over of a step it ran itself gives its notices the same order. A line true

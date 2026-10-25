@@ -1228,7 +1228,8 @@ export function stageValidityNote(invocation: string, stage: string | null): str
 // there (say-once-lands' measure).
 export const SAY_ONCE_BEFORE_THEY_REPLY =
   "once, as written (only a verb's tense may change to fit when you say it), as your own sentence with nothing in " +
-  "front of it, in the last message you write before they reply";
+  "front of it, in the last message you write before they reply (when you end your turn with a question, the text " +
+  "you write just before it)";
 export const CHANGE_NOTICES_NOTE =
   `Say each change_notices line to the person ${SAY_ONCE_BEFORE_THEY_REPLY}, and add nothing about why.`;
 

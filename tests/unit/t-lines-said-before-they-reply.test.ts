@@ -24,7 +24,8 @@ const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const AIDLC = join(AIDLC_SRC, "tools", "aidlc.ts");
 const SESSION = "01995000-7a11-7000-8000-00000000c0de";
 const chat = { ...process.env, AIDLC_SESSION_OVERRIDE: SESSION, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
-const WHEN = "in the last message you write before they reply";
+const WHEN = "in the last message you write before they reply (when you end your turn with a question, the text you " +
+  "write just before it)";
 const NO_CODE = "The folder has no code yet, so I'm starting this as a new project without Reverse Engineering. " +
   "If the work is on existing code, tell me.";
 const TREES = [
