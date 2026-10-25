@@ -15548,7 +15548,13 @@ function planChangeDirective(
       : turnEndingPrint(`${message}${end} ${undo}${resume}`));
   }
   if (gateOpen !== null) {
-    return kept(turnEndingPrint(`${message} ${openGateAnswerStep(gateOpen)} ${undo}${resume}`));
+    // Practices Discovery's approval waits for the practices the person
+    // approved to be saved, so its gate gets no answer step: the report would
+    // be refused in engine words. The turn ends with the gate's question still
+    // waiting, as below.
+    if (engineProjectDir === undefined || !practicesApprovalHeld(engineProjectDir, gateOpen, plan!.stateContent)) {
+      return kept(turnEndingPrint(`${message} ${openGateAnswerStep(gateOpen)} ${undo}${resume}`));
+    }
   }
   return kept(turnEndingPrint(`${message}${end} ${undo}${resume}`));
 }
