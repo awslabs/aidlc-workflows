@@ -174,7 +174,7 @@ function shown(file: BroughtFile): string {
 
 // A path as bash, zsh, PowerShell and cmd all pass it to git, and git reads it
 // as that one file; null when no quoting does both.
-function quoted(path: string): string | null {
+export function quoted(path: string): string | null {
   if (/^[A-Za-z0-9._/@+-]+$/.test(path)) return path;
   if (/["$`%!*?[\]\\]/.test(path) || Array.from(path).some(isControl)) return null;
   return `"${path}"`;

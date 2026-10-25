@@ -312,6 +312,23 @@ describe("t-early-edit-said: what the agent changed before the person picked a p
     );
   });
 
+  test("a path git would read as a pattern is left out of the checkout, so it never puts back another file", () => {
+    proj = greeter();
+    writeFileSync(join(proj, "src", "a[1].js"), "module.exports = 1;\n");
+    writeFileSync(join(proj, "src", "a1.js"), "module.exports = 1;\n");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "two"]);
+    writeFileSync(join(proj, "src", "a1.js"), "module.exports = 'mine';\n");
+    const ask = planQuestion(proj);
+    agentWrites(proj, "src/app.js", FIXED);
+    agentWrites(proj, "src/a[1].js", "module.exports = 2;\n");
+    expect(said(pick(proj, ask))).toBe(
+      "Before this work started, src/app.js was changed; `git checkout HEAD -- src/app.js` puts it back as last committed.",
+    );
+    git(proj, ["checkout", "HEAD", "--", "src/app.js"]);
+    expect(readFileSync(join(proj, "src", "a1.js"), "utf-8")).toBe("module.exports = 'mine';\n");
+  });
+
   test("a project outside git: named, and that it cannot be undone", () => {
     proj = greeter({ inGit: false });
     const ask = planQuestion(proj);

@@ -34,6 +34,7 @@ import {
   writeEngineFileNoFollow,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.ts";
+import { quoted } from "./aidlc-brought-files.ts";
 import { inQuestionChain, planQuestionWindow, type StoredQuestion } from "./aidlc-question-store.ts";
 
 const KEPT_MAX_BYTES = 1024 * 1024;
@@ -146,13 +147,6 @@ export function keepWritesBeforePick(
   if (added) writeRecordFileNoFollow(projectDir, rel, `${JSON.stringify(kept)}\n`);
 }
 
-// A path as a command argument that reads the same in bash, PowerShell and cmd.exe; null when no quoting does.
-function commandPath(path: string): string | null {
-  if (/^[A-Za-z0-9._/+=:-]+$/.test(path)) return path;
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: a control character is the point
-  return /["$`%\u0000-\u001f]/.test(path) ? null : `"${path}"`;
-}
-
 function listed(paths: readonly string[]): string {
   const shown = paths.slice(0, NAMED_MAX).map(inertPath);
   const more = paths.length - shown.length;
@@ -176,8 +170,8 @@ function undoLine(projectDir: string, changed: readonly KeptFile[]): string | nu
     } else if (file.repo === null) {
       outsideGit.push(file.path);
     } else {
-      const arg = commandPath(file.inRepo);
-      const repoArg = file.repo ? commandPath(file.repo) : "";
+      const arg = quoted(file.inRepo);
+      const repoArg = file.repo ? quoted(file.repo) : "";
       // Unnamed rather than given a reason that may not hold: git could not read it at the write.
       if (arg === null || repoArg === null || file.blob === null) continue;
       const repoDir = join(projectDir, file.repo);
