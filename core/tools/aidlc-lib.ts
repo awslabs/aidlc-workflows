@@ -19394,6 +19394,49 @@ export function openReviewRequests(events: ReadonlyArray<AuditShardEvent>): Open
 }
 
 /**
+ * The open review requests of each side-by-side Unit of the record a chat
+ * works in from `projectDir`, with the Unit's own record. A Unit's review is
+ * recorded in its worktree (stage-protocol-swarm.md, the reviewer boundary)
+ * and its reviewer writes the review file in that worktree's record, while the
+ * reviewer runs from `projectDir`, whose hooks record its finish. The
+ * worktrees are the folders `prepare` made under `.aidlc/worktrees/` whose own
+ * metadata (swarmWorkerWorktreeMeta) names this folder and this record; each
+ * is read with this record's names, never resolved on its own. Evidence only:
+ * a worktree that cannot be read is left out.
+ */
+export function swarmUnitOpenReviews(
+  projectDir: string,
+  intent: string,
+  space: string,
+): Array<{ record: string; requests: OpenReviewRequest[] }> {
+  const reviews: Array<{ record: string; requests: OpenReviewRequest[] }> = [];
+  const root = worktreesDir(projectDir);
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return reviews;
+  }
+  const record = relativeRecordDir(projectDir, intent, space);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || parseBoltName(entry.name) === null) continue;
+    const worktree = join(root, entry.name);
+    try {
+      const worker = swarmWorkerWorktreeMeta(worktree);
+      if (worker === null || worker.intentRecord !== record ||
+        canonicalPathKey(worker.parent) !== canonicalPathKey(projectDir)) continue;
+      reviews.push({
+        record: join(worktree, ...worker.intentRecord.split("/")),
+        requests: openReviewRequests(readAuditShardEvents(worktree, intent, space)),
+      });
+    } catch {
+      // Not readable as a Unit's worktree: no evidence from it.
+    }
+  }
+  return reviews;
+}
+
+/**
  * The latest row of `event` whose `Agent Type` is `reviewer` that definitely
  * follows `after` (same shard: a later position; another shard: a later
  * timestamp) and that `accept` admits, or null when there is none. A
@@ -19894,6 +19937,16 @@ export function subagentDispatchesShowNoReviewer(
  * (its heartbeat newer than every completion row since), or a failure that
  * hook recorded since (its drops file). The caller holds the audit lock, so
  * neither the rows nor the ledger move while this reads.
+ *
+ * A side-by-side Unit's review is recorded in its worktree while its reviewer
+ * runs from the main folder, whose hooks record the finish there (with the
+ * Unit's digest, swarmUnitOpenReviews), so the same checks run over the main
+ * folder's rows, ledger and hook health too; a worker naming another record,
+ * or a chat outside the main folder's workflow, is a doubt. The host records
+ * the finish before the conductor sees the reviewer's result, so those rows
+ * do not move under this read either. A row names an agent type, not a
+ * review: with two Units reviewed side by side by one reviewer type, either
+ * reviewer finishing reads as both, and the other Unit's line is not said.
  */
 export function noReviewerFinishedSinceReview(
   projectDir: string,
@@ -19907,34 +19960,52 @@ export function noReviewerFinishedSinceReview(
     if (selection.intent === null || workflowParticipation(projectDir, selection) !== "participant") return false;
     const requested = Date.parse(request.row.timestamp);
     if (!Number.isFinite(requested)) return false;
-    const ledger = subagentInflightMarkerPath(projectDir);
-    if (existsSync(ledger)) {
-      if (lstatSync(ledger).mtimeMs >= requested) return false;
-      const inflight = inspectSubagentInflight(projectDir);
-      if (inflight.malformed || inflight.freshCount > 0) return false;
+    const ledgers: Array<{ dir: string; events: ReadonlyArray<AuditShardEvent> }> = [{ dir: projectDir, events }];
+    const worker = swarmWorkerWorktreeMeta(projectDir);
+    if (worker !== null) {
+      if (worker.intentRecord !== relativeRecordDirForSelection(selection)) return false;
+      const main = resolveWorkflowSelection(worker.parent, {
+        intent: selection.intent, space: selection.space, bind: false,
+      });
+      if (workflowParticipation(worker.parent, main) !== "participant") return false;
+      // The two ledgers' shard files can share a name: the main folder's rows
+      // carry its path, so only their time orders them against the request.
+      ledgers.push({
+        dir: worker.parent,
+        events: readAuditShardEvents(worker.parent, selection.intent, selection.space)
+          .map((row) => ({ ...row, shard: `${worker.parent}:${row.shard}` })),
+      });
     }
-    const since = events.filter((row) =>
-      row.event === "SUBAGENT_COMPLETED" && !attemptEventDefinitelyBefore(row, request.row));
-    for (const row of since) {
-      const agent = auditBlockField(row.block, "Agent Type");
-      if (agent === null || agent === "" || agent === "unknown") return false;
-      if (agent === request.reviewer && recordedReviewFileDigest(row.block, request.reviewFile) !== null) return false;
-    }
-    const health = hooksHealthReadDir(projectDir, selection.intent, selection.space);
-    const heartbeat = join(health, "log-subagent.last");
-    if (existsSync(heartbeat)) {
-      const beat = Date.parse(readFileSync(heartbeat, "utf-8").trim());
-      if (!Number.isFinite(beat)) return false;
-      // The hook beats, then appends its row in the same run: a beat since the
-      // request with no completion row at or after it is a run that left none.
-      if (beat >= requested && !since.some((row) => Date.parse(row.timestamp) >= beat)) return false;
-    }
-    const drops = join(health, "log-subagent.drops");
-    if (existsSync(drops)) {
-      for (const line of readFileSync(drops, "utf-8").split("\n")) {
-        if (line.trim() === "") continue;
-        const at = Date.parse(line.split("\t", 1)[0]);
-        if (!Number.isFinite(at) || at >= requested) return false;
+    for (const { dir, events: rows } of ledgers) {
+      const ledger = subagentInflightMarkerPath(dir);
+      if (existsSync(ledger)) {
+        if (lstatSync(ledger).mtimeMs >= requested) return false;
+        const inflight = inspectSubagentInflight(dir);
+        if (inflight.malformed || inflight.freshCount > 0) return false;
+      }
+      const since = rows.filter((row) =>
+        row.event === "SUBAGENT_COMPLETED" && !attemptEventDefinitelyBefore(row, request.row));
+      for (const row of since) {
+        const agent = auditBlockField(row.block, "Agent Type");
+        if (agent === null || agent === "" || agent === "unknown") return false;
+        if (agent === request.reviewer && recordedReviewFileDigest(row.block, request.reviewFile) !== null) return false;
+      }
+      const health = hooksHealthReadDir(dir, selection.intent, selection.space);
+      const heartbeat = join(health, "log-subagent.last");
+      if (existsSync(heartbeat)) {
+        const beat = Date.parse(readFileSync(heartbeat, "utf-8").trim());
+        if (!Number.isFinite(beat)) return false;
+        // The hook beats, then appends its row in the same run: a beat since the
+        // request with no completion row at or after it is a run that left none.
+        if (beat >= requested && !since.some((row) => Date.parse(row.timestamp) >= beat)) return false;
+      }
+      const drops = join(health, "log-subagent.drops");
+      if (existsSync(drops)) {
+        for (const line of readFileSync(drops, "utf-8").split("\n")) {
+          if (line.trim() === "") continue;
+          const at = Date.parse(line.split("\t", 1)[0]);
+          if (!Number.isFinite(at) || at >= requested) return false;
+        }
       }
     }
     return true;
