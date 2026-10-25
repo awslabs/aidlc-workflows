@@ -521,7 +521,7 @@ of the workspace root that has its own `.git`) and records the set in the intent
 the right repo automatically.
 
 Each repo is recorded by its folder's name as you gave it: a space, an accent,
-an apostrophe or another letter works (`my lib`, `café`, `C# lib`). A few
+an apostrophe or another letter works (`my lib`, `C# lib`, a name with an accent). A few
 characters break something AI-DLC relies on, so a folder whose name has one is
 left out of the work, and the first step says which folder and why: `<` `>`
 `:` `"` `|` `?` `*` (Windows cannot hold them in a folder name), `&` `^` `%`
