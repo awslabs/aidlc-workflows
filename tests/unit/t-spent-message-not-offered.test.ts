@@ -266,6 +266,32 @@ describe("before the plan question, the message an approval is given in is offer
     expect(plan, answered.out).toBeDefined();
   });
 
+  // Two replies since the plan question and no message named: the setting would
+  // carry the words of whichever came last, so the agent names the one that asked.
+  test("two replies since the plan question and no message named: the answer names both and records nothing", () => {
+    const proj = bugfixAtRequirements();
+    approveRequirements(proj, said(proj, "Approve"));
+    planQuestionShown(proj);
+    const both = said(proj, "approve the plan, and turn plan approval off from here");
+    const other = said(proj, "oh and keep the blue theme");
+    tick();
+    const unnamed = run(proj, LOG, [
+      "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
+      "--plan-approval", "off",
+    ]);
+    expect(unnamed.rc).not.toBe(0);
+    expect(unnamed.out).toContain(both);
+    expect(unnamed.out).toContain(other);
+    expect(stateField(proj, "Plan Approval")).not.toBe("off (set by you)");
+    expect(readAuditShardEvents(proj).filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toHaveLength(0);
+    const named = run(proj, LOG, [
+      "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
+      "--plan-approval", "off", "--message", both,
+    ]);
+    expect(named.rc, named.out).toBe(0);
+    expect(auditBlockField(lastCeremonySet(proj), "Person Reply")).toBe("approve the plan, and turn plan approval off from here");
+  });
+
   test("the approval recorded first: no refusal names their message for the setting any more", () => {
     const proj = bugfixAtRequirements();
     const both = said(proj, "approve, and turn plan approval off");

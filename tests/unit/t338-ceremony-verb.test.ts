@@ -636,8 +636,10 @@ describe("t338 summary confirmation off is the person's switch", () => {
     }, proj);
     const again = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "on"], proj, SESSIONLESS);
     expect(again.status, again.stderr).toBe(0);
+    // The two stages approved together are the one approval it backed.
     const late = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "off", "--message", id], proj, SESSIONLESS);
     expect(late.status).not.toBe(0);
+    expect(late.stderr).toContain("already gave an approval or another decision");
   });
 
   test("turning it on stays free for a command", () => {
