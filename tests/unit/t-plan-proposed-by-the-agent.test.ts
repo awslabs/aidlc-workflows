@@ -845,7 +845,7 @@ describe("t-plan-proposed-by-the-agent: a reply naming another plan at the which
 
   // A plan typed with the request asks the question at once, with what was
   // typed: a setting kept for the new work rides every plan's command, a change
-  // to the typed plan's stages that plan's alone, as the question's own rows.
+  // to the stages each plan that can make it, as the question's own rows.
   test.each([
     ["kiro, work here and none selected, a setting and a skip typed", KIRO_TOOLS, () => cloneWithWork(KIRO_TOOLS),
       ["--scope", "bugfix", "--learnings", "on", "--skip", "reverse-engineering", "fix the logout bug"], "bugfix"],
@@ -862,7 +862,12 @@ describe("t-plan-proposed-by-the-agent: a reply naming another plan at the which
     expect(named).toEqual(open.scope_commands!.filter((row) => row.scope !== plan).map((row) => row.command));
     if (typed.includes("--skip")) {
       for (const command of named) expect(command).toContain("--learnings on");
-      for (const command of named) expect(command).not.toContain("--skip");
+      // Every plan but infra runs Reverse Engineering, so every row but infra's skips it.
+      const runs = (scope: string): boolean => loadScopeMapping()[scope]?.stages["reverse-engineering"] === "EXECUTE";
+      for (const row of open.scope_commands!.filter((entry) => entry.scope !== plan)) {
+        expect(row.command.includes("--skip reverse-engineering"), row.command).toBe(runs(row.scope));
+      }
+      expect(runs("infra")).toBe(false);
     }
   });
 
@@ -873,5 +878,122 @@ describe("t-plan-proposed-by-the-agent: a reply naming another plan at the which
     expect(step).toContain(`"Separate new piece of work": \`${open.new_intent_command}\``);
     expect(step).not.toContain(OTHER_PLAN);
     expect(step).not.toContain("--new-intent --scope");
+  });
+});
+
+// A stage skipped or added with the plan typed for the request rides to the plan
+// the person names at the which-work question when that plan can make the
+// change, and starting a plan that cannot says so once, in one line: the change
+// it already makes. Before, it rode the proposed plan's row alone, so the plan
+// they named started with every stage, unsaid, and an agent that typed the skip
+// on by hand met a refusal for a stage that plan never runs.
+describe("t-plan-proposed-by-the-agent: a stage change typed with the plan rides to the plan named at the which-work question", () => {
+  const SKIP_DP = ["--scope", "bugfix", "--skip", "deployment-pipeline", "fix the logout bug"];
+  const LEAVES_OUT_DP = "The classic plan already leaves out Deployment Pipeline.";
+  const row = (open: Directive, scope: string): { scope: string; command: string; stages?: string } =>
+    open.scope_commands!.find((entry) => entry.scope === scope)!;
+  const routed = (tools: string, project: string, typed: string[]): Directive => {
+    const open = next(tools, project, typed);
+    expect(open.ask_type, JSON.stringify(open).slice(0, 300)).toBe("new-work-routing");
+    expect(open.proposed_scope).toBe("bugfix");
+    return open;
+  };
+  /** The `intent create` a creation print names, run as the agent runs it, its label filled. */
+  const runCreation = (tools: string, created: Directive): string => {
+    const args = /intent create ([^`]+)`/.exec(String(created.message))![1]
+      .replace('"<2-3 word kebab essence>"', "logout-bug").split(" ");
+    const made = spawnSync(process.execPath, [join(tools, "aidlc-utility.ts"), "intent-create", ...args, "--project-dir", proj], {
+      cwd: proj,
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+    });
+    expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+    const record = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim();
+    return readFileSync(join(proj, "aidlc", "spaces", "default", "intents", record, "aidlc-state.md"), "utf-8");
+  };
+
+  test("kiro, work here and none selected: a plan with the stage carries the skip, counted, and starts without it", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const open = routed(KIRO_TOOLS, proj, SKIP_DP);
+    const workshop = row(open, "workshop");
+    expect(workshop.command).toContain("--scope workshop");
+    expect(workshop.command).toContain("--skip deployment-pipeline");
+    // Its size is the plan its command creates, one stage fewer than workshop's own.
+    const size = creationSize(KIRO_TOOLS, proj, workshop.command);
+    expect(size).toStartWith(`${workshop.stages}, `);
+    const plain = Object.entries(loadScopeMapping().workshop.stages).filter(([, action]) => action === "EXECUTE").length;
+    expect(Number.parseInt(workshop.stages!, 10)).toBeLessThan(plain);
+    // The step that reads a reply naming it names the same command.
+    expect(String(next(KIRO_TOOLS, proj, ["Separate work, but use the workshop plan"]).message)).toContain(`\`${workshop.command}\``);
+    const started = next(KIRO_TOOLS, proj, answerArgs(workshop.command));
+    expect(started.kind, JSON.stringify(started).slice(0, 300)).toBe("print");
+    expect(String(started.message)).toContain("--skip deployment-pipeline");
+    expect(String(started.narration ?? "")).not.toContain("already");
+    expect(runCreation(KIRO_TOOLS, started)).toMatch(/^- \[.\] deployment-pipeline \u2014 SKIP/m);
+  });
+
+  test("kiro, work here and none selected: a plan without the stage carries none and says so once as it starts", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const open = routed(KIRO_TOOLS, proj, SKIP_DP);
+    const classic = row(open, "classic");
+    expect(classic.command).not.toContain("--skip");
+    expect(String(next(KIRO_TOOLS, proj, ["Separate work, but use the classic plan"]).message)).toContain(`\`${classic.command}\``);
+    const started = next(KIRO_TOOLS, proj, answerArgs(classic.command));
+    expect(started.kind, JSON.stringify(started).slice(0, 300)).toBe("print");
+    expect(String(started.message)).toContain("intent create --scope classic");
+    expect(String(started.message)).not.toContain("--skip");
+    expect(String(started.narration)).toContain(LEAVES_OUT_DP);
+    expect(String(started.narration).split(LEAVES_OUT_DP)).toHaveLength(2);
+    expect(getField(runCreation(KIRO_TOOLS, started), "Scope")).toBe("classic");
+  });
+
+  // What live agents did: the skip typed back on by hand for a plan that never
+  // runs the stage. The creation leaves it off and says so, never refuses it.
+  test("claude code, work here and none selected: the skip typed on by hand for a plan without the stage is left off and said", () => {
+    proj = cloneWithWork(CLAUDE_TOOLS);
+    const open = routed(CLAUDE_TOOLS, proj, SKIP_DP);
+    const started = next(CLAUDE_TOOLS, proj, [...answerArgs(row(open, "classic").command), "--skip", "deployment-pipeline"]);
+    expect(started.kind, JSON.stringify(started).slice(0, 300)).toBe("print");
+    expect(String(started.message)).not.toContain("--skip");
+    expect(String(started.narration)).toContain(LEAVES_OUT_DP);
+    expect(getField(runCreation(CLAUDE_TOOLS, started), "Scope")).toBe("classic");
+  });
+
+  test("claude code, work here and none selected: an add rides a plan that does not run the stage, and one that runs it says so", () => {
+    proj = cloneWithWork(CLAUDE_TOOLS);
+    const open = routed(CLAUDE_TOOLS, proj, ["--scope", "bugfix", "--add", "user-stories", "fix the logout bug"]);
+    expect(open.new_intent_command).toContain("--add user-stories");
+    expect(row(open, "express").command).toContain("--add user-stories");
+    const classic = row(open, "classic");
+    expect(classic.command).not.toContain("--add");
+    const started = next(CLAUDE_TOOLS, proj, answerArgs(classic.command));
+    expect(String(started.message)).not.toContain("--add");
+    expect(String(started.narration)).toContain("The classic plan already runs User Stories.");
+  });
+
+  // The plan typed with the request follows the same rule: a change it already
+  // makes is left off its separate-work answer and said once, where creation
+  // refused it before.
+  test("kiro, work here and none selected: the typed plan's own change it already makes starts the work and is said", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const open = routed(KIRO_TOOLS, proj, ["--scope", "bugfix", "--skip", "user-stories", "fix the logout bug"]);
+    expect(open.new_intent_command).not.toContain("--skip");
+    expect(row(open, "classic").command).toContain("--skip user-stories");
+    const started = next(KIRO_TOOLS, proj, answerArgs(open.new_intent_command));
+    expect(String(started.message)).not.toContain("--skip");
+    expect(String(started.narration)).toContain("The bugfix plan already leaves out User Stories.");
+    expect(getField(runCreation(KIRO_TOOLS, started), "Scope")).toBe("bugfix");
+  });
+
+  // Asked again (a reshape with no record named), the question keeps what was
+  // typed and hands it out the same way.
+  test("kiro, work here and none selected: the question asked again carries the skip to the plans that take it", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const open = routed(KIRO_TOOLS, proj, SKIP_DP);
+    const again = next(KIRO_TOOLS, proj, answerArgs(open.compose_command));
+    expect(again.ask_type, JSON.stringify(again).slice(0, 300)).toBe("new-work-routing");
+    expect(row(again, "workshop").command).toContain("--skip deployment-pipeline");
+    expect(row(again, "classic").command).not.toContain("--skip");
+    expect(again.new_intent_command).toContain("--skip deployment-pipeline");
   });
 });
