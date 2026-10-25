@@ -6,7 +6,9 @@
 // stands (refactor's Functional Design, poc's Intent Capture): it never runs
 // unless they go back to it, so the switch line leaves it out. The audit row,
 // the next stage's "(stage n of m)", the progress line after its approval and
-// status's Completion say the line's count too.
+// status's Completion say the line's count too. A stage the work goes back
+// to is counted: User Stories added while the work is paused just after
+// Requirements Analysis.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { cleanupTestProject } from "../harness/fixtures.ts";
@@ -71,3 +73,39 @@ for (const [from, shape, to] of [["bugfix", "code", "refactor"], ["express", "em
     }, SCOPE_RUN_TIMEOUT_MS);
   });
 }
+
+// A stage added just after the work passed it is one the work goes back to,
+// so it stays in the count: poc on a new project, Requirements Analysis
+// approved and the work paused; in a new chat the person adds User Stories,
+// reads status, and picks the work back up.
+describe("poc on a new project, User Stories added while the work is paused after Requirements Analysis", () => {
+  test("status counts the stage the work goes back to, and that stage's start says the same count", () => {
+    let added = false;
+    let completion = "";
+    let started: string | null = null;
+    const run = runScope("poc", {
+      shape: "empty",
+      afterApproval: (stage: string, agent: AgentStandIn) => {
+        if (stage !== "requirements-analysis" || added) return undefined;
+        added = true;
+        expect(agent.host.engine("orchestrate", "park", "--person-asked").status).toBe(0);
+        agent.host.newSession();
+        agent.host.typed("add the user stories stage too please");
+        const add = agent.host.engine("recompose", "--add", "user-stories", "--reason", "the person asked to add User Stories");
+        expect(add.status, add.stdout + add.stderr).toBe(0);
+        completion = agent.host.bash("bun .claude/tools/aidlc.ts --status").stdout.match(/Completion: +\d+\/\d+ stages/)?.[0] ?? "";
+        const resume = agent.personTypes("/aidlc --resume");
+        return agent.actOnPrint(resume) ? agent.next("--resume") : resume;
+      },
+      until: (d) => {
+        if (d.kind === "run-stage" && d.stage === "user-stories") started = String(d.narration ?? "");
+        return started !== null;
+      },
+    });
+    runs.push(run);
+    // Intent Capture and Requirements Analysis done, of Intent Capture, User
+    // Stories, Requirements Analysis, Code Generation and Build and Test.
+    expect(completion).toMatch(/Completion: +2\/5 stages/);
+    expect(started).toContain("(stage 3 of 5)");
+  }, SCOPE_RUN_TIMEOUT_MS);
+});
