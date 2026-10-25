@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:report, function:answeredBeforeShownStep
+// covers: subcommand:aidlc-orchestrate:report, function:answeredBeforeShownStep, function:unshownGateReplyStands
 // covers: hook:aidlc-record-human-turn
 //
 // A reply sent before a stage's document was last written does not approve its
@@ -21,7 +21,12 @@
 // and a reply followed only by a write to another stage's output or by a
 // teammate's write on another clone. A reply in the same second as the write
 // counts as before it, as the summary has it. The summary reads the same rule:
-// a teammate's write on another clone no longer moves it.
+// a teammate's write on another clone no longer moves it. A gate the agent
+// never opened (it reports the approval with no showing on record) has the
+// rule too, through Kiro CLI's and Claude Code's hooks: the stage answer
+// neither approves it nor is offered, and once the agent shows the gate, or the
+// person replies again in chat, that reply approves it; a reply after the
+// document approves it at once.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -129,6 +134,43 @@ describe("t-gate-reply-before-document: a reply sent before the stage's document
       const approved = await report(proj, ["--result", "approved", "--user-input", "Approve"]);
       expect(rows(proj, "GATE_APPROVED"), approved.stdout).toHaveLength(1);
       expect(auditBlockField(rows(proj, "GATE_APPROVED")[0].block, "Message Id")).toBe(latestMessageId(proj));
+    });
+
+    for (const harness of ["kiro", "claude"] as const) {
+      test(`${policy}, ${harness}: a gate never opened takes no answer sent before the document, and the next reply approves it`, async () => {
+        const proj = await at("stage-question", policy);
+        expect((await say(proj, "SQLite, and stop with a clear error on bad input", harness)).status).toBe(0);
+        const answer = latestMessageId(proj);
+        expect((await log(proj, ["answer", "--details", "SQLite"])).status).toBe(0);
+        sleep();
+        await writeAndReview(proj);
+        const refused = await report(proj, ["--result", "approved", "--user-input", "Approve"]);
+        expect(rows(proj, "GATE_APPROVED"), refused.stdout).toHaveLength(0);
+        expect(message(refused)).not.toContain(answer);
+        expect(message(refused)).toContain("since the gate's output was last written answers this gate. Show the gate and end your turn");
+        sleep();
+        // On Kiro CLI the agent shows the gate; on Claude Code the person
+        // replies in chat with the gate still unopened. Either reply approves.
+        if (harness === "kiro") expect((await report(proj, ["--result", "awaiting-approval"])).status).toBe(0);
+        expect((await say(proj, "approve", harness)).status).toBe(0);
+        const approved = await report(proj, ["--result", "approved", "--user-input", "Approve"]);
+        expect(rows(proj, "GATE_APPROVED"), approved.stdout).toHaveLength(1);
+        expect(auditBlockField(rows(proj, "GATE_APPROVED")[0].block, "Message Id")).toBe(latestMessageId(proj));
+      });
+    }
+
+    test(`${policy}: a gate never opened, a reply after the document approves it at once`, async () => {
+      const proj = await at("stage-question", policy);
+      expect((await say(proj, "SQLite, and stop with a clear error on bad input", "claude")).status).toBe(0);
+      expect((await log(proj, ["answer", "--details", "SQLite"])).status).toBe(0);
+      sleep();
+      await writeAndReview(proj);
+      sleep();
+      expect((await say(proj, "Looks right, approve it", "claude")).status).toBe(0);
+      const approval = latestMessageId(proj);
+      const approved = await report(proj, ["--result", "approved", "--user-input", "Approve"]);
+      expect(rows(proj, "GATE_APPROVED"), approved.stdout).toHaveLength(1);
+      expect(auditBlockField(rows(proj, "GATE_APPROVED")[0].block, "Message Id")).toBe(approval);
     });
 
     test(`${policy}, claude: an approval at the learnings question after the document is written is still offered and taken`, async () => {

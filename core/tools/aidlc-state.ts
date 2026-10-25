@@ -7436,9 +7436,11 @@ function verifyApprovalDecision(
     const shown = message === undefined ? personRepliedSinceGateShown(pd, gate) : undefined;
     if (shown === false) refuseGateShownAfterReply(pd, "approve", stage.slug);
     // A stage gate the record never shows stands on this chat's reply, never
-    // on another chat's answer to something else.
-    if (shown === null && unit === undefined && !unshownGateReplyStands(pd, stage.slug)) {
-      refuseUnshownGate(pd, stage.slug);
+    // on another chat's answer to something else, and never on one sent before
+    // what the gate shows was last written.
+    if (shown === null && unit === undefined) {
+      const shownWriting = gateOutputWriting(pd, stage.slug);
+      if (!unshownGateReplyStands(pd, stage.slug, shownWriting)) refuseUnshownGate(pd, stage.slug, shownWriting);
     }
   }
   // The conductor reports the choice the person made; a report that names none
@@ -7470,15 +7472,24 @@ function refuseGateShownAfterReply(pd: string, verb: "approve" | "request change
 }
 
 // An approval of a stage gate the record never shows, with no reply of theirs
-// in this chat to stand on: the agent names the message that answered it, or
-// shows the gate.
-function refuseUnshownGate(pd: string, slug: string): never {
+// in this chat to stand on (since what the gate shows was last written, when
+// the record says): the agent names the message that answered it, or shows the
+// gate.
+function refuseUnshownGate(pd: string, slug: string, shownWriting: ShownWriting | undefined): never {
+  let written = false;
+  try {
+    written = shownWriting !== undefined && shownLastWrittenAt(pd, shownWriting) !== null;
+  } catch {
+    written = false;
+  }
+  const since = written ? `${shownWriting?.what} was last written` : "this stage last started";
   const { step, named } = answeredBeforeShownStep(pd, slug, {
     refused: `Cannot approve "${slug}"`,
     question: `the "${slug}" gate`,
     shown: "the gate",
     command: "report",
-    why: "no reply of the person's in this chat since this stage last started answers this gate.",
+    why: `no reply of the person's in this chat since ${since} answers this gate.`,
+    shownWriting,
   });
   refuseForAgent(step, { personDecided: named });
 }

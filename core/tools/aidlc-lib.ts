@@ -31048,14 +31048,24 @@ const chatOf = (row: AuditShardEvent): string => auditBlockField(row.block, "Ses
 // something else, in a chat that never had this gate put to them, and taking
 // it would guess whose approval it was. A reply the hook recorded with no chat
 // stands too, as do a chat that cannot be named or resolved and a record that
-// cannot be read, which leave the bound to the checks around it.
-export function unshownGateReplyStands(projectDir: string, stage: string): boolean {
+// cannot be read, which leave the bound to the checks around it. With `shown`
+// (what the gate shows), a reply sent by the time it was last written did not
+// see it and stands for nothing, in any chat (answeredBeforeShownStep's rule).
+export function unshownGateReplyStands(projectDir: string, stage: string, shown?: ShownWriting): boolean {
   try {
     const session = resolveInvokingSessionId(projectDir);
-    if (session === null) return true;
+    const writtenAt = shown === undefined ? null : shownLastWrittenAt(projectDir, shown);
+    if (session === null && writtenAt === null) return true;
+    const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+    const sentAt = (row: AuditShardEvent): string => {
+      const id = auditBlockField(row.block, "Message Id");
+      return (id === null ? undefined : readMessage(projectDir, id)?.at) ?? row.timestamp;
+    };
     const { mine, others } = ownShardRows(projectDir);
     return unspentStageTurns(mine, others, stage).unspent.some((row) =>
-      isReplyTurn(row) && (chatOf(row) === "" || chatOf(row) === session));
+      isReplyTurn(row) &&
+      (session === null || chatOf(row) === "" || chatOf(row) === session) &&
+      (writtenAt === null || sentAt(row) > writtenAt));
   } catch {
     return true;
   }
