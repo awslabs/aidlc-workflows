@@ -1733,41 +1733,52 @@ function commandArgSpans(raw: string): CommandArgSpan[] {
 // between two words was gone from the record and the request: Kiro CLI hands
 // its hooks a quoted phrase with the quotes removed and the spaces kept, so
 // "Hello,  World!" arrives as two tokens. `words` is some of the line's tokens
-// in order, separated by whitespace; each separator between two tokens that
-// stand next to each other on the line becomes the spaces and tabs typed
-// between them. Any other gap (a line break, a no-break or other Unicode
-// space) stays one plain space, as the split hands it on.
-// A token lines up only whole, at a whitespace boundary in `words`, and
-// `words` is never split again, so the words never change; words that do not
-// line up with the line's tokens come back as they are.
+// in order, separated by whitespace. When one stretch of the line's tokens,
+// side by side, spells them, each separator takes the spaces and tabs typed
+// there; any other gap (a line break, a no-break or other Unicode space) stays
+// one plain space, as the split hands it on. Read by text alone a flag's value
+// can spell a word too (`--scope bugfix  bugfix bugfix is broken`), so words no
+// stretch spells, or two stretches spell with different spacing, keep the
+// join's spaces. A token lines up only whole, at a whitespace boundary, and
+// only separators are rewritten, so the words never change.
 export function withTypedSpacing(words: string, raw: string): string {
   const tokens = commandArgSpans(raw);
-  const taken: Array<{ token: number; from: number; to: number }> = [];
+  // A stretch holds as many whitespace-separated pieces as the words, so no
+  // stretch starts where fewer are left: a long pasted line stays one pass.
+  const pieces = (text: string): number => text.split(/\s+/).filter((piece) => piece.length > 0).length;
+  const wanted = pieces(words);
+  if (wanted === 0) return words;
+  let left = tokens.reduce((sum, token) => sum + pieces(token.text), 0);
+  let spelled: string | null = null;
+  for (let first = 0; first < tokens.length && left >= wanted; first++) {
+    const spaced = spacedFrom(words, raw, tokens, first);
+    left -= pieces(tokens[first].text);
+    if (spaced === null || spaced === spelled) continue;
+    if (spelled !== null) return words;
+    spelled = spaced;
+  }
+  return spelled ?? words;
+}
+
+// The words with the line's spacing when its tokens from `first` on, side by
+// side, spell them; null when they do not.
+function spacedFrom(words: string, raw: string, tokens: CommandArgSpan[], first: number): string | null {
   let at = 0;
   while (at < words.length && /\s/.test(words[at])) at++;
-  for (let k = 0; k < tokens.length && at < words.length; k++) {
+  let spaced = words.slice(0, at);
+  for (let k = first; k < tokens.length; k++) {
     const text = tokens[k].text;
-    if (text.length === 0 || !words.startsWith(text, at)) continue;
+    if (text.length === 0 || !words.startsWith(text, at)) return null;
     const to = at + text.length;
-    if (to < words.length && !/\s/.test(words[to])) continue;
-    taken.push({ token: k, from: at, to });
+    if (to < words.length && !/\s/.test(words[to])) return null;
+    spaced += text;
     at = to;
     while (at < words.length && /\s/.test(words[at])) at++;
+    if (at === words.length) return spaced + words.slice(to);
+    const typed = k + 1 < tokens.length ? raw.slice(tokens[k].end, tokens[k + 1].start) : "";
+    spaced += /^[ \t]+$/.test(typed) ? typed : words.slice(to, at);
   }
-  if (at < words.length || taken.length === 0) return words;
-  let spaced = words.slice(0, taken[0].from);
-  for (let n = 0; n < taken.length; n++) {
-    const piece = taken[n];
-    spaced += words.slice(piece.from, piece.to);
-    const after = taken[n + 1];
-    if (after === undefined) {
-      spaced += words.slice(piece.to);
-      break;
-    }
-    const typed = raw.slice(tokens[piece.token].end, tokens[after.token].start);
-    spaced += after.token === piece.token + 1 && /^[ \t]+$/.test(typed) ? typed : words.slice(piece.to, after.from);
-  }
-  return spaced;
+  return null;
 }
 
 export const RESERVED_RECORD_NAME_LIST = Object.freeze(

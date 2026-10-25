@@ -172,6 +172,16 @@ describe("every harness: an unquoted run of spaces between words is kept", () =>
     expect(records.length, JSON.stringify(records)).toBe(1);
     expect(records[0].words && personsWordsText(records[0].words)).toBe("fix  the  login  page");
   });
+
+  test("Claude Code: a plan named by flag whose name opens the request keeps the request's own spacing", () => {
+    const proj = emptyProject();
+    fire(proj, [DISPATCHER, "engine", "hook", "record-human-turn"],
+      { hook_event_name: "UserPromptSubmit", prompt: "/aidlc --scope bugfix  bugfix bugfix  is broken" },
+      { CLAUDE_PROJECT_DIR: proj });
+    const records = listMessages(proj);
+    expect(records.length, JSON.stringify(records)).toBe(1);
+    expect(records[0].words && personsWordsText(records[0].words)).toBe("bugfix bugfix  is broken");
+  });
 });
 
 describe("withTypedSpacing: only the separators take what was typed", () => {
@@ -189,10 +199,17 @@ describe("withTypedSpacing: only the separators take what was typed", () => {
     expect(withTypedSpacing("fix this and that", "fix this \r\n and that")).toBe("fix this and that");
   });
 
-  test("tokens that were not next to each other on the line keep the join's space", () => {
-    // `--depth minimal` is a flag and its value; the words around it were not neighbours.
-    expect(withTypedSpacing("add  it now", "add  --depth minimal  it  now")).toBe("add  it  now");
+  test("the spacing comes only from the one stretch of the line that spells the words side by side", () => {
+    // A plan named by flag whose name opens the request: the stretch is the request's own words.
+    expect(withTypedSpacing("feature flags", "--scope feature feature  flags")).toBe("feature  flags");
+    // The gap typed between the flag's value and the request is no gap between the request's words.
+    expect(withTypedSpacing("bugfix bugfix is broken", "--scope bugfix  bugfix bugfix is broken"))
+      .toBe("bugfix bugfix is broken");
     expect(withTypedSpacing("fix the bug", "--plan-approval  off  fix  the  bug")).toBe("fix  the  bug");
+    expect(withTypedSpacing("fix the bug", "fix  the  bug  --plan-approval off")).toBe("fix  the  bug");
+    // Two stretches that spell the words with different spacing, or a flag between the words: the join's space.
+    expect(withTypedSpacing("a a", "--scope a  a a")).toBe("a a");
+    expect(withTypedSpacing("add it now", "add  --depth minimal  it  now")).toBe("add it now");
   });
 
   test("the words never change: a token lines up only whole, and text that does not line up comes back as it is", () => {
