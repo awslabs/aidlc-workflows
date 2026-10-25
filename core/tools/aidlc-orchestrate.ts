@@ -16263,6 +16263,16 @@ function skippedJumpDirective(target: string, direction: string, current: string
   );
 }
 
+// The one check of a stage the plan skips as a jump target, asked by `next
+// --stage` and by the re-entry report's jump before it says the jump is
+// accepted, so the report never accepts a jump back that `next --stage` only
+// asks about. Null when the plan runs the target.
+function skippedJumpCheck(resolved: ResolvedJump, scope: string): Directive | null {
+  return resolved.targetSkipped
+    ? skippedJumpDirective(resolved.targetSlug, resolved.direction, resolved.currentSlug, scope)
+    : null;
+}
+
 // Resolve an explicit --stage / --phase jump and emit the resulting directive.
 //
 // A jump against an EXISTING workflow is a MUTATION: it marks intervening
@@ -16378,23 +16388,9 @@ function emitJumpDirective(
   const hasState = existsSync(engineStateFilePath(projectDir));
 
   if (hasState) {
-    const resolveArgs = ["resolve", "--scope", scope, "--project-dir", projectDir];
-    if (flags.phase) resolveArgs.push("--phase", flags.phase);
-    else if (flags.stage) resolveArgs.push("--stage", flags.stage, "--allow-skipped");
-
-    const run = runTool("aidlc-jump.ts", resolveArgs);
-    if (!run.ok) {
-      // Unknown stage/phase, a phase with no planned stage, etc.: relay the
-      // tool's verbatim error (it owns the wording the rest of the framework
-      // asserts on).
-      emit(errorDirective(toolErrorMessage(run)));
-      return;
-    }
-    const resolved = parseResolved(run.stdout);
-    if (!resolved) {
-      emit(errorDirective(
-        `Internal: aidlc-jump.ts resolve returned no target_slug/direction for ${flags.phase ? `--phase ${flags.phase}` : `--stage ${flags.stage}`}.`,
-      ));
+    const resolved = resolveJumpTarget(scope, projectDir, flags);
+    if ("kind" in resolved) {
+      emit(resolved);
       return;
     }
     const { targetSlug, direction } = resolved;
@@ -16405,8 +16401,9 @@ function emitJumpDirective(
       emit(initRefusal);
       return;
     }
-    if (resolved.targetSkipped) {
-      emit(skippedJumpDirective(targetSlug, direction, resolved.currentSlug, scope));
+    const skipped = skippedJumpCheck(resolved, scope);
+    if (skipped) {
+      emit(skipped);
       return;
     }
     const unitMajorState = loadStateFileIfPresent(projectDir) ?? "";
@@ -16541,6 +16538,30 @@ function emitJumpDirective(
     : directive);
 }
 
+type ResolvedJump = { targetSlug: string; direction: string; currentSlug: string; targetSkipped: boolean };
+
+// `aidlc-jump.ts resolve` for a --stage or --phase jump target, asked by `next`
+// and by the re-entry report's jump: the resolved target, or the error to
+// relay as it is.
+function resolveJumpTarget(
+  scope: string,
+  projectDir: string,
+  target: { stage?: string; phase?: string },
+): ResolvedJump | ErrorDirective {
+  const resolveArgs = ["resolve", "--scope", scope, "--project-dir", projectDir];
+  if (target.phase) resolveArgs.push("--phase", target.phase);
+  else if (target.stage) resolveArgs.push("--stage", target.stage, "--allow-skipped");
+
+  const run = runTool("aidlc-jump.ts", resolveArgs);
+  // Unknown stage/phase, a phase with no planned stage, etc.: relay the
+  // tool's verbatim error (it owns the wording the rest of the framework
+  // asserts on).
+  if (!run.ok) return errorDirective(toolErrorMessage(run));
+  return parseResolved(run.stdout) ?? errorDirective(
+    `Internal: aidlc-jump.ts resolve returned no target_slug/direction for ${target.phase ? `--phase ${target.phase}` : `--stage ${target.stage}`}.`,
+  );
+}
+
 // Pull `target_slug` AND `direction` out of `aidlc-jump.ts resolve`'s stdout
 // JSON. resolve emits both fields (aidlc-jump.ts handleResolve); the engine needs
 // the slug to name the target and the direction to compose the `execute` commit
@@ -16548,9 +16569,7 @@ function emitJumpDirective(
 // redo resets only the target). Returns null when the payload is unparseable or
 // missing either field, so the caller surfaces a clean internal error rather
 // than composing a half-specified jump command.
-function parseResolved(
-  stdout: string,
-): { targetSlug: string; direction: string; currentSlug: string; targetSkipped: boolean } | null {
+function parseResolved(stdout: string): ResolvedJump | null {
   try {
     const parsed: unknown = JSON.parse(stdout.trim());
     if (
@@ -18399,6 +18418,15 @@ function emitTypedResumeChoice(
     const initRefusal = initJumpRefusal(node.slug, pd);
     if (initRefusal) {
       emit(initRefusal);
+      return;
+    }
+    // A stage the plan skips, at or behind the current one, gets the question
+    // `next --stage` asks about it, as it is, for the same reason. One ahead
+    // goes back on the plan through `next --stage`, so that jump is accepted.
+    const resolved = validScopes().has(scope) ? resolveJumpTarget(scope, pd, { stage: node.slug }) : null;
+    const skipped = resolved !== null && !("kind" in resolved) ? skippedJumpCheck(resolved, scope) : null;
+    if (skipped !== null && turnEndingPrints.has(skipped)) {
+      emit(skipped);
       return;
     }
     const unknownUnit = unitNotInWork(node.slug);
