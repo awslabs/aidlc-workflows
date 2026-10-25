@@ -191,6 +191,19 @@ describe("t-gate-says-replaced-files", () => {
     expect(line).not.toContain("package.json");
   });
 
+  test("brownfield: a Dockerfile and a YAML config are read as code by name and not named, as the guide says", () => {
+    const proj = atBuild({
+      type: "Brownfield",
+      git: true,
+      brought: { "README.md": README, Dockerfile: "FROM node:20\n", "config.yaml": "port: 3000\n" },
+    });
+    write(proj, { "README.md": "# Replaced\n", Dockerfile: "FROM node:22\n", "config.yaml": "port: 8080\n" });
+    const line = said(openGate(proj));
+    expect(line).toContain("The build changed README.md, a file you had before this work started.");
+    expect(line).not.toContain("Dockerfile");
+    expect(line).not.toContain("config.yaml");
+  });
+
   test("the person's AGENTS.md rewritten by the build is named", () => {
     const proj = atBuild({ brought: { "AGENTS.md": "# Our team's rules\n" } });
     write(proj, { "AGENTS.md": "# Generated\n" });
