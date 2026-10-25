@@ -14193,7 +14193,7 @@ export const REQUEST_TEXT_DIR = "aidlc/.aidlc-request-text";
  * through no link; nothing outside that folder is ever read.
  */
 export function readAnswerTextFile(projectDir: string, file: string): string {
-  const root = recordDir(projectDir);
+  const root = runRecordDir(projectDir);
   if (!root) throw new Error("An answer text file needs an active piece of work.");
   const inFolder = (name: string): boolean =>
     !name.split("/").some((part) => part === ".." || part === ".") &&
@@ -14775,7 +14775,7 @@ function summaryQuestionFiles(
   stage: SummaryConfirmationStage,
   stateContent: string | null,
 ): SummaryQuestionFile[] {
-  const rec = recordDir(projectDir);
+  const rec = runRecordDir(projectDir);
   if (rec === null) return [];
   // Follow the approved plan's artifact placement. Without workflow state,
   // isolated per-unit stages retain their existing unit-directory discovery.
@@ -15327,7 +15327,7 @@ export function summaryAuthorizationTargetOrThrow(
   stage: string,
   unit: string | null,
 ): string {
-  const record = recordDir(projectDir);
+  const record = runRecordDir(projectDir);
   if (record === null) throw new Error("Cannot resolve the active intent record.");
   return recordFileTargetOrThrow(record, summaryAuthorizationRelativePath(stage, unit));
 }
@@ -15336,7 +15336,7 @@ export function writeSummaryAuthorization(
   projectDir: string,
   authorization: SummaryAuthorization,
 ): void {
-  const record = recordDir(projectDir);
+  const record = runRecordDir(projectDir);
   if (record === null) throw new Error("Cannot resolve the active intent record.");
   writeRecordFileNoFollow(
     record,
@@ -15350,7 +15350,7 @@ export function clearSummaryAuthorization(
   stage: string,
   unit: string | null,
 ): void {
-  const record = recordDir(projectDir);
+  const record = runRecordDir(projectDir);
   if (record === null) return;
   const relativePath = summaryAuthorizationRelativePath(stage, unit);
   refuseEngineObserverWrite("clearSummaryAuthorization");
@@ -15366,7 +15366,7 @@ export function readSummaryAuthorization(
   stage: string,
   unit: string | null,
 ): SummaryAuthorization | null {
-  const record = recordDir(projectDir);
+  const record = runRecordDir(projectDir);
   if (record === null) return null;
   let parsed: unknown;
   try {
@@ -17756,7 +17756,7 @@ export function reviewArtifactEntries(
     );
   }
 
-  const record = recordDir(projectDir);
+  const record = runRecordDir(projectDir);
   if (record === null) return null;
   if (stage.for_each !== "unit-of-work") {
     return allArtifacts.map((artifact) => ({
@@ -19997,7 +19997,7 @@ function isReviewRecord(value: unknown): value is ReviewRecord {
  */
 function reviewRecordAbsent(projectDir: string, relativePath: string): boolean {
   if (!isReviewRecordRelativePath(relativePath)) return false;
-  const record = recordDir(projectDir);
+  const record = runRecordDir(projectDir);
   if (record === null) return true;
   let at = record;
   for (const part of relativePath.split("/")) {
@@ -20032,7 +20032,7 @@ export function readReviewRecord(
   ref: { path: string; digest: string },
 ): ReviewRecord | null {
   if (!isReviewRecordRelativePath(ref.path)) return null;
-  const record = recordDir(projectDir);
+  const record = runRecordDir(projectDir);
   if (record === null) return null;
   let bytes: Buffer;
   try {
@@ -29463,7 +29463,7 @@ export function writeWorkspaceSourceSnapshot(
   state: WorkspaceSourceState,
 ): boolean {
   const path = workspaceSourceSnapshotPath(projectDir, stageSlug, state.fingerprint);
-  const record = recordDir(projectDir);
+  const record = runRecordDir(projectDir);
   if (path === null || record === null) return false;
   const serialized =
     `${WORKSPACE_SNAPSHOT_HEADER}\t${state.fingerprint}\t-\n${serializeSourceListing(state.listing)}`;
@@ -37019,6 +37019,24 @@ export function isolatedRunIsOpen(projectDir: string, selection: WorkflowSelecti
     if (stage && auditBlockField(entry.block, "Workflow") === `single-stage:${stage}`) stages.add(stage);
   }
   return [...stages].some((stage) => singleStageAttemptOpenIn(events, stage));
+}
+
+// With no work selected, an isolated run keeps its record in the space's own,
+// where `next --single` records its start: the person's turns and answers, its
+// summary confirmation and its review land there too, while the run is open.
+// A project with no run open keeps its pre-work behaviour.
+export function isolatedRunWithoutWork(
+  projectDir: string,
+  selection: WorkflowSelection = resolveWorkflowSelection(projectDir),
+): boolean {
+  return selection.intent === null && isolatedRunIsOpen(projectDir, selection);
+}
+
+// The record a stage's run writes in: the selected work's, or with no work
+// selected, the space's own while an isolated run is open there. Null
+// otherwise, as recordDir.
+export function runRecordDir(projectDir: string): string | null {
+  return recordDir(projectDir) ?? (isolatedRunWithoutWork(projectDir) ? docsRoot(projectDir) : null);
 }
 
 function singleStageAttemptOpenIn(

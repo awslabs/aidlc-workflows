@@ -1,7 +1,8 @@
 // SubagentStop hook: Emit SUBAGENT_COMPLETED when a subagent finishes.
 //
 // Receives JSON on stdin with subagent info. Audits only while a workflow is
-// running. Its pair, SUBAGENT_DISPATCHED (a helper was sent), is written by
+// running, or with no work while a stage run on its own is open in the space's
+// own record. Its pair, SUBAGENT_DISPATCHED (a helper was sent), is written by
 // recordSubagentDispatch: from the dispatch hook every adapter but Cursor's and
 // Kiro IDE's runs, and here for a `hook_event_name: "SubagentStart"` those two
 // forward.
@@ -17,6 +18,7 @@ import {
   hooksHealthDir,
   writeHookStatusFile,
   isClaudeCodeHookInput,
+  isolatedRunWithoutWork,
   isoTimestamp,
   isScopedReviewCopy,
   openReviewRequests,
@@ -26,6 +28,7 @@ import {
   renderReviewFileDigests,
   resolveProjectDirFromHook,
   resolveWorkflowSelection,
+  runRecordDir,
   REVIEW_FILE_DIGEST_FIELD,
   reviewCopyRequest,
   reviewFileDigestOnDisk,
@@ -33,6 +36,18 @@ import {
   swarmUnitOpenReviews,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
+
+// The selection's record takes a helper's rows while its workflow runs, or with
+// no work while a stage run on its own is open in the space's own record.
+function recordsHelpers(projectDir: string, selection: ReturnType<typeof resolveWorkflowSelection>): boolean {
+  let stateContent: string;
+  try {
+    stateContent = readFileSync(stateFilePathForSelection(projectDir, selection), "utf-8");
+  } catch {
+    return isolatedRunWithoutWork(projectDir, selection);
+  }
+  return getField(stateContent, "Status") === "Running";
+}
 
 /**
  * Record that helpers were sent (SUBAGENT_DISPATCHED) in the workflow the
@@ -49,7 +64,7 @@ export function recordSubagentDispatch(projectDir: string, rawSessionId: unknown
   let selection: ReturnType<typeof resolveWorkflowSelection>;
   try {
     selection = resolveWorkflowSelection(projectDir, { sessionId: sessionId ?? undefined });
-    if (getField(readFileSync(stateFilePathForSelection(projectDir, selection), "utf-8"), "Status") !== "Running") return;
+    if (!recordsHelpers(projectDir, selection)) return;
     if (selection.intent !== null && workflowParticipation(projectDir, selection) !== "participant") return;
   } catch {
     return;
@@ -110,20 +125,15 @@ export async function run(input: string): Promise<number> {
     completionError = errorMessage(error);
   }
 
-  let stateContent: string;
   let selection: ReturnType<typeof resolveWorkflowSelection>;
   try {
     selection = resolveWorkflowSelection(projectDir, {
       sessionId: sessionId ?? undefined,
     });
-    stateContent = readFileSync(
-      stateFilePathForSelection(projectDir, selection),
-      "utf-8",
-    );
   } catch {
     return 0;
   }
-  if (getField(stateContent, "Status") !== "Running") return 0;
+  if (!recordsHelpers(projectDir, selection)) return 0;
   // A conversation that has not joined this workflow records nothing in it.
   if (selection.intent !== null && workflowParticipation(projectDir, selection) !== "participant") return 0;
   // Record the completion in the workflow whose state was just read.
@@ -191,7 +201,7 @@ export async function run(input: string): Promise<number> {
   // Evidence only: a ledger or record that cannot be read leaves the row as
   // it was.
   try {
-    const record = recordDir(projectDir, intent, space);
+    const record = intent ? recordDir(projectDir, intent, space) : runRecordDir(projectDir);
     if (record !== null) {
       const units = intent && space && agentType !== "unknown" ? swarmUnitOpenReviews(projectDir, intent, space) : [];
       const digests = [

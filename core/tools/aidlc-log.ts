@@ -183,6 +183,7 @@ import {
   readUnitSourceManifest,
   recordUnitClaimCheckouts,
   recordDir,
+  runRecordDir,
   recordedReviewFileDigest,
   editedReviewNotice,
   REVIEW_EDITED_FIELD,
@@ -238,6 +239,7 @@ import {
   summaryConfirmationAnswer,
   summaryConfirmationContentHash,
   singleStageAttemptIsOpen,
+  singleStageAttemptScope,
   stateFilePath,
   teamUnitGateStatus,
   toPosix,
@@ -350,21 +352,25 @@ function unknownCheckpointMessage(checkpoint: string, accepted: readonly string[
 // no workflow. Existence of the resolved state file is the same "is there an
 // active workflow" signal every other emitter guards on: the hooks via
 // `if (!existsSync(stateFilePath(...)))` no-op, emitError() via the same check.
-// `isolatedStage` names the isolated run a row belongs to. With no work
-// selected, `next --single` records that run's start in the bare root and
-// `report --single` reads its evidence there, so a row for the run whose
-// attempt is open joins its start.
+// `isolatedStage` is the stage the row names: with no work selected, `next
+// --single` records that stage's isolated run in the bare root and `report
+// --single` reads its evidence there, so a row for the run whose attempt is
+// open joins its start, with or without `--single` (the stage protocol's own
+// question commands carry none).
 function resolveActiveProjectDir(explicit?: string, isolatedStage?: string): string {
   const pd = resolveProjectDir(explicit);
-  if (
-    !existsSync(stateFilePath(pd)) &&
-    !(isolatedStage !== undefined && singleStageAttemptIsOpen(pd, isolatedStage))
-  ) {
+  if (!existsSync(stateFilePath(pd)) && !rowJoinsIsolatedRun(pd, isolatedStage)) {
     error(
       `No active workflow is selected, so this interaction cannot be recorded. Start one by describing what to build (${entrySkillInvocation()} "build the auth service"), or switch to an existing one with ${entrySkillInvocation()} intent <name>.`
     );
   }
   return pd;
+}
+
+// With no work selected, a row for a stage whose isolated run is open belongs
+// to that run (resolveActiveProjectDir).
+function rowJoinsIsolatedRun(pd: string, stage: string | undefined): boolean {
+  return stage !== undefined && !existsSync(stateFilePath(pd)) && singleStageAttemptIsOpen(pd, stage);
 }
 
 // handleAnswer emits inside a withAuditLock section (classification and
@@ -654,7 +660,7 @@ function summaryQuestionEvidence(
     );
   }
   const absolute = resolve(pd, supplied);
-  const root = recordDir(pd);
+  const root = runRecordDir(pd);
   if (
     root === null ||
     (absolute !== root && !absolute.startsWith(`${root}${sep}`))
@@ -966,7 +972,7 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
   // An answer names a summary choice by its label, with what to change after it.
   const summaryRead = verb === "answer" ? offeredChoiceLabel(flags.details ?? "", SUMMARY_CONFIRMATION_CHOICES) : null;
   const summaryReply = summaryRead?.choice ?? null;
-  const pd = resolveActiveProjectDir(projectDir);
+  const pd = resolveActiveProjectDir(projectDir, flags.stage);
   const stage = loadStageGraphAll().find((entry) => entry.slug === flags.stage);
   if (!stage) return;
   const unit = flags.unit ?? null;
@@ -1114,7 +1120,7 @@ function handleDecision(args: string[]): void {
     error(unknownCheckpointMessage(flags.checkpoint, DECISION_CHECKPOINTS));
   }
   refusePlainSummaryConfirmation(flags, "decision");
-  const pd = resolveActiveProjectDir(projectDir);
+  const pd = resolveActiveProjectDir(projectDir, flags.stage);
   if (flags.checkpoint === "plan-approval" && planApprovalAskIsOpen(pd)) {
     error(PLAN_APPROVAL_ASKED_BY_ENGINE);
   }
@@ -1349,7 +1355,11 @@ function handleAnswers(args: string[]): void {
   if (positional.length > 0 || Object.keys(flags).some((key) => !["stage", "unit"].includes(key))) {
     error("Usage: aidlc-log answers --stage <slug> [--unit <unit>]");
   }
-  const rows = sortAttemptEvents(readActiveAuditShardEvents(resolveProjectDir(projectDir))).filter(
+  const pd = resolveProjectDir(projectDir);
+  // An open isolated run with no work keeps its rows in the space's own record.
+  const rows = sortAttemptEvents(
+    rowJoinsIsolatedRun(pd, flags.stage) ? readAuditShardEvents(pd) : readActiveAuditShardEvents(pd),
+  ).filter(
     (row) => auditBlockField(row.block, "Stage") === flags.stage &&
       auditBlockField(row.block, "Checkpoint") === null &&
       (flags.unit === undefined || auditBlockField(row.block, "Unit") === flags.unit),
@@ -1951,7 +1961,7 @@ function handleAnswer(args: string[]): void {
     if (flags[file] === undefined) continue;
     if (flags[text] !== undefined) error(`Pass either --${text} or --${file}, not both.`);
     try {
-      flags[text] = readAnswerTextFile(resolveActiveProjectDir(projectDir), flags[file]);
+      flags[text] = readAnswerTextFile(resolveActiveProjectDir(projectDir, flags.stage), flags[file]);
     } catch (err) {
       error(errorMessage(err));
     }
@@ -1987,7 +1997,7 @@ function handleAnswer(args: string[]): void {
   // person picked, as it read their reply. "Request Changes: <what>" says the
   // same reply also said what should change.
   if (flags.checkpoint === "guard-recovery") {
-    const pd = resolveActiveProjectDir(projectDir);
+    const pd = resolveActiveProjectDir(projectDir, flags.stage);
     let picked: { op: string; action: string; awaitingWords: boolean; stage: string; unit?: string };
     try {
       picked = recordGuardRecoveryChoice(pd, flags.details, /:\s*\S/.test(flags.details));
@@ -2035,11 +2045,11 @@ function handleAnswer(args: string[]): void {
   if (setting !== undefined && !planCheckpoint) settingRidesOnlyApprovePlan(setting);
   if (planCheckpoint && offeredChoiceLabel(flags.details, [LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE]) !== null) {
     if (setting !== undefined) settingRidesOnlyApprovePlan(setting);
-    answerLegacyPlanApprovalRecovery(resolveActiveProjectDir(projectDir), flags);
+    answerLegacyPlanApprovalRecovery(resolveActiveProjectDir(projectDir, flags.stage), flags);
     return;
   }
   if (planCheckpoint && flags.override === undefined && flags["override-file"] === undefined) {
-    const pd = resolveActiveProjectDir(projectDir);
+    const pd = resolveActiveProjectDir(projectDir, flags.stage);
     if (planApprovalAskIsOpen(pd) || offeredChoiceLabel(flags.details, [PLAN_REVIEW_CHOICE]) !== null ||
       planApprovalCorrectionPendingSafe(pd)) {
       answerEnginePlanApproval(pd, flags, offeredChoiceLabel(flags.details, enginePlanApprovalChoices()));
@@ -2049,7 +2059,7 @@ function handleAnswer(args: string[]): void {
   if (setting !== undefined) settingRidesOnlyApprovePlan(setting);
   const verificationCheckpoint = flags.checkpoint === "verification-command";
   const policyCheckpoint = flags.checkpoint === "construction-policy";
-  const policyFields = policyCheckpoint ? constructionPolicyFields(resolveActiveProjectDir(projectDir), flags) : null;
+  const policyFields = policyCheckpoint ? constructionPolicyFields(resolveActiveProjectDir(projectDir, flags.stage), flags) : null;
   if (verificationCheckpoint && (flags.single !== undefined || flags.unit !== undefined)) {
     error("Construction verification commands apply to the whole intent; omit --single and --unit.");
   }
@@ -2069,14 +2079,14 @@ function handleAnswer(args: string[]): void {
     flags.details = picked.choice;
   }
   if (flags["batch-file"] !== undefined) {
-    handlePlanApprovalBatch(resolveActiveProjectDir(projectDir), flags, "answer");
+    handlePlanApprovalBatch(resolveActiveProjectDir(projectDir, flags.stage), flags, "answer");
     return;
   }
   // The mode question ("How would you like to answer them?"): the agent reads
   // the way the person chose from their reply and records its option, which
   // later stages reuse; the person's own words are kept beside it.
   if (flags.checkpoint === undefined && !isNonAnswer(reply)) {
-    const asked = openDecisionBlock(resolveActiveProjectDir(projectDir), flags.stage);
+    const asked = openDecisionBlock(resolveActiveProjectDir(projectDir, flags.stage), flags.stage);
     if (asked !== null && isAnswerModeDecision(asked)) {
       const labels = Object.values(ANSWER_MODE_LABELS);
       const mode = answerModeFromReply(reply) ??
@@ -2127,7 +2137,7 @@ function handleAnswer(args: string[]): void {
   }
   const overrideReason = (
     flags["override-file"] !== undefined
-      ? readOverrideReasonFile(resolveActiveProjectDir(projectDir), flags["override-file"])
+      ? readOverrideReasonFile(resolveActiveProjectDir(projectDir, flags.stage), flags["override-file"])
       : flags.override
   )?.trim() ?? null;
   if (overrideReason !== null) {
@@ -2154,7 +2164,7 @@ function handleAnswer(args: string[]): void {
     );
   }
 
-  const pd = resolveActiveProjectDir(projectDir);
+  const pd = resolveActiveProjectDir(projectDir, flags.stage);
   const verificationCommand = verificationCheckpoint
     ? verificationCommandFromFlags(pd, flags) : null;
   if (flags.unit) validateLiveUnitScope(pd, flags.unit);
@@ -2425,9 +2435,9 @@ function handleAnswer(args: string[]): void {
             authorization.unit,
           );
           if (previousRegistry === null) {
-            removeRecordFileNoFollow(recordDir(pd) as string, registryRelative);
+            removeRecordFileNoFollow(runRecordDir(pd) as string, registryRelative);
           } else {
-            writeRecordFileNoFollow(recordDir(pd) as string, registryRelative, previousRegistry);
+            writeRecordFileNoFollow(runRecordDir(pd) as string, registryRelative, previousRegistry);
           }
         } catch (restoreError) {
           rollback =
@@ -3430,12 +3440,14 @@ function handleReview(args: string[]): void {
     );
   }
 
-  const pd = resolveActiveProjectDir(projectDir);
+  const pd = resolveActiveProjectDir(projectDir, flags.stage);
   if (flags.unit) validateLiveUnitScope(pd, flags.unit);
   const selection = resolveWorkflowSelection(pd);
   const space = selection.space;
-  const intent = selection.intent;
-  if (!intent) {
+  // An isolated run with no work selected has no intent: its review records
+  // in the space's own record, where its start is.
+  const intent = selection.intent ?? undefined;
+  if (!intent && flags.single !== "true") {
     error("Cannot resolve the active intent for review logging.");
   }
   // A stage's own review of work no longer in flight is not the stage's work
@@ -3460,7 +3472,7 @@ function handleReview(args: string[]): void {
     scanReceipts: boolean,
     enforceAdmissibility = true,
   ) => {
-    const state = readStateFile(pd, intent, space);
+    const state = intent ? readStateFile(pd, intent, space) : "";
     const node = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
     if (!node?.reviewer) {
       refuseReview(`Cannot record review: stage "${flags.stage}" has no declared reviewer.`);
@@ -3686,7 +3698,7 @@ function handleReview(args: string[]): void {
     draftRelativeToRecord: string;
     recordRelative: string;
   } => {
-    const record = recordDir(pd);
+    const record = runRecordDir(pd);
     if (record === null) refuseReview("Cannot resolve the active intent record.");
     const attemptId = reviewAttemptId(floor);
     const draft = reviewDraftRelativePath(flags.stage as string, flags.unit, attemptId, iteration, requestId);
@@ -3710,8 +3722,10 @@ function handleReview(args: string[]): void {
   ) => {
     const { state, node, attempt, budget, receipts, requireRequiredArtifacts, unitResolution, mergedBoltUnits } = context;
     const teamGate = teamUnitGateStatus(pd, state, node.slug, flags.unit);
+    // With no work, the run's own recorded scope sets its ceremony, as
+    // `report --single` reads it.
     const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
-      stateContent: state,
+      ...(intent ? { stateContent: state } : { stateContent: null, scope: singleStageAttemptScope(pd, node.slug) }),
       unit: flags.unit,
       workflow: fields.Workflow,
       selection: { intent, space },
@@ -3843,12 +3857,12 @@ function handleReview(args: string[]): void {
       // this record's, so the request refuses instead of clearing a path
       // outside the intent record.
       try {
-        removeRecordFileNoFollow(recordDir(pd) as string, slot.draftRelativeToRecord);
+        removeRecordFileNoFollow(runRecordDir(pd) as string, slot.draftRelativeToRecord);
         // The slot's folder exists before the reviewer runs, so the review is
         // one plain file write with no folder to make first.
-        const draftTarget = recordFileTargetOrThrow(recordDir(pd) as string, slot.draftRelativeToRecord);
+        const draftTarget = recordFileTargetOrThrow(runRecordDir(pd) as string, slot.draftRelativeToRecord);
         mkdirSync(dirname(draftTarget), { recursive: true });
-        recordFileTargetOrThrow(recordDir(pd) as string, slot.draftRelativeToRecord);
+        recordFileTargetOrThrow(runRecordDir(pd) as string, slot.draftRelativeToRecord);
       } catch (e) {
         refuseReview(
           `Cannot start review for "${flags.stage}": the review slot ` +
@@ -4617,7 +4631,7 @@ function handleReview(args: string[]): void {
       const readFrom = pendingRequest.ownReviewFile ? slot : reviewSlot(attempt.floor, iteration, null);
       let body: Buffer | null = null;
       try {
-        const recordRoot = realpathSync(recordDir(pd) as string);
+        const recordRoot = realpathSync(runRecordDir(pd) as string);
         const target = assertNoSymlinkInChainOrThrow(recordRoot, readFrom.draftRelativeToRecord);
         const present = lstatExists(target);
         if (reviewFileFlag !== undefined) {
@@ -4950,7 +4964,7 @@ function handleReview(args: string[]): void {
       const findingArtifact = toPosix(
         relative(
           pd,
-          join(recordDir(pd) as string, ...artifactKey.split("/")),
+          join(runRecordDir(pd) as string, ...artifactKey.split("/")),
         ),
       );
       const recordBody = incompleteFallback ? Buffer.alloc(0) : reviewBytes;
@@ -5063,7 +5077,7 @@ function handleReview(args: string[]): void {
       }
       try {
         writeRecordFileNoFollow(
-          recordDir(pd) as string,
+          runRecordDir(pd) as string,
           slot.recordRelative,
           serialized,
         );
@@ -5080,7 +5094,7 @@ function handleReview(args: string[]): void {
       // The draft was the reviewer's input; the record now holds it. The
       // chain was verified when the draft was read, so this cannot redirect.
       if (body !== null && reviewFileFlag === undefined) {
-        removeRecordFileNoFollow(recordDir(pd) as string, readFrom.draftRelativeToRecord);
+        removeRecordFileNoFollow(runRecordDir(pd) as string, readFrom.draftRelativeToRecord);
       }
       // A readable copy for people, beside the artifact the review is about:
       // `<stage dir>/reviews/review-NN.md`, numbered in the order verdicts land.
@@ -5088,7 +5102,7 @@ function handleReview(args: string[]): void {
       // copy back, so a failure to write it never withholds the verdict.
       if (recordBody.length > 0) {
         try {
-          const recordRoot = recordDir(pd) as string;
+          const recordRoot = runRecordDir(pd) as string;
           const reviewsDirRelative = posix.join(posix.dirname(artifactKey), "reviews");
           const reviewsDir = join(recordRoot, ...reviewsDirRelative.split("/"));
           let next = 1;
@@ -5141,7 +5155,7 @@ function handleReview(args: string[]): void {
 
   const agentNote = recorded.context === undefined
     ? null
-    : reviewVerdictStep(pd, flags, verdict, iteration, recorded.context, { intent, space }, recorded.request ?? {
+    : reviewVerdictStep(pd, flags, verdict, iteration, recorded.context, { intent: intent ?? null, space }, recorded.request ?? {
       personAsked: false,
       recovery: false,
     });

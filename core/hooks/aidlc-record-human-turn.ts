@@ -75,6 +75,7 @@ import {
   freshReviewReceipts,
   getField,
   hookStandsOutside,
+  isolatedRunWithoutWork,
   hostEnvelopeTurnText,
   planApprovalChallengeRelativePath,
   COMMAND_TURN_REPLY,
@@ -800,13 +801,17 @@ try {
   // where doctor and `next` look then, so a tool that runs no hooks is known
   // from the person's first message, before any work.
   recordPreWorkflowHeartbeat(projectDir, "record-human-turn");
+  // The rows below go in the work's record, or with no work in the space's own
+  // while a stage run on its own is open there (its start is there).
+  const inRecord = existsSync(stateFilePath(projectDir)) ||
+    (workflow.selection !== null && isolatedRunWithoutWork(projectDir, workflow.selection));
   // A turn the host made (its notice or brief, not the person's words): none of
   // the person's authority rides on it. No turn, no kept words, no reply, no
   // switch, no conversational marker. The record keeps that it happened and why,
   // with no text, so a turn that stopped counting is visible there.
   if (turnOrigin.kind === "host") {
     const host = turnOrigin;
-    if (existsSync(stateFilePath(projectDir))) {
+    if (inRecord) {
       try {
         writeProjectHookStatusFile(projectDir, hooksHealthDir(projectDir), "record-human-turn.last", isoTimestamp());
       } catch {
@@ -831,8 +836,8 @@ try {
   // it as the engine's own parser read it; nothing is applied here.
   const messageId = keepMessage();
   sayIfKeyShaped();
-  if (existsSync(stateFilePath(projectDir))) {
-    // Inside a workflow it lands in the record, before the mint branch and
+  if (inRecord) {
+    // With a record it lands in the record, before the mint branch and
     // apart from it, so a hook that ran but withheld its mint (AIDLC_UNATTENDED=1,
     // or a turn with no pending question) is never mistaken for one that never
     // ran. Best-effort: a heartbeat failure never blocks the person's turn.
