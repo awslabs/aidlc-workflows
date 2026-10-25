@@ -13,7 +13,7 @@
 // `next --request-file <that file>` after the switch, so the words get the
 // reading they get with that work selected (go on, redo, jump, start fresh, an
 // answer to what is open) with no shell on the way: a line break, a quote or a
-// character cmd.exe reads comes through as typed. Nothing else changes:
+// character cmd.exe reads in the kept words comes through as kept. Nothing else changes:
 // another chat's words, a later message, parked work and a pick with no words
 // before it keep the step they had.
 //
@@ -52,9 +52,12 @@ async function clone(state: "work-open" | "parked" | "gate-open" = "work-open"):
   return proj;
 }
 
-/** The person's `/aidlc <words>`, then the agent's first step: the reading for work none is selected for. */
-async function typed(proj: string, words: string, opts: RunOptions = {}): Promise<Directive> {
-  const said = await say(proj, `/aidlc ${words}`, "claude", opts);
+/**
+ * The person's `/aidlc <words>` (or, `asReply`, the words as a plain message), then the agent's first step: the
+ * reading for work none is selected for.
+ */
+async function typed(proj: string, words: string, opts: RunOptions = {}, asReply = false): Promise<Directive> {
+  const said = await say(proj, asReply ? words : `/aidlc ${words}`, "claude", opts);
   expect(said.status, `${said.stdout}${said.stderr}`).toBe(0);
   const { directive, out } = await next(proj, [words], opts);
   expect(directive?.kind, out).toBe("print");
@@ -152,7 +155,8 @@ describe("the words that led to a pick are read against the piece picked", () =>
   });
 
   // Quotes, an apostrophe, the characters cmd.exe reads, and a line break: the words the reading kept are the words
-  // the picked work reads, character for character.
+  // the picked work reads, character for character. Said as a plain message, so the agent's exact copy is the one
+  // kept (an `/aidlc` line's words are the engine's own parse of that line, its quotes read as quoting).
   for (const [label, words] of [
     ["quotes and an apostrophe", `redo reverse engineering, the "legacy" scan missed Sam's folder`],
     ["cmd.exe's characters", "redo reverse engineering: src/legacy & src/old at 100% <both> | ^now"],
@@ -160,7 +164,8 @@ describe("the words that led to a pick are read against the piece picked", () =>
   ] as const) {
     test(`words with ${label} reach the picked work as typed`, async () => {
       const proj = await clone();
-      await typed(proj, words);
+      await typed(proj, words, {}, true);
+      expect(questionTexts(proj)).toEqual([words]);
       const picked = await next(proj, ["--pick", PIECE]);
       const kept = carried(proj, stepAfterSwitch(picked.directive));
       expect(kept.words).toBe(words);
