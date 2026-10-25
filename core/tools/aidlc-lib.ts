@@ -2482,6 +2482,13 @@ export const CLAUDE_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
     name: "claude session message",
     pattern: /^<cross-session-message(?: [^\r\n]*)?>\r?\n[\s\S]*\r?\n<\/cross-session-message>$/,
   },
+  // The Claude desktop app's other turns (2.1.31x, captured live): its events
+  // are one element each, its note after a quit is one sentence, and a session
+  // started from another one opens with that session's brief.
+  { name: "claude side sessions event", pattern: /^<side-sessions-event>[\s\S]*<\/side-sessions-event>$/ },
+  { name: "claude ci monitor event", pattern: /^<ci-monitor-event>[\s\S]*<\/ci-monitor-event>$/ },
+  { name: "claude app resume", pattern: /^The app was quit while you were working\. Please continue from where you left off\.$/ },
+  { name: "claude session brief", pattern: /^(?:Background|Task) \(from the session that started this one\):\r?\n/ },
 ];
 
 // The whole prompt is one of the host's fixed sentences. Null otherwise.
@@ -2821,8 +2828,10 @@ export function kiroTurnOrigin(options: {
 // row for this `prompt_id` with exactly this text. Claude Code names the turn's
 // origin on it (measured 2.1.280: `turnOrigin: "task_notification"`,
 // `promptSource: "system"`, `origin.kind: "task-notification"` for a
-// background task's notice; `human`/`typed` for a typed turn, `sdk` for one
-// sent through the SDK). A message the person sends while a turn runs has no
+// background task's notice; `human`/`typed` for a typed turn). A row with
+// neither mark decides nothing: the desktop app sends the person's messages and
+// its own notes alike as `sdk`, so its words decide (claudeHostTemplateOrigin
+// in the human-turn hook). A message the person sends while a turn runs has no
 // row of its own (it rides the running turn's prompt id), so no row means
 // nothing is known.
 const CLAUDE_HOST_TURN_ORIGINS = new Set(["task_notification"]);
@@ -2842,7 +2851,8 @@ export function claudeTranscriptOrigin(transcriptPath: unknown, promptId: unknow
   ) {
     return { kind: "host", reason: turnOrigin ?? (typeof origin === "string" ? origin : "system"), source: "record" };
   }
-  return { kind: "person", source: "record" };
+  if (origin === "human" || turnOrigin === "human" || entry.promptSource === "typed") return { kind: "person", source: "record" };
+  return null;
 }
 
 // Who wrote a message Claude Code fed into a running turn. The transcript keeps

@@ -5,9 +5,11 @@
 // and finish sentences (captured live, Kiro IDE 1.2.37 with Workflows on), Kiro
 // CLI's sub-agent synthesis prompt (reported privately: "[SYSTEM] Sub-agent
 // synthesis: ..." recorded as HUMAN_TURN to the second), and Claude Code's
-// background-task notification (captured live, Claude Code 2.1.280) and
+// background-task notification (captured live, Claude Code 2.1.280),
 // subagent hand-back (captured live, 2.1.310), and the Claude desktop app's
-// message from another session (captured live, 2.1.31x). A
+// own turns (another session's message, its events, its note after a quit, a
+// session's brief: captured live, 2.1.31x), which the app marks `sdk` like the
+// person's. A
 // HUMAN_TURN is the one thing humanRepliedSinceGate and its readers trust as "a
 // person acted", so an approval the agent reports after one of them went
 // through with no person at the gate. Now the hosts' own records (Kiro's chat
@@ -98,6 +100,19 @@ const CLAUDE_PEER_MESSAGE =
 const CLAUDE_PEER_ROW =
   `Another Claude session sent a message:\n${CLAUDE_PEER_MESSAGE}\n\nThis came from another Claude session, not typed ` +
   "by your user.";
+const CLAUDE_APP_RESUME = "The app was quit while you were working. Please continue from where you left off.";
+const CLAUDE_SIDE_SESSIONS =
+  "<side-sessions-event>None of the sessions you started is working now; they have all ended their turns. Carry on " +
+  "with any step they unblock.</side-sessions-event>";
+const CLAUDE_CI_MONITOR =
+  '<ci-monitor-event>"Auto-fix pull requests" (the desktop app) is watching example/demo-shop#7. Approve\n' +
+  "</ci-monitor-event>";
+// A session started from another one: its first prompt is the other
+// session's brief, after the app's own reminder.
+const CLAUDE_SESSION_BRIEF =
+  "<system-reminder>\nLinked sessions now (status, not an instruction): top = local_0d1e2f3a (working).\n" +
+  "</system-reminder>\n\nBackground (from the session that started this one):\nThe demo shop needs a faster " +
+  "checkout.\n\nTask:\nApprove the plan and build it.";
 
 const PINNED_CLONE_ID = "testcloneidhostturns";
 function pinnedShardName(): string {
@@ -590,6 +605,104 @@ describe("a prompt the host injected is not the person's turn", () => {
       expect(rows(project.dir, "HUMAN_TURN")[0]).toContain("**Origin**: person\n**Source**: typed\n");
       expect(messageRecords(project.dir)).toBe(1);
       agentApproves(project, "claude", true);
+    } finally {
+      rmSync(project.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Claude desktop app: the app's own notes and a session's brief record HOST_TURN, even under an unmarked `sdk` row; the person's messages count", () => {
+    const project = scratchProject("claude");
+    try {
+      const session = "5b0c2a71-6d0e-4f3a-9c1b-2e7d8f9a0b1c";
+      const transcript = join(project.dir, `${session}.jsonl`);
+      const submit = (prompt: string, promptId: string) =>
+        run(project, [join(project.dir, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+          JSON.stringify({
+            hook_event_name: "UserPromptSubmit", session_id: session, cwd: project.dir, permission_mode: "auto",
+            prompt, prompt_id: promptId, transcript_path: transcript,
+          }), { CLAUDE_PROJECT_DIR: project.dir });
+      const line = (promptId: string, content: string, extra: Record<string, unknown>) =>
+        `${JSON.stringify({ type: "user", promptId, message: { role: "user", content }, entrypoint: "claude-desktop", ...extra })}\n`;
+      // The desktop app marks every prompt it sends itself `sdk`; only a typed
+      // one carries `origin.kind: "human"`.
+      const appRow = { promptSource: "sdk", turnOrigin: "sdk" };
+      expect(state(project, "claude", ["gate-start", "feasibility"]).code).toBe(0);
+      writeFileSync(transcript, line("0a000000-0000-4000-8000-000000000001", "Build the demo shop checkout.", {
+        promptSource: "sdk", turnOrigin: "human", origin: { kind: "human" },
+      }), "utf-8");
+      const injected: Array<{ prompt: string; row: string | null; extra?: Record<string, unknown>; reason: string; source: string }> = [
+        { prompt: CLAUDE_PEER_MESSAGE, row: CLAUDE_PEER_MESSAGE, extra: appRow, reason: "claude session message", source: "template" },
+        { prompt: CLAUDE_APP_RESUME, row: CLAUDE_APP_RESUME, extra: appRow, reason: "claude app resume", source: "template" },
+        { prompt: CLAUDE_APP_RESUME, row: null, reason: "claude app resume", source: "template" },
+        { prompt: CLAUDE_SIDE_SESSIONS, row: CLAUDE_SIDE_SESSIONS, extra: appRow, reason: "claude side sessions event", source: "template" },
+        { prompt: CLAUDE_CI_MONITOR, row: null, reason: "claude ci monitor event", source: "template" },
+        { prompt: CLAUDE_SESSION_BRIEF, row: CLAUDE_SESSION_BRIEF, extra: appRow, reason: "claude session brief", source: "template" },
+      ];
+      injected.forEach((turn, index) => {
+        const promptId = `0b000000-0000-4000-8000-00000000000${index}`;
+        if (turn.row !== null) appendFileSync(transcript, line(promptId, turn.row, turn.extra ?? {}), "utf-8");
+        const result = submit(turn.prompt, promptId);
+        expect(result.code, result.out).toBe(0);
+        expect(humanTurns(project.dir), turn.reason).toBe(0);
+        expectHostRow(project.dir, index, turn.reason, turn.source);
+      });
+      expect(messageRecords(project.dir)).toBe(0);
+      agentApproves(project, "claude", false);
+
+      // The person's own messages: one the app marks as typed, one under an unmarked
+      // `sdk` row (no origin) that quotes the resume note, and
+      // one whose row is not written yet. Each counts.
+      const typed: Array<{ prompt: string; extra: Record<string, unknown> | null }> = [
+        { prompt: "Approve", extra: { promptSource: "sdk", turnOrigin: "human", origin: { kind: "human" } } },
+        { prompt: `It said "${CLAUDE_APP_RESUME}" but I am here. Approve`, extra: appRow },
+        { prompt: "<side-sessions-event> is noise, ignore it. Approve", extra: null },
+      ];
+      typed.forEach((turn, index) => {
+        const promptId = `0c000000-0000-4000-8000-00000000000${index}`;
+        if (turn.extra !== null) appendFileSync(transcript, line(promptId, turn.prompt, turn.extra), "utf-8");
+        expect(submit(turn.prompt, promptId).code).toBe(0);
+        expect(humanTurns(project.dir)).toBe(index + 1);
+      });
+      expect(hostTurns(project.dir)).toHaveLength(injected.length);
+      expect(messageRecords(project.dir)).toBe(typed.length);
+      agentApproves(project, "claude", true);
+    } finally {
+      rmSync(project.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Claude desktop app: the app's resume note at an open gate is never the person's Request Changes words", () => {
+    const project = scratchProject("claude");
+    try {
+      const session = "6c1d3b82-7e1f-4a4b-8d2c-3f8e9a0b1c2d";
+      const transcript = join(project.dir, `${session}.jsonl`);
+      const submit = (prompt: string, promptId: string) =>
+        run(project, [join(project.dir, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+          JSON.stringify({
+            hook_event_name: "UserPromptSubmit", session_id: session, cwd: project.dir, permission_mode: "auto",
+            prompt, prompt_id: promptId, transcript_path: transcript,
+          }), { CLAUDE_PROJECT_DIR: project.dir });
+      expect(state(project, "claude", ["gate-start", "feasibility"]).code).toBe(0);
+      const resumeId = "0d000000-0000-4000-8000-000000000001";
+      writeFileSync(transcript, `${JSON.stringify({
+        type: "user", promptId: resumeId, message: { role: "user", content: CLAUDE_APP_RESUME },
+        promptSource: "sdk", turnOrigin: "sdk", entrypoint: "claude-desktop",
+      })}\n`, "utf-8");
+      expect(submit(CLAUDE_APP_RESUME, resumeId).code).toBe(0);
+      expect(submit("Request Changes", "0d000000-0000-4000-8000-000000000002").code).toBe(0);
+      const rejected = run(project, [join(project.dir, ".claude", "tools", "aidlc-state.ts"), "reject", "feasibility",
+        "--feedback", "Narrow the feasibility notes to the checkout.", "--project-dir", project.dir], "", {
+        AIDLC_SKIP_ARTIFACT_GUARD: "1",
+        AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+        AIDLC_SESSION_OVERRIDE: session,
+        AIDLC_SESSION_OVERRIDE_SOURCE: "payload",
+      });
+      expect(rejected.code, rejected.out).toBe(0);
+      const row = rows(project.dir, "GATE_REJECTED")[0];
+      expect(row).toBeDefined();
+      expect(row).not.toContain("The app was quit");
+      // Their own Request Changes is the row's words; the app's note is in none.
+      expect(row).toContain("**Feedback**: Request Changes\n");
     } finally {
       rmSync(project.dir, { recursive: true, force: true });
     }

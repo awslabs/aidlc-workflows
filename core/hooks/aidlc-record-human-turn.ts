@@ -118,6 +118,14 @@ import { boxQuestionId, QUESTION_ID_FIELD, turnQuestionFields } from "../tools/a
 import { aidlcEntryWords, isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
 import { MESSAGE_PICKER_MAX_CHARS, MESSAGE_TEXT_MAX_CHARS, type NewMessage, saveMessage } from "../tools/aidlc-message-store.ts";
 
+// The desktop app puts its own `<system-reminder>` blocks ahead of some of its
+// turns (a session's brief) and of some of the person's; the templates read
+// what follows them.
+const CLAUDE_LEADING_REMINDERS_RE = /^(?:\s*<system-reminder>[\s\S]*?<\/system-reminder>)+\s*/;
+function claudeHostTemplateOrigin(prompt: string): TurnOrigin | null {
+  return hostTemplateOrigin(prompt.replace(CLAUDE_LEADING_REMINDERS_RE, ""), CLAUDE_HOST_TEMPLATES);
+}
+
 // The one parse of a typed line, for the message record (aidlc-message-store.ts)
 // and for the turn's Reply mark: flags are syntax, read by the engine's own
 // parser, and everything after them is the person's words. A prompt that does
@@ -673,10 +681,10 @@ try {
     } else if (promptSubmitted && typedPrompt && typeof parsed.transcript_path === "string") {
       // Claude Code hands its transcript to the hook: its row for this prompt
       // names who started the turn. With no row (2.1.310 writes it only after
-      // this hook returns), only the host's whole notice or message block
-      // counts as the host's.
+      // this hook returns) or one that names no origin (the desktop app's), only
+      // the host's whole notice, message block or note counts as the host's.
       turnOrigin = claudeTranscriptOrigin(parsed.transcript_path, parsed.prompt_id, typedPrompt) ??
-        hostTemplateOrigin(typedPrompt, CLAUDE_HOST_TEMPLATES) ??
+        claudeHostTemplateOrigin(typedPrompt) ??
         { kind: "person" };
     }
   } catch { /* presence still records without identity on legacy payloads */ }
