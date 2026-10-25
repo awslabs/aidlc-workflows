@@ -595,8 +595,12 @@ Review outcome: Concerns remain for your decision.
   metric is sufficient, or ask a follow-up to add a data-accuracy or reliability metric before
   inception begins.
 
+Approve accepts the open review findings R-01 (...), R-02 (...) and R-03 (The table carries a
+single, binary success metric ("at least one real...) as risk; to decide one differently, say
+"approve, and fix R-01" or "reject R-01".
+
 Decision options:
-- Approve - continue with the open findings accepted.
+- Approve - continue.
 - Request Changes - return to the listed artifacts so the required actions can be addressed.
 
 Review: aidlc/spaces/default/intents/261013-inventory-rest-api/ideation/intent-capture/

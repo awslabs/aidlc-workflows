@@ -213,8 +213,12 @@ Review outcome: Concerns remain for your decision.
 > R-03 Required action: Human should confirm at the gate that a single integration-adoption
   metric is sufficient, or ask a follow-up to add a data-accuracy or reliability metric ...
 
+Approve accepts the open review findings R-01 (...), R-02 (...) and R-03 (The table carries a
+single, binary success metric ("at least one real...) as risk; to decide one differently, say
+"approve, and fix R-01" or "reject R-01".
+
 Decision options:
-- Approve - continue with the open findings accepted.
+- Approve - continue.
 - Request Changes - return to the listed artifacts so the required actions can be addressed.
 
  Approval
@@ -226,9 +230,13 @@ Decision options:
 Each finding has an ID, a severity, where it is, and what would resolve it. The
 engine owns the stable finding list. Later checks report only what changed,
 while your decisions remain exactly as you made them. Choose **Approve** to
-continue with every open finding accepted, or **Request Changes** to return to
-the listed artifacts. When rejecting an open finding as inapplicable, give its
-ID and reason. If a reviewer marks one fixed and you disagree, request changes
+continue with every open finding accepted as risk (the line under the findings
+names them), or **Request Changes** to return to the listed artifacts. To decide
+one differently, say so in your reply: "approve, and fix R-03" approves and
+records that you asked for R-03 to be fixed, so the next check looks at it
+again; "reject R-03" records it as not applying and the stage comes back to
+you. When rejecting an open finding as inapplicable, give its ID and reason. If
+a reviewer marks one fixed and you disagree, request changes
 with that ID and explain why it is not fixed; the engine reopens it for the
 next check. Ordinary revision feedback changes no finding decision. After a
 backward jump, Keep and Modify retain this list and its decisions. Redo from
