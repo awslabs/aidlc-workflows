@@ -9455,7 +9455,8 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   // a question and marked the message) is not read again: the bare `next` the
   // agent runs after that step goes on from it.
   if (own.intent !== undefined && lineHandedOut(pd, engineSessionId, message.id)) return null;
-  if (own.intent !== undefined) own.intent = withTypedSpacing(own.intent, typed);
+  // A plain-chat line went whole behind `--`, with the spacing it was typed with.
+  if (own.intent !== undefined && typed !== null) own.intent = withTypedSpacing(own.intent, typed);
   for (const key of Object.keys(flags)) delete (flags as unknown as Record<string, unknown>)[key];
   Object.assign(flags, own);
   return argv;
