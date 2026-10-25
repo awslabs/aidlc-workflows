@@ -1079,8 +1079,6 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#isKeptRequest`]: { use: "keeps", why: "the presence shape: whether next carries a request" },
   [`${ORCH}#noteRestartRequest`]: { use: "keeps", why: "keeps a new chat's request for the step that asks about it" },
   [`${ORCH}#speaksToPerson`]: { use: "keeps", why: "as above" },
-  [`${ORCH}#withPickUpLine`]: { use: "keeps", why: "as above: the line a --resume picked up" },
-  [`${ORCH}#withPersonLine`]: { use: "keeps", why: "as above: a line said once with the step (the phase rules added, git's conflict in the record)" },
   [`${ORCH}#sayPendingPersonLines`]: { use: "keeps", why: "a step's narration, which may carry their request" },
   [`${ORCH}#prepareEmission`]: { use: "decides", why: "the step's text cut at a character boundary" },
   [`${ORCH}#authoritativeRequest`]: { use: "decides", why: "the request a question shows back: its directions outside a pasted document", from: [`${ORCH}#composeDispatchDirective`, `${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#requestPreview`] },
