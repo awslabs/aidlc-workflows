@@ -334,6 +334,7 @@ import {
   cursorPastStage,
   addedStagesPassedOver,
   addReachesPassedOver,
+  stageAddedBack,
   constructionHasStarted,
   reverseEngineeringOwedBehindCursor,
   planWithChanges,
@@ -12548,14 +12549,19 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       }
       const skipping = skipList.includes(slug);
       const state = checkboxMap.get(slug);
-      if (state === "completed" || state === "in-progress" || state === "skipped" ||
+      // A stage the work skipped where it stood, added, goes back on the line
+      // not started (stageAddedBack) wherever the checks below say the work
+      // still reaches it; anywhere else it is refused as before.
+      const putBack = !skipping && state === "skipped";
+      const frozen = `its checkbox is not pending ([${state}]), so the plan can no longer change it.`;
+      if (state === "completed" || state === "in-progress" || (state === "skipped" && !putBack) ||
           state === "awaiting-approval" || state === "revising") {
         const instead = state === "completed"
           ? `It is already done; to run it again, jump back to it with ${typed(`--stage ${slug}`)}.`
           : state === "skipped"
-            ? (skipping ? "It is already skipped." : runAlone(slug))
+            ? "It is already skipped."
             : (skipping ? movePast(slug) : runAlone(slug));
-        reject(slug, `its checkbox is not pending ([${state}]), so the plan can no longer change it. ${instead}`);
+        reject(slug, `${frozen} ${instead}`);
       }
       const idx = graph.findIndex((s) => s.slug === slug);
       // Reverse Engineering owed behind the cursor is one `next` goes back to,
@@ -12563,7 +12569,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       // an add (the skip's undo) puts it back where `next` runs it.
       const owedRe = slug === "reverse-engineering" &&
         (skipping || declaredProjectType(getField(content, "Project Type") ?? "") === "Brownfield") &&
-        reverseEngineeringOwedBehindCursor(skipping ? content : setStageSuffix(content, slug, "EXECUTE"),
+        reverseEngineeringOwedBehindCursor(skipping ? content : stageAddedBack(content, slug),
           recordDir(projectDir, flags.intent, flags.space));
       // A stage the work has just passed over, while nothing after it has
       // started, is one `next` goes back to (addedStagesPassedOver): the add
@@ -12573,6 +12579,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
         ? addedStagesPassedOver(content, projectDir, flags.intent, flags.space).includes(slug)
         : addReachesPassedOver(content, slug, recordDir(projectDir, flags.intent, flags.space));
       if (!owedRe && !passedOver && currentIdx !== -1 && idx !== -1 && idx <= currentIdx) {
+        if (putBack) reject(slug, `${frozen} ${runAlone(slug)}`);
         const instead = idx === currentIdx
           ? (skipping ? movePast(slug) : runAlone(slug))
           : (skipping ? "The workflow does not go back to it, so there is nothing to skip." : runAlone(slug));
@@ -12665,7 +12672,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
 
     // --- Apply the suffix flips ---------------------------------------------
     for (const slug of skipList) content = setStageSuffix(content, slug, "SKIP");
-    for (const slug of addList) content = setStageSuffix(content, slug, "EXECUTE");
+    for (const slug of addList) content = stageAddedBack(content, slug);
 
     // --- Rebuild the derived fields against the EFFECTIVE plan --------------
     const rebuilt = rebuildEffectivePlanFields(content, scope, scopeDef, currentSlug);

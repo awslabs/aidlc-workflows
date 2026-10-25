@@ -15701,8 +15701,13 @@ function planChangeDirective(
   // A stage the plan already skips or runs is no change: it is said, not sent
   // to recompose, so the undo line names only what changed. After a scope
   // change (plan null) the new plan is not known here, so every flip is sent.
+  // A stage the work skipped where it stood does not run, whatever the plan
+  // says, so adding it puts it back.
+  const skippedWhereItStood = (slug: string): boolean =>
+    plan !== null && parseCheckboxes(plan.stateContent).some((c) => c.slug === slug && c.state === "skipped");
   const already = (slug: string, action: "EXECUTE" | "SKIP"): boolean =>
-    plan !== null && effectivePlanAction(slug, plan.scope, plan.stateContent) === action;
+    plan !== null && effectivePlanAction(slug, plan.scope, plan.stateContent) === action &&
+    !(action === "EXECUTE" && skippedWhereItStood(slug));
   const skip = [...new Set(changes.skip)].filter((slug) => !already(slug, "SKIP"));
   const add = [...new Set(changes.add)].filter((slug) => !already(slug, "EXECUTE"));
   const unchanged = [
@@ -15779,9 +15784,12 @@ function planChangeDirective(
   const oneUnitOnly = (slugs: string[]): string =>
     `${listed(slugs.map(name))} can be skipped for one Unit while that Unit is working on it`;
   const notNow = (slugs: string[]): string => `${oneUnitOnly(slugs)}; the ${unitName} Unit is ${unitIsAt} now.`;
+  const putBack = add.filter(skippedWhereItStood);
+  const newlyAdded = add.filter((slug) => !putBack.includes(slug));
   const summary = [
     ...(skip.length > 0 ? [`skipped ${listed(skip.map(skipName))}`] : []),
-    ...(add.length > 0 ? [`added ${named(add)}`] : []),
+    ...(newlyAdded.length > 0 ? [`added ${named(newlyAdded)}`] : []),
+    ...(putBack.length > 0 ? [`put ${named(putBack)} back on the plan`] : []),
   ].join(" and ");
   const startedSkip = started === null ? null
     : `${aidlcToolInvocation("orchestrate")} report --stage ${started} --result skipped ` +

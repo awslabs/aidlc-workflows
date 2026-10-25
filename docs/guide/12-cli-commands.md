@@ -2993,6 +2993,8 @@ Runs under the audit lock, rejects flips that would starve a remaining stage of 
 
 The undo AI-DLC names after a skip you named puts the stage back the same way, so it is not refused either.
 
+A stage skipped where it stood (it had started when you skipped it, so it shows as skipped) goes back on the plan when you add it again, with `/aidlc --add <slug>` or in your own words, and it runs next: Reverse Engineering on existing code while Construction has not started (after it the work returns to the stage you were on), and any other stage while the work has only just entered the stage after it. Once the work has gone further, the add is refused with the way to run the stage on its own, `/aidlc --stage <slug> --single`.
+
 ### `aidlc engine scope save` - keep a plan as a scope
 
 `aidlc engine scope save --name <name> [--keywords <word,...>] [--intent <slug>] [--space <name>]` keeps the selected piece of work's current plan as a reusable scope. It writes the stages the plan runs, its depth, Guard Policy, the five ceremony settings (sensors, learnings, summary confirmation, plan approval, collaborators), and its review level to the durable record `aidlc/scopes/<name>.md`, then compiles, so `/aidlc --scope <name>` works at once in this harness; another harness picks it up at its next `graph compile`. The running work is left as it is. A hint another plan already has is saved as asked, with one line naming that plan. The conductor runs it when you say "save this plan as quick-fix"; picking **Approve and save as scope** at a compose gate runs the same save as part of creating the work (`--save-as`), or, when you also gave keywords, right after it instead.
