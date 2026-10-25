@@ -4683,7 +4683,8 @@ describe("t304 the gate brief says once what Approve accepts", () => {
     expect(brief).toContain("the inception guardrail requires every requirement to have one");
   });
 
-  test("a per-Unit stage's final gate labels each finding with its Unit when two Units share an id", () => {
+  // Each Unit's review numbers from R-01, so both Units here carry an R-01.
+  test("a per-Unit stage's final gate labels each finding with its Unit when the findings named span Units", () => {
     const { proj, artifacts } = perUnitReviewProject("functional-design", ["unit-a", "unit-b"]);
     const unitB = join(proj, artifacts.get("unit-b")!);
     writeFileSync(unitB, readFileSync(unitB, "utf-8").replace("| R-02 |", "| R-01 |"), "utf-8");
