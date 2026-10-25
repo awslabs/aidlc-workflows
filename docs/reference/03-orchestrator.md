@@ -502,6 +502,13 @@ another chat. A line a tool gives inside a stage (`document-input`'s
 it, on a **SAY:** line in the stage file, next to the untrusted-path notice. Without a chat to keep them for, a line
 stays on its own step.
 A line that would push a step over its size limit waits for the next one.
+Every skill says a `print`'s or a `run-stage`'s `narration` first (on a
+`run-stage`, in the same message as the stage's context reads), so the lines
+they carry are heard before the step's own work starts.
+When the reclassify reply names a finished stage that ran before the code was
+there, the chat counts that stage's out-of-date warning as heard on that work
+(in the same file), and the `stage_validity` advisory with that warning is
+left off its later steps.
 
 One such line comes from the creation itself. While a chat's plan question for
 new work is open, the Plan-Approval guard keeps each file the agent writes there
@@ -510,19 +517,12 @@ with what it held just before
 When the person's pick creates the work, `intent create` names the kept files
 that still differ, once, with the way back worked out against git at that
 moment: "Before you picked this plan, src/app.js was changed;
-`git checkout -- src/app.js` puts it back as last committed." A file that held the person's
-uncommitted edits, or one outside git, is said to be beyond undoing; a new file
-is to be deleted. The person's own edits, a teammate's pull and generated files
+`git checkout -- src/app.js` puts it back as last committed." A file that held
+the person's uncommitted edits, or one outside git, is said to be beyond
+undoing; a new file is to be deleted. The person's own edits, a teammate's pull and generated files
 reach no hook and are never named. The work keeps what those files held before
 (`.aidlc-engine/before-pick.json`), so a file the person puts back reads as
 nobody's change when Code Generation accounts for its Units.
-Every skill says a `print`'s or a `run-stage`'s `narration` first (on a
-`run-stage`, in the same message as the stage's context reads), so the lines
-they carry are heard before the step's own work starts.
-When the reclassify reply names a finished stage that ran before the code was
-there, the chat counts that stage's out-of-date warning as heard on that work
-(in the same file), and the `stage_validity` advisory with that warning is
-left off its later steps.
 
 ### Inline Execution
 
