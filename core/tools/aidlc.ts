@@ -595,6 +595,8 @@ export const ROUTES: readonly Route[] = [
       "finalize",
       "complete-workflow",
       "gate-start",
+      // The review request runs it (aidlc-log.ts, completionChecksHold).
+      "completion-checks",
       "approve",
       "reject",
       "revise",

@@ -40,6 +40,18 @@ before you author anything:
   approves itself under Construction autonomy fires only blocking sensors, since
   advisory evidence has no reader there. The dispatch stays outside the
   transaction because the sensor dispatcher takes the audit lock.
+- **Advisory gate checks run once before the gate, too.** When the stage's
+  documents are written and handed on, the first hand-off of the attempt (the
+  review request, or the report that opens the gate when no review took them
+  first) fires the advisory gate checks on those documents. When one reports
+  findings, the hand-off records nothing and comes back to the agent as its
+  step, naming the findings and the same command; the agent fixes what is its
+  own and runs it again, and it goes on. So the review sees the tidied
+  documents, and the gate, which fires every check again, names only what is
+  left. Blocking checks run only at the gate. A review the person asks for, an
+  isolated `--single` run, Units built in a swarm worker's checkout and a gate
+  the engine approves itself skip this step (`completionChecksStep` in
+  `aidlc-state.ts`).
 - **Severity controls gate enforcement.** `advisory` outcomes are recorded and
   the gate still opens. A `blocking` binding requires a verified pass: findings,
   unavailable tools, script/dispatcher errors, malformed verdicts, and timeouts

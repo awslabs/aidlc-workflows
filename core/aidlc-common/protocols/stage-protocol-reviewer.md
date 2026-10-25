@@ -70,8 +70,9 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    consolidated answers are confirmed and every verifiable required output
    document exists; a Unit's review has one more check (the reviewer-unit module). If the request is refused,
    finish the named prerequisite before dispatching the reviewer. When it
-   returns `kind: "print"` instead of the request (Units Generation's units
-   block cannot be read), the step is yours: do what its `message` says, then
+   returns `kind: "print"` instead of the request (the stage's checks found
+   something in its documents, or Units Generation's units block cannot be
+   read), the step is yours: do what its `message` says, then
    run the request command it names again, and say nothing to the person
    about it.
 

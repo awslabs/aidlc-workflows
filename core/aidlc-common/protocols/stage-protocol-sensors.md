@@ -19,7 +19,12 @@ timing, and `default_severity`; only sensors imported by the stage are eligible
 to run. `fire_on: write` runs during matching writes and remains advisory in
 this release, even when the manifest declares `blocking`. `fire_on: gate` runs
 against matching declared deliverables when the stage enters or re-enters its
-approval gate. Advisory outcomes emit their audit rows but do not stop the
+approval gate, and its advisory checks run once before that, when the
+documents are written and handed on: the review request, or the report that
+opens the gate when no review took them first, comes back as a `print` that
+names what a check found and the same command. That step is yours: fix what
+is yours in those documents, then run the command again, and it goes on.
+Advisory outcomes emit their audit rows but do not stop the
 gate; a gate the engine approves itself under Construction autonomy runs only
 its blocking sensors, since advisory evidence has no reader there. A blocking gate sensor requires a verified pass: findings, unavailable
 evaluation, malformed output, and timeouts refuse gate entry until the issue

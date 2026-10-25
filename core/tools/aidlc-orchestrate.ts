@@ -670,6 +670,7 @@ import {
 import {
   type GuardPreflightAction,
   type GuardPreflightResult,
+  completionChecksStep,
   failedCheckNotices,
   guardPreflight as stateGuardPreflight,
   leftOutNotice,
@@ -18088,6 +18089,11 @@ function practicesDraftPostureProblem(pd: string): string | null {
   return promotableTestingPosture(extractMarkdownSection(content, "## Testing Posture")).problem;
 }
 
+// The report that opens a stage's gate, or shows it again after a revision.
+function gateReportCommand(slug: string, result: "awaiting-approval" | "revised"): string {
+  return renderEngineInvocation({ route: "orchestrate", args: ["report", "--stage", slug, "--result", result] });
+}
+
 // The evidence required before a gated stage may either enter [?] or resolve
 // approval. Sharing this check prevents gate-start, revised, and approved from
 // disagreeing about whether per-unit work and collaborator dispatch completed.
@@ -18137,8 +18143,7 @@ function checkStageCompletionEvidence(
   // Construction walks its Units from Units Generation's units block, so the
   // stage's gate never opens over a block the engine cannot read: the agent
   // writes it, then runs the same report again.
-  const reportAgain = retry ??
-    `\`${renderEngineInvocation({ route: "orchestrate", args: ["report", "--stage", slug, "--result", "awaiting-approval"] })}\` again`;
+  const reportAgain = retry ?? `\`${gateReportCommand(slug, "awaiting-approval")}\` again`;
   if (slug === "units-generation") {
     const dag = resolveBoltDag(pd);
     if (dag.state === "malformed") {
@@ -19678,6 +19683,18 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       if (waits !== null) {
         emit(waits);
         return;
+      }
+      // The stage's checks run on its documents before its gate opens when no
+      // review took them first; the person's Override pick goes to the gate.
+      const opening = flags.result === "awaiting-approval"
+        ? stageCheckbox.state === "in-progress"
+        : stageCheckbox.state === "revising";
+      if (opening && !flags.overrideBlockingSensors) {
+        const held = completionChecksStep(pd, slug, null, gateReportCommand(slug, flags.result as "awaiting-approval" | "revised"), "approval");
+        if (held !== null) {
+          emit(printDirective(held));
+          return;
+        }
       }
     }
 

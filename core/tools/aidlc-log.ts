@@ -7,9 +7,11 @@
 // because they fire per-question / per-review, not per state transition.
 
 import { otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
+import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { prepareReviewCopy, removeReviewCopy } from "./aidlc-kiro-review-copy.ts";
 import {
@@ -252,6 +254,7 @@ import {
   PLAN_APPROVAL_ASKED_BY_ENGINE,
   planApprovalAskIsOpen,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
+  resolveCeremony,
 } from "./aidlc-lib.js";
 import type {
   StageEntry,
@@ -294,7 +297,7 @@ import {
   recordPlanApprovalReceipt,
   recordPlanApprovalLegacyRecoveryAnswer,
 } from "./aidlc-testing-posture.js";
-import { aidlcDispatcherInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcEngineCommand, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES,
   SUMMARY_CONFIRMATION_CHOICES,
@@ -3297,6 +3300,27 @@ export function reviewVerdictStep(
   });
 }
 
+// completionChecksStep (aidlc-state.ts, the one owner) for the review request,
+// run as the state tool's own command: that tool's module graph cannot be
+// required here. Sensors off asks nothing of it; a failure holds nothing.
+function completionChecksHold(pd: string, stage: string, unit: string | undefined, request: string): string | null {
+  const state = readStateFile(pd);
+  if (resolveCeremony("sensors", getField(state, "Scope"), state).value === "off") return null;
+  const [command, ...args] = aidlcEngineCommand(
+    "state",
+    ["completion-checks", stage, ...(unit ? ["--unit", unit] : []), "--hand-off", "review", "--again", request, "--project-dir", pd],
+    fileURLToPath(new URL("./aidlc-state.ts", import.meta.url)),
+  );
+  const result = spawnSync(command, args, { encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: pd } });
+  try {
+    const line = (result.stdout ?? "").split(/\r?\n/).findLast((entry) => entry.startsWith("{"));
+    const reply = JSON.parse(line ?? "{}") as { held?: unknown; message?: unknown };
+    return reply.held === true && typeof reply.message === "string" ? reply.message : null;
+  } catch {
+    return null;
+  }
+}
+
 function handleReview(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -3683,6 +3707,22 @@ function handleReview(args: string[]): void {
           kind: "print",
           message: `${unitsBlockRepair(dag.reason, dag.detail)} Then run \`${again}\` again.`,
         }));
+        return;
+      }
+    }
+    // The stage's checks run on its documents before their review, so the
+    // agent fixes its own slips first. A review the person asked for runs at
+    // once, and a retry repeats a request already made.
+    if (!retryPending && flags.single !== "true" && flags["person-asked"] !== "true") {
+      const held = completionChecksHold(pd, flags.stage, flags.unit, renderReviewRequestCommand({
+        projectDir: pd,
+        stage: flags.stage,
+        reviewer: flags.reviewer,
+        ...(flags.unit ? { unit: flags.unit } : {}),
+        iteration: Number(flags.iteration),
+      }));
+      if (held !== null) {
+        console.log(JSON.stringify({ kind: "print", message: held }));
         return;
       }
     }
