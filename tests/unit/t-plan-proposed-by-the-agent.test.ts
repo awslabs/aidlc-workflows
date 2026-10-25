@@ -912,19 +912,18 @@ describe("t-plan-proposed-by-the-agent: a stage change typed with the plan rides
     return readFileSync(join(proj, "aidlc", "spaces", "default", "intents", record, "aidlc-state.md"), "utf-8");
   };
 
-  test("kiro, work here and none selected: a plan with the stage carries the skip, counted, and starts without it", () => {
+  test("kiro, work here and none selected: a plan with the stage carries the skip, counted, and starts with it skipped", () => {
     proj = cloneWithWork(KIRO_TOOLS);
     const open = routed(KIRO_TOOLS, proj, SKIP_DP);
     const workshop = row(open, "workshop");
     expect(workshop.command).toContain("--scope workshop");
     expect(workshop.command).toContain("--skip deployment-pipeline");
-    // Its size is the plan its command creates, one stage fewer than workshop's own.
-    const size = creationSize(KIRO_TOOLS, proj, workshop.command);
-    expect(size).toStartWith(`${workshop.stages}, `);
-    const plain = Object.entries(loadScopeMapping().workshop.stages).filter(([, action]) => action === "EXECUTE").length;
-    expect(Number.parseInt(workshop.stages!, 10)).toBeLessThan(plain);
     // The step that reads a reply naming it names the same command.
     expect(String(next(KIRO_TOOLS, proj, ["Separate work, but use the workshop plan"]).message)).toContain(`\`${workshop.command}\``);
+    // Its size is the plan its command creates, one stage fewer than workshop's own.
+    expect(creationSize(KIRO_TOOLS, proj, workshop.command)).toStartWith(`${workshop.stages}, `);
+    const plain = creationSize(KIRO_TOOLS, proj, workshop.command.replace(" --skip deployment-pipeline", ""));
+    expect(Number.parseInt(workshop.stages!, 10)).toBe(Number.parseInt(plain, 10) - 1);
     const started = next(KIRO_TOOLS, proj, answerArgs(workshop.command));
     expect(started.kind, JSON.stringify(started).slice(0, 300)).toBe("print");
     expect(String(started.message)).toContain("--skip deployment-pipeline");
