@@ -10789,7 +10789,6 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       passedOver: planChanges
         ? planChanges.add.filter((slug) => addReachesPassedOver(stateContent, slug, recordDir(pd), planChanges.add))
         : [],
-      putBack: planChanges ? planChanges.add.filter((slug) => stageSkippedWhereItStood(pd, stateContent, slug)) : [],
     };
     // Words typed with a differing scope may be new work or the reason for
     // the change: Branch 9c asks which, so they are never dropped.
@@ -15682,11 +15681,7 @@ function planChangeDirective(
   before: string | null,
   // `together`: the stages the open gate's one question named, when it named several.
   // `passedOver`: the added stages the work has just passed over, which `next` goes back to.
-  // `putBack`: the added stages the work skipped where they stood (stageSkippedWhereItStood).
-  plan: {
-    scope: string; stateContent: string; walk?: PlanChangeWalk | null; together?: string[]; passedOver?: string[];
-    putBack?: string[];
-  } | null,
+  plan: { scope: string; stateContent: string; walk?: PlanChangeWalk | null; together?: string[]; passedOver?: string[] } | null,
   // The code plan's question is open: it stays the open step, so what the
   // person says next is kept as their answer to it.
   planWaits = false,
@@ -15711,7 +15706,7 @@ function planChangeDirective(
   // change (plan null) the new plan is not known here, so every flip is sent.
   // A stage the work skipped where it stood does not run, whatever the plan
   // says, so adding it puts it back.
-  const skippedWhereItStood = (slug: string): boolean => plan?.putBack?.includes(slug) === true;
+  const skippedWhereItStood = (slug: string): boolean => plan !== null && stageSkippedWhereItStood(plan.stateContent, slug);
   const already = (slug: string, action: "EXECUTE" | "SKIP"): boolean =>
     plan !== null && effectivePlanAction(slug, plan.scope, plan.stateContent) === action &&
     !(action === "EXECUTE" && skippedWhereItStood(slug));

@@ -12552,17 +12552,15 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       const state = checkboxMap.get(slug);
       // A stage the work skipped where it stood, added, goes back on the line
       // not started (stageAddedBack) wherever the checks below say the work
-      // still reaches it; anywhere else it is refused as before, and so is one
-      // every Unit skipped.
-      const putBack = !skipping && state === "skipped" &&
-        stageSkippedWhereItStood(projectDir, content, slug, flags.intent, flags.space);
+      // still reaches it; anywhere else it is refused as before.
+      const putBack = !skipping && stageSkippedWhereItStood(content, slug);
       const frozen = `its checkbox is not pending ([${state}]), so the plan can no longer change it.`;
       if (state === "completed" || state === "in-progress" || (state === "skipped" && !putBack) ||
           state === "awaiting-approval" || state === "revising") {
         const instead = state === "completed"
           ? `It is already done; to run it again, jump back to it with ${typed(`--stage ${slug}`)}.`
           : state === "skipped"
-            ? "It is already skipped."
+            ? (skipping ? "It is already skipped." : runAlone(slug))
             : (skipping ? movePast(slug) : runAlone(slug));
         reject(slug, `${frozen} ${instead}`);
       }

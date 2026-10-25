@@ -42377,18 +42377,17 @@ export function stageAddedBack(content: string, slug: string): string {
     : added;
 }
 
-// A stage the work skipped where it stood: marked skipped as a whole. One a
-// Unit walk marked skipped because every Unit skipped it is not: its Units'
-// skips (unitSkippedUnits), not its mark, say which Unit still owes it.
-export function stageSkippedWhereItStood(
-  projectDir: string,
-  content: string,
-  slug: string,
-  intent?: string,
-  space?: string,
-): boolean {
-  return parseCheckboxes(content).some((c) => c.slug === slug && c.state === "skipped") &&
-    unitSkippedUnits(projectDir, slug, readAuditShardEvents(projectDir, intent, space), content).size === 0;
+// A stage the work skipped where it stood: marked skipped behind the current
+// stage, which the work went on to; going back to it starts it again, for
+// every Unit too. One marked skipped ahead of the current stage is not: a Unit
+// walk marks a later step so once every Unit skipped it, while Current Stage
+// stays on the walk's first step, and its Units' skips, not its mark, say who
+// owes it.
+export function stageSkippedWhereItStood(content: string, slug: string): boolean {
+  const graph = loadStageGraph();
+  const at = graph.findIndex((stage) => stage.slug === slug);
+  const now = graph.findIndex((stage) => stage.slug === getField(content, "Current Stage")?.trim());
+  return at >= 0 && at < now && parseCheckboxes(content).some((c) => c.slug === slug && c.state === "skipped");
 }
 
 // Whether an add of `slug` puts back a stage the work has just passed over
