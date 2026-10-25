@@ -124,6 +124,25 @@ describe("a stage skipped where it stood, asked back, goes back on the line", ()
     expect(run.directive?.stage, run.out).toBe("requirements-analysis");
   });
 
+  test("two stages skipped where they stood one after the other, asked back together, both go back and the first runs next", async () => {
+    const proj = await projectAt("stage-gate");
+    projects.push(proj);
+    await skipWhereItStands(proj, "requirements-analysis", "skip the requirements analysis");
+    await skipWhereItStands(proj, "code-generation", "skip the code generation too");
+    expect(current(proj)).toBe("build-and-test");
+    const both = "requirements-analysis,code-generation";
+    const message = await askBack(proj, both, "actually, undo both skips");
+    expect(message).toContain("Put Requirements Analysis and Code Generation back on the plan.");
+    expect(message).toContain("Then re-run `next` to carry on with the work.");
+    const added = await tool(proj, UTILITY, ["recompose", "--add", both]);
+    expect(added.status, added.stdout + added.stderr).toBe(0);
+    expect(row(proj, "requirements-analysis")).toBe("- [ ] requirements-analysis \u2014 EXECUTE");
+    expect(row(proj, "code-generation")).toBe("- [ ] code-generation \u2014 EXECUTE");
+    const route = await next(proj, []);
+    const jump = named(String(route.directive?.message ?? ""), "aidlc-jump\\.ts execute");
+    expect(jump, route.out).toEndWith("execute --target requirements-analysis --direction backward --scope bugfix");
+  });
+
   test("once the stage after it has work of its own, the add names the way to run it on its own, as before", async () => {
     const proj = await projectAt("stage-gate");
     projects.push(proj);

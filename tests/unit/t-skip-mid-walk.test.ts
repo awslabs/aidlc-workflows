@@ -289,6 +289,23 @@ describe("a skip the person asks for while Construction walks Unit by Unit is ca
     expect(after.construction_checkpoint ?? null).toBeNull();
   });
 
+  // Marked skipped because every Unit skipped it, not skipped where it stood:
+  // its Units' skips, not its mark, say who owes it, so an add does not claim
+  // to put it back (the way back is the Unit's own run the skip line named).
+  test("a stage every Unit skipped, added again, is not said to be back on the plan, and its mark stays", () => {
+    const proj = walk(["alpha"]);
+    expect(runNamed(proj, THIS_UNIT).status).toBe(0);
+    const before = readFileSync(stateFile(proj), "utf-8");
+    expect(before).toContain("- [S] code-generation \u2014 EXECUTE");
+    const step = next(proj, ["--add", "code-generation"]);
+    expect(String(step.message), JSON.stringify(step)).not.toContain("back on the plan");
+    expect(String(step.message), JSON.stringify(step)).not.toContain("recompose --add");
+    const added = run(proj, "aidlc.ts", ["engine", "recompose", "--add", "code-generation"]);
+    expect(added.status, added.out).not.toBe(0);
+    expect(added.out).toContain("its checkbox is not pending ([skipped])");
+    expect(readFileSync(stateFile(proj), "utf-8")).toBe(before);
+  });
+
   test("Code Generation named while the Unit is still on its design: the step says it covers every Unit", () => {
     const proj = walk(["alpha", "beta"], false);
     const step = next(proj, ["--skip", "code-generation"]);
