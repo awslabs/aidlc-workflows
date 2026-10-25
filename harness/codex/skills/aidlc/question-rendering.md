@@ -53,6 +53,11 @@ shipped config flags (`[tools] experimental_request_user_input` +
 prose track below is the permanent floor for sessions where the tool is
 unavailable (flag off, older Codex, headless exec).
 
+On some models Codex also offers `request_user_input_async`. AI-DLC's questions
+use `request_user_input`, not that one: you end the turn at every question, and
+Codex takes an async question off the screen when the turn ends, so the person
+would have no box to answer.
+
 ### Track 1 — request_user_input (when the tool is available)
 
 Map the spec fields 1:1:

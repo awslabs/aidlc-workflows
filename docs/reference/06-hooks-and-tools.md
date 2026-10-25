@@ -387,7 +387,13 @@ before the core hook when a UserPromptSubmit carries a nonblank `agent_id` or a
 rollout path naming another thread, so those prompts record no `HUMAN_TURN`,
 no kept gate words, no answer, and no typed switch. A transcript path in any
 other form decides nothing. A `request_user_input` answer is the person's own
-choice and is read as before, whichever thread asked. When Codex's question box
+choice and is read as before, whichever thread asked. An answer in the other box
+Codex offers on some models, `request_user_input_async`, comes back as a new
+prompt wrapped in Codex's `<send_user_message_question_reply>` envelope (a JSON
+list of answer, question and question id); the adapter forwards the answers in
+it, each whole and one per line, as the prompt (`questionReplyWords`), so they
+are kept and read like a reply typed in the chat. Any other prompt, an envelope
+with words around it included, goes on as it came. When Codex's question box
 runs out (about two minutes in default mode) it returns no answers,
 `{"answers":{}}`. The adapter forwards exactly that shape to the core hook,
 which records `QUESTION_UNANSWERED` instead of a `HUMAN_TURN`: the row spends
