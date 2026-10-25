@@ -31061,7 +31061,9 @@ export function stageStartFloorRefusal(
 // that question's too only when the question came before it there: one reply
 // answers every question asked before it, never one the agent logged after it
 // had answered another (a live opencode run recorded the person's "postgres"
-// as their answer to a question they were never shown). A row of another
+// as their answer to a question they were never shown). A question box the
+// person answered for several questions (its message's picker) answers the
+// questions the agent logs after it too: they were the box's. A row of another
 // shard is not ordered against these turns, so it keeps none. `words` is their words as the message record
 // keeps them, joined by line breaks, left out when one of those messages is no
 // longer readable or was cut (the words kept would not be everything they
@@ -31144,11 +31146,16 @@ export function personsGateReply(
       const ids = [auditBlockField(row.block, "Message Id"), ...(auditBlockField(row.block, "Message Ids") ?? "").split(",")];
       for (const id of ids) if (id) answered.add(id);
     }
+    const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+    const severalPicks = (row: AuditShardEvent): boolean => {
+      const id = auditBlockField(row.block, "Message Id");
+      const picks = id === null ? [] : readMessage(projectDir, id)?.picker?.filter((entry) => entry.reply !== null) ?? [];
+      return picks.length > 1;
+    };
     const latestAnswers = (row: AuditShardEvent): boolean =>
-      asked === undefined || (asked.shard === row.shard && asked.pos < row.pos);
+      asked === undefined || severalPicks(row) || (asked.shard === row.shard && asked.pos < row.pos);
     turns = turns.filter((row, at) =>
       (at === turns.length - 1 && latestAnswers(row)) || !answered.has(auditBlockField(row.block, "Message Id") ?? ""));
-    const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
     const elsewhere = held.map((row) => {
       const id = auditBlockField(row.block, "Message Id") as string;
       return { id, at: readMessage(projectDir, id)?.at ?? row.timestamp };
