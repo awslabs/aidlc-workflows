@@ -3801,16 +3801,36 @@ function mainCheckoutRepoName(projectDir: string): string | null {
   return name.length > 0 ? name : null;
 }
 
+// A folder's name as a repo name, for a name the engine records on its own (a
+// project root no repo is registered for, a checkout the work found), never a
+// name the person typed: those are checked as they are. A name the rule takes
+// comes back byte for byte. Otherwise accents are dropped first, so a macOS
+// (NFD) and a Windows or Linux (NFC) spelling of one name agree, each run of
+// characters the rule does not take becomes "-", and anything before the first
+// letter or digit and any trailing "-" go: "portal app" is portal-app. Empty
+// when no letter or digit is left; the caller names its fallback.
+export function folderRepoName(folder: string): string {
+  if (isValidRepoName(folder)) return folder;
+  return folder
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^[^A-Za-z0-9]+/, "")
+    .replace(/-+$/, "");
+}
+
 // The deterministic repo NAME for codekb keying (NOT the intent slug):
 //   1 recorded repo  -> that name
-//   0 recorded repos (workspace root IS the repo) -> the MAIN CHECKOUT's basename
-//                       (mainCheckoutRepoName), falling back to basename(projectDir)
-//                       when git cannot answer. Identical to basename(projectDir)
-//                       for every root that is not a linked worktree. A folder
-//                       that was moved keeps its earlier store
+//   0 recorded repos (workspace root IS the repo) -> the MAIN CHECKOUT's folder
+//                       name (mainCheckoutRepoName), falling back to
+//                       basename(projectDir) when git cannot answer, made a repo
+//                       name by folderRepoName ("project" when nothing is left).
+//                       Identical to basename(projectDir) for every root that is
+//                       not a linked worktree and whose name fits the rule. A
+//                       folder that was moved keeps its earlier store
 //                       (movedFolderStoreName).
-//   >1 recorded      -> caller loops per repo (this returns basename as a safe
-//                       default; callers that know the repo pass --repo explicitly).
+//   >1 recorded      -> caller loops per repo (this returns the folder's name as a
+//                       safe default; callers that know the repo pass --repo explicitly).
 // basename done here (lib has basename imported) so callers never inline it.
 export function codekbRepoName(
   projectDir: string,
@@ -3824,11 +3844,11 @@ export function codekbRepoName(
     selection.space,
   );
   if (repos.length === 1) return repos[0];
-  // Multi-repo (2+) keeps the basename namespace unchanged; only the
+  // Multi-repo (2+) keeps the project folder's own name; only the
   // NOTHING-RECORDED case consults git, where the project root is the repo and a
   // worktree basename is otherwise mistaken for the repository name.
-  if (repos.length > 1) return basename(projectDir);
-  const name = mainCheckoutRepoName(projectDir) ?? basename(projectDir);
+  if (repos.length > 1) return folderRepoName(basename(projectDir)) || "project";
+  const name = folderRepoName(mainCheckoutRepoName(projectDir) ?? basename(projectDir)) || "project";
   return movedFolderStoreName(projectDir, selection.space, selection.intent, name) ?? name;
 }
 
@@ -22728,10 +22748,10 @@ export function recordedCheckoutAt(
   return checkouts.find((entry) => comparablePath(entry.real) === at) ?? null;
 }
 
-// A label for a newly recorded checkout: its folder's name made repo-name
-// shaped, with a number added when another recorded checkout has it.
+// A label for a newly recorded checkout: its folder's name as a repo name
+// (folderRepoName), with a number added when another recorded checkout has it.
 export function sourceCheckoutLabelFor(real: string, checkouts: readonly RecordedSourceCheckout[]): string {
-  const base = basename(real).replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "") || "checkout";
+  const base = folderRepoName(basename(real)) || "checkout";
   const taken = new Set(checkouts.map((entry) => entry.label));
   if (!taken.has(base)) return base;
   for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;

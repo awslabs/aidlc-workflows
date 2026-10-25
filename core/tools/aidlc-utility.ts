@@ -9993,7 +9993,8 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
 // deterministic space-level per-repo codekb directory (forward-slash, workspace-
 // relative) the reverse-engineering stage writes its 9 artifacts into. The repo
 // is the caller-supplied --repo, else the engine-resolved codekbRepoName (the
-// lone recorded repo, or basename(projectDir) when none is recorded). No mkdir,
+// lone recorded repo, or the project folder's name as a repo name when none is
+// recorded). No mkdir,
 // no state read, no audit — mirrors the intent/space read-only query arms.
 function handleCodekbPath(projectDir: string, flags: Record<string, string>): void {
   const asJson = flags.json === "true";
