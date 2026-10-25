@@ -113,7 +113,7 @@ const GREETER: Record<string, string> = {
   "src/app.js": "const name = process.argv[2];\nconsole.log('hello');\n",
   "CHANGELOG.md": "# Changelog\n",
 };
-const FIXED = "const name = process.argv[2];\nconsole.log(`Hello, ${name}!`);\n";
+const FIXED = "const name = process.argv[2];\nconsole.log('Hello, ' + name + '!');\n";
 
 /** Bugfix work's record, Requirements Analysis running and going straight to Code Generation. */
 function bugfixState(): string {
@@ -251,7 +251,7 @@ describe("t-changed-before-codegen: what the agent changed before Code Generatio
     proj = bugfixAtRequirements();
     writeFileSync(join(proj, "README.md"), `${GREETER["README.md"]}\nMy own note.\n`);
     agentWrites(proj, "README.md", `${GREETER["README.md"]}\nMy own note.\n\nFixed.\n`);
-    agentWrites(proj, "src/greet.js", "module.exports = (name) => `Hello, ${name}!`;\n");
+    agentWrites(proj, "src/greet.js", "module.exports = (name) => 'Hello, ' + name + '!';\n");
     expect(said(approved(proj))).toBe(
       "During Requirements Analysis, README.md and src/greet.js were changed; src/greet.js is new: delete it to undo " +
         "that; README.md already had changes that were not committed, so its change cannot be undone.",
@@ -378,7 +378,7 @@ describe("t-changed-before-codegen: what the agent changed before Code Generatio
     expect(stage).toBe("reverse-engineering");
     host("guard-tool-call", {
       hook_event_name: "PreToolUse", tool_name: "Edit",
-      tool_input: { path: join(proj, "src", "app.js"), old_str: "console.log('hello');", new_str: "console.log(`Hello, ${name}!`);" },
+      tool_input: { path: join(proj, "src", "app.js"), old_str: "console.log('hello');", new_str: "console.log('Hello, ' + name + '!');" },
     });
     writeFileSync(join(proj, "src", "app.js"), FIXED);
     state(["gate-start", stage]);
