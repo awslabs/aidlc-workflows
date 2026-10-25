@@ -29851,7 +29851,7 @@ function siblingGitFolders(projectDir: string): string[] {
 
 // Auto-discover the code repos that are immediate children of the workspace
 // root, each by the name of its folder. Returns [] when there are none (the
-// legacy single-repo / fresh-greenfield case — the caller records no repos row
+// legacy single-repo / fresh-greenfield case: the caller records no repos row
 // and the lone repo is inferred later). A folder whose name cannot be a repo's
 // is not one (siblingReposLeftOut says which and why).
 export function discoverSiblingRepos(projectDir: string): string[] {

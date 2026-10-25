@@ -290,11 +290,16 @@ export function hasControlCharacters(value: string): boolean {
 }
 
 // Text bash, zsh, PowerShell and cmd.exe all read as written inside double
-// quotes: nothing in it expands or ends the quotes, and nothing acts in cmd.exe
-// when PowerShell hands the word on without them.
+// quotes: nothing in it expands or ends the quotes (PowerShell ends them at a
+// typographic double quote too), and nothing acts in cmd.exe when PowerShell
+// hands the word on without them.
 export function readsAlikeInDoubleQuotes(value: string): boolean {
-  return /^[^"$`\\%!^&|<>\r\n]+$/.test(value);
+  return /^[^"\u201c-\u201e$`\\%!^&|<>\r\n]+$/.test(value);
 }
+
+// The characters PowerShell reads as a single quote: the apostrophe and the
+// typographic ones a pasted name can hold.
+const POWERSHELL_SINGLE_QUOTE = /['\u2018-\u201b]/;
 
 // One argument of a command we print for someone to run: bare when it cannot
 // expand, else single-quoted so no shell substitutes into it. It stays one
@@ -311,9 +316,9 @@ export function quoteCommandArgument(
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value) && !(shell !== "posix" && value.startsWith("@"))) return value;
   // The two shells quote an apostrophe differently, so it is double-quoted
   // when both read that alike.
-  if (shell === "windows" && value.includes("'") && readsAlikeInDoubleQuotes(value)) return `"${value}"`;
+  if (shell === "windows" && POWERSHELL_SINGLE_QUOTE.test(value) && readsAlikeInDoubleQuotes(value)) return `"${value}"`;
   return shell !== "posix"
-    ? `'${value.replaceAll("'", "''")}'`
+    ? `'${value.replaceAll(new RegExp(POWERSHELL_SINGLE_QUOTE.source, "g"), "$&$&")}'`
     : `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 

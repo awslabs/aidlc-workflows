@@ -299,5 +299,12 @@ describe("a command AI-DLC prints carries the repo's name whole", () => {
     expect(quoteCommandArgument("@scope", "windows")).toBe("'@scope'");
     expect(quoteCommandArgument("@scope", "powershell")).toBe("'@scope'");
     expect(quoteCommandArgument("@scope", "posix")).toBe("@scope");
+    // PowerShell reads a typographic quote as a quote: a name pasted with one
+    // is double-quoted, or has its single quote doubled, never left to end the word.
+    const curly = "Fred\u2019s lib";
+    expect(quoteCommandArgument(curly, "windows")).toBe(`"${curly}"`);
+    expect(quoteCommandArgument(curly, "powershell")).toBe("'Fred\u2019\u2019s lib'");
+    expect(quoteCommandArgument(curly, "posix")).toBe(`'${curly}'`);
+    expect(quoteCommandArgument("a\u201cb\u201d", "windows")).toBe("'a\u201cb\u201d'");
   });
 });
