@@ -307,9 +307,10 @@ are handed on (`completionChecksStep` in `aidlc-state.ts`): the review request
 which prints `{"held":false}` or `{"held":true,"message":...}`), or, when no
 review was asked for in the attempt, the report that opens the gate or shows it
 again after a revision. The first such hand-off of an attempt (the floor
-`reviewAttemptWindow` reads) fires each advisory check on the scope's declared
-outputs (one Unit's, with `Unit` on the rows) whose (check, output) pairs have
-no `SENSOR_FIRED` row since the floor, once every required output exists. When
+`reviewAttemptWindow` reads) fires the advisory checks on the scope's declared
+outputs (one Unit's, with `Unit` on the rows) when none of its (check, output)
+pairs has a `SENSOR_FIRED` row since the floor (paths compared canonically),
+once every required output exists. When
 a fire reports findings the hand-off records nothing and returns a `print`: the
 gate's own sentence for each, the detail files and the same command. A pass
 with a note holds nothing. A review the person asked for (`--person-asked`), a

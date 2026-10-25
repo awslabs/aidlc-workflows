@@ -281,6 +281,7 @@ import {
   SUMMARY_AUTHORIZATION_FIELD,
   UNIT_NAME_REGEX,
   attemptEventDefinitelyBefore,
+  resolveAuditProjectPath,
   swarmWorkerWorktreeMeta,
 } from "./aidlc-lib.js";
 import {
@@ -7150,9 +7151,9 @@ function failedCheckLines(
   return lines;
 }
 
-// Arden's decision (OPEN-FOR-ARDEN line 167): the stage's advisory gate checks
-// run when its documents are written and handed on, before their review, so
-// the agent fixes its own slips and the gate says only what is left. The
+// The stage's advisory gate checks run when its documents are written and
+// handed on, before their review, so the agent fixes its own slips and the
+// gate says only what is left. The
 // hand-offs every harness shares: the review request (`log review`, through
 // the `completion-checks` command) and, when no review took them first, the
 // report that opens the gate. The first of them in an attempt fires each check
@@ -7204,13 +7205,24 @@ export function completionChecksStep(
       (unit === null || auditBlockField(row.block, "Unit") === unit) && inAttempt(row)
     )
   ) return null;
-  const rel = (path: string): string => relative(pd, path).split(sep).join("/");
+  // Compared as canonical paths: a row spells its output from the project
+  // folder as given (or as `<project-dir>/...` when the canonical path lies
+  // outside that spelling, under a symlink or junction), and the hold must end
+  // on its own fires whatever the spelling.
+  const canonical = (path: string | null): string | null => {
+    if (path === null) return null;
+    try {
+      return realpathSync(resolveAuditProjectPath(pd, path));
+    } catch {
+      return null;
+    }
+  };
   const pairs = new Set(advisory.flatMap((sensor) =>
-    gateSensorOutputs(sensor, paths, stage.slug).map((fire) => `${sensor.id}@${rel(fire.outputPath)}`)
+    gateSensorOutputs(sensor, paths, stage.slug).map((fire) => `${sensor.id}@${canonical(fire.outputPath)}`)
   ));
   const firedInAttempt = view.allEvents.some((row) =>
     row.event === "SENSOR_FIRED" && auditBlockField(row.block, "Stage slug") === slug && inAttempt(row) &&
-    pairs.has(`${auditBlockField(row.block, "Sensor ID")}@${auditBlockField(row.block, "Output path")}`)
+    pairs.has(`${auditBlockField(row.block, "Sensor ID")}@${canonical(auditBlockField(row.block, "Output path"))}`)
   );
   if (firedInAttempt) return null;
 
@@ -7249,13 +7261,7 @@ function requiredOutputsWritten(pd: string, stage: GateStage, unit: string | nul
     if (unit === null || usesStageLevelPerUnitArtifacts(getField(stateContent, "Scope"), stateContent)) {
       return inspectRequiredArtifactInstances(pd, stage, { stateContent }).ok;
     }
-    const dag = resolveBoltDag(pd);
-    const kind = dag.state === "ok" ? dag.unitKinds?.get(unit) ?? null : null;
-    const produces = filterProducesByKind(stage.produces_kinds, stage.produces ?? [], kind);
-    return inspectRequiredArtifactInstances(pd, { ...stage, produces }, {
-      stateContent,
-      runtimeUnits: [{ name: unit, kind }],
-    }).ok;
+    return missingUnitArtifacts(pd, stage, unit).length === 0;
   } catch {
     return false;
   }

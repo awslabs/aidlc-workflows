@@ -12,7 +12,8 @@
 // new is asked of the person, and a blocking check stays the gate's.
 
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LOG, ORCHESTRATE, env, exec, say } from "../harness/aidlc-input-corpus.ts";
 import {
@@ -199,6 +200,21 @@ describe("t-checks-before-review: a reviewed stage's checks run at its review re
       expect(count(proj, "STAGE_AWAITING_APPROVAL"), gate.out).toBe(1);
       expect(String(gate.json?.message)).not.toContain("Before the approval");
       expect(String(gate.json?.narration)).toContain("The upstream-coverage check reports 1 finding in requirements.md.");
+    } finally {
+      cleanupTestProject(proj);
+    }
+  });
+
+  test("a project folder reached through a link is held once, and the next request goes on", async () => {
+    const proj = await reviewedStage();
+    const link = join(mkdtempSync(join(tmpdir(), "aidlc-link-")), "project");
+    symlinkSync(proj, link, process.platform === "win32" ? "junction" : "dir");
+    try {
+      const viaLink = () => run(link, LOG, ["review", "--stage", RA, "--reviewer", PRODUCT_LEAD, "--iteration", "1"]);
+      const held = await viaLink();
+      expect(held.json?.kind, held.out).toBe("print");
+      const asked = await viaLink();
+      expect(asked.json?.emitted, asked.out).toBe("REVIEW_REQUESTED");
     } finally {
       cleanupTestProject(proj);
     }
