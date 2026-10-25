@@ -19972,7 +19972,7 @@ export function noReviewerFinishedSinceReview(
       // carry its path, so only their time orders them against the request.
       ledgers.push({
         dir: worker.parent,
-        events: readAuditShardEvents(worker.parent, selection.intent, selection.space)
+        events: readAuditShardEvents(worker.parent, selection.intent, selection.space, undefined, false)
           .map((row) => ({ ...row, shard: `${worker.parent}:${row.shard}` })),
       });
     }
