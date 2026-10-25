@@ -222,6 +222,7 @@ For example, `/aidlc-session-cost` in a Claude Code run that had just finished I
     Fired:            9
     Passed:           9
     Failed:           0
+    Could not run:    0
     Budget-override:  0
     Incomplete:       0
   Learnings captured

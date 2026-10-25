@@ -49,7 +49,7 @@ latest), so the row's words and its ids match. A row that stands on one
 message, or on the one the conductor named with `--message`, carries
 `Message Id` alone.
 
-## Event Registry (125 events, 26 categories)
+## Event Registry (126 events, 26 categories)
 
 ### Workflow Lifecycle (8 events)
 
@@ -396,7 +396,7 @@ Emitted when Construction's Bolt-merge step calls aidlc-pipeline-deploy-agent vi
 
 ### Sensor Events (6 events)
 
-Emitted by the deterministic-sensor system. The sensor dispatcher emits the four `SENSOR_*` events; the paired-coverage doctor row emits `GUARDRAIL_LOADED` with `Scope: all`, because doctor reads the full resolved guardrail set without an active stage (the per-workflow org → project → phase → stage scoping in the When-clause below describes the steady-state loader, not doctor's unscoped read). `fire_on: write` sensors run from the PostToolUse hook on matching writes; `fire_on: gate` sensors run once per existing declared deliverable (`upstream-coverage` and `claim-sources` once per output folder) before `gate-start` opens the first gate, `revise` re-enters it, or the approve-time revision backstop attempts recovered re-entry. A gate the engine approves itself under Construction autonomy runs only blocking gate sensors (advisory evidence has no reader there). Blocking severity is enforced only for gate-fired sensors in this release; write-fired failures remain advisory.
+Emitted by the deterministic-sensor system. The sensor dispatcher emits the five `SENSOR_*` events; the paired-coverage doctor row emits `GUARDRAIL_LOADED` with `Scope: all`, because doctor reads the full resolved guardrail set without an active stage (the per-workflow org → project → phase → stage scoping in the When-clause below describes the steady-state loader, not doctor's unscoped read). `fire_on: write` sensors run from the PostToolUse hook on matching writes; `fire_on: gate` sensors run once per existing declared deliverable (`upstream-coverage` and `claim-sources` once per output folder) before `gate-start` opens the first gate, `revise` re-enters it, or the approve-time revision backstop attempts recovered re-entry. A gate the engine approves itself under Construction autonomy runs only blocking gate sensors (advisory evidence has no reader there). Blocking severity is enforced only for gate-fired sensors in this release; write-fired failures remain advisory.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|

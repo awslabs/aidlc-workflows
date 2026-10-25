@@ -3095,7 +3095,7 @@ The runtime graph (`runtime-graph.json` in the intent's record dir) is the data-
 |------------|--------------|
 | `compile` | Walk the `audit/` shards and the per-stage `memory.md` files and rewrite `runtime-graph.json`. Fired automatically by a hook on every transition |
 | `read <stage-slug>` | Print one stage's row from `runtime-graph.json` (timestamps, agent, memory breakdown, Sensor firings, outcome) |
-| `summary [--json]` | Print deterministic aggregates over the whole graph — stage/phase outcome tallies, memory-entry counts, Sensor 4-state tallies, learnings captured, workflow duration. The data source the read-only session skills read from |
+| `summary [--json]` | Print deterministic aggregates over the whole graph — stage/phase outcome tallies, memory-entry counts, Sensor 5-state tallies, learnings captured, workflow duration. The data source the read-only session skills read from |
 
 ```
 bun .claude/tools/aidlc-runtime.ts read requirements-analysis

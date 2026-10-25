@@ -380,7 +380,7 @@ aidlc engine runtime compile
 aidlc engine runtime read <stage-slug>
 
 # Print deterministic aggregates over runtime-graph.json: stage/phase
-# outcome tallies, memory-entry counts by category, sensor 4-state
+# outcome tallies, memory-entry counts by category, sensor 5-state
 # tallies, learnings captured, and workflow duration. Read-only; the
 # session skills (session-cost, replay, outcomes-pack) consume the
 # --json shape so every number they render comes from here, not from
@@ -512,7 +512,7 @@ main's location. Its lifecycle is:
 - **The lifecycle that triggers compile** — the workflow / phase /
   stage transitions whose audit emits drive the compile hook. See
   [State Machine](12-state-machine.md).
-- **The audit log this graph is derived from** - the 125-event taxonomy
+- **The audit log this graph is derived from** - the 126-event taxonomy
   and the emitter registry. See [State Machine](12-state-machine.md)
   and the User Guide's [State and Audit
   Trail](../guide/10-state-and-audit.md).

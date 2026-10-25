@@ -39,7 +39,7 @@ approval question, never claim coverage a
 check reports against or could not run (every requirement traced, every section
 present, the code type-checks), and
 when they ask for changes, correct from that detail file. A Unit's own gate
-names that Unit's outputs only; with Sensors off,
+names that Unit's outputs and writes only; with Sensors off,
 nothing is said about checks.
 
 `required-sections` requires the `##` headings of a markdown output's
