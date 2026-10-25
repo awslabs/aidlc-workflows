@@ -401,7 +401,7 @@ class Work {
   // or names the jump for the agent to run.
   jump(target: string, direction: "backward" | "forward" | "redo"): void {
     this.said(`/aidlc --stage ${target}`);
-    const step = this.json(this.tool("orchestrate", ["next", "--stage", target]), `next --stage ${target}`);
+    const step = this.next(["--stage", target]);
     const command = /Run `(bun [^`]+aidlc-jump\.ts execute [^`]+)`/.exec(String(step.message ?? ""))?.[1];
     if (command !== undefined) {
       expect(command).toContain(`--direction ${direction}`);
