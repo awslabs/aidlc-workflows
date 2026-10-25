@@ -516,6 +516,8 @@ type ChoicesMutationContext = {
   extraSettings?: SettingsMutation[];
   /** The id `--message` named: the message the person asked in. */
   message?: string;
+  /** The switches `--clear-bypass` named. */
+  clears?: string[];
 };
 
 type SettingsMutation = {
@@ -4240,7 +4242,11 @@ function prepareChoiceSection(
     if (canonical(targetCurrentSettings) === canonical(nextSettings)) {
       // A check the person asked to turn off that is already off there: they
       // hear that, with the one wider place, instead of a note about the file.
-      const already = alreadyOffLines(projectDir, target, valuesAfter(argv, "--bypass"));
+      // One they asked back on that another file keeps off: that file.
+      const already = [
+        ...alreadyOffLines(projectDir, target, valuesAfter(argv, "--bypass")),
+        ...stillRecordedAfter(projectDir, [], undefined, valuesAfter(argv, "--clear-bypass")),
+      ];
       emitResult(success(already.length > 0 ? already.join("\n") : "flags configuration unchanged"), options);
       return null;
     }
@@ -4316,6 +4322,7 @@ function prepareChoiceSection(
       ...(settings ? { settings } : {}),
       ...(extraSettings.length > 0 ? { extraSettings } : {}),
       ...(valuesAfter(argv, "--message").length > 0 ? { message: valuesAfter(argv, "--message").at(-1) } : {}),
+      ...(valuesAfter(argv, "--clear-bypass").length > 0 ? { clears: valuesAfter(argv, "--clear-bypass") } : {}),
     },
   };
 }
@@ -11559,7 +11566,8 @@ function handleSettingsOnlySection(
       nextFile = updateSettingsSection(currentFile, "flags", nextFlags);
     }
     if (canonical(currentFile) === canonical(nextFile)) {
-      emitResult(success(`${section} configuration unchanged`), options);
+      const still = stillRecordedAfter(projectDir, [], undefined, valuesAfter(argv, "--clear-bypass"));
+      emitResult(success(still.length > 0 ? still.join("\n") : `${section} configuration unchanged`), options);
       return true;
     }
     const mutation: SettingsMutation = {
@@ -11608,7 +11616,7 @@ function handleSettingsOnlySection(
       if (note) notes.push(note);
     }
     for (const change of mutations) invalidateSettingsCache(change.path);
-    const changes = settingsChangeLines(projectDir, mutations);
+    const changes = settingsChangeLines(projectDir, mutations, undefined, valuesAfter(argv, "--clear-bypass"));
     // The lines above already name any other file that still records a
     // cleared switch.
     const switchLines = section === "flags"
@@ -11826,11 +11834,13 @@ function stillRecordedLines(projectDir: string, name: string, harness?: string):
 // What a settings change did, one line each, with the command that undoes it.
 // A setting that was not there before has no flag that removes it, so its undo
 // is the section's --reset, offered only when that resets nothing else the
-// file records; otherwise the line says it was not set there before.
+// file records; otherwise the line says it was not set there before. `clears`
+// holds the switches the command named with --clear-bypass.
 function settingsChangeLines(
   projectDir: string,
   mutations: readonly SettingsMutation[],
   harness?: string,
+  clears: readonly string[] = [],
 ): string[] {
   const fileOf = (target: SettingsTarget): string => settingsFileShown(projectDir, target);
   const command = (section: "flags" | "models", args: string[], target: SettingsTarget | null): string =>
@@ -11901,7 +11911,7 @@ function settingsChangeLines(
       }
     }
   }
-  lines.push(...stillRecordedAfter(projectDir, mutations, harness));
+  lines.push(...stillRecordedAfter(projectDir, mutations, harness, clears));
   return lines;
 }
 
@@ -11913,13 +11923,20 @@ function changedBypasses(change: SettingsMutation): string[] {
 }
 
 // A clear aimed at one layer leaves the switch on where another records it:
-// one line for each such switch, with the command that clears it there.
-function stillRecordedAfter(projectDir: string, mutations: readonly SettingsMutation[], harness?: string): string[] {
+// one line for each such switch, with the command that clears it there. A
+// switch the command named counts even when the file it aimed at never
+// recorded it, so the file that does is named.
+function stillRecordedAfter(
+  projectDir: string,
+  mutations: readonly SettingsMutation[],
+  harness?: string,
+  clears: readonly string[] = [],
+): string[] {
   const cleared = mutations.flatMap((change) => {
     const after = new Set(change.next?.flags?.bypasses ?? []);
     return (change.previous?.flags?.bypasses ?? []).filter((name) => !after.has(name));
   });
-  return [...new Set(cleared)].flatMap((name) => stillRecordedLines(projectDir, name, harness));
+  return [...new Set([...cleared, ...clears])].flatMap((name) => stillRecordedLines(projectDir, name, harness));
 }
 
 // What a harness.json answer changed, with the command that puts the earlier
@@ -12267,21 +12284,25 @@ function afterProjectSettings(
 }
 
 // The switches a command that is ONLY `--clear-bypass` pairs names (plus
-// --yes, a layer, --project-dir and the output mode), and the layers it named.
-// Null for anything else, or a name that is not a switch, so the normal path
-// keeps its error and makes a change riding beside the clear.
+// --yes, a layer, --project-dir, the output mode, and what a clear does not
+// use: the --message the agent is handed for every typed message, and a
+// --harness the project has), and the layers it named. Null for anything
+// else, or a name that is not a switch, so the normal path keeps its error and
+// makes a change riding beside the clear.
 function clearOnlySwitches(
   argv: readonly string[],
   projectDir: string,
 ): { names: RecordableProjectBypass[]; layers: SettingsTarget[] } | null {
   const clears: string[] = [];
   const layers: SettingsTarget[] = [];
+  const harnesses: string[] = [];
   for (let index = 0; index < argv.length; index++) {
     const token = argv[index];
-    if (token === "--clear-bypass" || token === "--project-dir") {
+    if (token === "--clear-bypass" || token === "--project-dir" || token === "--message" || token === "--harness") {
       const value = argv[index + 1];
       if (value === undefined || value.startsWith("--")) return null;
       if (token === "--clear-bypass") clears.push(value);
+      if (token === "--harness") harnesses.push(value);
       index++;
       continue;
     }
@@ -12289,11 +12310,16 @@ function clearOnlySwitches(
       layers.push(token.slice(2) as SettingsTarget);
       continue;
     }
-    if (["--yes", "--json", "--quiet", "--no-color"].includes(token)) continue;
+    if (["--yes", "--json", "--quiet", "--no-color", "--verbose"].includes(token)) continue;
     return null;
   }
   if (clears.length === 0 || !settingsProjectAvailable(projectDir)) return null;
   if (!clears.every((name) => (RECORDABLE_PROJECT_BYPASSES as readonly string[]).includes(name))) return null;
+  try {
+    for (const harness of harnesses) selectedDiagnosticHarness(projectDir, harness, "flags");
+  } catch {
+    return null;
+  }
   return { names: clears as RecordableProjectBypass[], layers };
 }
 
@@ -12431,7 +12457,7 @@ function recordBypassesOnly(
     const notes = excludes.flatMap((exclude) => excludeLocalSettingsFromClone(exclude) ?? []);
     for (const change of mutations) invalidateSettingsCache(change.path);
     // What changed, the command that undoes it, and who picks it up.
-    const changes = settingsChangeLines(projectDir, mutations);
+    const changes = settingsChangeLines(projectDir, mutations, undefined, context.clears);
     const open = openWorkflowLine(projectDir, mutations);
     if (open) changes.push(open);
     // Which of the person's checks is now off or back on, in plain words.
@@ -12462,7 +12488,7 @@ function recordBypassesOnly(
       const ownSwitchesOnly = mutations.every((change) => change.target === "local") &&
         mutations.flatMap(changedBypasses).every((name) => (PERSON_CHECK_SWITCHES as readonly string[]).includes(name));
       const shown = switchLines.length > 0 && !commandAtPersonsTerminal() && ownSwitchesOnly
-        ? stillRecordedAfter(projectDir, mutations)
+        ? stillRecordedAfter(projectDir, mutations, undefined, context.clears)
         : changes;
       writeMenuLines("", shown);
       writeMenuLines("", notes.map((note) => `Note: ${note}`));
@@ -13990,7 +14016,9 @@ export async function main(
     // What a recorded setting changed, the command that undoes it, and who
     // picks it up.
     const changes = [
-      ...(settingsMutation ? settingsChangeLines(projectDir, [settingsMutation], descriptor.distribution) : []),
+      ...(settingsMutation
+        ? settingsChangeLines(projectDir, [settingsMutation], descriptor.distribution, choicesContext?.clears)
+        : []),
       ...(diagnosticsContext ? recordChangeLines(projectDir, diagnosticsContext) : []),
     ];
     // A model policy reaches running work only through the agent files it
