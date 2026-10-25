@@ -2099,12 +2099,13 @@ async function keepWriteBeforePick(
     const chat = workflow.selection?.sessionId;
     if ((toolName !== "Bash" && !WRITE_TOOLS.has(toolName)) || !chat) return;
     const projectDir = workflow.projectDir;
-    if (openPlanQuestion(projectDir, chat) === null) return;
+    const question = openPlanQuestion(projectDir, chat);
+    if (question === null) return;
     const cwd = typeof parsed.cwd === "string" ? parsed.cwd : projectDir;
     const { targets } = await mutationIntent(
       projectDir, toolName, parsed.tool_input, cwd, parsed.aidlc_shell === "powershell",
     );
-    keepWritesBeforePick(projectDir, chat, targets.filter((target) => !isOutsideProject(projectDir, target)));
+    keepWritesBeforePick(projectDir, chat, question, targets.filter((target) => !isOutsideProject(projectDir, target)));
   } catch {
     // Unkept.
   }

@@ -11,13 +11,15 @@
 
 import { afterEach, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, cpSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createOrchestrationTestProject,
+  REPO_ROOT,
   removeWorkspaceRecord,
   resetAidlcEnv,
   runOrchestrateNext,
@@ -98,13 +100,14 @@ const GREETER: Record<string, string> = {
 const FIXED = "const name = process.argv[2];\nconsole.log('Hello, ' + name + '!');\n";
 
 /** The person's greeter, AI-DLC installed, all of it committed (`inGit` false: a folder outside git). */
-function greeter(options: { inGit?: boolean; earlierWork?: boolean } = {}): string {
+function greeter(options: { inGit?: boolean; earlierWork?: boolean; workInProgress?: boolean } = {}): string {
   const proj = createOrchestrationTestProject();
-  removeWorkspaceRecord(proj);
+  if (!options.workInProgress) removeWorkspaceRecord(proj);
   // The hooks the host runs here are registered, as in the person's install.
   mkdirSync(join(proj, ".claude"), { recursive: true });
   copyFileSync(join(AIDLC_SRC, "settings.json"), join(proj, ".claude", "settings.json"));
   if (options.earlierWork) seedStateFile(proj, "state-completed.md");
+  if (options.workInProgress) seedStateFile(proj, "state-mid-ideation.md");
   for (const [rel, text] of Object.entries(GREETER)) {
     mkdirSync(join(proj, rel, ".."), { recursive: true });
     writeFileSync(join(proj, rel), text);
@@ -293,6 +296,25 @@ describe("t-early-edit-said: what the agent changed before the person picked a p
     expect(said(pick(proj, ask))).toContain("src/app.js was changed; `git checkout -- src/app.js`");
   });
 
+  test("beside work in progress: the plan question the person's new-work answer leads to is the window", () => {
+    proj = greeter({ workInProgress: true });
+    typed(proj, `/aidlc ${WORDS}`);
+    later();
+    const read = next(proj, ["--", WORDS]);
+    const routing = next(proj, ["--request", REQUEST.exec(String(read.message))![1]]);
+    expect(routing.ask_type, JSON.stringify(routing).slice(0, 300)).toBe("new-work-routing");
+    later();
+    typed(proj, "separate, it is new work");
+    const command = String(routing.new_intent_command);
+    const proposal = next(proj, command.slice(command.indexOf(" next ") + 6).split(" "));
+    const ask = next(proj, ["--propose", "bugfix", "--request", REQUEST.exec(String(proposal.message))![1]]);
+    expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("scope-confirm");
+    agentWrites(proj, "src/app.js", FIXED);
+    expect(said(pick(proj, ask))).toBe(
+      "Before you picked this plan, src/app.js was changed; `git checkout -- src/app.js` puts it back as last committed.",
+    );
+  });
+
   test("another chat's agent writing is not this chat's: nothing is named at this chat's pick", () => {
     proj = greeter();
     const ask = planQuestion(proj);
@@ -312,5 +334,58 @@ describe("t-early-edit-said: what the agent changed before the person picked a p
     const ask = planQuestion(proj);
     expect(said(pick(proj, ask))).toBeNull();
     expect(keptWithWork(proj)).toBeNull();
+  });
+
+  test("Copilot CLI: its edit, as the CLI hands it to AI-DLC's hook (Edit with path), is said at the pick", () => {
+    // The shipped Copilot tree, its adapter run for each host event, as in the live leg this payload was taken from.
+    proj = realpathSync(mkdtempSync(join(tmpdir(), "aidlc-early-edit-copilot-")));
+    cpSync(join(REPO_ROOT, "dist", "copilot"), proj, { recursive: true });
+    for (const [rel, text] of Object.entries(GREETER)) {
+      mkdirSync(join(proj, rel, ".."), { recursive: true });
+      writeFileSync(join(proj, rel), text);
+    }
+    git(proj, ["init", "-q"]);
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "greeter"]);
+    const chat = "0f3c2a54-8d1e-4b6a-9c2f-5e7d1a2b3c4d";
+    const env = { ...chatEnv(proj, chat), AIDLC_COPILOT_SESSION_ID: chat };
+    const host = (target: string, payload: Record<string, unknown>): void => {
+      const r = spawnSync(process.execPath, [join(proj, ".aidlc", "hooks", "aidlc-copilot-adapter.ts"), target], {
+        cwd: proj, env, encoding: "utf-8", input: JSON.stringify({ session_id: chat, cwd: proj, ...payload }),
+      });
+      expect(r.status, `${target}: ${r.stdout}${r.stderr}`).toBe(0);
+      expect(r.stdout, target).not.toContain('"deny"');
+    };
+    const tools = join(proj, ".aidlc", "tools");
+    const engine = (args: string[]): Directive => {
+      host("guard-tool-call", { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: `bun .aidlc/tools/aidlc-orchestrate.ts next ${args.join(" ")}` } });
+      const r = runOrchestrateNext(join(tools, "aidlc-orchestrate.ts"), proj, args, { cwd: proj, env });
+      expect(r.directive, r.out.slice(0, 400)).not.toBeNull();
+      return r.directive as Directive;
+    };
+    host("session-start", { hook_event_name: "SessionStart", source: "new" });
+    host("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt: `/aidlc ${WORDS}` });
+    later();
+    const proposal = engine(["--", WORDS]);
+    const ask = engine(["--propose", "bugfix", "--request", REQUEST.exec(String(proposal.message))![1]]);
+    expect(ask.kind, JSON.stringify(ask).slice(0, 300)).toBe("ask");
+    const confirm = String(ask.confirm_command);
+    const id = REQUEST.exec(confirm)![1];
+    host("guard-tool-call", {
+      hook_event_name: "PreToolUse", tool_name: "Edit",
+      tool_input: { path: join(proj, "src", "app.js"), old_str: "console.log('hello');", new_str: "console.log('Hello, ' + name + '!');" },
+    });
+    writeFileSync(join(proj, "src", "app.js"), FIXED);
+    later();
+    host("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt: "1" });
+    expect(String(engine(confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).message)).toContain("intent create");
+    const created = spawnSync(process.execPath, [
+      join(tools, "aidlc.ts"), "engine", "intent", "create", "--scope", "bugfix", "--request", id, "--label", "greeter-fix",
+      "--project-dir", proj,
+    ], { cwd: proj, env, encoding: "utf-8" });
+    expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
+    expect(said(JSON.stringify(engine([])))).toBe(
+      "Before you picked this plan, src/app.js was changed; `git checkout -- src/app.js` puts it back as last committed.",
+    );
   });
 });

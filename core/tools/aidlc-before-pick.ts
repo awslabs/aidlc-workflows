@@ -31,9 +31,10 @@ import {
   sourcePathKey,
   splitSourcePathKey,
   stableFileSha256,
+  writeEngineFileNoFollow,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.ts";
-import { openPlanQuestion, planQuestionRoot } from "./aidlc-question-store.ts";
+import { inQuestionChain, planQuestionWindow, type StoredQuestion } from "./aidlc-question-store.ts";
 
 const KEPT_MAX_BYTES = 1024 * 1024;
 const NAMED_MAX = 10;
@@ -119,14 +120,17 @@ function fileNow(projectDir: string, rel: string): KeptFile {
 }
 
 /**
- * Keep the agent's write targets (absolute, inside the project) while this chat's plan question for new work is
- * open: each file's state just before the first write to it. AI-DLC's own files and `.git` are never kept.
+ * Keep the agent's write targets (absolute, inside the project) while `question`, this chat's plan question for new
+ * work, is open: each file's state just before the first write to it. AI-DLC's own files and `.git` are never kept.
  */
-export function keepWritesBeforePick(projectDir: string, chat: string, targets: readonly string[]): void {
-  if (targets.length === 0) return;
-  const question = openPlanQuestion(projectDir, chat);
+export function keepWritesBeforePick(
+  projectDir: string,
+  chat: string,
+  question: StoredQuestion,
+  targets: readonly string[],
+): void {
   const rel = keptPath(projectDir, chat);
-  if (question === null || !rel) return;
+  if (targets.length === 0 || !rel) return;
   const saved = readKept(projectDir, rel);
   const kept: KeptWrites = saved?.question === question.id ? saved : { question: question.id, files: [] };
   const owned = aidlcOwnedSourceKey(projectDir);
@@ -144,7 +148,7 @@ export function keepWritesBeforePick(projectDir: string, chat: string, targets: 
 
 // A path as a command argument that reads the same in bash, PowerShell and cmd.exe; null when no quoting does.
 function commandPath(path: string): string | null {
-  if (/^[A-Za-z0-9._/@+=:,-]+$/.test(path)) return path;
+  if (/^[A-Za-z0-9._/+=:-]+$/.test(path)) return path;
   // biome-ignore lint/suspicious/noControlCharactersInRegex: a control character is the point
   return /["$`%\u0000-\u001f]/.test(path) ? null : `"${path}"`;
 }
@@ -174,13 +178,14 @@ function undoLine(projectDir: string, changed: readonly KeptFile[]): string | nu
     } else {
       const arg = commandPath(file.inRepo);
       const repoArg = file.repo ? commandPath(file.repo) : "";
-      if (arg === null || repoArg === null) continue;
+      // Unnamed rather than given a reason that may not hold: git could not read it at the write.
+      if (arg === null || repoArg === null || file.blob === null) continue;
       const repoDir = join(projectDir, file.repo);
       const atHead = git(repoDir, ["rev-parse", "--verify", "-q", `HEAD:./${file.inRepo}`]);
       const atKept = atHead === file.blob || file.head === null
         ? null
         : git(repoDir, ["rev-parse", "--verify", "-q", `${file.head}:./${file.inRepo}`]);
-      if (file.blob !== null && (atHead === file.blob || atKept === file.blob)) {
+      if (atHead === file.blob || atKept === file.blob) {
         const at = atHead === file.blob ? "" : `${(file.head as string).slice(0, 12)} `;
         const key = `${repoArg}\u0000${at}`;
         restore.set(key, [...(restore.get(key) ?? []), arg]);
@@ -227,21 +232,20 @@ export function sayWritesBeforePick(
   work: { dirName: string; space: string },
   pickingChat: string | null,
 ): void {
-  const root = planQuestionRoot(projectDir, questionId);
-  const rel = root?.asker ? keptPath(projectDir, root.asker) : "";
-  if (!root || !rel) return;
+  const window = planQuestionWindow(projectDir, questionId);
+  const rel = window ? keptPath(projectDir, window.chat) : "";
+  if (!window || !rel) return;
   const kept = readKept(projectDir, rel);
+  if (kept === null || !inQuestionChain(projectDir, kept.question, window.chain)) return;
   try {
     removeRecordFileNoFollow(projectDir, rel);
   } catch {
     // Already gone: nothing is kept for this chat.
   }
-  if (kept === null || kept.question !== root.id) return;
   const changed = kept.files.filter((file) => listedNow(projectDir, file.path) !== file.listed);
   if (changed.length === 0) return;
   const entries = changed.map((file) => ({ path: file.path, listed: file.listed }));
-  const dir = engineDir(projectDir, work.dirName, work.space);
-  writeRecordFileNoFollow(projectDir, relative(projectDir, join(dir, WORK_FILE)), `${JSON.stringify({ files: entries })}\n`);
+  writeEngineFileNoFollow(projectDir, WORK_FILE, `${JSON.stringify({ files: entries })}\n`, work.dirName, work.space);
   const line = undoLine(projectDir, changed);
   if (line !== null && pickingChat) addPendingPersonLines(projectDir, pickingChat, [line]);
 }

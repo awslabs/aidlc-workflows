@@ -1870,7 +1870,7 @@ starts retires it), the guard keeps each project file the agent's call writes,
 read exactly as it reads targets for the plan (`mutationIntent`), with what the
 file held just before the first write: its source-listing content id, its git
 blob and HEAD (`core/tools/aidlc-before-pick.ts`). It does so before any of its
-own checks, in a chat that joined no work too, and it refuses nothing; a write
+plan checks, in a chat that joined no work too, and it refuses nothing; a write
 it cannot read goes unkept. AI-DLC's own files are never kept. The pick says the
 ones that still differ once, with the way back
 ([Lines carried to the next spoken step](03-orchestrator.md#lines-carried-to-the-next-spoken-step)).
