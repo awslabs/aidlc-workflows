@@ -84,7 +84,7 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS, EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { type Dirent, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -97,6 +97,7 @@ import {
   auditShardDir,
   authorizedVerificationCommand,
   boltWorktreeBaseCommit,
+  ENGINE_DIR,
   unitPlainName,
   withdrawProtectedQuestions,
   boltSlugForUnit,
@@ -1009,16 +1010,121 @@ function captureReviewedRecordSnapshot(
   return { snapshot: { entries, edits, stageFolder: `construction/${unit}/${stage.slug}` } };
 }
 
+// The intent's records a side-by-side Unit carries, by path in the record (a
+// folder asked with a trailing slash): all but the state and the audit, which
+// have their own merges, the runtime graph and `.aidlc-*` files, which are the
+// engine's own, and every Unit's own folder for the stage, which lands through
+// its snapshot. Prepare copies these into a new Unit folder, and finalize
+// brings the Unit's edits to them home.
+function unitCarriesRecord(path: string, stageSlug: string): boolean {
+  const segments = path.split("/");
+  return !(
+    path === "aidlc-state.md" || path === "runtime-graph.json" || segments[0] === "audit" ||
+    segments.some((segment) => segment.startsWith(".aidlc-")) ||
+    (segments[0] === "construction" && segments.length > 3 && segments[2] === stageSlug)
+  );
+}
+
+/** The regular files under `root` a Unit carries, by posix path; a link is never followed. */
+function carriedRecordFiles(root: string, stageSlug: string): string[] {
+  const found: string[] = [];
+  const walk = (dir: string, prefix: string): void => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const path = `${prefix}${entry.name}`;
+      if (entry.isDirectory() && unitCarriesRecord(`${path}/`, stageSlug)) walk(join(dir, entry.name), `${path}/`);
+      else if (entry.isFile() && unitCarriesRecord(path, stageSlug)) found.push(path);
+    }
+  };
+  walk(root, "");
+  return found;
+}
+
+const UNIT_START_RECORDS = "unit-start-records.json";
+
+// A new Unit folder holds the records as last committed, or none in a
+// workspace of several repositories, while a team may leave them uncommitted.
+// So the folder gets the intent's records as the project has them: each that
+// differs is written, or taken out where the project has none. What the Unit
+// started with for those is kept in its record's engine folder, written last
+// so a failed copy leaves none, and finalize measures the Unit's edits to them
+// from there. A link, a folder or a file either side cannot read stays as it
+// is. Nothing is copied unless the folder's record is the one finalize reads.
+function copyIntentRecords(projectDir: string, selection: WorkflowSelection, wt: string, stageSlug: string): void {
+  const intent = selection.intent ?? undefined;
+  const from = recordDir(projectDir, intent, selection.space);
+  const prefix = relativeRecordDir(projectDir, intent, selection.space);
+  const to = recordDir(wt);
+  if (from === null || prefix === null || to === null || resolve(to) !== resolve(wt, ...prefix.split("/"))) return;
+  if (!existsSync(from) || !existsSync(to)) return;
+  const fromAnchor = realpathSync(from);
+  const toAnchor = realpathSync(to);
+  const started: Record<string, string | null> = {};
+  const paths = new Set([...carriedRecordFiles(from, stageSlug), ...carriedRecordFiles(to, stageSlug)]);
+  for (const path of [...paths].sort()) {
+    let project: Buffer | null;
+    let target: string;
+    let unit: Buffer | null;
+    try {
+      project = presentRecordBytes(assertNoSymlinkInChainOrThrow(fromAnchor, path), path);
+      target = assertNoSymlinkInChainOrThrow(toAnchor, path);
+      unit = presentRecordBytes(target, path);
+    } catch {
+      continue;
+    }
+    if (sameRecordBytes(project, unit)) continue;
+    if (process.env.AIDLC_TEST === "1" && process.env.AIDLC_TEST_RECORD_COPY_FAIL === path) {
+      throw new Error(`injected copy failure for ${path}`);
+    }
+    if (project === null) {
+      rmSync(target, { force: true });
+    } else {
+      mkdirSync(dirname(target), { recursive: true });
+      writeBufferAtomic(target, project);
+    }
+    started[path] = project === null ? null : project.toString("base64");
+  }
+  if (Object.keys(started).length === 0) return;
+  const startFile = assertNoSymlinkInChainOrThrow(toAnchor, `${ENGINE_DIR}/${UNIT_START_RECORDS}`);
+  mkdirSync(dirname(startFile), { recursive: true });
+  writeBufferAtomic(startFile, Buffer.from(`${JSON.stringify({ version: 1, records: started })}\n`, "utf-8"));
+}
+
+/** What the Unit started with for the records prepare copied, by path; none when nothing was copied. */
+function unitStartRecords(anchor: string): Map<string, Buffer | null> {
+  const started = new Map<string, Buffer | null>();
+  try {
+    const path = assertNoSymlinkInChainOrThrow(anchor, `${ENGINE_DIR}/${UNIT_START_RECORDS}`);
+    const parsed = JSON.parse(readRegularFileNoFollowOrThrow(path, "unit start records").toString("utf-8")) as {
+      version?: unknown;
+      records?: Record<string, unknown>;
+    };
+    if (parsed.version !== 1 || typeof parsed.records !== "object" || parsed.records === null) return started;
+    for (const [logicalPath, bytes] of Object.entries(parsed.records)) {
+      if (bytes === null || typeof bytes === "string") {
+        started.set(logicalPath, bytes === null ? null : Buffer.from(bytes, "base64"));
+      }
+    }
+  } catch {
+    // Nothing copied, or a file nobody can read: the Unit's edits are measured from git.
+  }
+  return started;
+}
+
 // The worker's edits to the rest of the intent's record, which an inline build
-// of the same plan would have made on main. Each Unit's stage folder lands
-// through its own snapshot, the state and the audit through their own merges,
-// and the runtime graph and `.aidlc-*` files are the engine's own. Git says
-// what changed, ignored records included (a team may ignore its records),
-// against the commit the Unit and the project share: prepare's approval
-// transfer may fast-forward a kept worktree past its recorded base commit, and
-// counting the project's own commits as the Unit's would clash where git
-// merges cleanly. The recorded base stands in where the project checkout is
-// not the Unit's repository (a workspace of several repositories).
+// of the same plan would have made on main. Git says what changed, ignored
+// records included (a team may ignore its records), against the commit the
+// Unit and the project share: prepare's approval transfer may fast-forward a
+// kept worktree past its recorded base commit, and counting the project's own
+// commits as the Unit's would clash where git merges cleanly. The recorded base
+// stands in where the project checkout is not the Unit's repository (a
+// workspace of several repositories). A record prepare copied into the folder
+// is measured from what the Unit started with instead.
 function workerRecordEdits(projectDir: string, wt: string, stageSlug: string): RecordEdit[] | null {
   const record = recordDir(wt);
   if (record === null || !existsSync(record)) return [];
@@ -1030,24 +1136,26 @@ function workerRecordEdits(projectDir: string, wt: string, stageSlug: string): R
   const changed = git(["diff", "--name-only", "-z", "--no-renames", "--relative", base, "--", "."]);
   const added = git(["ls-files", "-z", "--others", "--", "."]);
   if (changed.status !== 0 || added.status !== 0) return null;
-  const paths = new Set(`${changed.stdout.toString()}\0${added.stdout.toString()}`.split("\0").filter(Boolean));
   const anchor = realpathSync(record);
+  const started = unitStartRecords(anchor);
+  const paths = new Set([
+    ...`${changed.stdout.toString()}\0${added.stdout.toString()}`.split("\0").filter(Boolean),
+    ...started.keys(),
+  ]);
   const edits: RecordEdit[] = [];
   for (const path of [...paths].sort()) {
-    const segments = path.split("/");
-    if (
-      path === "aidlc-state.md" || path === "runtime-graph.json" || segments[0] === "audit" ||
-      segments.some((segment) => segment.startsWith(".aidlc-")) ||
-      (segments[0] === "construction" && segments.length > 3 && segments[2] === stageSlug)
-    ) continue;
-    // As a checkout writes it, so a CRLF checkout compares and merges as on
-    // disk; none when the base has no file there (nothing, a folder, or a file
-    // git cannot show).
-    const kind = git(["cat-file", "-t", `${base}:./${path}`]);
-    const shown = kind.status === 0 && kind.stdout.toString().trim() === "blob"
-      ? git(["cat-file", "--filters", `${base}:./${path}`])
-      : null;
-    const baseBytes: Buffer | null = shown?.status === 0 ? shown.stdout : null;
+    if (!unitCarriesRecord(path, stageSlug)) continue;
+    let baseBytes = started.get(path) ?? null;
+    if (!started.has(path)) {
+      // As a checkout writes it, so a CRLF checkout compares and merges as on
+      // disk; none when the base has no file there (nothing, a folder, or a file
+      // git cannot show).
+      const kind = git(["cat-file", "-t", `${base}:./${path}`]);
+      const shown = kind.status === 0 && kind.stdout.toString().trim() === "blob"
+        ? git(["cat-file", "--filters", `${base}:./${path}`])
+        : null;
+      baseBytes = shown?.status === 0 ? shown.stdout : null;
+    }
     let unitBytes: Buffer | null;
     try {
       unitBytes = presentRecordBytes(assertNoSymlinkInChainOrThrow(anchor, path), path);
@@ -2992,6 +3100,18 @@ function handlePrepare(rest: string[]): void {
         ok: false,
         worktree_path: worktreeDir,
         error: `bolt start failed: ${started.stderr.trim() || started.stdout.trim()}; ${
+          resume ? "retry prepare --resume-existing to recover this revision" :
+            `source was preserved; run aidlc-worktree discard --slug ${boltSlug} before retrying prepare`}`,
+      });
+      continue;
+    }
+    try {
+      copyIntentRecords(projectDir, selected, worktreeDir, stageDefinition?.slug ?? stage);
+    } catch (error) {
+      if (!resume) releasePreparationRegistration(projectDir, unit);
+      prepared.push({
+        unit, ok: false, worktree_path: worktreeDir,
+        error: `copying the intent's records into the worktree failed: ${error instanceof Error ? error.message : String(error)}; ${
           resume ? "retry prepare --resume-existing to recover this revision" :
             `source was preserved; run aidlc-worktree discard --slug ${boltSlug} before retrying prepare`}`,
       });
