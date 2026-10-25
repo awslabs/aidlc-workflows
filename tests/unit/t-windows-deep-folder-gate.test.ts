@@ -5,7 +5,8 @@
 // Generation names the Units. On Windows the Units Generation gate says the
 // same line once, from the same helper, with the depth the Unit names make:
 // not when the open gate is shown again, not for short names, and never on
-// Linux or macOS.
+// Linux or macOS. The gate cases keep Git's long paths off, so the line comes
+// whatever the box's Windows long-path setting.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -36,6 +37,9 @@ const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const HELPER = join(import.meta.dir, "..", "..", "core", "tools", "aidlc-folder-depth.ts");
 const WINDOWS = process.platform === "win32";
 const SAID = "characters deep; Windows tools refuse paths over 260 characters and AI-DLC's records add about";
+// What the gate's line says on either Windows long-path setting.
+const ANY_SAID = "characters deep;";
+const OFF = { longPaths: () => ({ windows: false, git: false }) };
 const STAGE = "units-generation";
 const SEP = "\u2014";
 const made: string[] = [];
@@ -59,13 +63,13 @@ describe("the helper with the Unit names", () => {
     // Infrastructure Design's per-Unit review brief with an empty name:
     // aidlc/spaces/default/intents/<YYMMDD>-<label>/.aidlc-engine/reviews/infrastructure-design/units/<unit>/briefs/<sha256>.md
     expect(UNIT_RECORD_DEPTH).toBe(186);
-    const named = deepFolder(folder, "win32", { names: ["u2-billing", "u1-order-management"] });
+    const named = deepFolder(folder, "win32", { names: ["u2-billing", "u1-order-management"] }, OFF);
     expect(named?.adds).toBe(UNIT_RECORD_DEPTH + "u1-order-management".length);
     expect(named?.facts).toBe(`70 ${SAID} ${UNIT_RECORD_DEPTH + 19}`);
     expect(named?.adds).toBeGreaterThan(RECORD_DEPTH);
     // 70 + 1 + 186 + 3 is 260, not over it.
     expect(deepFolder(folder, "win32", { names: ["api"] })).toBeNull();
-    expect(deepFolder(folder, "win32", { names: ["apis"] })?.depth).toBe(70);
+    expect(deepFolder(folder, "win32", { names: ["apis"] }, OFF)?.depth).toBe(70);
   });
 
   test("the work's own record folder counts: its space's name and its intent folder", async () => {
@@ -76,11 +80,11 @@ describe("the helper with the Unit names", () => {
     expect(deepFolder(folder, "win32", { names: ["api"], recordFolder: capped })).toBeNull();
     // A team space with a longer name puts the same Unit's records past 260.
     const team = `aidlc/spaces/payments-platform-team/intents/261024-${"w".repeat(24)}`;
-    const said = deepFolder(folder, "win32", { names: ["api"], recordFolder: team });
+    const said = deepFolder(folder, "win32", { names: ["api"], recordFolder: team }, OFF);
     expect(said?.adds).toBe(team.length + UNIT_RECORD_SUFFIX + 3);
     expect(said?.facts).toBe(`70 ${SAID} ${team.length + UNIT_RECORD_SUFFIX + 3}`);
     // So does a second intent of the same day and label.
-    expect(deepFolder(folder, "win32", { names: ["api"], recordFolder: `${capped}-2` })?.adds).toBe(UNIT_RECORD_DEPTH + 5);
+    expect(deepFolder(folder, "win32", { names: ["api"], recordFolder: `${capped}-2` }, OFF)?.adds).toBe(UNIT_RECORD_DEPTH + 5);
   });
 
   test("the shared short temp folder is never deeper than the user's, and is tmpdir off Windows", async () => {
@@ -201,6 +205,9 @@ function project(units: (depth: number, record: number) => string[]): { proj: st
 function openGate(proj: string): Record<string, unknown> {
   const env = { ...process.env };
   delete env.AWS_AIDLC_DEFAULT_SCOPE;
+  // Git's long paths off, the box image's system config left out.
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.GIT_CONFIG_GLOBAL = join(proj, "no-global.gitconfig");
   const r = spawnSync(BUN, [ORCH, "report", "--stage", STAGE, "--result", "awaiting-approval", "--project-dir", proj], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
@@ -232,15 +239,14 @@ describe("the Units Generation gate", () => {
     console.log(`gate in a ${proj.length}-character folder:\n${JSON.stringify(opened, null, 2)}`);
     expect(String(opened.message), JSON.stringify(opened)).toContain(`Recorded awaiting-approval for "${STAGE}"`);
     const narration = String(opened.narration ?? "");
-    expect(times(narration, SAID), narration).toBe(WINDOWS ? 1 : 0);
-    expect(JSON.stringify(opened).split(SAID).length - 1).toBe(WINDOWS ? 1 : 0);
+    expect(times(narration, ANY_SAID), narration).toBe(WINDOWS ? 1 : 0);
+    expect(JSON.stringify(opened).split(ANY_SAID).length - 1).toBe(WINDOWS ? 1 : 0);
     if (WINDOWS) {
-      expect(narration).toContain(
-        `This project folder is ${proj.length} ${SAID} ${records + longest}, so move the project`,
-      );
+      expect(narration).toContain(`This project folder is ${proj.length} ${ANY_SAID} `);
+      expect(narration).toContain(`AI-DLC's records add about ${records + longest}, so move the project`);
     }
     const again = openGate(proj);
-    expect(JSON.stringify(again)).not.toContain(SAID);
+    expect(JSON.stringify(again)).not.toContain(ANY_SAID);
   });
 
   test("short Unit names: the gate says nothing about the folder", async () => {
@@ -255,6 +261,6 @@ describe("the Units Generation gate", () => {
     const opened = openGate(proj);
     // The gate opened: a refused one is a print too.
     expect(String(opened.message), JSON.stringify(opened)).toContain(`Recorded awaiting-approval for "${STAGE}"`);
-    expect(JSON.stringify(opened)).not.toContain(SAID);
+    expect(JSON.stringify(opened)).not.toContain(ANY_SAID);
   });
 });

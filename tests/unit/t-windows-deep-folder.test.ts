@@ -5,8 +5,11 @@
 // review file and the stage's questions file, and Git without long paths
 // refuses the committed question files. `aidlc config` says so once, in one
 // line, and `aidlc doctor` shows the same as a row, from one helper and one
-// number. Nothing on Linux or macOS, nothing for a short folder, and nothing of
-// the person's is changed. The Windows cases run on Windows Server.
+// number. The line reads the machine: with Windows long paths and Git's
+// core.longpaths both on it is silent, except under Copilot CLI, whose own
+// check refuses either way; otherwise it names a shorter folder and the setting
+// still off. Nothing on Linux or macOS, nothing for a short folder, and nothing
+// of the person's is changed. The Windows cases run on Windows Server.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -28,8 +31,19 @@ const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const DIST_RELEASE = join(REPO_ROOT, "dist-release");
 const HELPER = join(REPO_ROOT, "core", "tools", "aidlc-folder-depth.ts");
 const WINDOWS = process.platform === "win32";
-// What the line and the row say, whatever the folder's depth.
+// What the line and the row say, whatever the folder's depth: with Windows long
+// paths off, with only Git's off, and under Copilot CLI.
 const SAID = "characters deep; Windows tools refuse paths over 260 characters and AI-DLC's records add about";
+const GIT_SAID = "characters deep; Git refuses paths over 260 characters and AI-DLC's records add about";
+const COPILOT_SAID = "characters deep; Copilot CLI refuses paths over 260 characters and AI-DLC's records add about";
+const ANY_SAID = "characters deep;";
+const KEY = "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem";
+const BOTH_WAY = `, or turn long paths on: set LongPathsEnabled to 1 in ${KEY} as an administrator, ` +
+  "then run git config --global core.longpaths true";
+const WINDOWS_WAY = `, or turn Windows long paths on: set LongPathsEnabled to 1 in ${KEY} as an administrator`;
+const GIT_WAY = ", or turn Git's long paths on: run git config --global core.longpaths true";
+const shorter = (name: string): string => `move the project to a shorter folder (for example C:\\src\\${name})`;
+const OFF = () => ({ windows: false, git: false });
 const HARNESSES = ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"] as const;
 const temporary: string[] = [];
 
@@ -53,6 +67,33 @@ function projectFolder(length: number, root = tmpdir()): string {
 }
 
 type Run = { status: number; out: string };
+
+// This box's own Windows long-path setting, read through PowerShell (AI-DLC
+// asks reg.exe), so a case knows which words the machine should get.
+function windowsLongPathsOn(): boolean {
+  const read = spawnSync("powershell", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    "(Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\FileSystem' -Name LongPathsEnabled " +
+    "-ErrorAction SilentlyContinue).LongPathsEnabled",
+  ], { encoding: "utf-8" });
+  return read.status === 0 && Number(read.stdout.trim() || "0") !== 0;
+}
+
+// Git's long paths as the person set them: GIT_CONFIG_NOSYSTEM keeps the box
+// image's system config out, and the global file is the scratch home's.
+function personGit(env: Record<string, string | undefined>, longPaths: boolean): string {
+  const file = join(String(env.HOME), ".gitconfig");
+  if (longPaths) writeFileSync(file, "[core]\n\tlongpaths = true\n");
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.GIT_CONFIG_GLOBAL = file;
+  if (WINDOWS) {
+    const seen = spawnSync("git", ["config", "--show-origin", "--get", "core.longpaths"], { env, encoding: "utf-8" });
+    console.log(`LongPathsEnabled ${windowsLongPathsOn() ? 1 : 0}; git core.longpaths: ${seen.stdout.trim() || "unset"}`);
+  }
+  return file;
+}
 
 function machineEnv(terminal: boolean): Record<string, string | undefined> {
   const machine = temp("aidlc-t-deep-machine-");
@@ -116,23 +157,24 @@ function run(tool: string, args: string[], cwd: string, env: Record<string, stri
   return { status: result.status, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
-function configure(project: string, env: Record<string, string | undefined>): Run {
+// Copilot CLI by default; Claude Code is a harness that does not refuse a long path on its own.
+function configure(project: string, env: Record<string, string | undefined>, harness = "copilot"): Run {
   return run(INIT, [
     "config",
     "--project-dir",
     project,
     "--from",
-    join(DIST_RELEASE, "copilot"),
+    join(DIST_RELEASE, harness),
     "--harness",
-    "copilot",
+    harness,
     "--mcp",
     "none",
     "--yes",
   ], project, env);
 }
 
-function doctor(project: string, env: Record<string, string | undefined>): Run {
-  return run(join(project, ".aidlc", "tools", "aidlc.ts"), [
+function doctor(project: string, env: Record<string, string | undefined>, harness = "copilot"): Run {
+  return run(join(project, harness === "copilot" ? ".aidlc" : `.${harness}`, "tools", "aidlc.ts"), [
     "doctor",
     "--no-color",
     "--project-dir",
@@ -180,24 +222,78 @@ describe("the line and the row come from one helper", () => {
     }
   });
 
+  const folder = (length: number): string => `C:\\Users\\${"u".repeat(length - "C:\\Users\\\\my-app".length)}\\my-app`;
+
   test("on Windows a folder too deep for the records is said, with the folder, the limit and the number", async () => {
     const { RECORD_DEPTH, deepFolder } = await import(HELPER);
     const limit = 260 - 1 - RECORD_DEPTH;
-    const folder = (length: number): string => `C:\\Users\\${"u".repeat(length - "C:\\Users\\\\my-app".length)}\\my-app`;
     expect(folder(100)).toHaveLength(100);
-    const deep = deepFolder(folder(100), "win32");
+    const deep = deepFolder(folder(100), "win32", undefined, { longPaths: OFF });
     expect(deep).not.toBeNull();
     expect(deep.depth).toBe(100);
     expect(deep.adds).toBe(RECORD_DEPTH);
     expect(deep.facts).toBe(`100 ${SAID} ${RECORD_DEPTH}`);
-    expect(deep.fix).toBe("move the project to a shorter folder (for example C:\\src\\my-app)");
+    expect(deep.fix).toBe(`${shorter("my-app")}${BOTH_WAY}`);
     for (const text of [deep.facts, deep.fix]) {
       expect(text).not.toContain("\n");
       expect(text).toMatch(/^[\x20-\x7e]+$/);
     }
     expect(deepFolder(folder(limit), "win32")).toBeNull();
-    expect(deepFolder(folder(limit + 1), "win32")?.depth).toBe(limit + 1);
+    expect(deepFolder(folder(limit + 1), "win32", undefined, { longPaths: OFF })?.depth).toBe(limit + 1);
     expect(deepFolder(folder(40), "win32")).toBeNull();
+  });
+
+  test("Windows long paths and Git's core.longpaths both on: nothing is said, however deep the folder", async () => {
+    const { deepFolder } = await import(HELPER);
+    const on = () => ({ windows: true, git: true });
+    expect(deepFolder(folder(100), "win32", undefined, { longPaths: on })).toBeNull();
+    expect(deepFolder(folder(200), "win32", undefined, { longPaths: on, harnesses: ["claude", "codex"] })).toBeNull();
+    expect(deepFolder(folder(100), "win32", { names: ["u1-order-management"] }, { longPaths: on })).toBeNull();
+  });
+
+  test("either one off: the line names a shorter folder and turning on what is still off", async () => {
+    const { RECORD_DEPTH, deepFolder } = await import(HELPER);
+    const said = (windows: boolean, git: boolean) => deepFolder(folder(100), "win32", undefined, {
+      longPaths: () => ({ windows, git }),
+    });
+    expect(said(false, true)?.facts).toBe(`100 ${SAID} ${RECORD_DEPTH}`);
+    expect(said(false, true)?.fix).toBe(`${shorter("my-app")}${WINDOWS_WAY}`);
+    // With Windows long paths on, only Git still refuses.
+    expect(said(true, false)?.facts).toBe(`100 ${GIT_SAID} ${RECORD_DEPTH}`);
+    expect(said(true, false)?.fix).toBe(`${shorter("my-app")}${GIT_WAY}`);
+    expect(said(true, false)?.note).toBe(`This project folder is 100 ${GIT_SAID} ${RECORD_DEPTH}, so ${shorter("my-app")}${GIT_WAY}.`);
+    expect(said(false, false)?.note).toBe(`This project folder is 100 ${SAID} ${RECORD_DEPTH}, so ${shorter("my-app")}${BOTH_WAY}.`);
+  });
+
+  test("under Copilot CLI the line is said whatever the machine says, and names a shorter folder", async () => {
+    const { RECORD_DEPTH, deepFolder } = await import(HELPER);
+    let reads = 0;
+    const on = () => {
+      reads++;
+      return { windows: true, git: true };
+    };
+    for (const harnesses of [["copilot"], ["claude", "copilot"]]) {
+      const deep = deepFolder(folder(100), "win32", undefined, { longPaths: on, harnesses });
+      expect(deep?.facts).toBe(`100 ${COPILOT_SAID} ${RECORD_DEPTH}`);
+      expect(deep?.fix).toBe(shorter("my-app"));
+      expect(deep?.note).toBe(`This project folder is 100 ${COPILOT_SAID} ${RECORD_DEPTH}, so ${shorter("my-app")}.`);
+    }
+    // Long paths do not move Copilot's own check, so the machine is not asked.
+    expect(reads).toBe(0);
+    expect(deepFolder(folder(60), "win32", undefined, { longPaths: on, harnesses: ["copilot"] })).toBeNull();
+  });
+
+  test("a short folder, and Linux or macOS, read nothing of the machine", async () => {
+    const { deepFolder } = await import(HELPER);
+    let reads = 0;
+    const count = () => {
+      reads++;
+      return { windows: false, git: false };
+    };
+    expect(deepFolder(folder(40), "win32", undefined, { longPaths: count })).toBeNull();
+    expect(deepFolder(`/home/${"u".repeat(200)}`, "linux", undefined, { longPaths: count })).toBeNull();
+    expect(deepFolder(`/Users/${"u".repeat(200)}`, "darwin", undefined, { longPaths: count })).toBeNull();
+    expect(reads).toBe(0);
   });
 
   test("on Linux and macOS nothing is said, however deep the folder", async () => {
@@ -209,9 +305,11 @@ describe("the line and the row come from one helper", () => {
 });
 
 describe("config and doctor in a project folder", () => {
-  test("a deep folder: config says it once, doctor shows it as a row, and the folder and its git are as they were", () => {
+  test("a deep folder under Copilot CLI: config says it once and doctor as a row, with Git's long paths on too, and the folder and its git are as they were", () => {
     const project = projectFolder(120);
     const env = machineEnv(false);
+    const global = personGit(env, true);
+    const globalConfig = readFileSync(global, "utf-8");
     const gitConfig = readFileSync(join(project, ".git", "config"), "utf-8");
     const setup = configure(project, env);
     // A refresh is the same config run, and says it the same way.
@@ -220,28 +318,73 @@ describe("config and doctor in a project folder", () => {
     console.log(`config in a ${project.length}-character folder:\n${setup.out}\nits refresh:\n${refresh.out}`);
     console.log(`doctor in a ${project.length}-character folder:\n${checked.out}`);
     expect(setup.status, setup.out).toBe(0);
-    expect(times(setup.out, SAID), setup.out).toBe(WINDOWS ? 1 : 0);
+    expect(times(setup.out, ANY_SAID), setup.out).toBe(WINDOWS ? 1 : 0);
     if (WINDOWS) {
-      expect(setup.out).toContain(`Note: This project folder is ${project.length} ${SAID}`);
-      expect(setup.out).toContain(`move the project to a shorter folder (for example C:\\src\\${basename(project)})`);
+      expect(setup.out).toContain(`Note: This project folder is ${project.length} ${COPILOT_SAID}`);
+      expect(setup.out).toContain(`${shorter(basename(project))}.`);
     }
     expect(refresh.status, refresh.out).toBe(0);
-    expect(times(refresh.out, SAID), refresh.out).toBe(WINDOWS ? 1 : 0);
-    expect(times(checked.out, SAID), checked.out).toBe(WINDOWS ? 1 : 0);
+    expect(times(refresh.out, ANY_SAID), refresh.out).toBe(WINDOWS ? 1 : 0);
+    expect(times(checked.out, ANY_SAID), checked.out).toBe(WINDOWS ? 1 : 0);
     if (WINDOWS) {
-      expect(checked.out).toContain(`warn  Project folder: ${project.length} ${SAID}`);
-      expect(checked.out).toContain(`fix: move the project to a shorter folder (for example C:\\src\\${basename(project)})`);
+      expect(checked.out).toContain(`warn  Project folder: ${project.length} ${COPILOT_SAID}`);
+      expect(checked.out).toContain(`fix: ${shorter(basename(project))}\n`);
     }
     // An advisory row: doctor's verdict is what the other checks make it.
     const json = JSON.parse(
       run(join(project, ".aidlc", "tools", "aidlc.ts"), ["doctor", "--json", "--project-dir", project], project, env).out,
     );
     const rows = (json.data.checks as Array<{ label: string; pass: boolean; severity?: string }>)
-      .filter((check) => check.label.includes(SAID));
+      .filter((check) => check.label.includes(COPILOT_SAID));
     expect(rows.map((row) => [row.pass, row.severity])).toEqual(WINDOWS ? [[false, "warn"]] : []);
 
     expect(existsSync(project)).toBe(true);
     expect(readFileSync(join(project, ".git", "config"), "utf-8")).toBe(gitConfig);
+    expect(readFileSync(global, "utf-8")).toBe(globalConfig);
+  });
+
+  test("a deep folder under Claude Code with Git's long paths off: config and doctor name a shorter folder and what this machine still has off", () => {
+    const project = projectFolder(120);
+    const env = machineEnv(false);
+    personGit(env, false);
+    const windowsOn = WINDOWS && windowsLongPathsOn();
+    const setup = configure(project, env, "claude");
+    const checked = doctor(project, env, "claude");
+    console.log(`config under Claude Code in a ${project.length}-character folder:\n${setup.out}`);
+    console.log(`doctor:\n${checked.out}`);
+    expect(setup.status, setup.out).toBe(0);
+    expect(times(setup.out, ANY_SAID), setup.out).toBe(WINDOWS ? 1 : 0);
+    expect(times(checked.out, ANY_SAID), checked.out).toBe(WINDOWS ? 1 : 0);
+    if (WINDOWS) {
+      const [said, way] = windowsOn ? [GIT_SAID, GIT_WAY] : [SAID, BOTH_WAY];
+      expect(setup.out).toContain(`Note: This project folder is ${project.length} ${said}`);
+      expect(setup.out).toContain(`${shorter(basename(project))}${way}.`);
+      expect(checked.out).toContain(`warn  Project folder: ${project.length} ${said}`);
+      expect(checked.out).toContain(`fix: ${shorter(basename(project))}${way}`);
+    }
+  });
+
+  test("a deep folder under Claude Code with Git's long paths on: silent when Windows long paths are on, else it names the Windows setting, and neither setting is changed", () => {
+    const project = projectFolder(120);
+    const env = machineEnv(false);
+    const global = personGit(env, true);
+    const globalConfig = readFileSync(global, "utf-8");
+    const windowsOn = WINDOWS && windowsLongPathsOn();
+    const setup = configure(project, env, "claude");
+    const checked = doctor(project, env, "claude");
+    console.log(`config under Claude Code in a ${project.length}-character folder:\n${setup.out}`);
+    console.log(`doctor:\n${checked.out}`);
+    expect(setup.status, setup.out).toBe(0);
+    const says = WINDOWS && !windowsOn ? 1 : 0;
+    expect(times(setup.out, ANY_SAID), setup.out).toBe(says);
+    expect(times(checked.out, ANY_SAID), checked.out).toBe(says);
+    if (says) {
+      expect(setup.out).toContain(`Note: This project folder is ${project.length} ${SAID}`);
+      expect(setup.out).toContain(`${shorter(basename(project))}${WINDOWS_WAY}.`);
+      expect(checked.out).toContain(`fix: ${shorter(basename(project))}${WINDOWS_WAY}`);
+    }
+    expect(readFileSync(global, "utf-8")).toBe(globalConfig);
+    if (WINDOWS) expect(windowsLongPathsOn()).toBe(windowsOn);
   });
 
   test("a deep folder, first run at a terminal: the line comes once, before setup says it is complete", () => {
@@ -250,8 +393,8 @@ describe("config and doctor in a project folder", () => {
     console.log(`first run in a ${project.length}-character folder:\n${setup.out}`);
     expect(setup.status, setup.out).toBe(0);
     expect(setup.out).toContain("Setup complete.");
-    expect(times(setup.out, SAID), setup.out).toBe(WINDOWS ? 1 : 0);
-    if (WINDOWS) expect(setup.out.indexOf(SAID)).toBeLessThan(setup.out.indexOf("Setup complete."));
+    expect(times(setup.out, COPILOT_SAID), setup.out).toBe(WINDOWS ? 1 : 0);
+    if (WINDOWS) expect(setup.out.indexOf(COPILOT_SAID)).toBeLessThan(setup.out.indexOf("Setup complete."));
   });
 
   test("a short folder: neither config nor doctor says anything about it", async () => {
@@ -262,7 +405,7 @@ describe("config and doctor in a project folder", () => {
     const env = machineEnv(false);
     const setup = configure(project, env);
     expect(setup.status, setup.out).toBe(0);
-    expect(setup.out).not.toContain(SAID);
-    expect(doctor(project, env).out).not.toContain(SAID);
+    expect(setup.out).not.toContain(ANY_SAID);
+    expect(doctor(project, env).out).not.toContain(ANY_SAID);
   });
 });
