@@ -1332,7 +1332,8 @@ function planQuestionDue(projectDir: string): boolean {
     const intentId = marker.intent_uuid ?? "bare-space";
     const record = readPlanApprovalAsk(projectDir, intentId);
     const units = issued.kind === "invoke-swarm" ? issued.units : [issued.unit?.trim() || null];
-    return units.some((unit) => targetState(projectDir, unit, intentId, record, issued).kind === "ask");
+    const off = planApprovalSettingFor(projectDir)?.value === "off";
+    return units.some((unit) => targetState(projectDir, unit, intentId, record, issued, off).kind === "ask");
   } catch {
     return false;
   }
