@@ -20,6 +20,8 @@ import {
   seedAidlcMemory,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { cpSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -41,9 +43,10 @@ function noWorkProject(): string {
   return proj;
 }
 
-function startIsolated(proj: string, words: string[] = []): void {
+function startIsolated(proj: string, words: string[] = []): Record<string, unknown> {
   const run = runOrchestrateNext(ORCH, proj, ["--scope", "feature", "--stage", STAGE, "--single", ...words], { env: childEnv() });
   expect(run.directive?.kind, JSON.stringify(run.directive)).toBe("run-stage");
+  return run.directive as Record<string, unknown>;
 }
 
 function projectDescription(proj: string): { status: number; json: Record<string, unknown> | null; out: string } {
@@ -107,6 +110,26 @@ describe("the request of a stage run on its own with no work", () => {
     finish(proj);
     startIsolated(proj);
     expect(projectDescription(proj).json).toEqual({ description: null, source: null });
+  });
+
+  test("the stage run again with other words starts over with them; again with none, it goes on with them", () => {
+    const proj = noWorkProject();
+    startIsolated(proj, ["add due dates to each todo"]);
+    const again = startIsolated(proj, ["sort the todos by priority instead"]);
+    expect(String((again.change_notices as string[] | undefined) ?? [])).toContain("starts over with your new request");
+    expect(projectDescription(proj).json?.description).toBe("sort the todos by priority instead");
+    const resumed = startIsolated(proj);
+    expect(String((resumed.change_notices as string[] | undefined) ?? [])).not.toContain("starts over");
+    expect(projectDescription(proj).json?.description).toBe("sort the todos by priority instead");
+  });
+
+  test("a team clone of the record keeps the request: it is not in a folder git leaves out", () => {
+    const proj = noWorkProject();
+    startIsolated(proj, ["add due dates to each todo"]);
+    // What git carries: the shipped .gitignore leaves every .aidlc-engine folder out.
+    const clone = mkdtempSync(join(tmpdir(), "aidlc-test-clone-"));
+    cpSync(proj, clone, { recursive: true, filter: (from) => !/[\\/]\.aidlc-engine([\\/]|$)/.test(from) });
+    expect(projectDescription(clone).json).toEqual({ description: "add due dates to each todo", source: `single-stage:${STAGE}` });
   });
 
   test("inside work the work's own description is read, as before", () => {

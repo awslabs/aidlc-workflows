@@ -37041,17 +37041,22 @@ export function runRecordDir(projectDir: string): string | null {
 
 // The words typed after the flags of a stage run on its own with no work: its
 // description, where a piece of work keeps project-description.json. Kept
-// whole beside the space's own record, one file a stage, and bound to the
-// start that kept them by their digest on its STAGE_STARTED row.
-const SINGLE_RUN_REQUEST_DIR = `${ENGINE_DIR}/single-stage-request`;
+// whole in the space's own record, one file a stage, committed as that file is
+// (so a team clone has them), and bound to the start that kept them by their
+// digest on its STAGE_STARTED row.
+const SINGLE_RUN_REQUEST_DIR = "single-stage-request";
 export const SINGLE_RUN_REQUEST_FIELD = "Request SHA-256";
+
+export function singleRunRequestDigest(words: string): string {
+  return createHash("sha256").update(words, "utf-8").digest("hex");
+}
 
 /** Keep an isolated start's words; returns the digest its STAGE_STARTED row records. */
 export function keepSingleRunRequest(projectDir: string, slug: string, words: string): string {
   const root = docsRoot(projectDir);
   mkdirSync(root, { recursive: true });
   writeRecordFileNoFollow(root, `${SINGLE_RUN_REQUEST_DIR}/${slug}.json`, `${JSON.stringify(words)}\n`);
-  return createHash("sha256").update(words, "utf-8").digest("hex");
+  return singleRunRequestDigest(words);
 }
 
 // The request of the latest isolated run open with no work: its stage, and the
@@ -37083,7 +37088,7 @@ export function singleRunRequest(projectDir: string): { stage: string; descripti
   try {
     const path = recordFileTargetOrThrow(docsRoot(projectDir), `${SINGLE_RUN_REQUEST_DIR}/${stage}.json`);
     const words: unknown = JSON.parse(readRegularFileNoFollowOrThrow(path, "isolated run request").toString("utf-8"));
-    return typeof words === "string" && createHash("sha256").update(words, "utf-8").digest("hex") === digest
+    return typeof words === "string" && singleRunRequestDigest(words) === digest
       ? { stage, description: words }
       : { stage, description: null };
   } catch {
