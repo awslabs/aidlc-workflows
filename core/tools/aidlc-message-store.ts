@@ -551,8 +551,9 @@ function onlyItsOwnDecisionAfter(
 // approval or another decision does not also stand for a setting, so their
 // "Approve" never turns one of their checks off later (live Copilot CLI runs
 // turned learnings and the summary confirmation off that way, recorded as
-// theirs). A decision that names this message, or names none, is one it
-// backed; one that names a later message of theirs is that message's. For a
+// theirs). A decision that names this message is one it backed, and so is the
+// one decision after it that names none; one that names a later message of
+// theirs is that message's. For a
 // setting, a routing answer (it carries the settings before it to the work it
 // names, as settingTheirs reads it) and a question box closed with nothing
 // picked are no decision at all. A setting asked for beside an approval goes
@@ -565,6 +566,7 @@ function messageReach(
   setting: boolean,
 ): "stands" | "spent" | "backed" {
   const decisions = new Set<string>();
+  let unnamed = false;
   // One jump over several Units is one decision, as one plan answer over
   // several Units is.
   let jump: { key: string; units: Set<string> } | null = null;
@@ -585,7 +587,8 @@ function messageReach(
         auditBlockField(row.block, "User Input") === null || auditBlockField(row.block, "Autonomous") === "true")
     ) continue;
     const named = auditBlockField(row.block, "Message Id");
-    if (setting && (named === null || named === message.id)) return "backed";
+    if (setting && named === message.id) return "backed";
+    unnamed ||= setting && named === null;
     if (named !== null && named !== message.id) {
       const backing = readMessage(pd, named);
       if (backing === null || backing.at < message.at || backing.session !== message.session) return "spent";
@@ -599,7 +602,7 @@ function messageReach(
     jump = reopen === null ? null : { key: reopen, units: new Set([unit]) };
     decisions.add(row.event === "PLAN_APPROVAL_RECORDED" ? "plan" : String(index));
   }
-  return decisions.size <= 1 ? "stands" : "spent";
+  return decisions.size > 1 ? "spent" : unnamed ? "backed" : "stands";
 }
 
 // The refusal for a setting on a message that already backed a decision: it

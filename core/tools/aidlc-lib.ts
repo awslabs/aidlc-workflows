@@ -13,7 +13,6 @@ import {
   aidlcDispatcherInvocation,
   aidlcInvocation,
   aidlcToolInvocation,
-  compiledExecutable,
   entrySkillInvocation,
   type DirectiveLimit,
   directiveLimitFor,
@@ -50,6 +49,7 @@ import {
   type GuardFence,
   type SwitchableGuardFence,
   isSwitchableGuardFence,
+  guardFenceConfigKey,
   guardFenceFromConfigKey,
 } from "./aidlc-guard-fences.ts";
 export {
@@ -3087,6 +3087,24 @@ export function messageFill(projectDir: string, settings: readonly string[] = []
     : `${MESSAGE_FILL} (${named.map((message) => `${message.id}, sent ${message.at}`).join("; ")})`;
 }
 
+// The per-work settings `config set` takes, by their flag names: the setter
+// (aidlc-guard-switch.ts) and a decision's own command (settingsBesideDecision)
+// read this one list.
+const GUARD_FENCE_CONFIG_KEYS = SWITCHABLE_GUARD_FENCES.map((fence) => guardFenceConfigKey(fence)) as
+  ["guard.plan-approval", "guard.review-freeze", "guard.state-transition", "guard.reviewer-scope"];
+export const CONFIG_KEYS = [
+  "depth",
+  "test-strategy",
+  "review",
+  "guard-policy",
+  "sensors",
+  "learnings",
+  "summary-confirmation",
+  "plan-approval",
+  "collaborators",
+  ...GUARD_FENCE_CONFIG_KEYS,
+] as const;
+
 // The settings the person asked for in the reply that gives a decision ride
 // that decision's own command (`report --result approved`, the plan answer):
 // the setter runs first, on that reply's message, so the message still stands
@@ -3096,6 +3114,7 @@ export function messageFill(projectDir: string, settings: readonly string[] = []
 // Its lines for the person, or its refusal.
 export function settingsBesideDecision(
   projectDir: string,
+  session: string | null,
   settings: ReadonlyArray<readonly [string, string]>,
   message: string | null,
 ): { lines: string[] } | { refusal: string } {
@@ -3104,10 +3123,13 @@ export function settingsBesideDecision(
     "config", "set", key, value, ...rest.flatMap(([other, set]) => [`--${other}`, set]),
     ...(message === null ? [] : ["--message", message]), "--project-dir", projectDir,
   ];
-  const executable = compiledExecutable();
+  // The child serves this command's chat, and runs this process's own
+  // identity, never one the environment names (as spawnState does).
   const run = Bun.spawnSync({
-    cmd: executable ? [executable, ...args] : [process.execPath, join(dirname(fileURLToPath(import.meta.url)), "aidlc.ts"), ...args],
-    env: process.env,
+    cmd: isCompiledExecutable()
+      ? [process.execPath, ...args]
+      : [process.execPath, join(dirname(fileURLToPath(import.meta.url)), "aidlc.ts"), ...args],
+    env: hookChildEnv(projectDir, session ?? undefined),
     stdout: "pipe",
     stderr: "pipe",
   });

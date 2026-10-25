@@ -619,19 +619,25 @@ describe("t338 summary confirmation off is the person's switch", () => {
   // One reply that approves several stages together and asks for a setting:
   // the stages approved with the first are that one approval, so the request
   // in the same reply still stands (#1981 F5).
-  test("\"approve, and turn the summary confirmation off\" at a grouped approval does both", () => {
+  // The setting goes first (a message that already gave an approval does not
+  // also stand for a setting), then the grouped approval on the same message.
+  test("\"approve, and turn the summary confirmation off\" at a grouped approval does both, the setting first", () => {
     const { proj, state } = project("feature");
     recordHumanPrompt(proj, "approve, and turn the summary confirmation off");
     const id = lastMessageId(proj);
+    const changed = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "off", "--message", id], proj, SESSIONLESS);
+    expect(changed.status, changed.stderr).toBe(0);
+    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toStartWith("off (");
     // A row in the same second as the message is no decision after it.
     Bun.sleepSync(1100);
     appendAuditEntry("GATE_APPROVED", { Stage: "functional-design", "User Input": "Approve" }, proj);
     appendAuditEntry("GATE_APPROVED", {
       Stage: "nfr-requirements", "User Input": "Approve", "Approved Together With": "functional-design",
     }, proj);
-    const changed = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "off", "--message", id], proj, SESSIONLESS);
-    expect(changed.status, changed.stderr).toBe(0);
-    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toStartWith("off (");
+    const again = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "on"], proj, SESSIONLESS);
+    expect(again.status, again.stderr).toBe(0);
+    const late = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "off", "--message", id], proj, SESSIONLESS);
+    expect(late.status).not.toBe(0);
   });
 
   test("turning it on stays free for a command", () => {

@@ -193,6 +193,27 @@ describe.each(POLICIES)("Guard Policy %s: a message that gave an approval or a d
     expect(getField(stateOf(proj), "Summary Confirmation")).toContain("off");
   });
 
+  // Several replies since the last decision and no message named: the setting
+  // would carry the words of whichever came last, so the agent names the one that asked.
+  test("two replies and no message named: the report names both and records nothing; naming the one that asked, both stand", () => {
+    const proj = project();
+    const slug = openGate(proj);
+    const asked = said(proj, "approve, and turn learnings off");
+    const other = said(proj, "also use the blue theme");
+    tick();
+    const unnamed = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve", "--learnings", "off"]);
+    expect(unnamed.out).toContain(asked);
+    expect(unnamed.out).toContain(other);
+    expect(rows(proj, "GATE_APPROVED")).toHaveLength(0);
+    expect(rows(proj, "CEREMONY_SET")).toHaveLength(0);
+    const named = report(proj, [
+      "--stage", slug, "--result", "approved", "--user-input", "Approve", "--learnings", "off", "--message", asked,
+    ]);
+    expect(named.status, named.out).toBe(0);
+    expect(field(rows(proj, "CEREMONY_SET").at(-1), "Person Reply")).toBe("approve, and turn learnings off");
+    expect(rows(proj, "GATE_APPROVED")).toHaveLength(1);
+  });
+
   test("a setting flag on a report that approves nothing is refused before anything is recorded", () => {
     const proj = project();
     const slug = openGate(proj);

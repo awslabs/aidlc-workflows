@@ -309,7 +309,8 @@ recovery protocol's Session resume says, never as Request Changes.
   then record "Approve Plan", so the approval covers the plan as it stands then.
   A setting in the same reply ("approve, and turn plan approval off") rides the
   approval: put its `config set` flag on the report (`--plan-approval off`), or
-  at Plan Approval on the `log answer`, and say the line it prints.
+  at Plan Approval on the `log answer`, and say the line it prints. At any other
+  checkpoint, run its setter with `--message <id>` first, then record the choice.
   No second question.
 - **They asked for something with no approval in it** ("from here on, build
   one unit at a time; I'll approve the design after"): it is not the gate's

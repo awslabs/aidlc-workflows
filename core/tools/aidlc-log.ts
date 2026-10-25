@@ -11,7 +11,6 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
-import { CONFIG_KEYS } from "./aidlc-guard-switch.ts";
 import { prepareReviewCopy, removeReviewCopy } from "./aidlc-kiro-review-copy.ts";
 import {
   chatsSince,
@@ -156,6 +155,7 @@ import {
   readAuditShardEvents,
   backgroundAgentOutSince,
   isRequestTurn,
+  CONFIG_KEYS,
   latestReplyAfter,
   personsGateReply,
   settingsBesideDecision,
@@ -1790,7 +1790,7 @@ function answerEnginePlanApproval(
     if (choice !== "approve") settingRidesOnlyApprovePlan(settings[0][0]);
     const shown = planApprovalAsk().planQuestionShown(pd);
     const reply = flags.message ?? (shown === null || shown === "due" ? null : latestReplyAfter(pd, shown)?.messageId ?? null);
-    const set = settingsBesideDecision(pd, settings, reply);
+    const set = settingsBesideDecision(pd, resolveInvokingSessionId(pd), settings, reply);
     if ("refusal" in set) error(`${set.refusal} Nothing was recorded: record their choice again without the setting.`);
     if (set.lines.length > 0) said = `Say to the person, as it is: "${set.lines.join(" ")}" `;
   }
@@ -1803,7 +1803,7 @@ function answerEnginePlanApproval(
       ...(opening ? { opening } : {}),
     });
   } catch (e) {
-    error(errorMessage(e));
+    error(`${said}${errorMessage(e)}`);
   }
   const message = `${said}${result.message}`;
   if (flags.park === "true") {

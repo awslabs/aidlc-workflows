@@ -4,6 +4,7 @@ import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./
 import {
   assertChangeControlLedgerWritable,
   auditBlockField,
+  CONFIG_KEYS,
   type GuardPolicy,
   guardPolicyAtLeast,
   keepActiveDirectiveOverSettingWrite,
@@ -94,20 +95,7 @@ export const VALID_TEST_STRATEGIES: Record<string, string> = {
   comprehensive: "Comprehensive",
 };
 
-const GUARD_FENCE_CONFIG_KEYS = SWITCHABLE_GUARD_FENCES.map((fence) => guardFenceConfigKey(fence)) as
-  ["guard.plan-approval", "guard.review-freeze", "guard.state-transition", "guard.reviewer-scope"];
-export const CONFIG_KEYS = [
-  "depth",
-  "test-strategy",
-  "review",
-  "guard-policy",
-  "sensors",
-  "learnings",
-  "summary-confirmation",
-  "plan-approval",
-  "collaborators",
-  ...GUARD_FENCE_CONFIG_KEYS,
-] as const;
+export { CONFIG_KEYS };
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 export type IntentSettingsRequest = Partial<Record<ConfigKey, { value: string; source: string }>>;
 export type ReviewOverride = "adversarial" | "advisory" | "none";

@@ -345,6 +345,7 @@ import {
   MESSAGE_SLOT,
   messageFill,
   settingsBesideDecision,
+  CONFIG_KEYS,
   plannedStages,
   resolveGuardPolicy,
   guardPolicyAcceptsChanges,
@@ -664,7 +665,7 @@ import {
   inspectStageValidity, stageDefinitionChangedFields, stageDefinitionChangedLine, stageLabel, staleStageNote,
   stageOutputAmendedFields, type StageValidityInspection,
 } from "./aidlc-validity.ts";
-import { CONFIG_KEYS, VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
+import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
 import { markSwitchOffNoticesSaid, type SwitchOffNotice, switchOffNotices } from "./aidlc-recorded-switches.ts";
 import { kiroHooksOffNotices, markKiroHooksOffSaid } from "./aidlc-kiro-hooks-off.ts";
 import {
@@ -19479,9 +19480,18 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // also when the approval is then refused.
   const settingLines: string[] = [];
   if (flags.settings !== undefined) {
-    const set = settingsBesideDecision(
-      pd, flags.settings, flags.message ?? personsGateReply(pd, resolveInvokingSessionId(pd), slug).messageId,
-    );
+    const session = resolveInvokingSessionId(pd);
+    const reply = personsGateReply(pd, session, slug);
+    // Several replies: the agent names the one that asked, so the setting
+    // carries their words for it and no other reply's.
+    if (flags.message === undefined && reply.replies.length > 1) {
+      emit(errorDirective(
+        `Their replies since the last decision, oldest first: ${reply.replies.map((one) => `${one.id} (${one.at})`).join(", ")}. ` +
+          "Run this report again with --message <id>, the one that asked for the setting; nothing was recorded.",
+      ));
+      return;
+    }
+    const set = settingsBesideDecision(pd, session, flags.settings, flags.message ?? reply.messageId);
     if ("refusal" in set) {
       emit(errorDirective(`${set.refusal} Nothing was approved: run this report again without the setting to record the approval.`));
       return;
