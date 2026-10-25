@@ -7792,9 +7792,11 @@ function phasesWithExecuteStages(plan: Record<string, "EXECUTE" | "SKIP">): Set<
 // Scope-excluded phases get NO folder: an empty `operation/` in a bugfix record
 // reads as work that was planned and skipped, when that phase was never in the
 // plan. Nothing depends on the folder pre-existing: a stage artifact is written
-// by the agent's own file tool, which creates its parent chain on first write,
-// and every deterministic reader of a phase dir guards on existence. This only
-// ever creates: an older record that already carries all five keeps them.
+// by the agent, which makes its folder first where its file tool does not (the
+// Copilot CLI's; Code Generation's plan folder `next` makes itself,
+// preparePlanRecordFolders), and every deterministic reader of a phase dir
+// guards on existence. This only ever creates: an older record that already
+// carries all five keeps them.
 function ensureWorkspaceDirs(
   projectDir: string,
   plan: Record<string, "EXECUTE" | "SKIP">,

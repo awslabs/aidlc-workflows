@@ -592,6 +592,7 @@ import {
   planApprovalOverrideOffers,
   withdrawLatestPlanApprovalReply,
   withdrawPlanApprovalReplies,
+  preparePlanRecordFolders,
   publishPlanApprovalAsk,
   publishPlanApprovalSkip,
   routeCodeGenerationPlanApproval,
@@ -2624,6 +2625,14 @@ function emit(requested: Directive): void {
           publishPlanApprovalAsk(projectDir, prepared.transported, engineSessionId);
         } else {
           recordPlanBuiltWithoutAsking(projectDir, prepared.transported);
+        }
+        // From the step itself, not the part transported, so the folder is
+        // there while the rules still arrive. Without it the step still goes
+        // out: the agent can make the folder itself, as before.
+        try {
+          preparePlanRecordFolders(projectDir, directive);
+        } catch (e) {
+          recordHookDrop(projectDir, "plan-approval-ask", errorMessage(e));
         }
         settleBuiltPlanReviews(projectDir, prepared.transported);
         // Asked where their words belong, the person said the work in

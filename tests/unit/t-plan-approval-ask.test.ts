@@ -1,7 +1,7 @@
 // covers: function:routeCodeGenerationPlanApproval, function:publishPlanApprovalAsk, function:notePlanApprovalAskReply, function:recordPlanApprovalAnswer, function:requestPlanApprovalReviewNow, function:codeGenerationPlanReadiness, function:planSummaryLines,
 // function:PLAN_APPROVAL_ASK_TYPE, function:planApprovalRuntimeFile, function:readPlanApprovalRuntimeRecord,
 // function:writePlanApprovalRuntimeRecord, function:removePlanApprovalRuntimeRecord, function:releaseTakenGuardRecoveryReply,
-// function:keepPlanApprovalAskOverStateWrite, function:planNote
+// function:keepPlanApprovalAskOverStateWrite, function:planNote, function:preparePlanRecordFolders
 //
 // The engine asks for Plan Approval itself. These cases drive the real `next`,
 // the real human-turn hook, and the real plan-approval guard over one poc
@@ -46,11 +46,15 @@
 //   - an isolated Code Generation run with the workflow at another stage: its
 //     plan step, plan question and revision name that run's own `next`, which
 //     brings back that run's step; the workflow's own steps keep the bare `next`.
+//   - the step that writes a plan (stage-level, a Unit's, a parallel batch's)
+//     makes each plan's record folder first, so a file tool that makes no
+//     folders writes the plan; a route check makes nothing.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
-import { appendFileSync, cpSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -103,6 +107,7 @@ import {
   personsWordsText,
   writeBaselineSourceSnapshot,
   writeSessionPidEntry,
+  hooksHealthDir,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { listMessages, saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
@@ -3793,6 +3798,84 @@ describe("the zero-Unit Code Generation lockout reported in #1172", () => {
     const current = nextThroughParts(proj).directive;
     expect(current.kind, JSON.stringify(current)).toBe("run-stage");
     expect(current.stage).toBe("functional-design");
+  });
+});
+
+// The Copilot CLI's file tool makes no folders ("Parent directory does not
+// exist"), and while the plan waits the guard refuses every PowerShell way of
+// making one (New-Item, a variable, python), so on Windows the agent looped and
+// then turned plan approval off before the plan question was ever asked. The
+// engine makes the plan's folder when it issues the step that writes the plan.
+describe("the plan's record folder is there before the plan is written", () => {
+  const emptyFolder = (dir: string): void => {
+    expect(existsSync(dir), dir).toBe(true);
+    expect(readdirSync(dir)).toEqual([]);
+  };
+
+  test("a bugfix's stage-level plan step, with its rules in parts: the folder is there from the first part", () => {
+    const proj = zeroUnitProject("bugfix");
+    expect(existsSync(stageDir(proj))).toBe(false);
+    const first = engineCall(proj, ["next"]);
+    expect(first, JSON.stringify(first)).toMatchObject({ kind: "load-steering", stage: "code-generation", part: 1 });
+    emptyFolder(stageDir(proj));
+    const planning = continueEachPart(proj, first);
+    expect(planning.plan_approval).toEqual({ status: "plan" });
+    emptyFolder(stageDir(proj));
+    // The plan is one plain file write into it.
+    const write = guardWrite(proj, join(stageDir(proj), "code-generation-plan.md"));
+    expect(write.code, write.stderr).toBe(0);
+  });
+
+  test("a Unit's plan step makes that Unit's folder only", () => {
+    const proj = unitProject("unit-a");
+    const step = next(proj) as Emitted & { unit?: string };
+    expect(step).toMatchObject({ kind: "run-stage", unit: "unit-a", plan_approval: { status: "plan" } });
+    emptyFolder(stageDir(proj, "unit-a"));
+    expect(existsSync(stageDir(proj))).toBe(false);
+  });
+
+  test("a parallel batch's plan step makes each listed Unit's folder", () => {
+    const pd = swarmFixture(false);
+    // Installed as config installs it, and the person's message reached the
+    // hooks, so `next` hands out the batch.
+    mkdirSync(join(pd, ".claude"), { recursive: true });
+    cpSync(join(AIDLC_SRC, "settings.json"), join(pd, ".claude", "settings.json"));
+    reply(pd, "continue");
+    const batch = next(pd);
+    expect(batch.kind, JSON.stringify(batch)).toBe("invoke-swarm");
+    expect(batch.plan_approval.status).toBe("plan");
+    for (const unit of GROUP) emptyFolder(codeGenerationRecordDir(pd, unit));
+    expect(existsSync(codeGenerationRecordDir(pd, "later"))).toBe(false);
+  });
+
+  test("a file where the folder goes, or a link out of the project, leaves the step as it was", () => {
+    const blocked = project();
+    mkdirSync(dirname(stageDir(blocked)), { recursive: true });
+    writeFileSync(stageDir(blocked), "", "utf-8");
+    expect(next(blocked).plan_approval).toEqual({ status: "plan" });
+    expect(readFileSync(join(hooksHealthDir(blocked), "plan-approval-ask.drops"), "utf-8")).toContain("EEXIST");
+    if (process.platform === "win32") return; // A link needs a privilege Windows does not give by default.
+    const linked = project();
+    const outside = mkdtempSync(join(tmpdir(), "t-plan-folder-outside-"));
+    try {
+      symlinkSync(outside, join(seededRecordDir(linked), "construction"));
+      expect(next(linked).plan_approval).toEqual({ status: "plan" });
+      expect(readdirSync(outside)).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("a route check makes nothing, and a written plan's folder keeps what it holds", () => {
+    const proj = project();
+    const probe = runOrchestrateNext(ORCHESTRATE, proj, [], { env: { ...process.env, AIDLC_ROUTE_CHECK: "1" } });
+    expect(probe.directive).toMatchObject({ kind: "run-stage", stage: "code-generation" });
+    expect(existsSync(stageDir(proj))).toBe(false);
+    expect(next(proj).plan_approval).toEqual({ status: "plan" });
+    emptyFolder(stageDir(proj));
+    writePlan(proj);
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(readdirSync(stageDir(proj))).toEqual(expect.arrayContaining(["code-generation-plan.md", "unit-test-instructions.md"]));
   });
 });
 
