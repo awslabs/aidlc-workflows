@@ -305,7 +305,7 @@ const VALID_EVENT_TYPES = new Set([
 
 // The hook-owned session events above: a host's chat starting, resuming,
 // compacting or ending. They are the host's bookkeeping, never an act on what
-// the person said (turnIsLatestRow in aidlc-orchestrate.ts reads past them).
+// the person said (latestOwnRow in aidlc-orchestrate.ts reads past them).
 export const SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
   "SESSION_STARTED", "SESSION_RESUMED", "SESSION_COMPACTED", "SESSION_ENDED",
 ]);
