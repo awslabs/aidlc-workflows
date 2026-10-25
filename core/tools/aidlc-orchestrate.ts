@@ -1466,8 +1466,8 @@ function withRecordConflictLine(transported: Directive): Directive {
   return withPersonLine(transported, line);
 }
 
-// A line for the person, said once: on a stage or question step's own
-// narration while the step still fits, else with the next step the agent
+// A line for the person, said once: in a stage or question step's
+// change_notices while the step still fits, else with the next step the agent
 // speaks from.
 function withPersonLine(transported: Directive, line: string | null): Directive {
   if (line === null) return transported;
