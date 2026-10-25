@@ -41,6 +41,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
+import { kiroCliPrompt, kiroCliRecord, kiroCliToolResults } from "../harness/kiro-cli-record.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename,
@@ -842,4 +843,28 @@ describe("an answer to the routing question is no answer to the stage's own ques
     expect(later.kind, JSON.stringify(later)).toBe("run-stage");
     expect(later.kept_replies?.replies ?? []).not.toContain("2");
   });
+});
+
+// On Kiro CLI a reply typed while the agent works runs no prompt hook (measured
+// live, kiro-cli 2.34.0); Kiro's own record keeps it, and the agent's next
+// AI-DLC command records it as the person's turn, so under strict their
+// "Approve Plan" is the plan question's reply and the answer records it at once.
+test("Kiro CLI (strict): a reply typed while the agent works answers the code plan question in one step", () => {
+  const proj = project("strict");
+  expect(next(proj).ask_type).toBe("plan-approval");
+  cpSync(join(REPO_ROOT, "dist", "kiro", ".kiro"), join(proj, ".kiro"), { recursive: true });
+  const home = join(proj, "kiro-home");
+  kiroCliRecord(home, SESSION, [
+    kiroCliPrompt("Show me the code plan."),
+    kiroCliToolResults("{}\n", [{ words: "Approve Plan", id: "steer-5a4b3c2d1e0f5a4b3c2d1e0f5a4b3c2d" }]),
+  ]);
+  run(proj, [join(proj, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "state-transition-guard"],
+    JSON.stringify({
+      hook_event_name: "preToolUse", session_id: SESSION, cwd: proj, tool_name: "shell",
+      tool_input: { command: "bun .kiro/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --details 'Approve Plan'" },
+    }),
+    { HOME: home, USERPROFILE: home, CLAUDE_PROJECT_DIR: undefined, AIDLC_UNATTENDED: undefined, USER_PROMPT: undefined });
+  answer(proj, "Approve Plan");
+  expect(planAnswers(proj)).toEqual(["PLAN_APPROVAL_RECORDED: Approve Plan"]);
+  expect(next(proj).plan_approval?.status).toBe("approved");
 });

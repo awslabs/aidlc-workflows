@@ -156,9 +156,13 @@ has stopped when its PID is dead, or when the system has since given that PID
 to a later process (Windows reuses PIDs quickly): one whose start record
 differs from the one the lock recorded, or, for a lock from a release that
 recorded none, one that started after the lock was written. A directory lock
-also needs its recorded host/boot identity to match. Foreign, incomplete, or
-unverifiable directory owners are retained; a PID absent on this host is not
-proof that a foreign owner has stopped.
+also needs its recorded host/boot identity to match. A directory lock whose
+owner stamp never finished (no `owner.json`, an empty one, or one cut off
+before it reads as JSON) is what a command stopped while taking the lock
+leaves, and the next command clears it the same way once it is a few seconds
+old. A stamp that reads but names a foreign host, no valid owner, or a live
+process is retained, as is an unverifiable one; a PID absent on this host is
+not proof that a foreign owner has stopped.
 
 For manual diagnosis, preserve the error, lock, and named staging/recovery
 paths. Inspect `.aidlc-transaction.lock/owner.json` (the lock file itself for a
@@ -602,6 +606,12 @@ own folder for a recorded repo). The exclude works at once, with no further
 review; remove the line to put the path back. A path the project's `.gitignore`
 already ignores is never counted. Under Guard Policy relaxed or off the change
 is kept and said once instead.
+
+On a plan with no Units the same change answers with "the project source
+changed after <reviewer> reviewed it" (or, once the one recovery review is used,
+"changed again after the one recovery review"), followed by what changed and the
+same way through for a path that is not source. The exclude works there at
+once too, with no further review.
 
 ### Plan Approval asked twice for the same plan
 

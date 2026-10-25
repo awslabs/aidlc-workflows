@@ -207,10 +207,14 @@ export function readPlanApprovalAsk(projectDir: string, intentId: string): PlanA
 /**
  * Where the person stands on the recorded Plan Approval question: not answered
  * yet, editing the files themselves, or answered (a choice is recorded and the
- * next `next` carries it out). Null when no question is recorded.
+ * next `next` carries it out). Null when no question is recorded. The selected
+ * work's unless another work's id is given.
  */
-export function planApprovalAskState(projectDir: string): "unanswered" | "editing" | "answered" | null {
-  const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
+export function planApprovalAskState(
+  projectDir: string,
+  intentId = intentIdFor(projectDir),
+): "unanswered" | "editing" | "answered" | null {
+  const record = readPlanApprovalAsk(projectDir, intentId);
   if (record === null) return null;
   if (record.mode === "editing") return "editing";
   return (record.results?.length ?? 0) > 0 ? "answered" : "unanswered";
@@ -674,6 +678,25 @@ function promptSha256(questions: string): string {
 function answerWrittenInFile(questions: string): string {
   const line = /^\[Answer\]:[ \t]*(.*)$/m.exec(questions);
   return line === undefined || line === null ? "" : line[1].trim();
+}
+
+// The line as the person left it, kept on the answer's record before the
+// engine writes its own mark over it. A line that is exactly a mark the engine
+// wrote is left out: the mark of the answer on record for this plan, either
+// choice's mark while the person edits the files (choosing to edit withdraws
+// the recorded answer and leaves its mark on the line), and "Plan approval off"
+// on a plan built without asking. A choice the file lists, copied onto the line
+// before an answer is recorded, is theirs like any other words.
+function answerLineAsFound(
+  questions: string,
+  recorded: PlanApprovalAskResult["choice"] | undefined,
+  editing: boolean,
+): string {
+  const line = answerWrittenInFile(questions);
+  const engineWrote = line === PLAN_APPROVAL_OFF_ANSWER ||
+    (line === APPROVED_ANSWER && (recorded === "approve" || editing)) ||
+    (line === CHANGES_ANSWER && (recorded === "request-changes" || editing));
+  return engineWrote ? "" : line;
 }
 
 // The same question, with only the person's written answer differing from what
@@ -1356,6 +1379,9 @@ function approveTarget(
     : approvalFingerprint(planAsFound, instructions, read.contract.contract_sha256, authority);
   const asked = record.targets.find((target) => target.unit === unit)?.fingerprint;
   const questionsPath = join(dir, QUESTIONS_FILE);
+  const theirLine = answerLineAsFound(
+    readText(questionsPath), record.results?.find((result) => result.unit === unit)?.choice, record.mode === "editing",
+  );
   const questions = questionsFileContent(
     record.question, view, record.choices, fingerprint, sourceFingerprint, APPROVED_ANSWER,
   );
@@ -1405,6 +1431,7 @@ function approveTarget(
     Session: session,
     "Asked By": "engine",
     ...(words ? { "Person Reply": words } : {}),
+    ...(theirLine ? { "Answer Line In File": theirLine } : {}),
     ...(words && messageId ? { "Message Id": messageId } : {}),
     ...(unit !== null ? { Unit: unit, ...claimAttemptFields(projectDir, unit) } : {}),
   }, projectDir);
@@ -1433,6 +1460,9 @@ function requestChangesFor(
   const view = targetView(projectDir, unit, changedBeforeApprovalLine(projectDir));
   const asked = record.targets.find((target) => target.unit === unit);
   const existing = readText(questionsPath);
+  const theirLine = answerLineAsFound(
+    existing, record.results?.find((result) => result.unit === unit)?.choice, record.mode === "editing",
+  );
   const fingerprintLine = /^\[Approval Fingerprint\]:[ \t]*(\S+)/m.exec(existing)?.[1] ?? asked?.fingerprint ?? "";
   const sourceLine = /^\[Planned Source\]:[ \t]*(\S+)/m.exec(existing)?.[1] ?? "unbindable";
   writeFileAtomic(
@@ -1459,6 +1489,7 @@ function requestChangesFor(
     "Asked By": "engine",
     ...(feedback ? { "User Input": feedback } : {}),
     ...(words && words !== feedback ? { "Person Reply": words } : {}),
+    ...(theirLine ? { "Answer Line In File": theirLine } : {}),
     ...(words && messageId ? { "Message Id": messageId } : {}),
     ...(unit !== null ? { Unit: unit } : {}),
   }, projectDir);

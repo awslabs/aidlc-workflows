@@ -2980,6 +2980,12 @@ describe("t271 review iteration ceiling", () => {
       "list continuation code cannot open a fake HTML comment",
       "blockquote continuation code cannot open a fake HTML comment",
     ]);
+    // A review file is its request's own slot, so a reviewer that writes
+    // another round than the request's (the count starts again after a
+    // rejection or a jump) still records, with the request's round. The
+    // appended section has no slot: its Iteration line is what ties it to the
+    // request, and it is still refused.
+    const ownRoundInAReviewFile = "wrong iteration";
     for (const scenario of cases) {
       for (const path of ["record", "embedded"] as const) {
         const proj = seedProject("feature");
@@ -3036,6 +3042,18 @@ describe("t271 review iteration ceiling", () => {
             ),
             `${scenario.name} (${path})`,
           ).toEqual([]);
+          continue;
+        }
+        if (path === "record" && scenario.name === ownRoundInAReviewFile) {
+          expect(completed.status, `${scenario.name} (${path}): ${completed.stderr}`).toBe(0);
+          const recorded = auditBlocks(proj, "REVIEW_COMPLETED");
+          expect(recorded, `${scenario.name} (${path})`).toHaveLength(1);
+          expect(auditBlockField(recorded[0], "Verdict"), `${scenario.name} (${path})`).toBe("READY");
+          expect(auditBlockField(recorded[0], "Iteration"), `${scenario.name} (${path})`).toBe("1");
+          const { reviewRecord } = JSON.parse(completed.stdout) as { reviewRecord: string };
+          expect((JSON.parse(
+            readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8"),
+          ) as ReviewRecord).iteration, `${scenario.name} (${path})`).toBe(1);
           continue;
         }
         expect(completed.status, `${scenario.name} (${path})`).not.toBe(0);

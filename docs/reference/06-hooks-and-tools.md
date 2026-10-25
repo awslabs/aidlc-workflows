@@ -323,14 +323,16 @@ words, no answer to an open question, no typed switch, and no human-sequence
 advance. When the lock is busy, the adapter tries one plain read. Every launch
 writes the record before its subagent starts and a spend never removes the
 file, so a missing record reads the same as one that cannot be read. A prompt
-that matches no record, or arrives when the record cannot be read, while a
-subagent started in the same chat within the last 5 seconds (the subagent
-ledger says so) is not counted: it is almost certainly that subagent's brief,
-whether VS Code changed the brief's text or the record is unreadable, and a
-message the person did type in that window is asked for again. Any other
-prompt counts as before, including one typed while the subagent still runs. On
-the CLI a brief never arrives in the launching chat, so the window never
-catches a brief there.
+that matches no record while the record still holds a launch from the same chat
+(only a VS Code `runSubagent` record names its chat), or that arrives when the
+record cannot be read, while a subagent started in the same chat within the
+last 5 seconds (the subagent ledger says so) is not counted: it is almost
+certainly that subagent's brief, whether VS Code changed the brief's text or
+the record is unreadable, and a message the person did type in that window is
+asked for again. Any other prompt counts as before, including one typed while
+the subagent still runs. On the CLI a brief never arrives in the launching
+chat and its record names no chat, so there a prompt the record can be read
+for always counts, however soon after a start it comes.
 
 Each prompt the 5-second window holds back leaves an advisory
 `SUBAGENT_PROMPT_UNMATCHED` audit row (`Counted: no`, with a Reason naming
@@ -1576,8 +1578,11 @@ a variable, and relative words are resolved against every directory a literal
 `cd` could leave the shell in; each result is checked against the anchored
 path, so a project's own `src/audit/` stays writable. A word that still cannot
 be decided (a computed assignment or a command substitution such as
-`$(printf au)dit`) is refused when the command names `audit` in any quoting,
-or reaches into `aidlc/spaces/`, or already runs inside that tree. Any other
+`$(printf au)dit`) is refused when the command names an `audit` folder in any
+quoting (`x/audit`, `audit/x`; not `npm audit` or `audit-service`), or reaches
+into `aidlc/spaces/`, or already runs inside that tree. The folders the shell
+stands in and above are the person's own path, so a project under a folder
+named audit does not count. Any other
 unresolvable write keeps the fail-open treatment the runtime-record check gives
 such targets. This is a guardrail against prose-driven and casual writes, not a
 boundary against a model that runs arbitrary code: evidence the hooks can
@@ -2084,7 +2089,7 @@ A stage reported as skipped emits `STAGE_SKIPPED` instead of
 | `write-audit-log.ts` | `ARTIFACT_CREATED` / `ARTIFACT_UPDATED` | Every Write/Edit to the intent's record dir (except the `audit/` shards) |
 | `log-subagent.ts` | `SUBAGENT_COMPLETED` | Any subagent stop while the active workflow has `Status: Running` |
 | Copilot adapter `record-human-turn` | `SUBAGENT_PROMPT_UNMATCHED` | A prompt within seconds of a subagent start in the same chat that matched no recorded brief (advisory; never a human turn) |
-| `record-human-turn.ts` (Kiro CLI, Kiro IDE and Copilot adapters deciding for their hosts) | `HOST_TURN` | A prompt the host made for the agent reached the prompt-submit seam: a Kiro Workflows brief or finish notice, a Kiro sub-agent synthesis prompt, a Claude Code background-task notification, a Stop reason Copilot sends back (advisory; never a human turn; no kept words, reply, switch or marker) |
+| `record-human-turn.ts` (Kiro CLI, Kiro IDE and Copilot adapters deciding for their hosts) | `HOST_TURN` | A prompt the host made for the agent reached the prompt-submit seam: a Kiro Workflows brief or finish notice, a Kiro sub-agent synthesis prompt, a Claude Code background-task notification or subagent hand-back, a Stop reason Copilot sends back (advisory; never a human turn; no kept words, reply, switch or marker) |
 | `reviewer-scope.ts` | `REVIEWER_SCOPE_BLOCKED` | A per-unit reviewer's tool call refused for sibling-unit access (PreToolUse) |
 | `review-freeze.ts` | `REVIEW_FREEZE_BLOCKED` | A reviewed-output write refused for voiding a fresh terminal review receipt before the gate (PreToolUse); summary-owned questions are excluded unless explicitly named by `review_artifact`. The refusal, which the tool shows the person, says what was refused and ends with `Next:` and the `next` command, with no JSON; the guard-recovery ask the router would emit (see [Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks)) waits in the refusal record and that `next` hands it over once, and the write is never retried: when no turn of the person's since the last decision stands behind the write (one only answers used counts as theirs), the first refusal is the conductor's own step, to leave the document and quote the change at the next gate or Unit checkpoint; a repeat, or a write the person may have asked for, puts the typed remedies to the person |
 | `plan-approval-guard.ts` | `PLAN_APPROVAL_BLOCKED` | A code-generation developer dispatch refused before the plan is approved (PreToolUse) |

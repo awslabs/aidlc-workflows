@@ -32,6 +32,7 @@ import {
 } from "../harness/harness-matrix.ts";
 import { intentDisplayLabel, loadScopeMapping, MESSAGE_SLOT, personsWordsText, readIntentRegistry, toPosix } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { listMessages } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
+import { quoteCommandArgument } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 import { mintQuestionId, saveQuestion } from "../../dist/claude/.claude/tools/aidlc-question-store.ts";
 
 const BUN = process.execPath;
@@ -993,6 +994,52 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(refused.kind).toBe("error");
     });
 
+    // The composer is a subagent with no chat: an Other answer read as a
+    // reshape reaches it through every print between the answer and the dispatch.
+    const OTHER_ANSWER = "Treat this as a documentation update for the work I pick instead.";
+    const reshapeNamed = (message: string): string => {
+      const at = message.indexOf('"Reshape existing work": ');
+      expect(at, message).toBeGreaterThanOrEqual(0);
+      return message.slice(at).match(/`([^`]+)`/)![1];
+    };
+
+    test("a reshape answer from the pick list carries the reply through the record switch to the composer", () => {
+      seedTwoIntentsNoCursor();
+      const first = JSON.parse(next(["fix the broken login button"]).stdout.trim());
+      const ask = JSON.parse(runEmittedCommand(first.confirm_command).stdout.trim());
+      expect(ask.ask_type).toBe("new-work-routing");
+      const [target] = ask.reshape_commands;
+      const answer = reshapeNamed(routeNamed(OTHER_ANSWER).message);
+      expect(answer).toBe(`${target.command} -- ${quoteCommandArgument(OTHER_ANSWER)}`);
+      const step = JSON.parse(runEmittedCommand(answer).stdout.trim());
+      expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
+      const commands = [...step.message.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+      expect(commands).toHaveLength(2);
+      expect(commands[1]).toEndWith(` -- ${quoteCommandArgument(OTHER_ANSWER)}`);
+      expect(runEmittedCommand(commands[0]).status).toBe(0);
+      const dispatch = JSON.parse(runEmittedCommand(commands[1]).stdout.trim());
+      expect(dispatch.message).toContain("RUNNING workflow");
+      expect(dispatch.message).toContain("fix the broken login button");
+      expect(dispatch.message).toContain(`Asked where that request belongs, the person answered: "${OTHER_ANSWER}"`);
+    });
+
+    test("the reshape-settings print carries the reply on to compose", () => {
+      expect(util(["intent-create", "--scope", "poc", "--arguments", "first", "--label", "first"]).status).toBe(0);
+      const read = JSON.parse(next(["--depth", "comprehensive", "rename the settings page"]).stdout.trim());
+      const id = /--request ([0-9a-f]{8})/.exec(String(read.message ?? read.confirm_command ?? ""))?.[1];
+      const ask = id === undefined ? read : JSON.parse(runEmittedCommand(`${ORCH_SH} next --request ${id} --propose feature`).stdout.trim());
+      expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
+      expect(ask.compose_command).toContain("--depth comprehensive");
+      const step = JSON.parse(runEmittedCommand(`${ask.compose_command} -- ${quoteCommandArgument(OTHER_ANSWER)}`).stdout.trim());
+      expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
+      expect(step.message).toContain("config set depth comprehensive");
+      const commands = [...step.message.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+      expect(commands.at(-1)).toEndWith(` -- ${quoteCommandArgument(OTHER_ANSWER)}`);
+      const dispatch = JSON.parse(runEmittedCommand(commands.at(-1)!).stdout.trim());
+      expect(dispatch.message).toContain("RUNNING workflow");
+      expect(dispatch.message).toContain(`Asked where that request belongs, the person answered: "${OTHER_ANSWER}"`);
+    });
+
     // `next` reads none of these replies: it names each option's own command, and
     // the agent runs the one the person chose (agentRuns), or for continue and
     // reshape with several records the one for the work they named.
@@ -1013,6 +1060,10 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const SEPARATE = "Separate new piece of work";
       const RESHAPE = "Reshape existing work";
       const commandsOf = (rows: Array<{ command: string }>) => rows.map((row) => row.command);
+      // A reshape answer hands the composer, which has no chat, the person's reply.
+      const withReply = (command: string, text: string) => `${command} -- ${quoteCommandArgument(text)}`;
+      const reshapesOf = (ask: { reshape_commands: Array<{ command: string }> }, text: string) =>
+        commandsOf(ask.reshape_commands).map((command) => withReply(command, text));
       // The same line marked as a request of their own. With a question of ours
       // already open, a bare words line is read as a possible reply to it
       // (t-three-ways-to-read-a-line), so a case about a REQUEST says so.
@@ -1064,8 +1115,10 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
             seedTwoIntentsNoCursor();
             const ask = routingAsk();
             const before = questionCount();
-            const named = routeNamed(reply(ask, text));
-            expect(namedCommands(named.message, route === "continue" ? CONTINUE : RESHAPE)).toEqual(commandsOf(ask[field]));
+            const said = reply(ask, text);
+            const named = routeNamed(said);
+            expect(namedCommands(named.message, route === "continue" ? CONTINUE : RESHAPE))
+              .toEqual(route === "continue" ? commandsOf(ask[field]) : reshapesOf(ask, said));
             expect(questionCount(), "no new question is asked").toBe(before);
             if (route === "continue") {
               const [target] = ask.select_commands;
@@ -1153,7 +1206,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         seedOneIntentNoCursor();
         const ask = routingAsk();
         for (const text of ["3", "Reshape existing work"]) {
-          expect(agentRuns(text, RESHAPE)).toEqual(emitted(ask.reshape_commands[0].command));
+          expect(agentRuns(text, RESHAPE)).toEqual(emitted(withReply(ask.reshape_commands[0].command, text)));
         }
       });
 
@@ -1161,7 +1214,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const records = seedTwoIntentsNoCursor();
         routingAsk();
         const d = routeNamed("Separate new piece of work, and add CSV export");
-        expect(d.message).toContain("which keeps every word of theirs");
+        expect(d.message).toContain(` next -- ${quoteCommandArgument("Separate new piece of work, and add CSV export")}`);
         expect(recordDirs(proj)).toEqual(records);
       });
 
@@ -1183,7 +1236,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const ask = routingAsk();
         progressRecord(record);
         expect(agentRuns("1", CONTINUE)).toEqual(emitted(ask.select_commands[0].command));
-        expect(agentRuns("Reshape existing work", RESHAPE)).toEqual(emitted(ask.reshape_commands[0].command));
+        expect(agentRuns("Reshape existing work", RESHAPE)).toEqual(emitted(withReply(ask.reshape_commands[0].command, "Reshape existing work")));
       });
 
       for (const [text, field] of [["1", "select_commands"], ["3", "reshape_commands"]] as const) {
@@ -1191,7 +1244,8 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
           const records = seedTwoIntentsNoCursor();
           const ask = routingAsk();
           progressRecord(records[0]);
-          expect(namedCommands(routeNamed(text).message, text === "1" ? CONTINUE : RESHAPE)).toEqual(commandsOf(ask[field]));
+          expect(namedCommands(routeNamed(text).message, text === "1" ? CONTINUE : RESHAPE))
+            .toEqual(field === "select_commands" ? commandsOf(ask[field]) : reshapesOf(ask, text));
         });
       }
 
@@ -1216,7 +1270,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
           addRecordUnselected();
           const before = questionCount();
           const named = namedCommands(routeNamed(text).message, field === "select_commands" ? CONTINUE : RESHAPE);
-          expect(named).toEqual(commandsOf(ask[field]));
+          expect(named).toEqual(field === "select_commands" ? commandsOf(ask[field]) : reshapesOf(ask, text));
           expect(questionCount(), "no new question is asked").toBe(before);
           for (const command of named) {
             const chosen = emitted(command);

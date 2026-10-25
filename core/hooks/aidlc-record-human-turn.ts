@@ -660,8 +660,9 @@ try {
       turnOrigin = supplied;
     } else if (promptSubmitted && typedPrompt && typeof parsed.transcript_path === "string") {
       // Claude Code hands its transcript to the hook: its row for this prompt
-      // names who started the turn. With no row, only the whole notice
-      // sentence counts as the host's.
+      // names who started the turn. With no row (2.1.310 writes it only after
+      // this hook returns), only the host's whole notice or message block
+      // counts as the host's.
       turnOrigin = claudeTranscriptOrigin(parsed.transcript_path, parsed.prompt_id, typedPrompt) ??
         hostTemplateOrigin(typedPrompt, CLAUDE_HOST_TEMPLATES) ??
         { kind: "person" };

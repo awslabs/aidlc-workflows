@@ -181,7 +181,9 @@ export function addSubmodule(pd: string): void {
 
 // With `repo`, a workspace of several repositories: its roof holds the records
 // and is no repository, and the Units' code is in that one recorded sibling.
-export function fixture(units = ["alpha"], command: string | null = CHECK, withSubmodule = false, repo: string | null = null): string {
+export function fixture(
+  units = ["alpha"], command: string | null = CHECK, withSubmodule = false, repo: string | null = null, policy = "strict",
+): string {
   const pd = setupWorktreeFixture();
   projects.push(pd);
   const code = repo === null ? pd : join(pd, repo);
@@ -211,7 +213,7 @@ export function fixture(units = ["alpha"], command: string | null = CHECK, withS
 - **Skeleton Stance**: off
 - **Unit Ownership**: solo
 - **Review Override**: adversarial
-- **Change Control**: strict
+- **Change Control**: ${policy}
 - **Bolt Refs**: [empty list]
 - **Worktree Path**: -
 ## Scope Configuration

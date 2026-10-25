@@ -155,6 +155,7 @@ import {
   backgroundAgentOutSince,
   isRequestTurn,
   personsGateReply,
+  personRepliedSinceGateShown,
   windowMessageIds,
   personSpokeSinceReviewRequest,
   messageSinceReviewRequest,
@@ -225,6 +226,7 @@ import {
   SUMMARY_CONFIRMATION_HASH_SCOPE,
   summaryConfirmationAnswer,
   summaryConfirmationContentHash,
+  singleStageAttemptIsOpen,
   stateFilePath,
   teamUnitGateStatus,
   toPosix,
@@ -259,6 +261,7 @@ import type {
 } from "./aidlc-lib.js";
 import {
   deriveReviewFindingsList,
+  readReviewArtifactContexts,
   renderReadableReviewCopy,
 } from "./aidlc-review-brief.js";
 import {
@@ -324,23 +327,26 @@ function unknownCheckpointMessage(checkpoint: string, accepted: readonly string[
   return `Unknown --checkpoint "${checkpoint}". Accepted: ${accepted.join(", ")}`;
 }
 
-// Resolve the project dir AND assert that an active workflow exists before any
-// audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
-// --intent/--space, so it relies on default intent resolution. On a fresh shell
-// (pre-creation) or a >1-intent workspace with no active-intent cursor, that
-// resolution yields null and stateFilePath()/auditFilePath() collapse to the
-// BARE space record root (aidlc/spaces/<space>/intents/). Emitting there would
-// drop an audit shard DIRECTLY into the bare intents root and break the "no
-// aidlc-state.md / no audit/ ever lives directly in the bare intents root"
-// invariant (aidlc-lib.ts). Existence of the resolved state file is the same
-// "is there an active workflow" signal every other emitter guards on — the
-// hooks via `if (!existsSync(stateFilePath(...)))` no-op, emitError() via the
-// same check. aidlc-log is the lone emitter that was missing it; mirror the
-// clean-error idiom (orchestrator-called → a missing workflow is a misuse, not
-// a routine no-op).
-function resolveActiveProjectDir(explicit?: string): string {
+// Resolve the project dir AND assert, before any audit emit, that an active
+// workflow exists or that the row names an open isolated run. WHY: aidlc-log
+// is orchestrator-called per-question and threads no --intent/--space, so it
+// relies on default intent resolution. On a fresh shell (pre-creation) or a
+// >1-intent workspace with no active-intent cursor, that resolution yields
+// null and stateFilePath()/auditFilePath() collapse to the BARE space record
+// root (aidlc/spaces/<space>/intents/), where a workflow's row would belong to
+// no workflow. Existence of the resolved state file is the same "is there an
+// active workflow" signal every other emitter guards on: the hooks via
+// `if (!existsSync(stateFilePath(...)))` no-op, emitError() via the same check.
+// `isolatedStage` names the isolated run a row belongs to. With no work
+// selected, `next --single` records that run's start in the bare root and
+// `report --single` reads its evidence there, so a row for the run whose
+// attempt is open joins its start.
+function resolveActiveProjectDir(explicit?: string, isolatedStage?: string): string {
   const pd = resolveProjectDir(explicit);
-  if (!existsSync(stateFilePath(pd))) {
+  if (
+    !existsSync(stateFilePath(pd)) &&
+    !(isolatedStage !== undefined && singleStageAttemptIsOpen(pd, isolatedStage))
+  ) {
     error(
       `No active workflow is selected, so this interaction cannot be recorded. Start one by describing what to build (${entrySkillInvocation()} "build the auth service"), or switch to an existing one with ${entrySkillInvocation()} intent <name>.`
     );
@@ -2644,14 +2650,16 @@ function handleLink(args: string[]): void {
     );
   }
 
-  const pd = resolveActiveProjectDir(projectDir);
+  const singleRun = flags.single === "true";
+  const pd = resolveActiveProjectDir(projectDir, singleRun ? flags.stage : undefined);
   const selection = resolveWorkflowSelection(pd);
   const space = selection.space;
-  const intent = selection.intent;
-  if (!intent) {
+  // An isolated run with no work selected has no intent: its rows go to the
+  // record its start went to.
+  const intent = selection.intent ?? undefined;
+  if (!intent && !singleRun) {
     error("Cannot resolve the active intent for pipeline link logging.");
   }
-  const singleRun = flags.single === "true";
   // The repo the receipt records (none for the project root).
   let recordedRepo: string | null = null;
   let alreadyRecorded = false;
@@ -2741,11 +2749,6 @@ function handleLink(args: string[]): void {
           );
         }
         const accepted = developerHandoffPaths(pd, repo);
-        if (accepted === null) {
-          throw new Error(
-            "Cannot record reverse-engineering developer link: active intent record is unavailable.",
-          );
-        }
         const artifact = resolve(pd, flags.artifact);
         if (!accepted.includes(artifact)) {
           throw new Error(
@@ -3157,6 +3160,31 @@ function reviewVerdictStep(
       summary: true,
       brief,
     });
+  }
+  // The one recovery pass at an open gate the person already answered: the
+  // approval refused for the stale review stands on their reply, which nothing
+  // has used, so the agent records it rather than asking again. A reply in
+  // another chat is not named: the agent here never saw its words. A pass with
+  // a finding they have not seen (a NOT-READY one, or a READY one with a minor
+  // point) brings it to them at the gate, with the brief.
+  const reviewed = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
+  const unseen = () => reviewed === undefined || readReviewArtifactContexts(pd, reviewed).some((context) =>
+    context.findings.some((finding) => finding.status === "New" || finding.status === "Unresolved"));
+  if (request.recovery && box === "awaiting-approval" && verdict === "READY" &&
+    personRepliedSinceGateShown(pd, { stage: flags.stage }) === true && !unseen()) {
+    const replies = personsGateReply(pd, resolveInvokingSessionId(pd), flags.stage).replies;
+    if (replies.length > 0) {
+      const report = `orchestrate report --stage ${quoteCommandArgument(flags.stage)}`;
+      return reviewVerdictNote({
+        kind: "reply-stands",
+        stage: flags.stage,
+        replies,
+        approve: aidlcDispatcherInvocation(`${report} --result approved --user-input "Approve" --message <id>`),
+        reject: aidlcDispatcherInvocation(`${report} --result rejected --user-input "Request Changes" --message <id>`),
+        report: stageGateReportCommand(flags.stage, "awaiting-approval"),
+        brief,
+      });
+    }
   }
   return reviewVerdictNote({
     kind: "gate",

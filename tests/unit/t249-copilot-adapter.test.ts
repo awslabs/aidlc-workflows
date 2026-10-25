@@ -3342,11 +3342,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     );
   });
 
-  // The claim reads the launcher's folder where the dispatcher reads it, so a
-  // folder the dispatcher would run the work in is checked, whatever comes before it.
-  test("23c-dispatcher-folder: a folder the dispatcher takes after a flag and a word is still checked", () => {
+  // The claim checks a folder on the line wherever it sits: among the person's
+  // words, and where the dispatcher takes it as the folder to run the work in.
+  test("23c-dispatcher-folder: a folder after a flag that takes no value and a word, or after the dispatcher's own flag, is still checked", () => {
     const dir = orchestrationProject();
     const other = scratchProject(true);
+    // After a flag that takes no value the word is theirs, and the folder among their words.
     const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, "dispatcher-folder", `aidlc next --new-intent notes --project-dir ${JSON.stringify(other)}`, "dispatcher-folder"));
     expect(pre.stdout).toContain("targets a different physical project");
     // Its own flag in front of the words: the dispatcher takes every folder on the line.
@@ -4646,6 +4647,61 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(typedPrompt(dir, chat, SUBAGENT_BRIEFING).code).toBe(0);
     expect(humanTurnCount(dir)).toBe(2);
     expect(messageTexts().sort()).toEqual(["Approve", SUBAGENT_BRIEFING].sort());
+  });
+
+  // The first seconds after a start hold a prompt that matches no brief only
+  // where a brief can come into the chat: VS Code's (35d). The CLI sends a
+  // brief under the helper's own session, so a message the person sends in
+  // the chat right as a helper starts is theirs, on 1.0.96's start and on
+  // 1.0.98's, which names the helper.
+  test("35j: on the Copilot CLI a message typed right after a helper starts is the person's turn", () => {
+    const dir = rulesProject();
+    appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
+    const chat = String(FIXTURES.preToolUse_task.session_id);
+    const helper = String(FIXTURES.userPromptSubmit_subagentBrief.session_id);
+    const agent = "aidlc-architecture-reviewer-agent";
+    const starts = [
+      { ...FIXTURES.subagentStart_task, agentName: agent },
+      { ...FIXTURES.subagentStart_task, agentName: agent, agent_id: helper, agent_type: agent, parent_agent_id: chat },
+    ];
+    for (const [i, start] of starts.entries()) {
+      const pre = runAdapter(dir, "guard-tool-call", withCwd({
+        ...FIXTURES.preToolUse_task,
+        tool_input: { ...(FIXTURES.preToolUse_task.tool_input as Record<string, unknown>), agent_type: agent, prompt: SUBAGENT_BRIEFING },
+      }, dir));
+      expect(pre.code, pre.stderr).toBe(0);
+      expect(runAdapter(dir, "subagent-start", withCwd(start, dir)).code).toBe(0);
+      expect(typedPrompt(dir, chat, `Approve, round ${i + 1}`).code).toBe(0);
+      expect(humanTurnCount(dir), `start ${i + 1}`).toBe(i + 1);
+      runAdapter(dir, "log-subagent", withCwd({ ...FIXTURES.subagentStop_task, agent_type: agent, agent_name: agent }, dir));
+    }
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(0);
+  });
+
+  // In VS Code the window is for a brief still to come: once it has come, the
+  // person's next message counts, however soon.
+  test("35k: in VS Code a message typed after the helper's brief arrived is the person's turn", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000308";
+    runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+    });
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249K",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    expect(typedPrompt(dir, session, SUBAGENT_BRIEFING).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(0);
+    expect(typedPrompt(dir, session, "Approve").code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(0);
   });
 
   // The Copilot CLI hands the reason of a Stop block back to the agent as a new

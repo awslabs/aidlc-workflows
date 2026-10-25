@@ -1511,7 +1511,7 @@ const MAX_SHELL_ROOTS = 64;
 // The directories a bare `cd` or a leading `~` or $HOME names: HOME, else the
 // OS home. PowerShell on Windows takes them from its user profile instead
 // (USERPROFILE, or HOMEDRIVE and HOMEPATH), never from HOME.
-function shellHomes(powerShell: boolean): string[] {
+export function shellHomes(powerShell: boolean): string[] {
   if (!powerShell || process.platform !== "win32") return [resolve(process.env.HOME || homedir())];
   const homes = [process.env.USERPROFILE || homedir()];
   if (process.env.HOMEDRIVE && process.env.HOMEPATH) homes.push(process.env.HOMEDRIVE + process.env.HOMEPATH);

@@ -150,7 +150,7 @@ before starting a second intent alongside the first:
  > 1. Part of the active work
       Continue the current workflow
    2. Separate new piece of work
-      Yes, set it up alongside the current one as "bugfix" work (6 stages, 6 approval gates) without changing it
+      Set it up alongside the current one as "bugfix" work (6 stages, 6 approval gates) without changing it
    3. Reshape the active work
       Change how the remaining plan is shaped
    4. Type something.
@@ -188,8 +188,12 @@ spent on a plan you did not choose.
 So does a scope that differs from the active intent's, typed with a
 description (`/aidlc --scope express "add a health endpoint"`), with new work
 first: choose **1** and the description starts new express work, the active
-intent kept as it is, or **2** and the active intent changes to express. A
-scope with no description changes the active intent's scope without asking.
+intent kept as it is, or **2** and the active intent changes to express.
+`--scope` with no description (`/aidlc --scope express`) changes the active
+intent's scope without asking. Another plan's name typed alone
+(`/aidlc workshop`) may mean new work on that plan or the active intent moved
+to it: the assistant reads which you meant and asks you once when it cannot
+tell, and new work on it asks what the work is for before anything starts.
 
 AI-DLC never creates a second intent without asking. If a prompt is genuinely a
 follow-up to the current work — answering a gate, correcting a requirement — it
@@ -323,8 +327,8 @@ creation times, and parent PIDs identify the owning session within the same
 select a session.
 Shared-process harnesses still cannot distinguish chats that use one process,
 including Kiro IDE multi-chat. In multi-session opencode the shell commands carry
-their chat (item 2), but a file write's audit row and sensors, and the to-do
-list sync, still go by the process. Children of payload-bearing hooks follow
+their chat (item 2), and so do a file write's audit row and sensors and the to-do
+list sync. Children of payload-bearing hooks follow
 the payload session; tools without that parent still fall back to the shared
 cursors when ancestry is unavailable unless the harness process has a valid
 `AIDLC_SESSION_OVERRIDE`.

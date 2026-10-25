@@ -58,7 +58,9 @@ import {
   REPO_ROOT,
   cleanupWorktreeFixture,
   createOrchestrationTestProject,
+  DEFAULT_RECORD_DIR,
   FIXTURES_DIR,
+  intentsDirOf,
   runOrchestrateNext,
   seedAidlcMemory,
   seedBoltDag,
@@ -534,6 +536,36 @@ describe("the engine asks for Plan Approval", () => {
     writePlan(units, "", "unit-a");
     expect(next(units).ask_type).toBe("plan-approval");
     expect(statusLine(units)).toBe("Awaiting your approval on the code plan for unit-b");
+  });
+
+  test("--status for a named piece of work reads that work's code plan question", () => {
+    const statusLine = (proj: string, target: string[]): string => {
+      const result = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-utility.ts"), "status", ...target, "--project-dir", proj], {
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_UNATTENDED: "0" },
+      });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      return /^Status:\s+(.*)$/m.exec(result.stdout ?? "")?.[1] ?? "";
+    };
+    const proj = project();
+    next(proj);
+    askFor(proj);
+    // Other work here, not selected and with no plan question of its own.
+    const other = "fixture-other-0000000000000002";
+    const intents = intentsDirOf(proj);
+    mkdirSync(join(intents, other), { recursive: true });
+    writeFileSync(join(intents, other, "aidlc-state.md"), readFileSync(seededStateFile(proj), "utf-8")
+      .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: requirements-analysis"), "utf-8");
+    const registry = JSON.parse(readFileSync(join(intents, "intents.json"), "utf-8"));
+    registry.push({ uuid: "00000000-0000-7000-8000-000000000002", slug: "fixture-other", dirName: other, status: "in-flight" });
+    writeFileSync(join(intents, "intents.json"), `${JSON.stringify(registry, null, 2)}\n`, "utf-8");
+    expect(statusLine(proj, ["--intent", DEFAULT_RECORD_DIR])).toBe("Awaiting your approval on the code plan");
+    expect(statusLine(proj, ["--space", "default"])).toBe("Awaiting your approval on the code plan");
+    expect(statusLine(proj, ["--intent", other])).not.toContain("code plan");
+    replyAndRecord(proj, "/aidlc 3", "I'll edit the files");
+    expect(next(proj).plan_approval?.editing).toBe(true);
+    expect(statusLine(proj, ["--intent", DEFAULT_RECORD_DIR])).toBe("Waiting for you to finish editing the code plan");
+    expect(statusLine(proj, ["--intent", other])).not.toContain("code plan");
   });
 
   test("a stage without a plan is planned first; a ready plan is asked for with its summary", () => {

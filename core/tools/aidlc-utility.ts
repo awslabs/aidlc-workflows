@@ -2004,8 +2004,8 @@ To get started:
   // aidlc-orchestrate.ts). The line carries the way back, in the harness's own
   // entry word. A live run read "Status: Running" over paused work and the
   // agent had to correct it.
-  // Read for the selected work only, as the step marker below is.
-  const planAsk = flags.intent || flags.space ? null : openPlanApprovalAsk(projectDir);
+  // Read for the work this status is for, the one named or the selected one.
+  const planAsk = openPlanApprovalAsk(projectDir, flags.intent, flags.space);
   const parkedAt = (getField(content, "Parked At Stage") ?? "").trim();
   const parked = (getField(content, "Parked") ?? "").trim().length > 0 &&
     parkedAt.length > 0 && parkedAt === currentStage &&
@@ -2029,7 +2029,7 @@ To get started:
     const plans = units.length > 1
       ? `code plans for ${units.join(", ")}`
       : `code plan${units.length === 1 ? ` for ${units[0]}` : ""}`;
-    statusLine = planApprovalAskState(projectDir) === "editing"
+    statusLine = planApprovalAskState(projectDir, planAsk.intent_uuid ?? "bare-space") === "editing"
       ? `Waiting for you to finish editing the ${plans}`
       : `Awaiting your approval on the ${plans}`;
   } else if (currentCheckbox?.state === "awaiting-approval") {

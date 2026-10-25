@@ -1031,6 +1031,21 @@ describe("t342 Construction checkpoint routing", () => {
     expect(readAuditShardEvents(p)).toHaveLength(rows);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("asked for the Units in parallel while they are built one at a time, the two lines read as one change", () => {
+    const p = fixture();
+    const id = policyHuman(p, "let's build the units in parallel");
+    // Parallel needs stage by stage first: the agent runs both setters and says both lines, in this order.
+    const order = policyCli(p, "state", ["set-construction-iteration", "stage-major", "--message", id]);
+    expect(order.status, `${order.stdout}${order.stderr}`).toBe(0);
+    const parallel = policyCli(p, "state", ["set-construction-execution", "swarm", "--message", id]);
+    expect(parallel.status, `${parallel.stdout}${parallel.stderr}`).toBe(0);
+    expect([JSON.parse(order.stdout).notice, JSON.parse(parallel.stdout).notice]).toEqual([
+      "Construction now goes stage by stage (it built one Unit at a time). You can switch back any time.",
+      "Construction now builds the Units in parallel, stage by stage (it built the Units one after another). " +
+        "You can switch back any time.",
+    ]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("an unattended run never changes a Construction setting, even after a person turn", () => {
     const p = fixture();
     const before = readFileSync(seededStateFile(p));
@@ -2206,6 +2221,26 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(next(p).artifact_reuse).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // The engine hands a Unit's redo out as agent work too (the redo-unit-step
+  // remedy), and the re-entry report reads none of the person's words: the row
+  // says what was redone, never that the person asked for it.
+  test("a Unit redo with no reply of the person's on record is not recorded as their request", () => {
+    const p = betaBuilding();
+    cover(p, "beta", ["code-generation"]);
+    // The person's last turn was alpha's approval; nothing of theirs since.
+    const rows = readAuditShardEvents(p);
+    const approvedAt = rows.map((row) => row.event).lastIndexOf("GATE_APPROVED");
+    expect(approvedAt).toBeGreaterThanOrEqual(0);
+    expect(rows.slice(approvedAt + 1).filter((row) => row.event === "HUMAN_TURN")).toHaveLength(0);
+    const command = /`[^`]*aidlc-jump\.ts (reopen [^`]+)`/.exec(redo(p))?.[1];
+    const reopened = tool(p, "jump", command!.split(" "));
+    expect(reopened.status, reopened.out).toBe(0);
+    const rejected = readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED").at(-1)!;
+    expect(auditBlockField(rejected.block, "Reopen")).toBe("redo");
+    expect(auditBlockField(rejected.block, "Feedback")).toBe("Redid Code Generation for unit beta (redo on re-entry).");
+    expect(rejected.block).not.toContain("the person's request");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // Audit rows are read in time order across shards (a teammate's shard, or a
   // second session's), not file by file, and a Redo answer whose order against
   // another shard's row in the same second cannot be known is not used.
@@ -2252,7 +2287,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(next(p).artifact_reuse).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("unit-major Redo at a Unit checkpoint in a parked workflow unparks first and credits the person's Redo", () => {
+  test("unit-major Redo at a Unit checkpoint in a parked workflow unparks first and records the redo", () => {
     const p = betaBuilding();
     cover(p, "beta", ["code-generation"]);
     expect(next(p).construction_checkpoint?.unit).toBe("beta");
@@ -2269,9 +2304,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     }
     expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
     const rejected = readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED").at(-1)!;
-    expect(auditBlockField(rejected.block, "Feedback")).toBe(
-      "Redid Code Generation for unit beta at the person's request (redo on re-entry).",
-    );
+    expect(auditBlockField(rejected.block, "Feedback")).toBe("Redid Code Generation for unit beta (redo on re-entry).");
     // The Redo answers the step's re-use question with the Source the engine reads back.
     const reused = readAuditShardEvents(p).filter((row) => row.event === "ARTIFACT_REUSED").at(-1)!;
     expect(auditBlockField(reused.block, "Source")).toBe(REDO_REUSE_SOURCE);

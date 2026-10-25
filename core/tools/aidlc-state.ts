@@ -61,7 +61,8 @@ import {
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   BLOCKING_SENSOR_OVERRIDE_DECISION,
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
-  blockingSensorPicks,
+  blockingSensorOverrideReport,
+  hasBlockingSensorOverrideAuthorization,
   BoltIdentityError,
   type CheckboxState,
   checkSummaryConfirmationEvidence,
@@ -109,6 +110,7 @@ import {
   answeredBeforeShownStep,
   messageRetryStep,
   personRepliedSinceGateShown,
+  unshownGateReplyStands,
   personsGateReply,
   windowMessageIds,
   personsWordsText,
@@ -215,10 +217,13 @@ import {
   setPhaseProgress,
   singleStageAttemptIsOpen,
   stagesInScope,
+  stateFilePath,
   swarmConvergedUnits,
   teamUnitGateStatus,
   unclaimableIgnoredSourceKeys,
   registryExcludedSourceKeys,
+  renderChangedPaths,
+  renderSourcePathKeys,
   unitCompletedReceipts,
   unitGateStatus,
   unitMajorConstructionStageSlugs,
@@ -987,7 +992,11 @@ export function main(argv: string[]): void {
       "park",
       "unpark",
     ]);
-    if (subcommand && archivedProtectedCommands.has(subcommand)) {
+    // An isolated run's reuse with no work selected has no workflow that
+    // could be archived.
+    const isolatedWithoutWork = subcommand === "reuse-artifact" && args.includes("--single") &&
+      !existsSync(stateFilePath(resolveProjectDir(projectDir)));
+    if (subcommand && archivedProtectedCommands.has(subcommand) && !isolatedWithoutWork) {
       assertWorkflowNotArchived(
         readStateFile(resolveProjectDir(projectDir)),
         `aidlc-state.ts ${subcommand}`,
@@ -1359,8 +1368,10 @@ function constructionPolicyNotice(before: string, after: string, field: string):
       now: "Construction now goes stage by stage", was: "it went stage by stage",
       already: "Construction already goes stage by stage",
     },
+    // Parallel runs only stage by stage (setConstructionPolicyField), so said
+    // right after the order's own line, the two read as one change.
     swarm: {
-      now: "Construction now builds the Units in parallel", was: "it built the Units in parallel",
+      now: "Construction now builds the Units in parallel, stage by stage", was: "it built the Units in parallel",
       already: "Construction already builds the Units in parallel",
     },
     serial: {
@@ -4120,49 +4131,6 @@ function verifyGateSensorArtifactsUnchanged(
   }
 }
 
-function auditEventIsAfter(
-  later: ReturnType<typeof readAuditShardEvents>[number],
-  earlier: ReturnType<typeof readAuditShardEvents>[number],
-): boolean {
-  if (later.shard === earlier.shard) return later.pos > earlier.pos;
-  return later.timestamp > earlier.timestamp;
-}
-
-function hasBlockingSensorOverrideAuthorization(
-  pd: string,
-  slug: string,
-): boolean {
-  const rows = readAuditShardEvents(pd);
-  const stageRows = rows.filter((row) => {
-    const workflow = auditField(row.block, "Workflow");
-    return auditField(row.block, "Stage") === slug &&
-      !workflow?.startsWith("single-stage:");
-  });
-  const boundaries = stageRows.filter((row) =>
-    row.event === "STAGE_STARTED" ||
-    row.event === "STAGE_AWAITING_APPROVAL" ||
-    row.event === "GATE_REJECTED"
-  );
-  const interactions = stageRows.filter((row) =>
-    row.event === "DECISION_RECORDED" ||
-    row.event === "QUESTION_ANSWERED"
-  );
-  for (const [answer, choice] of blockingSensorPicks(rows, slug)) {
-    if (choice !== BLOCKING_SENSOR_OVERRIDE_CHOICE) continue;
-    if (!boundaries.every((boundary) => auditEventIsAfter(answer, boundary))) {
-      continue;
-    }
-    if (
-      interactions.every((row) =>
-        row === answer || auditEventIsAfter(answer, row)
-      )
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function enforceBlockingGateSensors(
   pd: string,
   stateContent: string,
@@ -4213,9 +4181,8 @@ function enforceBlockingGateSensors(
       `--decision "${BLOCKING_SENSOR_OVERRIDE_DECISION}" --options ` +
       `"${BLOCKING_SENSOR_OVERRIDE_OPTIONS.join(",")}", present those choices, and ` +
       `after the human selects "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" record it with ` +
-      `${aidlcToolInvocation("log")} answer. Then retry: ${aidlcToolInvocation("orchestrate")} ` +
-      `report --stage ${slug} --result ${reportResult} --override-blocking-sensors ` +
-      `--user-input "${BLOCKING_SENSOR_OVERRIDE_CHOICE}". Autonomous mode cannot override.`,
+      `${aidlcToolInvocation("log")} answer. Then retry: ` +
+      `${blockingSensorOverrideReport(slug, reportResult)}. Autonomous mode cannot override.`,
   );
 }
 
@@ -5633,25 +5600,30 @@ function verifyReviewerPrecondition(
       }
       // The person's line: what changed, and the three ways through, in their
       // words. The agent knows the mechanics (the stage file and the reviewer
-      // protocol say how a manifest is written and a review recorded). The
-      // registry that reaches a path is the one in its own repo folder (the
-      // walk reads each repo root's file), so a recorded repo's path names it.
-      const registries = [...new Set(unclaimed.map((key) => {
-        const repo = key.slice(0, key.indexOf("\0"));
-        return repo ? `${inertPath(repo)}/.aidlc-source-paths.json` : ".aidlc-source-paths.json";
-      }))].sort();
-      const where = registries.length === 1 && registries[0] === ".aidlc-source-paths.json"
-        ? ".aidlc-source-paths.json"
-        : `the .aidlc-source-paths.json of the path's own folder (${registries.join(", ")})`;
+      // protocol say how a manifest is written and a review recorded).
       error(
         `Refusing to complete "${stage.slug}": ${unclaimed.length} change${unclaimed.length === 1 ? "" : "s"} made during ${stage.name} ` +
           `that no Unit's review covers (${rendered.join(", ")}${more}). A Unit that made one of them lists the path ` +
-          `in its source manifest and is reviewed once more; a change nobody meant is undone; a path that is not source ` +
-          `(a tool's cache, a build output, a folder that is not this project's code) is left out of the source checks by naming ` +
-          `it under "exclude" in ${where}.`,
+          `in its source manifest and is reviewed once more; a change nobody meant is undone; ${notSourceWayThrough(unclaimed)}.`,
       );
     }
   }
+}
+
+// The way through for a changed path that is not source, the same on every
+// refusal that names changed paths. The registry that reaches a path is the
+// one in its own repo folder (the walk reads each repo root's file), so a
+// recorded repo's path names it.
+function notSourceWayThrough(keys: readonly string[]): string {
+  const registries = [...new Set(keys.map((key) => {
+    const repo = key.slice(0, key.indexOf("\0"));
+    return repo ? `${inertPath(repo)}/.aidlc-source-paths.json` : ".aidlc-source-paths.json";
+  }))].sort();
+  const where = registries.length === 1 && registries[0] === ".aidlc-source-paths.json"
+    ? ".aidlc-source-paths.json"
+    : `the .aidlc-source-paths.json of the path's own folder (${registries.join(", ")})`;
+  return "a path that is not source (a tool's cache, a build output, a folder that is not this project's code) " +
+    `is left out of the source checks by naming it under "exclude" in ${where}`;
 }
 
 function staleSourcePreconditionError(
@@ -5710,10 +5682,16 @@ function staleSourcePreconditionError(
       receipts,
     });
   }
+  // What moved since the review: a path that is not source (a test run's
+  // cache) is left out by the exclude, and the review then still holds.
+  const changed = receipts.sourceChangedKeys;
+  const whatChanged = changed !== null && changed.length > 0
+    ? ` What changed: ${renderChangedPaths(renderSourcePathKeys(changed))}; ${notSourceWayThrough(changed)}.`
+    : "";
   if (recoverySpent) {
     const message =
       `Refusing to complete "${slug}": the workspace source changed again after ` +
-        `the one recovery review by ${reviewer} (source-fingerprint mismatch). ` +
+        `the one recovery review by ${reviewer} (source-fingerprint mismatch).${whatChanged} ` +
         `${recoveryGuidance(pd, content, slug)} ` +
         (requestChangesResetIsExecutable(content, slug)
           ? "Only a human Request Changes decision resets the review attempt; do not " +
@@ -5730,7 +5708,7 @@ function staleSourcePreconditionError(
   const message =
     `Cannot complete "${slug}" because the project source changed after ${reviewer} ` +
       `reviewed it. Ask ${reviewer} to review the current source once more and record ` +
-      `the verdict, or revert the source change, then try again.`;
+      `the verdict, or revert the source change, then try again.${whatChanged}`;
   // On a per-unit stage the review that covered the source is the newest
   // Unit's, so the one recovery review is that Unit's.
   const reviewUnit = receipts.newestSourceUnit ?? undefined;
@@ -7386,8 +7364,12 @@ function verifyApprovalDecision(
     }
     if (!repliedSinceStageStart(pd, stage.slug, message)) refuseForAgent(stageStartFloorRefusal("approve", stage.slug, message));
     const gate = { stage: stage.slug, ...(unit !== undefined ? { unit } : {}) };
-    if (message === undefined && personRepliedSinceGateShown(pd, gate) === false) {
-      refuseGateShownAfterReply(pd, "approve", stage.slug);
+    const shown = message === undefined ? personRepliedSinceGateShown(pd, gate) : undefined;
+    if (shown === false) refuseGateShownAfterReply(pd, "approve", stage.slug);
+    // A stage gate the record never shows stands on this chat's reply, never
+    // on another chat's answer to something else.
+    if (shown === null && unit === undefined && !unshownGateReplyStands(pd, stage.slug)) {
+      refuseUnshownGate(pd, stage.slug);
     }
   }
   // The conductor reports the choice the person made; a report that names none
@@ -7413,6 +7395,20 @@ function refuseGateShownAfterReply(pd: string, verb: "approve" | "request change
     shown: "the gate",
     command: "report",
     why: "no new human reply has been received for this approval question since it was shown.",
+  });
+  refuseForAgent(step, { personDecided: named });
+}
+
+// An approval of a stage gate the record never shows, with no reply of theirs
+// in this chat to stand on: the agent names the message that answered it, or
+// shows the gate.
+function refuseUnshownGate(pd: string, slug: string): never {
+  const { step, named } = answeredBeforeShownStep(pd, slug, {
+    refused: `Cannot approve "${slug}"`,
+    question: `the "${slug}" gate`,
+    shown: "the gate",
+    command: "report",
+    why: "no reply of the person's in this chat since this stage last started answers this gate.",
   });
   refuseForAgent(step, { personDecided: named });
 }

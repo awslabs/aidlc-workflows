@@ -159,6 +159,8 @@ import {
   isBindableIntentRecordName,
   keptRepliesSinceStageStart,
   stageDir,
+  stageQuestionsFile,
+  UNIT_NAME_PLACEHOLDER,
   isSafeIntentRecordName,
   SPACE_NAME_REGEX,
   workflowParticipation,
@@ -185,6 +187,8 @@ import {
   boltSlugForUnit,
   composeGateOpen,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
+  blockingSensorOverrideReport,
+  hasBlockingSensorOverrideAuthorization,
   type CheckboxState,
   CHANGE_CONTROL_FIELD,
   CEREMONY_FLAGS,
@@ -411,6 +415,7 @@ import {
   recentWorkspaceRecordNames,
   resolveWorkflowSelection,
   delegatedWorktreeIntent,
+  swarmWorkerWorktreeMeta,
   scopeCostSummary,
   singleStageAttemptField,
   singleStageAttemptIsOpen,
@@ -1025,6 +1030,9 @@ let routingAnsweredAsActiveWork = false;
 // The words that answer was about, and the message they came in, for the
 // question the work in progress has open.
 let routingAnswered: { text: string; messageId?: string } | null = null;
+// The person's reply a reshape answer to the routing question carried: the
+// composer runs as a subagent without their chat, so its task names it.
+let routingReshapeReply: string | null = null;
 
 function isKeptRequest(args: readonly string[]): boolean {
   const flags = parseNextFlags([...args]);
@@ -3493,14 +3501,18 @@ type RoutingOption = {
   readonly label: string;
   readonly detail: (scope: string, size: string) => string;
 };
+// An option's detail where the prose question's sentence carries it after a dash.
+function detailInSentence(detail: string): string {
+  return detail.charAt(0).toLowerCase() + detail.slice(1);
+}
 const NEW_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
   { route: "continue", label: "Part of the active work", detail: (_scope: string) => "Continue the current workflow" },
   {
     route: "separate",
     label: "Separate new piece of work",
     detail: (scope: string, size: string) => scope
-      ? `Yes, set it up alongside the current one as "${scope}" work${size ? ` (${size})` : ""} without changing it`
-      : "Yes, set it up alongside the current one without changing it; you pick its plan next",
+      ? `Set it up alongside the current one as "${scope}" work${size ? ` (${size})` : ""} without changing it`
+      : "Set it up alongside the current one without changing it; you pick its plan next",
   },
   { route: "reshape", label: "Reshape the active work", detail: (_scope: string) => "Change how the remaining plan is shaped" },
 ];
@@ -3534,8 +3546,8 @@ const EXISTING_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
     route: "separate",
     label: "Separate new piece of work",
     detail: (scope: string, size: string) => scope
-      ? `Yes, set it up alongside the existing work as "${scope}" work${size ? ` (${size})` : ""} without changing it`
-      : "Yes, set it up alongside the existing work without changing it; you pick its plan next",
+      ? `Set it up alongside the existing work as "${scope}" work${size ? ` (${size})` : ""} without changing it`
+      : "Set it up alongside the existing work without changing it; you pick its plan next",
   },
   {
     route: "reshape",
@@ -4162,8 +4174,9 @@ function openRoutingQuestion(projectDir: string): StoredQuestion | null {
 // person's chat and reads whether they answer it. The step names each of the
 // question's answers with its own command, as the question gave them, so the
 // agent runs the one the person chose; nothing runs from the words themselves.
-// Null when the settings the question kept no longer parse: the words are then
-// asked about as usual.
+// A reshape answer carries their words too: the composer it reaches works
+// without their chat. Null when the settings the question kept no longer parse:
+// the words are then asked about as usual.
 function routingQuestionReplyDirective(question: StoredQuestion, words: string): PrintDirective | null {
   let carried = carriedFromQuestion(question, parseNextFlags([]));
   if (carried !== null && routingAskedAboutScope(question)) {
@@ -4179,17 +4192,19 @@ function routingQuestionReplyDirective(question: StoredQuestion, words: string):
     carried,
     pick ? question.askedAbout?.targets.map(({ intent }) => intent) : undefined,
   );
+  const named = (route: NewWorkRoute, command: string): string =>
+    route === "reshape" ? `${command} -- ${quoteCommandArgument(words)}` : command;
   const answers = routingQuestionOptions(question).map((option) => {
     const command = commands.route[option.route];
-    if (command !== undefined) return `"${option.label}": \`${command}\``;
+    if (command !== undefined) return `"${option.label}": \`${named(option.route, command)}\``;
     const each = option.route === "continue" ? commands.select : commands.reshape;
-    return `"${option.label}": the command for the work they named, one of ${each.map(({ command: c }) => `\`${c}\``).join(", ")}`;
+    return `"${option.label}": the command for the work they named, one of ${each.map(({ command: c }) => `\`${named(option.route, c)}\``).join(", ")}`;
   });
   return printDirective(
     "The person has not answered the question about where their words belong, so `next` cannot tell their reply " +
     "from a new request and took nothing from the line. If their words answer that question, run the command for " +
     `their choice: ${answers.join("; ")}. If they are asking for something else, run ` +
-    `\`${tool} -- ${quoteCommandArgument(words)}\`, which keeps every word of theirs. ` +
+    `\`${tool} -- ${quoteCommandArgument(words)}\`. ` +
     "If you cannot tell, ask them once in plain words.",
   );
 }
@@ -6066,9 +6081,11 @@ function freshWorkRoute(
   // proposal step first.
   const plan = flags.propose !== undefined && flags.propose !== "" ? flags.propose : null;
   if (isKiroRoutingHarness()) {
+    // A tailored plan (`compose`) is no plan's name: the separate-work answer
+    // picks the plan next, as the routing question over selected work does.
     const pick = intentPickPromptIfRecordsExist(pd, {
       description,
-      proposedScope: plan ?? "",
+      proposedScope: plan === null || plan === "compose" ? "" : plan,
       carried: carriedRoutingFlags(flags),
       ...(derivedFrom === undefined ? {} : { derivedFrom }),
     });
@@ -6208,6 +6225,34 @@ function planNamedAloneStep(plan: string, flags: ParsedFlags, besideWork = false
   );
   step.narration = `I'll use the ${plan} plan. What should I work on? Tell me in your own words and I'll start it.`;
   return step;
+}
+
+// A plan's name typed with no words beside unfinished work on another plan
+// (`/aidlc workshop` over bugfix work): no other branch reads the plan word
+// there, so the stage in hand would run with it dropped.
+function planTypedAloneBesideWork(flags: ParsedFlags, stateContent: string): boolean {
+  const plan = flags.positionalScope;
+  const current = (getField(stateContent, "Scope") ?? "").trim();
+  return plan !== undefined && flags.scope === undefined && !flags.intent && !flags.resume &&
+    flags.planChanges === undefined && !flags.compose && validScopes().has(plan) &&
+    plan !== current && !workflowFinished(stateContent, current);
+}
+
+// That plan word may ask for new work on the plan (planNamedAloneStep, through
+// Branch 4a) or for this work to move to it (Branch 5's scope change): the
+// agent reads which, with the settings typed with the plan on both commands.
+function planNamedBesideWorkStep(plan: string, flags: ParsedFlags, stateContent: string): PrintDirective {
+  const next = `${aidlcToolInvocation("orchestrate")} next --scope ${scopeArg(plan)}`;
+  const settings = typedSettingModifiers(flags).map((modifier) => ` --${modifier}`).join("");
+  const current = (getField(stateContent, "Scope") ?? "").trim();
+  return printDirective(
+    `The person typed the name of the \`${plan}\` plan with no words about the work, beside the work on ` +
+      `"${activeWorkLabel(stateContent)}" on the \`${current}\` plan. Read what they meant. For new work on the \`${plan}\` ` +
+      `plan, run \`${next} --new-intent${settings}\`: it asks them what the new work is for (once they have said, add ` +
+      "` -- <their words>` with their words as one shell-safe argument, which starts it). For this work to move to the " +
+      `\`${plan}\` plan, run \`${next}${settings}\` and follow what it returns. If you cannot tell which they meant, ask ` +
+      "them once in plain words, then run the command for their answer.",
+  );
 }
 
 // The optional line offering a clean chat for new work, in the host's own words.
@@ -6431,6 +6476,12 @@ function subagentCallShape(agent: string): string | null {
   return null;
 }
 
+// The person's reply a reshape answer carried, for a print that hands that
+// answer on to `next compose`.
+function reshapeReplyArgument(): string {
+  return routingReshapeReply === null ? "" : ` -- ${quoteCommandArgument(routingReshapeReply)}`;
+}
+
 function composeDispatchDirective(
   flags: ParsedFlags,
   inFlight: boolean,
@@ -6438,10 +6489,16 @@ function composeDispatchDirective(
   const hd = harnessDir();
   const parts: string[] = [];
   const inFlightCallShape = subagentCallShape("aidlc-composer-agent");
+  // Their reply read as the request is: a pasted document goes to the composer as reference.
+  const reply = routingReshapeReply === null ? null : authoritativeRequest(routingReshapeReply);
   if (inFlight) {
     parts.push(
       `Dispatch the composer agent (${hd}/agents/aidlc-composer-agent.md) as a subagent to propose re-shaping the RUNNING workflow's pending stages` +
         (flags.intent ? ` for: "${authoritativeRequest(flags.intent)}".${pastedDocumentNote(flags.intent)}` : "."),
+      // The sentence closed only where their reply does not close itself.
+      ...(routingReshapeReply === null || reply === null
+        ? []
+        : [`Asked where that request belongs, the person answered: "${reply}"${/[.!?]$/.test(reply) ? "" : "."}${pastedDocumentNote(routingReshapeReply)}`]),
       ...(inFlightCallShape === null ? [] : [inFlightCallShape]),
       "This returned directive has selected the composer path. Stages the person names go through next --skip or --add only BEFORE calling next compose; now dispatch the composer even when the request names exact stage flips. Dispatch the composer subagent with this message as its task and use its validated proposal at the approval gate. Do not substitute your own state read and proposal for that dispatch.",
       "The composer reads the live state file's Stage Progress, re-estimates the entropy components from what completed stages resolved, validates the flipped grid with --strict, and proposes SKIP/un-SKIP flips for PENDING, ahead-of-cursor stages only (completed [x], in-progress [-], and skipped [S] stages are frozen; an ADD whose required producer is skipped or behind the cursor is rejected, not proposed).",
@@ -6685,7 +6742,7 @@ function intentPickPromptIfRecordsExist(
       `This project already has ${inProgress}, ` +
         `and none is currently selected: ${list}${unlisted}. You said: "${requestPreview(pendingWork.description)}".${documentSplitSentence(pendingWork.description)} ` +
         `Is this (1) part of existing work - select its record and continue it; ` +
-        `(2) a separate new piece of work - ${EXISTING_WORK_ROUTING_OPTIONS[1].detail(pendingWork.proposedScope, size)}; ` +
+        `(2) a separate new piece of work - ${detailInSentence(EXISTING_WORK_ROUTING_OPTIONS[1].detail(pendingWork.proposedScope, size))}; ` +
         "or (3) a change to an existing remaining plan - select its record, then reshape it?",
       {
         prompt: `This project already has ${inProgress}, ` +
@@ -7265,13 +7322,6 @@ function resolveSkeletonGate(stance: SkeletonStance, scope: string): boolean {
 // whole thesis"). The mapping is documented in
 // docs/reference/16-artifact-vocabulary.md, "Filesystem mapping".
 
-// The literal token used in the per-unit path shape when no concrete Unit of
-// Work is supplied at emit time. The unit value comes from active Bolt context
-// (a later engine increment threads it in); when absent, the faithful emission
-// is the documented `{unit-name}` placeholder shape, matching
-// 16-artifact-vocabulary.md, "Filesystem mapping".
-const UNIT_NAME_PLACEHOLDER = "{unit-name}";
-
 // True when the node runs once per Unit of Work. The marker + known-set rule
 // lives in aidlc-lib.ts (isPerUnitStage) so the runtime resolver and the cost
 // summary (gridCostSummary) agree on the per-unit set.
@@ -7839,10 +7889,7 @@ function boundedContextWarnings(warnings: string[]): string[] {
 // questions writes five new ones over them.
 function answeredQuestionsFile(projectDir: string, node: GraphStage, unit: string | null): string | null {
   try {
-    const dir = node.phase === "construction" && unit !== null && unit !== UNIT_NAME_PLACEHOLDER
-      ? join(docsRoot(projectDir), "construction", unit, node.slug)
-      : stageDir(projectDir, node.phase, node.slug);
-    const path = join(dir, `${node.slug}-questions.md`);
+    const path = stageQuestionsFile(projectDir, node.phase, node.slug, unit);
     if (!existsSync(path)) return null;
     return /^\[Answer\]:/m.test(readFileSync(path, "utf-8"))
       ? relative(projectDir, path).replaceAll("\\", "/")
@@ -9465,6 +9512,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
     question = found;
+    if (found.origin === "routing" && flags.compose && flags.markedWords && flags.intent?.trim()) {
+      routingReshapeReply = flags.intent;
+    }
     flags.intent = found.text;
     if (!flags.scope && !flags.positionalScope && !flags.compose && !flags.continue) {
       flags.scope = found.proposedScope || undefined;
@@ -9952,7 +10002,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         : `\`${aidlcDispatcherInvocation("space switch")} ${shellArg(question.askedAbout.space)}\`, then `;
       emit(printDirective(
         `To ${flags.continue ? "continue" : "reshape"} ${flags.record}, run ${spaceStep}\`${aidlcDispatcherInvocation("intent switch")} ${shellArg(flags.record)}\`, ` +
-          `then run \`${aidlcToolInvocation("orchestrate")} next ${route} --request ${question.id}${carriedRoutingFlags(flags).existingWork}\` and follow what it returns.`,
+          `then run \`${aidlcToolInvocation("orchestrate")} next ${route} --request ${question.id}${carriedRoutingFlags(flags).existingWork}` +
+          `${flags.compose ? reshapeReplyArgument() : ""}\` and follow what it returns.`,
       ));
       return;
     }
@@ -10152,12 +10203,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   //      equals `Current Stage`. If the workflow has advanced past the parked
   //      slug (a stale marker), ignore it and fall through to the normal route.
   // A change the person typed to the parked work (another scope, stages to
-  // skip or add, a reshape, a setting) is made, and the work stays parked:
-  // answering it with the park would drop it.
+  // skip or add, a reshape, a setting, another plan's name alone) is made, and
+  // the work stays parked: answering it with the park would drop it.
   const parkedWorkChange = stateContent !== null && (
     (flags.scope !== undefined && flags.scope !== (getField(stateContent, "Scope") ?? "").trim()) ||
     flags.planChanges !== undefined || Boolean(flags.compose || flags.newScope || flags.report) ||
-    typedSettingModifiers(flags).length > 0
+    typedSettingModifiers(flags).length > 0 || planTypedAloneBesideWork(flags, stateContent)
   );
   if (
     stateContent &&
@@ -10354,7 +10405,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(printDirective(
         `Run \`${configSetCommand(reshapeSettings, unnamed)}\` to apply the settings typed with this request to the work being reshaped` +
           `${unnamed ? messageFill(pd) : ""}, ` +
-          `then run \`${aidlcToolInvocation("orchestrate")} next compose --request ${question.id}\` and follow what it returns.`,
+          `then run \`${aidlcToolInvocation("orchestrate")} next compose --request ${question.id}${reshapeReplyArgument()}\` and follow what it returns.`,
       ));
       return;
     }
@@ -10571,6 +10622,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const verbatimThenStop = stillParked === null
       ? "print its output verbatim and stop."
       : `print its output verbatim followed by "${stillParked}", and stop.${resumeOnYes()}`;
+    if (!unitScope && flags.positionalScope && planTypedAloneBesideWork(flags, stateContent)) {
+      emit(planNamedBesideWorkStep(flags.positionalScope, flags, stateContent));
+      return;
+    }
     if (
       flags.scope &&
       validScopes().has(flags.scope) &&
@@ -11097,13 +11152,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const scopeChange = flags.scope !== undefined && flags.scope !== (getField(stateContent, "Scope") ?? "");
     const options = scopeChange ? SCOPE_CHANGE_ROUTING_OPTIONS : NEW_WORK_ROUTING_OPTIONS;
     // Name the plan a confirmed new intent would get so the single ask carries
-    // everything the offer needs: active work, the new text, the plan, and a
-    // "Yes"-led affirmative. Once emitted, this question is the sole route
-    // authority. A typed same-scope --scope is the plan; otherwise the one the
-    // agent proposed when it read the words (`--propose`); with none, or with
-    // `compose` (no ready-made plan fits: the plan question after the answer
-    // offers the tailored one), the separate-work answer says the plan is
-    // picked next.
+    // everything the offer needs: active work, the new text and the plan. Once
+    // emitted, this question is the sole route authority. A typed same-scope
+    // --scope is the plan; otherwise the one the agent proposed when it read
+    // the words (`--propose`); with none, or with `compose` (no ready-made plan
+    // fits: the plan question after the answer offers the tailored one), the
+    // separate-work answer says the plan is picked next.
     const proposed = flags.propose !== undefined && flags.propose !== "" && flags.propose !== "compose" ? flags.propose : "";
     const inferred = {
       scope: routingScopeProposal ?? flags.scope ?? flags.positionalScope ?? proposed,
@@ -11116,7 +11170,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           ? `Is this (1) a separate new piece of work - start new "${inferred.scope}" work for it, the current work stays as it is; ` +
             `(2) part of that work - change it to "${inferred.scope}" and continue it; `
           : "Is this (1) part of that work - continue it; (2) a separate new piece of work - " +
-            `${NEW_WORK_ROUTING_OPTIONS[1].detail(inferred.scope, size)}; `) +
+            `${detailInSentence(NEW_WORK_ROUTING_OPTIONS[1].detail(inferred.scope, size))}; `) +
         "or (3) a change to how the remaining plan is shaped?",
       {
         prompt: `Work is already in progress on: "${activeLabel}". You said: "${requestPreview(flags.intent)}".${documentSplitSentence(flags.intent)} What should I do?`,
@@ -11372,6 +11426,27 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           return;
         }
       }
+    }
+    // The person picked Override blocking sensors at this stage's blocking
+    // check and the gate is still shut: the report that carries the override
+    // opens it. Handing back the stage instead sends the agent into reviewed
+    // work the person asked to approve as it is. The override names no Unit,
+    // so a team Unit gate, and a Unit's step a solo walk owes first, keep the
+    // stage's own step; under autonomy the report refuses an override, so
+    // none is named there.
+    if (
+      (currentState === "in-progress" || currentState === "revising") &&
+      readAutonomyMode(stateContent) !== "autonomous" &&
+      !isTeamUnitOwnership(stateContent) &&
+      hasBlockingSensorOverrideAuthorization(pd, currentSlug) &&
+      !walkOwes()
+    ) {
+      const result = currentState === "revising" ? "revised" : "awaiting-approval";
+      emit(printDirective(
+        `The person picked "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" at the ${nodeForSlug(currentSlug)?.name ?? currentSlug} ` +
+          `blocking check: run \`${blockingSensorOverrideReport(currentSlug, result)}\` and show the gate with what it returns.`,
+      ));
+      return;
     }
     // Under an autonomy grant, an eligible per-unit build stage fans out as a
     // swarm batch instead of a single run-stage. tryEmitSwarm advances the swarm
@@ -15509,12 +15584,10 @@ function skippedJumpDirective(target: string, direction: string, current: string
 // direct graph lookup that names the requested target (the prose's "or 0.3 if
 // freshly initialized" degenerate case) and emits a plain run-stage — it is NOT
 // a commit, so it does not route through `execute`.
-// SKILL.md step 5 (Initialization guard) verbatim: jumping to an initialization
-// stage — or `--phase initialization` — is rejected. Init stages have bootstrap
-// behavior (create the state file, scaffold dirs) that doesn't fit the jump
-// model; the user must run `/aidlc --init`. The guard is prose-only in SKILL.md
-// (`aidlc-jump.ts resolve` treats init stages as valid targets, returning
-// valid:true), so the engine enforces it here rather than relaying a tool error.
+// Jumping to an initialization stage, or `--phase initialization`, is rejected.
+// Init stages have bootstrap behavior (create the state file, scaffold dirs)
+// that doesn't fit the jump model. `aidlc-jump.ts resolve` treats init stages as
+// valid targets, so the engine enforces it (initJumpRefusal for a stage).
 const INIT_JUMP_ERROR =
   `Cannot jump to initialization stages. The Initialization phase runs automatically when you start a workflow (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service").`;
 // With work already under way, asking for an initialization stage is asking to
@@ -15526,6 +15599,14 @@ function initStageDirective(base: string, projectDir: string): Directive {
       `If they want that, run \`${aidlcToolInvocation("orchestrate")} next --project-type brownfield\` ` +
       "(`--project-type greenfield` when it is a new project).",
   );
+}
+
+// The one check of an initialization stage as a jump target, asked by `next
+// --stage` and by the re-entry report's jump before it says the jump is
+// accepted, so the report never accepts an initialization stage the jump then
+// refuses.
+function initJumpRefusal(slug: string, projectDir: string): Directive | null {
+  return nodeForSlug(slug)?.phase === "initialization" ? initStageDirective(INIT_JUMP_ERROR, projectDir) : null;
 }
 
 // Why a jump cannot reopen its target for the unit the person named, said
@@ -15587,9 +15668,9 @@ function emitJumpDirective(
     const { targetSlug, direction } = resolved;
     // resolve validates SKIP/unknown but NOT the init-stage guard — enforce it
     // on the resolved target (covers --stage <init> against existing state).
-    const targetNode = nodeForSlug(targetSlug);
-    if (targetNode && targetNode.phase === "initialization") {
-      emit(initStageDirective(INIT_JUMP_ERROR, projectDir));
+    const initRefusal = initJumpRefusal(targetSlug, projectDir);
+    if (initRefusal) {
+      emit(initRefusal);
       return;
     }
     if (resolved.targetSkipped) {
@@ -15675,9 +15756,10 @@ function emitJumpDirective(
     ));
     return;
   }
-  // Init-stage guard applies on the no-state path too (SKILL.md step 5).
-  if (node.phase === "initialization") {
-    emit(errorDirective(INIT_JUMP_ERROR));
+  // Init-stage guard applies on the no-state path too.
+  const initRefusal = initJumpRefusal(node.slug, projectDir);
+  if (initRefusal) {
+    emit(initRefusal);
     return;
   }
   // Scope membership. resolve REQUIRES a state file, so this no-state branch
@@ -17499,6 +17581,14 @@ function emitTypedResumeChoice(
         `Run nothing. Tell the person in one line: "No stage is named ${target}. Which stage did you mean?" ` +
           "When they say, report again with `--choice jump --target <stage>`.",
       ));
+      return;
+    }
+    // An initialization target gets the refusal `next --stage` gives, as it
+    // is: nothing moves, so there is nothing to park after, and `move()` would
+    // rebuild the print without its turn-ending mark.
+    const initRefusal = initJumpRefusal(node.slug, pd);
+    if (initRefusal) {
+      emit(initRefusal);
       return;
     }
     emit(move(printDirective(
@@ -19355,6 +19445,23 @@ export function main(argv: string[]): void {
   let subArgs = filteredArgs.slice(1);
   if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
   const resolvedProjectDir = resolveProjectDir(projectDir);
+  const commandKind = (["next", "continue", "report", "park"] as const).find((kind) => kind === subcommand);
+  // The conductor's workflow commands run in a Unit's worktree (a shell left
+  // there after a `cd`, which Claude Code keeps) would read the copy of the
+  // record that checkout was made with, and none of the hooks' heartbeats,
+  // which land in the project folder: the hooks would look off, or an approved
+  // plan not yet approved. Before the record or the request is read, or the
+  // request spent, the agent goes back.
+  const workerWorktree = commandKind === undefined ? null : swarmWorkerWorktreeMeta(resolvedProjectDir);
+  if (workerWorktree !== null) {
+    emit(printDirective(
+      `This ran in the folder AI-DLC made for Unit ${workerWorktree.swarmUnit}'s build, whose copy of the work's ` +
+        `record cannot say where the work stands. Go back to the project folder, ${workerWorktree.parent}, then run ` +
+        `the same \`${subcommand}\` again from there (with \`--project-dir\` naming that folder if you passed one) ` +
+        "and follow what it returns.",
+    ));
+    return;
+  }
   let spendRequestFile = (): void => {};
   let restoreRequestFile = (): void => {};
   if (subcommand === "next") {
@@ -19373,7 +19480,6 @@ export function main(argv: string[]): void {
   engineSessionId = resolvedSelection.sessionId ?? undefined;
   engineSelections.clear();
   engineSelections.set(resolvedProjectDir, resolvedSelection);
-  const commandKind = (["next", "continue", "report", "park"] as const).find((kind) => kind === subcommand);
   // Resolving a record is not joining it. For a conversation that has not
   // joined the selected workflow, `next` sees a workspace with no active
   // intent (so it asks which intent to work on), and the commands that advance a
@@ -19512,6 +19618,7 @@ export function main(argv: string[]): void {
     restartUnmarkedNotice = false;
     routingAnsweredAsActiveWork = false;
     routingAnswered = null;
+    routingReshapeReply = null;
     engineProjectDir = undefined;
     resolvedDirectiveLimit = null;
     engineSessionId = undefined;
