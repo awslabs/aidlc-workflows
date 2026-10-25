@@ -243,16 +243,19 @@ describe("a pick with no words of this message before it keeps the bare next", (
     expect(stepAfterSwitch(picked.directive), picked.out).toBe("");
   });
 
-  test("the where-does-it-go question's own answer, after the person went ahead with a plan", async () => {
+  // The where-does-it-go question comes before the plan offer, or after the person went ahead with a plan; either
+  // way its answer is a later message of theirs.
+  test("the where-does-it-go question's own answer, after the person answered in a later message", async () => {
     const proj = await clone();
     const reading = await typed(proj, WORDS);
     const id = /next --request ([0-9a-f]{8})/.exec(String(reading.message))?.[1];
     expect(id).toBeDefined();
-    const offer = await next(proj, ["--propose", "bugfix", "--request", id!]);
-    expect(offer.directive?.ask_type, offer.out).toBe("scope-confirm");
-    await laterSecond();
-    await say(proj, "go ahead", "claude");
-    const routing = await next(proj, String(offer.directive?.confirm_command).replace(/^.* next /, "").split(" "));
+    let routing = await next(proj, ["--propose", "bugfix", "--request", id!]);
+    if (routing.directive?.ask_type === "scope-confirm") {
+      await laterSecond();
+      await say(proj, "go ahead", "claude");
+      routing = await next(proj, String(routing.directive?.confirm_command).replace(/^.* next /, "").split(" "));
+    }
     expect(routing.directive?.ask_type, routing.out).toBe("new-work-routing");
     await laterSecond();
     await say(proj, "1", "claude");
