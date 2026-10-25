@@ -13,7 +13,7 @@
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { reviewVerdictNote } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -23,6 +23,7 @@ import {
   createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
+  REPO_ROOT,
   resetAidlcEnv,
   runOrchestrateNext,
   seededAuditShard,
@@ -231,5 +232,55 @@ describe("t2655 a note given with the approval is kept", () => {
     const learned = readAuditShardEvents(pd).filter((row) => row.event === "RULE_LEARNED");
     expect(learned.map((row) => [auditBlockField(row.block, "Stage"), auditBlockField(row.block, "Source")]))
       .toEqual([[GATE, "user_addition"]]);
+  });
+});
+
+// The person's words reach the tools as data, never through a shell: a
+// correction or the question holding it is written to a file in the record's
+// answer-text folder, as stage-protocol.md "Their words on a command line" says.
+describe("t2655 the person's words reach the step without a shell", () => {
+  const SHELLY = "write the env var as $HOME, run `bun test` first, and keep $(touch pwned) literal";
+
+  test("surface reads a correction from a file, word for word, and removes the file", () => {
+    const pd = project(stateAt(STAGE, `- [-] ${STAGE}\n`));
+    const rel = ".aidlc-engine/answer-text/correction-1.txt";
+    const file = join(seededRecordDir(pd), rel);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${SHELLY}\n`, "utf-8");
+    const out = surfaced(pd, STAGE, "--correction-file", rel);
+    expect((out.questions as Array<{ question: string }>).map((q) => q.question)).toEqual([
+      `You asked me to ${SHELLY}. Keep that for next time?`,
+    ]);
+    expect(existsSync(file)).toBe(false);
+    expect(existsSync(join(pd, "pwned"))).toBe(false);
+  });
+
+  test("log decision reads the question from a file, word for word", () => {
+    const pd = project(stateAt(STAGE, `- [-] ${STAGE}\n`));
+    const rel = ".aidlc-engine/answer-text/question-1.txt";
+    const file = join(seededRecordDir(pd), rel);
+    mkdirSync(dirname(file), { recursive: true });
+    const question = `You asked me to ${SHELLY}. Keep that for next time?`;
+    writeFileSync(file, `${question}\n`, "utf-8");
+    const r = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc-log.ts"), "decision", "--stage", STAGE,
+      "--decision-file", rel, "--options", "|Yes, for this project|Yes, for the team|No", "--question-kind", "learnings-note",
+      "--project-dir", pd], { cwd: pd, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    const row = readAuditShardEvents(pd).filter((e) => e.event === "DECISION_RECORDED").at(-1);
+    expect(row && auditBlockField(row.block, "Decision")).toBe(question);
+    expect(existsSync(file)).toBe(false);
+  });
+
+  test("the step and every skill put the person's words in single quotes or a file, never double quotes", () => {
+    const texts = [
+      join(REPO_ROOT, "core", "aidlc-common", "protocols", "stage-protocol-learnings.md"),
+      ...["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]
+        .map((h) => join(REPO_ROOT, "harness", h, "skills", "aidlc", "SKILL.md")),
+    ].map((path) => [path, readFileSync(path, "utf-8")] as const);
+    for (const [path, text] of texts) {
+      expect(text, path).not.toContain('--correction "');
+      expect(text, path).not.toContain('--decision "<the question');
+      expect(text, path).toContain("--correction-file");
+    }
   });
 });

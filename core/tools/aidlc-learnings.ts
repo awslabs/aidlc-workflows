@@ -1,11 +1,13 @@
 // Learning-gate tool -- the tool-as-actor half of stage-protocol section 13's
 // Learnings Ritual. Two subcommands:
 //
-//   surface --slug <stage-slug> [--correction <their change>]... [--project-dir <path>]
+//   surface --slug <stage-slug> [--correction <their change> | --correction-file <file>]... [--project-dir <path>]
 //       Read-only. Prints, for each correction the agent read in the
 //       person's words (KNOWLEDGE), the one question the person answers
 //       (JUDGEMENT): "You asked me to <it>. Keep that for next time?" with
-//       its exact choices; with no correction it prints no question. The
+//       its exact choices; with no correction it prints no question. A
+//       --correction-file is read from the record's answer-text folder and
+//       removed, so words a shell would expand never pass through one. The
 //       agent's diary (memory.md) is the stage's record and is never offered:
 //       only its counts ride along. Carries NO AskUserQuestion field names;
 //       the orchestrator renders the question and runs the single-line
@@ -123,6 +125,7 @@ import {
   LEARNINGS_NOTE_QUESTION_KIND,
   learningsCorrectionQuestion,
   learningsCorrectionText,
+  readAnswerTextFile,
   readAuditShardEvents,
   sortAttemptEvents,
   listIntentDirs,
@@ -475,9 +478,8 @@ function handleSurface(args: string[], projectDir: string): void {
   const flags = parseFlags(args);
   const slug = flags.slug;
   if (!slug) {
-    fail("Usage: aidlc-learnings.ts surface --slug <stage-slug> [--correction <their change>]... [--project-dir <path>]", 1);
+    fail("Usage: aidlc-learnings.ts surface --slug <stage-slug> [--correction <their change> | --correction-file <file>]... [--project-dir <path>]", 1);
   }
-  const corrections = repeatedFlag(args, "correction").map(learningsCorrectionText).filter((c) => c !== "");
 
   // Resolve space/intent FIRST, before touching any per-intent path. A
   // genuinely ambiguous workspace (multiple intent records, no valid cursor)
@@ -501,6 +503,15 @@ function handleSurface(args: string[], projectDir: string): void {
 
   const atCheckpoint = checkpointUnits(projectDir, stateContent, slug);
   assertActiveStage(stateContent, slug, atCheckpoint, () => approvedLast(projectDir, slug, pinnedIntent, space));
+  // Read after the stage check, so a refused call leaves its files for the retry.
+  let corrections: string[];
+  try {
+    corrections = correctionFlags(args)
+      .map((f) => learningsCorrectionText(f.file ? readAnswerTextFile(projectDir, f.value) : f.value))
+      .filter((c) => c !== "");
+  } catch (e) {
+    fail(errorMessage(e), 1);
+  }
 
   const memRel = resolveMemoryPath(projectDir, slug, pinnedIntent, space);
   const memAbs = join(projectDir, memRel);
@@ -1289,11 +1300,13 @@ function parseFlags(args: string[]): Record<string, string> {
   return flags;
 }
 
-// Every value a flag that may be given more than once carries, in order.
-function repeatedFlag(args: string[], name: string): string[] {
-  const values: string[] = [];
+// Every --correction and --correction-file, in the order given.
+function correctionFlags(args: string[]): Array<{ file: boolean; value: string }> {
+  const values: Array<{ file: boolean; value: string }> = [];
   for (let i = 0; i < args.length - 1; i++) {
-    if (args[i] === `--${name}`) values.push(args[++i]);
+    if (args[i] === "--correction" || args[i] === "--correction-file") {
+      values.push({ file: args[i] === "--correction-file", value: args[++i] });
+    }
   }
   return values;
 }
@@ -1315,7 +1328,7 @@ function printHelp(): void {
       "aidlc-learnings.ts — §13 learning-gate tool (tool-as-actor).",
       "",
       "Subcommands:",
-      "  surface --slug <stage-slug> [--correction <their change>]... [--project-dir <path>]",
+      "  surface --slug <stage-slug> [--correction <their change> | --correction-file <file>]... [--project-dir <path>]",
       "      Print the question for each correction the person made in the stage",
       "      (none without one), and the selections file persist reads.",
       "  persist --slug <stage-slug> --selections-json <selections_file> [--project-dir <path>]",

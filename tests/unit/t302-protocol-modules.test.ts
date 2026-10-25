@@ -471,7 +471,7 @@ describe("t302 learnings: the one question after a correction", () => {
     expect(learnings).toContain("3. **Ask the structured questions `surface` printed.**");
     expect(learnings).toContain("Ask each as its own structured question with every option it lists, also when there is only one");
     expect(learnings).toContain("never fold one into another");
-    expect(learnings).toContain("--options \"|Yes, for this project|Yes, for the team|No\" --question-kind learnings-note");
+    expect(learnings).toContain("--options '|Yes, for this project|Yes, for the team|No' --question-kind learnings-note");
     expect(learnings).toContain("The person never picks a heading or a diary heading");
     expect(learnings).not.toContain("pick one of the four diary headings");
     expect(learnings).not.toContain("Keep none of these");

@@ -439,8 +439,9 @@ step between them:
 1. **`surface` (stdout).** The conductor runs it only when the person
    corrected it in the stage, or asked it to keep something for next time
    (reading that is the conductor's knowledge). `aidlc engine learnings surface
-   --slug <stage-slug> --correction "<their change>"` (one `--correction` per
-   correction) prints structured JSON: `candidates[]` (one per correction, each
+   --slug <stage-slug> --correction '<their change>'` (one `--correction` per
+   correction, or a `--correction-file` in the record's answer-text folder for
+   one holding a character a shell reads) prints structured JSON: `candidates[]` (one per correction, each
    carrying `id`, `correction`, `default_scope: "project"`) and `questions[]`:
    for each, "You asked me to <correction>. Keep that for next time?" with the
    exact options `Yes, for this project`, `Yes, for the team`, `No` and its

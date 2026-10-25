@@ -556,6 +556,7 @@ const LOG_INTERACTION_OPTIONS = [
 const DECISION_OPTIONS: ReadonlySet<string> = new Set([
   ...LOG_INTERACTION_OPTIONS,
   "--decision",
+  "--decision-file",
   "--rationale",
   "--exact-option-labels",
   "--question-kind",
@@ -998,7 +999,7 @@ function demoteReviewHeadings(body: Buffer): { bytes: Buffer; changed: string[] 
 }
 
 // --- Subcommand: decision ---
-// Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>]
+// Usage: aidlc-log decision --stage <slug> (--decision <text> | --decision-file <file>) [--options <csv>]
 //   [--rationale <text>] [--question-kind answer-mode|learnings-note|assumption-confirmation]
 //   [--checkpoint summary-confirmation --questions-file <path> [--unit <unit>] [--single]]
 //
@@ -1029,7 +1030,17 @@ function latestDecisionMessageId(pd: string, stage: string, unit: string | undef
 function handleDecision(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
-  if (!flags.decision) error("Missing --decision <text>");
+  // A question holding the person's words arrives in a file the agent wrote, as
+  // an answer's text does, so no shell reads it on the way.
+  if (flags["decision-file"] !== undefined) {
+    if (flags.decision !== undefined) error("Pass either --decision or --decision-file, not both.");
+    try {
+      flags.decision = readAnswerTextFile(resolveActiveProjectDir(projectDir), flags["decision-file"]);
+    } catch (err) {
+      error(errorMessage(err));
+    }
+  }
+  if (!flags.decision) error("Missing --decision <text> (or --decision-file <file>)");
   if (flags.checkpoint !== undefined && !DECISION_CHECKPOINTS.includes(flags.checkpoint)) {
     error(unknownCheckpointMessage(flags.checkpoint, DECISION_CHECKPOINTS));
   }

@@ -82,7 +82,8 @@ const NARRATION_TOKENS = [
 const LEARNINGS_QUESTION_TOKENS = [
   "take the **section 13 learnings step**",
   "otherwise it asks nothing and you go straight to step 4",
-  "--correction \"<their change>\"",
+  "--correction '<their change>'",
+  "`--correction-file`",
   "`Yes, for this project` / `Yes, for the team` / `No`",
   "--question-kind learnings-note",
   "Never infer their answer.",

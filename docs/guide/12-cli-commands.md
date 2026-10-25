@@ -1981,7 +1981,9 @@ a file instead of the command line: the agent writes it to
 `<record>/.aidlc-engine/answer-text/answer.txt` and passes `--details-file
 .aidlc-engine/answer-text/answer.txt`. The same file named from the project folder, or by
 its full path, is read too. The engine reads only that folder, through no link,
-up to 64 KiB, and removes the file once read.
+up to 64 KiB, and removes the file once read. `log decision` takes the question the
+same way with `--decision-file`, and `learnings surface` a correction with
+`--correction-file`.
 
 A plain `log answer` needs a reply of the person's in this chat that no
 decision has used yet, sent before or after the question was logged: which
@@ -3062,7 +3064,7 @@ gate instead of calling these steps automatically.
 
 | Subcommand | What it does |
 |------------|--------------|
-| `surface --slug <stage-slug> [--correction <your change>]...` | Print, for each correction the agent read in your words, the question "You asked me to <it>. Keep that for next time?" with `Yes, for this project`, `Yes, for the team` and `No` (no question without a correction), and name the `selections_file` the picks are written to (one per piece of work, inside its record). The stage's `memory.md` diary is counted, never offered. Read-only |
+| `surface --slug <stage-slug> [--correction <your change> \| --correction-file <file>]...` | Print, for each correction the agent read in your words, the question "You asked me to <it>. Keep that for next time?" with `Yes, for this project`, `Yes, for the team` and `No` (no question without a correction), and name the `selections_file` the picks are written to (one per piece of work, inside its record). The stage's `memory.md` diary is counted, never offered. Read-only |
 | `persist --slug <stage-slug> --selections-json <selections_file>` | Write the confirmed learnings (a confirmed learning is a practice) to `aidlc/spaces/<active-space>/memory/project.md` / `team.md` (and, for a Sensor-binding learning, scaffold and bind a project-tier Sensor), emitting `RULE_LEARNED` / `SENSOR_PROPOSED`. Reads only the `selections_file` `surface` named for the picks' own piece of work, and refuses any other path |
 
 A confirmed learning reaches the agent from the next applicable stage of the current workflow (rule files are re-read before each stage delivery) and every later workflow; a new Sensor binds at the next stage-graph compile.

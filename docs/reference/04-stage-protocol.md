@@ -1467,7 +1467,7 @@ When `directive.protocol_modules` lists `learnings`, the step sits between the c
    entries `[unit <name>]` after the timestamp. The diary is the stage's
    record; nothing in it is offered to the person.
 2. **Surface**: `aidlc-learnings.ts surface --slug <slug> --correction
-   "<their change>"` prints, for each correction the agent read in the
+   '<their change>'` (or `--correction-file`) prints, for each correction the agent read in the
    person's words, the question "You asked me to <it>. Keep that for next
    time?" with `Yes, for this project`, `Yes, for the team` and `No`; with no
    correction it prints none.
