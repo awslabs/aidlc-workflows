@@ -2944,6 +2944,7 @@ describe("an isolated Code Generation run's plan steps name that run's own next"
 // step was issued on, so the run builds and finishes as it does inside work.
 describe("an isolated Code Generation run in a project with no work", () => {
   const SINGLE = ["--stage", "code-generation", "--single", "--scope", "enterprise"];
+  const OWN_NEXT = "bun .claude/tools/aidlc-orchestrate.ts next";
   const SPACE_RECORD = ["aidlc", "spaces", "default", "intents"];
   const planDir = (proj: string) => join(proj, ...SPACE_RECORD, "construction", "code-generation");
   // A project with code and no work, the harness installed, and the run started.
@@ -3020,7 +3021,8 @@ describe("an isolated Code Generation run in a project with no work", () => {
     asked(proj);
     replyAndRecord(proj, "rename slugify to toSlug", "Request Changes: rename slugify to toSlug");
     expect(next(proj, SINGLE)).toMatchObject({
-      kind: "run-stage", plan_approval: { status: "revise", feedback: "rename slugify to toSlug" },
+      kind: "run-stage",
+      plan_approval: { status: "revise", feedback: "rename slugify to toSlug", next: `${OWN_NEXT} ${SINGLE.join(" ")}` },
     });
     writeOwnPlan(proj, "toSlug for titles");
     expect(asked(proj).plan_approval.targets?.[0].summary[0]).toBe("Builds: toSlug for titles");
