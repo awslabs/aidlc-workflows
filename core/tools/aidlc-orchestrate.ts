@@ -19283,6 +19283,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   }
   if (approvedNames.length > 1) changeNotices.push(approvedLine());
   const lastApproved = approvedTogether[approvedTogether.length - 1];
+  // A note the person gave with their approval is kept through the learnings
+  // step, under the stage they approved, which `surface` still takes after the
+  // approval moved the work on (stage-protocol-learnings.md, When to run).
+  // Whether their reply asked for one is the agent's reading.
+  const keepNote = flags.result === "approved" && learningsRitualRuns(ceremonyPolicyValues(scope, stateContent).learnings)
+    ? ` When their reply also asked you to keep something for next time, keep it under "${lastApproved}" now: run ` +
+      `\`${aidlcDispatcherInvocation(`learnings surface --slug ${lastApproved}`)}\`, persist it as ` +
+      "stage-protocol-learnings.md step 5 says, and say in one line where it went."
+    : "";
 
   // The transition committed. Emit a terminal `done` directive naming the move
   // — the loop driver reads this to know the report landed and the next `next`
@@ -19291,7 +19300,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     ? parkAfterApproval(pd, lastApproved, !isAutonomousConstructionGate(stateContent, node, pd))
     : null;
   if (parked) {
-    emit(withChangeNotices(parked, changeNotices));
+    emit(withChangeNotices({ ...parked, reason: `${parked.reason}${keepNote}` }, changeNotices));
     return;
   }
   const approvedState = flags.result === "approved" ? loadStateFileIfPresent(pd) : null;
@@ -19302,7 +19311,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         kind: "done",
         reason:
           `Committed ${committed.join(" + ")} for "${approvedTogether.join('", "')}" (scope: ${scope}). ` +
-          "State advanced; run next to continue.",
+          `State advanced; run next to continue.${keepNote}`,
         ...(progress ? { narration: progress } : {}),
         ...workflowContinues(pd),
       },

@@ -16,11 +16,14 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { reviewVerdictNote } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createOrchestrationTestProject,
   createTestProject,
+  FIXTURES_DIR,
+  resetAidlcEnv,
   runOrchestrateNext,
   seededAuditShard,
   seededRecordDir,
@@ -32,6 +35,9 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const LEARNINGS_TS = join(AIDLC_SRC, "tools", "aidlc-learnings.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const STATE_TS = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
+const SESSION = "01995000-7a11-7000-8000-00000000a655";
 const STAGE = "user-stories";
 const CHOICES = ["Yes, for this project", "Yes, for the team", "No"];
 
@@ -161,5 +167,69 @@ describe("t2655 a stage being revised keeps the step", () => {
     expect(note).toContain("or now when it has none");
     expect(note).toContain("ask the approval question.");
     expect(note).not.toContain("run the learnings ritual and ask its questions");
+  });
+});
+
+describe("t2655 a note given with the approval is kept", () => {
+  const GATE = "feasibility";
+  const WORDS = "approve, and from now on keep each requirement to one sentence";
+  const env = (): Record<string, string | undefined> => {
+    const e: Record<string, string | undefined> = {
+      ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_UNATTENDED: "0", AIDLC_SESSION_OVERRIDE: SESSION,
+    };
+    delete e.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete e.AIDLC_SESSION_OVERRIDE_SOURCE;
+    return e;
+  };
+  const tool = (path: string, args: string[], extra: Record<string, string> = {}) => {
+    const r = spawnSync(process.execPath, [path, ...args], {
+      encoding: "utf-8", env: { ...env(), ...extra }, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  };
+
+  test("the approval names the step that keeps it, and it is kept under the stage approved", () => {
+    resetAidlcEnv();
+    const pd = createOrchestrationTestProject();
+    projects.push(pd);
+    // The fixture confirms summaries; this stage asked none.
+    seedStateFile(pd, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    writeFileSync(seededStateFile(pd), readFileSync(seededStateFile(pd), "utf-8").replace(
+      "- **Change Control**: strict (from scope feature)",
+      "- **Change Control**: strict (from scope feature)\n- **Summary Confirmation**: off (set by you)",
+    ));
+    const state = (args: string[]) =>
+      tool(STATE_TS, [...args, "--project-dir", pd], { AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" });
+    expect(state(["checkbox", `${GATE}=in-progress`]).status).toBe(0);
+    expect(state(["gate-start", GATE]).status).toBe(0);
+    const typed = spawnSync(process.execPath, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: pd,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: WORDS }),
+      env: { ...env(), CLAUDE_PROJECT_DIR: pd, AIDLC_PROJECT_DIR: pd },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(typed.status, typed.stderr).toBe(0);
+
+    const approved = tool(ORCHESTRATE, ["report", "--stage", GATE, "--result", "approved", "--user-input", "Approve", "--project-dir", pd]);
+    const done = JSON.parse(approved.out.split("\n").find((line) => line.startsWith("{")) ?? "{}") as { kind?: string; reason?: string };
+    expect(done.kind, approved.out).toBe("done");
+    expect(done.reason).toContain(`learnings surface --slug ${GATE}`);
+
+    // The agent read their reply as a note to keep: it keeps it under the stage they approved.
+    const out = surfaced(pd, GATE);
+    expect(out.questions).toEqual([]);
+    const file = join(pd, String(out.selections_file));
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify({
+      stage_slug: GATE, space: out.space, intent: out.intent,
+      selections: [{ candidate_id: "n1", type: "learning", scope: "project", heading: "Corrections",
+        text: "Keep each requirement to one sentence.", source: "user_addition" }],
+    }));
+    const persisted = tool(LEARNINGS_TS, ["persist", "--slug", GATE, "--selections-json", file, "--project-dir", pd]);
+    expect(persisted.status, persisted.out).toBe(0);
+    const learned = readAuditShardEvents(pd).filter((row) => row.event === "RULE_LEARNED");
+    expect(learned.map((row) => [auditBlockField(row.block, "Stage"), auditBlockField(row.block, "Source")]))
+      .toEqual([[GATE, "user_addition"]]);
   });
 });
