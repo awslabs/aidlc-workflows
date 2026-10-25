@@ -533,6 +533,25 @@ describe("a skip the person asks for at the walk's first stage, while a Unit is 
     expect(`${at.kind} ${at.stage}/${at.unit}`, JSON.stringify(at)).toBe("run-stage nfr-requirements/beta");
   });
 
+  test("every Unit from here, then asked back as the next stage starts: it is back on the plan and alpha runs it next", () => {
+    const proj = walk(["alpha", "beta"], false);
+    next(proj, ["--skip", "functional-design"]);
+    expect(runNamed(proj, FIRST_EVERY_UNIT).status).toBe(0);
+    expect(readFileSync(stateFile(proj), "utf-8")).toContain("- **Current Stage**: nfr-requirements");
+    const step = next(proj, ["--add", "functional-design"]);
+    expect(String(step.message), JSON.stringify(step)).toContain("Put Functional Design back on the plan.");
+    const added = run(proj, "aidlc.ts", ["engine", "recompose", "--add", "functional-design"]);
+    expect(added.status, added.out).toBe(0);
+    expect(readFileSync(stateFile(proj), "utf-8")).toContain("- [ ] functional-design \u2014 EXECUTE");
+    const route = next(proj);
+    const jump = /`[^`]*aidlc-jump\.ts (execute --target functional-design --direction backward[^`]*)`/.exec(String(route.message))?.[1];
+    expect(jump, JSON.stringify(route)).toBeDefined();
+    const jumped = run(proj, "aidlc-jump.ts", String(jump).split(" "));
+    expect(jumped.status, jumped.out).toBe(0);
+    const at = next(proj);
+    expect(`${at.kind} ${at.stage}/${at.unit}`, JSON.stringify(at)).toBe("run-stage functional-design/alpha");
+  });
+
   test("every Unit from here in the person's own words: the next stage's question is not handed them", () => {
     const proj = walk(["alpha", "beta"], false);
     says(proj, "skip functional design, we have the design already");

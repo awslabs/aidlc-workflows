@@ -5,8 +5,8 @@
 // Reverse Engineering left out at the plan pick, the session that found it, runs with the redo while Construction has
 // not started; another stage runs with the backward jump while the work has only just entered the stage after it, and
 // the Code Generation plan-approval guard lets that one move through. Where the work no longer goes back to it, the
-// add is refused with the way to run it on its own, as before. The line never says a skipped stage is already on the
-// plan.
+// add is refused with the way to run it on its own, as before. Stages skipped one after another and asked back together
+// come back together. The line never says a stage skipped where it stood is already on the plan.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
