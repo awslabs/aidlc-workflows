@@ -134,6 +134,32 @@ describe("structured guard recovery operations", () => {
     expect(ask.remedies.some((remedy) => remedy.op === "reconfirm-summary")).toBe(true);
   });
 
+  // With no questions file for some Units their answers were never summarized,
+  // so the way on offers a summary; a summary refusal over answers they gave
+  // keeps offering to confirm that summary again.
+  test("the summary way on names a summary of the answers only when the questions file exists", () => {
+    const summaryWayOn = (code: string) => guardRecoveryAskForRefusal(evaluateGuardRefusal({
+      code,
+      blockedAction: "complete",
+      stage: "functional-design",
+      unit: "alpha",
+      stateContent: "# State\n- [-] functional-design \u2014 EXECUTE\n",
+      invariant: "Completion requires the person's summary confirmation.",
+      userMessage: "The summary is not confirmed.",
+      attempt: { recovery: "spent", summaryCoverage: "missing", reviewCoverage: "missing", sourceCoverage: "current" },
+      humanAuthority: { freshTurn: true, unattended: false },
+    }))!.remedies.find((remedy) => remedy.op === "reconfirm-summary")!;
+    for (const code of ["SUMMARY_UNIT_EVIDENCE_MISSING"]) {
+      const remedy = summaryWayOn(code);
+      expect(remedy.label, code).toBe("Confirm a summary");
+      expect(remedy.description, code).toMatch(
+        /^I'll show you a summary of .+ for alpha to confirm, then save its documents again from it\.$/);
+    }
+    const answered = summaryWayOn("SUMMARY_RECEIPT_MISSING");
+    expect(answered.label).toBe("Confirm the summary again");
+    expect(answered.description).toContain("the current summary of your answers");
+  });
+
   test("native recovery admission is limited to the exact abort operation", () => {
     const args = [
       "engine", "bolt", "abort", "--name", "alpha", "--slug", "alpha",

@@ -434,7 +434,8 @@ export const GUARD_REMEDY_WORDING = {
   "produce-stage-output": null,
   "ask-stage-questions": null,
   "repair-source-boundary": null,
-  // With no questions asked yet there is no summary to show again.
+  // With no questions asked yet there is no summary to show again; with no
+  // questions file for some Units, their answers were never summarized.
   "reconfirm-summary": (c) =>
     c.code === "SUMMARY_QUESTIONS_MISSING"
       ? {
@@ -442,6 +443,11 @@ export const GUARD_REMEDY_WORDING = {
           description:
             `I'll ask you the questions for ${c.target}, show you a summary of your answers to confirm, ` +
             "then save its documents again from them.",
+        }
+      : c.code === "SUMMARY_UNIT_EVIDENCE_MISSING"
+      ? {
+          label: "Confirm a summary",
+          description: `I'll show you a summary of ${c.target} to confirm, then save its documents again from it.`,
         }
       : {
           label: "Confirm the summary again",

@@ -189,6 +189,10 @@ import {
   summaryOutputDescendsFrom,
   auditBlockField,
   CONSTRUCTION_POLICY_CHECKPOINT,
+  protectedQuestionsElsewhere,
+  readProtectedQuestion,
+  SUMMARY_CONFIRMATION_CHECKPOINT,
+  summaryConfirmationCommands,
   VERIFICATION_COMMAND_CHECKPOINT,
   validConstructionPolicyChange,
   swarmNeedsStageMajor,
@@ -3836,11 +3840,22 @@ function openQuestionAnswer(
   const flags = checkpoint === VERIFICATION_COMMAND_CHECKPOINT
     ? " --checkpoint verification-command --command-file verification-command.txt"
     : policy ? ` --checkpoint construction-policy --field ${shellArg(field)} --value ${shellArg(value)}` : null;
+  // The summary confirmation is recorded against its questions file, whose
+  // `[Answer]:` tag holds the choice first (stage-protocol-summary.md).
+  const summaryFile = checkpoint === SUMMARY_CONFIRMATION_CHECKPOINT ? auditBlockField(block, "Questions File") : null;
   return gate
     ? `${numbered}answer it through that checkpoint, never \`log answer\` (which would not approve it): ` +
       `run \`${gate} --action approve${target}\` or \`${gate} --action reject${target}\`` +
       `${target ? "" : " for that Unit or batch"}, passing the person's reply unchanged as \`--user-input\` ` +
       "(and their feedback as `--reason` when they ask for changes)"
+    : summaryFile !== null
+      ? `${options.length > 0 ? numberedChoices(options) : ""}write the choice they made on the summary's ` +
+        `\`[Answer]:\` line in ${summaryFile}, then record it with \`${summaryConfirmationCommands({
+          stage, unit, questionsFile: summaryFile,
+          single: auditBlockField(block, "Workflow")?.startsWith("single-stage:") === true,
+          // What they asked to change rides after Request changes (aidlc-log.ts keeps it as Feedback).
+          details: options.length === 2 ? `<${options[0]}, or ${options[1]}: what they asked to change>` : "<their choice>",
+        }).answer}\``
     : flags !== null
       ? `${numbered}record the choice they made with ` +
         `\`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)}${flags} ` +
@@ -3925,16 +3940,26 @@ function recoveryQuestionAnsweredByWordsDirective(marker: ActiveDirectiveMarker)
   );
 }
 
+// The checkpoint questions a bare re-entry shows again from their row
+// (openQuestionAgainDirective).
+const SHOWN_AGAIN_CHECKPOINTS: ReadonlySet<string> = new Set([
+  VERIFICATION_COMMAND_CHECKPOINT, CONSTRUCTION_POLICY_CHECKPOINT, SUMMARY_CONFIRMATION_CHECKPOINT,
+]);
+
 // A bare re-entry (`/aidlc` alone, or `--resume`) while the current stage has
-// a question the agent asked in chat that no step of its own asks again (one
-// logged with no checkpoint, or a Construction policy question a record
-// carries): the agent shows it again from its row and waits, so the person
-// keeps their place. The text goes out verbatim: a question box pairs the
-// reply with a protected question by that text or its two choices. Null for
-// any other question; its own step asks it again with what it asks about. So
-// is a question the stage's questions file still holds (a guided batch logs
-// only its question numbers): the stage's step asks it from the file, with any
-// reply kept for it (withKeptReplies). Unreadable is left to that step too.
+// a question the agent asked in chat that the step `next` returns would not
+// name (one logged with no checkpoint, the verification command, a
+// Construction policy question a record carries, the summary confirmation):
+// the agent shows it again from its row and waits, so the person keeps their
+// place. The verification command's own checkpoint step asks for a command
+// and never names the one asked, and a stage's step names only its questions
+// file, so neither asks it again. The text goes out verbatim: a question box
+// pairs the reply with a protected question by that text or its two choices.
+// Null for a Unit or batch checkpoint's approval, which its own step asks
+// again. So is a question the stage's questions file still holds (a guided
+// batch logs only its question numbers): the stage's step asks it from the
+// file, with any reply kept for it (withKeptReplies). Unreadable is left to
+// that step too.
 function openQuestionAgainDirective(
   projectDir: string,
   { stage, block, alone }: { stage: string; block: string; alone: boolean },
@@ -3944,27 +3969,39 @@ function openQuestionAgainDirective(
   afterAnswer?: string,
 ): PrintDirective | null {
   const checkpoint = auditBlockField(block, "Checkpoint");
-  if (checkpoint !== null && checkpoint !== CONSTRUCTION_POLICY_CHECKPOINT) return null;
-  try {
-    const phase = nodeForSlug(stage)?.phase ?? "";
-    const construction = join(docsRoot(projectDir), "construction");
-    const unitDirs = phase === "construction" && existsSync(construction)
-      ? readdirSync(construction).map((unit) => join(construction, unit, stage))
-      : [];
-    if ([stageDir(projectDir, phase, stage), ...unitDirs].some(hasBlankAnswer)) return null;
-  } catch {
-    return null;
+  if (checkpoint !== null && !SHOWN_AGAIN_CHECKPOINTS.has(checkpoint)) return null;
+  // Only a question logged with no checkpoint can be one the file holds.
+  if (checkpoint === null) {
+    try {
+      const phase = nodeForSlug(stage)?.phase ?? "";
+      const construction = join(docsRoot(projectDir), "construction");
+      const unitDirs = phase === "construction" && existsSync(construction)
+        ? readdirSync(construction).map((unit) => join(construction, unit, stage))
+        : [];
+      if ([stageDir(projectDir, phase, stage), ...unitDirs].some(hasBlankAnswer)) return null;
+    } catch {
+      return null;
+    }
   }
   const decision = auditBlockField(block, "Decision");
   if (!decision) return null;
   const choices = questionOptions(block);
+  const listed = choices.length > 0 ? `, with the choices ${choices.map((choice) => JSON.stringify(choice)).join(", ")}` : "";
+  const command = checkpoint === VERIFICATION_COMMAND_CHECKPOINT ? auditBlockField(block, "Command Label") : null;
+  const summaryFile = checkpoint === SUMMARY_CONFIRMATION_CHECKPOINT ? auditBlockField(block, "Questions File") : null;
+  const again = afterAnswer === undefined ? " again" : "";
+  // The summary the person confirms is read from the file it was asked from.
+  const shown = summaryFile !== null
+    ? `Show it to them${again}, with its choices, and end your turn: the consolidated summary of their answers in ` +
+      `${summaryFile}, as unordered bullets, then ${JSON.stringify(decision)}${listed}. It is on record already, so do ` +
+      "not log it again."
+    : `Show it to them${again}, word for word as it was asked, with its choices, and end your turn: ` +
+      `${JSON.stringify(decision)}${command !== null ? `, followed by the command it asks about, ${JSON.stringify(command)}, in a code span` : ""}${listed}.`;
   // Their reply is not in yet: whether it will be kept is read from the turn that ran this.
   const answer = openQuestionAnswer(stage, block, personsWordsKept(projectDir), alone, stateContent);
+  const register = protectedQuestionHeldHere(projectDir, block) ? "" : registerAgainStep(stage, block, decision, choices);
   return printDirective(
-    `Stage "${stage}" has a question you asked that the person has not answered yet. Show it to them` +
-      `${afterAnswer === undefined ? " again" : ""}, word for word as it was asked, with its choices, and end your turn: ` +
-      `${JSON.stringify(decision)}` +
-      `${choices.length > 0 ? `, with the choices ${choices.map((choice) => JSON.stringify(choice)).join(", ")}` : ""}. ` +
+    `Stage "${stage}" has a question you asked that the person has not answered yet. ${register}${shown} ` +
       `When they answer it, ${answer}, then ` +
       (afterAnswer ??
         `carry on with "${stage}" from where you asked and run bare \`${aidlcToolInvocation("orchestrate")} next\` ` +
@@ -4023,6 +4060,39 @@ function reuseSkipWaitsOnAnswer(projectDir: string, stage: string, stateContent:
       `(\`${aidlcToolInvocation("log")} answer\`, which pairs a question logged after their reply with it); only if ` +
       `they have not seen it, show it to them and end your turn. Then, ${wayOn}`,
   );
+}
+
+// A question that takes the person's own reply (the verification command, a
+// Construction policy question) is held for that reply under
+// aidlc/.aidlc-sessions/, which is not committed: in a teammate's fresh clone
+// no chat holds it, so their answer would be refused and they would be asked
+// again. Any other question, or a store that cannot be read, needs no hold.
+function protectedQuestionHeldHere(projectDir: string, block: string): boolean {
+  const checkpoint = auditBlockField(block, "Checkpoint");
+  if (checkpoint !== VERIFICATION_COMMAND_CHECKPOINT && checkpoint !== CONSTRUCTION_POLICY_CHECKPOINT) return true;
+  try {
+    const own = engineSessionId === undefined ? null : readProtectedQuestion(projectDir, engineSessionId);
+    return [...(own === null ? [] : [own]), ...protectedQuestionsElsewhere(projectDir, engineSessionId ?? "")].some((held) =>
+      checkpoint === VERIFICATION_COMMAND_CHECKPOINT
+        ? held.kind === "verification-command" && held.target.commandSha256 === auditBlockField(block, "Command SHA-256")
+        : held.kind === "construction-policy" && held.target.field === auditBlockField(block, "Field") &&
+          held.target.value === auditBlockField(block, "Value"));
+  } catch {
+    return true;
+  }
+}
+
+// The question's own command, from its row, that holds it for the reply in
+// this chat; the verification command stays in its file, never on a shell line.
+function registerAgainStep(stage: string, block: string, decision: string, choices: string[]): string {
+  const flags = auditBlockField(block, "Checkpoint") === VERIFICATION_COMMAND_CHECKPOINT
+    ? "--checkpoint verification-command --command-file verification-command.txt"
+    : `--checkpoint construction-policy --field ${shellArg(auditBlockField(block, "Field") ?? "")} ` +
+      `--value ${shellArg(auditBlockField(block, "Value") ?? "")}`;
+  return "Nothing in this checkout holds it for their reply (aidlc/.aidlc-sessions/ is not shared), so first register " +
+    "it again with " +
+    `\`${aidlcToolInvocation("log")} decision --stage ${shellArg(stage)} ${flags} --decision ${shellArg(decision)} ` +
+    `--options ${shellArg(choices.join(","))}\`. `;
 }
 
 // Prose while the engine's code plan question is open: the conductor reads
@@ -11507,8 +11577,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
   }
-  // A bare re-entry while a question with no step of its own is open: it is
-  // shown again, and the turn ends at it (openQuestionAgainDirective).
+  // A bare re-entry while the stage has a question open that the next step
+  // would not name: it is shown again, and the turn ends at it
+  // (openQuestionAgainDirective).
   if (
     flags.resume && !flags.intent && !flags.stage && !flags.phase && !flags.single && question === undefined &&
     !isTeamUnitOwnership(stateContent)

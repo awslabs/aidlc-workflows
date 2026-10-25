@@ -1,10 +1,9 @@
 // covers: file:tests/harness/aidlc-answers-corpus.ts
 //
-// What the live answers check can set up in a fresh chat, the way a person meets it. A bare `/aidlc` shows again a
-// question the agent asked in chat that has no step of its own. Every reply to a Construction policy question is driven
-// live; a stage question and learnings keep to their replies typed with `/aidlc` while the drive cannot judge the
-// agent's words after a chat reply. The verification command comes back at its own checkpoint step, which the fixture
-// does not reach, so only its replies typed with `/aidlc` are driven; its answer typed in a fresh chat is recorded there.
+// What the live answers check can set up in a fresh chat, the way a person meets it. A bare `/aidlc` shows again the
+// question the agent asked in chat. Every reply to the verification command and to a Construction policy question is
+// driven live, and an answer typed in a fresh chat is recorded there; a stage question and learnings keep to their
+// replies typed with `/aidlc` while the drive cannot judge the agent's words after a chat reply.
 // Guard recovery's fixture cannot be met, so it is not driven live at all. The open work carrying on after a routing
 // reply is counted from that reply, not from the rows the chat writes as it opens. And a gate a blocking sensor refused
 // is met as a run leaves it, the summary confirmed and the review READY, so the override the person picks opens it.
@@ -45,14 +44,15 @@ function project(): string {
 }
 
 describe("the live answers check in a fresh chat", () => {
-  test("a question asked in chat is driven live only by its /aidlc replies, a Construction policy question by every reply, and guard recovery not at all", () => {
+  test("a question asked in chat is driven live only by its /aidlc replies, the verification command and a Construction policy question by every reply, and guard recovery not at all", () => {
     const live = (question: string) => ANSWERS.filter((item) => item.question === question && liveReply(item)).map((item) => item.via);
     for (const question of ASKED_IN_CHAT) expect(live(question).every((via) => via === "aidlc"), question).toBe(true);
-    expect(live("verification-command")).toEqual(["aidlc", "aidlc"]);
     expect(live("stage-question")).toEqual(["aidlc"]);
     expect(live("learnings")).toEqual([]);
-    // A bare /aidlc shows it again, so every reply to it is driven.
-    expect(live("construction-policy")).toHaveLength(ANSWERS.filter((item) => item.question === "construction-policy").length);
+    // A bare /aidlc shows them again, so every reply to them is driven.
+    for (const question of ["verification-command", "construction-policy"]) {
+      expect(live(question), question).toHaveLength(ANSWERS.filter((item) => item.question === question).length);
+    }
     for (const question of NOT_LIVE) expect(live(question), question).toEqual([]);
     // Every other question keeps every reply.
     const others = ANSWERS.filter((item) => !ASKED_IN_CHAT.has(item.question) && !NOT_LIVE.has(item.question));
