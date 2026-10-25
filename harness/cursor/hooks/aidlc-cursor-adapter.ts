@@ -455,6 +455,21 @@ export async function run(
       renameSync(pendingWitness, witness);
       writeFileSync(pending, JSON.stringify(record), "utf-8");
       renameSync(pending, path);
+      // The record that this helper was sent, which its completion closes:
+      // Cursor runs no dispatch hook of AI-DLC's, so it is forwarded here, once
+      // the Task is let through. Evidence only: it never stops the Task.
+      try {
+        runCore(
+          "aidlc-log-subagent.ts",
+          JSON.stringify({
+            hook_event_name: "SubagentStart",
+            agent_type: subagentType,
+            ...(sessionId ? { session_id: sessionId } : {}),
+          }),
+        );
+      } catch {
+        // The verdict reads a missing record as nothing sent: no line.
+      }
       return true;
     } catch {
       removeLedger(pending);

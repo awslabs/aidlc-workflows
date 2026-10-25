@@ -112,6 +112,14 @@ function followParts(proj: string, tools: string, from: Emitted): Emitted {
   return directive;
 }
 
+// The agent's record of the choice it read from the person's reply.
+function recordApproval(proj: string, tools: string): void {
+  tool(proj, tools, [
+    "aidlc-log.ts", "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
+    "--project-dir", proj,
+  ]);
+}
+
 function reply(proj: string, prompt: string): void {
   tool(proj, join(AIDLC_SRC, "tools"), ["aidlc.ts", "engine", "hook", "record-human-turn"], JSON.stringify({
     hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt,
@@ -177,10 +185,12 @@ describe("one approval starts the build however the rules travel", () => {
     const ask = engine(proj, kiro, ["next"]);
     expect(ask.kind, JSON.stringify(ask)).toBe("ask");
     expect(ask.ask_type).toBe("plan-approval");
-    // The person types "1" in Kiro CLI chat; its userPromptSubmit hook reads it.
+    // The person types "1" in Kiro CLI chat; its userPromptSubmit hook keeps it,
+    // and the agent records the choice it read.
     tool(proj, kiro, ["aidlc.ts", "engine", "adapter", "kiro", "verb-intercept"], JSON.stringify({
       hook_event_name: "userPromptSubmit", cwd: proj, session_id: SESSION, prompt: "1",
     }));
+    recordApproval(proj, kiro);
     expect(answer(proj, null)).toBe("[Answer]: A. Approve Plan");
 
     const part = engine(proj, kiro, ["next"]);
@@ -244,6 +254,7 @@ describe("one approval starts the build however the rules travel", () => {
     expect(ask.kind, JSON.stringify(ask)).toBe("ask");
     expect(ask.ask_type).toBe("plan-approval");
     reply(proj, "1");
+    recordApproval(proj, tools);
     expect(answer(proj, unit)).toBe("[Answer]: A. Approve Plan");
 
     const first = engine(proj, tools, ["next"]);
@@ -275,6 +286,7 @@ describe("one approval starts the build however the rules travel", () => {
     writePlan(proj, null);
     expect(followParts(proj, tools, engine(proj, tools, ["next"])).kind).toBe("ask");
     reply(proj, "1");
+    recordApproval(proj, tools);
     writePlan(proj, null, "- [ ] Step 2: add a fast path\n");
     const first = engine(proj, tools, ["next"]);
     expect(first, JSON.stringify(first)).toMatchObject({ kind: "load-steering", part: 1 });

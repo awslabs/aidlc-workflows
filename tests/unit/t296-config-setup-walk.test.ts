@@ -762,7 +762,9 @@ describe("t296 first-run config setup walk", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("non-TTY human output is byte-identical to the pre-walk completion", () => {
-    const path = project("aidlc-t296-nontty-snapshot-");
+    // A short name: on Windows a project folder 75 characters deep gets
+    // config's own warning that it is too deep for AI-DLC's records.
+    const path = project("aidlc-t296-nontty-");
     const result = run(
       scaffoldArgs(path),
       path,

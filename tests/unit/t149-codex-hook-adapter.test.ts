@@ -29,6 +29,8 @@
 //   record-human-turn -> a question box that ran out ({"answers":{}}) records
 //                       QUESTION_UNANSWERED, which spends the turn before it,
 //                       and tells the agent to ask again.
+//   record-human-turn -> a box with one question left blank is still the
+//                       person's turn, and their other picks are on record.
 //
 // WHY SUBPROCESS. The adapter IS a subprocess shim — in-process unit testing
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
@@ -40,6 +42,7 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { listMessages } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
+import { personsWordsText } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -63,7 +66,7 @@ import {
   humanActedSinceGate,
   humanTurnMarkerPath,
   humanTurnState,
-  personsGateFeedback,
+  personsGateReply,
   readSessionBinding,
   sessionsDir,
   setActiveIntentCursor,
@@ -408,6 +411,34 @@ describe("t149 Codex structured request_user_input presence", () => {
     }
   });
 
+  // Codex's box lets the person move past a question and submit with it
+  // unanswered: that question comes back as an empty list beside their other
+  // picks (captured on Codex CLI 0.164.0).
+  test("a box with one question left blank is the person's turn, and their pick is on record", () => {
+    const dir = scratchProject(true);
+    try {
+      const payload = {
+        ...structuredSelectionPayload(dir, JSON.stringify({
+          answers: { colour: { answers: [] }, fruit: { answers: ["Pear"] } },
+        }), "blank-question-turn"),
+        tool_input: {
+          questions: [
+            { header: "Colour", id: "colour", question: "Favourite colour?", options: [{ label: "Red", description: "Choose Red." }, { label: "Blue", description: "Choose Blue." }] },
+            { header: "Fruit", id: "fruit", question: "Favourite fruit?", options: [{ label: "Apple", description: "Choose Apple." }, { label: "Pear", description: "Choose Pear." }] },
+          ],
+        },
+      };
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(1);
+      const replied = readAudit(dir).split("\n## ").filter((block) => block.includes("**Event**: QUESTION_REPLIED"));
+      expect(replied).toHaveLength(1);
+      expect(replied[0]).toContain("**Question**: Favourite fruit?");
+      expect(replied[0]).toContain("**Reply**: Pear");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("substantive Codex answer arrays mint, including opaque question IDs and cancellation words in prose", () => {
     for (const [index, answer] of ["Approve", "cancel the standing order via cron"].entries()) {
       const dir = scratchProject(true);
@@ -640,7 +671,7 @@ describe("t149 Codex typed guard switch", () => {
       expect(typed.stdout).not.toContain("never run a setter for it");
       const [record] = listMessages(dir);
       expect(record.settings).toEqual([{ key: "guard.review-freeze", value: "off" }]);
-      expect(record.words).toBe("fix the parser");
+      expect(record.words && personsWordsText(record.words)).toBe("fix the parser");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -734,10 +765,10 @@ describe("t149 Codex subagent prompts are not the person's turn", () => {
       const gate = { stage: "requirements-analysis", acceptAsIs: false };
       appendEvent(dir, "STAGE_AWAITING_APPROVAL", gate.stage);
       prompt(dir, BRIEF, true);
-      expect(personsGateFeedback(dir, ROOT_SESSION, gate)).toBeNull();
+      expect(personsGateReply(dir, ROOT_SESSION, gate.stage).words).toBeNull();
       prompt(dir, "Please add a p99 latency budget of 200 ms.");
       prompt(dir, BRIEF, true);
-      expect(personsGateFeedback(dir, ROOT_SESSION, gate)).toBe("Please add a p99 latency budget of 200 ms.");
+      expect(personsGateReply(dir, ROOT_SESSION, gate.stage).words).toBe("Please add a p99 latency budget of 200 ms.");
       expect(keptWords(dir)).not.toContain("t149-brief-marker");
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -225,6 +225,29 @@ describe("t272 §3 retired framework-voice phrases stay out of user-visible pros
     walk(stagesRoot);
     expect(offenders).toEqual([]);
   });
+
+  // A live run read "This is a lead-only run, so the developer both scans and
+  // synthesizes", "the sole, final link" and "the developer is the final link"
+  // to the person, and offered "greenfield lead-only run" as a practice to
+  // keep: the words came from the stage and protocol text the agent reads. The
+  // same steps now say the lead works alone and name the last link.
+  test("no stage, protocol, agent or knowledge file names a lead-only run or a final link", () => {
+    const { readdirSync, statSync } = require("node:fs") as typeof import("node:fs");
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir)) {
+        const abs = join(dir, entry);
+        if (statSync(abs).isDirectory()) {
+          walk(abs);
+        } else if (entry.endsWith(".md")) {
+          const hits = readFileSync(abs, "utf-8").match(/lead-only|sole and final|final link/gi) ?? [];
+          if (hits.length > 0) offenders.push(`${abs.slice(REPO_ROOT.length + 1)}: ${hits.join(", ")}`);
+        }
+      }
+    };
+    for (const root of ["aidlc-common", "knowledge", "agents"]) walk(join(REPO_ROOT, "core", root));
+    expect(offenders).toEqual([]);
+  });
 });
 
 // =========================================================================

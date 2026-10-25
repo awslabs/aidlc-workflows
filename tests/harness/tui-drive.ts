@@ -825,6 +825,99 @@ export async function declineOwnedModelUpgrade(
   return true;
 }
 
+const KIRO_V3_OFFER_TITLE_RE = /You're using Kiro CLI V2\.\s+Switch to V3 today\./;
+const KIRO_V3_OFFER_OPTIONS = ["Switch to V3 and upgrade my configs", "Remind me later", "Don't ask again"];
+const KIRO_V3_REMIND_LATER = 1;
+
+/**
+ * The key that moves Kiro CLI's V3 offer (2.33.1, at launch) to "Remind me later", or takes it.
+ * Its caret is U+276F, or an ASCII `>` on Windows Server.
+ */
+export function kiroV3OfferNavigation(screen: string): "Up" | "Down" | "Enter" | null {
+  // The offer paints before the chat; an agent's reply quoting it sits above the input footer.
+  if (!KIRO_V3_OFFER_TITLE_RE.test(screen) || /ask a question or describe a task/.test(screen)) return null;
+  const options = screen.split(/\r?\n/).flatMap((line) => {
+    const match = /^\s*([❯>]\s*)?(Switch to V3 and upgrade my configs|Remind me later|Don't ask again)\s*$/.exec(line);
+    return match ? [{ selected: !!match[1], label: match[2] }] : [];
+  });
+  if (
+    options.map((option) => option.label).join("\0") !== KIRO_V3_OFFER_OPTIONS.join("\0") ||
+    options.filter((option) => option.selected).length !== 1
+  ) return null;
+  const selected = options.findIndex((option) => option.selected);
+  return selected === KIRO_V3_REMIND_LATER ? "Enter" : KIRO_V3_REMIND_LATER > selected ? "Down" : "Up";
+}
+
+/**
+ * Answer Kiro CLI's V3 offer "Remind me later", the answer the live legs give: it writes only
+ * Kiro's snooze date (v3Prompt.snoozeUntil in its data.sqlite3), none of its
+ * configs, so no fixture gate applies; the release journey's project is not
+ * one. The other two answers change the machine's Kiro and are never sent:
+ * Enter goes only on a settled screen with "Remind me later" selected, and
+ * only one key is ever on its way, so the painted caret is Kiro's own. The
+ * answer returns only once the offer is off the screen, so no later poll or
+ * wait reads the answered offer as a new one; no one-attempt marker, since an
+ * offer a later launch paints is answered again. The Enter goes into the drive's record of the person's turns
+ * as one more empty turn at its start, the same as the trust prompt's Enter.
+ */
+export async function remindKiroV3OfferLater(
+  backend: Pick<Backend, "capture" | "send">,
+  session: string,
+  screen: string,
+  timing: FixtureMenuTiming = {},
+): Promise<boolean> {
+  if (!kiroV3OfferNavigation(screen)) return false;
+  const now = timing.now ?? Date.now;
+  const pause = timing.sleep ?? sleep;
+  const deadline = now() + remainingOperationTimeoutMs(LIVE_STARTUP_TIMEOUT_MS, { deadlineMs: timing.deadlineMs, phase: "Kiro V3 offer" })!;
+  let previous = "";
+  let stableSince = now();
+  const moves: string[] = [];
+  while (now() < deadline) {
+    screen = await backend.capture(session, false, "physical");
+    const navigation = kiroV3OfferNavigation(screen);
+    if (!navigation) return false;
+    if (screen !== previous) stableSince = now();
+    previous = screen;
+    if (now() - stableSince < DEFAULT_STABLE_MS) {
+      await pause(POLL_INTERVAL_MS);
+      continue;
+    }
+    if (navigation === "Enter") {
+      const answered = screen;
+      await backend.send(session, "Enter", false, true);
+      // Kiro keeps the answered offer painted while it starts its chat, whose
+      // first screen takes a second Enter as "No, exit".
+      while (now() < deadline) {
+        await pause(POLL_INTERVAL_MS);
+        screen = await backend.capture(session, false, "physical");
+        if (!kiroV3OfferNavigation(screen)) {
+          writeTuiTrace(session, "kiro_v3_offer_remind_later", { keys: [...moves, "Enter"], screen: answered });
+          return true;
+        }
+      }
+      throw new Error(`Kiro did not take Remind me later on its V3 offer; refusing another Enter\n---- last pane ----\n${screen}`);
+    }
+    if (moves.length === 2) break;
+    moves.push(navigation);
+    await backend.send(session, navigation, false, true);
+    // A frame painted before this key arrived still shows the old caret; a key
+    // that never paints may be late rather than lost, so it is not sent again.
+    const paintBy = Math.min(now() + ANSWER_REPAINT_WAIT_MS, deadline);
+    let painted: ReturnType<typeof kiroV3OfferNavigation> = navigation;
+    while (painted === navigation && now() < paintBy) {
+      await pause(POLL_INTERVAL_MS);
+      screen = await backend.capture(session, false, "physical");
+      painted = kiroV3OfferNavigation(screen);
+    }
+    if (painted === navigation) {
+      throw new Error(`Kiro did not paint ${navigation} on its V3 offer; refusing another key\n---- last pane ----\n${screen}`);
+    }
+    previous = "";
+  }
+  throw new Error(`Kiro's V3 offer never settled on Remind me later; refusing Enter\n---- last pane ----\n${screen}`);
+}
+
 type TuiPatternView = TuiTextLayout | "auto";
 
 function patternView(a: Args): TuiPatternView {
@@ -886,7 +979,10 @@ async function cmdWait(backend: Backend, a: Args): Promise<void> {
     }
     lastViews = views;
     const screen = views.physical;
-    if (await declineOwnedModelUpgrade(backend, session, screen, deadline)) {
+    if (
+      await declineOwnedModelUpgrade(backend, session, screen, deadline) ||
+      await remindKiroV3OfferLater(backend, session, screen, { deadlineMs: deadline })
+    ) {
       prev = "";
       stableSince = 0;
       continue;

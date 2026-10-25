@@ -97,12 +97,16 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
     expect(protocolHas("workspace-scaffold, workspace-detection, state-init")).toBe(true);
   });
 
-  test("§1: Construction/Operation restricted to 2-option approval", () => {
-    expect(protocolHas("CONSTRUCTION and OPERATION stages: Strictly 2-option only")).toBe(true);
+  // The engine reads no option out of the person's reply, so no rule fixes
+  // how many choices a gate shows or in which order: the agent offers what fits.
+  test("§1: no rule caps or orders the gate's options", () => {
+    expect(protocolHas("NO EMERGENT BEHAVIOR RULE")).toBe(false);
+    expect(protocolHas("Strictly 2-option only")).toBe(false);
   });
 
-  test("§1: Ideation/Inception may include a 3rd option", () => {
-    expect(protocolHas("IDEATION and INCEPTION stages may include a 3rd option")).toBe(true);
+  test("§1: Ideation/Inception may offer approve-and-add for a skipped stage", () => {
+    expect(protocolHas("IDEATION and INCEPTION stages may offer to add a previously skipped stage")).toBe(true);
+    expect(protocolHas("label: Approve, and add [Skipped Stage] next")).toBe(true);
   });
 
   test("§1: revision escape hatch is offered from the gate reply, never a count kept in the chat", () => {
@@ -135,6 +139,13 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
       expect(protocolMatches(re)).toBe(true);
     });
   }
+
+  // The engine holds the work's depth and test strategy; an agent left to fill
+  // in a level said Standard for Minimal work.
+  test("§2: the first completion message says the levels the run-stage carries, none left to fill in", () => {
+    expect(protocolMatches(/FIRST completion message[^\n]*the levels the run-stage carries as `depth` and `test_strategy`/)).toBe(true);
+    expect(protocolHas("[Minimal/Standard/Comprehensive]")).toBe(false);
+  });
 
   // =========================================================================
   // Section 2 - Progress/depth tables list every scope. `| <scope>` is a

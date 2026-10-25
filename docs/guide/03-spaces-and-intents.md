@@ -108,6 +108,10 @@ intent owns a row in the space's `intents.json` registry — `{uuid, slug, dirNa
 scope, repos, status}` — and a **record dir** holding that run's state, audit
 trail, and artifacts. The `uuid` (a UUIDv7) is the canonical, collision-proof
 identity; `dirName` records the human-readable record-dir name verbatim.
+A hand edit that leaves a trailing comma, a comment or a BOM still reads as every
+row. A list nothing can read is never written over: the next new piece of work
+keeps its bytes as `intents.json.unreadable-<UTC time>` beside the new list, and
+you are told once.
 
 The row's `status` is the intent's lifecycle: `in-flight` from creation,
 `complete` once the last in-scope gate closes, or `archived` when you retire
@@ -150,15 +154,16 @@ before starting a second intent alongside the first:
  > 1. Part of the active work
       Continue the current workflow
    2. Separate new piece of work
-      Yes, set it up alongside the current one without changing it; you pick its plan next
+      Set it up alongside the current one as "bugfix" work (6 stages, 6 approval gates) without changing it
    3. Reshape the active work
       Change how the remaining plan is shaped
    4. Type something.
    5. Chat about this
 ```
 
-- Choose **2** and you pick the new work's plan next (here the agent proposed
-  `bugfix`); then AI-DLC creates a second intent beside the first. In that run
+- Choose **2** and AI-DLC creates a second intent beside the first, on the plan
+  that option names, with its size (here the agent proposed `bugfix`). When the
+  option names no plan, you pick the new work's plan next. In that run
   the agent said: "I've set up the export timeout fix as a separate piece of
   work using the bug-fix plan, and it's waiting at Requirements Analysis. Your
   inventory API work is unchanged at the feasibility stage." The first intent's
@@ -187,8 +192,12 @@ spent on a plan you did not choose.
 So does a scope that differs from the active intent's, typed with a
 description (`/aidlc --scope express "add a health endpoint"`), with new work
 first: choose **1** and the description starts new express work, the active
-intent kept as it is, or **2** and the active intent changes to express. A
-scope with no description changes the active intent's scope without asking.
+intent kept as it is, or **2** and the active intent changes to express.
+`--scope` with no description (`/aidlc --scope express`) changes the active
+intent's scope without asking. Another plan's name typed alone
+(`/aidlc workshop`) may mean new work on that plan or the active intent moved
+to it: the assistant reads which you meant and asks you once when it cannot
+tell, and new work on it asks what the work is for before anything starts.
 
 AI-DLC never creates a second intent without asking. If a prompt is genuinely a
 follow-up to the current work — answering a gate, correcting a requirement — it
@@ -322,8 +331,8 @@ creation times, and parent PIDs identify the owning session within the same
 select a session.
 Shared-process harnesses still cannot distinguish chats that use one process,
 including Kiro IDE multi-chat. In multi-session opencode the shell commands carry
-their chat (item 2), but a file write's audit row and sensors, and the to-do
-list sync, still go by the process. Children of payload-bearing hooks follow
+their chat (item 2), and so do a file write's audit row and sensors and the to-do
+list sync. Children of payload-bearing hooks follow
 the payload session; tools without that parent still fall back to the shared
 cursors when ancestry is unavailable unless the harness process has a valid
 `AIDLC_SESSION_OVERRIDE`.
@@ -549,6 +558,14 @@ guide documents the `aidlc-workspace-sync` tool that reads this file to clone
 missing repos, keep the gitignore block current, and generate a VSCode
 multi-root workspace.
 
+[`/aidlc intent add-repo <name>`](12-cli-commands.md#aidlc-intent-add-repo-name-add-a-sibling-repo-to-work-already-under-way)
+writes this file too. A repo that work needs but nobody cloned here is cloned
+from its entry; a repo with no entry is cloned from `org` (or the address you
+give) and gets one, with the file's comments and layout kept. With no `repos.json` yet, a hosted
+`--url` (a host, an owner and a name) creates one whose `org` is that owner, so
+commit it to share the list with your team. An address written here never keeps
+its credentials.
+
 The manifest is a convenience, not a second source of truth. **Disk wins at
 runtime**: intent creation still auto-discovers whatever siblings are actually
 present, so a repo works the moment it is cloned whether or not it is declared,
@@ -622,6 +639,12 @@ Everything else under a space — `memory/**`, `knowledge/**`, `codekb/**`,
 `intents.json`, each record's `aidlc-state.md`, `audit/` shards, and artifacts — is
 committed. The rule of thumb: **cursors and runtime scratch are local; the shared
 work is committed.**
+
+When a pull, a rebase or a stash pop leaves git's conflict in a record's
+`aidlc-state.md` (two clones advanced the same work), the next step carries on
+from your own side and writes the record back without git's markers. It says
+once where the other side stands and the git command that takes it instead; git
+shows the file as conflicted until you add it.
 
 `knowledge/documents/` and `knowledge/documentkb/` are both committed, but they are
 owned by different parties and that difference is the whole design. `documents/`

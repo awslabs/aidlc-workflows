@@ -165,7 +165,7 @@ know.
 
 PROACTIVE: Always generate clarifying questions unless requirements are exceptionally clear and complete across all six dimensions.
 
-Create `<record>/inception/requirements-analysis/requirements-analysis-questions.md` using the [Answer]: tag format from stage-protocol.md. Include context-appropriate questions with A-E options. Every ordinary clarifying question MUST end with `X. Other (please specify)` as the final option; the later Consolidated Summary Confirmation is the unlettered exception. Leave all [Answer]: tags blank.
+Create `<record>/inception/requirements-analysis/requirements-analysis-questions.md` using the [Answer]: tag format from stage-protocol.md. Include context-appropriate questions with {{OPTION_LETTERS}} options. Every ordinary clarifying question MUST end with `X. Other (please specify)` as the final option; the later Consolidated Summary Confirmation is the unlettered exception. Leave all [Answer]: tags blank.
 
 Then follow the unified question flow from stage-protocol.md section 3: offer the user a choice between guided (interactive) and self-guided (file edit) modes. In either case, ensure all answers are written to the file before proceeding.
 
@@ -285,16 +285,19 @@ options:
     description: Continue to [next stage]
   - label: Request Changes
     description: Provide revision feedback
-  - label: Add User Stories
-    description: Include User Stories stage (currently skipped)
+  - label: Approve, and add User Stories next
+    description: Include the User Stories stage (currently skipped) and start it now
 ```
 Render `[next stage]` verbatim from the `next_stage` field of the reply that
 opened the gate, else the run-stage directive's (per the stage-protocol.md
 approval-gate binding), or `Complete workflow` when it is null. Never guess the
 next stage name.
-If "Add User Stories" is selected, run
-`{{INVOKE}} engine recompose --add user-stories`
-before re-entering the approval flow.
+If they pick "Approve, and add User Stories next", run
+`{{INVOKE}} engine orchestrate next --add user-stories` and follow its step,
+which names the report that records their approval; User Stories runs next.
+If they only ask to add User Stories, run the same `next --add user-stories`,
+say in one line that it is on the plan, and ask once whether they approve the
+requirements as they are or want anything changed.
 
 IF User Stories is NOT set to SKIP: use standard 2-option approval (Approve / Request Changes).
 

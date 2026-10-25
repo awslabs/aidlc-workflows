@@ -28,6 +28,9 @@ const manifest: HarnessManifest = {
   // in-flight ledger until its SubagentStop. Claude Code sets
   // CLAUDE_CODE_SESSION_ID in its agent's shell.
   agentFinishRecorded: { env: ["CLAUDE_CODE_SESSION_ID"] },
+  // AskUserQuestion takes four options besides its own "Type something" row
+  // (question-rendering.md, "Batching limits"), so a question is lettered A-D.
+  questionOptions: 4,
   // A Claude Code session open before setup has no /aidlc and runs none of
   // its hooks until it starts again.
   configNextStep:
@@ -83,6 +86,12 @@ const manifest: HarnessManifest = {
       "Claude Code was open, exit Claude Code and start it again in this folder, then type <entry>. " +
       "If you started it with a setting that turns hooks off, start it again without that setting; " +
       'otherwise ask your Claude Code administrator to allow project hooks."',
+    // Measured live (2.1.278, 2.1.310): started in a folder inside the
+    // project, Claude Code offers /aidlc there but runs none of the project's
+    // hooks, whatever the settings say.
+    startedInsideProject:
+      "Claude Code runs this project's hooks only when it is started in the project folder. Exit Claude Code, " +
+      "start it again in <folder>, then type <entry>.",
   },
   harnessDir: ".claude",
   orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md",

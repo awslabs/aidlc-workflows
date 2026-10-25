@@ -150,6 +150,7 @@ export function refreshWeights(evidenceRoot: string, repoRoot = REPO_ROOT): { un
     defaultSeconds: unit.defaultSeconds,
     weights: merged(unitFiles, measuredUnit, unit.weights),
     affinityGroups: unit.affinityGroups,
+    ...(unit.parallel ? { parallel: unit.parallel } : {}),
   };
   const measuredPlatforms = platformUnitWeights(samples.unit);
   nextUnit.platformWeights = Object.fromEntries(

@@ -108,6 +108,9 @@ function runCoreHook(
       child.on("close", (code: number | null) =>
         resolve({ stdout: out, stderr: err, code: code ?? 0 })
       );
+      // A hook that exits before it reads its input breaks this pipe; its exit
+      // still answers through "close".
+      child.stdin.on("error", () => {});
       child.stdin.write(JSON.stringify(input));
       child.stdin.end();
     } catch {
@@ -687,7 +690,15 @@ export default async ({
       if (typed !== null) typedCommands.delete(input.sessionID);
       // Never treat this plugin's own continue-workflow-nudge injection as a human turn.
       if (output.parts.some((p) => p.id !== undefined && ownNudgeParts.delete(p.id))) return;
-      const first = output.parts.find((p) => p.type === "text");
+      // What the person typed is every text part opencode does not mark as its
+      // own: it leads with a synthetic note when an editor's open file or
+      // selection rides the message (opencode in Zed's terminal, or in VS
+      // Code's with the editor extension), and a client may send their words
+      // in more than one part. A message with none forwards its first text
+      // part.
+      const texts = output.parts.filter((p) => p.type === "text");
+      const own = texts.filter((p) => p.synthetic !== true && p.ignored !== true);
+      const said = own.length > 0 ? own.map((p) => p.text ?? "").join("\n") : texts[0]?.text;
       if (!(await isMainSession(input.sessionID))) return;
       sawHumanTurn.add(input.sessionID);
       interrupted.delete(input.sessionID);
@@ -711,7 +722,7 @@ export default async ({
         {
           hook_event_name: "UserPromptSubmit",
           session_id: input.sessionID,
-          prompt: typed ?? first?.text ?? "",
+          prompt: typed ?? said ?? "",
         },
         directory,
       );
@@ -980,6 +991,8 @@ export default async ({
             hook_event_name: "PostToolUse",
             tool_name: "Write",
             tool_input: { file_path: absolutePath },
+            // The process names only the chat that started last; the write is its own chat's.
+            session_id: await owningSessionOrNone(input.sessionID),
           };
           // audit THEN sensors, mirroring the Claude settings.json order.
           await runCore("aidlc-write-audit-log.ts", payload, directory);
@@ -1011,6 +1024,7 @@ export default async ({
             hook_event_name: "PostToolUse",
             tool_name: "TaskUpdate",
             tool_input: { status: "in_progress", activeForm: active.content },
+            session_id: await owningSessionOrNone(input.sessionID),
           },
           directory,
         );

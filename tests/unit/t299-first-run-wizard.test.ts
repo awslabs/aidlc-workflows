@@ -2413,6 +2413,10 @@ describe("t299 first-run guidance helpers", () => {
       // notRunInWorkflow needs a guard heartbeat before each engine command;
       // only Copilot pins one.
       expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunInWorkflow"), harness).toBe(copilot);
+      // The line for a chat started in a folder inside the project needs the
+      // host's own record of where the chat started: Claude Code's and Codex's.
+      expect(Object.hasOwn(shipped.hookActivation ?? {}, "startedInsideProject"), harness)
+        .toBe(harness === "claude" || harness === "codex");
     }
   });
 

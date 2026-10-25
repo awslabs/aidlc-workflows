@@ -40,6 +40,7 @@ describe("the person's own words", () => {
     const events = auditEvents(run.proj);
     const at = (event: string) =>
       events.filter((e) => e.event === event && field(e.block, "Stage") === "requirements-analysis");
+    // The reply the approval was given in: the learnings answer just before it is on its own row.
     expect(at("GATE_APPROVED").map((e) => field(e.block, "Person Reply"))).toEqual(["ok that makes sense, approve"]);
     expect(at("STAGE_AWAITING_APPROVAL")).toHaveLength(1);
     const answers = at("QUESTION_ANSWERED").map((e) => field(e.block, "Details"));

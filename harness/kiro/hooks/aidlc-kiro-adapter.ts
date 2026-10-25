@@ -62,10 +62,12 @@ import {
   kiroTurnOrigin,
   isAidlcAgentFile,
   leadingOrchestratorVerb,
+  noteKiroCliSteerRecorded,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
   stateFilePath,
   stripOrchestratorLauncherOptions,
+  unrecordedKiroCliSteers,
 } from "../tools/aidlc-lib.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 import { ACTIVE_MEMORY_DIR, refreshActiveMemory } from "../tools/aidlc-includes.ts";
@@ -75,6 +77,9 @@ const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // The agent-v1 hook's default max_output_size is 10 KiB, independently of
 // the shell tool's larger response budget. Count the complete UTF-8 packet.
 const PROMPT_HOOK_MAX_BYTES = 10 * 1024;
+// A shell command that runs one of AI-DLC's own tools: the `aidlc` dispatcher,
+// or a `.kiro/tools/aidlc*.ts` file.
+const AIDLC_COMMAND = /(?:^|[\s"'`;&|(])(?:aidlc|[^\s"'`;&|()]*[\\/]tools[\\/]aidlc[\w.-]*\.ts)(?=$|[\s"'`;&|)])/;
 
 interface KiroHookInput {
   hook_event_name?: string;
@@ -927,6 +932,9 @@ if (target === "state-transition-guard") {
   if (canonicalTool(tool) !== "Bash") process.exit(0);
   const command = String(kiro.tool_input?.command ?? "");
   const registeredAgent = extraArgs[0] ?? "";
+  // The first shell hook of the chat's own agent, so the guards and the
+  // AI-DLC command after it read the person's message as theirs.
+  if (!registeredAgent) recordMessagesTypedWhileWorking(command);
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const hookCommand = executable
     ? [executable, "engine", "hook", "state-transition-guard"]
@@ -997,6 +1005,7 @@ if (target === "plan-approval-guard") {
       tool_name: "Bash",
       tool_input: { command: (ti.command as string) ?? "" },
       cwd: projectDir,
+      ...shellReading(tool),
     };
   } else if (canonical === "Write" || canonical === "Edit" || tool === "delete_file") {
     const paths = inputPaths(ti);
@@ -1132,6 +1141,7 @@ if (target === "review-freeze") {
         tool_name: shell ? "Bash" : canonical === "Write" ? "Write" : "Edit",
         tool_input: coreInput,
         cwd: projectDir,
+        ...(shell ? shellReading(tool) : {}),
       }),
       "utf-8",
     ),
@@ -1246,6 +1256,15 @@ function canonicalTool(
   // did not recognise failed open there instead of being guarded.
   if (name === "shell" || name === "execute_bash" || name === "execute_pwsh") return "Bash";
   return name;
+}
+
+// The shell a Bash call ran in, for the readers that take it: `execute_pwsh`
+// runs PowerShell, as the Kiro IDE adapter marks it, and on Windows Kiro CLI
+// runs its shell tool in PowerShell under every name the call carries.
+function shellReading(name: string): { aidlc_shell?: "powershell" } {
+  return canonicalTool(name) === "Bash" && (name === "execute_pwsh" || process.platform === "win32")
+    ? { aidlc_shell: "powershell" }
+    : {};
 }
 
 type Forward = {
@@ -1414,6 +1433,28 @@ function runCore(hookFile: string, input: Record<string, unknown>): { stdout: st
     ),
     code: r.exitCode ?? 0,
   };
+}
+
+// A message the person typed while the agent worked reaches no prompt hook on
+// Kiro CLI (unrecordedKiroCliSteers), so before one of AI-DLC's commands runs
+// it is recorded as their turn, in their words, each message once. What the
+// core hook prints stays here: Kiro reads this hook's stdout.
+function recordMessagesTypedWhileWorking(command: string): void {
+  const session = validSessionId(kiro.session_id?.trim());
+  if (!session || !AIDLC_COMMAND.test(command)) return;
+  try {
+    for (const steer of unrecordedKiroCliSteers(projectDir, session)) {
+      const turn = runCore("aidlc-record-human-turn.ts", {
+        hook_event_name: "UserPromptSubmit",
+        session_id: session,
+        prompt: steer.words,
+        origin: { kind: "person", source: "record" },
+        relays_terminal_output: true,
+      });
+      if (turn.code !== 0) return;
+      noteKiroCliSteerRecorded(projectDir, session, steer.id);
+    }
+  } catch { /* an unreadable record or runtime folder records nothing */ }
 }
 
 const fwd = buildForward();

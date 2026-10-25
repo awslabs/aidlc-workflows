@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   acceptTuiFixturePermissionMode, claudeModelUpgradeNavigation, claudePermissionNavigation, claudeTrustNavigation, declineOwnedModelUpgrade,
-  preseedClaudeOnboarding, TUI_TEST_FIXTURE_MARKER,
+  kiroV3OfferNavigation, preseedClaudeOnboarding, remindKiroV3OfferLater, TUI_TEST_FIXTURE_MARKER,
 } from "../harness/tui-drive.ts";
 
 const scratchDirs: string[] = [];
@@ -183,5 +183,129 @@ describe("Claude onboarding profile isolation", () => {
       projects: { "C:/legacy": { hasTrustDialogAccepted: true } },
     });
     expect(existsSync(join(home, ".claude"))).toBe(false);
+  });
+});
+
+// Kiro CLI 2.33.1 paints this offer at launch with the caret on the upgrade.
+const KIRO_V3_OPTIONS = ["Switch to V3 and upgrade my configs", "Remind me later", "Don't ask again"];
+function kiroV3Offer(caret: number, options = KIRO_V3_OPTIONS, title = "You're using Kiro CLI V2. Switch to V3 today."): string {
+  return [
+    title,
+    "V3 adds workflows, cloud sessions, and specs. To try it in a new session, run kiro-cli --v3. Learn more: https://kiro.dev/docs/cli/v3/",
+    ...options.map((option, index) => `${index === caret ? "❯" : " "} ${option}`),
+  ].join("\n");
+}
+
+describe("Kiro CLI's V3 offer at launch", () => {
+  test("navigation takes Remind me later and refuses anything else", () => {
+    expect(kiroV3OfferNavigation(kiroV3Offer(0))).toBe("Down");
+    expect(kiroV3OfferNavigation(kiroV3Offer(1))).toBe("Enter");
+    expect(kiroV3OfferNavigation(kiroV3Offer(2))).toBe("Up");
+    expect(kiroV3OfferNavigation(kiroV3Offer(1, KIRO_V3_OPTIONS, "You're using Kiro CLI V2.\nSwitch to V3 today."))).toBe("Enter");
+    expect(kiroV3OfferNavigation(kiroV3Offer(-1))).toBeNull();
+    expect(kiroV3OfferNavigation(kiroV3Offer(0).replace("  Remind me later", "❯ Remind me later"))).toBeNull();
+    expect(kiroV3OfferNavigation(kiroV3Offer(1, [KIRO_V3_OPTIONS[1], KIRO_V3_OPTIONS[0], KIRO_V3_OPTIONS[2]]))).toBeNull();
+    expect(kiroV3OfferNavigation(kiroV3Offer(1, KIRO_V3_OPTIONS.slice(0, 2)))).toBeNull();
+    expect(kiroV3OfferNavigation(kiroV3Offer(1, KIRO_V3_OPTIONS, "Upgrade now?"))).toBeNull();
+    expect(kiroV3OfferNavigation(`${kiroV3Offer(1)}\n›  ask a question or describe a task ↵`)).toBeNull();
+
+    // On Windows Server the caret is an ASCII ">": kiroV3Offer(0) with ">" is byte for byte the screen Kiro CLI 2.33.1
+    // paints there.
+    const windows = (screen: string) => screen.replace("❯", ">");
+    expect(kiroV3OfferNavigation(windows(kiroV3Offer(0)))).toBe("Down");
+    expect(kiroV3OfferNavigation(windows(kiroV3Offer(1)))).toBe("Enter");
+    expect(kiroV3OfferNavigation(windows(kiroV3Offer(2)))).toBe("Up");
+    expect(kiroV3OfferNavigation(windows(kiroV3Offer(0)).replace("  Remind me later", "> Remind me later"))).toBeNull();
+    expect(kiroV3OfferNavigation(windows(kiroV3Offer(0)).replace("  Remind me later", "❯ Remind me later"))).toBeNull();
+  });
+
+  test("the offer is answered Remind me later and never Enter on another option", async () => {
+    const chat = "›  ask a question or describe a task ↵";
+    let now = 0;
+    const timing = { now: () => now, sleep: async (ms: number) => { now += ms; } };
+    for (const [start, move] of [[0, "Down"], [2, "Up"], [1, null]] as const) {
+      let caret: number = start;
+      let taken = false;
+      const keys: string[] = [];
+      const backend = {
+        capture: () => taken ? chat : kiroV3Offer(caret),
+        send: (_session: string, key: string, _literal: boolean, noEnter: boolean) => {
+          expect(noEnter).toBe(true);
+          keys.push(key);
+          if (key === "Down") caret++;
+          else if (key === "Up") caret--;
+          else {
+            expect(caret).toBe(1);
+            taken = true;
+          }
+        },
+      };
+      expect(await remindKiroV3OfferLater(backend, "kiro", kiroV3Offer(start), timing)).toBe(true);
+      expect(keys).toEqual(move ? [move, "Enter"] : ["Enter"]);
+    }
+
+    // A loaded host paints a move after the settle time, or loses the key: the
+    // old frame is never read as the moved caret, and no second key goes while
+    // one may still be on its way (it could land on "Don't ask again" unseen).
+    for (const [lagMs, lost, expected] of [[1000, 0, ["Down", "Enter"]], [0, 1, ["Down"]]] as const) {
+      let caret = 0;
+      let movedAt = 0;
+      let losing: number = lost;
+      let taken = false;
+      const keys: string[] = [];
+      const slow = {
+        capture: () => taken ? chat : kiroV3Offer(now - movedAt >= lagMs ? caret : caret - 1),
+        send: (_session: string, key: string) => {
+          keys.push(key);
+          if (key === "Enter") {
+            expect(caret).toBe(1);
+            taken = true;
+            return;
+          }
+          if (losing-- > 0) return;
+          caret += key === "Down" ? 1 : -1;
+          movedAt = now;
+        },
+      };
+      const answered = remindKiroV3OfferLater(slow, "kiro", kiroV3Offer(0), timing);
+      if (lost) await expect(answered).rejects.toThrow(/did not paint Down/);
+      else expect(await answered).toBe(true);
+      expect(keys).toEqual([...expected]);
+    }
+
+    // A caret that jumps past Remind me later gets no Enter.
+    let caret = 0;
+    const keys: string[] = [];
+    const skipping = {
+      capture: () => kiroV3Offer(caret),
+      send: (_session: string, key: string) => {
+        keys.push(key);
+        caret = key === "Down" ? 2 : key === "Up" ? 0 : caret;
+      },
+    };
+    await expect(remindKiroV3OfferLater(skipping, "kiro", kiroV3Offer(0), timing)).rejects.toThrow(/Remind me later/);
+    expect(keys).not.toContain("Enter");
+
+    // Kiro takes a while to start its chat after the answer, with the offer
+    // still painted: the answer returns only once it is gone, with one Enter.
+    {
+      let answeredAt: number | null = null;
+      const keys: string[] = [];
+      const slowExit = {
+        capture: () => answeredAt !== null && now - answeredAt >= 1500
+          ? "Warning: Kiro is running in trust all tools mode\n❯ No, exit\n  Yes, I accept"
+          : kiroV3Offer(1),
+        send: (_session: string, key: string) => {
+          keys.push(key);
+          answeredAt ??= now;
+        },
+      };
+      expect(await remindKiroV3OfferLater(slowExit, "kiro", kiroV3Offer(1), timing)).toBe(true);
+      expect(keys).toEqual(["Enter"]);
+      expect(slowExit.capture()).not.toContain("Remind me later");
+    }
+
+    const ordinary = { capture: () => "Approve this workflow?\n❯ 1. Yes\n  2. No", send: () => { throw new Error("no key expected"); } };
+    expect(await remindKiroV3OfferLater(ordinary, "kiro", "Approve this workflow?\n❯ 1. Yes\n  2. No", timing)).toBe(false);
   });
 });

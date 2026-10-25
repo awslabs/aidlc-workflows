@@ -590,6 +590,55 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     expect(ftBlock).toContain("Candidate-ID**: free_text_1");
   });
 
+  // "Keep none of these" picked, and the agent listed the candidate anyway with
+  // `keep: false` (a live Kiro run did): the note the person declined is not
+  // written to their memory and the record does not say a rule was learned.
+  test("a candidate marked keep:false is never written and never recorded", () => {
+    const pd = mkproj("p18-keep-false");
+    const sel = writeSel(
+      pd,
+      `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [
+  { "id": "c1", "keep": false, "source_heading": "Interpretations", "heading": "Interpretations", "text": "Declined by the person" } ] }
+`,
+    );
+    const res = runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
+    expect(res.rc, res.out).toBe(0);
+    expect(JSON.parse(res.stdout).rule_learned).toBe(0);
+    expect(existsSync(projectPractices(pd)) ? readFile(projectPractices(pd)) : "").not.toContain("Declined by the person");
+    expect(grepCountAudit(pd, /Event.*: RULE_LEARNED/)).toBe(0);
+  });
+
+  test("a bare keep:false entry, with no heading or text, keeps nothing", () => {
+    const pd = mkproj("p18-keep-false-bare");
+    const sel = writeSel(
+      pd,
+      `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [ { "id": "c1", "keep": false } ] }
+`,
+    );
+    const res = runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
+    expect(res.rc, res.out).toBe(0);
+    expect(JSON.parse(res.stdout).rule_learned).toBe(0);
+    expect(grepCountAudit(pd, /Event.*: RULE_LEARNED/)).toBe(0);
+  });
+
+  test("beside a kept candidate, only the kept note is written", () => {
+    const pd = mkproj("p18-keep-mixed");
+    const sel = writeSel(
+      pd,
+      `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [
+  { "id": "c1", "keep": false, "heading": "Corrections", "text": "Declined by the person" },
+  { "candidate_id": "c2", "type": "learning", "scope": "project", "heading": "Corrections", "text": "Kept by the person" } ] }
+`,
+    );
+    const res = runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
+    expect(res.rc, res.out).toBe(0);
+    expect(JSON.parse(res.stdout).rule_learned).toBe(1);
+    const practices = readFile(projectPractices(pd));
+    expect(practices).toContain("Kept by the person");
+    expect(practices).not.toContain("Declined by the person");
+    expect(grepCountAudit(pd, /Event.*: RULE_LEARNED/)).toBe(1);
+  });
+
   test("idempotent re-run -> exactly one audit row + one file line", () => {
     const pd = mkproj("p23");
     const sel = writeSel(

@@ -15,10 +15,11 @@ import {
   type Directive, type Exec, type Harness, type StoredRecord,
 } from "./aidlc-input-corpus.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   artifactFilename, auditBlockField, authorizedVerificationCommand, currentSwarmSourceMergeChain, findStageBySlug,
-  gitCommitSourceListing, latestMainWorkflowStageRunFloorForProject, latestPersonTurn, listIntents, personsGateWords,
-  personsLatestGatePick, readActiveDirectiveMarker, readAuditShardEvents, readProtectedResponse, readUnitSourceManifest,
+  gitCommitSourceListing, latestMainWorkflowStageRunFloorForProject, listIntents, personsGateReply, personsWordsText,
+  readActiveDirectiveMarker, readAuditShardEvents, readProtectedResponse, readUnitSourceManifest,
   reviewArtifactFingerprint, serializeSourceListing, sourceListingSha256, stateDigest, unitSourceFingerprint,
   workspaceSourceFingerprint, workspaceSourceListing, writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
   writeSessionPidEntry,
@@ -41,7 +42,7 @@ export interface EngineExpectation {
   recorded: string;
   /** The typed text that must be kept verbatim (null for a non-answer, which keeps nothing as a reply). */
   words: string | null;
-  /** `recorded`: an exact pick on record; `reading-step`: the question's own print carrying the words (an /aidlc
+  /** `recorded`: a box pick on record; `reading-step`: the question's own print carrying the words (an /aidlc
    * line); `none`: plain chat, nothing to run; `command`: the ask's own command. */
   step: "recorded" | "reading-step" | "none" | "command";
   no_ask: boolean;
@@ -611,26 +612,50 @@ export async function pick(proj: string, item: AnswersItem, harness: Harness): P
 // --- what the tools recorded -------------------------------------------------------------------------------------------
 
 export interface Recorded { choice: string; words: string | null }
+
+/**
+ * The latest turn's words as its message record keeps them, unless the turn only commanded AIDLC or answered another
+ * engine question; else the labels the person picked in a question box, in the order shown.
+ */
+function latestTurnWords(proj: string): string | null {
+  const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  if (turn === undefined) return null;
+  const aside = auditBlockField(turn.block, "Reply") !== null || auditBlockField(turn.block, "Open Question") !== null;
+  const id = auditBlockField(turn.block, "Message Id");
+  const message = id === null ? null : readMessage(proj, id);
+  if (!aside && message?.words) return personsWordsText(message.words);
+  let picked: unknown = [];
+  try {
+    picked = JSON.parse(auditBlockField(turn.block, "Picked") ?? "[]");
+  } catch {
+    picked = [];
+  }
+  const labels = Array.isArray(picked) ? picked.filter((label): label is string => typeof label === "string" && label.trim() !== "") : [];
+  return labels.length > 0 ? labels.join(", ") : null;
+}
 /** The choice a tool recorded from the reply alone (`none` when nothing is recorded) and the words it kept. */
 export function recorded(proj: string, item: AnswersItem): Recorded {
   // The person's words as the record keeps them: the latest turn's words, else the message record's text (a picker
   // reply and a reply to an engine question are kept there, marked as a command turn).
-  const turn = latestPersonTurn(proj)?.words ?? messageRecord(proj, typedPrompt(item))?.text ?? null;
+  const turn = latestTurnWords(proj) ?? messageRecord(proj, typedPrompt(item))?.text ?? null;
   switch (item.question) {
     case "stage-gate":
     case "stage-gate-accept-as-is": {
-      const gate = { stage: STAGE };
-      const pickLabel = personsLatestGatePick(proj, SESSION, gate, item.question === "stage-gate-accept-as-is");
-      return { choice: pickLabel ?? "none", words: personsGateWords(proj, SESSION, gate) };
+      // Only the agent's report records a gate's choice: the row it wrote, if any.
+      const decided = readAuditShardEvents(proj).filter((row) =>
+        (row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED") && auditBlockField(row.block, "Stage") === STAGE).at(-1);
+      const choice = decided === undefined ? "none"
+        : decided.event === "GATE_REJECTED" ? "Request Changes" : auditBlockField(decided.block, "User Input") ?? "none";
+      return { choice, words: personsGateReply(proj, SESSION, STAGE).words };
     }
     case "code-plan":
     case "code-plan-grouped": {
-      const open = openPlanApprovalQuestion(proj, item.input);
+      const open = openPlanApprovalQuestion(proj);
       if (open === null) return { choice: "unknown", words: turn };
       if (open.editing) return { choice: "I'll edit the files", words: turn };
       if (!open.answered) return { choice: "none", words: turn };
       const approve = item.question === "code-plan-grouped" ? "Approve all" : "Approve Plan";
-      return { choice: open.picked === "approve" ? approve : open.picked === "request-changes" ? "Request Changes" : open.picked === "edit" ? "I'll edit the files" : "answered", words: turn };
+      return { choice: open.recorded === "approve" ? approve : open.recorded === "request-changes" ? "Request Changes" : open.recorded === "edit" ? "I'll edit the files" : "answered", words: turn };
     }
     case "unit-checkpoint":
     case "batch-checkpoint":

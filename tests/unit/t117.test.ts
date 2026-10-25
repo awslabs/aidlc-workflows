@@ -79,8 +79,9 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -202,25 +203,24 @@ function directive(out: string): any {
 
 describe("t117 jump-direction delegation (migrated from t117-orchestrate-branches.sh, plan 24)", () => {
   // A WITH-STATE jump is a MUTATION (mark intervening [S], emit STAGE_JUMPED,
-  // pivot Current Stage) and ordinary `next` routing is read-only, so, like
-  // scope-change / config-change, the engine emits a `print` naming
-  // `aidlc-jump.ts execute` carrying the tool-resolved target + direction, NOT a
-  // run-stage. (A run-stage emitted directly would produce ZERO state change.)
-  test("1: forward jump → print naming execute code-generation; resolve direction forward", () => {
+  // pivot Current Stage) the person asked for, so `next` runs `aidlc-jump.ts
+  // execute` with the tool-resolved target + direction itself and returns the
+  // target's step. Where Code Generation is the step on record (state-jumped),
+  // it names that command in a `print` instead, for the plan-approval guard.
+  test("1: forward jump -> the code-generation step, made in the direction resolve gives", () => {
     const p = proj("state-mid-ideation.md");
-    const r = next(["--stage", "code-generation"], p);
     const dir = jumpResolve(["--stage", "code-generation", "--scope", "feature"], p);
-    expect(r.out).toContain("execute --target code-generation --direction forward");
     // resolve direction is forward (code-generation is later than feasibility)
     expect(dir.out).toContain('"direction":"forward"');
-    // The engine's directive is a valid print whose message names the execute
-    // delegate for resolve's target_slug - the delegation contract.
-    const d = directive(r.stdout);
-    expect(d.kind).toBe("print");
-    expect(d.message).toContain("execute --target code-generation --direction forward");
     const resolved = directive(dir.stdout);
-    expect(d.message).toContain(resolved.target_slug);
     expect(resolved.direction).toBe("forward");
+    const r = next(["--stage", "code-generation"], p);
+    const d = directive(r.stdout);
+    expect(d.kind).not.toBe("print");
+    expect(d.stage).toBe(resolved.target_slug);
+    const state = readFileSync(seededStateFile(p), "utf-8");
+    expect(state).toContain("- **Current Stage**: code-generation");
+    expect(readAllAuditShards(p)).toContain("**Direction**: FORWARD");
   });
 
   test("2: backward jump → print naming execute feasibility; resolve direction backward", () => {
@@ -299,11 +299,11 @@ describe("t117 explicit resume routing", () => {
     const r = runOrchestrateNext(ORCH, p, ["--resume"]);
     expect(r.directive?.kind).toBe("run-stage");
     expect(r.directive?.stage).toBe("feasibility");
-    expect(r.steering.length).toBe(0);
-    expect(inlineRulePaths(r.directive)).toEqual(
-      r.directive?.rules_in_context as string[],
-    );
-    expect(inlineRulePaths(r.directive).length).toBeGreaterThan(0);
+    // Inline or in parts ahead of the step, the rules delivered are exactly
+    // the ones it names.
+    const delivered = [...new Set([...r.steering, r.directive].flatMap(inlineRulePaths))];
+    expect(delivered).toEqual(r.directive?.rules_in_context as string[]);
+    expect(delivered.length).toBeGreaterThan(0);
   });
 });
 
@@ -390,16 +390,17 @@ describe("t117 flag-validation, env-scope, scope/config change, phase jump, free
 
   // state-mid-ideation is feature scope, Current Stage=feasibility; --phase
   // construction resolves (via resolve) to the first EXECUTE stage of
-  // construction (functional-design), forward of feasibility. A WITH-STATE phase
-  // jump is a MUTATION, so the engine emits a `print` naming execute, not a
-  // run-stage (see the jump-direction delegation block).
-  test("13: phase jump (construction, feature) → print naming execute functional-design", () => {
+  // construction (functional-design), forward of feasibility. The person's phase
+  // jump is made by that `next`, which returns the target's step (see the
+  // jump-direction delegation block).
+  test("13: phase jump (construction, feature) -> the functional-design step in the same call", () => {
     const p = proj("state-mid-ideation.md");
     const r = next(["--phase", "construction"], p);
-    expect(r.out).toContain("execute --target functional-design --direction forward");
     const d = directive(r.stdout);
-    expect(d.kind).toBe("print");
-    expect(d.message).toContain("execute --target functional-design --direction forward");
+    expect(d.kind).not.toBe("print");
+    expect(d.stage).toBe("functional-design");
+    const state = readFileSync(seededStateFile(p), "utf-8");
+    expect(state).toContain("- **Current Stage**: functional-design");
   });
 
   test("14: freeform intent with no workflow → ask directive (scope confirmation)", () => {

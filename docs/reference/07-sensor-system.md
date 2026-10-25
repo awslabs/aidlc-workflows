@@ -268,7 +268,15 @@ being written against the glob and an entry without a glob never fires. For
 deliverable, skip paths outside each sensor's `matches` capability, and dispatch
 only matching paths; an omitted glob accepts every deliverable. `upstream-coverage` and `claim-sources`, which
 read the whole stage's output, dispatch once per output folder, on its first
-deliverable that is not a questions or timestamp file. A gate the engine
+deliverable that is not a questions or timestamp file. At a code knowledge base
+stage (Reverse Engineering), `required-sections` and `upstream-coverage`
+(`PATH_SET_SENSOR_IDS`, `aidlc-graph.ts`) dispatch once for the stage: the fire
+names the first matching path and takes every matching path on stdin behind
+`--paths-stdin json`, the sensor evaluates each file (or folder) as it would
+alone, and a failed fire's `SENSOR_FAILED` row lists the failing files in its
+`Failed outputs` field, which the gate's check line reads to name
+`<repo>/<file>`. A blocking binding holds every path the fire covers to the bytes
+fingerprinted before it. A call for one file never reads stdin. A gate the engine
 approves itself under Construction autonomy dispatches only blocking sensors
 (advisory evidence has no reader there). All six shipped
 manifests declare a glob. The compile resolver copies it into
@@ -310,9 +318,20 @@ The operator can fix the findings and retry, or make a separate explicit
 override decision. The conductor records a `DECISION_RECORDED` offering
 `Fix findings,Override blocking sensors`, waits for a new human turn, records
 the exact `QUESTION_ANSWERED`, then retries the gate report with
-`--override-blocking-sensors --user-input "Override blocking sensors"`. A bare
-flag, an unoffered/paraphrased choice, a missing human-backed receipt, or
-autonomous mode is refused. A successful override records the sensor ids,
+`--override-blocking-sensors --user-input "Override blocking sensors"`. While
+that pick stands (nothing asked, answered or sent back on the stage since it,
+and the gate not yet open), `next` names the same report instead of the stage,
+outside autonomy, team Unit gates and a Unit step a solo walk owes first. A
+bare flag, an unoffered/paraphrased choice, a missing human-backed receipt, or
+autonomous mode is refused. The recorded answer names its option by label or
+by its number on the offered list. Fix findings starts a new attempt the way
+Request Changes does: the reviewed outputs open for the fix, and the retried
+report needs a fresh review. Where each Unit's review is its own (unit-major
+work, Construction checkpoints, team-owned Units), that is the pick's Unit when
+it was logged with one, and otherwise only the Units whose outputs the failing
+blocking check named in its latest result; a check that named no Unit's output,
+or stage-major work, starts every Unit again.
+A successful override records the sensor ids,
 optional detail paths, and evaluation reasons on `STAGE_AWAITING_APPROVAL`.
 Revalidating an already-open gate emits a fresh row with `Revalidated: true`,
 consuming the authorization receipt instead of leaving it reusable.
@@ -325,7 +344,8 @@ dispatch remains advisory.
 
 `write` is the default and preserves incremental PostToolUse feedback. `gate`
 fires once per existing declared deliverable (once per output folder for
-`upstream-coverage` and `claim-sources`) immediately before `gate-start`
+`upstream-coverage` and `claim-sources`, and once for the stage at Reverse
+Engineering for `required-sections` and `upstream-coverage`) immediately before `gate-start`
 opens the first gate, before `revise` re-enters the gate after revision work,
 and before the approve-time revision backstop performs recovered re-entry. When
 no person will answer the gate (the engine approves it itself under Construction

@@ -76,6 +76,11 @@
 //      The shim hands the core hook the line rebuilt from that structure, and
 //      only when the installed file with those words equals the prompt's body
 //      byte for byte (copilotSkillInvocationLine).
+//  11. The CLI hands a Stop block's reason back to the agent as a new prompt,
+//      with the same keys as a typed one (live-captured on 1.0.103). The Stop
+//      case keeps a digest of the reason it sent for that chat and the chat's
+//      next prompt spends it: an exact match is the host's turn, never the
+//      person's message or reply (armStopNote, spendStopNote).
 //
 // Wiring (.github/hooks/aidlc.json, emitted by harness/copilot/emit.ts) is
 // matcher-FREE by design: VS Code parses but IGNORES matchers, so a matcher
@@ -126,10 +131,12 @@ import {
   resolveWorkflowSelection,
   noteHelperSession,
   runHookHere,
+  sessionsDir,
   settleCopilotCommand,
   settleCopilotIntentBoundary,
   stateFilePath,
   stateFilePathForSelection,
+  validSessionId,
 } from "../tools/aidlc-lib.ts";
 import { appendCoordinationStoodAside, appendSubagentPromptUnmatched } from "../tools/aidlc-audit.ts";
 import { keptRestartRun } from "../tools/aidlc-question-store.ts";
@@ -333,6 +340,8 @@ export async function run(
     "ask_questions",
     "askQuestion",
     "ask_question",
+    // ask_user as Copilot CLI hands it to the PascalCase hooks AI-DLC registers.
+    "AskUserQuestion",
   ]);
   const rawToolName = copilot.tool_name ?? copilot.toolName ?? "";
   const toolName = TOOL_ALIAS[rawToolName] ?? rawToolName;
@@ -535,13 +544,16 @@ export async function run(
   const PLAIN_WORD = `(?:[A-Za-z0-9_./:=,+-]+${PLAIN_QUOTED}?|${PLAIN_QUOTED})`;
   const PLAIN_COMMAND = new RegExp(`^ *${PLAIN_WORD}(?: +${PLAIN_WORD})* *$`);
   // The shell the command runs in. A shell the call names wins, so Git Bash
-  // or WSL on Windows keeps the POSIX reading; a tool named for its shell
-  // (`powershell`, `bash`) is that shell; VS Code's terminal tool runs the
-  // terminal's default shell, PowerShell or cmd on Windows.
+  // or WSL on Windows keeps the POSIX reading; a tool named `powershell` is
+  // that shell; VS Code's terminal tool runs the terminal's default shell,
+  // PowerShell or cmd on Windows; and the CLI hands its shell tool to these
+  // hooks as `Bash` on every host, which on Windows is PowerShell (the CLI's
+  // own record names that tool `powershell`).
   const terminalShell = typeof nativeToolInput?.shell === "string" ? nativeToolInput.shell.trim() : "";
   const windowsTerminal = terminalShell
     ? /(?:^|[\\/])(?:pwsh|powershell|cmd)(?:\.exe)?$/i.test(terminalShell)
-    : /^(?:pwsh|powershell)$/i.test(rawToolName) || (VSCODE_SHELL_TOOLS.has(rawToolName) && platform() === "win32");
+    : /^(?:pwsh|powershell)$/i.test(rawToolName) ||
+      ((VSCODE_SHELL_TOOLS.has(rawToolName) || /^bash$/i.test(rawToolName)) && platform() === "win32");
   // PowerShell itself: cmd never splits a command line at `;`.
   const powerShellTerminal = windowsTerminal && !/(?:^|[\\/])cmd(?:\.exe)?$/i.test(terminalShell);
   // The plan-approval guard reads a PowerShell command the way PowerShell runs
@@ -779,20 +791,24 @@ export async function run(
       // Onboarding and sync run the extractor the project's harness names.
       case "knowledge": return verb === "onboard" || verb === "sync";
       // One of the person's checks switched as they asked runs click-free when
-      // the setter would carry it out (on always, off once they asked since the
-      // last decision), with or without their words beside it (--person-words, or
-      // --person-words-file for words in a file);
-      // any other setting keeps the prompt.
-      case "config":
+      // they asked since the last decision (on always), with or without the
+      // message they asked in beside it (--message, which the setter proves), or
+      // the words form from before it (--person-words, --person-words-file),
+      // and with the --verbatim an engine step ends it with; any other setting
+      // keeps the prompt.
+      case "config": {
+        const own = rest.at(-1) === "--verbatim" ? rest.slice(0, -1) : rest;
         return verb === "set" && !(
-          (rest.length === 2 || (rest.length === 4 && (rest[2] === "--person-words" || rest[2] === "--person-words-file"))) &&
-          personCheckSwitchAllowed(projectDir, rest[0], rest[1])
+          (own.length === 2 ||
+            (own.length === 4 && (own[2] === "--message" || own[2] === "--person-words" || own[2] === "--person-words-file"))) &&
+          personCheckSwitchAllowed(projectDir, own[0], own[1])
         );
+      }
       // Turning Construction checkpoints on or off runs click-free when the
       // setter's own check passes (the person asked for it since the last
       // decision, or chose it); without that it keeps the prompt.
       case "state-passthrough":
-        if (verb === "set-construction-checkpoints" && rest.length === 1 &&
+        if (verb === "set-construction-checkpoints" && (rest.length === 1 || (rest.length === 3 && rest[1] === "--message")) &&
           constructionPolicyChangeAllowed(projectDir, "Construction Checkpoints", rest[0])) return false;
         if (ENGINE_OWNED_STATE_TRANSITIONS.has(verb)) return stateTransitionStandsAside();
         return GATE_SETTERS_KEEP_PROMPT.has(verb);
@@ -1870,22 +1886,32 @@ export async function run(
   // "briefing" spends the matching launch's record; "unknown" means the
   // record could not be read even under the lock. A VS Code launch from
   // another chat never matches: its brief arrives under that chat's session.
-  // The record spent is kept in spentBriefing for the caller.
+  // The record spent is kept in spentBriefing for the caller. When the prompt
+  // matched none, briefDueHere says whether a launch from this chat still waits
+  // for a brief that comes into it: only VS Code's runSubagent records name the
+  // chat. Null when the record was not read.
   let spentBriefing: BriefingEntry | null = null;
+  let briefDueHere: boolean | null = null;
   function checkBriefing(prompt: unknown): "briefing" | "not-briefing" | "unknown" {
     if (typeof prompt !== "string" || prompt.trim().length === 0) return "not-briefing";
     const digest = briefingDigest(prompt);
     const matches = (entry: BriefingEntry): boolean =>
       entry.digests.includes(digest) && (!entry.session || !sessionId || entry.session === sessionId);
+    const dueHere = (entries: BriefingEntry[]): boolean =>
+      Boolean(sessionId) && entries.some((entry) => entry.session === sessionId);
     const spent = transactBriefings((entries) => {
       const index = entries.findIndex(matches);
       if (index >= 0) spentBriefing = entries.splice(index, 1)[0];
+      else briefDueHere = dueHere(entries);
       return { value: index >= 0, changed: index >= 0 };
     }, true);
     if (spent.read) return spent.value ? "briefing" : "not-briefing";
     // The lock stayed busy or the read failed under it: one plain read.
     try {
-      return liveBriefings(true).some(matches) ? "briefing" : "not-briefing";
+      const entries = liveBriefings(true);
+      if (entries.some(matches)) return "briefing";
+      briefDueHere = dueHere(entries);
+      return "not-briefing";
     } catch {
       return "unknown";
     }
@@ -1948,6 +1974,54 @@ export async function run(
     }
   }
 
+  // The Stop note record (difference #11): the digest of the last block reason
+  // sent to a chat, beside that chat's other per-session files. Only the digest
+  // is kept, never the text.
+  function stopNotePath(chat: string): string {
+    const valid = validSessionId(chat);
+    return valid ? join(sessionsDir(projectDir), `${valid}.copilot-stop-note`) : "";
+  }
+
+  // Without a record the note, when it comes back, counts as the person's.
+  function armStopNote(chat: string, reason: string): void {
+    const path = stopNotePath(chat);
+    if (!path) return;
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, briefingDigest(reason), "utf-8");
+    } catch {
+      // The Stop goes out as it is.
+    }
+  }
+
+  // Whether `prompt` is the note this chat's last Stop sent. Every prompt in the
+  // chat spends the record, matched or not. A record that cannot be read, or
+  // cannot be spent, is no match: the prompt is the person's.
+  function spendStopNote(chat: string, prompt: unknown): boolean {
+    const path = stopNotePath(chat);
+    if (!path) return false;
+    let recorded: string;
+    try {
+      recorded = readFileSync(path, "utf-8").trim();
+    } catch {
+      return false;
+    }
+    let spent = false;
+    try {
+      rmSync(path, { force: true });
+      spent = true;
+    } catch {
+      try {
+        writeFileSync(path, "", "utf-8");
+        spent = true;
+      } catch {
+        // Neither: the digest stays, so it must not count now either.
+      }
+    }
+    return spent && recorded.length > 0 && typeof prompt === "string" && prompt.trim().length > 0 &&
+      recorded === briefingDigest(prompt);
+  }
+
   // --- Targets ----------------------------------------------------------------
 
   switch (target) {
@@ -2002,23 +2076,40 @@ export async function run(
     }
 
     case "record-human-turn": {
+      const delivered = copilot.prompt ?? copilot.user_prompt ?? copilot.message ?? "";
+      // The note this chat's last Stop sent, handed back by Copilot (difference
+      // #11): the host's turn, so the core hook keeps nothing of the person's,
+      // and the human sequence stays where it is.
+      if (spendStopNote(coreSessionId, delivered)) {
+        runCore(
+          "aidlc-record-human-turn.ts",
+          JSON.stringify({
+            hook_event_name: "UserPromptSubmit",
+            session_id: coreSessionId,
+            prompt: delivered,
+            origin: { kind: "host", reason: "copilot stop hook reason", source: "record" },
+          }),
+        );
+        return 0;
+      }
       // A skill the person invoked by its slash name is read as their own line
       // (copilotSkillInvocationLine) before anything else looks at the prompt.
-      const delivered = copilot.prompt ?? copilot.user_prompt ?? copilot.message ?? "";
       const prompt = copilotSkillInvocationLine(delivered, projectDir);
       // A subagent's briefing is the agent speaking (difference #8): no
       // HUMAN_TURN, no kept words, no answer, no typed switch, no human
       // sequence. A different prompt typed while the subagent runs still
-      // counts once the first few seconds after its start have passed.
+      // counts, in VS Code once the first few seconds after its start have
+      // passed. The CLI never sends a brief into the launching chat, so its
+      // launch records name no chat and a prompt there counts at once.
       const brief = checkBriefing(prompt);
       if (brief === "briefing") {
         bindSubagentSession(spentBriefing);
         return 0;
       }
-      const started = justStartedSubagent();
+      const started = briefDueHere === false ? null : justStartedSubagent();
       if (started) {
         // A subagent has just started in this chat and this prompt matched
-        // none of its recorded briefs: the host changed the brief's text, or
+        // none of its recorded briefs: VS Code changed the brief's text, or
         // the record could not be read. It is almost certainly that subagent's
         // brief, so it is not counted. A message the person typed in those few
         // seconds is asked for again.
@@ -2516,6 +2607,8 @@ export async function run(
           const parsed = JSON.parse(r.stdout) as Record<string, unknown>;
           const decision = parsed.decision;
           const reason = parsed.reason;
+          // Recorded before the block goes out: Copilot sends it back at once.
+          if (decision === "block" && typeof reason === "string" && reason.trim()) armStopNote(coreSessionId, reason);
           process.stdout.write(`${JSON.stringify({
             ...parsed,
             ...(typeof decision === "string"

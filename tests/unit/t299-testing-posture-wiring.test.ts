@@ -23,7 +23,6 @@ import {
   evaluateCodeGenerationApproval,
   parseTestingContract,
   questionsFileApprovalFingerprint,
-  questionsFileApproved,
   questionsFileHasPendingPlanApproval,
   renderTestingContract,
   resolveCodeGenerationAuthority,
@@ -727,7 +726,6 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
       "",
     ].join("\n");
 
-    expect(questionsFileApproved(questions)).toBe(true);
     expect(questionsFileApprovalFingerprint(questions)).toBe(fingerprint);
   });
 
@@ -755,7 +753,6 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
     for (const subheading of ["### Scope", "#### Scope", "###### Scope"]) {
       expect(questionsFileApprovalFingerprint(withSubheading(subheading)), subheading)
         .toBe(fingerprint);
-      expect(questionsFileApproved(withSubheading(subheading)), subheading).toBe(true);
     }
 
     // A heading at the section's own depth still ends it: that is the next
@@ -792,7 +789,6 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
         "",
       ].join("\n");
     for (const subheading of ["### 5. Follow-up", "### Follow-up", "## Other question"]) {
-      expect(questionsFileApproved(pendingThen(subheading)), subheading).toBe(false);
       expect(questionsFileHasPendingPlanApproval(pendingThen(subheading)), subheading)
         .toBe(true);
     }
@@ -811,7 +807,6 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
       "",
     ].join("\n");
     expect(questionsFileApprovalFingerprint(numbered)).toBe(fingerprint);
-    expect(questionsFileApproved(numbered)).toBe(true);
   });
 
   test("a memory change after approval invalidates the unit contract", () => {

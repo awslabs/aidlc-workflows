@@ -9,8 +9,9 @@
 // work): an approval of the old question went through on words meant for the
 // new work, and a later chat was handed them as the stage's answer. Now the
 // engine takes them back from the old question when the person sends them
-// elsewhere, so that question waits for a reply of its own. Said to be part of
-// the work in progress ("1"), they stay its reply.
+// elsewhere, so that question waits for a reply of its own, by the message
+// they came in (never by matching its text). Said to be part of the work in
+// progress ("1"), they stay its reply.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -37,7 +38,6 @@ import {
   auditBlockField,
   findStageBySlug,
   latestMainWorkflowStageRunFloorForProject,
-  personsLatestGatePick,
   readAuditShardEvents,
   readProtectedResponse,
   reviewArtifactFingerprint,
@@ -60,7 +60,11 @@ const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const SESSION = "01995000-7a11-7000-8000-00000000b001";
 const CHANGE = "also add a test for an empty title";
 
-type Policy = "off" | "strict";
+type Policy = "off" | "relaxed" | "strict";
+
+// The state's Guard Policy line for `policy`.
+const guardPolicyLine = (policy: Policy, scope: string): string =>
+  policy === "strict" ? "- **Guard Policy**: strict (set by you)" : `- **Guard Policy**: ${policy} (from scope ${scope})`;
 type Harness = "claude" | "kiro" | "kiro-ide" | "codex";
 
 interface Emitted {
@@ -84,7 +88,7 @@ function project(policy: Policy): string {
   created.push(proj);
   const state = readFileSync(join(FIXTURES_DIR, "state-mid-inception.md"), "utf-8")
     .replace("- **Change Control**: strict (from scope bugfix)",
-      policy === "off" ? "- **Guard Policy**: off (from scope bugfix)" : "- **Guard Policy**: strict (set by you)")
+      guardPolicyLine(policy, "bugfix"))
     .replace("- **Summary Confirmation**: on (from scope bugfix)", "- **Summary Confirmation**: off (from scope bugfix)")
     .replace("- **Learnings**: on (from scope bugfix)", "- **Learnings**: off (from scope bugfix)")
     .replace("- [-] requirements-analysis ", "- [x] requirements-analysis ")
@@ -172,10 +176,11 @@ function planAnswers(proj: string): string[] {
     .map((row) => `${row.event}: ${auditBlockField(row.block, "Details")}`);
 }
 
-function routingQuestionOverThePlan(proj: string, planQuestionOpen = true): Emitted {
+// `typed` is the person's line; `passed` the words the agent hands `next`, as it read them.
+function routingQuestionOverThePlan(proj: string, planQuestionOpen = true, typed = `/aidlc ${CHANGE}`, passed = CHANGE): Emitted {
   if (planQuestionOpen) expect(next(proj).ask_type).toBe("plan-approval");
-  say(proj, `/aidlc ${CHANGE}`);
-  const print = next(proj, [CHANGE]);
+  say(proj, typed);
+  const print = next(proj, [passed]);
   expect(print.kind, JSON.stringify(print)).toBe("print");
   const request = /`[^`]* next (--request [0-9a-f]{8})`/.exec(print.message ?? "")?.[1];
   expect(request, print.message).toBeDefined();
@@ -208,7 +213,7 @@ function checkpointProject(policy: Policy): string {
 - **Construction Execution**: serial
 - **Construction Autonomy Mode**: gated
 - **Review Override**: none
-- ${policy === "off" ? "**Guard Policy**: off (from scope feature)" : "**Guard Policy**: strict (set by you)"}
+${guardPolicyLine(policy, "feature")}
 - **Summary Confirmation**: off (set by you)
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -317,9 +322,11 @@ function askCheckpoint(proj: string): void {
   expect(ask.code, ask.out).toBe(0);
 }
 
-function routingQuestionOverTheStep(proj: string, session = SESSION): Emitted {
-  const words = "also handle an empty list";
-  say(proj, `/aidlc ${words}`, "claude", session);
+// `typed` is the person's line; `words` what the agent hands `next`, as it read them.
+function routingQuestionOverTheStep(
+  proj: string, session = SESSION, words = "also handle an empty list", typed = `/aidlc ${words}`,
+): Emitted {
+  say(proj, typed, "claude", session);
   const print = next(proj, [words]);
   expect(print.kind, JSON.stringify(print)).toBe("print");
   const request = /`[^`]* next (--request [0-9a-f]{8})`/.exec(print.message ?? "")?.[1];
@@ -341,7 +348,7 @@ function gateProject(policy: Policy): string {
   created.push(proj);
   writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8")
     .replace("- **Change Control**: strict (from scope feature)",
-      `${policy === "off" ? "- **Guard Policy**: off (from scope feature)" : "- **Guard Policy**: strict (set by you)"}\n` +
+      `${guardPolicyLine(policy, "feature")}\n` +
         "- **Summary Confirmation**: off (set by you)"), "utf-8");
   say(proj, "/aidlc");
   expect(next(proj).kind).toBe("run-stage");
@@ -380,7 +387,6 @@ describe("words sent to separate new work leave the question the work in progres
       const routing = routingQuestionOverTheStep(proj);
       say(proj, "2");
       sendToNewWork(proj, routing);
-      expect(personsLatestGatePick(proj, SESSION, { stage: "feasibility" })).toBeNull();
       expect(report(proj, "approved", ["--user-input", "Approve"]).out).toContain("no new human reply");
       say(proj, "approve");
       expect(report(proj, "approved", ["--user-input", "Approve"]).out).toContain("Committed approve");
@@ -415,6 +421,34 @@ describe("words sent to separate new work leave the question the work in progres
       .not.toBe(0);
   });
 
+  // Taken back by the message they came in, never by matching its text: the
+  // agent hands `next` the words as it read them.
+  test("a Unit checkpoint gives back words the agent handed on as it read them", () => {
+    const proj = checkpointProject("off");
+    askCheckpoint(proj);
+    const typed = "please also handle an empty list, thanks";
+    const routing = routingQuestionOverTheStep(proj, SESSION, "also handle an empty list", `/aidlc ${typed}`);
+    expect(keptReply(proj)).toEqual({ choice: null, words: typed });
+    say(proj, "2");
+    sendToNewWork(proj, routing);
+    expect(keptReply(proj)).toEqual({ choice: null, words: null });
+  });
+
+  test("the code plan question gives back words the agent handed on as it read them", () => {
+    const proj = project("off");
+    const routing = routingQuestionOverThePlan(proj, true, `/aidlc please ${CHANGE}, thanks`, CHANGE);
+    say(proj, "2");
+    sendToNewWork(proj, routing);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    const refused = spawnSync(BUN, [
+      LOG, "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
+      "--project-dir", proj,
+    ], { cwd: proj, env: env(proj), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(refused.status).not.toBe(0);
+    expect(`${refused.stdout}${refused.stderr}`).toContain("has not replied");
+    expect(planAnswers(proj)).toEqual([]);
+  });
+
   test("codex: a later chat is not handed them as the stage's answer", () => {
     const proj = createOrchestrationTestProject();
     created.push(proj);
@@ -438,38 +472,97 @@ describe("words sent to separate new work leave the question the work in progres
     expect(later.kind, JSON.stringify(later)).toBe("run-stage");
     expect(later.kept_replies?.replies ?? []).not.toContain(words);
   });
+});
 
-  // A live run on Codex: "turn the specialist reviewers off for the rest of
-  // this work", typed while the code plan question was open, stayed kept as
-  // the first line of the plan approval's Person Reply, above "looks good, go
-  // ahead". A setting the engine applies is an instruction to it, like words
-  // sent to new work: the question keeps none of it, and the answer recorded
-  // later holds the answer alone.
-  test("a setting typed while the code plan question is open is not kept as its reply", () => {
+// A setting the engine applies takes nothing back from the open question: one
+// message can carry the setting and the answer ("looks good, build it, and turn
+// the specialist reviewers off"), and which it is is the agent's to read. Before,
+// the setting dropped every kept line equal to the person's latest words, so the
+// approval typed beside it was refused and the person was asked again.
+describe("a setting the engine applies leaves the open question's reply standing", () => {
+  const typedWithSetting = "looks good, build it, and turn the specialist reviewers off for the rest of this work";
+  const planReplies = (proj: string): string[] =>
+    readPlanApprovalAsk(proj, activeIntentUuid(proj) ?? "bare-space")?.replies?.map((reply) => reply.text) ?? [];
+  const approvePlan = (proj: string) => spawnSync(BUN, [
+    LOG, "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
+    "--project-dir", proj,
+  ], {
+    cwd: proj,
+    env: { ...env(proj), AIDLC_SESSION_OVERRIDE: SESSION, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  const planPersonReplies = (proj: string): Array<string | null> => readAuditShardEvents(proj)
+    .filter((row) => row.event === "PLAN_APPROVAL_RECORDED").map((row) => auditBlockField(row.block, "Person Reply"));
+  // The setting `next` names, run as the agent runs it.
+  const applySetting = (proj: string, flag: string, value: string): void => {
+    const applied = next(proj, [flag, value]);
+    expect(applied.kind, JSON.stringify(applied)).toBe("print");
+    expect(applied.message).toContain(`config set ${flag.slice(2)} ${value}`);
+    run(proj, [DISPATCHER, "engine", "config", "set", flag.slice(2), value], "",
+      { AIDLC_SESSION_OVERRIDE: SESSION, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" });
+  };
+  const approveCheckpoint = (proj: string) =>
+    engine(proj, ["bolt", "checkpoint", "--action", "approve", "--unit", "alpha", "--kind", "unit", "--user-input", "Approve"]);
+  const checkpointApprovals = (proj: string): Array<string | null> => readAuditShardEvents(proj)
+    .filter((row) => row.event === "GATE_APPROVED" && auditBlockField(row.block, "Unit") === "alpha")
+    .map((row) => auditBlockField(row.block, "Person Reply"));
+
+  for (const policy of ["off", "relaxed", "strict"] as const) {
+    test(`${policy}: an approval typed with a setting at the code plan question is recorded the first time`, () => {
+      const proj = project(policy);
+      expect(next(proj).ask_type).toBe("plan-approval");
+      say(proj, typedWithSetting);
+      applySetting(proj, "--review", "none");
+      expect(planReplies(proj)).toEqual([typedWithSetting]);
+      const answered = approvePlan(proj);
+      expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
+      expect(planPersonReplies(proj)).toEqual([typedWithSetting]);
+      expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Review Override**: none");
+    });
+
+    test(`${policy}: an approval typed with a setting at a Unit checkpoint is recorded the first time`, () => {
+      const proj = checkpointProject(policy);
+      askCheckpoint(proj);
+      const typed = "Approve, and keep the specialist reviews off for the rest of this work";
+      say(proj, typed);
+      applySetting(proj, "--review", "none");
+      expect(keptReply(proj).words).toBe(typed);
+      const approved = approveCheckpoint(proj);
+      expect(approved.code, approved.out).toBe(0);
+      expect(checkpointApprovals(proj)).toEqual([typed]);
+    });
+
+    // By the message, never by its words: a reply with the same words as the
+    // setting's message stays the checkpoint's.
+    test(`${policy}: a checkpoint reply with the same words as the setting's message stays`, () => {
+      const proj = checkpointProject(policy);
+      askCheckpoint(proj);
+      say(proj, "yes");
+      say(proj, "yes");
+      applySetting(proj, "--review", "none");
+      expect(keptReply(proj).words).toBe("yes\nyes");
+      const approved = approveCheckpoint(proj);
+      expect(approved.code, approved.out).toBe(0);
+      expect(checkpointApprovals(proj)).toEqual(["yes\\nyes"]);
+    });
+  }
+
+  // A live run on Codex typed "turn the specialist reviewers off for the rest
+  // of this work" while the code plan question was open, then "looks good, go
+  // ahead": both messages are the person's words on the approval's record, in
+  // the order they came, as at a gate.
+  test("a setting typed on its own while the code plan question is open stays on the record beside the answer", () => {
     const proj = project("off");
     expect(next(proj).ask_type).toBe("plan-approval");
-    const kept = (): string[] =>
-      readPlanApprovalAsk(proj, activeIntentUuid(proj) ?? "bare-space")?.replies?.map((reply) => reply.text) ?? [];
     const setting = "turn the specialist reviewers off for the rest of this work";
     say(proj, setting);
-    expect(kept()).toEqual([setting]);
-    const applied = next(proj, ["--review", "none"]);
-    expect(applied.kind, JSON.stringify(applied)).toBe("print");
-    expect(applied.message).toContain("config set review none");
-    expect(kept()).toEqual([]);
+    applySetting(proj, "--review", "none");
+    expect(planReplies(proj)).toEqual([setting]);
     say(proj, "looks good, go ahead");
-    const answered = spawnSync(BUN, [
-      LOG, "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
-      "--project-dir", proj,
-    ], {
-      cwd: proj,
-      env: { ...env(proj), AIDLC_SESSION_OVERRIDE: SESSION, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" },
-      encoding: "utf-8",
-      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-    });
+    const answered = approvePlan(proj);
     expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
-    const recorded = readAuditShardEvents(proj).filter((row) => row.event === "PLAN_APPROVAL_RECORDED");
-    expect(recorded.map((row) => auditBlockField(row.block, "Person Reply"))).toEqual(["looks good, go ahead"]);
+    expect(planPersonReplies(proj)).toEqual([`${setting}\\nlooks good, go ahead`]);
   });
 });
 

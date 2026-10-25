@@ -83,7 +83,8 @@ describe("Claude hook project-root anchoring", () => {
         state_sha256: stateDigest(state),
       });
       const hooks = settings("dist").hooks.PreToolUse
-        .filter((group) => new RegExp(`^(?:${group.matcher})$`).test("Bash"))
+        // Claude Code reads "*" as every tool, and any other matcher as a pattern.
+        .filter((group) => group.matcher === "*" || new RegExp(`^(?:${group.matcher})$`).test("Bash"))
         .flatMap((group) => group.hooks);
       // One process runs the PreToolUse checks (#2066), so the shipped entry for
       // a shell call is the guard group that carries the plan-approval guard.

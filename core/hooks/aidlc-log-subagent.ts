@@ -1,7 +1,10 @@
 // SubagentStop hook: Emit SUBAGENT_COMPLETED when a subagent finishes.
 //
 // Receives JSON on stdin with subagent info. Audits only while a workflow is
-// running.
+// running. Its pair, SUBAGENT_DISPATCHED (a helper was sent), is written by
+// recordSubagentDispatch: from the dispatch hook every adapter but Cursor's and
+// Kiro IDE's runs, and here for a `hook_event_name: "SubagentStart"` those two
+// forward.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
@@ -24,11 +27,51 @@ import {
   resolveProjectDirFromHook,
   resolveWorkflowSelection,
   REVIEW_FILE_DIGEST_FIELD,
+  reviewCopyRequest,
   reviewFileDigestOnDisk,
-  scopedReviewCopyName,
   stateFilePathForSelection,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
+
+/**
+ * Record that helpers were sent (SUBAGENT_DISPATCHED) in the workflow the
+ * sending chat has joined; a completion of the same agent closes it
+ * (subagentDispatchesShowNoReviewer). One row per dispatch: a crew's roles are
+ * one row, as sent, and a dispatch that names no agent is `unknown`. A
+ * reviewer copy (Kiro) is recorded under its request's reviewer, as its
+ * completion is. Evidence only: a failure is a drop, which a review verdict
+ * reads as a doubt, and nothing here changes whether the helper goes.
+ */
+export function recordSubagentDispatch(projectDir: string, rawSessionId: unknown, agents: ReadonlyArray<string>): void {
+  const sessionId =
+    typeof rawSessionId === "string" && rawSessionId.length > 0 ? validSessionId(rawSessionId) : null;
+  let selection: ReturnType<typeof resolveWorkflowSelection>;
+  try {
+    selection = resolveWorkflowSelection(projectDir, { sessionId: sessionId ?? undefined });
+    if (getField(readFileSync(stateFilePathForSelection(projectDir, selection), "utf-8"), "Status") !== "Running") return;
+    if (selection.intent !== null && workflowParticipation(projectDir, selection) !== "participant") return;
+  } catch {
+    return;
+  }
+  const intent = selection.intent ?? undefined;
+  const space = intent ? selection.space : undefined;
+  try {
+    const named = agents.map((agent) => agent.trim()).filter((agent) => agent !== "");
+    const agentType = named.length === 0 ? "unknown" : named.join(",");
+    const copy = named.length === 1 && isScopedReviewCopy(agentType)
+      ? reviewCopyRequest(openReviewRequests(readAuditShardEvents(projectDir, intent, space)), agentType)
+      : undefined;
+    appendAuditEntry(
+      "SUBAGENT_DISPATCHED",
+      copy ? { "Agent Type": copy.reviewer, "Dispatch Agent": agentType } : { "Agent Type": agentType },
+      projectDir,
+      intent,
+      space,
+    );
+  } catch (e) {
+    recordHookDrop(projectDir, "log-subagent", `dispatch not recorded: ${errorMessage(e)}`, intent, space);
+  }
+}
 
 export async function run(input: string): Promise<number> {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -48,6 +91,12 @@ export async function run(input: string): Promise<number> {
   }
 
   const rawSessionId = parsed.session_id;
+  // A helper sent, not one finished: only its record, no completion, ledger
+  // change or heartbeat (a beat is read as a completion hook that ran).
+  if (parsed.hook_event_name === "SubagentStart") {
+    recordSubagentDispatch(projectDir, rawSessionId, [typeof parsed.agent_type === "string" ? parsed.agent_type : ""]);
+    return 0;
+  }
   const sessionId =
     typeof rawSessionId === "string" && rawSessionId.length > 0
       ? validSessionId(rawSessionId)
@@ -108,7 +157,7 @@ export async function run(input: string): Promise<number> {
   if (isScopedReviewCopy(agentType)) {
     try {
       openRequests = openReviewRequests(readAuditShardEvents(projectDir, intent, space));
-      const request = openRequests.find((open) => scopedReviewCopyName(open.requestId) === agentType);
+      const request = reviewCopyRequest(openRequests, agentType);
       if (request) {
         dispatchAgent = agentType;
         agentType = request.reviewer;

@@ -31,7 +31,10 @@
 //      agent's text (question-rendering annex), not a protocol gate the driver
 //      can answer - so the first turn ends on them, and ONE bounded follow-up
 //      turn on the SAME keepAlive session answers with the recommended
-//      defaults. Two turns maximum; the disk poll spans both.
+//      defaults. An isolated run still asks its summary confirmation after
+//      that (it reads only its own scope's setting, so "do not ask me" does not
+//      switch it off), and a third turn answers it. Three turns maximum; the
+//      disk poll spans them all.
 //
 // ASSERTABLE SURFACES (on-disk + tool trace, never prose):
 //   - requirements.md exists without an embedded review. REVIEW_COMPLETED
@@ -86,7 +89,7 @@ function remainingWorkMs(): number {
   })!;
 }
 
-// Two drive turns share the budget; leave headroom for setup/asserts.
+// The drive turns share the budget; leave headroom for setup/asserts.
 
 const REVIEWER_SLUG = "aidlc-product-lead-agent";
 const STAGE = "requirements-analysis";
@@ -219,6 +222,12 @@ describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kir
               ` stage now, including the reviewer step. Do not ask me anything.`,
           );
         }
+        // Bounded third turn: the person confirms the summary the isolated run
+        // still asks before it generates.
+        let r3: Awaited<ReturnType<typeof driveKiroAcp>> | undefined;
+        if (!completedReview(proj) && r2?.stopReason === "end_turn") {
+          r3 = await driveUntilReview(session, proj, "Looks correct");
+        }
 
         // §12a on disk: the primary artifact and the separately recorded review
         // both exist. The completion verifies record bytes and receipt ownership.
@@ -264,7 +273,7 @@ describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kir
         // still pointed at the dead root path would recreate it here.
         expect(existsSync(join(proj, "aidlc-docs"))).toBe(false);
 
-        const allCalls = [...r1.toolCalls, ...(r2?.toolCalls ?? [])];
+        const allCalls = [...r1.toolCalls, ...(r2?.toolCalls ?? []), ...(r3?.toolCalls ?? [])];
         // The request's project-relative reviewFile is the native write target.
         // The logger deletes this draft on commit, so inspect the completed tool
         // call and retained record body instead of requiring the draft to remain.
@@ -298,7 +307,7 @@ describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kir
         // test; a SYSTEMATIC failure is. Reject only issues that the on-disk
         // outcome (asserted above) did not absorb: hook blocks and repeated
         // failures of the same call.
-        const issues = [...r1.toolCallIssues, ...(r2?.toolCallIssues ?? [])];
+        const issues = [...r1.toolCallIssues, ...(r2?.toolCallIssues ?? []), ...(r3?.toolCallIssues ?? [])];
         const systematic = issues.filter(
           (issue) =>
             issue.output.join("\n").includes("PreToolHook blocked") ||

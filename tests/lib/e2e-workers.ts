@@ -75,13 +75,21 @@ function allocatedCopyBytes(path: string, sourceRoot: string): number {
   return 4096 + readdirSync(path).reduce((sum, entry) => sum + allocatedCopyBytes(join(path, entry), sourceRoot), 0);
 }
 
+// On Windows the shorter of the user's and the system's temp folder comes
+// first: under windows-latest's user temp a test project is deep enough that
+// config says the folder is too deep for AI-DLC's records, and a test whose
+// subject is not the folder's depth should meet a folder like a person's.
+async function defaultTemporaryRoots(): Promise<string[]> {
+  if (process.platform !== "win32") return [tmpdir(), "/var/tmp"];
+  const roots = [tmpdir(), join(process.env.SystemRoot || "C:\\Windows", "Temp")];
+  const [user, system] = await Promise.all(roots.map(async (root) => (await realpath(root).catch(() => root)).length));
+  return system < user ? [roots[1], roots[0]] : roots;
+}
+
 /** Some applications discover .git markers even when Git rejects the marker.
  * Avoid both valid repositories and incomplete markers without modifying them. */
-export async function createE2eTemporaryRoot(candidates = [
-  tmpdir(),
-  process.platform === "win32" ? join(process.env.SystemRoot || "C:\\Windows", "Temp") : "/var/tmp",
-]): Promise<string> {
-  for (const candidate of new Set(candidates)) {
+export async function createE2eTemporaryRoot(candidates?: string[]): Promise<string> {
+  for (const candidate of new Set(candidates ?? await defaultTemporaryRoots())) {
     let base: string;
     try {
       base = await realpath(candidate);

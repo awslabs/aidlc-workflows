@@ -28,6 +28,7 @@ import {
   readAuditShardEvents,
   summaryConfirmationCommands,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -108,6 +109,17 @@ function rows(proj: string, event: string) {
   return readAuditShardEvents(proj).filter((entry) => entry.event === event);
 }
 
+// A reply of the person's as the prompt hook keeps it: their message and the
+// turn that names it. Returns the message id.
+function replied(proj: string, words: string): string {
+  const stored = saveMessage(proj, {
+    session: null, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text: words, picker: null,
+    words, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+  });
+  appendAuditEntry("HUMAN_TURN", { "Message Id": stored.id }, proj);
+  return stored.id;
+}
+
 function presentSummary(proj: string, questions: string): void {
   const decision = run(
     ["decision", "--stage", STAGE, "--checkpoint", "summary-confirmation", "--questions-file", questions,
@@ -150,15 +162,15 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
   });
 
   // The summary was asked in the plain form and the person answered it: the
-  // agent records it with its checkpoint, and that reply answers it, so the
-  // person is never asked again.
+  // agent records it with its checkpoint and names their reply, so the person
+  // is never asked again.
   test("a plain answer to a plain summary question is recorded from the reply already given", () => {
     const { proj, questions } = project();
     appendAuditEntry("DECISION_RECORDED", {
       Stage: STAGE, Decision: "Does this all look correct?", Options: "Looks correct,Request changes",
     }, proj);
-    appendAuditEntry("HUMAN_TURN", {}, proj);
     const words = "the date is wrong, it should be Q3";
+    const id = replied(proj, words);
     const result = run(["answer", "--stage", STAGE, "--details", words], proj);
     expect(result.status).toBe(1);
     expect(result.error).toContain("log.ts decision --checkpoint summary-confirmation");
@@ -173,25 +185,29 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
     );
     expect(decision.status, decision.stderr).toBe(0);
     writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:\n", "[Answer]: Request changes\n"));
-    const recorded = run(
-      ["answer", "--checkpoint", "summary-confirmation", "--stage", STAGE, "--questions-file", questions,
-        "--details", `Request changes: ${words}`],
-      proj,
-    );
+    const answer = ["answer", "--checkpoint", "summary-confirmation", "--stage", STAGE, "--questions-file", questions,
+      "--details", `Request changes: ${words}`];
+    // Their reply came before the checkpoint was recorded: the step names it.
+    const unnamed = run(answer, proj);
+    expect(unnamed.status).toBe(1);
+    expect(unnamed.error).toStartWith(`If their message ${id} (sent `);
+    expect(unnamed.error).not.toContain("the date is wrong");
+    const recorded = run([...answer, "--message", id], proj);
     expect(recorded.status, recorded.stderr).toBe(0);
     expect(rows(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(1);
     expect(rows(proj, "HUMAN_TURN")).toHaveLength(turns);
   });
 
-  // The tool proves only a reply since the person's last answer; which question
-  // it answers is the agent's reading, so the engine says it back.
-  test("a reply after another question in between counts when the agent reads it as the summary's, said back", () => {
+  // A reply from before the summary's own question record counts when the
+  // agent names it: which question it answers is the agent's reading, so the
+  // engine says it back.
+  test("a reply after another question in between counts when the agent names it as the summary's, nothing said back", () => {
     const { proj, questions } = project();
     appendAuditEntry("DECISION_RECORDED", {
       Stage: STAGE, Decision: "Does this all look correct?", Options: "Looks correct,Request changes",
     }, proj);
     appendAuditEntry("DECISION_RECORDED", { Stage: "user-stories", Decision: "Which persona first?", Options: "Admin,Guest" }, proj);
-    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const id = replied(proj, "looks right to me");
     const decision = run(
       ["decision", "--stage", STAGE, "--checkpoint", "summary-confirmation", "--questions-file", questions,
         "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes"],
@@ -201,18 +217,19 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
     writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:\n", "[Answer]: Looks correct\n"));
     const recorded = run(
       ["answer", "--checkpoint", "summary-confirmation", "--stage", STAGE, "--questions-file", questions,
-        "--details", "Looks correct"],
+        "--details", "Looks correct", "--message", id],
       proj,
     );
     expect(recorded.status, recorded.error).toBe(0);
     expect(rows(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(1);
-    expect((JSON.parse(recorded.stdout.trim().split("\n").at(-1)!) as { say?: string }).say)
-      .toBe('Recorded your reply for "Does this all look correct?".');
+    expect((JSON.parse(recorded.stdout.trim().split("\n").at(-1)!) as { say?: string }).say).toBeUndefined();
   });
 
-  test("a summary recorded with its checkpoint after another answer still waits for the person", () => {
+  // An answer spends no reply, but a reply from before the summary's question
+  // record is no confirmation of it unless the agent names it; a turn that kept
+  // no message has nothing to name, so the step is to show the summary.
+  test("a summary recorded with its checkpoint after another answer waits for a reply to it", () => {
     const { proj, questions } = project();
-    // A reply already used by another answer is not one to the summary.
     appendAuditEntry("HUMAN_TURN", {}, proj);
     appendAuditEntry("QUESTION_ANSWERED", { Stage: STAGE, Details: "The form" }, proj);
     const decision = run(
@@ -228,7 +245,10 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
       proj,
     );
     expect(early.status).toBe(1);
-    expect(early.error).toContain("no human reply has arrived since their last answer");
+    expect(early.error).toStartWith("Cannot record the summary choice because");
+    expect(early.error).toContain("Show the summary and end your turn; their next reply answers it.");
+    expect(early.error).not.toContain("--message");
+    expect(rows(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(0);
   });
 
   test("a plain answer of Request changes carries that choice into the command", () => {

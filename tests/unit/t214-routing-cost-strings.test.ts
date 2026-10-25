@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:scope-change, subcommand:aidlc-utility:intent-create
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:scope-change, subcommand:aidlc-utility:intent-create, audit:SCOPE_CHANGED
 //
 // t214 - the scope-cost preview reaches the emitted routing strings (issue:
 // preview the cost at scope confirmation). t213 pins the helper; this pins the
@@ -15,7 +15,8 @@
 //   - intent create's "State initialized" line says that print's count, for
 //     every shipped scope on a new project and on existing code, and
 //   - scope-change stdout carries the "Approval gates:" line (greenfield
-//     reverse-engineering adjustment applied, matching the handler).
+//     reverse-engineering adjustment applied, matching the handler), and the
+//     SCOPE_CHANGED row says the same stages and gates.
 //
 // Mechanism: CLI spawn of the shipped dist engine (t198's convention) - no LLM,
 // unit tier.
@@ -40,6 +41,7 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { auditEvents, field } from "../harness/scope-run.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -296,17 +298,21 @@ describe("t214 creation print carries the cost parenthetical", () => {
 });
 
 describe("t214 scope-change stdout carries the stage and gate counts", () => {
-  test("scope change --scope mvp says its stages and approval gates in one line", () => {
+  // feature to mvp on the mid-ideation record, as the engine writes it: the
+  // Stage Progress note the switch rewrites the stages under, and a new
+  // project's plan with no Reverse Engineering.
+  function switchToMvp(): RunResult {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
-    // The record as the engine writes it: the Stage Progress note the switch
-    // rewrites the stages under, and a new project's plan with no Reverse
-    // Engineering.
     const file = seededStateFile(proj);
     writeFileSync(file, readFileSync(file, "utf-8")
       .replace("## Stage Progress\n", "## Stage Progress\n<!-- Checkbox states: [ ] not started -->\n")
       .replace("- [ ] reverse-engineering \u2014 EXECUTE", "- [ ] reverse-engineering \u2014 SKIP"));
-    const r = runUtility(proj, ["scope-change", "--scope", "mvp"]);
+    return runUtility(proj, ["scope-change", "--scope", "mvp"]);
+  }
+
+  test("scope change --scope mvp says its stages and approval gates in one line", () => {
+    const r = switchToMvp();
     expect(r.rc).toBe(0);
     // The fixture is Greenfield, so reverse-engineering EXECUTE -> SKIP. Market
     // Research, done before the switch, still counts, as the progress line counts it.
@@ -315,6 +321,22 @@ describe("t214 scope-change stdout carries the stage and gate counts", () => {
       `Switched to mvp (the set of stages this work runs): ${mvp.shown + 1} stages (2 done), ` +
         `${mvp.gates + 1} approval gates. You can switch back to feature any time.`,
     );
+  });
+
+  test("the SCOPE_CHANGED row counts the stages and gates the line says", () => {
+    const r = switchToMvp();
+    expect(r.rc).toBe(0);
+    const said = /: (\d+) stages \(\d+ done\), (\d+) approval gates\./.exec(r.out);
+    expect(said, r.out).not.toBeNull();
+    const rows = auditEvents(proj).filter((e) => e.event === "SCOPE_CHANGED");
+    expect(rows).toHaveLength(1);
+    expect(field(rows[0].block, "Stages in Scope")).toBe(said![1]);
+    expect(field(rows[0].block, "Approval Gates")).toBe(said![2]);
+    // The change from the count the person read before: feature's stages on
+    // this record, Reverse Engineering off.
+    const before = counts(GRID.feature.stages, true).shown;
+    const delta = Number(said![1]) - before;
+    expect(field(rows[0].block, "Stage Count Delta")).toBe(delta >= 0 ? `+${delta}` : String(delta));
   });
 });
 

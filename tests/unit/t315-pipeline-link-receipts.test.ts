@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-log:link, audit:PIPELINE_LINK_COMPLETED, function:codekbStoreIsCurrent, function:codekbSourceRoot, function:latestPipelineLinkArtifactMtime, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:singleStageAttemptIsOpen, function:checkPipelineLinkEvidence, function:pipelineLinkWayOn
+// covers: subcommand:aidlc-log:link, subcommand:aidlc-state:reuse-artifact, function:developerHandoffPaths, audit:PIPELINE_LINK_COMPLETED, function:codekbStoreIsCurrent, function:codekbSourceRoot, function:latestPipelineLinkArtifactMtime, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:singleStageAttemptIsOpen, function:checkPipelineLinkEvidence, function:pipelineLinkWayOn
 //
 // Pipeline links are durable, ordered completion evidence. The log tool owns
 // each receipt; the engine and direct state transitions require the complete
@@ -14,9 +14,11 @@ import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   cpSync,
+  existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -32,6 +34,7 @@ import {
   cleanupTestProject,
   createTestProject,
   DEFAULT_SPACE,
+  removeWorkspaceRecord,
   runOrchestrateNext,
   seedAidlcMemory,
   seededAuditDir,
@@ -736,7 +739,7 @@ describe("t315 pipeline link receipts", () => {
       { link: FINAL, repo: null },
     ]);
 
-    writeDeveloperHandoff(proj);
+    writeFileSync(handoff, "## Developer Code Scan Results\n\nA rescan.\n", "utf-8");
     const rewrittenAt = new Date(receiptMtime + 1_000);
     utimesSync(handoff, rewrittenAt, rewrittenAt);
     expect(pipelineLinkEvidence(proj, {
@@ -757,6 +760,82 @@ describe("t315 pipeline link receipts", () => {
       lead_agent: LEAD,
       support_agents: [FINAL],
     }).completed).toEqual([LEAD, FINAL]);
+  });
+
+  // A clone, a plain copy or a branch switch rewrites the handoff's file time
+  // and nothing else: under strict the scan the developer did still stands.
+  test("under Guard Policy strict, a copy that changes only the handoff's file time keeps both links", () => {
+    const proj = pipelineProject();
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    expect(runLog(proj, LEAD).rc).toBe(0);
+    expect(runLog(proj, FINAL).rc).toBe(0);
+    const node = { slug: RE_STAGE, lead_agent: LEAD, support_agents: [FINAL] };
+
+    const handoff = developerHandoffPath(proj);
+    const later = new Date(statSync(handoff).mtimeMs + 60_000);
+    utimesSync(handoff, later, later);
+    expect(pipelineLinkEvidence(proj, node).completed).toEqual([LEAD, FINAL]);
+    const wholeSeconds = new Date(Math.floor(statSync(handoff).mtimeMs / 1_000) * 1_000 - 1_000);
+    utimesSync(handoff, wholeSeconds, wholeSeconds);
+    expect(pipelineLinkEvidence(proj, node).completed).toEqual([LEAD, FINAL]);
+
+    const copy = mkdtempSync(join(tmpdir(), "aidlc-t315-copy-"));
+    projects.push(copy);
+    cpSync(proj, copy, { recursive: true });
+    // A clone writes the file anew; a copy on Windows keeps its time, so the
+    // copy is given the time a clone would.
+    const cloned = new Date(statSync(handoff).mtimeMs + 120_000);
+    utimesSync(developerHandoffPath(copy), cloned, cloned);
+    expect(pipelineLinkEvidence(copy, node).completed).toEqual([LEAD, FINAL]);
+
+    appendFileSync(handoff, "\nPost-receipt edit.\n");
+    expect(pipelineLinkEvidence(proj, node).completed).toEqual([]);
+  });
+
+  // Git for Windows checks committed text out with CRLF line endings, and a
+  // checkout elsewhere with LF: the handoff's text is the same, so its links
+  // stand whichever way it was written when they were recorded.
+  test("under Guard Policy strict, a checkout that changes only the handoff's line endings keeps both links", () => {
+    const node = { slug: RE_STAGE, lead_agent: LEAD, support_agents: [FINAL] };
+    const proj = pipelineProject();
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    expect(runLog(proj, LEAD).rc).toBe(0);
+    expect(runLog(proj, FINAL).rc).toBe(0);
+    const handoff = developerHandoffPath(proj);
+    const text = readFileSync(handoff, "utf-8");
+    writeFileSync(handoff, text.replace(/\n/g, "\r\n"), "utf-8");
+    expect(pipelineLinkEvidence(proj, node).completed).toEqual([LEAD, FINAL]);
+    appendFileSync(handoff, "\r\nPost-receipt edit.\r\n");
+    expect(pipelineLinkEvidence(proj, node).completed).toEqual([]);
+
+    const windows = pipelineProject();
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, windows);
+    const written = developerHandoffPath(windows);
+    mkdirSync(dirname(written), { recursive: true });
+    writeFileSync(written, text.replace(/\n/g, "\r\n"), "utf-8");
+    expect(runLog(windows, LEAD, undefined, false, false).rc).toBe(0);
+    expect(runLog(windows, FINAL).rc).toBe(0);
+    writeFileSync(written, text, "utf-8");
+    expect(pipelineLinkEvidence(windows, node).completed).toEqual([LEAD, FINAL]);
+  });
+
+  // A link recorded before line endings were read as LF holds the raw bytes'
+  // digest: on the checkout that wrote it, it still stands.
+  test("under Guard Policy strict, a link recorded over CRLF bytes before line endings were read as LF still stands", () => {
+    const node = { slug: RE_STAGE, lead_agent: LEAD, support_agents: [FINAL] };
+    const proj = pipelineProject();
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    const handoff = developerHandoffPath(proj);
+    mkdirSync(dirname(handoff), { recursive: true });
+    writeFileSync(handoff, "## Developer Code Scan Results\r\n\r\nWritten on Windows.\r\n", "utf-8");
+    process.env.AIDLC_TEST_RAW_LINE_ENDINGS = "1";
+    try {
+      expect(runLog(proj, LEAD, undefined, false, false).rc).toBe(0);
+    } finally {
+      delete process.env.AIDLC_TEST_RAW_LINE_ENDINGS;
+    }
+    expect(runLog(proj, FINAL).rc).toBe(0);
+    expect(pipelineLinkEvidence(proj, node).completed).toEqual([LEAD, FINAL]);
   });
 
   // Under Guard Policy relaxed or off, a targeted fix after Request Changes, or
@@ -2015,5 +2094,130 @@ describe("t315 each link's exact command, and a held link lands again", () => {
     expect(flat(stage)).toContain("Under Guard Policy strict, a rejection or resume cannot reuse an older file");
     expect(flat(read("protocols", "stage-protocol.md"))).toContain("Under Guard Policy strict, the developer must perform fresh analysis");
     expect(flat(ensemble)).toContain("a rejection under Guard Policy strict");
+  });
+});
+
+// An isolated run in a project with no work: `next --single` records the
+// run's start in the space's own record, so the links it prints, a reuse of
+// the store and its completion land there too (#2953).
+describe("t315 an isolated run in a project with no work", () => {
+  const NO_WORK_RECORD = ["aidlc", "spaces", DEFAULT_SPACE, "intents"];
+
+  function noWorkProject(): string {
+    const proj = createTestProject();
+    projects.push(proj);
+    seedAidlcMemory(proj);
+    removeWorkspaceRecord(proj);
+    return proj;
+  }
+
+  function startIsolated(proj: string): Record<string, unknown> {
+    const run = runOrchestrateNext(ORCH, proj, ["--scope", "enterprise", "--stage", RE_STAGE, "--single"], { env: childEnv() });
+    expect(run.directive?.kind, JSON.stringify(run.directive)).toBe("run-stage");
+    return run.directive as Record<string, unknown>;
+  }
+
+  // The words after `link` of a printed record command, run as the agent runs it.
+  function runPrinted(proj: string, command: string): { rc: number; out: string } {
+    const words = command.slice(command.indexOf(" link ") + 1).split(" ");
+    const result = spawnSync(BUN, [LOG, ...words, "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: childEnv(),
+    });
+    return { rc: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  }
+
+  // The agent's own reuse command: no test switch in its environment.
+  function reuseStore(proj: string, store: string): { rc: number; out: string } {
+    const result = spawnSync(
+      BUN,
+      [STATE, "reuse-artifact", RE_STAGE, "--decision", "keep", "--artifacts", store, "--single", "--project-dir", proj],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: childEnv() },
+    );
+    return { rc: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  }
+
+  function finish(proj: string): Record<string, unknown> | null {
+    return report(proj, ["--single", "--stage", RE_STAGE, "--result", "completed"]).directive;
+  }
+
+  function shards(proj: string): Record<string, string> {
+    const dir = join(proj, ...NO_WORK_RECORD, "audit");
+    if (!existsSync(dir)) return {};
+    return Object.fromEntries(readdirSync(dir).sort().map((name) => [name, readFileSync(join(dir, name), "utf-8")]));
+  }
+
+  function leavesNoWork(proj: string): void {
+    expect(existsSync(join(proj, ...NO_WORK_RECORD, "aidlc-state.md"))).toBe(false);
+    expect(existsSync(join(proj, ...NO_WORK_RECORD, "intents.json"))).toBe(false);
+  }
+
+  test("the first scan: the links the run prints record beside its start and the run finishes", () => {
+    const proj = noWorkProject();
+    const directive = startIsolated(proj);
+    const record = (directive.pipeline as { record: Array<{ link: string; command: string }> }).record;
+    expect(record.map((row) => row.link)).toEqual([LEAD, FINAL]);
+    const handoff = `${NO_WORK_RECORD.join("/")}/inception/${RE_STAGE}/developer-scan.md`;
+    expect(record[0].command).toContain(`--artifact ${handoff}`);
+    mkdirSync(join(proj, dirname(handoff)), { recursive: true });
+    writeFileSync(
+      join(proj, handoff),
+      "## Developer Code Scan Results\n\n### Scan Coverage\n\n- src/\n\n## Handoff Summary\n\nCurrent attempt.\n",
+      "utf-8",
+    );
+    for (const row of record) {
+      const recorded = runPrinted(proj, row.command);
+      expect(recorded.rc, recorded.out).toBe(0);
+      expect(recorded.out).toContain('"emitted":"PIPELINE_LINK_COMPLETED"');
+    }
+    const shard = Object.values(shards(proj));
+    expect(shard).toHaveLength(1);
+    const blocks = shard[0].split("\n---\n").filter((block) => block.includes(`**Workflow**: single-stage:${RE_STAGE}`));
+    expect(blocks.map((block) => /\*\*Event\*\*: (\S+)/.exec(block)?.[1])).toEqual([
+      "STAGE_STARTED",
+      "PIPELINE_LINK_COMPLETED",
+      "PIPELINE_LINK_COMPLETED",
+    ]);
+    writeCurrentCodekbStore(proj);
+    const done = finish(proj);
+    expect(done?.kind, JSON.stringify(done)).toBe("done");
+    expect(done?.narration).toBe("The code knowledge base now matches the code.");
+    leavesNoWork(proj);
+  });
+
+  test("a second run that reuses the store finishes", () => {
+    const proj = noWorkProject();
+    const current = writeCurrentCodekbStore(proj);
+    startIsolated(proj);
+    const reused = reuseStore(proj, current.store);
+    expect(reused.rc, reused.out).toBe(0);
+    expect(reused.out).toContain('"emitted":"ARTIFACT_REUSED"');
+    const done = finish(proj);
+    expect(done?.kind, JSON.stringify(done)).toBe("done");
+    expect(done?.narration).toBe("The code knowledge base now matches the code.");
+    leavesNoWork(proj);
+  });
+
+  test("a link with no isolated run open is refused and writes nothing", () => {
+    const proj = noWorkProject();
+    const refused = runLog(proj, LEAD, undefined, true);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("No active workflow is selected");
+    expect(shards(proj)).toEqual({});
+  });
+
+  test("a link after the run closed is refused again and writes nothing", () => {
+    const proj = noWorkProject();
+    const current = writeCurrentCodekbStore(proj);
+    startIsolated(proj);
+    expect(reuseStore(proj, current.store).rc).toBe(0);
+    expect(finish(proj)?.kind).toBe("done");
+    expect(singleStageAttemptIsOpen(proj, RE_STAGE)).toBe(false);
+    const before = shards(proj);
+    const refused = runLog(proj, FINAL, undefined, true);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("No active workflow is selected");
+    expect(shards(proj)).toEqual(before);
   });
 });

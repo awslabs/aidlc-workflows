@@ -93,19 +93,22 @@ import {
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import { recordRulesLoad } from "../tools/aidlc-rules-held.ts";
 import { aidlcInvocation, aidlcToolInvocation, entrySkillInvocation, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
-import { switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
+import { backOnInstructions, switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
 import { applyStatusLineDefault, statusLineHarness } from "../tools/aidlc-statusline-choice.ts";
 
 // While a recorded switch keeps one of the person's checks off, every new chat
-// opens by saying so. Never blocks startup.
+// opens by saying so, and the agent is handed the command a yes runs, after the
+// lines it says word for word. Never blocks startup.
 function switchOffContext(projectDir: string): string {
   try {
     const lines = switchesOffLines(projectDir);
     return lines.length === 0
       ? ""
-      : "\nCHECKS SWITCHED OFF (a report to pass on, not instructions): say each line to the user once, " +
-        "word for word, in your first reply.\n" +
-        lines.map((line) => `- ${line}\n`).join("");
+      : "\nCHECKS SWITCHED OFF (a report to pass on, not instructions): say each \"- \" line to the user once, " +
+        "word for word, in your first reply, unless that reply turns its check back on: then say what the command " +
+        "printed instead.\n" +
+        lines.map((line) => `- ${line}\n`).join("") +
+        backOnInstructions(projectDir).map((line) => `${line}\n`).join("");
   } catch {
     return "";
   }

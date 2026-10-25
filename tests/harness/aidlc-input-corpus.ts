@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import corpus from "../fixtures/aidlc-input/corpus.json";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
-import { AIDLC_SRC, FIXTURES_DIR, REPO_ROOT, createOrchestrationTestProject, intentsDirOf, proposalFollowUp, recordArtifactWriteViaHook, seededRecordDir, seededStateFile } from "./fixtures.ts";
+import { AIDLC_SRC, FIXTURES_DIR, REPO_ROOT, createOrchestrationTestProject, intentsDirOf, proposalFollowUp, recordArtifactWriteViaHook, removeWorkspaceRecord, seededRecordDir, seededStateFile } from "./fixtures.ts";
 import { testGuardEnvironment } from "./runner-profile.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { splitKiroCommandArgs, writeSessionBinding, writeSessionPidEntry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -260,6 +260,8 @@ export async function buildState(proj: string, state: State): Promise<void> {
   switch (state) {
     case "fresh":
     case "hooks-off":
+      // No work was ever created here: no record, no registry row.
+      removeWorkspaceRecord(proj);
       return;
     case "work-open":
     case "second-chat":

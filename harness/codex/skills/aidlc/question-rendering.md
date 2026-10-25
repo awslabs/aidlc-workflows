@@ -73,8 +73,9 @@ Map the spec fields 1:1:
   through." (Questions *files* still
   end every question with `X. Other (please specify)` per protocol §3 — the
   file format is harness-neutral.)
-- Limits: 1–3 questions per call, 2–3 options each. For 4+ options, split
-  across calls (options A–C, then D+); the questions file retains the full
+- Limits: 1-3 questions per call, 2-3 options each. A question from the
+  questions file with more options is asked as numbered prose instead
+  (Track 2, stage-protocol.md Step 3a); the questions file retains the full
   option set as the authoritative record.
 - **Answer capture**: the selection returns as the exact option label; record
   it verbatim (protocol: never summarize User Input).
@@ -178,7 +179,6 @@ Rules (both tracks):
   and add the note that it comes after one more revision. Never count the
   rounds yourself.
 - **No emergent options**: render exactly the spec's options (+ the escape).
-  The NO EMERGENT BEHAVIOR rule applies to the rendering, not just the spec.
 - **Prose response keys**: on Track 2, start every question at `1`, independent
   of numbered content earlier in the message or another question in the batch.
   Use unordered bullets for immediately preceding summaries. Visible `1` maps
@@ -202,7 +202,7 @@ Rules (both tracks):
   `select_commands[].selector` and execute that entry's complete `command`
   verbatim; never interpolate a selector. `new-work-routing` carries its routes
   as fields: `new_intent_command` (or a `scope_commands` entry for a corrected
-  scope), `compose_command`, and `continue_command` for the active workflow or,
+  scope; there is none when no plan is proposed), `compose_command`, and `continue_command` for the active workflow or,
   with `available_intents`, per-record `select_commands` and `reshape_commands`. Run them verbatim and
   retain the `--request` id through selection or composition. Existing intents with no selected cursor and
   pending work receive this ask on every harness, including after scope

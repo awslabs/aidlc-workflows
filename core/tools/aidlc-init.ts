@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { proveMessage } from "./aidlc-message-store.ts";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -137,6 +138,7 @@ import {
   _resetStageGraphForTests,
   activeSpace,
   activeWorkflowDescriptions,
+  CEREMONY_ENV,
   commandAtPersonsTerminal,
   composedPluginBase,
   DEFAULT_SPACE,
@@ -362,6 +364,7 @@ import {
   type TrustRecord,
 } from "./aidlc-config-diagnostics.ts";
 import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
+import { deepFolder } from "./aidlc-folder-depth.ts";
 import {
   LOCAL_SETTINGS_FILE,
   invalidateSettingsCache,
@@ -512,6 +515,8 @@ type ChoicesMutationContext = {
   settings?: SettingsMutation;
   /** A no-layer clear's other layers that also record the bypass. */
   extraSettings?: SettingsMutation[];
+  /** The id `--message` named: the message the person asked in. */
+  message?: string;
 };
 
 type SettingsMutation = {
@@ -557,12 +562,14 @@ const CONFIG_VALUE_FLAGS = new Set([
   "--hook-debug",
   "--bypass",
   "--clear-bypass",
+  "--message",
   "--writing-up-effort",
 ]);
 
 const CHOICE_VALUE_FLAGS = new Set([
   "--bypass",
   "--clear-bypass",
+  "--message",
   "--completions",
   "--default-scope",
   "--from",
@@ -3456,6 +3463,7 @@ function validateChoiceArgs(
         "--default-scope",
         "--harness",
         "--hook-debug",
+        "--message",
         "--plan-token",
         "--project-dir",
         "--sensor-timeout-ms",
@@ -3495,9 +3503,9 @@ function validateChoiceArgs(
   }
   // A check the person relies on is switched off for the project only when they
   // asked, by the rule every lowering follows (personAskedForThisLowering): from
-  // a chat, a turn of theirs since the last decision, or before any work their
-  // message there. A command no chat is named for (a script, a test) records as
-  // before.
+  // a chat, the message they asked in (--message), proved; a message that does
+  // not prove refuses with the proof's own words. A command no chat is named for
+  // (a script, a test) records as before.
   const lowered = section === "flags"
     ? valuesAfter(argv, "--bypass").find((name): name is RecordableProjectBypass =>
       (PERSON_CHECK_SWITCHES as readonly string[]).includes(name))
@@ -3510,8 +3518,14 @@ function validateChoiceArgs(
     } catch {
       chat = null;
     }
-    if (chat !== null && !personAskedForThisLowering(projectDir, chat) && !fenceKeyBypassed(projectDir, chat)) {
-      return guardSwitchRefusal(bypassedCheck(lowered), projectDir);
+    if (chat !== null) {
+      const named = valuesAfter(argv, "--message").at(-1);
+      const planApprovalOff = valuesAfter(argv, "--bypass").includes(CEREMONY_ENV.plan_approval);
+      const proof = named === undefined ? null : proveMessage(projectDir, named, "setting", { request: true, planApprovalOff });
+      if (proof !== null && "refusal" in proof) return proof.refusal;
+      if (!personAskedForThisLowering(proof?.message) && !fenceKeyBypassed(projectDir, chat)) {
+        return guardSwitchRefusal(bypassedCheck(lowered), projectDir);
+      }
     }
   }
   const mutationFlags = section === "flags"
@@ -4302,6 +4316,7 @@ function prepareChoiceSection(
       notes: summary.notes,
       ...(settings ? { settings } : {}),
       ...(extraSettings.length > 0 ? { extraSettings } : {}),
+      ...(valuesAfter(argv, "--message").length > 0 ? { message: valuesAfter(argv, "--message").at(-1) } : {}),
     },
   };
 }
@@ -7544,6 +7559,12 @@ function installedSources(
       // The explicit root may be a parent of distributions.
     }
   }
+  // A copied project's own tool (a Bun projection) has no installed runtime to
+  // refresh from: a native install holds the native form of whatever release it
+  // has, whose hooks call `aidlc`, so taking it would move the project to that
+  // release and swap its hooks. The copy fetches its own release instead
+  // (troubleshooting, the "workspace shell ready" row).
+  if (aidlcInvocation() !== "aidlc" && projectedDispatcher() !== null) return dedupeSourceRoots(roots);
   let selectedVersionRuntimeFound = false;
   const active = activeVersion();
   if (active) {
@@ -8898,6 +8919,11 @@ function renderFirstRunEnding(
   // record-hiding finding is read here, where the person looks.
   for (const warning of committedRecordIgnoreConflicts(projectDir)) {
     writeMenuRow("  Note: ", `${warning}.`);
+    process.stdout.write("\n");
+  }
+  const deep = deepFolder(projectDir);
+  if (deep) {
+    writeMenuRow("  Note: ", deep.note);
     process.stdout.write("\n");
   }
   const steps = choices.candidate.descriptor.firstRunSteps ??
@@ -11593,7 +11619,9 @@ function handleSettingsOnlySection(
     // cleared switch.
     const switchLines = section === "flags"
       ? [...new Set(mutations.flatMap((change) =>
-        recordSwitchChange(projectDir, change.target, change.previous, change.next, { otherFiles: false })
+        recordSwitchChange(projectDir, change.target, change.previous, change.next, {
+          otherFiles: false, message: valuesAfter(argv, "--message").at(-1),
+        })
       ))]
       : [];
     if (options.mode === "human") {
@@ -11879,13 +11907,25 @@ function settingsChangeLines(
       }
     }
   }
-  // A clear aimed at one layer leaves the switch on where another records it.
+  lines.push(...stillRecordedAfter(projectDir, mutations, harness));
+  return lines;
+}
+
+// The switches one settings change turned off or back on.
+function changedBypasses(change: SettingsMutation): string[] {
+  const before = new Set(change.previous?.flags?.bypasses ?? []);
+  const after = new Set(change.next?.flags?.bypasses ?? []);
+  return [...[...after].filter((name) => !before.has(name)), ...[...before].filter((name) => !after.has(name))];
+}
+
+// A clear aimed at one layer leaves the switch on where another records it:
+// one line for each such switch, with the command that clears it there.
+function stillRecordedAfter(projectDir: string, mutations: readonly SettingsMutation[], harness?: string): string[] {
   const cleared = mutations.flatMap((change) => {
     const after = new Set(change.next?.flags?.bypasses ?? []);
     return (change.previous?.flags?.bypasses ?? []).filter((name) => !after.has(name));
   });
-  for (const name of new Set(cleared)) lines.push(...stillRecordedLines(projectDir, name, harness));
-  return lines;
+  return [...new Set(cleared)].flatMap((name) => stillRecordedLines(projectDir, name, harness));
 }
 
 // What a harness.json answer changed, with the command that puts the earlier
@@ -12404,7 +12444,9 @@ function recordBypassesOnly(
     // The lines above already name any other file that still records a
     // cleared switch.
     const switchLines = [...new Set(mutations.flatMap((change) =>
-      recordSwitchChange(projectDir, change.target, change.previous, change.next, { otherFiles: false })
+      recordSwitchChange(projectDir, change.target, change.previous, change.next, {
+        otherFiles: false, message: context.message,
+      })
     ))];
     // With several harnesses and none named, no one harness's setup is the
     // person's to finish here.
@@ -12412,12 +12454,26 @@ function recordBypassesOnly(
       ? []
       : postApplyOutstandingActions(projectDir, context.harnessDir, context.harness);
     if (options.mode === "human") {
-      // The person sees what changed with its undo, and which check is now
-      // off or on again; anything more only when something still needs them.
-      writeMenuLines("", changes);
+      // The person sees which check is now off or on again and, where they
+      // need it, what changed with its undo; anything more only when
+      // something still needs them. From a chat, for their own file, the
+      // switch's own line already says what changed and the way back, and the
+      // agent turns the check back on when they ask, never handing them a
+      // command, so the file, its undo and the open workflows stay in the JSON
+      // result. A change to the project's shared file or the machine's keeps
+      // them (from a chat chatBackOnLines never clears either, so the file and
+      // its undo are the person's way back), and so does a switch with no line
+      // of its own. A switch another file still keeps off is said either way:
+      // its own line is left out of switchLines for that one.
+      const ownSwitchesOnly = mutations.every((change) => change.target === "local") &&
+        mutations.flatMap(changedBypasses).every((name) => (PERSON_CHECK_SWITCHES as readonly string[]).includes(name));
+      const shown = switchLines.length > 0 && !commandAtPersonsTerminal() && ownSwitchesOnly
+        ? stillRecordedAfter(projectDir, mutations)
+        : changes;
+      writeMenuLines("", shown);
       writeMenuLines("", notes.map((note) => `Note: ${note}`));
       writeMenuLines("", switchLines);
-      if (changes.length + notes.length + switchLines.length === 0) {
+      if (shown.length + notes.length + switchLines.length === 0) {
         writeMenuLines("", [`configured flags settings for ${projectDir}`]);
       }
       if (outstandingActions.length > 0) {
@@ -13530,6 +13586,12 @@ export async function main(
         descriptor.rootIntegrations.some((integration) => integration.path === ".gitignore")
         ? committedRecordIgnoreConflicts(projectDir)
         : [];
+    // A Windows folder too deep for AI-DLC's records is named the same way, in
+    // one line; the folder stays where the person keeps it.
+    const deepProject = !choicesContext && !diagnosticsContext && !modelsContext
+      ? deepFolder(projectDir)?.note
+      : undefined;
+    if (deepProject) prepared.notes.push(deepProject);
     // Kiro's v3 engine and Kiro IDE run every hook JSON file in the hooks
     // directory; the v2 engine the agent-v1 row runs on reads none. A switch to
     // a row that registers its hooks that way names each such file AI-DLC does
@@ -13612,7 +13674,12 @@ export async function main(
     // edit map AI-DLC writes into this project; the person hears it once here.
     const shortForm = stamp.distribution === "opencode" ? openCodeGlobalShortFormNote() : null;
     if (shortForm) prepared.notes.push(shortForm);
-    const quietWarnings = [...hiddenRecords, ...switchWarnings, ...(shortForm ? [shortForm] : [])];
+    const quietWarnings = [
+      ...hiddenRecords,
+      ...(deepProject ? [deepProject] : []),
+      ...switchWarnings,
+      ...(shortForm ? [shortForm] : []),
+    ];
     const withQuietWarnings = (message: string): string =>
       options.mode === "quiet" && quietWarnings.length > 0
         ? `${message}${quietWarnings.map((warning) => `\nWarning: ${warning}`).join("")}`
@@ -13906,6 +13973,7 @@ export async function main(
           choicesContext.settings.target,
           choicesContext.settings.previous,
           choicesContext.settings.next,
+          { message: choicesContext.message },
         )
       : [];
     if (modelsContext && options.mode === "human") {
