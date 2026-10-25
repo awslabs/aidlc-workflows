@@ -42167,15 +42167,23 @@ export function effectivePlanAction(
 }
 
 // The stages the plan runs after Initialization, in run order: every one that
-// finished, and every one not skipped that the plan executes. Status, the
-// progress line and each stage's start line count from this one list.
-export function plannedStages(stateContent: string, scope: string): StageEntry[] {
+// finished, and every one not skipped that the plan executes, less each one the
+// work has passed without starting (a plan change put it behind the cursor, and
+// it never runs unless the person goes back to it). Reverse Engineering owed
+// there stays, since `next` runs it; `workRecordDir` lets that rule read the
+// work's own files, as `next` does. A plan switch's line and its audit row,
+// status, the progress line and each stage's start line count from this one list.
+export function plannedStages(stateContent: string, scope: string, workRecordDir?: string | null): StageEntry[] {
   const boxes = parseCheckboxes(stateContent);
   const stateOf = (slug: string) => boxes.find((c) => c.slug === slug)?.state;
   const runs = (slug: string) =>
     stateOf(slug) === "completed" ||
     (stateOf(slug) !== "skipped" && effectivePlanAction(slug, scope, stateContent) === "EXECUTE");
-  return loadStageGraph().filter((stage) => stage.phase !== "initialization" && runs(stage.slug));
+  const passedOver = (slug: string) =>
+    (stateOf(slug) ?? "pending") === "pending" && cursorPastStage(stateContent, slug) &&
+    !(slug === "reverse-engineering" && reverseEngineeringOwedBehindCursor(stateContent, workRecordDir));
+  return loadStageGraph().filter((stage) =>
+    stage.phase !== "initialization" && runs(stage.slug) && !passedOver(stage.slug));
 }
 
 // --- Plans composed for one piece of work ---

@@ -2087,7 +2087,8 @@ To get started:
   // is. Initialization's setup, done when the work was created, keeps its row
   // below and stays out of the count.
   const checkboxes = parseCheckboxes(content);
-  const planned = new Set(plannedStages(content, scope).map((s) => s.slug));
+  const workDir = selection.intent === null ? null : recordDir(projectDir, selection.intent, selection.space);
+  const planned = new Set(plannedStages(content, scope, workDir).map((s) => s.slug));
   const setup = new Set(graph.filter((s) => s.phase === "initialization").map((s) => s.slug));
   const scopedCheckboxes = checkboxes.filter((c) =>
     planned.has(c.slug) ||
@@ -12218,13 +12219,16 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       const back = oldScopeDef ? gridFor(oldScopeDef) : null;
       const switchBackRestores = back !== null && stagesStillToRun(contentBefore).every((stage) =>
         (back[stage.slug] === "EXECUTE") === (effectivePlanAction(stage.slug, oldScope, contentBefore) === "EXECUTE"));
-      const oldExecuteCount = oldScopeDef
-        ? graph.filter(s => (oldScopeDef.stages[s.slug] || "SKIP") === "EXECUTE").length
-        : 0;
-      const stageDelta = executeStages.length - oldExecuteCount;
+      // The stages the work runs on the new plan, the one list each stage's
+      // start, the progress line and status count; the row says the same
+      // counts as the line, and its delta is from the count the old plan gave.
+      const workDir = recordDir(projectDir, intent, space);
+      const boxes = new Map(updatedCheckboxes.map((c) => [c.slug, c.state]));
+      const shown = plannedStages(content, newScope, workDir);
+      const shownDone = shown.filter((stage) => boxes.get(stage.slug) === "completed").length;
+      const shownGates = gridCostSummary(Object.fromEntries(shown.map((stage) => [stage.slug, "EXECUTE" as const]))).gates;
+      const stageDelta = shown.length - plannedStages(contentBefore, oldScope, workDir).length;
       const deltaStr = stageDelta >= 0 ? `+${stageDelta}` : String(stageDelta);
-      const summary = gridCostSummary(adjustedMapping as Record<string, "EXECUTE" | "SKIP">);
-      const gates = summary.gates;
       const effectiveDepth = getField(content, "Depth") || "unknown";
       auditEntries.unshift(
         {
@@ -12233,8 +12237,8 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
             "Old Scope": oldScope,
             "New Scope": newScope,
             "Stage Count Delta": deltaStr,
-            "Stages in Scope": String(executeStages.length),
-            "Approval Gates": String(gates),
+            "Stages in Scope": String(shown.length),
+            "Approval Gates": String(shownGates),
             Depth: effectiveDepth,
           },
         },
@@ -12261,17 +12265,6 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         });
       }
       const droppedUnitWork = droppedUnitWorkLine(projectDir, contentBefore, content, intent, space);
-      // The stages the work runs on the new plan, from the one list the
-      // progress line and status count, less each stage the new plan adds
-      // behind the cursor: it never runs unless the person goes back to it.
-      // Reverse Engineering owed there stays, since `next` runs it.
-      const boxes = new Map(updatedCheckboxes.map((c) => [c.slug, c.state]));
-      const reOwed = reverseEngineeringOwedBehindCursor(content, recordDir(projectDir, intent, space));
-      const shown = plannedStages(content, newScope).filter((stage) =>
-        !(cursorPastStage(content, stage.slug) && (boxes.get(stage.slug) ?? "pending") === "pending") ||
-        (stage.slug === "reverse-engineering" && reOwed));
-      const shownDone = shown.filter((stage) => boxes.get(stage.slug) === "completed").length;
-      const shownGates = gridCostSummary(Object.fromEntries(shown.map((stage) => [stage.slug, "EXECUTE" as const]))).gates;
       // What happened and how to go back, then each stage it skipped, the Unit
       // work it dropped, and each setting whose value changed. Whether the
       // work goes on in the same turn is `next`'s call (its scope-change
