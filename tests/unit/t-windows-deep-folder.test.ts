@@ -256,8 +256,9 @@ describe("config and doctor in a project folder", () => {
   test("a short folder: neither config nor doctor says anything about it", async () => {
     const { RECORD_DEPTH } = await import(HELPER);
     const project = projectFolder(0);
-    // Short only because the temp folder is: a TEMP moved deep enough is the rig, not AI-DLC.
-    expect(project.length, project).toBeLessThanOrEqual(260 - 1 - RECORD_DEPTH);
+    // On Windows short only because the runner's temp folder is (run-tests picks the shorter of the user's and
+    // the system's): a TEMP deeper than that is the rig, not AI-DLC. Elsewhere any depth says nothing.
+    if (WINDOWS) expect(project.length, project).toBeLessThanOrEqual(260 - 1 - RECORD_DEPTH);
     const env = machineEnv(false);
     const setup = configure(project, env);
     expect(setup.status, setup.out).toBe(0);
