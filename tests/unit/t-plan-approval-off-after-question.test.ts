@@ -90,7 +90,7 @@ function said(proj: string, prompt: string): string {
 }
 
 /** Bugfix work at the Requirements Analysis gate: Guard Policy off and plan approval on, from the scope. */
-function bugfixAtRequirements(policy: "off" | "strict" = "off"): string {
+function bugfixAtRequirements(policy: "off" | "strict" = "off", planApproval: "on" | "off" = "on"): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
   let state = readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8")
@@ -98,7 +98,7 @@ function bugfixAtRequirements(policy: "off" | "strict" = "off"): string {
     .replace(
       "- **Change Control**: strict (from scope feature)",
       `- **Guard Policy**: ${policy === "off" ? "off (from scope bugfix)" : "strict (set by you)"}\n` +
-        "- **Plan Approval**: on (from scope bugfix)\n- **Review Override**: none",
+        `- **Plan Approval**: ${planApproval} (from scope bugfix)\n- **Review Override**: none`,
     );
   // Requirements Analysis goes straight to Code Generation, as on bugfix.
   for (const slug of [
@@ -308,6 +308,18 @@ describe("before the plan question, and for every other setting, as before", () 
     ]);
     expect(made.rc, made.out).toBe(0);
     expect(made.out).not.toContain(LINE);
+  });
+
+  // As on poc and express, which ship plan approval off: the written plan is built, not asked about.
+  test("plan approval already off from the scope: the written plan is not waiting, and saying so goes through", () => {
+    const proj = bugfixAtRequirements("off", "off");
+    const both = said(proj, "approve, and turn plan approval off");
+    approveRequirements(proj);
+    expect(["run-stage", "load-steering"]).toContain(next(proj).kind ?? "");
+    planWritten(proj);
+    const off = planApprovalOff(proj, both);
+    expect(off.rc, off.out).toBe(0);
+    expect(off.out).not.toContain(LINE);
   });
 
   test("another setting on the earlier message is not this rule's", () => {
