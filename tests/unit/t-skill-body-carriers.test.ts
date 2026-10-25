@@ -41,7 +41,7 @@ const KEPT = [
   "## The Forwarding Loop",
   "**When AI-DLC carries on by itself.**",
   '--result approved --user-input "Approve"',
-  "`Nothing to add` / `Add a note`",
+  "`Yes, for this project` / `Yes, for the team` / `No`",
   "never park, report, or otherwise touch the active work",
   "stage-protocol-recovery.md",
   "stage-protocol-governance.md",

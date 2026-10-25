@@ -288,7 +288,7 @@ Unit columns.
 
 **Branch on `directive.unit_gate` before the ordinary `gate: true` branch.**
 The body, any enabled summary checkpoint, lifecycle completion, and reviewer are already
-settled; do not regenerate or re-review them. Run the learnings presentation only when `directive.protocol_modules` lists `learnings`, then the approval gate. In team-owned unit work, every non-gate
+settled; do not regenerate or re-review them. Take the learnings step only when `directive.protocol_modules` lists `learnings` (the module says when it asks), then the approval gate. In team-owned unit work, every non-gate
 `aidlc-log.ts decision` / `answer` call also adds
 `--unit "<directive.unit>"` so pending human decisions remain attempt- and
 Unit-scoped. Every report call for this gate adds

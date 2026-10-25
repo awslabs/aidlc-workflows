@@ -1460,24 +1460,23 @@ Ritual handles this, not a separate guardrail-emission flow.
 
 *(Conditional module: `stage-protocol-learnings.md`, Section 13; the base protocol keeps a loading stub.)*
 
-When `directive.protocol_modules` lists `learnings`, the ritual runs between the completion message and the approval gate. Bootstrap stages keep only a diary; isolated `single: true` runs keep no diary or ritual; per-unit `gate: false` iterations defer the ritual to the final stage gate, except team-owned unit-major gates run it at each emitted Unit gate. Gate revisions never rerun it. With the module absent, keep no diary, surface no candidates, ask no learning question, and go directly to the approval gate. The enabled ritual is:
+When `directive.protocol_modules` lists `learnings`, the step sits between the completion message and the approval gate, and asks the person something only when they corrected the agent in that stage (asked for changes at its gate, or corrected it in their own words) in a way that would hold next time; with no correction it asks nothing and the gate follows the completion message. Bootstrap stages keep only a diary; isolated `single: true` runs keep no diary or step; per-unit `gate: false` iterations defer the step to the final stage gate, except team-owned unit-major gates run it at each emitted Unit gate. After a Request Changes, the change asked for is asked about before the revised gate. With the module absent, keep no diary, ask no learning question, and go directly to the approval gate. The enabled step is:
 
 1. **Diary**: the agent maintains a per-stage `memory.md` (Interpretations /
    Deviations / Tradeoffs / Open questions) as it works. A Unit's turn tags its
-   entries `[unit <name>]` after the timestamp, so a Unit's checkpoint surfaces
-   that Unit's entries and the untagged ones.
-2. **Surface**: `aidlc-learnings.ts surface --slug <slug>` reads the diary and
-   emits structured candidates — the LLM does not re-parse or classify.
-3. **Confirm**: the conductor renders the candidates; the user picks which to
-   keep and, for free-text additions, picks the heading that derives the
-   destination. The always-present "Anything to add?" channel renders at least
-   `Nothing to add` and `Add a note`; one-option structured questions are
-   invalid on Claude Code and Codex. Its `log decision` carries
-   `--question-kind learnings-note`, so an answer of `Add a note` is known by
-   that field, never by the question's wording (a question recorded before
-   the field existed is known by exactly those two options): it ends the turn
-   at the follow-up, and its `agent_note` tells the agent to take the note
-   from the person's reply when they already gave it, and ask only otherwise.
+   entries `[unit <name>]` after the timestamp. The diary is the stage's
+   record; nothing in it is offered to the person.
+2. **Surface**: `aidlc-learnings.ts surface --slug <slug> --correction
+   "<their change>"` prints, for each correction the agent read in the
+   person's words, the question "You asked me to <it>. Keep that for next
+   time?" with `Yes, for this project`, `Yes, for the team` and `No`; with no
+   correction it prints none.
+3. **Confirm**: the conductor asks each printed question; the person's pick
+   is the only thing asked, and the conductor routes the practice line to its
+   heading. Its `log decision` carries `--question-kind learnings-note`, so the
+   question is known by that field, never by its wording (a question recorded
+   before the field existed is known by its options). A note the person asked
+   to keep is kept with no question, and said in one line with where it went.
 4. **Admission check**: each kept learning is checked against `org.md`'s
    matching section; a contradiction is surfaced to revise / skip / escalate.
 5. **Persist**: `aidlc-learnings.ts persist` writes each confirmed learning as a practice to

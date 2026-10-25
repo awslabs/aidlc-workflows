@@ -558,18 +558,9 @@ for one confirmation before it writes anything:
 
 Then it writes the stage's documents. When they rest on assumptions your
 answers did not settle, it asks whether to keep them as assumptions or turn
-them into questions. A reviewer agent reads the main document, and the last
-question before the approval is whether anything from this stage is worth
-remembering next time:
-
-```text
- Notes
- Anything to add for next time?
- > 1. Nothing to add
-      Move on to the approval for this step
-   2. Add a note
-      Record something AI-DLC should remember for future runs
-```
+them into questions. A reviewer agent reads the main document. Had you
+corrected the agent along the way, it would ask here whether to keep that
+correction for next time; you corrected nothing, so the approval comes next.
 
 Then the first approval (trimmed: the source-check lines, the review file's
 path and two of the three findings are left out):

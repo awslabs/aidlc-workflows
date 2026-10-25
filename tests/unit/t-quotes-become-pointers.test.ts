@@ -203,7 +203,7 @@ describe.each(POLICIES)("Guard Policy %s: a choice left to the agent names the m
     // Whether the stage's run lists the learnings step, read as the directive reads it.
     const learningsRuns = () => {
       const state = readFileSync(seededStateFile(proj), "utf-8");
-      return learningsRitualRuns(ceremonyPolicyValues(getField(state, "Scope"), state).learnings, state, STAGE);
+      return learningsRitualRuns(ceremonyPolicyValues(getField(state, "Scope"), state).learnings);
     };
     expect(learningsRuns()).toBe(true);
     const off = run(proj, [DISPATCHER, "engine", "config", "set", "summary-confirmation", "off", "--learnings", "off",

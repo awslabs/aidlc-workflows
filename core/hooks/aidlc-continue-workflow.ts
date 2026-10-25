@@ -883,7 +883,7 @@ function isPendingQuestionStop(
 // A structured non-gate question is logged before it is rendered and answered
 // afterward. That audit handshake is the positive human-wait signal for prompts
 // that are not represented by a blank tag in `<slug>-questions.md`, such as the
-// §13 learning selection and "Anything to add?" prompts. Keep the same strict
+// section 13 learnings question after a correction. Keep the same strict
 // stage-state gate as the question-file carve-out. Which logged question waits
 // on the person is decisionWaitsOnPerson's (aidlc-lib.ts), the reader `next`
 // uses too: under autonomous Construction a person who is there still answers

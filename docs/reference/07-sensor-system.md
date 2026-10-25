@@ -436,24 +436,21 @@ deterministic tool (`aidlc-learnings.ts`) and the conductor (the live
 `/aidlc` session) has two legs, with a knowledge step and a judgement
 step between them:
 
-1. **`surface` (stdout).** `aidlc engine learnings surface
-   --slug <stage-slug>` reads the stage's `memory.md` and prints structured
-   JSON: `candidates[]` (one per non-blank Interpretation / Deviation /
-   Tradeoff entry, each carrying `id`, `source_heading`, `ts`, `summary`,
-   `context`, `default_scope: "project"`), a read-only
-   `parked_open_questions[]`, and `questions[]`: what to ask, in order, with
-   exact options (which notes to keep, when there are any, **Keep none of
-   these** first and then each candidate `summary` verbatim; then always
-   "Anything to add for next time?"). No AskUserQuestion field names: pure domain
-   data. Open questions never become candidates (they are research items).
-2. **Conductor asks those questions (knowledge).** Each is its own question;
-   each candidate option gets a description naming the derived destination
-   (e.g. `-> memory/project.md (Deviation)`) plus a promote-to-team
-   affordance. After `multiSelect`, the conductor correlates each kept label
-   back to its candidate `id` + `source_heading`; any free-text gets
-   a single heading-pick AUQ (Interpretation / Deviation / Tradeoff / Open
-   question) — the heading pick is the user's only classification, and the
-   destination is derived from it.
+1. **`surface` (stdout).** The conductor runs it only when the person
+   corrected it in the stage, or asked it to keep something for next time
+   (reading that is the conductor's knowledge). `aidlc engine learnings surface
+   --slug <stage-slug> --correction "<their change>"` (one `--correction` per
+   correction) prints structured JSON: `candidates[]` (one per correction, each
+   carrying `id`, `correction`, `default_scope: "project"`) and `questions[]`:
+   for each, "You asked me to <correction>. Keep that for next time?" with the
+   exact options `Yes, for this project`, `Yes, for the team`, `No` and its
+   `question_kind`. With no `--correction` it prints no question. The stage's
+   `memory.md` diary is counted (`memory_entries_total`) and never offered. No
+   AskUserQuestion field names: pure domain data.
+2. **Conductor asks those questions (judgement is the person's).** Each is
+   its own question. The person's pick is the only thing asked: the conductor
+   writes the practice line from their correction and routes it to the
+   fitting heading itself. A note they asked to keep is not asked about.
 3. **Admission conflict-check (knowledge → orchestrator-LLM; gates which
    selections reach persist).** For each kept learning, the conductor
    compares the single proposed dated entry against `org.md`'s

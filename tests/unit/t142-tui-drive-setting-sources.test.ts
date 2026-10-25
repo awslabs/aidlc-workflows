@@ -752,7 +752,7 @@ describe("Kiro numbered-prose answer classification", () => {
     }
   });
 
-  test("answers guide batches, summary, learnings, and approval in order", () => {
+  test("answers guide batches, summary, the learnings question after a correction, and approval in order", () => {
     const state = createKiroNumberedProseAnswerState();
     expect(
       nextKiroNumberedProseAnswer(
@@ -774,10 +774,11 @@ describe("Kiro numbered-prose answer classification", () => {
     ).toBe("Looks correct");
     expect(
       nextKiroNumberedProseAnswer(
-        "Anything to add for next time?\n1. Nothing to add\n2. Add a note",
+        "You asked me to name files in kebab-case. Keep that for next time?\n" +
+          "1. Yes, for this project\n2. Yes, for the team\n3. No",
         state,
       ),
-    ).toBe("Nothing to add");
+    ).toBe("No");
     expect(
       nextKiroNumberedProseAnswer(
         "How would you like to proceed?\n1. Approve\n2. Request Changes",
@@ -811,21 +812,8 @@ describe("Kiro numbered-prose answer classification", () => {
     expect(state.learningsAnswered).toBe(1);
   });
 
-  test("rejects an approval prompt combined with the unanswered learning channel", () => {
+  test("answers an approval with no learning response: the step asks only after a correction", () => {
     const state = createKiroNumberedProseAnswerState();
-    expect(() =>
-      nextKiroNumberedProseAnswer(
-        "Anything to add for next time? Nothing to add / Add a note\n" +
-          "Approval\n1. Approve\n2. Request Changes",
-        state,
-      )
-    ).toThrow("approval before the mandatory learning response");
-    expect(state.learningsAnswered).toBe(0);
-    expect(state.approvalsAnswered).toBe(0);
-  });
-
-  test("answers an approval with no learning response when the scope turns learnings off", () => {
-    const state = createKiroNumberedProseAnswerState({ learnings: false });
     expect(
       nextKiroNumberedProseAnswer(
         "How would you like to proceed?\n1. Approve\n2. Request Changes",

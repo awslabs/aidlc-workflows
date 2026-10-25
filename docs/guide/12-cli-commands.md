@@ -3055,14 +3055,14 @@ bun .claude/tools/aidlc-sensor.ts fire required-sections \
 
 ### `aidlc-learnings` — the learning-gate tool
 
-This is the deterministic half of the section 13 learning gate. After a stage's completion message and before its approval question, the orchestrator uses it to turn your stage's `memory.md` diary into reviewable learning candidates, then to persist the ones you confirm. You normally never call it directly (the orchestrator drives both steps around its own questions), but it is here so the audit rows it emits make sense. [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) shows the questions.
+This is the deterministic half of the section 13 learnings step. After a stage's completion message and before its approval question, when you corrected the agent in that stage, the orchestrator uses it to print the question about each correction, then to persist what you keep (and a note you asked it to keep, with no question). You normally never call it directly (the orchestrator drives both steps around its own questions), but it is here so the audit rows it emits make sense. [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) shows the questions.
 
 When the Learnings ceremony is `off`, the workflow omits its diary and learning
 gate instead of calling these steps automatically.
 
 | Subcommand | What it does |
 |------------|--------------|
-| `surface --slug <stage-slug>` | Read the finished stage's `memory.md` and print structured candidates (Interpretations, Deviations, Tradeoffs) plus any parked open questions and the questions to ask about them, and name the `selections_file` the picks are written to (one per piece of work, inside its record). Read-only |
+| `surface --slug <stage-slug> [--correction <your change>]...` | Print, for each correction the agent read in your words, the question "You asked me to <it>. Keep that for next time?" with `Yes, for this project`, `Yes, for the team` and `No` (no question without a correction), and name the `selections_file` the picks are written to (one per piece of work, inside its record). The stage's `memory.md` diary is counted, never offered. Read-only |
 | `persist --slug <stage-slug> --selections-json <selections_file>` | Write the confirmed learnings (a confirmed learning is a practice) to `aidlc/spaces/<active-space>/memory/project.md` / `team.md` (and, for a Sensor-binding learning, scaffold and bind a project-tier Sensor), emitting `RULE_LEARNED` / `SENSOR_PROPOSED`. Reads only the `selections_file` `surface` named for the picks' own piece of work, and refuses any other path |
 
 A confirmed learning reaches the agent from the next applicable stage of the current workflow (rule files are re-read before each stage delivery) and every later workflow; a new Sensor binds at the next stage-graph compile.
@@ -3071,8 +3071,8 @@ A confirmed learning reaches the agent from the next applicable stage of the cur
 file has been compiled, and works out the same path itself when it has not —
 which is the normal state on a workflow's first gate, and also what a fresh
 clone looks like. In that case it prints a note on stderr naming the
-`aidlc engine runtime compile` that rebuilds the graph; the candidates on stdout
-are unaffected.
+`aidlc engine runtime compile` that rebuilds the graph; the output on stdout is
+unaffected.
 
 ### `aidlc-runtime` — read the runtime graph
 

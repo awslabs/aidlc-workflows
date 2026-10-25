@@ -50,7 +50,8 @@ describe("the person's own words", () => {
 
 describe("settings typed with new work", () => {
   test("--learnings on typed with the request carries through express, which ships it off", () => {
-    const run = runScope("express", { flags: ["--learnings", "on"] });
+    // The person corrects the agent at each stage, so the learnings step has its question.
+    const run = runScope("express", { flags: ["--learnings", "on"], answers: { correction: () => "keep handlers thin" } });
     runs.push(run);
     expect(run.declared.learnings).toBe(false);
     expect(scopeRunProblems(run, { skip: ["learnings"] })).toEqual([]);
@@ -60,7 +61,7 @@ describe("settings typed with new work", () => {
     const stages = run.agent.directives.filter((d) => d.kind === "run-stage" && d.ceremony);
     expect(stages.length).toBeGreaterThan(0);
     for (const d of stages) expect((d.ceremony as Record<string, string>).learnings).toBe("on");
-    const learned = auditEvents(run.proj).filter((e) => e.event === "QUESTION_ANSWERED" && field(e.block, "Details") === "Nothing to add");
+    const learned = auditEvents(run.proj).filter((e) => e.event === "QUESTION_ANSWERED" && field(e.block, "Details") === "No");
     expect(learned.length).toBeGreaterThan(0);
   }, SCOPE_RUN_TIMEOUT_MS);
 
