@@ -32707,32 +32707,6 @@ export function humanTurnMintAllowed(): boolean {
   return process.env.AIDLC_UNATTENDED !== "1";
 }
 
-// A decision of the person's is open in the work: the current stage waits at
-// its approval gate (a team-owned Unit at its own gate too), or has a question
-// the agent logged that is not answered yet, or the engine's code plan question
-// is open, or a question that needs this chat's own reply (a checkpoint, the
-// verification command, a Construction policy question). Never under
-// autonomous Construction or an unattended run, where nobody is answering. A
-// record that cannot be read says none is open.
-export function personDecisionPending(projectDir: string, session: string): boolean {
-  try {
-    if (!humanTurnMintAllowed()) return false;
-    const content = readStateFile(projectDir);
-    if (isAutonomousMode(content)) return false;
-    const stage = getField(content, "Current Stage")?.trim() ?? "";
-    const box = stage === "" ? undefined : parseCheckboxes(content).find((row) => row.slug === stage)?.state;
-    if (box === "awaiting-approval") return true;
-    const unit = getField(content, "Active Unit")?.trim() || undefined;
-    const team = stage === "" ? undefined : teamUnitGateStatus(projectDir, content, stage, unit);
-    if (team?.resolved === true && team.status === "awaiting-approval") return true;
-    if (box === "in-progress" && openPendingDecision(projectDir, stage, "STAGE_STARTED") !== null) return true;
-    if (planApprovalAskIsOpen(projectDir)) return true;
-    return session !== "" && readProtectedQuestion(projectDir, session) !== null;
-  } catch {
-    return false;
-  }
-}
-
 // The same hard signal `next`'s stop reads, for the current workflow: a stage
 // or gate event and no heartbeat at all, with no link on the way to the
 // status files. Anything unreadable proves nothing.

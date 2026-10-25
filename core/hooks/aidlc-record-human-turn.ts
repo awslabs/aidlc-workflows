@@ -75,7 +75,6 @@ import {
   getField,
   hookStandsOutside,
   hostEnvelopeTurnText,
-  personDecisionPending,
   planApprovalChallengeRelativePath,
   COMMAND_TURN_REPLY,
   OPEN_QUESTION_FIELD,
@@ -929,12 +928,12 @@ try {
       } catch {
         // Authority bookkeeping remains fail-open for the human's turn.
       }
-      // While a decision of theirs is open, the agent learns the id of the
-      // message it can name with --message, never its words.
-      if (
-        promptSubmitted && messageId && !notAReply && !contextMayReachPerson &&
-        personDecisionPending(projectDir, sessionId)
-      ) {
+      // On the work, the agent learns the id of the message it can name with
+      // --message, never its words: a reply, or a check the person asks in
+      // chat to change with nothing waiting on them (without the id, every
+      // such request met the setter's refusal first). The setter's proof of
+      // the message still decides.
+      if (promptSubmitted && messageId && !notAReply && !contextMayReachPerson) {
         notes.push(`This message of the person's is on record as ${messageId}: a decision you record from it can ` +
           `name it with --message ${messageId}.`);
       }
