@@ -2828,8 +2828,16 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       const reopen = redoReopen(copilotStep(p, "report --result resumed --choice redo"));
       expect(reopen).toContain("--units beta --via redo");
       expect(copilotRuns(p, reopen!).refused, "the Redo the person asked for was refused on Copilot").toBeNull();
+      // A Redo is a fresh attempt: beta's plan comes back to the person as it
+      // stands, and once approved the old build is not picked up.
+      const asked = copilotNext(p, "next") as Step & { choices?: { label: string; command: string }[] };
+      expect(asked).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit: "beta" });
+      copilotSays(p, "approve");
+      const approve = asked.choices?.find((choice) => choice.label === "Approve Plan")?.command;
+      expect(copilotRuns(p, String(approve)).refused).toBeNull();
       const beat = copilotNext(p, "next");
       expect(beat).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta" });
+      expect(beat.plan_approval).toEqual({ status: "approved" });
       expect(beat.artifact_reuse).toEqual({ decision: "redo", unit: "beta" });
       expect(beat.narration ?? "").not.toContain("Picking up");
       expect(approved(p, "alpha")).toBe(true);
