@@ -289,17 +289,30 @@ export function hasControlCharacters(value: string): boolean {
   return /[\u0000-\u001f\u007f]/.test(value);
 }
 
+// Text bash, zsh, PowerShell and cmd.exe all read as written inside double
+// quotes: nothing in it expands or ends the quotes, and nothing acts in cmd.exe
+// when PowerShell hands the word on without them.
+export function readsAlikeInDoubleQuotes(value: string): boolean {
+  return /^[^"$`\\%!^&|<>\r\n]+$/.test(value);
+}
+
 // One argument of a command we print for someone to run: bare when it cannot
 // expand, else single-quoted so no shell substitutes into it. It stays one
 // line of plain text: a control character is shown as "?", never emitted.
+// "windows" is the agent's shell on Windows, which may be PowerShell or Git Bash
+// (Claude Code's).
 export function quoteCommandArgument(
   value: string,
-  shell: "posix" | "powershell" = process.platform === "win32" ? "powershell" : "posix",
+  shell: "posix" | "powershell" | "windows" = process.platform === "win32" ? "windows" : "posix",
 ): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
   value = value.replace(/[\u0000-\u001f\u007f]/g, "?");
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
-  return shell === "powershell"
+  // PowerShell reads a bare word that starts with "@" as splatting a variable.
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value) && !(shell !== "posix" && value.startsWith("@"))) return value;
+  // The two shells quote an apostrophe differently, so it is double-quoted
+  // when both read that alike.
+  if (shell === "windows" && value.includes("'") && readsAlikeInDoubleQuotes(value)) return `"${value}"`;
+  return shell !== "posix"
     ? `'${value.replaceAll("'", "''")}'`
     : `'${value.replaceAll("'", "'\"'\"'")}'`;
 }

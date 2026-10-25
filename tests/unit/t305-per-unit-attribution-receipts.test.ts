@@ -29,6 +29,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { quoteCommandArgument } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 import {
   boltName,
   reviewedSourceRefPrefix,
@@ -1473,6 +1474,15 @@ describe("t305 real receipt and guard flows", () => {
     expect(error).toContain('names repo "app-b", which this piece of work does not record');
     expect(error).toContain("intent add-repo app-b");
     expect(error).not.toContain("Write the manifest listing every application-source path");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("the add-repo it offers keeps a repo name with a space whole", () => {
+    const { project, record } = runtimeFixture();
+    writeManifest(record, "alpha", [{ repo: "app b", path: "src/" }]);
+    const refused = cli(LOG, ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", "1"], project);
+    expect(refused.rc).toBe(1);
+    const error = (JSON.parse(refused.out) as { error: string }).error;
+    expect(error).toContain(`intent add-repo ${quoteCommandArgument("app b")} --reason`);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("REVIEW_COMPLETED and retry-pending refuse source edited after dispatch", () => {

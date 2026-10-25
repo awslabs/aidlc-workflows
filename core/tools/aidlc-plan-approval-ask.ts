@@ -63,6 +63,7 @@ import {
   steeringTokenKeyPathFor,
   toPosix,
   harnessDir,
+  intentRepos,
   MESSAGE_SLOT,
   messageFill,
   UNBINDABLE_FINGERPRINT,
@@ -562,6 +563,8 @@ function changedBeforeApprovalLine(projectDir: string): string | null {
 // A word in a plan that names a file or folder: it has a "/" or a file
 // extension, and no scheme, flag or variable.
 const PLAN_PATH_WORD_RE = /^[A-Za-z0-9_.@~][A-Za-z0-9_.@~/+-]*$/;
+// What ends a word in a plan.
+const PLAN_WORD_BREAK = /[\s`'"()<>[\]{},;|*]/;
 
 /**
  * The files and folders the waiting plans name, project-relative with "/":
@@ -590,20 +593,49 @@ export function codeGenerationPlanNamedPaths(projectDir: string, unit: string | 
 
 function plansNamedPaths(projectDir: string, units: Array<string | null>): string[] {
   const own = ["aidlc/", `${harnessDir()}/`];
+  const repos = intentRepos(projectDir);
   const named = new Set<string>();
   for (const unit of units) {
     const dir = codeGenerationRecordDir(projectDir, unit);
     for (const file of [PLAN_FILE, INSTRUCTIONS_FILE]) {
       const text = readText(join(dir, file)).replace(/^## Testing Contract[^\n]*\n\s*```json[\s\S]*?\n```/m, "");
-      for (const raw of text.split(/[\s`'"()<>[\]{},;|*]+/)) {
+      for (const raw of text.split(new RegExp(`${PLAN_WORD_BREAK.source}+`))) {
         const word = raw.replace(/\\/g, "/").replace(/^\.\//, "").replace(/[.:!?]+$/, "");
         if (word.length > 300 || word.startsWith("..") || word.includes("//") || !PLAN_PATH_WORD_RE.test(word)) continue;
         if (own.some((prefix) => word.startsWith(prefix)) || [PLAN_FILE, INSTRUCTIONS_FILE, QUESTIONS_FILE].includes(word)) continue;
         if (word.includes("/") || /\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(word)) named.add(word);
       }
+      for (const word of repoQualifiedWords(text, repos)) named.add(word);
     }
   }
   return [...named];
+}
+
+// A recorded repo's files as a plan names them, `<repo>/<path>`: the word split
+// above stops at a space or a bracket and keeps ASCII words only, and a repo's
+// folder name may hold either. Each recorded name is found by plain string
+// search, without case on Windows as the guard compares (isPlanWaitSideWrite),
+// and kept as the work records it.
+function repoQualifiedWords(text: string, repos: readonly string[]): string[] {
+  const slashed = text.replace(/\\/g, "/");
+  const folding = process.platform === "win32" && slashed.toLowerCase().length === slashed.length;
+  const haystack = folding ? slashed.toLowerCase() : slashed;
+  const boundary = (at: number): boolean =>
+    at === 0 || PLAN_WORD_BREAK.test(slashed[at - 1]) ||
+    (slashed.slice(at - 2, at) === "./" && (at === 2 || PLAN_WORD_BREAK.test(slashed[at - 3])));
+  const words: string[] = [];
+  for (const repo of repos) {
+    const needle = folding ? `${repo}/`.toLowerCase() : `${repo}/`;
+    for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
+      if (!boundary(at)) continue;
+      let end = at + needle.length;
+      while (end < slashed.length && !PLAN_WORD_BREAK.test(slashed[end])) end++;
+      const rest = slashed.slice(at + needle.length, end).replace(/[.:!?]+$/, "");
+      if (rest.length > 300 || rest.startsWith("..") || rest.includes("//") || !/^[A-Za-z0-9_.@~/+-]*$/.test(rest)) continue;
+      words.push(`${repo}/${rest}`);
+    }
+  }
+  return words;
 }
 
 // What the person reads when their own edit broke the generated block and the

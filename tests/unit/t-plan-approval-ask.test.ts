@@ -661,6 +661,34 @@ describe("the engine asks for Plan Approval", () => {
     });
   }
 
+  // In a workspace whose repo folder has a space, the plan's files in that repo
+  // are its build as they are in any other repo: they wait, and a file the
+  // plan does not name goes through.
+  test("while the plan waits, its files in a repo named with a space wait, as in any repo", () => {
+    const proj = project("strict");
+    const registry = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = ["api", "my lib"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    for (const repo of ["api", "my lib"]) {
+      mkdirSync(join(proj, repo, "src"), { recursive: true });
+      writeFileSync(join(proj, repo, "src", "greet.py"), "def greet(name):\n    return name\n");
+      for (const args of [["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-qm", "init"]]) {
+        expect(spawnSync("git", args, { cwd: join(proj, repo), encoding: "utf-8" }).status).toBe(0);
+      }
+    }
+    writePlan(proj, "- [ ] Step 2: change `my lib/src/greet.py` and api/src/greet.py\n");
+    const directive = next(proj);
+    expect(directive.ask_type, JSON.stringify(directive)).toBe("plan-approval");
+    for (const path of [join(proj, "my lib", "src", "greet.py"), join(proj, "api", "src", "greet.py")]) {
+      expect(guardWrite(proj, path).code, path).toBe(2);
+    }
+    for (const path of [join(proj, "my lib", "notes.md"), join(proj, "api", "notes.md")]) {
+      const result = guardWrite(proj, path);
+      expect(result.code, `${path}\n${result.stderr}`).toBe(0);
+    }
+  });
+
   // K6c on Kiro IDE: the plan is written and the agent writes the person's
   // standing notify line in the same batch as the `next` that asks the plan
   // question, so the write is judged while the plan step is still current.

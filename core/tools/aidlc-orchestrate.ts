@@ -228,6 +228,7 @@ import {
   clearActiveDirectiveMarker,
   codeGenerationIsTheStep,
   codekbRepoName,
+  siblingReposLeftOut,
   currentUnitLifecycleMode,
   constructionSkeletonOn,
   constructionCheckpointGaps,
@@ -6817,6 +6818,11 @@ function createPrintDirective(
     directive.narration +=
       " The folder has no code yet, so I'm starting this as a new project without Reverse Engineering. If the work is on existing code, tell me.";
   }
+  // A repo folder whose name cannot be a repo's is not part of the work, said
+  // once, with why.
+  for (const { name, problem } of siblingReposLeftOut(projectDir)) {
+    directive.narration += ` The folder "${name}" is not part of this work: its name ${problem}.`;
+  }
   if (routedGuardPolicyNote) directive.narration += ` ${routedGuardPolicyNote}`;
   // Beside other work the chat still holds that work's conversation: the
   // person can start this one in a clean chat instead, said once, never as a stop.
@@ -10647,16 +10653,19 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
     const [verb, ...tail] = argv;
+    // Quoted for the shell the agent runs it in: a repo's name can hold an
+    // apostrophe, which PowerShell quotes its own way.
+    const word = (value: string): string => quoteCommandArgument(value);
     const route = verb === "intent-create"
       ? "intent create"
       : verb === "space-create"
       ? "space create"
       : verb === "intent"
-      ? `intent ${tail[0] && !tail[0].startsWith("--") ? shellArg(tail.shift()!) : "list"}`
+      ? `intent ${tail[0] && !tail[0].startsWith("--") ? word(tail.shift()!) : "list"}`
       : verb === "space"
-      ? `space ${tail[0] && !tail[0].startsWith("--") ? shellArg(tail.shift()!) : "list"}`
+      ? `space ${tail[0] && !tail[0].startsWith("--") ? word(tail.shift()!) : "list"}`
       : verb;
-    const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
+    const suffix = tail.length > 0 ? ` ${tail.map(word).join(" ")}` : "";
     // Words typed after the name ride with the switch, whole, for the agent to
     // act on for the work just selected: a request, or a setting such as
     // `--guard-policy relaxed`. Nothing of theirs is dropped or read here.

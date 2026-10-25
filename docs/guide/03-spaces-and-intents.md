@@ -520,6 +520,15 @@ of the workspace root that has its own `.git`) and records the set in the intent
 `intents.json` row. During Construction, each git operation is then anchored to
 the right repo automatically.
 
+Each repo is recorded by its folder's name as you gave it: a space, an accent,
+an apostrophe or another letter works (`my lib`, `café`, `C# lib`). A few
+characters break something AI-DLC relies on, so a folder whose name has one is
+left out of the work, and the first step says which folder and why: `<` `>`
+`:` `"` `|` `?` `*` (Windows cannot hold them in a folder name), `&` `^` `%`
+(AI-DLC's commands on Windows), `(` `)` `[` `]` `{` `}` `;` `$` and a backtick
+(AI-DLC's commands on Cursor), a comma (it separates repo names), a name that
+is `-` or starts with `--`, ends with `@checkout`, or starts or ends with a space.
+
 ```
 my-project/
 ├── aidlc/          # AI-DLC's records
@@ -551,8 +560,9 @@ records that expected set so it can be reproduced with one command:
 `org` supplies the default clone host (a repo with no `url` clones from
 `git@github.com:<org>/<name>.git`; set `url` on an entry to override). `branch`
 selects the checkout for a new clone and is an advisory expectation for a repo
-already on disk; omit it to use the repo's own default. Repo names must be safe
-single path segments, matching the runtime's immediate-child discovery model. The
+already on disk; omit it to use the repo's own default. A repo name is the name
+of one folder directly in the workspace, with the characters a discovered folder
+may have (above). The
 [CLI Commands](12-cli-commands.md#aidlc-workspace-sync-clone-and-reconcile-the-declared-repo-set)
 guide documents the `aidlc-workspace-sync` tool that reads this file to clone
 missing repos, keep the gitignore block current, and generate a VSCode
