@@ -928,7 +928,23 @@ describe("t-plan-proposed-by-the-agent: a stage change typed with the plan rides
     expect(started.kind, JSON.stringify(started).slice(0, 300)).toBe("print");
     expect(String(started.message)).toContain("--skip deployment-pipeline");
     expect(String(started.narration ?? "")).not.toContain("already");
+    expect(String(started.narration ?? "")).not.toContain("left off");
     expect(runCreation(KIRO_TOOLS, started)).toMatch(/^- \[.\] deployment-pipeline \u2014 SKIP/m);
+  });
+
+  // What a live agent did: the row typed again without its skip, for a plan
+  // that runs the stage. Nothing is put back (no list is also how the agent
+  // says no skip after all), and the creation says it was left off, once.
+  test("kiro, work here and none selected: a command that leaves off a skip the plan could take says so once as it starts", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const open = routed(KIRO_TOOLS, proj, SKIP_DP);
+    const started = next(KIRO_TOOLS, proj, answerArgs(row(open, "workshop").command.replace(" --skip deployment-pipeline", "")));
+    expect(started.kind, JSON.stringify(started).slice(0, 300)).toBe("print");
+    expect(String(started.message)).not.toContain("--skip");
+    const line = "Deployment Pipeline runs in this work: the skip you typed with the request was left off. Say so to skip it.";
+    expect(String(started.narration)).toContain(line);
+    expect(String(started.narration).split(line)).toHaveLength(2);
+    expect(runCreation(KIRO_TOOLS, started)).toMatch(/^- \[.\] deployment-pipeline \u2014 EXECUTE/m);
   });
 
   test("kiro, work here and none selected: a plan without the stage carries none and says so once as it starts", () => {
