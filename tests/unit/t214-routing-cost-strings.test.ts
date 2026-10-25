@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:scope-change, subcommand:aidlc-utility:intent-create
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:scope-change, subcommand:aidlc-utility:intent-create, audit:SCOPE_CHANGED
 //
 // t214 - the scope-cost preview reaches the emitted routing strings (issue:
 // preview the cost at scope confirmation). t213 pins the helper; this pins the
@@ -15,7 +15,8 @@
 //   - intent create's "State initialized" line says that print's count, for
 //     every shipped scope on a new project and on existing code, and
 //   - scope-change stdout carries the "Approval gates:" line (greenfield
-//     reverse-engineering adjustment applied, matching the handler).
+//     reverse-engineering adjustment applied, matching the handler), and the
+//     SCOPE_CHANGED row says the same stages and gates.
 //
 // Mechanism: CLI spawn of the shipped dist engine (t198's convention) - no LLM,
 // unit tier.
