@@ -34,7 +34,7 @@ const SESSION = "early-edit-chat-1";
 const OTHER = "early-edit-chat-2";
 const REQUEST = /--request ([0-9a-f]{8})/;
 const WORDS = "fix the greeter: it says hello instead of greeting the person by name";
-const SAID = "Before you picked this plan,";
+const SAID = "Before this work started,";
 
 type Directive = Record<string, unknown> & { kind?: string; message?: string; confirm_command?: string };
 
@@ -165,7 +165,7 @@ function said(step: string): string | null {
   const directive = JSON.parse(step) as { narration?: unknown; change_notices?: unknown };
   const text = [directive.narration, ...(Array.isArray(directive.change_notices) ? directive.change_notices : [])]
     .filter((part): part is string => typeof part === "string").join(" ");
-  return /Before you picked this plan,.*?(?:last committed|was before|were before|to undo that|cannot be undone)\.(?=\s|$)/
+  return /Before this work started,.*?(?:last committed|was before|were before|to undo that|cannot be undone)\.(?=\s|$)/
     .exec(text)?.[0] ?? null;
 }
 
@@ -184,8 +184,8 @@ describe("t-early-edit-said: what the agent changed before the person picked a p
     agentWrites(proj, "src/app.js", FIXED);
     agentRuns(proj, "echo 'fixed greeting' >> CHANGELOG.md");
     expect(said(pick(proj, ask))).toBe(
-      "Before you picked this plan, src/app.js and CHANGELOG.md were changed; " +
-        "`git checkout -- src/app.js CHANGELOG.md` puts them back as last committed.",
+      "Before this work started, src/app.js and CHANGELOG.md were changed; " +
+        "`git checkout HEAD -- src/app.js CHANGELOG.md` puts them back as last committed.",
     );
     expect(JSON.stringify(next(proj, []))).not.toContain(SAID);
     // What they held before, kept with the work for Code Generation's accounting of a file put back.
@@ -223,7 +223,7 @@ describe("t-early-edit-said: what the agent changed before the person picked a p
     writeFileSync(join(proj, "package.json"), '{\n  "name": "greeter",\n  "version": "0.2.0"\n}\n');
     agentWrites(proj, "src/app.js", FIXED);
     expect(said(pick(proj, ask))).toBe(
-      "Before you picked this plan, src/app.js was changed; `git checkout -- src/app.js` puts it back as last committed.",
+      "Before this work started, src/app.js was changed; `git checkout HEAD -- src/app.js` puts it back as last committed.",
     );
   });
 
@@ -236,7 +236,7 @@ describe("t-early-edit-said: what the agent changed before the person picked a p
     agentWrites(proj, "test/app.test.js", GREETER["test/app.test.js"]);
     agentWrites(proj, "src/greet.js", "module.exports = (n) => 'Hello, ' + n;\n");
     expect(said(pick(proj, ask))).toBe(
-      "Before you picked this plan, README.md and src/greet.js were changed; src/greet.js is new: delete it to undo that; " +
+      "Before this work started, README.md and src/greet.js were changed; src/greet.js is new: delete it to undo that; " +
         "README.md already had changes that were not committed, so its change cannot be undone.",
     );
   });
@@ -248,7 +248,39 @@ describe("t-early-edit-said: what the agent changed before the person picked a p
     agentWrites(proj, "src/app.js", FIXED);
     agentRuns(proj, "git add src/app.js && git commit -qm 'greet by name'");
     expect(said(pick(proj, ask))).toBe(
-      `Before you picked this plan, src/app.js was changed; \`git checkout ${before.slice(0, 12)} -- src/app.js\` puts it back as it was before.`,
+      `Before this work started, src/app.js was changed; \`git checkout ${before.slice(0, 12)} -- src/app.js\` puts it back as it was before.`,
+    );
+  });
+
+  test("the agent staged its edit before the pick: the checkout names HEAD, so it puts the file back", () => {
+    proj = greeter();
+    const ask = planQuestion(proj);
+    agentWrites(proj, "src/app.js", FIXED);
+    agentRuns(proj, "git add src/app.js");
+    expect(said(pick(proj, ask))).toBe(
+      "Before this work started, src/app.js was changed; `git checkout HEAD -- src/app.js` puts it back as last committed.",
+    );
+    // The command does what the line says.
+    git(proj, ["checkout", "HEAD", "--", "src/app.js"]);
+    expect(readFileSync(join(proj, "src", "app.js"), "utf-8")).toBe(GREETER["src/app.js"]);
+  });
+
+  test("a plan typed with the request: an edit before the work starts is named, never as before a pick", () => {
+    proj = greeter();
+    typed(proj, `/aidlc bugfix ${WORDS}`);
+    later();
+    const start = next(proj, ["--scope", "bugfix", "--", WORDS]);
+    const id = REQUEST.exec(String(start.message))?.[1];
+    expect(String(start.message), JSON.stringify(start).slice(0, 300)).toContain("intent create");
+    agentWrites(proj, "src/app.js", FIXED);
+    const created = spawnSync(process.execPath, [
+      join(TOOLS, "aidlc.ts"), "engine", "intent", "create", "--scope", "bugfix", "--request", id!, "--label", "greeter-fix",
+      "--project-dir", proj,
+    ], { cwd: proj, env: chatEnv(proj, SESSION), encoding: "utf-8" });
+    expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
+    guard(proj, SESSION, "Bash", { command: "bun .claude/tools/aidlc-orchestrate.ts next" });
+    expect(said(JSON.stringify(next(proj, [])))).toBe(
+      "Before this work started, src/app.js was changed; `git checkout HEAD -- src/app.js` puts it back as last committed.",
     );
   });
 
@@ -262,7 +294,7 @@ describe("t-early-edit-said: what the agent changed before the person picked a p
     const ask = planQuestion(proj);
     agentWrites(proj, "src/app.js", FIXED.replaceAll("\n", "\r\n"));
     expect(said(pick(proj, ask))).toBe(
-      "Before you picked this plan, src/app.js was changed; `git checkout -- src/app.js` puts it back as last committed.",
+      "Before this work started, src/app.js was changed; `git checkout HEAD -- src/app.js` puts it back as last committed.",
     );
   });
 
@@ -276,7 +308,7 @@ describe("t-early-edit-said: what the agent changed before the person picked a p
     const ask = planQuestion(proj);
     agentWrites(proj, "lib/util.js", "module.exports = 2;\n");
     expect(said(pick(proj, ask))).toBe(
-      "Before you picked this plan, lib/util.js was changed; `git -C lib checkout -- util.js` puts it back as last committed.",
+      "Before this work started, lib/util.js was changed; `git -C lib checkout HEAD -- util.js` puts it back as last committed.",
     );
   });
 
@@ -285,7 +317,7 @@ describe("t-early-edit-said: what the agent changed before the person picked a p
     const ask = planQuestion(proj);
     agentWrites(proj, "src/app.js", FIXED);
     expect(said(pick(proj, ask))).toBe(
-      "Before you picked this plan, src/app.js was changed; src/app.js is not in git, so its change cannot be undone.",
+      "Before this work started, src/app.js was changed; src/app.js is not in git, so its change cannot be undone.",
     );
   });
 
@@ -293,7 +325,7 @@ describe("t-early-edit-said: what the agent changed before the person picked a p
     proj = greeter({ earlierWork: true });
     const ask = planQuestion(proj);
     agentWrites(proj, "src/app.js", FIXED);
-    expect(said(pick(proj, ask))).toContain("src/app.js was changed; `git checkout -- src/app.js`");
+    expect(said(pick(proj, ask))).toContain("src/app.js was changed; `git checkout HEAD -- src/app.js`");
   });
 
   test("beside work in progress: the plan question the person's new-work answer leads to is the window", () => {
@@ -311,7 +343,7 @@ describe("t-early-edit-said: what the agent changed before the person picked a p
     expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("scope-confirm");
     agentWrites(proj, "src/app.js", FIXED);
     expect(said(pick(proj, ask))).toBe(
-      "Before you picked this plan, src/app.js was changed; `git checkout -- src/app.js` puts it back as last committed.",
+      "Before this work started, src/app.js was changed; `git checkout HEAD -- src/app.js` puts it back as last committed.",
     );
   });
 
@@ -385,7 +417,7 @@ describe("t-early-edit-said: what the agent changed before the person picked a p
     ], { cwd: proj, env, encoding: "utf-8" });
     expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
     expect(said(JSON.stringify(engine([])))).toBe(
-      "Before you picked this plan, src/app.js was changed; `git checkout -- src/app.js` puts it back as last committed.",
+      "Before this work started, src/app.js was changed; `git checkout HEAD -- src/app.js` puts it back as last committed.",
     );
   });
 });

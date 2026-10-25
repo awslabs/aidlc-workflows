@@ -516,8 +516,8 @@ with what it held just before
 ([Plan-Approval Guard Hook](06-hooks-and-tools.md#plan-approval-guard-hook)).
 When the person's pick creates the work, `intent create` names the kept files
 that still differ, once, with the way back worked out against git at that
-moment: "Before you picked this plan, src/app.js was changed;
-`git checkout -- src/app.js` puts it back as last committed." A file that held
+moment: "Before this work started, src/app.js was changed;
+`git checkout HEAD -- src/app.js` puts it back as last committed." A file that held
 the person's uncommitted edits, or one outside git, is said to be beyond
 undoing; a new file is to be deleted. The person's own edits, a teammate's pull and generated files
 reach no hook and are never named. The work keeps what those files held before

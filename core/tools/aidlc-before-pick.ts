@@ -186,7 +186,8 @@ function undoLine(projectDir: string, changed: readonly KeptFile[]): string | nu
         ? null
         : git(repoDir, ["rev-parse", "--verify", "-q", `${file.head}:./${file.inRepo}`]);
       if (atHead === file.blob || atKept === file.blob) {
-        const at = atHead === file.blob ? "" : `${(file.head as string).slice(0, 12)} `;
+        // A tree-ish either way: `checkout -- <file>` restores from the index, where an edit the agent staged sits.
+        const at = atHead === file.blob ? "HEAD " : `${(file.head as string).slice(0, 12)} `;
         const key = `${repoArg}\u0000${at}`;
         restore.set(key, [...(restore.get(key) ?? []), arg]);
       } else {
@@ -201,7 +202,8 @@ function undoLine(projectDir: string, changed: readonly KeptFile[]): string | nu
     const [repoArg, at] = key.split("\u0000");
     const command = `git ${repoArg ? `-C ${repoArg} ` : ""}checkout ${at}-- ${args.join(" ")}`;
     const one = args.length === 1;
-    clauses.push(`\`${command}\` puts ${one ? "it" : "them"} back as ${at ? `${one ? "it was" : "they were"} before` : "last committed"}`);
+    const as = at === "HEAD " ? "last committed" : `${one ? "it was" : "they were"} before`;
+    clauses.push(`\`${command}\` puts ${one ? "it" : "them"} back as ${as}`);
   }
   if (fresh.length > 0) {
     clauses.push(`${listed(fresh)} ${fresh.length === 1 ? "is new: delete it" : "are new: delete them"} to undo that`);
@@ -218,7 +220,8 @@ function undoLine(projectDir: string, changed: readonly KeptFile[]): string | nu
         "cannot be undone",
     );
   }
-  return `Before you picked this plan, ${listed(named)} ${named.length === 1 ? "was" : "were"} changed; ${clauses.join("; ")}.`;
+  // "Before this work started": true whether the plan was picked at its question or typed with the request.
+  return `Before this work started, ${listed(named)} ${named.length === 1 ? "was" : "were"} changed; ${clauses.join("; ")}.`;
 }
 
 /**
