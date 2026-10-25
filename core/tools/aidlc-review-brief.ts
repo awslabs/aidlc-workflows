@@ -1562,13 +1562,17 @@ function findingGist(text: string): string {
   return `${(word > 0 ? cut.slice(0, word) : cut).replace(/[\s,;:]+$/, "")}...`;
 }
 
+// What the person can say, before a finding's id, to decide it differently
+// (Arden's words): "approve, and fix" is --fix-finding on the approval, and
+// "reject" is --reject-finding on a change request.
+const DECIDE_ONE_WAYS = ["approve, and fix", "reject"] as const;
+
 // Arden's #2099 line: the open findings a person's Approve at this stage's gate
 // records as `Accepted risk` (the builder approve writes through, so a finding
-// it records as `Changed after review` is not named), and the two ways to
-// decide one differently: --fix-finding on the approval, --reject-finding on a
-// change request. Each Unit's review numbers from R-01, so when the findings
-// named span Units each is labelled with its Unit. Null when none is named, or
-// when Construction approves the gate on its own.
+// it records as `Changed after review` is not named), and DECIDE_ONE_WAYS.
+// Each Unit's review numbers from R-01, so when the findings named span Units
+// each is labelled with its Unit. Null when none is named, or when
+// Construction approves the gate on its own.
 function approveAcceptsLine(projectDir: string, stage: ReviewFingerprintStage): string | null {
   try {
     if (isAutonomousConstructionGate(readFileSync(stateFilePath(projectDir), "utf-8"), stage, projectDir)) return null;
@@ -1585,8 +1589,9 @@ function approveAcceptsLine(projectDir: string, stage: ReviewFingerprintStage): 
   const one = named.length === 1;
   const list = one ? named[0] : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
   const first = label(accepted[0]);
+  const ways = DECIDE_ONE_WAYS.map((way) => `"${way} ${first}"`).join(" or ");
   return `Approve accepts the open review finding${one ? "" : "s"} ${list} as risk; ` +
-    `to decide ${one ? "it" : "one"} differently, say "approve, and fix ${first}" or "reject ${first}".`;
+    `to decide ${one ? "it" : "one"} differently, say ${ways}.`;
 }
 
 // The flags that name a gate's findings. A fix asked for carries no reason:
