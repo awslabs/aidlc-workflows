@@ -47,7 +47,7 @@ import {
   reviewInvalidationAttemptView,
   markStageWorkLogged,
   markTurnEnd,
-  LEARNINGS_NOTE_QUESTION,
+  LEARNINGS_CORRECTION_ASK,
   learningsRitualRuns,
   ceremonyPolicyValues,
   terminalReviewVerdict,
@@ -1113,7 +1113,7 @@ function handleDecision(args: string[]): void {
       error(
         `--question-kind ${JSON.stringify(kind)} is not a kind log decision records. Its kinds are ` +
           `"${ANSWER_MODE_QUESTION_KIND}", for the question of how the person answers a stage's questions, ` +
-          `"${LEARNINGS_NOTE_QUESTION_KIND}", for the learnings question "${LEARNINGS_NOTE_QUESTION}", and ` +
+          `"${LEARNINGS_NOTE_QUESTION_KIND}", for the learnings question about a correction ("... ${LEARNINGS_CORRECTION_ASK}"), and ` +
           `"${ASSUMPTION_CONFIRMATION_QUESTION_KIND}", for Intent Capture's Assumption Confirmation; leave the ` +
           "flag off for any other question.",
       );
@@ -2562,9 +2562,9 @@ function handleAnswer(args: string[]): void {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
 
-    // The learnings question's Add a note: the person's next reply answers
-    // what follows, so the turn ends at that question (stage-protocol-learnings.md
-    // section 13). A pick in a question box is read from the person's own
+    // Add a note at an "Anything to add?" question a record still holds (the
+    // step asked it at every gate before it asked only after a correction): the
+    // person's next reply answers what follows, so the turn ends at that question. A pick in a question box is read from the person's own
     // recorded reply; a typed one from the exact option the agent recorded on
     // the question its kind (or its two options) names. Whether their reply
     // already holds the note is the agent's to read.
