@@ -161,6 +161,19 @@ describe("t-approve-and-switch-plan: an approval typed with a plan switch at an 
     expect(turnEndIsOpen(proj)).toBe(true);
   });
 
+  // The same hold for a skip typed there: "approve, and skip user stories" gets the skip and its line, then the turn
+  // ends with the gate's question waiting, instead of a report that is refused in engine words.
+  test("a skip typed at Practices Discovery's gate names no approval report either, and ends the turn", async () => {
+    const proj = await atGate("feature", "practices-discovery");
+    await say(proj, "approve, and skip user stories", "claude");
+    const step = await next(proj, ["--skip", "user-stories"]);
+    const message = String(step.directive?.message ?? "");
+    expect(message).toContain("engine recompose --skip user-stories");
+    expect(message).not.toContain("--result approved");
+    expect(message).toContain("Then stop.");
+    expect(turnEndIsOpen(proj)).toBe(true);
+  });
+
   test("a switch to a plan that does not run the waiting stage skips it with its own line and names no gate report", async () => {
     const proj = await expressAtBuildAndTestGate();
     // poc does not run Deployment Pipeline: the waiting stage here is that one, opened the same way.
