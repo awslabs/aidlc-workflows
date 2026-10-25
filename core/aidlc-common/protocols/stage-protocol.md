@@ -1107,8 +1107,10 @@ When a stage detects existing output artifacts in its artifact directory:
 {{INVOKE}} engine state reuse-artifact <stage-slug> \
   --decision <keep|modify|redo> \
   --artifacts "<comma-separated list of existing artifacts found>" \
-  [--repo <repo>] [--single]
+  [--unit <unit>] [--repo <repo>] [--single]
 ```
+
+On a per-Unit stage, a Keep passes `--unit` with `directive.unit`; the row then names that Unit.
 
 The tool emits `ARTIFACT_REUSED` with the `Stage` / `Decision` / `Artifacts`
 fields, optional `Repo`, and isolated `Workflow` when `--single` is used —

@@ -438,7 +438,8 @@ summary again, the engine clears the file's summary `[Answer]:` when its only
 confirmation is from an earlier attempt and the summary has not been asked in
 this one (`clearEarlierAttemptSummaryAnswer`, before the step is emitted, never
 under the Stop hook's probe), so the conductor asks it once; every other answer
-is kept as written.
+is kept as written. A Keep at Artifact Re-use after that confirmation records the kept
+documents under it (`reuse-artifact`), so they need no save to descend from it.
 
 **Step 2: How the person answers.** The engine resolves the stage's answer
 mode (`resolveStageAnswerMode`: `mode`, `ask`, `reused_from`, `notice`), and the

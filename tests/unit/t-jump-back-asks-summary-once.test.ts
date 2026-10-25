@@ -8,8 +8,8 @@
 // and the approval gate follow with no "can't go ahead" question. A reply they
 // already gave since going back, summary confirmation turned off, the Stop
 // hook's read-only probe and a jump that does not reach the stage leave the
-// file as it is. Keeping the documents makes saving them again the agent's own
-// step, never a question. In a walk of one Unit at a time, a jump back reopens
+// file as it is. Keeping the documents records them under the new
+// confirmation, so the review runs with no save. In a walk of one Unit at a time, a jump back reopens
 // the Unit, whose confirmed summary still holds: its file is left as it is and
 // its step ends with no question. Runs the shipped tools and hooks with
 // production guards; every record comes from the engine's own commands and the
@@ -575,10 +575,9 @@ describe("t-jump-back-asks-summary-once: going back to a confirmed stage asks it
   });
 
   // Keeping the documents: the summary is confirmed once in the new attempt,
-  // the kept requirements.md was saved before it, so the review's refusal is
-  // the agent's own step (save the document again), never a question to the
-  // person, and once it is saved the review runs and the gate opens.
-  test("keeping the documents after a jump back: the agent re-saves them and reaches the gate", () => {
+  // and Keep records the kept requirements.md under that confirmation, so the
+  // review runs with no save and no refusal, and the gate opens.
+  test("keeping the documents after a jump back: the review runs with no save and the gate opens", () => {
     const work = new Work();
     work.firstAttempt();
     work.approve();
@@ -590,15 +589,6 @@ describe("t-jump-back-asks-summary-once: going back to a confirmed stage asks it
       ["Keep", "Modify", "Redo from scratch"], "Keep");
     work.ok(work.tool("state", ["reuse-artifact", STAGE, "--decision", "keep",
       "--artifacts", "requirements.md,requirements-analysis-questions.md"]), "record the re-use choice");
-    const refused = work.requestReview();
-    expect(refused.code, refused.stdout).not.toBe(0);
-    const error = String(lastJson(refused.stderr)?.error ?? "");
-    const ask = guardRecoveryAskFromRefusalText(error);
-    expect(ask, error).not.toBeNull();
-    expect(ask!.agent_work).toBe(true);
-    expect(ask!.remedies.map((remedy) => remedy.op)).toEqual(["produce-stage-output"]);
-    expect(error).toContain("requirements.md was last saved under a different summary confirmation");
-    work.write(work.artifact, REQUIREMENTS);
     work.finishReview(work.requestReview());
     expect(work.openGate().kind).toBe("print");
     work.expectNoGuardQuestion(since);

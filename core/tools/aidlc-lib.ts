@@ -14727,12 +14727,95 @@ export function summaryOutputDescent(
   };
 }
 
-/** Whether the output at `artifactAbs` descends from the summary authorization `id` (see summaryOutputDescent). */
+/**
+ * Whether the output at `artifactAbs` descends from the summary authorization
+ * `id`, as the summary guard reads it: its newest writes carry the stamp
+ * (summaryOutputDescent), or the person kept it, as it is, under that
+ * confirmation (keptUnderConfirmation).
+ */
 export function summaryOutputDescendsFrom(projectDir: string, artifactAbs: string, id: string): boolean {
-  const writes = readAuditShardEvents(projectDir)
+  const rows = readAuditShardEvents(projectDir);
+  const writes = rows
     .filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event) && auditRowWritesFile(projectDir, entry, artifactAbs));
   const { newestWrites, unauthorized } = summaryOutputDescent(writes, id);
-  return newestWrites.length > 0 && unauthorized.length === 0;
+  return (newestWrites.length > 0 && unauthorized.length === 0) || keptUnderConfirmation(projectDir, rows, artifactAbs, id);
+}
+
+/** The Keep row's list of kept outputs: `<sha256> <record-relative path>` entries joined by "; ". */
+export const KEPT_OUTPUTS_FIELD = "Kept Outputs";
+
+// A kept output as the Keep row names it: its bytes with line endings read as
+// LF (as the summary content hash reads them, so a clone that checks files out
+// with CRLF keeps the Keep), and its path under the record.
+function keptOutputEntry(record: string, path: string): string | null {
+  try {
+    // latin1 keeps every byte as it is, so only the line endings change.
+    const bytes = Buffer.from(readFileSync(path).toString("latin1").replace(/\r\n?/g, "\n"), "latin1");
+    const sha = createHash("sha256").update(bytes).digest("hex");
+    return `${sha} ${toPosix(relative(record, path))}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What a Keep pick keeps under the current summary confirmation: the stage's
+ * summary-governed outputs on disk for one scope (the stage, or the one Unit
+ * named on a per-Unit stage), each with its sha256, and the confirmation the
+ * write hook would stamp on them now. The Keep row that records them lets each
+ * one descend from that confirmation while its bytes still match
+ * (checkSummaryConfirmationEvidence), so keeping a document needs no save the
+ * host may not record. Null when the stage owes no summary, no confirmation is
+ * active for the scope, or a per-Unit stage names no Unit.
+ */
+export function keptSummaryOutputs(
+  projectDir: string,
+  stage: SummaryConfirmationStage,
+  options: { stateContent: string | null; unit?: string; single?: boolean },
+): { authorization: string; outputs: string[] } | null {
+  if (!summaryConfirmationOwed(stage, { stateContent: options.stateContent })) return null;
+  const record = recordDir(projectDir);
+  if (record === null) return null;
+  const stageLevel = options.stateContent !== null &&
+    usesStageLevelPerUnitArtifacts(getField(options.stateContent, "Scope"), options.stateContent);
+  const unit = options.unit ?? null;
+  if (isPerUnitStage(stage) && !stageLevel && !options.single && unit === null) return null;
+  const stages = loadStageGraphAll();
+  let authorization: string | null = null;
+  const outputs: string[] = [];
+  const questions = summaryQuestionFiles(projectDir, stage, options.single ? null : options.stateContent)
+    .filter((question) => question.unit === unit);
+  for (const question of questions) {
+    for (const path of summaryArtifactPaths(stage, question)) {
+      const id = activeSummaryAuthorizationForRecordPath(projectDir, toPosix(relative(record, path)), stages)?.id ?? null;
+      if (id === null || (authorization !== null && id !== authorization)) continue;
+      const entry = keptOutputEntry(record, path);
+      if (entry === null) continue;
+      authorization = id;
+      outputs.push(entry);
+    }
+  }
+  return authorization === null ? null : { authorization, outputs };
+}
+
+// Whether a Keep the person picked under this confirmation still covers this
+// output: a Keep row with the confirmation's id names the output with the
+// bytes it has now.
+function keptUnderConfirmation(
+  projectDir: string,
+  rows: readonly AuditShardEvent[],
+  path: string,
+  authorization: string,
+): boolean {
+  const record = recordDir(projectDir);
+  const entry = record === null ? null : keptOutputEntry(record, path);
+  if (entry === null) return false;
+  return rows.some((row) =>
+    row.event === "ARTIFACT_REUSED" &&
+    auditBlockField(row.block, "Decision") === "keep" &&
+    auditBlockField(row.block, SUMMARY_AUTHORIZATION_FIELD) === authorization &&
+    (auditBlockField(row.block, KEPT_OUTPUTS_FIELD) ?? "").split(";").some((kept) => kept.trim() === entry)
+  );
 }
 
 /** The audit events the summary-confirmation evidence reads. */
@@ -15808,6 +15891,9 @@ export function checkSummaryConfirmationEvidence(
       if (isSummaryAuthorizationId(receiptAuthorization)) {
         const { newestWrites, unauthorized } = summaryOutputDescent(writes, receiptAuthorization);
         if (newestWrites.length === 0 || unauthorized.length > 0) {
+          // The person kept this output, as it is, under this confirmation:
+          // it descends from it with no save (keptSummaryOutputs).
+          if (keptUnderConfirmation(projectDir, auditRows, artifactAbs, receiptAuthorization)) continue;
           // The governed checkpoint: the output was saved without the current
           // confirmation. Strict refuses with the existing remedy; relaxed
           // records the change once, tells the human once, and continues. The

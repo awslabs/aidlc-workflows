@@ -270,6 +270,10 @@ import {
   readRecordedSourceCheckouts,
   sourceBoundaryRepairStep,
   sourceWalkReach,
+  KEPT_OUTPUTS_FIELD,
+  keptSummaryOutputs,
+  SUMMARY_AUTHORIZATION_FIELD,
+  UNIT_NAME_REGEX,
 } from "./aidlc-lib.js";
 import {
   personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn, type StoredMessage,
@@ -9286,16 +9290,18 @@ function handlePracticesPromote(args: string[]): void {
 }
 
 // reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv>
-//   [--repo <repo>] [--single]
+//   [--unit <unit>] [--repo <repo>] [--single]
 function handleReuseArtifact(args: string[]): void {
   if (args.length < 1)
-    error("Usage: aidlc-state.ts reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv> [--repo <repo>] [--single]");
+    error("Usage: aidlc-state.ts reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv> [--unit <unit>] [--repo <repo>] [--single]");
   const slug = args[0];
   const rest = args.slice(1);
   const decision = getFlagValue(rest, "--decision");
   const artifacts = getFlagValue(rest, "--artifacts");
   const repoFlag = getFlagValue(rest, "--repo");
+  const unitFlag = getFlagValue(rest, "--unit");
   const singleRun = rest.includes("--single");
+  if (unitFlag !== undefined && unitFlag !== null && !UNIT_NAME_REGEX.test(unitFlag)) error(`Invalid Unit name: ${unitFlag}`);
   if (!decision) error("Missing --decision <keep|modify|redo>");
   if (!artifacts) error("Missing --artifacts <csv>");
 
@@ -9377,6 +9383,25 @@ function handleReuseArtifact(args: string[]): void {
     };
     if (repo) fields.Repo = repo;
     if (singleRun) fields.Workflow = `single-stage:${slug}`;
+    // Keep records what it keeps under the current summary confirmation, so
+    // the kept documents need no save the host may not record. Anything it
+    // cannot read leaves the row as it was.
+    if (decision === "keep") {
+      if (unitFlag) fields.Unit = unitFlag;
+      try {
+        const kept = keptSummaryOutputs(pd, stage, {
+          stateContent: readStateFile(pd),
+          ...(unitFlag ? { unit: unitFlag } : {}),
+          ...(singleRun ? { single: true } : {}),
+        });
+        if (kept !== null && kept.outputs.length > 0) {
+          fields[SUMMARY_AUTHORIZATION_FIELD] = kept.authorization;
+          fields[KEPT_OUTPUTS_FIELD] = kept.outputs.join("; ");
+        }
+      } catch {
+        // The row records the pick as before.
+      }
+    }
     emitAudit(pd, "ARTIFACT_REUSED", fields);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
