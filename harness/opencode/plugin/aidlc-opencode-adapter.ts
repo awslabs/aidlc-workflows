@@ -585,11 +585,9 @@ export default async ({
   }
 
   // A PostToolUse note for the model (`hookSpecificOutput.additionalContext`,
-  // the setter's say-once order) goes into the result the model reads. The TUI
-  // draws a bash call from its metadata.output, so the person does not see it.
-  // A note that already ends with the whole result (the setter alone) takes its
-  // place, so the model reads what the setter printed before the note existed;
-  // otherwise the note follows the result.
+  // the setter's say-once order with its lines) follows the result the model
+  // reads. The TUI draws a bash call from its metadata.output, so the person
+  // does not see it.
   function handModelNote(stdout: string, output?: { output?: string }): void {
     if (typeof output?.output !== "string") return;
     let note: unknown;
@@ -600,8 +598,7 @@ export default async ({
       return;
     }
     if (typeof note !== "string" || note === "") return;
-    const result = output.output.trimEnd();
-    output.output = note.endsWith(result) ? note : `${result}\n\n${note}`;
+    output.output = `${output.output.trimEnd()}\n\n${note}`;
   }
 
   // Sessions whose session-start hook reached an active workflow.

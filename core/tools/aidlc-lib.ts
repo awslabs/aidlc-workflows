@@ -45842,16 +45842,15 @@ export function engineErrorRelayLine(
  * developer message, and neither draws it; the opencode plugin puts it in the
  * tool result the model reads, while its panel draws the command's own output
  * (`metadata.output`). Measured with a probe hook on Claude Code 2.1.310, Codex
- * 0.164.0 and opencode 1.19.4. Kiro CLI has no such note, and Copilot, Cursor
- * and Kiro IDE keep the setter's order in its own output.
+ * 0.164.0 and opencode 1.19.4. Kiro CLI keeps the order in the setter's own
+ * output by decision, as Copilot, Cursor and Kiro IDE do.
  */
 export const SAY_ONCE_NOTE_HARNESSES: ReadonlySet<string> = new Set(["claude", "codex", "opencode"]);
 
-/** What the setter leaves for its call's hook: the order with its lines, the lines it printed, and the message it stood on. */
+/** What the setter leaves for the chat's next shell call: the order with its lines, and the message they stand on. */
 export interface SayOnceNote {
   say: string;
-  printed: string;
-  message?: string;
+  messageId: string;
 }
 
 function sayOnceNotePath(projectDir: string, sessionId: string | null): string {
@@ -45860,21 +45859,27 @@ function sayOnceNotePath(projectDir: string, sessionId: string | null): string {
 }
 
 /**
- * Leave the note for this chat's next shell call hook, where the harness hands
- * the model one; true when it is left, and the setter then prints its lines
- * alone. False on any doubt, and the order stays in the setter's own output.
+ * Leave `say` for this chat's next shell call hook, where the harness hands the
+ * model a note; true when it is left, and the setter then prints its lines
+ * alone. It stands on `messageId` (the message the agent named, or else the
+ * chat's latest). False on any doubt, and the order stays in the output.
  */
 export function leaveSayOnceNote(
   projectDir: string,
   sessionId: string | null,
-  note: SayOnceNote,
+  say: string,
+  messageId?: string,
   harness: string = runtimeHarnessName(),
 ): boolean {
   if (!SAY_ONCE_NOTE_HARNESSES.has(harness)) return false;
   const path = sayOnceNotePath(projectDir, sessionId);
   if (!path) return false;
   try {
+    const { latestMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+    const standsOn = messageId ?? latestMessage(projectDir, sessionId)?.id;
+    if (standsOn === undefined) return false;
     mkdirSync(sessionsDir(projectDir), { recursive: true });
+    const note: SayOnceNote = { say, messageId: standsOn };
     writeFileAtomic(path, `${JSON.stringify(note)}\n`);
     return true;
   } catch {
@@ -45882,40 +45887,24 @@ export function leaveSayOnceNote(
   }
 }
 
-// Whether the shell command names `--message <id>` as whole words.
-function commandNamesMessage(command: string, id: string): boolean {
-  const words = command.split(/\s+/).map((word) => word.replace(/^['"]|['"]$/g, ""));
-  return words.some((word, i) => word === `--message=${id}` || (word === "--message" && words[i + 1] === id));
-}
-
 /**
- * The PostToolUse line that hands this chat's note to the model, taken once,
- * or null. It is the setter's call when its output carries the lines the
- * setter printed (CRLF read as LF) or its command names the note's message (a
- * shell can re-encode the person's quoted words, as PowerShell does); another
- * call that ends first leaves the note for it.
+ * The PostToolUse line that hands this chat's note to the model, taken once by
+ * the chat's next shell call (the setter's own, as a rule; the note carries the
+ * lines, so another call that ends first hands over the same words), or null.
+ * A note whose message is no longer the chat's latest is dropped: the person
+ * has written again since, and the line is never said late.
  */
 export function sayOnceNoteLine(
   projectDir: string,
   sessionId: string | undefined,
-  command: string,
-  toolResponse: unknown,
   harness: string = runtimeHarnessName(),
 ): string | null {
   if (!SAY_ONCE_NOTE_HARNESSES.has(harness)) return null;
-  const path = sayOnceNotePath(projectDir, validSessionId(sessionId));
+  const valid = validSessionId(sessionId);
+  // The chat the setter named: a Codex helper thread's id maps to its root, as resolveChat maps it.
+  const chat = valid === null ? null : helperSessionRoot(projectDir, valid) ?? valid;
+  const path = sayOnceNotePath(projectDir, chat);
   if (!path || !existsSync(path)) return null;
-  let note: Partial<SayOnceNote>;
-  try {
-    note = JSON.parse(readFileSync(path, "utf-8")) as Partial<SayOnceNote>;
-  } catch {
-    return null;
-  }
-  if (typeof note.say !== "string" || note.say === "") return null;
-  const output = shellToolResponseText(toolResponse)?.replace(/\r\n/g, "\n") ?? "";
-  const itsCall = (typeof note.printed === "string" && note.printed !== "" && output.includes(note.printed)) ||
-    (typeof note.message === "string" && note.message !== "" && commandNamesMessage(command, note.message));
-  if (!itsCall) return null;
   // Taken by a rename, so two deliveries of one call cannot both hand it over.
   const taken = `${path}.${process.pid}`;
   try {
@@ -45923,11 +45912,20 @@ export function sayOnceNoteLine(
   } catch {
     return null;
   }
+  let note: Partial<SayOnceNote> | null = null;
+  try {
+    note = JSON.parse(readFileSync(taken, "utf-8")) as Partial<SayOnceNote>;
+  } catch {
+    /* unreadable: dropped */
+  }
   try {
     unlinkSync(taken);
   } catch {
     /* per-user runtime state; best-effort */
   }
+  if (typeof note?.say !== "string" || note.say === "" || typeof note.messageId !== "string") return null;
+  const { latestMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  if (latestMessage(projectDir, chat)?.id !== note.messageId) return null;
   return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: note.say } })}\n`;
 }
 

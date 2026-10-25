@@ -13070,11 +13070,10 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   // model a note the person does not see, the order rides it with the lines
   // (leaveSayOnceNote) and the output is the lines alone.
   const due = checkOffInTheirName && flags.verbatim !== "true";
-  const said = due && !leaveSayOnceNote(projectDir, selection.sessionId, {
-    say: [SAY_SETTER_LINES, ...lines].join("\n"),
-    printed: lines.join("\n"),
-    ...(named.message ? { message: named.message.id } : {}),
-  }) ? [SAY_SETTER_LINES] : [];
+  const said = due &&
+      !leaveSayOnceNote(projectDir, selection.sessionId, [SAY_SETTER_LINES, ...lines].join("\n"), named.message?.id)
+    ? [SAY_SETTER_LINES]
+    : [];
   process.stdout.write(`${[...said, ...lines].join("\n")}\n`);
 }
 

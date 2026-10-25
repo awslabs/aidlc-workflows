@@ -77,6 +77,7 @@ export const RECORD_COPIES: ReadonlyArray<{ file: string; type: string; field: s
   { file: "core/tools/aidlc-lib.ts", type: "ProtectedResponse", field: "words" },
   { file: "core/tools/aidlc-plan-approval-ask.ts", type: "PlanApprovalAskReply", field: "text" },
   { file: "core/tools/aidlc-question-store.ts", type: "StoredQuestion", field: "text" },
+  { file: "core/tools/aidlc-lib.ts", type: "SayOnceNote", field: "say" },
 ];
 /**
  * The questions files' `[Answer]:` line, by the functions that read it out of the file. Mostly the agent writes it (the
@@ -1049,6 +1050,8 @@ export const ALLOWED: Record<string, Allowed> = {
   "core/tools/aidlc-utility.ts#writeSettings": { use: "keeps", why: "hands the setter's lines on to its output" },
   "core/tools/aidlc-utility.ts#applyKeptToPickedWork": { use: "keeps", why: "as above, for settings kept for the work the person picks" },
   "core/tools/aidlc-utility.ts#handleConfigChange": { use: "keeps", why: "prints the setter's lines" },
+  [`${LIB}#leaveSayOnceNote`]: { use: "keeps", why: "the say-once note's writer: copies the setter's lines, which quote their words, for the model to say once", from: ["core/tools/aidlc-utility.ts#handleConfigChange"] },
+  [`${LIB}#sayOnceNoteLine`]: { use: "keeps", why: "the say-once note's own read: hands the setter's lines to the model as written, or drops them; it takes the note by its chat and message id, never by its text" },
   "core/tools/aidlc-utility.ts#handleIntent": { use: "keeps", why: "prints the lines of the settings kept for the work they pick" },
   "core/tools/aidlc-utility.ts#handleSpace": { use: "keeps", why: "as above, for the space they pick" },
   "core/tools/aidlc-utility.ts#handleRecompose": { use: "keeps", why: "prints the setter's lines with the plan change" },

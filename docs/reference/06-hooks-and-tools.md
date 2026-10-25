@@ -46,7 +46,7 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 | `write-audit-log.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Auto-log artifact writes to the `audit/` shards |
 | `run-sensors.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Fire the active directive stage's resolved Sensors on matching writes (advisory; never blocks); a state-bound per-intent marker preserves attribution when unit-major execution runs ahead of `Current Stage` |
 | `sync-workflow-state.ts` | PostToolUse | Project-wide (settings.json) | `TaskUpdate` | Auto-sync state file on stage task activation |
-| `rebuild-stage-graph.ts` | PostToolUse | Project-wide (settings.json) | `Bash` | Bind a successful `intent-create` to that tool event's exact host session ID; when the session already owns another intent, write the one-shot fresh-session handoff receipt; then recompile `runtime-graph.json` on transition-class audit emits. First, when the Bash call was one literal engine orchestrate command whose stdout is exactly an `error` directive, relay `directive.message` byte for byte to the human (see [Engine error relay](#engine-error-relay)); otherwise, on the setter's own call, hand the model its say-once order (the end of that section) |
+| `rebuild-stage-graph.ts` | PostToolUse | Project-wide (settings.json) | `Bash` | Bind a successful `intent-create` to that tool event's exact host session ID; when the session already owns another intent, write the one-shot fresh-session handoff receipt; then recompile `runtime-graph.json` on transition-class audit emits. First, when the Bash call was one literal engine orchestrate command whose stdout is exactly an `error` directive, relay `directive.message` byte for byte to the human (see [Engine error relay](#engine-error-relay)); otherwise, after the setter switched a check off in the person's name, hand the model its say-once order (the end of that section) |
 | `fold-usage.ts` | PreToolUse + PostToolUse | Project-wide (settings.json) | `*` | **Claude-only.** Fold the transcript's new token usage into the durable usage ledger every llm call: PreToolUse seals the completing main call and, before an engine boundary, every completed subagent call so lifecycle rollups are current; PostToolUse supplies the normal holdback fallback. Observe-only, never blocks; the Claude-Code transcript reader is wired only in the Claude harness, so on Kiro/Codex/opencode no producer runs and the ledger stays empty (every usage consumer degrades to no-data). `AIDLC_DISABLE_USAGE_TRACKING=1` disables it. See "Token usage and cost tracking" below |
 | `validate-state.ts` | PreCompact | Project-wide (settings.json) | `*` | Validate state file, record `SESSION_COMPACTED` |
 | `log-subagent.ts` | SubagentStop | Project-wide (settings.json) | (empty) | Remove one background-subagent ledger entry for the completing session and log subagent completion events. A forwarded `hook_event_name: "SubagentStart"` (Cursor's and Kiro IDE's adapters, which run no dispatch hook) records `SUBAGENT_DISPATCHED` instead and nothing else |
@@ -1260,7 +1260,7 @@ conversation, or count semantics.
 
 **Processing steps:**
 
-1. **Engine error relay:** Before any workflow or graph filter (the engine also errors before an intent exists), write one JSON line carrying `systemMessage` and a PostToolUse `additionalContext` note when the call qualifies; see [Engine error relay](#engine-error-relay) below. When it writes nothing, the call may instead hand the model the setter's say-once note (see the end of that section). Every other call writes nothing to stdout.
+1. **Engine error relay:** Before any workflow or graph filter (the engine also errors before an intent exists), write one JSON line carrying `systemMessage` and (on Claude Code and Codex) a PostToolUse `additionalContext` note when the call qualifies; see [Engine error relay](#engine-error-relay) below. When it writes nothing, the call may instead hand the model the setter's say-once note (see the end of that section). Every other call writes nothing to stdout.
 2. **Session binding:** Before graph filters, pair the PostToolUse event's exact `session_id` with the successful `intent-create` result's record and space. Resolve that record through `intents.json`; stamp an unbound session, or preserve existing ownership and write a short-lived handoff receipt naming the original and newly active intent UUIDs.
 3. **Command filter:** Only `bun .claude/tools/aidlc-(state|jump|bolt|utility).ts` invocations pass the graph early exit. `aidlc-runtime.ts` is rejected explicitly (recursion guard).
 4. **Audit-existence guard:** Exits cleanly before init (no `audit/` shard yet).
@@ -1339,14 +1339,14 @@ Codex, opencode). There `config set` (and `config-change`) prints its lines
 alone and leaves the order with its lines for this chat
 (`leaveSayOnceNote`, `aidlc/.aidlc-sessions/<session>.say-once`), and this
 hook hands it to the model once, as PostToolUse `additionalContext`, on the
-setter's own call: the call whose output carries the printed lines, or whose
-command names the note's `--message <id>` (`sayOnceNoteLine`). Claude Code reads
-it as hook context and Codex as a developer message, and neither draws it; the
-opencode plugin puts it in the result the model reads (`output`, in place of the
-setter's lines when it ends with them), while the TUI draws the call from
-`metadata.output`. Kiro CLI, Kiro IDE, Copilot and Cursor, and any call where
-the note cannot be left, print the order first and then the lines, as the one
-carrier. The engine's steps that already have the agent print the setter's
+chat's next shell call, which is the setter's own as a rule
+(`sayOnceNoteLine`). The note stands on the message the setting stood on: once
+the person has sent another message, it is dropped, never said late. Claude
+Code reads it as hook context and Codex as a developer message, and neither
+draws it; the opencode plugin puts it after the result the model reads
+(`output`), while the TUI draws the call from `metadata.output`. Kiro CLI,
+Kiro IDE, Copilot and Cursor, and any call where the note cannot be left, print
+the order first and then the lines, as the one carrier. The engine's steps that already have the agent print the setter's
 output as it is (`configSetCommand`, and the typed `config set` the engine runs
 itself) pass `--verbatim`, which leaves the order out. At the person's own
 terminal it is never printed.

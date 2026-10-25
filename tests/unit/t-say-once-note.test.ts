@@ -8,8 +8,9 @@
 // frame (live at main on Codex 0.164.0 and opencode 1.19.4). Claude Code,
 // Codex and opencode hand the model a PostToolUse note the person does not
 // see, so there the setter prints its lines alone and the Bash PostToolUse
-// hook gives the agent the order with them, once. Kiro CLI has no such note,
-// and Copilot, Cursor and Kiro IDE keep the order in the output as before.
+// hook gives the agent the order with them, once, and never after the person
+// has written again. Kiro CLI keeps the order in the output by decision, as
+// Copilot, Cursor and Kiro IDE do.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -167,17 +168,9 @@ describe("where the host hands the model a note the person does not see, the ord
     expect(postToolUse(setter(id), out)).toBe("");
   });
 
-  test("claude: another call that ends first leaves the note for the setter's own call", () => {
-    const { said, set, setter, postToolUse } = project("claude");
-    const id = said("turn the summary confirmation off");
-    const out = set(id);
-    expect(postToolUse("git status --short", "")).toBe("");
-    expect(noteOf(postToolUse(setter(id), out))).toBe(`${ORDER}\n${out.trimEnd()}`);
-  });
-
-  test("claude: a call in another chat takes nothing, and output a shell re-encoded is still the setter's call by its message", () => {
+  test("claude: a call in another chat takes nothing", () => {
     const { proj, said, set, setter, postToolUse } = project("claude");
-    const id = said("turn the summary confirmation off \u00e9t\u00e9");
+    const id = said("turn the summary confirmation off");
     const out = set(id);
     const other = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "rebuild-stage-graph"], {
       cwd: proj, env: chatEnv(proj), encoding: "utf-8",
@@ -188,11 +181,19 @@ describe("where the host hands the model a note the person does not see, the ord
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(other.stdout ?? "").toBe("");
-    const mangled = out.replace(/\u00e9/g, "\u0102\u00a9").replace(/\n/g, "\r\n");
-    expect(noteOf(postToolUse(setter(id), mangled))).toBe(`${ORDER}\n${out.trimEnd()}`);
+    expect(noteOf(postToolUse("git status --short", ""))).toBe(`${ORDER}\n${out.trimEnd()}`);
   });
 
-  test("opencode: the panel keeps the setter's own lines, and the result the model reads is the order then the lines", async () => {
+  test("claude: once the person has written again, the note is dropped, never said late", () => {
+    const { said, set, setter, postToolUse } = project("claude");
+    const id = said("turn the summary confirmation off");
+    const out = set(id);
+    said("thanks, go on");
+    expect(postToolUse(setter(id), out)).toBe("");
+    expect(postToolUse("git status --short", "")).toBe("");
+  });
+
+  test("opencode: the panel keeps the setter's own lines, and the order with them follows the result the model reads", async () => {
     const { proj, said, set, setter } = project("opencode");
     const id = said("turn the summary confirmation off");
     const out = set(id);
@@ -205,7 +206,7 @@ describe("where the host hands the model a note the person does not see, the ord
       result,
     );
     expect(result.metadata.output).toBe(out);
-    expect(result.output).toBe(`${ORDER}\n${out.trimEnd()}`);
+    expect(result.output).toBe(`${out.trimEnd()}\n\n${ORDER}\n${out.trimEnd()}`);
   });
 });
 

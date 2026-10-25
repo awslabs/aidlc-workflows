@@ -31,10 +31,11 @@
 // state: the engine errors before any intent exists too.
 //
 // Say-once note: when the setter switched a check of the person's off in their
-// name from this chat, it left the order to say its lines once for this call
-// (leaveSayOnceNote) instead of printing it where the tool panel draws it. The
+// name from this chat, it left the order to say its lines once, with the lines
+// (leaveSayOnceNote), instead of printing it where the tool panel draws it. The
 // hook hands that note to the model as PostToolUse `additionalContext` once,
-// on the setter's own call (sayOnceNoteLine), and never beside a relay line.
+// on the chat's next shell call, the setter's own as a rule (sayOnceNoteLine),
+// and never beside a relay line.
 
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { statSync } from "node:fs";
@@ -172,10 +173,11 @@ function relayEngineError(projectDir: string, parsed: ClaudeCodeHookInput): bool
   return writeEngineErrorRelay(message);
 }
 
-// The setter's say-once note, taken on its own call. A host that gets two
-// lines from one hook reads neither, so it is never written beside a relay.
+// The setter's say-once note, taken by the chat's next shell call. A host that
+// gets two lines from one hook reads neither, so it is never written beside a
+// relay.
 function handSayOnceNote(projectDir: string, parsed: ClaudeCodeHookInput): void {
-  const line = sayOnceNoteLine(projectDir, parsed.session_id, parsed.tool_input?.command ?? "", parsed.tool_response);
+  const line = sayOnceNoteLine(projectDir, parsed.session_id);
   if (line === null) return;
   hookDebug(projectDir, "rebuild-stage-graph", "say-once-note");
   process.stdout.write(line);
