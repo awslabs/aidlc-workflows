@@ -15073,25 +15073,45 @@ function keptOutputEntry(record: string, path: string): string | null {
  * write hook would stamp on them now. The Keep row that records them lets each
  * one descend from that confirmation while its bytes still match
  * (checkSummaryConfirmationEvidence), so keeping a document needs no save the
- * host may not record. Null when the stage owes no summary, no confirmation is
- * active for the scope, or a per-Unit stage names no Unit.
+ * host may not record. In an isolated run the scope is the one its own
+ * confirmation names (its questions file, on a per-Unit stage that Unit's), under
+ * that confirmation. Null when the stage owes no summary, no confirmation is
+ * active for the scope, or a per-Unit stage in the main run names no Unit.
  */
 export function keptSummaryOutputs(
   projectDir: string,
   stage: SummaryConfirmationStage,
   options: { stateContent: string | null; unit?: string; single?: boolean },
 ): { authorization: string; outputs: string[] } | null {
-  if (!summaryConfirmationOwed(stage, { stateContent: options.stateContent })) return null;
   const record = recordDir(projectDir);
   if (record === null) return null;
+  if (options.single) {
+    // Owed as the isolated completion reads it, from the run's own scope and
+    // not the main run's settings; and bound to this confirmation and its
+    // questions file, not the per-Unit one a walk may have left for the Unit.
+    if (!summaryConfirmationOwed(stage, { scope: singleStageAttemptScope(projectDir, stage.slug), stateContent: null })) {
+      return null;
+    }
+    const isolated = readSummaryAuthorization(projectDir, stage.slug, null);
+    if (isolated === null || isolated.workflow !== `single-stage:${stage.slug}`) return null;
+    const question = summaryQuestionFiles(projectDir, stage, null)
+      .find((candidate) => toPosix(relative(projectDir, candidate.path)) === isolated.questions_file);
+    if (question === undefined) return null;
+    if (options.unit !== undefined && question.unit !== null && question.unit !== options.unit) return null;
+    const outputs = summaryArtifactPaths(stage, question)
+      .map((path) => keptOutputEntry(record, path))
+      .filter((entry): entry is string => entry !== null);
+    return { authorization: isolated.id, outputs };
+  }
+  if (!summaryConfirmationOwed(stage, { stateContent: options.stateContent })) return null;
   const stageLevel = options.stateContent !== null &&
     usesStageLevelPerUnitArtifacts(getField(options.stateContent, "Scope"), options.stateContent);
   const unit = options.unit ?? null;
-  if (isPerUnitStage(stage) && !stageLevel && !options.single && unit === null) return null;
+  if (isPerUnitStage(stage) && !stageLevel && unit === null) return null;
   const stages = loadStageGraphAll();
   let authorization: string | null = null;
   const outputs: string[] = [];
-  const questions = summaryQuestionFiles(projectDir, stage, options.single ? null : options.stateContent)
+  const questions = summaryQuestionFiles(projectDir, stage, options.stateContent)
     .filter((question) => question.unit === unit);
   for (const question of questions) {
     for (const path of summaryArtifactPaths(stage, question)) {
