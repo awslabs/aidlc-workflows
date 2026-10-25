@@ -401,6 +401,8 @@ class Work {
   // or names the jump for the agent to run.
   jump(target: string, direction: "backward" | "forward" | "redo"): void {
     this.said(`/aidlc --stage ${target}`);
+    const jumps = () => readAuditShardEvents(this.dir).filter((row) => row.event === "STAGE_JUMPED");
+    const earlier = jumps().length;
     const step = this.next(["--stage", target]);
     const command = /Run `(bun [^`]+aidlc-jump\.ts execute [^`]+)`/.exec(String(step.message ?? ""))?.[1];
     if (command !== undefined) {
@@ -409,8 +411,9 @@ class Work {
       return;
     }
     expect(step, JSON.stringify(step)).toMatchObject({ kind: "run-stage", stage: target });
-    const jumped = readAuditShardEvents(this.dir).filter((row) => row.event === "STAGE_JUMPED").at(-1);
-    expect(auditBlockField(jumped?.block ?? "", "Direction")).toBe(direction.toUpperCase());
+    const rows = jumps();
+    expect(rows.length).toBe(earlier + 1);
+    expect(auditBlockField(rows.at(-1)!.block, "Direction")).toBe(direction.toUpperCase());
   }
 
   questionsText(): string {
@@ -551,8 +554,11 @@ describe("t-jump-back-asks-summary-once: going back to a confirmed stage asks it
     const work = new Work();
     work.firstAttempt();
     work.approve();
-    work.jump(STAGE, "backward");
+    // The jump itself, with no step after it, so the probe is the first to see
+    // the earlier answer.
+    work.ok(work.tool("jump", ["execute", "--target", STAGE, "--direction", "backward"]), "the jump back");
     const before = work.questionsText();
+    expect(summaryAnswer(before)).toBe("Looks correct");
     work.json(work.tool("orchestrate", ["next"], { AIDLC_STOP_HOOK_PROBE: "1" }), "the Stop hook's probe");
     expect(work.questionsText()).toBe(before);
   });
