@@ -4418,7 +4418,7 @@ export function sourceKeysChangedOutsideAidlcSince(
 ): Set<string> | null {
   const recorded = listing === undefined ? null : readBaselineSourceSnapshot(projectDir, stageSlug, listing, intent, space);
   if (recorded === null) return null;
-  return sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, recorded, current), current.listing);
+  return sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, recorded, current, intent, space), current.listing);
 }
 
 // A kept listing as the walk would list it now, to compare with `current`.
@@ -4426,6 +4426,8 @@ export function recordedSourceListingForCompare(
   projectDir: string,
   recorded: ReadonlyMap<string, string>,
   current: WorkspaceSourceState,
+  intent?: string,
+  space?: string,
 ): WorkspaceSourceListing {
   const before = recordedSourceListingUnderCurrentBoundary(recorded, current.listing);
   // A path the registry's exclude list now leaves out of the walk (a cache
