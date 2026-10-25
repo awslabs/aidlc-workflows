@@ -86,6 +86,7 @@ import {
   codeGenerationBuildsWithoutSource,
   clearPlanApprovalOverrideOffered,
   codeGenerationExecutionAllowed,
+  codeGenerationIssuance,
   codeGenerationRecordDir,
   codeGenerationTargetId,
   evaluateCodeGenerationApproval,
@@ -1309,12 +1310,32 @@ function shownFromNow(projectDir: string): { repliesFrom: AuditMark; shownFrom: 
 
 /**
  * Where the record stood when the Plan Approval question was shown, while it is
- * the open step with a plan still unanswered; else null. A record from before
- * shownFrom reads the mark its answer reads (repliesFrom, personRepliedAfter).
+ * the open step with a plan still unanswered; "due" while the step on record
+ * builds a written plan that `next` would ask about now, its question not shown
+ * yet; else null. A record from before shownFrom reads the mark its answer
+ * reads (repliesFrom, personRepliedAfter).
  */
-export function planQuestionShown(projectDir: string): AuditMark | null {
+export function planQuestionShown(projectDir: string): AuditMark | "due" | null {
   const record = currentPlanApprovalAsk(projectDir, "some")?.record;
-  return record?.shownFrom ?? record?.repliesFrom ?? null;
+  if (record !== undefined) return record.shownFrom ?? record.repliesFrom ?? null;
+  return planQuestionDue(projectDir) ? "due" : null;
+}
+
+// The plan step is on record and a plan it builds is ready for the person's
+// approval, read the way `next` routes it (targetState).
+function planQuestionDue(projectDir: string): boolean {
+  try {
+    const marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
+    if (marker?.version !== 2 || marker.kind === "ask") return false;
+    const issued = codeGenerationIssuance(marker);
+    if (issued === null) return false;
+    const intentId = marker.intent_uuid ?? "bare-space";
+    const record = readPlanApprovalAsk(projectDir, intentId);
+    const units = issued.kind === "invoke-swarm" ? issued.units : [issued.unit?.trim() || null];
+    return units.some((unit) => targetState(projectDir, unit, intentId, record, issued).kind === "ask");
+  } catch {
+    return false;
+  }
 }
 
 /**

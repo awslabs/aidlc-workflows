@@ -396,16 +396,18 @@ export type RequestKind = "any" | "setting" | "plan-approval-off";
 // against it (an older question with no mark, another clone's, a copy of the
 // tools without the plan question's module).
 function sincePlanQuestion(pd: string): ((row: AuditShardEvent) => boolean) | null {
-  let shown: import("./aidlc-lib.ts").AuditMark | null;
+  let shown: import("./aidlc-lib.ts").AuditMark | "due" | null;
   try {
     // Typed by hand: a type import of the plan question module from here takes the tests' typecheck past its heap.
     const { planQuestionShown } = require("./aidlc-plan-approval-ask.ts") as {
-      planQuestionShown(projectDir: string): import("./aidlc-lib.ts").AuditMark | null;
+      planQuestionShown(projectDir: string): import("./aidlc-lib.ts").AuditMark | "due" | null;
     };
     shown = planQuestionShown(pd);
   } catch {
     shown = null;
   }
+  // A plan waiting for its question, not shown yet: nothing is sent since.
+  if (shown === "due") return () => false;
   return shown === null ? null : rowsAfterMark(pd, shown);
 }
 
@@ -443,8 +445,8 @@ export const PLAN_APPROVAL_OFF_AFTER_SHOWN_LINE = "Turning plan approval off nee
 export function planApprovalOffWaitsStep(messageId?: string): string {
   return `${messageId === undefined ? "Plan approval stays on for now" : `Cannot turn plan approval off on message ${messageId}`}: ` +
     "the code plan question waits, and only a message the person sends since it was shown can turn plan approval " +
-    "off. Show them the plan question as it is and end the turn. If their words did ask for plan approval off, say " +
-    `first, in one line: "${PLAN_APPROVAL_OFF_AFTER_SHOWN_LINE}"`;
+    "off. Show them the plan question as it is (run next for it, if it is not shown yet) and end the turn. If " +
+    `their words did ask for plan approval off, say first, in one line: "${PLAN_APPROVAL_OFF_AFTER_SHOWN_LINE}"`;
 }
 
 // The person's messages in this chat a request can stand on (proveMessage's
