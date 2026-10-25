@@ -223,8 +223,8 @@ async function createIntent(proj: string, label: string, words: string): Promise
 }
 
 /** A bugfix at Requirements Analysis as a run leaves it before the gate's report: files written, summary confirmed,
- * the reviewer's READY review on record. */
-export async function reviewedStage(proj: string): Promise<void> {
+ * the reviewer's READY review on record, raising `findings` (rows of its New findings table) when given. */
+export async function reviewedStage(proj: string, findings: readonly string[] = []): Promise<void> {
   writeFileSync(seededStateFile(proj), midInception(), "utf-8");
   appendAuditEntry("STAGE_STARTED", { Stage: STAGE }, proj);
   writeStageFiles(proj, true);
@@ -250,7 +250,8 @@ export async function reviewedStage(proj: string): Promise<void> {
   if (!reviewFile) throw new Error(`no review file named: ${asked.stdout}`);
   writeFileSync(join(proj, reviewFile),
     `## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Date:** 2026-01-01T00:00:00Z\n**Iteration:** 1\n\n` +
-      "### Findings\n\n**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n\n### Summary\n\nReady.\n", "utf-8");
+      "### Findings\n\n**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n" +
+      findings.map((row) => `${row}\n`).join("") + "\n### Summary\n\nReady.\n", "utf-8");
   const ready = await exec([process.execPath, LOG, "review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { cwd: proj, env: env(proj) });
   if (ready.status !== 0) throw new Error(`review verdict failed: ${ready.stdout}${ready.stderr}`);
 }
