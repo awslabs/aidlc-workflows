@@ -109,6 +109,11 @@ import {
 } from "../harness/fixtures.ts";
 import { approveSuppliedCheckCommand } from "../harness/verification-command.ts";
 
+// The stage's checks run before each review and gate (completionChecksStep,
+// t-checks-before-review); this file's fixture documents are not written for
+// them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
+
 // The default also governs afterAll removal of a dozen-plus worktree fixtures,
 // which exceeds bun's 5s hook default under load; per-case literals stay.
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);

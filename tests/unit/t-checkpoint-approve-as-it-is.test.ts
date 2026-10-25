@@ -173,12 +173,16 @@ function build(p: string, unit: string): void {
   }, p);
 }
 
+// Its documents are not written for the stage's checks, which run before the
+// review (completionChecksStep, t-checks-before-review), and they are not its subject.
+const CHECKS_OFF = { AIDLC_DISABLE_SENSORS: "1" };
+
 const reviewArgs = (unit: string, iteration: number) =>
   ["review", "--stage", CG, "--reviewer", REVIEWER, "--unit", unit, "--iteration", String(iteration)];
 
 // The agent asks for the Unit's review; the reviewer's answer is optional.
 function review(p: string, unit: string, iteration: number, verdict?: "READY" | "NOT-READY", extra: string[] = []): void {
-  const requested = tool(p, "log", [...reviewArgs(unit, iteration), ...extra]);
+  const requested = tool(p, "log", [...reviewArgs(unit, iteration), ...extra], CHECKS_OFF);
   expect(requested.status, requested.out).toBe(0);
   if (verdict === undefined) return;
   const file = String(requested.json?.reviewFile);

@@ -47,6 +47,11 @@ import {
   _resetScopeMappingForTests, constructionCheckpointGaps,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
+// The stage's checks run before each review and gate (completionChecksStep,
+// t-checks-before-review); this file's fixture documents are not written for
+// them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
+
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 resetAidlcEnv();
@@ -360,7 +365,8 @@ describe("t342 Construction checkpoint routing", () => {
     cover(p, "alpha", stages.slice(0, 2));
     expect(surface("nfr-requirements").stderr).toContain('slug mismatch: requested "nfr-requirements"');
     cover(p, "alpha", stages.slice(2));
-    const directive = next(p);
+    // With Sensors on, as a person's run has them, the step lists the sensors module too.
+    const directive = next(p, { ...process.env, AIDLC_DISABLE_SENSORS: "0" });
     expect(directive.construction_checkpoint?.unit, JSON.stringify(directive)).toBe("alpha");
     expect(directive.protocol_modules).toEqual(["construction", "checkpoint", "learnings", "sensors"]);
     for (const slug of stages) {
@@ -413,7 +419,7 @@ describe("t342 Construction checkpoint routing", () => {
     seedBoltDag(p, [{ name: "beta", depends_on: ["alpha"] }, "alpha"], [["alpha"], ["beta"]]);
     const surface = learningsSurface(p);
     cover(p, "alpha");
-    const directive = next(p);
+    const directive = next(p, { ...process.env, AIDLC_DISABLE_SENSORS: "0" });
     expect(directive.construction_checkpoint?.kind, JSON.stringify(directive)).toBe("skeleton");
     expect(directive.protocol_modules).toEqual(["construction", "checkpoint", "learnings", "sensors"]);
     for (const slug of stages) expect(surface(slug).status, slug).toBe(0);
@@ -2668,7 +2674,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     const floor = latestMainWorkflowStageRunFloorForProject(p, "code-generation", true, "alpha");
     writeFileSync(join(p, "src", "alpha.ts"), "export const alpha = 2;\n");
 
-    const beat = next(p);
+    const beat = next(p, { ...process.env, AIDLC_DISABLE_SENSORS: "0" });
     const recheck = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", "2"];
     const rechecked = reviewThroughLog(p, recheck);
     expect(rechecked.status, rechecked.out).toBe(0);
@@ -2679,7 +2685,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(beat.reviewer).toBe(REVIEWER);
     expect(beat.protocol_modules).toEqual(["reviewer", "reviewer-unit", "reviewer-repair", "construction", "checkpoint", "sensors"]);
 
-    const asked = next(p);
+    const asked = next(p, { ...process.env, AIDLC_DISABLE_SENSORS: "0" });
     expect(asked.construction_checkpoint).toMatchObject({
       unit: "alpha", ready: true, rechecked: { verdict: "READY", approved_before: true },
     });

@@ -7232,11 +7232,13 @@ export function completionChecksStep(
   }));
   if (failed.length === 0) return null;
   const details = [...new Set(failed.flatMap((f) => f.detail === null ? [] : [f.detail]))];
+  // The run again does not check again, so the step says so: an agent that
+  // read it as a re-check told the person the checks passed.
   const next = handOff === "review"
-    ? "the review goes ahead then, and anything left is said with the approval."
-    : "the approval question comes then, and anything left is said with it.";
+    ? "it records the review request without checking again, and the gate checks again and says what is left."
+    : "it opens the gate, which checks again and says what is left.";
   return `Before the ${handOff}, this stage's checks ran on its documents. ${failedCheckLines(stage, failed).join(" ")} ` +
-    `The findings are in ${details.join(", ")}. Fix what is yours in those documents, then run \`${again}\` again; ${next}`;
+    `The findings are in ${details.join(", ")}. Fix what is yours in those documents, then run \`${again}\` again: ${next}`;
 }
 
 // Whether every required output of the scope (the stage's, or one Unit's) is

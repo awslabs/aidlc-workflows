@@ -23,7 +23,8 @@ approval gate, and its advisory checks run once before that, when the
 documents are written and handed on: the review request, or the report that
 opens the gate when no review took them first, comes back as a `print` that
 names what a check found and the same command. That step is yours: fix what
-is yours in those documents, then run the command again, and it goes on.
+is yours in those documents, then run the command again. It goes on without
+checking again; the gate checks again and says what is left.
 Advisory outcomes emit their audit rows but do not stop the
 gate; a gate the engine approves itself under Construction autonomy runs only
 its blocking sensors, since advisory evidence has no reader there. A blocking gate sensor requires a verified pass: findings, unavailable

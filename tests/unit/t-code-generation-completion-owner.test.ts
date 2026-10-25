@@ -34,6 +34,11 @@ import {
 } from "../harness/code-generation-states.ts";
 import { invalidateActiveDirectiveContext, stateDigest, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
+// The stage's checks run before each review and gate (completionChecksStep,
+// t-checks-before-review); this file's fixture documents are not written for
+// them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
+
 setDefaultTimeout(600_000);
 
 const created: string[] = [];

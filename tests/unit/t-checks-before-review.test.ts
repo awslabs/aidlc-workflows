@@ -116,6 +116,8 @@ describe("t-checks-before-review: a reviewed stage's checks run at its review re
       expect(message).toContain("Before the review, this stage's checks ran on its documents.");
       expect(message).toContain("The upstream-coverage check reports 1 finding in requirements.md.");
       expect(message).toContain(`review --stage ${RA} --reviewer ${PRODUCT_LEAD} --iteration 1`);
+      // The run again does not check again, and the step says so.
+      expect(message).toContain("it records the review request without checking again, and the gate checks again and says what is left.");
       const detail = /The findings are in (\S+)\. Fix what is yours/.exec(message)?.[1];
       expect(detail, message).toBeString();
       expect(existsSync(join(proj, detail as string))).toBe(true);
@@ -262,6 +264,7 @@ describe("t-checks-before-review: a stage no review covers runs them at the repo
       expect(message).toContain("Before the approval, this stage's checks ran on its documents.");
       expect(message).toMatch(/The upstream-coverage check reports \d findings? in (build-instructions|build-and-test-summary|test-results|cross-unit-traceability)\.md\./);
       expect(message).toContain(`report --stage ${BT} --result awaiting-approval`);
+      expect(message).toContain("it opens the gate, which checks again and says what is left.");
       expect(message).not.toContain("review");
       expect(held.json?.narration).toBeUndefined();
       expect(count(proj, "STAGE_AWAITING_APPROVAL")).toBe(0);
