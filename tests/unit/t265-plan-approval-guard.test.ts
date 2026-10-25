@@ -525,6 +525,8 @@ function scratchProject(): string {
     "aidlc-message-store.ts",
     "aidlc-review-brief.ts",
     "aidlc-construction-checkpoints.ts",
+    // The checkpoint question names the person's files a build changed.
+    "aidlc-brought-files.ts",
     "aidlc-testing-posture.ts",
     // The config sections the hook sorts while a plan waits, and what that imports.
     "aidlc-command.ts",
