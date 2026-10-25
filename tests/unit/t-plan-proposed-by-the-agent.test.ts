@@ -1000,6 +1000,18 @@ describe("t-plan-proposed-by-the-agent: a stage change typed with the plan rides
     expect(getField(runCreation(KIRO_TOOLS, started), "Scope")).toBe("bugfix");
   });
 
+  // An empty folder starts as a new project without Reverse Engineering, which
+  // the start says on its own: a typed skip of it the command left off is not
+  // said to run.
+  test("kiro, work here and none selected, an empty folder: a skip of Reverse Engineering left off is not said to run", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const open = routed(KIRO_TOOLS, proj, ["--scope", "bugfix", "--skip", "reverse-engineering", "fix the logout bug"]);
+    const started = next(KIRO_TOOLS, proj, answerArgs(row(open, "classic").command.replace(" --skip reverse-engineering", "")));
+    expect(String(started.message)).not.toContain("--skip");
+    expect(String(started.narration)).toContain("without Reverse Engineering");
+    expect(String(started.narration)).not.toContain("left off");
+  });
+
   // An initialization stage always runs: no plan takes its skip, and the start
   // says so in the same line instead of refusing it.
   test("kiro, work here and none selected: a skip of an initialization stage is said to always run", () => {

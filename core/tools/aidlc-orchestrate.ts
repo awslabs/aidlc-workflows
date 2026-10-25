@@ -6714,7 +6714,12 @@ function createPrintDirective(
   if (asked?.origin === "routing" && asked.approvedRequest === undefined) {
     if (flags.planChanges) flags.planChanges = changesThatApply(scope, flags.planChanges);
     const kept = parseNextFlags(asked.settings?.newWork ?? []);
-    if (!kept.parseError) leftOff = stageChangesLeftOffLine(scope, kept.planChanges, flags.planChanges);
+    // An empty folder drops Reverse Engineering on its own (said below), so a
+    // typed skip of it is made, whatever the command carried.
+    const made = !flags.projectType && newProjectDropsReverseEngineering(scope, projectDir, flags.planChanges)
+      ? { skip: [...(flags.planChanges?.skip ?? []), "reverse-engineering"], add: flags.planChanges?.add ?? [] }
+      : flags.planChanges;
+    if (!kept.parseError) leftOff = stageChangesLeftOffLine(scope, kept.planChanges, made);
   }
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
