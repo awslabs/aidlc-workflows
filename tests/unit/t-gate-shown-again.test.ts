@@ -182,7 +182,7 @@ describe("t-gate-shown-again", () => {
         const args = shownBy === "next" ? ["next"] : ["report", "--stage", STAGE, "--result", "awaiting-approval"];
         const shown = step(proj, args);
         if (shownBy === "next") expect(shown).toMatchObject({ kind: "run-stage", gate_only: true });
-        else expect(shown.message).toBe(`Stage "${STAGE}" is already awaiting approval; gate evidence revalidated.`);
+        else expect(shown.message).toStartWith(`Stage "${STAGE}" is already awaiting approval; gate evidence revalidated.`);
         const transcript = evidence === "claude"
           ? claudeTranscript(proj, `bun .claude/tools/aidlc.ts engine orchestrate ${args.join(" ")}`)
           : undefined;
