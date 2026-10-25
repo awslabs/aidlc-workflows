@@ -6497,6 +6497,40 @@ describe("t218 one card runs the checks that had their own cards (#2022)", () =>
     }
   });
 
+  test("a delegation the checks let through is on record as sent, one row per delegate; a refused one is not", () => {
+    const dir = scratchProject(true);
+    try {
+      const sent = () => readAudit(dir).split("\n---\n").filter((b) => b.includes("**Event**: SUBAGENT_DISPATCHED"));
+      const one = runIdeStdin(dir, "guard-tool-call", call(dir, {
+        tool_name: "invoke_sub_agent",
+        tool_input: { name: "aidlc-product-lead-agent", prompt: "Review the requirements." },
+      }), env);
+      expect(one.code, one.stderr).toBe(0);
+      expect(sent().map((b) => /\*\*Agent Type\*\*: (\S+)/.exec(b)?.[1])).toEqual(["aidlc-product-lead-agent"]);
+      const pipeline = runIdeStdin(dir, "guard-tool-call", call(dir, {
+        tool_name: "orchestrate_subagent",
+        tool_input: { stages: [{ name: "a", role: "aidlc-architect-agent" }, { name: "b", role: "aidlc-product-agent" }] },
+      }), env);
+      expect(pipeline.code, pipeline.stderr).toBe(0);
+      expect(sent()).toHaveLength(3);
+      // During Code Generation two developer stages in one pipeline are refused
+      // before any is decided: nothing went, so nothing is on record as sent.
+      const statePath = seededStateFile(dir);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation"),
+      );
+      const refused = runIdeStdin(dir, "guard-tool-call", call(dir, {
+        tool_name: "orchestrate_subagent",
+        tool_input: { stages: [{ name: "a", role: "aidlc-developer-agent" }, { name: "b", role: "aidlc-developer-agent" }] },
+      }), env);
+      expect(refused.code, refused.stderr).toBe(2);
+      expect(sent()).toHaveLength(3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("two checks refusing for the same reason say it once", () => {
     const dir = scratchProject(true);
     try {

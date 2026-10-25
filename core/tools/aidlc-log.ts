@@ -4565,9 +4565,10 @@ function handleReview(args: string[]): void {
       // nothing. No completion of the reviewer since the request (its row,
       // with the digest for this review file; another agent's row is not it)
       // is evidence only where noReviewerFinishedSinceReview says so (on Claude
-      // Code, outside a worktree, with no background agent sent since): there
-      // the row says no reviewer had finished, said once here, and at the gate
-      // under strict.
+      // Code; elsewhere when every helper sent since the request came back and
+      // none was the reviewer; outside a worktree, with no background agent
+      // sent since): there the row says no reviewer had finished, said once
+      // here, and at the gate under strict.
       // The fallback records none of the file, so none of this applies to it.
       if (body !== null && !incompleteFallback && requestBinding.requestId !== null) {
         const events = readAuditShardEvents(pd, intent, space);

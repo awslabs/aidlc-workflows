@@ -38,6 +38,7 @@ import {
   type RuleContent,
   resolvedRuleBundle,
 } from "../tools/aidlc-steering.ts";
+import { recordSubagentDispatch } from "./aidlc-log-subagent.ts";
 
 type HookInput = {
   cwd?: string;
@@ -204,16 +205,41 @@ function withPrompt(
   return input;
 }
 
+// The agent a single dispatch names, as each harness's dispatch input carries it.
+function dispatchAgent(input: Record<string, unknown>): unknown {
+  return input.subagent_type ?? input.agent_type ?? input.agent ?? input.role;
+}
+
+// Every helper one dispatch call sends, read as the rules read them: one name,
+// or a crew's roles; empty strings for names the call does not carry.
+function dispatchedAgents(toolName: string, input: Record<string, unknown>): string[] {
+  const named = (value: unknown): string => (typeof value === "string" ? value : "");
+  if (toolName.toLowerCase() === "subagent" && Array.isArray(input.stages) && input.stages.length > 0) {
+    return input.stages.map((stage) =>
+      stage && typeof stage === "object" ? named((stage as Record<string, unknown>).role) : "");
+  }
+  return [named(dispatchAgent(input))];
+}
+
+// The record that this call sends its helpers (aidlc-log-subagent.ts), on the
+// paths that let it go; a later guard that refuses it leaves the record open,
+// which reads as a doubt and never as a reviewer that did not finish.
+function recordDispatch(parsed: HookInput, projectDir: string): void {
+  try {
+    const toolName = parsed.tool_name ?? "";
+    if (!DISPATCH_TOOLS.has(toolName.toLowerCase())) return;
+    recordSubagentDispatch(projectDir, parsed.session_id, dispatchedAgents(toolName, parsed.tool_input ?? {}));
+  } catch {
+    // Evidence only: never the dispatch's output or exit code.
+  }
+}
+
 function augmentSingleDispatch(
   input: Record<string, unknown>,
   projectDir: string,
   fallbackStage: string | null,
 ): DispatchRuleResult {
-  const agent =
-    input.subagent_type ??
-    input.agent_type ??
-    input.agent ??
-    input.role;
+  const agent = dispatchAgent(input);
   if (!isAidlcAgent(agent)) return { changed: false };
   const original = promptText(input);
   if (!original) return { changed: false };
@@ -391,6 +417,7 @@ function deliver(parsed: HookInput, projectDir: string): number {
   }
   if (!result.changed || !result.updatedInput) {
     recordAcceptedBackgroundDispatch(parsed, projectDir);
+    recordDispatch(parsed, projectDir);
     return 0;
   }
   const output = `${JSON.stringify({
@@ -409,6 +436,7 @@ function deliver(parsed: HookInput, projectDir: string): number {
           "its own active-memory preload fallback, so the work continues without them attached.\n",
       );
       recordAcceptedBackgroundDispatch(parsed, projectDir);
+      recordDispatch(parsed, projectDir);
       return 3;
     }
     process.stderr.write(
@@ -421,6 +449,7 @@ function deliver(parsed: HookInput, projectDir: string): number {
     return 2;
   }
   recordAcceptedBackgroundDispatch(parsed, projectDir);
+  recordDispatch(parsed, projectDir);
   process.stdout.write(output);
   return 0;
 }

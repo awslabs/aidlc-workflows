@@ -19538,9 +19538,44 @@ export function hostRecordsAgentFinishes(): boolean {
 }
 
 /**
+ * Off a host that records every finish: true only when a helper was sent since
+ * `request`, every one sent since came back (a completion of the same agent,
+ * any case, closes its earliest open dispatch) and none was the reviewer,
+ * nameless or a crew. Nothing sent (no proof this chat records what it sends)
+ * or a helper still out (a failed or cancelled task, a row still to land) reads
+ * as false.
+ */
+export function subagentDispatchesShowNoReviewer(
+  events: ReadonlyArray<AuditShardEvent>,
+  request: Pick<OpenReviewRequest, "reviewer" | "row">,
+): boolean {
+  const agentOf = (row: AuditShardEvent): string =>
+    (auditBlockField(row.block, "Agent Type") ?? "").trim().toLowerCase();
+  const open = new Map<string, AuditShardEvent[]>();
+  const sent: AuditShardEvent[] = [];
+  for (const row of sortAttemptEvents(events)) {
+    if (row.event === "SUBAGENT_DISPATCHED") {
+      open.set(agentOf(row), [...(open.get(agentOf(row)) ?? []), row]);
+      if (!attemptEventDefinitelyBefore(row, request.row)) sent.push(row);
+    } else if (row.event === "SUBAGENT_COMPLETED") {
+      open.get(agentOf(row))?.shift();
+    }
+  }
+  if (sent.length === 0) return false;
+  const stillOut = new Set([...open.values()].flat());
+  const reviewer = request.reviewer.toLowerCase();
+  return sent.every((row) => {
+    const agent = agentOf(row);
+    return agent !== "" && agent !== "unknown" && !agent.includes(",") && agent !== reviewer && !stillOut.has(row);
+  });
+}
+
+/**
  * Whether the record shows that the reviewer `request` named has not finished
- * its review since the request, on a host where a missing completion row means
- * that. The reviewer finished only when a SUBAGENT_COMPLETED row definitely
+ * its review since the request. On a host that records every finish before the
+ * result (hostRecordsAgentFinishes, Claude Code) a missing completion row means
+ * that, as #943 settled; elsewhere subagentDispatchesShowNoReviewer has to show
+ * it. The reviewer finished only when a SUBAGENT_COMPLETED row definitely
  * after the request names it as Agent Type and carries a Review File Digest for
  * the request's review file: the log-subagent hook writes that digest for every
  * review still open for the reviewer that finished, so a row naming any other
@@ -19548,9 +19583,10 @@ export function hostRecordsAgentFinishes(): boolean {
  * finishing this review (#943: dispatching an unrelated agent after the request
  * no longer reads as the reviewer having finished). Every doubt reads as false,
  * so a lost or late row can never put a wrong line in front of the person:
- * another host, a delegated worktree (its reviewers' rows land in the parent's
- * ledger), a chat whose hooks do not write into this record (the check
- * log-subagent makes), a background agent sent or finished since the request
+ * another host whose dispatch record does not show it, a delegated worktree
+ * (its reviewers' rows land in the parent's ledger), a chat whose hooks do not
+ * write into this record (the check log-subagent makes), a background agent
+ * sent or finished since the request
  * (the in-flight ledger written since, or an entry still fresh: the ledger
  * names no agent), a completion row that names no agent (`unknown`, a host
  * that sent no agent type), a completion hook that ran since and left no row
@@ -19565,7 +19601,7 @@ export function noReviewerFinishedSinceReview(
   selection: WorkflowSelection,
 ): boolean {
   try {
-    if (!hostRecordsAgentFinishes()) return false;
+    if (!hostRecordsAgentFinishes() && !subagentDispatchesShowNoReviewer(events, request)) return false;
     if (delegatedWorktreeIntent(projectDir) !== null) return false;
     if (selection.intent === null || workflowParticipation(projectDir, selection) !== "participant") return false;
     const requested = Date.parse(request.row.timestamp);
@@ -41184,6 +41220,16 @@ export function scopedReviewCopyName(requestId: string): string | null {
 /** Whether an agent name, or an agent file name, is a reviewer copy's. */
 export function isScopedReviewCopy(name: string): boolean {
   return SCOPED_REVIEW_COPY_RE.test(basename(name).replace(/\.md$/, ""));
+}
+
+/** The open request a reviewer copy's agent name runs for, or undefined for a
+ *  name that is no copy's or whose request is closed: the copy is that
+ *  request's reviewer under another name, when it is sent and when it finishes. */
+export function reviewCopyRequest(
+  open: ReadonlyArray<OpenReviewRequest>,
+  agent: string,
+): OpenReviewRequest | undefined {
+  return isScopedReviewCopy(agent) ? open.find((request) => scopedReviewCopyName(request.requestId) === agent) : undefined;
 }
 
 export function isAidlcAgentFile(path: string): boolean {

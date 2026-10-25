@@ -1156,7 +1156,7 @@ The framework hooks are registered project-wide in `settings.json` (they self-ga
 
 - **Matcher**: (empty -- matches all subagent completions)
 - **Trigger**: When any subagent finishes execution.
-- **Behavior**: Exits silently unless the active workflow state has `Status: Running`. Otherwise emits a canonical `SUBAGENT_COMPLETED` audit event via `appendAuditEntry` (replacing the earlier free-form `## Subagent Completed` markdown write). Fields: agent type, agent ID, and truncated message (first 200 characters). Uses `mkdir`-based locking via `aidlc-lib.ts`.
+- **Behavior**: Exits silently unless the active workflow state has `Status: Running`. Otherwise emits a canonical `SUBAGENT_COMPLETED` audit event via `appendAuditEntry` (replacing the earlier free-form `## Subagent Completed` markdown write). Fields: agent type, agent ID, and truncated message (first 200 characters). Uses `mkdir`-based locking via `aidlc-lib.ts`. A forwarded `SubagentStart` (Cursor, Kiro IDE) records `SUBAGENT_DISPATCHED` instead, as the deliver-stage-rules hook does for every dispatch it lets go elsewhere.
 
 These hooks are TypeScript sources routed through `aidlc`; they require neither
 Bun nor `jq` at runtime.
