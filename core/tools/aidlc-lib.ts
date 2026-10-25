@@ -28316,7 +28316,7 @@ export function sourceListingChangedPaths(
   return renderSourcePathKeys(sourceListingChangedKeys(before, after));
 }
 
-function sourceListingChangedKeys(
+export function sourceListingChangedKeys(
   before: ReadonlyMap<string, string>,
   after: ReadonlyMap<string, string>,
 ): Set<string> {
@@ -28446,6 +28446,15 @@ export function currentStageSourceBaseline(
     intent,
     space,
   );
+}
+
+// The project type a state field or the person's word names, as every reader
+// compares it; null for anything else.
+export function declaredProjectType(value: string | undefined): "Greenfield" | "Brownfield" | null {
+  const word = value?.trim().toLowerCase();
+  if (word === "greenfield") return "Greenfield";
+  if (word === "brownfield") return "Brownfield";
+  return null;
 }
 
 // What the project held when this work started: the Source Baseline its

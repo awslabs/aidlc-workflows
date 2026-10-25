@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-orchestrate:report, subcommand:aidlc-orchestrate:next, subcommand:aidlc-bolt:checkpoint
-// covers: function:broughtFilesChanged, function:broughtFilesLine, function:broughtFilesLineOnce, function:workStartSourceBaseline
+// covers: function:broughtFilesChanged, function:broughtFilesLine, function:unheardBroughtFilesLine, function:workStartSourceBaseline
 //
 // The build replaced the README the person brought and nothing on screen said
 // so (t51, P182). The gate that approves Code Generation now says once which
@@ -76,7 +76,7 @@ function atBuild(setup: Setup): string {
   writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
     .replace("- **Project Type**: Brownfield", `- **Project Type**: ${setup.type ?? "Greenfield"}`)
     .replace("- [ ] code-generation", "- [-] code-generation")
-    .replace(/^(- \[.\] units-generation) — EXECUTE$/m, "$1 — SKIP"), "utf-8");
+    .replace(/^(- \[.\] units-generation) \u2014 EXECUTE$/m, "$1 \u2014 SKIP"), "utf-8");
   for (const [path, text] of Object.entries(setup.brought)) {
     mkdirSync(dirname(join(proj, path)), { recursive: true });
     writeFileSync(join(proj, path), text, "utf-8");
@@ -270,6 +270,37 @@ describe("t-gate-says-replaced-files", () => {
     expect(line).toContain("docs/page-11.md`.");
   });
 
+  test("git: a committed file over a megabyte is put back by the command too", () => {
+    const big = `${"a line of the person's notes\n".repeat(60_000)}`;
+    expect(big.length).toBeGreaterThan(1024 * 1024);
+    const proj = atBuild({ git: true, brought: { "docs/notes.md": big } });
+    write(proj, { "docs/notes.md": "# Replaced\n" });
+    expect(said(openGate(proj))).toContain("To put it back, run `git checkout HEAD -- docs/notes.md`.");
+  });
+
+  test("git: a path no shell quoting passes to git as that one file is named as held by git, with no command", () => {
+    const proj = atBuild({ git: true, brought: { "docs/[draft] plan.md": "draft\n" } });
+    write(proj, { "docs/[draft] plan.md": "# Replaced\n" });
+    const line = said(openGate(proj));
+    expect(line).toContain("The build changed docs/[draft] plan.md, a file you had before this work started. Git holds docs/[draft] plan.md.");
+    expect(line).not.toContain("git checkout");
+  });
+
+  test("git: a listing taken over CRLF bytes still finds the committed copy", () => {
+    const crlf = "# React Todo App\r\n\r\nA simple todo application.\r\n";
+    const before = process.env.AIDLC_TEST_RAW_LINE_ENDINGS;
+    process.env.AIDLC_TEST_RAW_LINE_ENDINGS = "1";
+    let proj: string;
+    try {
+      proj = atBuild({ git: true, brought: { "README.md": crlf } });
+    } finally {
+      if (before === undefined) delete process.env.AIDLC_TEST_RAW_LINE_ENDINGS;
+      else process.env.AIDLC_TEST_RAW_LINE_ENDINGS = before;
+    }
+    write(proj, { "README.md": "# Replaced\n" });
+    expect(said(openGate(proj))).toContain("To put it back, run `git checkout HEAD -- README.md`.");
+  });
+
   test("a path with a space is quoted the way every shell reads it", () => {
     const proj = atBuild({ git: true, brought: { "docs/how to run.md": "steps\n" } });
     write(proj, { "docs/how to run.md": "# Replaced\n" });
@@ -283,7 +314,7 @@ describe("t-gate-says-replaced-files", () => {
 // fixture: one solo intent in Construction, Units alpha and beta.
 const UNIT_STAGES = ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation"];
 
-function checkpointProject(): string {
+function checkpointProject(review: "none" | "advisory" = "none"): string {
   const p = createTestProject();
   created.push(p);
   seedAidlcMemory(p);
@@ -301,7 +332,7 @@ function checkpointProject(): string {
 - **Construction Checkpoints**: enabled
 - **Construction Execution**: serial
 - **Construction Autonomy Mode**: gated
-- **Review Override**: none
+- **Review Override**: ${review}
 - **Change Control**: strict
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -310,11 +341,13 @@ function checkpointProject(): string {
 - **Test Strategy**: Standard
 ## Stage Progress
 ### CONSTRUCTION PHASE
-${UNIT_STAGES.map((stage) => stage === "functional-design" ? `- [-] ${stage} \u2014 EXECUTE` : `- [ ] ${stage} \u2014 EXECUTE`).join("\n")}
+${UNIT_STAGES.map((stage) => review === "advisory"
+    ? stage === "code-generation" ? `- [-] ${stage} \u2014 EXECUTE` : `- [S] ${stage} \u2014 SKIP`
+    : stage === "functional-design" ? `- [-] ${stage} \u2014 EXECUTE` : `- [ ] ${stage} \u2014 EXECUTE`).join("\n")}
 - [ ] build-and-test \u2014 EXECUTE
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION
-- **Current Stage**: functional-design
+- **Current Stage**: ${review === "advisory" ? "code-generation" : "functional-design"}
 - **Status**: Running
 `);
   seedBoltDag(p, ["alpha", "beta"]);
@@ -324,8 +357,8 @@ ${UNIT_STAGES.map((stage) => stage === "functional-design" ? `- [-] ${stage} \u2
 }
 
 // Each stage's outputs for a Unit, with its completion receipt.
-function cover(p: string, unit: string) {
-  for (const slug of UNIT_STAGES) {
+function cover(p: string, unit: string, stages: readonly string[] = UNIT_STAGES) {
+  for (const slug of stages) {
     const stage = findStageBySlug(slug)!;
     const output = join(seededRecordDir(p), "construction", unit, slug);
     mkdirSync(output, { recursive: true });
@@ -401,5 +434,30 @@ describe("t-gate-says-replaced-files at a Unit checkpoint", () => {
     expect(after.stage, JSON.stringify(after).slice(0, 400)).toBe("build-and-test");
     steps.push(after);
     for (const step of steps) expect(JSON.stringify(step)).not.toContain("you had before this work started");
+  });
+  test("the person answered while the Unit's review ran: the question is not shown, and the line rides the next step", () => {
+    // Code Generation the only Construction step, so alpha's checkpoint is that step's.
+    const p = checkpointProject("advisory");
+    recordCommand(p);
+    cover(p, "alpha", ["code-generation"]);
+    write(p, { "README.md": "# The app's own\n" });
+    expect((next(p) as { construction_checkpoint?: { unit: string } }).construction_checkpoint?.unit).toBe("alpha");
+    const review = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", "1"];
+    const requested = tool(p, "log", review);
+    expect(reply(p, "approve it as it is", CHAT_A).status).toBe(0);
+    const file = join(p, String(requested.reviewFile));
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`);
+    tool(p, "log", [...review, "--verdict", "READY"]);
+    const asked = askCheckpoint(p, "alpha");
+    expect(asked.earlier_reply, JSON.stringify(asked)).toBe("approve it as it is");
+    expect(asked.changed_files).toBeUndefined();
+    const approved = tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "approve", "--session", CHAT_A, "--user-input", "approve it as it is"]);
+    expect(approved.approved, JSON.stringify(approved)).toBe(true);
+    const following = next(p);
+    expect(String(following.narration ?? ""), JSON.stringify(following).slice(0, 600)).toContain(
+      "The build changed README.md, a file you had before this work started. There is no committed copy to put back.",
+    );
+    expect(String(next(p).narration ?? "")).not.toContain("you had before this work started");
   });
 });

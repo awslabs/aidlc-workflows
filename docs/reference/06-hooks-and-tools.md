@@ -2382,15 +2382,20 @@ is not in it), the Code Generation attempt's baseline
 now. On a brownfield project a changed file is named only when the source walk
 does not read it as code by its name (`isSourceFileName`: a README, LICENSE,
 docs, `.env`), so the code the work changes on purpose is not; a deleted file
-always is. For each file git holds the content the build replaced (HEAD, else
-one of the last 20 commits that touched it), the line gives the
-`git checkout <commit> -- <path>` that puts it back; otherwise it says there is
-no committed copy. It says nothing when a listing is not on this machine (the
-copies are AI-DLC's ignored files: a teammate's clone) or cannot be read. The
-line is said once per build attempt in a chat (the person-lines said record,
-keyed with the attempt's starting listing), counted as heard only when a step
-that carries it is written. With Construction Checkpoints the Unit's checkpoint
-says it and the stage gate the engine settles after the last Unit does not.
+always is. For each file git holds the content the build replaced (HEAD, read
+for every file in one `git cat-file --batch` per repo, else for a named file one
+of the last 20 commits that touched it), the line gives the
+`git checkout <commit> -- <path>` that puts it back; a path no shell quoting
+passes to git as that one file is named as held by git, with no command;
+otherwise it says there is no committed copy. It says nothing when a listing is
+not on this machine (the copies are AI-DLC's ignored files: a teammate's clone)
+or cannot be read. The line is said once per build attempt in a chat (the
+person-lines said record, keyed with the attempt's starting listing and the
+files, and checked before git is asked), counted as heard only when a step that
+carries it is written. With Construction Checkpoints the Unit's checkpoint says
+it and the stage gate the engine settles after the last Unit does not; when the
+person's reply to the checkpoint came while its review ran, so the question is
+not shown, the line rides the next step the agent speaks from.
 
 ### `aidlc-testing-posture.ts` — Code Generation Testing Contract
 

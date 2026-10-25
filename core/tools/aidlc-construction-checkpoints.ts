@@ -20,6 +20,7 @@ import {
   auditBlockField,
   authorizedVerificationCommand,
   markPersonLinesHeard,
+  addPendingPersonLines,
   verificationCommandRecovery,
   type VerificationCommand,
   claimAttemptFields,
@@ -1679,11 +1680,15 @@ export function askConstructionCheckpoint(
     const changedFiles = current.result.stages.includes("code-generation")
       ? unheardBroughtFilesLine(projectDir, readStateFile(projectDir), session, true)
       : null;
-    if (changedFiles !== null) markPersonLinesHeard(projectDir, session, [changedFiles.key]);
+    // With their reply already in, the question is not shown: the line about
+    // their files rides the next step the agent speaks from instead.
+    const carried = changedFiles !== null && earlier !== null &&
+      addPendingPersonLines(projectDir, session, [changedFiles.line]);
+    if (changedFiles !== null && (earlier === null || carried)) markPersonLinesHeard(projectDir, session, [changedFiles.key]);
     const result = {
       ...current.result,
       ...(leftOut === null ? {} : { left_out: leftOut }),
-      ...(changedFiles === null ? {} : { changed_files: changedFiles.line }),
+      ...(changedFiles === null || carried ? {} : { changed_files: changedFiles.line }),
       ...(offer === null ? {} : { check_offer: offer.offer }),
     };
     if (earlier === null) return result;
