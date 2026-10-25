@@ -2709,7 +2709,7 @@ describe("t188: what the person's message asks for outlives the approval given i
     appendAuditEntry("GATE_APPROVED", { Stage: stage, "User Input": "Approve" }, proj);
     const spent = setter(["config-change", "--plan-approval", "off", "--message", id]);
     expect(spent.rc).not.toBe(0);
-    expect(spent.out).toContain("already gave an approval or another decision");
+    expect(spent.out).toContain(`message ${id} arrived before the last approval or decision`);
     expect(planApproval()).not.toBe("off");
     // A turn that was only a command to AIDLC carries no request behind an answer logged after it.
     const command = recordCommandTurn();
