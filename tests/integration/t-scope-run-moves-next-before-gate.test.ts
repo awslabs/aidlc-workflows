@@ -171,11 +171,12 @@ class Walk {
 function stepProblems(d: Directive, pickUp: boolean): string[] {
   const problems: string[] = [];
   const said = String(d.narration ?? "");
+  const told = Array.isArray(d.change_notices) ? d.change_notices.map(String).join(" ") : "";
   if (d.kind !== "print") {
     problems.push(`handed ${String(d.kind)} ${String(d.stage ?? "")}${d.gate_only === true ? " gate_only" : ""}, not the next step`);
   }
   if (said.includes("Now working on")) problems.push(`the person reads "${clip(said, 300)}"`);
-  if (pickUp && !said.includes("Picking up where we left off, at ")) problems.push("a new chat is not told where it picks up");
+  if (pickUp && !told.includes("Picking up where we left off, at ")) problems.push("a new chat is not told where it picks up");
   return problems;
 }
 

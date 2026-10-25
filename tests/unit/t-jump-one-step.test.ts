@@ -122,7 +122,7 @@ describe("t-jump-one-step: the jump is made by the `next` the person's request r
     expect(notices(step).filter((notice) => notice === line)).toHaveLength(1);
   });
 
-  test("in a chat, the backward line rides the step's narration, said once", () => {
+  test("in a chat, the backward line rides the step's lines for the person, said once", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, CONSTRUCTION);
     const chat = { AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-0000000000a5", AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
@@ -135,8 +135,8 @@ describe("t-jump-one-step: the jump is made by the `next` the person's request r
     expect(step.kind, res.out).toBe("run-stage");
     expect(step.stage).toBe("intent-capture");
     const line = "Moved back to Intent Capture & Framing. You can return to Functional Design any time.";
-    expect(String(step.narration)).toStartWith(line);
-    expect(notices(step)).not.toContain(line);
+    expect(notices(step).filter((notice) => notice === line)).toHaveLength(1);
+    expect(String(step.narration ?? "")).not.toContain(line);
   });
 
   test("a forward stage jump returns that stage's step with the line naming what it skipped", () => {

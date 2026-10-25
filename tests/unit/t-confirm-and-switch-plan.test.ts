@@ -128,7 +128,10 @@ describe("t-confirm-and-switch-plan: a confirmed summary's documents are written
     // The skip's line rides the next step, which goes straight on.
     const after = await next(proj, []);
     expect(after.directive?.stage).toBe("requirements-analysis");
-    expect(String(after.directive?.narration)).toMatch(/^Intent Capture & Framing is not part of the express plan, so I skipped it\. /);
+    const notes = after.directive?.change_notices;
+    const told = Array.isArray(notes) ? notes.map(String) : [];
+    expect(told).toContain("Intent Capture & Framing is not part of the express plan, so I skipped it.");
+    expect(String(after.directive?.narration)).toMatch(/^Now working on Requirements Analysis\b/);
     expect(JSON.stringify(after.directive?.consumes ?? [])).toContain("intent-capture/intent-statement.md");
   });
 
