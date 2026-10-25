@@ -6883,7 +6883,7 @@ export function clearKiroIdeLegacyPlanApprovalHost(
 // The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. The
 // session id is normalised to the slug shape so a host-supplied id can never
 // escape the sessions dir (path traversal / separators); an empty id yields "".
-function sessionRecordPath(projectDir: string, sessionId: string): string {
+export function sessionRecordPath(projectDir: string, sessionId: string): string {
   const valid = validSessionId(sessionId);
   if (!valid) return "";
   return join(sessionsDir(projectDir), valid);
@@ -25200,7 +25200,8 @@ function stableFileShas(
   }
 }
 
-function stableFileSha256(path: string): string | null {
+// The content id a source listing gives the file at `path`.
+export function stableFileSha256(path: string): string | null {
   const shas = stableFileShas(path);
   return shas === null || shas === "vanished" ? null : shas.sha;
 }

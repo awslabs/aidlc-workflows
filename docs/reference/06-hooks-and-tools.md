@@ -1711,6 +1711,17 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 
 The redo `jump execute` that `next` names to run Reverse Engineering, which the person put back on the plan behind the cursor before Construction started (Code Generation only just entered, nothing of it written), passes too, by the same check `next` prints it from: it is their change carried out, it leaves the finished stages and Code Generation as they are, and the work comes back to Code Generation after it.
 
+**Before a plan is picked.** While a chat's plan question for new work is
+open (the question store's root question that chat asked, until the work it
+starts retires it), the guard keeps each project file the agent's call writes,
+read exactly as it reads targets for the plan (`mutationIntent`), with what the
+file held just before the first write: its source-listing content id, its git
+blob and HEAD (`core/tools/aidlc-before-pick.ts`). It does so before any of its
+own checks, in a chat that joined no work too, and it refuses nothing; a write
+it cannot read goes unkept. AI-DLC's own files are never kept. The pick says the
+ones that still differ once, with the way back
+([Lines carried to the next spoken step](03-orchestrator.md#lines-carried-to-the-next-spoken-step)).
+
 **What the plan never governs.** At any point of Code Generation, under every
 Guard Policy and whatever the current step (the plan being written, the engine's
 plan question open, the rules still arriving, a swarm batch, a step gone out of

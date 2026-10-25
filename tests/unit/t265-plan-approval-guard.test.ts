@@ -512,6 +512,8 @@ function scratchProject(): string {
     // decides the refusal's last clause); the setting resolver and what it imports.
     "aidlc-guard-switch.ts",
     "aidlc-question-store.ts",
+    // What the agent writes before a plan is picked, kept whatever the hook decides.
+    "aidlc-before-pick.ts",
     "aidlc-recorded-switches.ts",
     "aidlc-model-policy.ts",
     "aidlc-guard-operation.ts",

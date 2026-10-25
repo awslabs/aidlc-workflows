@@ -35,6 +35,7 @@ import {
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { QUESTION_UNAVAILABLE, readQuestion, retireRequest, startedRequestFor } from "./aidlc-question-store.ts";
+import { sayWritesBeforePick } from "./aidlc-before-pick.ts";
 import { planApprovalAskState } from "./aidlc-plan-approval-ask.ts";
 import {
   appendAuditEntries,
@@ -8558,6 +8559,14 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     failIntentCreateAt("after-list");
     if (teamKeptCheck !== null && initialSelection.sessionId) {
       addPendingPersonLines(projectDir, initialSelection.sessionId, [teamKeptCheck]);
+    }
+    // The person's files the agent changed before this pick, said once with the way back.
+    if (questionId !== undefined) {
+      try {
+        sayWritesBeforePick(projectDir, questionId, created, initialSelection.sessionId);
+      } catch {
+        // Unsaid: the work starts as picked.
+      }
     }
     // This chat is now on the work it just created: anything it was still owed
     // (the creation line naming what the person set for this work) follows it.

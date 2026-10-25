@@ -38,6 +38,7 @@ import {
   currentSwarmAttemptObligations,
   currentSwarmSourceMergeChain,
   currentSwarmSourceOpeningFingerprint,
+  engineDir,
   freshReviewReceipts,
   latestMainWorkflowStageRunFloorForProject,
   readAllAuditShards,
@@ -1657,6 +1658,30 @@ describe("t305 real receipt and guard flows", () => {
     review(claimed.project, claimed.record, "alpha", [{ path: "app.ts" }, { path: "extra.ts" }]); expect(approve(claimed.project).rc).toBe(0);
     const reverted = runtimeFixture(); review(reverted.project, reverted.record, "alpha", [{ path: "app.ts" }]); review(reverted.project, reverted.record, "beta", []);
     writeFileSync(join(reverted.project, "extra.ts"), "export const x=1\n"); review(reverted.project, reverted.record, "beta", []); expect(approve(reverted.project).rc).toBe(1); rmSync(join(reverted.project, "extra.ts")); expect(approve(reverted.project).rc).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a file the agent changed before the plan was picked, put back since, is nobody's change", () => {
+    // The pick's Source Baseline holds the agent's early edit (app = 1); before it the file held app = 0, as the
+    // creation kept with the work (aidlc-before-pick.ts). The person ran the undo the pick's line named.
+    const keepBeforePick = (project: string): void => {
+      const before = workspaceSourceListing(project)?.get("\0app.ts")?.split(" ")[1];
+      mkdirSync(engineDir(project), { recursive: true });
+      writeFileSync(join(engineDir(project), "before-pick.json"), `${JSON.stringify({ files: [{ path: "app.ts", listed: before }] })}\n`);
+    };
+    const putBack = runtimeFixture();
+    writeFileSync(join(putBack.project, "app.ts"), "export const app = 0;\n");
+    keepBeforePick(putBack.project);
+    review(putBack.project, putBack.record, "alpha", []); review(putBack.project, putBack.record, "beta", []);
+    const approved = approve(putBack.project);
+    expect(approved.out).not.toContain("no Unit's review covers");
+    expect(approved.rc, approved.out).toBe(0);
+    // Any other content is still a change no Unit claimed.
+    const other = runtimeFixture();
+    writeFileSync(join(other.project, "app.ts"), "export const app = 0;\n");
+    keepBeforePick(other.project);
+    writeFileSync(join(other.project, "app.ts"), "export const app = 2;\n");
+    review(other.project, other.record, "alpha", []); review(other.project, other.record, "beta", []);
+    expect(approve(other.project).out).toContain("no Unit's review covers");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a setting recorded during the stage is not unclaimed source", () => {

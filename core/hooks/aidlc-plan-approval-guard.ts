@@ -153,9 +153,11 @@ import {
   LOCK_FOLDER_HELD_SAID_KEY,
   lockFolderHeldGoesOnStep,
 } from "../tools/aidlc-lock-line.ts";
+import { keepWritesBeforePick } from "../tools/aidlc-before-pick.ts";
 import { personTurnStands } from "../tools/aidlc-message-store.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
+import { openPlanQuestion } from "../tools/aidlc-question-store.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
 import {
   AS_ITS_OWN_COMMAND,
@@ -2084,6 +2086,30 @@ async function mutationIntent(
   };
 }
 
+// The agent's write while this chat's plan question for new work is open, kept
+// with what each file was just before, so the pick can say what changed and
+// how to undo it (aidlc-before-pick.ts). It reads the targets this guard reads
+// and refuses nothing; a failure keeps nothing, and the write goes unnamed.
+async function keepWriteBeforePick(
+  parsed: ClaudeCodeHookInput,
+  workflow: ReturnType<typeof enterHookWorkflow>,
+): Promise<void> {
+  try {
+    const toolName = parsed.tool_name ?? "";
+    const chat = workflow.selection?.sessionId;
+    if ((toolName !== "Bash" && !WRITE_TOOLS.has(toolName)) || !chat) return;
+    const projectDir = workflow.projectDir;
+    if (openPlanQuestion(projectDir, chat) === null) return;
+    const cwd = typeof parsed.cwd === "string" ? parsed.cwd : projectDir;
+    const { targets } = await mutationIntent(
+      projectDir, toolName, parsed.tool_input, cwd, parsed.aidlc_shell === "powershell",
+    );
+    keepWritesBeforePick(projectDir, chat, targets.filter((target) => !isOutsideProject(projectDir, target)));
+  } catch {
+    // Unkept.
+  }
+}
+
 // The person is editing the plan files themselves (they answered the plan
 // question with "I'll edit the files"), and the write names one of the asked
 // plans' own plan or test-instruction files: those are theirs while they edit.
@@ -2205,6 +2231,9 @@ async function evaluate(
   judgedStep = null;
   // Runtime integrity is not a fence and cannot be disabled with this hook.
   if (refuseRuntimeIntegrityViolation(parsed)) return 2;
+  // Kept whatever this guard then decides, in a chat that joined no work too:
+  // a record, never a gate.
+  await keepWriteBeforePick(parsed, workflow);
 
   // A conversation that has not joined the selected workflow is not held to its
   // Plan Approval: its ordinary edits pass as in a workspace with no workflow.

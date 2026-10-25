@@ -17,8 +17,11 @@ import {
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
+  resolveWorkflowSelection,
+  sessionRecordPath,
   SPACE_NAME_REGEX,
   sessionsDir,
+  validSessionId,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.ts";
 import { resolveAidlcSettings } from "./aidlc-settings.ts";
@@ -91,6 +94,11 @@ export interface StoredQuestion {
   approvedRequest?: string;
   /** The person's message the words came in, by its record's id; a question derived from another keeps that one's. */
   messageId?: string;
+  /**
+   * For a plan question for new work (a root `front` or `compose` question): the chat that asked it, so the agent's
+   * writes in that chat before the person picks a plan are kept (aidlc-before-pick.ts) while it is open.
+   */
+  asker?: string;
   createdAt: string;
 }
 
@@ -171,7 +179,8 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
       (typeof question.approvedRequest === "string" && QUESTION_ID.test(question.approvedRequest))) &&
     (question.answeredBy === undefined ||
       (typeof question.answeredBy === "string" && QUESTION_ID.test(question.answeredBy))) &&
-    (question.messageId === undefined || (typeof question.messageId === "string" && QUESTION_ID.test(question.messageId)))
+    (question.messageId === undefined || (typeof question.messageId === "string" && QUESTION_ID.test(question.messageId))) &&
+    (question.asker === undefined || (typeof question.asker === "string" && validSessionId(question.asker) === question.asker))
   ) {
     return question as StoredQuestion;
   }
@@ -412,6 +421,7 @@ export function saveQuestion(
   const parent = composedFrom ? readStoredQuestion(projectDir, composedFrom) : null;
   const root = composedFrom ? parent?.composedFrom ?? composedFrom : undefined;
   const carried = parent?.messageId ?? messageId;
+  const asker = (origin === "front" || origin === "compose") && !root ? validSessionId(askingChat(projectDir) ?? undefined) : null;
   const question: StoredQuestion = {
     id: mintQuestionId(projectDir),
     text,
@@ -424,10 +434,57 @@ export function saveQuestion(
     ...(settings && (settings.newWork.length > 0 || settings.existingWork.length > 0) ? { settings } : {}),
     ...(approvedRequest && QUESTION_ID.test(approvedRequest) ? { approvedRequest } : {}),
     ...(carried && QUESTION_ID.test(carried) ? { messageId: carried } : {}),
+    ...(asker ? { asker } : {}),
     createdAt: new Date().toISOString(),
   };
   writeRecordFileNoFollow(projectDir, questionRel(projectDir, question.id), `${JSON.stringify(question)}\n`);
+  if (asker) {
+    // Which question is this chat's open plan question, read on every write the agent makes: one small file, so
+    // the guard reads one question and never scans the store.
+    try {
+      writeRecordFileNoFollow(projectDir, relative(projectDir, `${sessionRecordPath(projectDir, asker)}.plan-question`), `${question.id}\n`);
+    } catch {
+      // Unkept: the agent's writes before this pick go unnamed, never misnamed.
+    }
+  }
   return question;
+}
+
+// The chat this engine process runs in, read without binding it.
+function askingChat(projectDir: string): string | null {
+  try {
+    return resolveWorkflowSelection(projectDir, { bind: false }).sessionId;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * This chat's plan question for new work while it is open: asked by this chat, not yet answered by work it started
+ * (`retireRequest`), not expired (`pruneExpiredQuestions`). Null otherwise.
+ */
+export function openPlanQuestion(projectDir: string, chat: string): StoredQuestion | null {
+  const path = sessionRecordPath(projectDir, chat);
+  if (!path) return null;
+  let id: string;
+  try {
+    id = readRegularFileNoFollowOrThrow(
+      recordFileTargetOrThrow(projectDir, relative(projectDir, `${path}.plan-question`)), "plan question", 64,
+    ).toString("utf-8").trim();
+  } catch {
+    return null;
+  }
+  const question = readStoredQuestion(projectDir, id);
+  if (question === null || question.asker !== chat || question.answeredBy !== undefined) return null;
+  const days = retentionDays(projectDir);
+  if (days !== null && Date.parse(question.createdAt) < Date.now() - days * DAY_MS) return null;
+  return question;
+}
+
+/** The root question `id` was derived from (or `id` itself), answered or not: the one that names its asking chat. */
+export function planQuestionRoot(projectDir: string, id: string): StoredQuestion | null {
+  const question = readStoredQuestion(projectDir, id);
+  return question?.composedFrom ? readStoredQuestion(projectDir, question.composedFrom) : question;
 }
 
 /** Remove a question's copy once it is spent; a missing file is already gone. */
