@@ -12,9 +12,8 @@
 // new is asked of the person, and a blocking check stays the gate's.
 
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { LOG, ORCHESTRATE, env, exec, say } from "../harness/aidlc-input-corpus.ts";
 import {
   AIDLC_SRC,
@@ -207,7 +206,9 @@ describe("t-checks-before-review: a reviewed stage's checks run at its review re
 
   test("a project folder reached through a link is held once, and the next request goes on", async () => {
     const proj = await reviewedStage();
-    const link = join(mkdtempSync(join(tmpdir(), "aidlc-link-")), "project");
+    // Beside the project, with a name shorter than its own: the temp folder may
+    // already be long (macOS, Windows runners), so the link adds no depth.
+    const link = join(dirname(proj), `l${basename(proj).slice(-6)}`);
     symlinkSync(proj, link, process.platform === "win32" ? "junction" : "dir");
     try {
       const viaLink = () => run(link, LOG, ["review", "--stage", RA, "--reviewer", PRODUCT_LEAD, "--iteration", "1"]);
