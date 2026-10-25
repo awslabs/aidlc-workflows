@@ -9215,10 +9215,12 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 // back and their new work was gone): `--resume` is the agent's, never theirs. A
 // later bare `next` is the work in hand. Their `/aidlc` alone over work in hand
 // is a resume whichever the agent sent. A reply in plain words is the agent's to
-// pass on, and is read here only while the current stage waits on its open
-// question (openStageQuestion), whole, as `next -- <their words>` takes it: a new
-// chat that never saw the question asked sent a bare `next` and the stage came
-// back with their answer dropped (live on Kiro CLI). Nothing happens without a
+// pass on, and is read here only for a bare `next` or `--resume` while the
+// current stage waits on its open question (openStageQuestion), whole, as
+// `next -- <their words>` takes it: a new chat that never saw the question asked
+// sent a bare `next` and the stage came back with their answer dropped (live on
+// Kiro CLI). A plan the agent names beside it is its reading of their words (a
+// switch), and its step stands. Nothing happens without a
 // chat identity (no record is read), on a read-only probe (an observer learns the
 // directive and never asks), once anything is recorded after their line, or with
 // any other message last (plain words with no question open, a utility). Returns
@@ -9290,7 +9292,8 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   let argv: string[];
   if (typed === null) {
     if (
-      stateContent === null || message.words === null || isTeamUnitOwnership(stateContent) ||
+      stateContent === null || message.words === null || flags.scope !== undefined ||
+      flags.positionalScope !== undefined || isTeamUnitOwnership(stateContent) ||
       openStageQuestion(pd, stateContent) === null
     ) return null;
     argv = ["--", personsWordsText(message.words)];

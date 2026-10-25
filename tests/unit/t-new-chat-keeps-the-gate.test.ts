@@ -233,6 +233,19 @@ describe("t-new-chat-keeps-the-gate: what stays as it was", () => {
     expect(next(tree, proj, SECOND)).toMatchObject({ kind: "run-stage", stage: STAGE });
   });
 
+  // The agent read their words as a plan switch and named the plan: that reading is its own, and so is the step
+  // (`--scope` changes the plan; a plan name alone beside work gets its own which-did-they-mean step).
+  test("plain words at the open question that the agent passes as a plan switch: its switch step stands", () => {
+    for (const [args, own] of [[["--scope", "feature"], "scope change --scope feature"], [["feature"], "next --scope feature`"]] as const) {
+      const proj = scanned(tree);
+      newChat(tree, proj, SECOND);
+      says(tree, proj, SECOND, "can you switch this to the feature plan?");
+      const step = String(next(tree, proj, SECOND, [...args]).message ?? "");
+      expect(step, args.join(" ")).not.toContain("has a question you asked that the person has not answered yet");
+      expect(step, args.join(" ")).toContain(own);
+    }
+  });
+
   test("a store from an earlier attempt reads CURRENT: a new start, a jump back, a rejection under relaxed", () => {
     const restarted = scanned(tree);
     Bun.sleepSync(1100);
