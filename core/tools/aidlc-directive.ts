@@ -24,6 +24,7 @@ import {
   type CeremonyPolicy,
   GUARD_REMEDY_OPS,
   type GuardRemedy,
+  harnessDir,
   isPlainObject,
   shellArg,
   type StageAnswerMode,
@@ -1267,12 +1268,25 @@ export function routingRecordsQuestionNote(invocation: string): string {
     "not, show only those pieces as a numbered list with Other, end your turn, and run the command of the one they name.";
 }
 
+// The plan offer comes before any stage step, so the protocol that says how a
+// reply is read is not in front of the agent there: its section is named, with
+// this install's path. The section owns the rule; this only points to it.
+function planOfferReplyNote(): string {
+  return `Read their reply as \`${harnessDir()}/aidlc-common/protocols/stage-protocol.md\` section ` +
+    '"Reading the person\'s reply at a checkpoint" says.';
+}
+
 // The plan offer: "Use a different plan" needs the plan named, so that pick
 // shows the plans the step lists (each with its length) and runs the one named.
 export function planOfferQuestionNote(invocation: string): string {
   return questionNote(invocation) + ' Their "Use a different plan" answer needs the plan named: show the plans this ' +
     "step lists, each with its length, as a numbered list with Other, end your turn, and run the command of the plan " +
-    "they pick or name.";
+    `they pick or name. ${planOfferReplyNote()}`;
+}
+
+// The plan offer when no ready-made plan fits: its choices are the plans.
+function composeOfferQuestionNote(invocation: string): string {
+  return `${questionNote(invocation)} ${planOfferReplyNote()}`;
 }
 
 export function unresolvedGateNote(invocation: string): string {
@@ -1757,6 +1771,8 @@ export function withAgentNotes<T extends object>(
       )
       : d.ask_type === "scope-confirm"
       ? planOfferQuestionNote(invocation)
+      : d.ask_type === "compose-offer"
+      ? composeOfferQuestionNote(invocation)
       : d.ask_type === "new-work-routing" && Array.isArray(d.available_intents)
       ? routingRecordsQuestionNote(invocation)
       : d.ask_type === "repo-scope"

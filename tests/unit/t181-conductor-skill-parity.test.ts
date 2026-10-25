@@ -756,6 +756,11 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  // The summary and the gate read the reply by the protocol's own section, which owns the rule (a lone letter
+  // included), so the skill names it there instead of wording the rule a second way.
+  const READING_SECTION_POINTER =
+    'Otherwise read their reply as `{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md` section ' +
+    '"Reading the person\'s reply at a checkpoint" says';
   test("every shipped conductor SKILL lets the person drive: read the reply, record their choice, never ask them to repeat", () => {
     const missing: string[] = [];
     for (const rel of skills) {
@@ -768,8 +773,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       ]) {
         if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
       }
-      if ((body.match(/never ask them to retype a choice/g) ?? []).length < 2) {
-        missing.push(`${rel}  missing the own-words rule at the summary and the gate`);
+      if (body.split(READING_SECTION_POINTER).length - 1 < 2) {
+        missing.push(`${rel}  missing the reading section's pointer at the summary and the gate`);
       }
       for (const stale of ["--user-input '<their reply>'", "the engine reads it in their own words"]) {
         if (body.includes(stale)) missing.push(`${rel}  still says: ${stale}`);

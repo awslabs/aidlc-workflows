@@ -1114,7 +1114,7 @@ describe("Kiro checkpoint reply protocol", () => {
     expect(KIRO_SKILL).toContain(
       "every offered semantic choice plus the final numbered Other",
     );
-    expect(KIRO_SKILL.match(/never ask them to retype a choice/g)).toHaveLength(2);
+    expect(KIRO_SKILL.match(/Otherwise read their reply as `\.kiro\/aidlc-common\/protocols\/stage-protocol\.md` section "Reading the person's reply at a checkpoint" says/g)).toHaveLength(2);
   });
 });
 
