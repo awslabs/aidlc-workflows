@@ -37039,6 +37039,58 @@ export function runRecordDir(projectDir: string): string | null {
   return recordDir(projectDir) ?? (isolatedRunWithoutWork(projectDir) ? docsRoot(projectDir) : null);
 }
 
+// The words typed after the flags of a stage run on its own with no work: its
+// description, where a piece of work keeps project-description.json. Kept
+// whole beside the space's own record, one file a stage, and bound to the
+// start that kept them by their digest on its STAGE_STARTED row.
+const SINGLE_RUN_REQUEST_DIR = `${ENGINE_DIR}/single-stage-request`;
+export const SINGLE_RUN_REQUEST_FIELD = "Request SHA-256";
+
+/** Keep an isolated start's words; returns the digest its STAGE_STARTED row records. */
+export function keepSingleRunRequest(projectDir: string, slug: string, words: string): string {
+  const root = docsRoot(projectDir);
+  mkdirSync(root, { recursive: true });
+  writeRecordFileNoFollow(root, `${SINGLE_RUN_REQUEST_DIR}/${slug}.json`, `${JSON.stringify(words)}\n`);
+  return createHash("sha256").update(words, "utf-8").digest("hex");
+}
+
+// The request of the latest isolated run open with no work: its stage, and the
+// words its start kept, or null when it kept none (nothing was typed, or the
+// file no longer matches the start). Null when no such run is open.
+export function singleRunRequest(projectDir: string): { stage: string; description: string | null } | null {
+  const selection = resolveWorkflowSelection(projectDir);
+  if (!isolatedRunWithoutWork(projectDir, selection)) return null;
+  let events: OrderedPipelineEvidenceEvent[];
+  try {
+    events = orderedPipelineEvidenceEvents(projectDir, undefined, selection.space);
+  } catch {
+    return null;
+  }
+  let start: OrderedPipelineEvidenceEvent | null = null;
+  for (const entry of events) {
+    const stage = auditBlockField(entry.block, "Stage");
+    if (
+      entry.event === "STAGE_STARTED" && stage !== null &&
+      auditBlockField(entry.block, "Workflow") === `single-stage:${stage}` && singleStageAttemptOpenIn(events, stage)
+    ) {
+      start = entry;
+    }
+  }
+  const stage = start === null ? null : auditBlockField(start.block, "Stage");
+  if (start === null || stage === null) return null;
+  const digest = auditBlockField(start.block, SINGLE_RUN_REQUEST_FIELD);
+  if (digest === null) return { stage, description: null };
+  try {
+    const path = recordFileTargetOrThrow(docsRoot(projectDir), `${SINGLE_RUN_REQUEST_DIR}/${stage}.json`);
+    const words: unknown = JSON.parse(readRegularFileNoFollowOrThrow(path, "isolated run request").toString("utf-8"));
+    return typeof words === "string" && createHash("sha256").update(words, "utf-8").digest("hex") === digest
+      ? { stage, description: words }
+      : { stage, description: null };
+  } catch {
+    return { stage, description: null };
+  }
+}
+
 function singleStageAttemptOpenIn(
   events: OrderedPipelineEvidenceEvent[],
   stageSlug: string,
