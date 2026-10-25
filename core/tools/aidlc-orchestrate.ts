@@ -6787,31 +6787,35 @@ function createPrintDirective(
 
 // The line a plan started from the which-work question says for each stage
 // change typed with the request that this work does not make: one the plan
-// already makes (a skip of a stage it leaves out, an add of one it runs), and
-// one it could make that the command left off. The latter is never put back:
-// no list is also how the agent says the person no longer wants it. An
-// initialization stage, or one on both lists, is not such a change, so it is
-// never named here.
+// cannot make (a skip of a stage it leaves out or an initialization stage it
+// always runs, an add of one it runs), and one it could make that the command
+// left off. The latter is never put back: no list is also how the agent says
+// the person no longer wants it. Each change is checked on its own, as
+// changesThatApply checks it; a stage on both lists is named neither way.
 function stageChangesLeftOffLine(scope: string, typed: PlanChanges | undefined, carried: PlanChanges | undefined): string {
-  const stages = loadScopeMapping()[scope]?.stages;
-  if (!typed || !stages) return "";
-  const named = (slug: string): boolean =>
-    nodeForSlug(slug)?.phase !== "initialization" && !(typed.skip.includes(slug) && typed.add.includes(slug));
-  const leavesOut = typed.skip.filter((slug) => named(slug) && stages[slug] !== "EXECUTE");
-  const runs = typed.add.filter((slug) => named(slug) && stages[slug] === "EXECUTE");
-  const skipOff = typed.skip.filter((slug) => named(slug) && stages[slug] === "EXECUTE" && !carried?.skip.includes(slug));
-  const addOff = typed.add.filter((slug) => named(slug) && stages[slug] !== "EXECUTE" && !carried?.add.includes(slug));
+  if (!typed || !loadScopeMapping()[scope]) return "";
+  const both = (slug: string): boolean => typed.skip.includes(slug) && typed.add.includes(slug);
+  const takes = (change: PlanChanges): boolean => changesThatApply(scope, change) !== undefined;
+  const skips = typed.skip.filter((slug) => !both(slug));
+  const adds = typed.add.filter((slug) => !both(slug));
+  const initialization = (slug: string): boolean => nodeForSlug(slug)?.phase === "initialization";
+  const alwaysRuns = skips.filter(initialization);
+  const leavesOut = skips.filter((slug) => !initialization(slug) && !takes({ skip: [slug], add: [] }));
+  const runs = adds.filter((slug) => !takes({ skip: [], add: [slug] }));
+  const skipOff = skips.filter((slug) => takes({ skip: [slug], add: [] }) && !carried?.skip.includes(slug));
+  const addOff = adds.filter((slug) => takes({ skip: [], add: [slug] }) && !carried?.add.includes(slug));
   const listed = (slugs: string[]): string => {
     const names = slugs.map((slug) => stageLabel(nodeForSlug(slug), slug) ?? slug);
     return names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
   };
-  const already = [
-    ...(leavesOut.length > 0 ? [`leaves out ${listed(leavesOut)}`] : []),
-    ...(runs.length > 0 ? [`runs ${listed(runs)}`] : []),
+  const cannot = [
+    ...(leavesOut.length > 0 ? [`already leaves out ${listed(leavesOut)}`] : []),
+    ...(runs.length > 0 ? [`already runs ${listed(runs)}`] : []),
+    ...(alwaysRuns.length > 0 ? [`always runs ${listed(alwaysRuns)}`] : []),
   ];
   const one = (slugs: string[], single: string, several: string): string => slugs.length === 1 ? single : several;
   return [
-    ...(already.length > 0 ? [`The ${scope} plan already ${already.join(", and already ")}.`] : []),
+    ...(cannot.length > 0 ? [`The ${scope} plan ${cannot.join(", and ")}.`] : []),
     ...(skipOff.length > 0
       ? [`${listed(skipOff)} ${one(skipOff, "runs", "run")} in this work: the ${one(skipOff, "skip", "skips")} you typed ` +
         `with the request ${one(skipOff, "was", "were")} left off. Say so to skip ${one(skipOff, "it", "them")}.`]

@@ -1000,6 +1000,18 @@ describe("t-plan-proposed-by-the-agent: a stage change typed with the plan rides
     expect(getField(runCreation(KIRO_TOOLS, started), "Scope")).toBe("bugfix");
   });
 
+  // An initialization stage always runs: no plan takes its skip, and the start
+  // says so in the same line instead of refusing it.
+  test("kiro, work here and none selected: a skip of an initialization stage is said to always run", () => {
+    proj = cloneWithWork(KIRO_TOOLS);
+    const open = routed(KIRO_TOOLS, proj, ["--scope", "bugfix", "--skip", "workspace-detection", "fix the logout bug"]);
+    expect(open.new_intent_command).not.toContain("--skip");
+    const started = next(KIRO_TOOLS, proj, answerArgs(open.new_intent_command));
+    expect(String(started.narration)).toContain("The bugfix plan always runs Workspace Detection.");
+    expect(String(started.narration)).not.toContain("left off");
+    expect(getField(runCreation(KIRO_TOOLS, started), "Scope")).toBe("bugfix");
+  });
+
   // Asked again (a reshape with no record named), the question keeps what was
   // typed and hands it out the same way.
   test("kiro, work here and none selected: the question asked again carries the skip to the plans that take it", () => {
