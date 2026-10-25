@@ -465,6 +465,31 @@ describe("t-unit-approval-dispositions: a Unit's findings on its own approval", 
     }]]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A misspelled finding flag would otherwise be dropped and the approval
+  // recorded as Accepted risk, the opposite of what the person said.
+  test("a misspelled finding flag is refused with no row, and the retry approves with no new question", () => {
+    const p = fixture();
+    buildUnit(p, "alpha");
+    expect(next(p).construction_checkpoint?.unit).toBe("alpha");
+    const session = askUnit(p, "alpha", false);
+    human(p, "Approve, but make sure R-01 gets fixed", session);
+    const approve = (flag: string) => checkpoint(p, "alpha", [
+      "--action", "approve", "--session", session, "--user-input", "Approve", flag, "R-01",
+    ]);
+    const refused = approve("--fix-findng");
+    expect(refused.status, refused.out).toBe(1);
+    const refusal = JSON.parse(refused.out).error as string;
+    expect(refusal).toStartWith('checkpoint does not accept "--fix-findng". It accepts --unit, ');
+    expect(refusal).toContain("--fix-finding");
+    expect(unitApprovals(p, "alpha")).toEqual([]);
+    const retried = approve("--fix-finding");
+    expect(retried.status, retried.out).toBe(0);
+    expect(JSON.parse(retried.stdout).approved).toBe(true);
+    expect(unitApprovals(p, "alpha").map(recorded)).toEqual([[{
+      artifact: stageArtifact(p, "functional-design", "alpha"), id: "R-01", status: "Fix requested",
+    }]]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("Construction approving a Unit on its own refuses a fix asked for, which no person asked", () => {
     const p = fixture({ autonomous: true });
     buildUnit(p, "alpha");

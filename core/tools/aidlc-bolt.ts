@@ -1351,6 +1351,23 @@ const CHECKPOINT_ACTIONS: readonly string[] = ["status", "ask", "verify", "appro
 const SWARM_CHECKPOINT_ACTIONS: readonly string[] = ["status", "ask", "approve", "reject"];
 const FINDING_FLAGS_USAGE = "--fix-finding <review-artifact>#R-NN (approve), --reject-finding and --reopen-finding " +
   "<review-artifact>#R-NN=<the person's reason> (reject), once per finding";
+const CHECKPOINT_FLAGS: readonly string[] = [
+  "unit", "kind", "action", "session", "user-input", "reason", "message", "timeout-ms", "over-unfinished-review",
+  "fix-finding", "reject-finding", "reopen-finding",
+];
+const SWARM_CHECKPOINT_FLAGS: readonly string[] = [
+  "batch", "units", "action", "session", "user-input", "reason", "message", "fix-finding", "reject-finding", "reopen-finding",
+];
+
+// A flag a checkpoint does not take is refused before anything is recorded:
+// dropped, a misspelled --fix-finding would record the finding as Accepted
+// risk, and the corrected retry still takes the person's reply.
+function refuseUnknownFlags(command: string, flags: Record<string, string>, accepted: readonly string[]): void {
+  const unknown = Object.keys(flags).find((name) => !accepted.includes(name));
+  if (unknown !== undefined) {
+    error(`${command} does not accept "--${unknown}". It accepts ${accepted.map((name) => `--${name}`).join(", ")}.`);
+  }
+}
 
 // A checkpoint's approval records the open review findings of the stages and
 // Units it covers, through the review ledger's writer: `Fix requested` for each
@@ -1393,6 +1410,7 @@ async function handleCheckpoint(args: string[]): Promise<void> {
   if (flags["check-cmd"] !== undefined) {
     error("checkpoint no longer accepts --check-cmd. " + verificationCommandRecovery() + " Run checkpoint --action verify without --check-cmd.");
   }
+  refuseUnknownFlags("checkpoint", flags, CHECKPOINT_FLAGS);
   if (!flags.unit) error("checkpoint requires --unit <name>");
   const kind = flags.kind ?? "unit";
   const checkpointKind = CHECKPOINT_KINDS.find((known) => known === kind);
@@ -1437,6 +1455,7 @@ async function handleCheckpoint(args: string[]): Promise<void> {
 
 function handleSwarmCheckpoint(args: string[]): void {
   const flags = parseFlags(args);
+  refuseUnknownFlags("swarm-checkpoint", flags, SWARM_CHECKPOINT_FLAGS);
   const batch = Number(flags.batch);
   if (!Number.isSafeInteger(batch) || batch < 1) error("swarm-checkpoint requires --batch <positive integer>");
   const units = (flags.units ?? "").split(",").map((unit) => unit.trim()).filter(Boolean);

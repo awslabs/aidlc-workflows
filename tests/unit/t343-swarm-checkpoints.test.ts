@@ -491,6 +491,22 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(alphaFindings(pd)).toEqual([{ id: "R-01", status: "New" }]);
   });
 
+  test("a misspelled finding flag on a batch is refused with no row, and the retry approves with no new question", () => {
+    const pd = fixture();
+    openFinding(pd);
+    converge(pd);
+    human(pd, "Approve, but get R-01 fixed");
+    const approve = (flag: string) => tool(pd, "bolt", ["swarm-checkpoint", "--action", "approve", "--batch", "1",
+      "--units", BATCH.join(","), "--session", "t343-checkpoint", "--user-input", "Approve", flag, "R-01"]);
+    const refused = approve("--fix-findng");
+    expect(refused.code, refused.out).toBe(1);
+    expect(JSON.parse(refused.out).error).toStartWith('swarm-checkpoint does not accept "--fix-findng". It accepts --batch, ');
+    expect(gates(pd)).toEqual([]);
+    const retried = approve("--fix-finding");
+    expect(retried.code, retried.out).toBe(0);
+    expect(gates(pd).map(dispositionsOf)).toEqual([[{ id: "R-01", status: "Fix requested" }]]);
+  });
+
   // One decision for the batch, so each Unit's row carries it.
   test("Request Changes on a batch that rejects a finding records the rejection on each Unit's row", () => {
     const pd = fixture();
