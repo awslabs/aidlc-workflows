@@ -31,7 +31,7 @@ for (const [from, shape, to] of [["bugfix", "code", "refactor"], ["express", "em
     test("the switch line, the row, the next stage, the progress line and status say one count", () => {
       let switched = false;
       // The approval report's own output, as the agent reads it.
-      let approvedAfter: string | null = null;
+      let approvedAfter = null as string | null;
       const run = runScope(from, {
         shape,
         afterApproval: (stage: string, agent: AgentStandIn) => {
