@@ -216,7 +216,9 @@ describe("the Units Generation gate", () => {
       const length = Math.min(64, Math.max(4, 260 - depth - records));
       return ["u2-billing", `u1-${"o".repeat(length - 3)}`];
     });
-    expect(proj.length + 1 + RECORD_DEPTH, proj).toBeLessThanOrEqual(260);
+    // On Windows the folder is one config stays silent for (run-tests puts fixtures under the shorter temp
+    // folder); elsewhere any depth says nothing.
+    if (WINDOWS) expect(proj.length + 1 + RECORD_DEPTH, proj).toBeLessThanOrEqual(260);
     const longest = Math.max(...units.map((name) => name.length));
     const opened = openGate(proj);
     console.log(`gate in a ${proj.length}-character folder:\n${JSON.stringify(opened, null, 2)}`);
@@ -241,7 +243,7 @@ describe("the Units Generation gate", () => {
       return ["a".repeat(Math.max(1, 260 - depth - 1 - records))];
     });
     // Short enough that the longest name lands the deepest record at 260, not over it.
-    expect(proj.length, proj).toBeLessThanOrEqual(260 - 1 - records - 1);
+    if (WINDOWS) expect(proj.length, proj).toBeLessThanOrEqual(260 - 1 - records - 1);
     const opened = openGate(proj);
     // The gate opened: a refused one is a print too.
     expect(String(opened.message), JSON.stringify(opened)).toContain(`Recorded awaiting-approval for "${STAGE}"`);
