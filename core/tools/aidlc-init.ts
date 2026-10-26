@@ -1264,7 +1264,7 @@ function showModels(
     return;
   }
   const out = process.stdout;
-  let output = `${heading(`Model policy for ${harness}`, out)}\n\n`;
+  let output = `${heading(`Model policy for ${typedHarnessName(harness)}`, out)}\n\n`;
   output += `Preset: ${policy?.preset ?? "none (shipped defaults)"}\n\n`;
   output += `All ${data.effective.length} agents inherit your session model and effort, except:\n`;
   const grouped = new Map<string, typeof data.effective>();
@@ -1894,10 +1894,10 @@ function showDiagnosticSection(
     };
   }
   if (options.mode !== "human") {
-    emitResult(success(`${section} configuration for ${selected.harness}`, data), options);
+    emitResult(success(`${section} configuration for ${typedHarnessName(selected.harness)}`, data), options);
     return;
   }
-  let output = `${section[0].toUpperCase()}${section.slice(1)} configuration for ${selected.harness}\n`;
+  let output = `${section[0].toUpperCase()}${section.slice(1)} configuration for ${typedHarnessName(selected.harness)}\n`;
   if (section === "runtime") {
     const diagnostics = data.diagnostics as ReturnType<typeof probeRuntime>;
     output += `  Hook baseline PATH: ${diagnostics.baselinePath}\n`;
@@ -2016,21 +2016,21 @@ function checkDiagnosticSection(
   const hostStep = hostSteps.length === 1 ? hostSteps[0] : null;
   const providersUnrecorded = section === "providers" && records.providers === null;
   const cleanMessage = section === "providers" && harnessOwnsModelAccess(selected.harness)
-    ? `providers needs no answer for ${selected.harness}; its model access is harness-managed`
+    ? `providers needs no answer for ${typedHarnessName(selected.harness)}; its model access is harness-managed`
     : providersUnrecorded && providerAnswerIsTheSession(selected.harness)
-    ? `providers needs no answer for ${selected.harness}; ` +
+    ? `providers needs no answer for ${typedHarnessName(selected.harness)}; ` +
       sessionProvidersDetail(
         selected.harness,
         `'${configInvocationFor(projectDir)} config providers --harness ${typedHarnessName(selected.harness)}${projectTarget(projectDir)}'`,
       )
     : providersUnrecorded
-    ? `providers has no recorded answer for ${selected.harness}; the shipped fallback is in use. ` +
+    ? `providers has no recorded answer for ${typedHarnessName(selected.harness)}; the shipped fallback is in use. ` +
       `Record one with '${configCommand("providers")}'`
     : warnings.length > 0
-    ? `${section} configuration has ${warnings.length} warning(s) for ${selected.harness}: ${
+    ? `${section} configuration has ${warnings.length} warning(s) for ${typedHarnessName(selected.harness)}: ${
       warnings.map((issue) => `${issue.id} (${issue.message})`).join("; ")
     }`
-    : `${section} configuration is clean for ${selected.harness}`;
+    : `${section} configuration is clean for ${typedHarnessName(selected.harness)}`;
   emitResult(
     blockers.length === 0
       ? success(cleanMessage, {
@@ -2086,7 +2086,7 @@ function providerRecordFromArgs(
   argv: readonly string[],
   selected: ReturnType<typeof selectedDiagnosticHarness>,
 ): ProvidersRecord {
-  if (harnessOwnsModelAccess(selected.harness)) throw new Error(`${selected.harness} provides its own model access; there is no provider answer to record. Use --reset to clear a legacy record.`);
+  if (harnessOwnsModelAccess(selected.harness)) throw new Error(`${typedHarnessName(selected.harness)} provides its own model access; there is no provider answer to record. Use --reset to clear a legacy record.`);
   const next = cloneDiagnosticRecord(current) ?? { schemaVersion: 1 };
   const provider = valueAfter(argv, "--provider");
   if (provider === "builtin" || (provider === undefined && next.provider === "builtin")) {
@@ -2447,7 +2447,7 @@ function kiroWorkflowsSwitch(
   const value = valueAfter([...argv], "--kiro-workflows");
   if (value !== "on" && value !== "off") return usage("--kiro-workflows must be on or off", configCommand("trust --help"));
   if (selected.harness !== "kiro-ide") {
-    return usage(`--kiro-workflows applies to Kiro IDE projects; this project is set up for ${selected.distribution}`);
+    return usage(`--kiro-workflows applies to Kiro IDE projects; this project is set up for ${typedHarnessName(selected.distribution)}`);
   }
   const other = ["--acknowledge", "--reset", "--kiro-cli-workflows"].find((flag) => argv.includes(flag));
   if (other) return usage(`--kiro-workflows cannot be combined with ${other}`);
@@ -2527,7 +2527,7 @@ function kiroCliWorkflowsSwitch(
     return usage("--kiro-cli-workflows must be on or off", configCommand("trust --help"));
   }
   if (selected.harness !== "kiro-ide") {
-    return usage(`--kiro-cli-workflows applies to Kiro IDE projects; this project is set up for ${selected.distribution}`);
+    return usage(`--kiro-cli-workflows applies to Kiro IDE projects; this project is set up for ${typedHarnessName(selected.distribution)}`);
   }
   const other = ["--acknowledge", "--reset", "--kiro-terminal"].find((flag) => argv.includes(flag));
   if (other) return usage(`--kiro-cli-workflows cannot be combined with ${other}`);
@@ -2607,7 +2607,7 @@ function kiroTerminalSwitch(
   const value = valueAfter([...argv], "--kiro-terminal");
   if (value?.toLowerCase() !== "powershell") return usage("--kiro-terminal must be powershell", configCommand("trust --help"));
   if (selected.harness !== "kiro-ide") {
-    return usage(`--kiro-terminal applies to Kiro IDE projects; this project is set up for ${selected.distribution}`);
+    return usage(`--kiro-terminal applies to Kiro IDE projects; this project is set up for ${typedHarnessName(selected.distribution)}`);
   }
   const other = ["--acknowledge", "--reset", "--kiro-workflows", "--kiro-cli-workflows"].find((flag) => argv.includes(flag));
   if (other) return usage(`--kiro-terminal cannot be combined with ${other}`);
@@ -3385,7 +3385,7 @@ function prepareDiagnosticSection(
       process.stdout.write(`  ${ownedModelAccessFact(product)} Nothing to answer.\n`);
     }
     emitResult(
-      success(`providers needs no answer for ${selected.harness}; its model access is harness-managed`),
+      success(`providers needs no answer for ${typedHarnessName(selected.harness)}; its model access is harness-managed`),
       options,
     );
     return null;
@@ -3886,12 +3886,12 @@ function showChoiceSection(
     };
   }
   if (options.mode !== "human") {
-    emitResult(success(`${section} configuration for ${selected.harness}`, data), options);
+    emitResult(success(`${section} configuration for ${typedHarnessName(selected.harness)}`, data), options);
     return;
   }
   const out = process.stdout;
   let output = `${heading(
-    `${section[0].toUpperCase()}${section.slice(1)} configuration for ${selected.harness}`,
+    `${section[0].toUpperCase()}${section.slice(1)} configuration for ${typedHarnessName(selected.harness)}`,
     out,
   )}\n`;
   if (section === "flags") {
@@ -3992,7 +3992,7 @@ function checkChoiceSection(
       );
   emitResult(
     issues.length === 0
-      ? success(`${section} configuration is clean for ${selected.harness}`, {
+      ? success(`${section} configuration is clean for ${typedHarnessName(selected.harness)}`, {
           section,
           harness: selected.harness,
           issues: [],
@@ -4634,7 +4634,7 @@ function assertSwitchBaseline(occupant: ProjectHarness, requested: string): void
     const baseline = readBaseline(path);
     if (!baseline) throw new SwitchRefusal(`${lead} has no ownership baseline (${rel}); ${refresh}`, remedy());
     problem = baselineShapeProblem(baseline) ??
-      (!baselineNamesHarness(baseline, occupant) ? `it names ${baseline.distribution} in ${baseline.harnessDir}` : null);
+      (!baselineNamesHarness(baseline, occupant) ? `it names ${typedHarnessName(baseline.distribution)} in ${baseline.harnessDir}` : null);
     // A baseline from before it held only shipped paths may also list the
     // project's own files, so the refresh planner keeps every file it names.
     // A switch would then leave the installed row's files behind; a refresh of
@@ -6880,7 +6880,7 @@ function prepareRefreshSource(
     }
     if (rowChanged && current.trust !== undefined && prior) {
       notes.push(
-        `The trust review recorded for ${prior.distribution} does not carry to ${descriptor.distribution}; once switched, review it again with ` +
+        `The trust review recorded for ${typedHarnessName(prior.distribution)} does not carry to ${typedHarnessName(descriptor.distribution)}; once switched, review it again with ` +
           `\`${configInvocationFor(projectDir)} config trust --harness ${typedHarnessName(descriptor.distribution)}${projectTarget(projectDir)}\`.`,
       );
     }
@@ -7032,7 +7032,7 @@ function prepareRefreshSource(
   ) {
     notes.push(
       `Removed legacy AI-DLC Bedrock defaults from ${legacyProviderMigration.path}; ` +
-        `${distribution} now uses the provider configured in the harness. To opt back in, run ` +
+        `${typedHarnessName(distribution)} now uses the provider configured in the harness. To opt back in, run ` +
         `${configCommandForHarness(
           descriptor.harnessDir,
           `providers --provider amazon-bedrock --region ${legacyProviderMigration.region} --yes`,
@@ -10393,7 +10393,7 @@ function planRootIntegrations(
         actions.push({
           path: integration.path,
           action: "conflict",
-          detail: `${missingCopy.distribution} is missing its shipped block copy (${missingCopy.harnessDir}/tools/data/root-blocks/${marker}); run aidlc config --harness ${typedHarnessName(missingCopy.distribution)} first`,
+          detail: `${typedHarnessName(missingCopy.distribution)} is missing its shipped block copy (${missingCopy.harnessDir}/tools/data/root-blocks/${marker}); run aidlc config --harness ${typedHarnessName(missingCopy.distribution)} first`,
         });
         continue;
       }
@@ -10449,14 +10449,14 @@ function planRootIntegrations(
             actions.push({
               path: integration.path,
               action: "conflict",
-              detail: `shared block is owned by ${owner.distribution} from a different release; refresh ${descriptor.distribution} from the same release as ${owner.distribution}, or refresh ${owner.distribution} from this release first`,
+              detail: `shared block is owned by ${typedHarnessName(owner.distribution)} from a different release; refresh ${typedHarnessName(descriptor.distribution)} from the same release as ${typedHarnessName(owner.distribution)}, or refresh ${typedHarnessName(owner.distribution)} from this release first`,
             });
             continue;
           }
           if (contributingSiblings?.has(owner)) {
-            combinedWith = owner.distribution;
+            combinedWith = typedHarnessName(owner.distribution);
           } else {
-            actions.push({ path: integration.path, action: "preserve", detail: `owned by ${owner.distribution}` });
+            actions.push({ path: integration.path, action: "preserve", detail: `owned by ${typedHarnessName(owner.distribution)}` });
             continue;
           }
         } else if (priorHash || !merged.currentBlockShipped) {
@@ -13330,7 +13330,7 @@ export async function main(
       );
       if (collision && !switchesInPlace(collision.distribution, stamp.distribution)) {
         throw new Error(
-          `harness ${stamp.distribution} shares directory ${descriptor.harnessDir} with installed ${collision.distribution}; they cannot coexist in one project`,
+          `harness ${typedHarnessName(stamp.distribution)} shares directory ${descriptor.harnessDir} with installed ${typedHarnessName(collision.distribution)}; they cannot coexist in one project`,
         );
       }
       if (collision) {
@@ -13360,21 +13360,21 @@ export async function main(
                 if (currentHash && contribution.hash === currentHash) continue;
               }
               throw new Error(
-                `refusing to refresh ${stamp.distribution} while installed ${sibling.distribution} co-owns ${integration.path} but has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${typedHarnessName(sibling.distribution)} first`,
+                `refusing to refresh ${typedHarnessName(stamp.distribution)} while installed ${typedHarnessName(sibling.distribution)} co-owns ${integration.path} but has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${typedHarnessName(sibling.distribution)} first`,
               );
             } else if (
               sibling.frameworkVersion !== undefined && baseline === null &&
               !unchangedManagedBlockHash(projectDir, selected.root, descriptor.harnessDir, integration)
             ) {
               throw new Error(
-                `refusing to refresh ${stamp.distribution} while installed ${sibling.distribution} has lost its projection descriptor and ownership baseline; run aidlc config --harness ${typedHarnessName(sibling.distribution)} first`,
+                `refusing to refresh ${typedHarnessName(stamp.distribution)} while installed ${typedHarnessName(sibling.distribution)} has lost its projection descriptor and ownership baseline; run aidlc config --harness ${typedHarnessName(sibling.distribution)} first`,
               );
             }
           }
           continue;
         }
         throw new Error(
-          `harness ${stamp.distribution} cannot be added while installed ${sibling.distribution} has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${typedHarnessName(sibling.distribution)} first`,
+          `harness ${typedHarnessName(stamp.distribution)} cannot be added while installed ${typedHarnessName(sibling.distribution)} has no readable projection descriptor (${sibling.harnessDir}/tools/data/aidlc-projection.json); run aidlc config --harness ${typedHarnessName(sibling.distribution)} first`,
         );
       }
       for (const integration of descriptor.rootIntegrations) {
@@ -13386,7 +13386,7 @@ export async function main(
         if (collision) {
           if (refreshing && !integration.shared && collision.shared === "identical") {
             throw new Error(
-              `refusing to refresh ${stamp.distribution} from a release whose ${integration.path} is not shared while installed ${sibling.distribution} shares it; use a release that declares it shared`,
+              `refusing to refresh ${typedHarnessName(stamp.distribution)} from a release whose ${integration.path} is not shared while installed ${typedHarnessName(sibling.distribution)} shares it; use a release that declares it shared`,
             );
           }
           if (
@@ -13394,11 +13394,11 @@ export async function main(
             predatesFrameworkVersion(sibling.frameworkVersion, stamp.frameworkVersion)
           ) {
             throw new Error(
-              `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}, whose install predates shared onboarding; run aidlc config --harness ${typedHarnessName(sibling.distribution)} first — if it still refuses afterwards, its ${integration.path} is exclusive and they cannot coexist in one project`,
+              `harness ${typedHarnessName(stamp.distribution)} shares ${integration.path} with installed ${typedHarnessName(sibling.distribution)}, whose install predates shared onboarding; run aidlc config --harness ${typedHarnessName(sibling.distribution)} first — if it still refuses afterwards, its ${integration.path} is exclusive and they cannot coexist in one project`,
             );
           }
           throw new Error(
-            `harness ${stamp.distribution} shares ${integration.path} with installed ${sibling.distribution}; they cannot coexist in one project`,
+            `harness ${typedHarnessName(stamp.distribution)} shares ${integration.path} with installed ${typedHarnessName(sibling.distribution)}; they cannot coexist in one project`,
           );
         }
       }

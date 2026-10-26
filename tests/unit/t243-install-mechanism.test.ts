@@ -1619,7 +1619,7 @@ describe("t243 project initialization", () => {
       }, "baseline is not a regular file"],
       ["another harness", (path) => {
         writeFileSync(path, readFileSync(path, "utf-8").replace("\"distribution\": \"kiro\"", "\"distribution\": \"kiro-ide\""));
-      }, "it names kiro-ide in .kiro"],
+      }, "it names kiro in .kiro"],
       ["wrong shape", (path) => {
         writeFileSync(path, `${JSON.stringify({ ...JSON.parse(readFileSync(path, "utf-8")), files: "none" }, null, 2)}\n`);
       }, "files is not a map of hashes"],
@@ -1877,7 +1877,7 @@ describe("t243 project initialization", () => {
     ], project);
     expect(switched.status, switched.stdout + switched.stderr).toBe(0);
     expect(trust()).toBeUndefined();
-    const note = /The trust review recorded for kiro does not carry to kiro-ide; once switched, review it again with `([^`]+)`\./.exec(
+    const note = /The trust review recorded for kiro-v2 does not carry to kiro; once switched, review it again with `([^`]+)`\./.exec(
       switched.stdout,
     );
     expect(note?.[1]).toEndWith(" config trust --harness kiro");
@@ -2008,7 +2008,7 @@ describe("t243 project initialization", () => {
     expect(addPlan.data.actions.find((action) => action.path === ".gitignore")).toEqual({
       path: ".gitignore",
       action: "merge",
-      detail: "combined with kiro",
+      detail: "combined with kiro-v2",
     });
     expect(readFileSync(join(project, ".gitignore"), "utf-8")).toBe(kiroGitignore);
 
@@ -2164,7 +2164,7 @@ describe("t243 project initialization", () => {
     expect(plan.data.actions.find((action) => action.path === ".gitignore")).toEqual({
       path: ".gitignore",
       action: "preserve",
-      detail: "owned by kiro",
+      detail: "owned by kiro-v2",
     });
 
     const addClaude = run(INIT, [
@@ -2237,7 +2237,7 @@ describe("t243 project initialization", () => {
     };
     const gitignoreAction = plan.data.actions.find((action) => action.path === ".gitignore");
     expect(gitignoreAction?.action).toBe("conflict");
-    expect(gitignoreAction?.detail).toContain("kiro is missing its shipped block copy");
+    expect(gitignoreAction?.detail).toContain("kiro-v2 is missing its shipped block copy");
 
     const refreshClaude = run(INIT, [
       "config",
@@ -2251,7 +2251,7 @@ describe("t243 project initialization", () => {
       "none",
     ], project);
     expect(refreshClaude.status, refreshClaude.stdout + refreshClaude.stderr).toBe(4);
-    expect(refreshClaude.stdout).toContain("kiro is missing its shipped block copy");
+    expect(refreshClaude.stdout).toContain("kiro-v2 is missing its shipped block copy");
     expect(readFileSync(join(project, ".gitignore"), "utf-8")).toBe(gitignore);
 
     const refreshKiro = run(INIT, [
@@ -2666,7 +2666,7 @@ describe("t243 project initialization", () => {
       "--harness", "codex", "--mcp", "none",
     ], project);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(4);
-    expect(refreshed.stdout).toContain("shared block is owned by kiro from a different release");
+    expect(refreshed.stdout).toContain("shared block is owned by kiro-v2 from a different release");
     expect(JSON.parse(readFileSync(codexBaselinePath, "utf-8")).rootContributions["AGENTS.md"])
       .toEqual(codexContribution);
     expect(readFileSync(agentsPath, "utf-8")).toBe(agents);
@@ -2981,7 +2981,7 @@ describe("t243 project initialization", () => {
     ], project);
     expect(addCopilot.status).toBe(4);
     expect(addCopilot.stdout).toContain(
-      "harness copilot shares AGENTS.md with installed kiro; they cannot coexist in one project",
+      "harness copilot shares AGENTS.md with installed kiro-v2; they cannot coexist in one project",
     );
     expect(existsSync(join(project, ".aidlc"))).toBe(false);
     expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
@@ -3017,7 +3017,7 @@ describe("t243 project initialization", () => {
     ], project);
     expect(addKiro.status).toBe(4);
     expect(addKiro.stdout).toContain(
-      "harness kiro shares AGENTS.md with installed copilot; they cannot coexist in one project",
+      "harness kiro-v2 shares AGENTS.md with installed copilot; they cannot coexist in one project",
     );
     expect(addKiro.stdout).not.toContain("predates");
     expect(existsSync(join(project, ".kiro"))).toBe(false);
@@ -3099,7 +3099,7 @@ describe("t243 project initialization", () => {
       ], project);
       expect(refreshed.status).toBe(4);
       expect(refreshed.stdout).toContain(
-        "refusing to refresh kiro from a release whose AGENTS.md is not shared while installed codex shares it; use a release that declares it shared",
+        "refusing to refresh kiro-v2 from a release whose AGENTS.md is not shared while installed codex shares it; use a release that declares it shared",
       );
       expect(readFileSync(join(project, "AGENTS.md"))).toEqual(agents);
       expect(existsSync(join(project, ".kiro", "steering", "aidlc-onboarding.md"))).toBe(true);

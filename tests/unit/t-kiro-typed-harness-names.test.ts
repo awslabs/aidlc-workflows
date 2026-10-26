@@ -195,6 +195,26 @@ describe("Kiro harness names a person types", () => {
     expect(stamp(dir)).toBe("kiro");
   });
 
+  test("the lines that name a harness in prose use the names a person types", () => {
+    const v2 = project();
+    expect(config(v2, ["--harness", "kiro-v2", "--yes"]).status).toBe(0);
+    const providers = spawnSync(process.execPath, [INIT, "config", "providers", "--project-dir", v2, "--check"], {
+      cwd: v2, encoding: "utf-8", env: { ...process.env, AIDLC_TEST_NAME: process.env.AIDLC_TEST_NAME ?? "t-kiro-typed-harness-names" },
+    });
+    expect(providers.stdout).toContain("providers needs no answer for kiro-v2;");
+    const models = spawnSync(process.execPath, [INIT, "config", "models", "--project-dir", v2, "--show"], {
+      cwd: v2, encoding: "utf-8", env: { ...process.env, AIDLC_TEST_NAME: process.env.AIDLC_TEST_NAME ?? "t-kiro-typed-harness-names", NO_COLOR: "1" },
+    });
+    expect(models.stdout).toContain("Model policy for kiro-v2");
+    const kiro = project();
+    expect(config(kiro, ["--harness", "kiro", "--yes"]).status).toBe(0);
+    const trust = spawnSync(process.execPath, [INIT, "config", "trust", "--project-dir", kiro, "--check"], {
+      cwd: kiro, encoding: "utf-8", env: { ...process.env, AIDLC_TEST_NAME: process.env.AIDLC_TEST_NAME ?? "t-kiro-typed-harness-names" },
+    });
+    expect(`${trust.stdout}${trust.stderr}`).toContain("for kiro");
+    expect(`${trust.stdout}${trust.stderr}`).not.toContain("kiro-ide");
+  });
+
   test("a copied tool's hand-off is read in ids: --harness kiro there is Kiro CLI (V2)", () => {
     const dir = project();
     const handed = config(dir, ["--harness", "kiro", "--yes"], { AIDLC_CONFIG_HANDOFF: join(dir, ".kiro", "tools", "aidlc.ts") });

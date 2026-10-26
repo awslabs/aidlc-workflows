@@ -190,7 +190,7 @@ up by an earlier release removes AI-DLC's old effort map (`claude-opus-4.8` at
 extra-high) from `.kiro/settings/cli.json` and says so; run
 `aidlc config models` to choose the session model.
 Override one session with `/effort <level>` in chat or `kiro-cli chat --v2
---effort <level>` (low|medium|high|xhigh|max). The Kiro IDE does not read `cli.json`.
+--effort <level>` (low|medium|high|xhigh|max; before Kiro CLI 2.21.4, drop `--v2`). The Kiro IDE does not read `cli.json`.
 
 ## Refresh and version skew
 

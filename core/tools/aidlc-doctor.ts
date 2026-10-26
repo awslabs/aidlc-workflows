@@ -285,7 +285,7 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
   const issues: string[] = [];
   for (const harness of harnesses) {
     if (!isModelHarness(harness.distribution)) {
-      issues.push(`unsupported harness policy surface: ${harness.distribution}`);
+      issues.push(`unsupported harness policy surface: ${typedHarnessName(harness.distribution)}`);
       continue;
     }
     try {

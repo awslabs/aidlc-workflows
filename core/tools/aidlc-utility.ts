@@ -4210,8 +4210,8 @@ export async function collectDoctorReport(
         label: stampVersion !== engineVersion
           ? `Project runtime stamp: ${stampVersion}; ${engine}`
           : pinnedEngine && pinnedEngine !== AIDLC_VERSION
-          ? `Project runtime stamp: ${stampVersion} (${distribution}); ${engine}`
-          : `Project runtime stamp: ${stampVersion} (${distribution})`,
+          ? `Project runtime stamp: ${stampVersion} (${typedHarnessName(distribution)}); ${engine}`
+          : `Project runtime stamp: ${stampVersion} (${typedHarnessName(distribution)})`,
         fix: pinnedEngine
           ? `refresh the project to the pinned release with \`${aidlcInvocation()} config${
               stamp.distribution ? ` --harness ${typedHarnessName(stamp.distribution)}` : ""

@@ -351,7 +351,7 @@ describe("t296 first-run config setup walk", () => {
     expect(asJson.stdout.trim().split("\n")).toHaveLength(1);
     expect(JSON.parse(asJson.stdout)).toEqual(expect.objectContaining({
       ok: true,
-      message: "providers needs no answer for kiro; its model access is harness-managed",
+      message: "providers needs no answer for kiro-v2; its model access is harness-managed",
     }));
     const quiet = run(
       ["config", "providers", "--project-dir", path, "--harness", "kiro-v2", "--quiet"],
@@ -360,7 +360,7 @@ describe("t296 first-run config setup walk", () => {
     );
     expect(quiet.status, quiet.stdout + quiet.stderr).toBe(0);
     expect(quiet.stdout.trim().split("\n")).toEqual([
-      "providers needs no answer for kiro; its model access is harness-managed",
+      "providers needs no answer for kiro-v2; its model access is harness-managed",
     ]);
     const nonTty = run(
       ["config", "providers", "--project-dir", path, "--harness", "kiro-v2"],

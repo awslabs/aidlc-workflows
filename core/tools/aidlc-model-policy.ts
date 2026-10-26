@@ -999,7 +999,7 @@ export function harnessHonestyNotes(
   for (const item of effective) {
     if (item.clampedEffort) {
       notes.push(
-        `${harness} clamps ${item.clampedEffort.from} effort down to ${item.clampedEffort.to}.`,
+        `${typedHarnessName(harness)} clamps ${item.clampedEffort.from} effort down to ${item.clampedEffort.to}.`,
       );
     }
   }

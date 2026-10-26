@@ -6509,7 +6509,7 @@ process.exit(0);
       [
         "kiro",
         ["--provider", "amazon-bedrock", "--region", "us-west-2"],
-        "kiro provides its own model access; there is no provider answer to record. Use --reset to clear a legacy record.",
+        "kiro-v2 provides its own model access; there is no provider answer to record. Use --reset to clear a legacy record.",
       ],
     ] as const) {
       const project = install(harness);
@@ -6575,7 +6575,7 @@ process.exit(0);
     const check = run([...args, "--check"], project, env);
     expect(check.status, check.stdout + check.stderr).toBe(0);
     expect(check.stdout).toContain(
-      "providers needs no answer for kiro-ide; its model access is harness-managed",
+      "providers needs no answer for kiro; its model access is harness-managed",
     );
     expect(postApplyOutstandingActions(project, ".kiro", "kiro-ide", {
       skipSections: ["runtime", "trust"],
@@ -6918,7 +6918,7 @@ process.exit(0);
       "--check",
     ], kiro, env);
     expect(kiroCheck.status, kiroCheck.stdout + kiroCheck.stderr).toBe(0);
-    expect(kiroCheck.stdout).toContain("needs no answer for kiro");
+    expect(kiroCheck.stdout).toContain("needs no answer for kiro-v2;");
     expect(kiroCheck.stdout).toContain("harness-managed");
     expect(providerDoctorCheck(kiro, ".kiro")).toEqual(expect.objectContaining({
       pass: true,
@@ -6945,7 +6945,7 @@ process.exit(0);
       ], project, env);
       expect(check.status, check.stdout + check.stderr).toBe(0);
       expect(check.stdout).toContain(
-        `providers needs no answer for ${harness}; model access comes with your ${product} session; ` +
+        `providers needs no answer for ${typedHarnessName(harness)}; model access comes with your ${product} session; ` +
           `to use your own Amazon Bedrock access${where} instead, run '`,
       );
       expect(check.stdout).toContain(` config providers --harness ${typedHarnessName(harness)}'`);
