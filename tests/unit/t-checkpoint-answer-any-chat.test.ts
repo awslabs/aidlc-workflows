@@ -823,6 +823,11 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
     const receipt = readAuditShardEvents(p).filter((row) => row.event === "SUMMARY_CONFIRMATION_RECORDED").at(-1);
     expect(auditBlockField(receipt!.block, "Details")).toBe("Request changes");
     expect(auditBlockField(receipt!.block, "Feedback")).toBeNull();
+    // A chat that ends here leaves them at what should change, not the summary.
+    const next = bare(p, "t-any-chat-third");
+    expect(next.kind, JSON.stringify(next)).toBe("print");
+    expect(next.message).toContain('"What should change?"');
+    expect(next.message).not.toContain('"Does this all look correct?"');
   });
 
   test("a Unit checkpoint question is asked again by its checkpoint step", () => {
