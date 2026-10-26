@@ -1,5 +1,6 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { lockFolderHeldGiveUpMs, lockFolderHeldLine } from "./aidlc-lock-line.ts";
+import { reviewManifestForms } from "./aidlc-review-manifest.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
@@ -18121,10 +18122,11 @@ export function committedTextSha256(bytes: Buffer): string {
   return current;
 }
 
-// Fingerprints this process computed both from the raw bytes (how a value was
-// recorded before line endings were read as LF) and as they are read now. Only
-// content read in this process is here, so a recorded raw value maps to the
-// current form of the same content and nothing else.
+// Fingerprints this process computed both in an older form (the raw bytes, as
+// recorded before line endings were read as LF; in the first map only, a
+// review's reviewManifestForms) and as read now. Only content read in this
+// process is here, so a recorded older value maps to the current form of the
+// same content and nothing else.
 const RAW_FINGERPRINTS = new Map<string, string>();
 const CURRENT_FINGERPRINTS = new Map<string, string>();
 export function rememberRawFingerprint(raw: string, current: string): void {
@@ -18154,9 +18156,8 @@ function reviewArtifactContentsFingerprint(
 ): string | null {
   const manifest: Array<[string, string]> = [];
   // The same manifest over raw bytes, as it was recorded before line endings
-  // were read as LF; remembered when it differs.
+  // were read as LF.
   const rawManifest: Array<[string, string]> = [];
-  let rawDiffers = false;
   let matchedAppendix = options.appendixArtifact === undefined;
   for (const entry of contents) {
     if (entry.summaryInput) {
@@ -18200,13 +18201,11 @@ function reviewArtifactContentsFingerprint(
     const text = committedTextBytes(fingerprintedBody);
     manifest.push([entry.logicalPath, `sha256:${createHash("sha256").update(text).digest("hex")}`]);
     rawManifest.push([entry.logicalPath, `sha256:${createHash("sha256").update(fingerprintedBody).digest("hex")}`]);
-    if (text !== fingerprintedBody) rawDiffers = true;
   }
   if (!matchedAppendix) return null;
-  const fingerprint = `sha256:${createHash("sha256").update(JSON.stringify(manifest)).digest("hex")}`;
-  if (rawDiffers) {
-    rememberRawFingerprint(`sha256:${createHash("sha256").update(JSON.stringify(rawManifest)).digest("hex")}`, fingerprint);
-  }
+  const { fingerprint, raw, older } = reviewManifestForms(manifest, rawManifest, contents);
+  if (raw !== null) rememberRawFingerprint(raw, fingerprint);
+  for (const form of older) RAW_FINGERPRINTS.set(form, fingerprint);
   return fingerprint;
 }
 

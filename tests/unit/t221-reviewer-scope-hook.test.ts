@@ -545,6 +545,7 @@ function scratchProject(): string {
     "aidlc-runtime-paths.ts",
     "aidlc-runtime-budget.ts",
     "aidlc-lock-line.ts",
+    "aidlc-review-manifest.ts",
     "aidlc-command.ts",
     "aidlc-color.ts",
     "aidlc-guard-fences.ts",
