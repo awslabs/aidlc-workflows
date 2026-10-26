@@ -174,8 +174,8 @@ function markedPart(path: string, text: string, marker: string): { block: string
 
 // Whether AI-DLC's install wrote this file as it is now: the whole file, or in
 // a shared file its marked part, with the person's part as it was before the
-// build (git's copy of it). With no copy, only a file that is all AI-DLC's
-// part counts: which part changed cannot be told.
+// build (git's copy of it). With no copy, which part changed cannot be told,
+// and the file is named.
 function writtenByInstall(projectDir: string, record: InstallRecord, file: BroughtFile): boolean {
   let bytes: Buffer;
   try {
@@ -189,9 +189,7 @@ function writtenByInstall(projectDir: string, record: InstallRecord, file: Broug
     const now = markedPart(file.path, text, marker);
     if (now?.block == null || !holdsRecordedWrite(now.block, hash)) continue;
     const copy = committedCopy(projectDir, file);
-    if (copy === null ? now.person === "" : markedPart(file.path, copy.blob.toString("utf-8"), marker)?.person === now.person) {
-      return true;
-    }
+    if (copy !== null && markedPart(file.path, copy.blob.toString("utf-8"), marker)?.person === now.person) return true;
   }
   return false;
 }

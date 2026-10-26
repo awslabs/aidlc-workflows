@@ -8,9 +8,9 @@
 // which files AI-DLC wrote and what it wrote, and only AI-DLC's marked part of
 // a shared file is AI-DLC's: those are left out while they hold what the
 // record says. A file the build changed is still named, an AI-DLC file
-// included, and so is the person's part of AGENTS.md. Without git, AGENTS.md is
-// left out only when it holds nothing but AI-DLC's part, so a build that
-// emptied the person's part there goes unsaid (there is no copy to put back).
+// included, and so is the person's part of AGENTS.md. Without git there is no
+// copy to tell which part of AGENTS.md or .gitignore changed, so each is named
+// as before.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
@@ -97,7 +97,10 @@ function write(proj: string, files: Record<string, string>): void {
  * over their files and the build begun on this release; then the night's
  * update, a refresh from a release whose AI-DLC files differ.
  */
-function builtOverUpdate(tree: Tree, options: { type?: "Greenfield" | "Brownfield"; git?: boolean } = {}): string {
+function builtOverUpdate(
+  tree: Tree,
+  options: { type?: "Greenfield" | "Brownfield"; git?: boolean; agents?: string } = {},
+): string {
   const proj = createCodeGenerationProject("off", "off");
   created.push(proj);
   const stateFile = seededStateFile(proj);
@@ -106,6 +109,7 @@ function builtOverUpdate(tree: Tree, options: { type?: "Greenfield" | "Brownfiel
     .replace("- [ ] code-generation", "- [-] code-generation")
     .replace(/^(- \[.\] units-generation) \u2014 EXECUTE$/m, "$1 \u2014 SKIP"), "utf-8");
   write(proj, { "README.md": README, "src/app.js": "export const greet = (name) => \"Hello \" + name;\n" });
+  if (options.agents !== undefined) write(proj, { "AGENTS.md": options.agents });
   const release = join(REPO_ROOT, "dist-release", tree);
   config(proj, release, tree);
   if (options.git ?? true) {
@@ -198,13 +202,26 @@ describe("t-gate-skips-refreshed-own-files", () => {
     namesNone(line, TREES.copilot.refreshed);
   });
 
-  test("copilot without git: AI-DLC's refreshed files and its AGENTS.md are not named; the README is, with no copy", () => {
+  test("copilot without git: AI-DLC's refreshed files are not named; the files it shares, with no copy to tell their parts apart, are", () => {
     const proj = builtOverUpdate("copilot", { git: false });
     write(proj, { "README.md": "# Replaced\n" });
     const line = openGate(proj);
     expect(line).toContain(
-      "The build changed README.md, a file you had before this work started. There is no committed copy to put back.",
+      "The build changed .gitignore, AGENTS.md and README.md, files you had before this work started. " +
+        "There are no committed copies to put back.",
     );
-    namesNone(line, [...TREES.copilot.refreshed, "AGENTS.md", ".gitignore"]);
+    namesNone(line, TREES.copilot.refreshed);
+  });
+
+  test("copilot without git: a build that removed the team's own text from AGENTS.md, leaving AI-DLC's part, is named", () => {
+    const proj = builtOverUpdate("copilot", { git: false, agents: "# Our team's rules\n\nRun the linter first.\n" });
+    const agents = readFileSync(join(proj, "AGENTS.md"), "utf-8");
+    expect(agents).toContain("# Our team's rules");
+    const begin = agents.indexOf("<!-- BEGIN AI-DLC:agents -->");
+    expect(begin).toBeGreaterThan(0);
+    write(proj, { "AGENTS.md": agents.slice(begin) });
+    const line = openGate(proj);
+    expect(line).toContain("The build changed .gitignore and AGENTS.md, files you had before this work started.");
+    namesNone(line, TREES.copilot.refreshed);
   });
 });
