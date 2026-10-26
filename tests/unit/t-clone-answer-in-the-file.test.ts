@@ -74,13 +74,13 @@ function install(proj: string, harness: "codex" | "claude"): void {
 async function beforeCommand(proj: string, harness: "codex" | "claude", opts: RunOptions): Promise<void> {
   const session = opts.session ?? SESSION;
   const payload = { hook_event_name: "PreToolUse", session_id: session, cwd: proj, tool_name: "Bash", tool_input: { command: "next" } };
+  if (harness === "codex") writeSessionPidEntry(proj, process.pid, session);
   const r = harness === "codex"
-    ? (writeSessionPidEntry(proj, process.pid, session),
-      await exec([process.execPath, join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "plan-approval-guard"], {
-        cwd: proj,
-        env: { ...env(proj, opts), CLAUDE_PROJECT_DIR: undefined, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined },
-        input: JSON.stringify({ ...payload, turn_id: "t1" }),
-      }))
+    ? await exec([process.execPath, join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "plan-approval-guard"], {
+      cwd: proj,
+      env: { ...env(proj, opts), CLAUDE_PROJECT_DIR: undefined, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined },
+      input: JSON.stringify({ ...payload, turn_id: "t1" }),
+    })
     : await exec([process.execPath, join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "plan-approval-guard"], {
       cwd: proj, env: env(proj, opts), input: JSON.stringify(payload),
     });
