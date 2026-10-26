@@ -524,7 +524,12 @@ async function helpRelay(typedPrompt: string, projectDir: string, sessionId: str
 async function run(input: string): Promise<number> {
   const notes: string[] = [];
   const forThePerson: Array<() => void> = [];
-  const handover: Handover = { help: null, event: "UserPromptSubmit" };
+  // Besides the notes, respond hands back the help line and the event the host
+  // fired: a host takes a hook's context only under its own event (a box
+  // answer's line named UserPromptSubmit is dropped on Claude Code).
+  const handover: { help: string | null; event: "UserPromptSubmit" | "PostToolUse" } = {
+    help: null, event: "UserPromptSubmit",
+  };
   try {
     return await respond(input, notes, forThePerson, handover);
   } finally {
@@ -542,19 +547,11 @@ async function run(input: string): Promise<number> {
   }
 }
 
-// What respond hands run besides the notes: the help line, and the event the
-// host fired. A host takes a hook's context only under the event it fired (a
-// box answer's line named UserPromptSubmit is dropped on Claude Code).
-interface Handover {
-  help: string | null;
-  event: "UserPromptSubmit" | "PostToolUse";
-}
-
 async function respond(
   input: string,
   notes: string[],
   forThePerson: Array<() => void>,
-  handover: Handover,
+  handover: { help: string | null; event: "UserPromptSubmit" | "PostToolUse" },
 ): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
