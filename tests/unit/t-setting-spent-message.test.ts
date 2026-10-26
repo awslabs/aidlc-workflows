@@ -13,6 +13,10 @@
 // setting riding the approval itself ("approve, and turn learnings off" as one
 // report, written before the approval in the same command). Answers, a routing
 // answer and a question box closed with nothing picked are no decision it backed.
+// The approval's own reply is the exception: a setter run on it right after the
+// approval, before the person says anything else and before a guard turns the
+// agent back, is that reply's setting (t-setting-rides-approval). The cases here
+// that reuse the Approve do it after a guard refused the agent, as in the live run.
 // Each case runs under Guard Policy off and strict: the rule is the proof's, not a
 // guard the policy lowers.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -76,6 +80,11 @@ function said(proj: string, prompt: string): string {
   return id as string;
 }
 
+// The agent went on with the work and a guard refused it, as before the live
+// Copilot CLI run turned learnings off on the Approve: that reply is over.
+const turnedBack = (proj: string) =>
+  appendAuditEntry("PLAN_APPROVAL_BLOCKED", { Guard: "plan-approval", Reason: "no approved plan", Tool: "Edit" }, proj);
+
 const rows = (proj: string, event: string) => readAuditShardEvents(proj).filter((row) => row.event === event);
 const field = (row: { block: string } | undefined, name: string): string | null =>
   row === undefined ? null : auditBlockField(row.block, name);
@@ -112,6 +121,7 @@ describe.each(POLICIES)("Guard Policy %s: a message that gave an approval or a d
     const id = said(proj, "Approve");
     tick();
     approve(proj, slug);
+    turnedBack(proj);
     const before = getField(stateOf(proj), "Learnings");
     const off = setter(proj, ["--learnings", "off", "--message", id]);
     expect(off.status).not.toBe(0);
@@ -134,6 +144,7 @@ describe.each(POLICIES)("Guard Policy %s: a message that gave an approval or a d
     const id = said(proj, "Approve");
     tick();
     approve(proj, slug);
+    turnedBack(proj);
     const before = getField(stateOf(proj), "Summary Confirmation");
     const unnamed = setter(proj, ["--summary-confirmation", "off"]);
     expect(unnamed.status).not.toBe(0);
@@ -141,7 +152,7 @@ describe.each(POLICIES)("Guard Policy %s: a message that gave an approval or a d
     const named = setter(proj, ["--summary-confirmation", "off", "--message", id]);
     expect(named.status).not.toBe(0);
     expect(named.out).not.toContain(id);
-    expect(named.out).toContain("It stays on; run it on the message they ask in.");
+    expect(named.out).toContain("It stays on; carry on with the work.");
     expect(named.out).not.toContain("because you said");
     expect(getField(stateOf(proj), "Summary Confirmation")).toBe(before);
   });
