@@ -25,6 +25,7 @@ import {
 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { putBackBeforePick } from "./aidlc-before-pick.ts";
 import {
   approvalDispositionField,
   rejectedFindingDispositionField,
@@ -5361,8 +5362,13 @@ function verifyReviewerPrecondition(
     // the walk (a cache excluded after the stage started: its baseline entries
     // are nobody's change).
     const aidlcOwned = aidlcOwnedSourceKey(pd);
+    // A file the agent changed before the person picked this work's plan, put
+    // back since (the undo the pick's line named), holds what it held before
+    // the agent's write: nobody's change.
+    const putBack = putBackBeforePick(pd);
     let outsideClaims = [...baselineChanged].filter((pathKey) =>
-      !aidlcOwned(pathKey) && !claimModels.some((claims) => sourceClaimCovers(pathKey, claims))
+      !aidlcOwned(pathKey) && !claimModels.some((claims) => sourceClaimCovers(pathKey, claims)) &&
+      !putBack(pathKey, receipts.currentSourceListing?.get(pathKey))
     );
     // Nor is a file another open piece of work in this folder claims: a second
     // chat building its own work here made it, so it is that work's change.

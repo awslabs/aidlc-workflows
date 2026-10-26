@@ -339,15 +339,15 @@ describe("t342 Construction checkpoint routing", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A live Claude Code run picked the work back up at a waiting Unit checkpoint:
-  // its step has no line of its own, so the pick-up line rides that step itself.
+  // its step has no line of its own, so the pick-up line rides that step's lines for the person.
   test("picking the work back up at a Unit checkpoint says where it picks up", () => {
     const p = fixture();
     cover(p, "alpha", stages);
     const chat = { ...process.env, AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000000342", AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
     const resumed = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, ["--resume"], { env: chat });
-    const directive = resumed.directive as { construction_checkpoint?: { unit: string }; narration?: string } | null;
+    const directive = resumed.directive as { construction_checkpoint?: { unit: string }; change_notices?: string[] } | null;
     expect(directive?.construction_checkpoint?.unit, resumed.stderr).toBe("alpha");
-    expect(String(directive?.narration)).toStartWith("Picking up where we left off, at ");
+    expect(directive?.change_notices?.[0] ?? "").toStartWith("Picking up where we left off, at ");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A live run built two Units one at a time with checkpoints and learnings
@@ -368,15 +368,17 @@ describe("t342 Construction checkpoint routing", () => {
       expect(surfaced.status, `${slug}: ${surfaced.stderr}`).toBe(0);
     }
     expect(surface("requirements-analysis").status).toBe(1);
-    // Approved, the checkpoint's stages no longer wait on the person.
+    // Approved, the checkpoint's stages no longer wait on the person; the stage
+    // approved last still takes a note given with that approval.
     approve(p, "alpha");
-    expect(surface("code-generation").stderr).toContain('slug mismatch: requested "code-generation"');
+    expect(surface("code-generation").status).toBe(0);
+    expect(surface("requirements-analysis").stderr).toContain('slug mismatch: requested "requirements-analysis"');
   });
 
   // Every Unit's turn at a stage writes the one stage diary. A Unit's
-  // checkpoint lists the notes written for that Unit and the notes that name
-  // no Unit, never an earlier Unit's notes again.
-  test("a Unit's checkpoint lists only that Unit's notes and the notes that name no Unit", () => {
+  // checkpoint counts the notes written for that Unit and the notes that name
+  // no Unit, never an earlier Unit's notes again, and offers none of them.
+  test("a Unit's checkpoint counts only that Unit's notes and the notes that name no Unit", () => {
     const p = fixture();
     const surface = learningsSurface(p);
     const dash = "\u2014"; // the diary line's separator, an em dash
@@ -389,18 +391,21 @@ describe("t342 Construction checkpoint routing", () => {
       `- 2026-10-05T11:00:00Z [unit beta] ${dash} beta reads the store through alpha; no second copy`,
       "",
     ].join("\n"));
-    const offered = () => {
+    const counted = () => {
       const result = surface("functional-design");
       expect(result.status, result.stderr).toBe(0);
-      return (JSON.parse(result.stdout).candidates as Array<{ summary: string }>).map((c) => c.summary);
+      const out = JSON.parse(result.stdout) as { memory_entries_total: number; candidates: unknown[]; questions: unknown[] };
+      expect(out.candidates).toEqual([]);
+      expect(out.questions).toEqual([]);
+      return out.memory_entries_total;
     };
     cover(p, "alpha");
     expect(next(p).construction_checkpoint?.unit).toBe("alpha");
-    expect(offered()).toEqual(["alpha keeps its own store", "every Unit logs in UTC"]);
+    expect(counted()).toBe(2);
     approve(p, "alpha");
     cover(p, "beta");
     expect(next(p).construction_checkpoint?.unit).toBe("beta");
-    expect(offered()).toEqual(["every Unit logs in UTC", "beta reads the store through alpha"]);
+    expect(counted()).toBe(2);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the working skeleton's checkpoint offers the learnings of the stages its Unit walked", () => {
@@ -413,7 +418,8 @@ describe("t342 Construction checkpoint routing", () => {
     expect(directive.protocol_modules).toEqual(["construction", "checkpoint", "learnings", "sensors"]);
     for (const slug of stages) expect(surface(slug).status, slug).toBe(0);
     approve(p, "alpha", "skeleton");
-    expect(surface("code-generation").stderr).toContain('slug mismatch: requested "code-generation"');
+    expect(surface("code-generation").status).toBe(0);
+    expect(surface("requirements-analysis").stderr).toContain('slug mismatch: requested "requirements-analysis"');
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // At a Unit's checkpoint Current Stage still names the Unit's first stage,

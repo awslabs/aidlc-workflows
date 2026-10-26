@@ -158,9 +158,10 @@ to `Minimal`. `classic`, `feature`, and `workshop` default to `Standard`. See
 
 ## Fewer stops: learnings and summary confirmation
 
-`workshop` keeps two checks at every stage: the "Anything to add for next
-time?" learnings question and the `Looks correct` summary confirmation. In a
-room that is often more stops than the group needs. Turn both off when the
+`workshop` keeps two checks at every stage: the `Looks correct` summary
+confirmation, and the "Keep that for next time?" learnings question after the
+group corrects the agent. In a room that is often more stops than the group
+needs. Turn both off when the
 work starts:
 
 ```

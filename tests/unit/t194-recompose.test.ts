@@ -625,12 +625,15 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     const nextEnv: Record<string, string | undefined> = { ...chat };
     delete nextEnv.AIDLC_SCOPE_MAPPING;
     const nextIn = () => (runOrchestrateNext(toolIn(proj, "aidlc-orchestrate.ts"), proj, [], { env: nextEnv }).directive ??
-      {}) as { kind?: string; narration?: string };
+      {}) as { kind?: string; narration?: string; change_notices?: string[] };
     const said = nextIn();
     expect(said.kind).toBe("run-stage");
-    expect(String(said.narration)).toContain("You can return to Code Generation any time.");
-    expect(String(said.narration)).toMatch(/^Moved back to [A-Z][^.;`]*\. You can return to Code Generation/);
-    expect(String(nextIn().narration ?? "")).not.toContain("To return to Code Generation");
+    expect(said.change_notices ?? []).toContainEqual(expect.stringMatching(
+      /^Moved back to [A-Z][^.;`]*\. You can return to Code Generation any time\.$/,
+    ));
+    expect(String(said.narration)).not.toContain("Moved back to");
+    const again = nextIn();
+    expect(`${(again.change_notices ?? []).join(" ")} ${again.narration ?? ""}`).not.toContain("return to Code Generation");
     expect(run(proj, "aidlc-jump.ts", ["execute", "--target", "code-generation", "--direction", "forward"], chat).status).toBe(0);
     expect(readState(proj)).toContain("- **Current Stage**: code-generation");
   });
@@ -672,8 +675,8 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     const nextEnv: Record<string, string | undefined> = { ...chat };
     delete nextEnv.AIDLC_SCOPE_MAPPING;
     const said = (runOrchestrateNext(toolIn(proj, "aidlc-orchestrate.ts"), proj, [], { env: nextEnv }).directive ??
-      {}) as { narration?: string };
-    expect(String(said.narration)).toContain("You can return to Code Generation any time.");
+      {}) as { change_notices?: string[] };
+    expect((said.change_notices ?? []).join(" ")).toContain("You can return to Code Generation any time.");
   });
 
   test("backward jump resets a promoted stage's [S/x] like any on-plan stage", () => {

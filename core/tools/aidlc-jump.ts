@@ -203,10 +203,13 @@ export function backwardJumpNotice(
 }
 
 // The redo `next` names for Reverse Engineering owed behind the stage the
-// person is on (they said this is existing code) says what comes next. Said
-// here, where it starts, so a skip asked for before it never hears it.
+// person is on (they said this is existing code) says what comes next. Kept
+// here, where it starts, so a skip asked for before it never hears it. It is
+// said before the person next replies, which is at that stage's gate while it
+// still waits on their approval, so it reads true before the documenting, at
+// the gate, and after a revise.
 export function reverseEngineeringRedoNotice(from: { slug: string; name: string; plugin?: string }): string {
-  return `Next I'll document the code, then we're back at ${stageLabel(from, from.slug) ?? "where we were"}.`;
+  return `Once you approve the code's documentation, we're back at ${stageLabel(from, from.slug) ?? "where we were"}.`;
 }
 
 if (import.meta.main) {

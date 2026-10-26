@@ -36,7 +36,7 @@ This applies to **every** structured-question site, including but not limited to
 - the ladder prompt (autonomy mode after the walking skeleton);
 - halt-and-ask on Bolt failure (Retry / Skip / Abort);
 - consolidated-summary confirmation before artifact generation;
-- the §13 learnings gate (keep / heading / promote-to-team).
+- the section 13 learnings question after a correction (keep for this project, for the team, or not).
 
 (Literal ` ```question ` fences legitimately remain in framework documentation
 like THIS file and the stage-protocol because they are authoring specs, not chat
@@ -52,6 +52,11 @@ shipped config flags (`[tools] experimental_request_user_input` +
 `[features] default_mode_request_user_input`). It is the PRIMARY track; the
 prose track below is the permanent floor for sessions where the tool is
 unavailable (flag off, older Codex, headless exec).
+
+On some models Codex also offers `request_user_input_async`. AI-DLC's questions
+use `request_user_input`, not that one: you end the turn at every question, and
+Codex takes an async question off the screen when the turn ends, so the person
+would have no box to answer.
 
 ### Track 1 — request_user_input (when the tool is available)
 

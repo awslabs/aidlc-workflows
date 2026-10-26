@@ -478,8 +478,9 @@ completion sequence in this order:
 
 1. Present Step 5's announcement and per-repo summary, including any NARROWER
    warning.
-2. When `directive.protocol_modules` lists `learnings`, ask its questions and
-   end the turn; continue once the answer is logged.
+2. When `directive.protocol_modules` lists `learnings`, take the learnings
+   step: when it has a question for the person, ask it and end the turn;
+   continue once the answer is logged.
 3. Open the approval gate exactly once with
    `{{INVOKE}} engine orchestrate report --stage reverse-engineering --result awaiting-approval`.
 4. Ask Step 5's approval question.
@@ -530,6 +531,6 @@ Upstream targets: none.
 
 When `directive.protocol_modules` lists `learnings`, follow
 `stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
-working and run the ritual before the approval gate, applying its bootstrap,
-`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
-skip both the diary and the ritual.
+working, and take the learnings step before the approval gate; that module says
+when it asks the person anything. When the module is absent, skip both the diary
+and the step.

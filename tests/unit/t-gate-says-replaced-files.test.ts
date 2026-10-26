@@ -483,9 +483,12 @@ describe("t-gate-says-replaced-files at a Unit checkpoint", () => {
     const approved = tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "approve", "--session", CHAT_A, "--user-input", "approve it as it is"]);
     expect(approved.approved, JSON.stringify(approved)).toBe(true);
     const following = next(p);
-    expect(String(following.narration ?? ""), JSON.stringify(following).slice(0, 600)).toContain(
+    const told = (step: Record<string, unknown>): string =>
+      `${Array.isArray(step.change_notices) ? step.change_notices.join(" ") : ""} ${String(step.narration ?? "")}`;
+    expect(following.change_notices, JSON.stringify(following).slice(0, 600)).toContain(
       "The build changed README.md, a file you had before this work started. There is no committed copy to put back.",
     );
-    expect(String(next(p).narration ?? "")).not.toContain("you had before this work started");
+    expect(String(following.narration ?? "")).not.toContain("you had before this work started");
+    expect(told(next(p))).not.toContain("you had before this work started");
   });
 });

@@ -158,18 +158,18 @@ resolve that gap with the human before claiming a pass.
 Only a verified checkpoint can be approved. A skeleton always needs a real
 human approval. An ordinary Unit needs one when `human_required` is true
 (`unset`/`gated`); under an explicit autonomous grant the conductor may approve
-the verified ordinary Unit automatically. At a human checkpoint, run the §13
-learnings ritual for the represented stages only when
-`directive.protocol_modules` lists `learnings`. With the module listed,
-consolidate relevant candidates into one Unit learning question (log it and its
-answer with `--stage "<directive.stage>"`) and persist only
-the human's explicit selections through each owning stage's learning tools, then
-open the checkpoint approval with `ask` below as a separate question and turn. During automatic
-execution, retain candidates in the diaries for the next human checkpoint or
-final handoff only when `directive.protocol_modules` lists `learnings`; do not
-infer acceptance, persist unapproved rules, or fabricate a “nothing to add” answer.
-When the module is absent, keep no diary and ask no learning question; go straight
-to the checkpoint approval procedure when a human is required. Only after `verify`
+the verified ordinary Unit automatically. At a human checkpoint, take the section
+13 learnings step for the represented stages only when
+`directive.protocol_modules` lists `learnings`. With the module listed, it asks
+only about a correction the person made in those stages (the module says when):
+log each question and its answer with `--stage "<directive.stage>"`, persist
+only what they keep through the owning stage's learning tools, then open the
+checkpoint approval with `ask` below as a separate question and turn. During
+automatic execution, a correction they made waits for the next human checkpoint
+or final handoff, only when `directive.protocol_modules` lists `learnings`; do
+not infer their answer or persist anything they did not keep. When the module is
+absent, keep no diary and ask no learning question; go straight to the
+checkpoint approval procedure when a human is required. Only after `verify`
 reports `verified: true` and the current directive has `ready: true`, run `ask`.
 It refuses an unready or unverified checkpoint. Before presenting **Approve** /
 **Request Changes**, bind the question to the current checkpoint proof and

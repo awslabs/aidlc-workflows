@@ -169,10 +169,11 @@ under an optional `aidlc-shared/` and per-agent subdirectories. See
 also keeps a committed `memory.md` alongside its artifacts (e.g.
 `<record>/inception/requirements-analysis/memory.md`). It is the
 stage's observation diary — created by the engine from a template when it emits
-the run-stage directive, maintained by the orchestrator during the stage, and
-read by the §13 Learnings Ritual at the approval gate. It is never hand-edited.
-See [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) for how the
-diary feeds the learning loop.
+the run-stage directive and maintained by the orchestrator during the stage, as
+the stage's record of the agent's reasoning; nothing in it is offered to you as
+something to keep. It is never hand-edited. See
+[Rules and the Learning Loop](09-rules-and-the-learning-loop.md) for the
+learning loop, which keeps the corrections you make.
 
 **Code lives in sibling repos, not the record dir.** The `aidlc/` tree holds only
 method, state, audit, and artifacts — never application code. Generated code lands

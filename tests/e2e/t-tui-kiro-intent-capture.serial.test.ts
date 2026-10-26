@@ -304,7 +304,8 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         expect(answerState.guideModeChosen).toBe(true);
         expect(answerState.answeredQuestions.size).toBeGreaterThan(0);
         expect(answerState.confirmedSummaries.size).toBeGreaterThanOrEqual(1);
-        expect(answerState.learningsAnswered).toBeGreaterThanOrEqual(1);
+        // The person corrected nothing, so the learnings step asked nothing.
+        expect(answerState.learningsAnswered).toBe(0);
         expect(answerState.approvalsAnswered).toBeGreaterThanOrEqual(1);
 
         // --- assert ON DISK (the Claude twin's surface, verbatim) -------------

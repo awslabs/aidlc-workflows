@@ -1221,9 +1221,17 @@ export function stageValidityNote(invocation: string, stage: string | null): str
     (stage ? ` If their next reply says yes to it, run \`${invocation} next --stage ${stage}\` and follow the step ` +
       "it returns." : "");
 }
+// The one order for a line the person must hear, in the step and in Kiro CLI's
+// hand-over of a step it ran itself. The last message before they reply is the
+// one every host shows: Copilot CLI headless writes one message a turn and
+// `claude -p` prints only the last, so a line said as its step came was lost
+// there (say-once-lands' measure).
+export const SAY_ONCE_BEFORE_THEY_REPLY =
+  "once, as written (only a verb's tense may change to fit when you say it), as your own sentence with nothing in " +
+  "front of it, in the last message you write before they reply (when you end your turn with a question, the text " +
+  "you write just before it)";
 export const CHANGE_NOTICES_NOTE =
-  "Say each change_notices line to the person once, word for word, as your own sentence with nothing in front of " +
-  "it, and add nothing about why.";
+  `Say each change_notices line to the person ${SAY_ONCE_BEFORE_THEY_REPLY}, and add nothing about why.`;
 
 // Every question the engine asks: whose it is, and what a pick does. A choice's
 // command answers the question; a routing command returns the next step, a
@@ -1405,8 +1413,7 @@ export type ReviewVerdictStep =
   | { kind: "person-wrote"; next: string }
   | { kind: "next-pass"; request: string }
   | { kind: "unit"; next: string; complete?: string }
-  | { kind: "learnings"; brief: string }
-  | { kind: "gate"; report: string; summary: boolean; brief: string }
+  | { kind: "learnings" | "gate"; report: string; summary: boolean; brief: string }
   | {
     kind: "reply-stands";
     stage: string;
@@ -1430,8 +1437,10 @@ export function reviewVerdictNote(step: ReviewVerdictStep): string {
       return `No further review pass follows: ${step.complete === undefined ? "" : `record this Unit's completion with \`${step.complete}\`, then `}` +
         `run \`${step.next}\` and follow the step it returns, in this turn.`;
     case "learnings":
-      return `${NO_FURTHER_PASS}say the completion summary, then run the learnings ritual and ask its questions, ` +
-        `which ends the turn. The approval gate comes after their answer, with the review brief that \`${step.brief}\` prints.`;
+      return `${NO_FURTHER_PASS}${step.summary ? "say the completion summary, then " : ""}take the learnings step ` +
+        "(stage-protocol-learnings.md): when it has a question for the person, ask it and end the turn there. After " +
+        `their answer, or now when it has none, run \`${step.report}\`, then \`${step.brief}\`, printing its output ` +
+        "as the review brief, and ask the approval question.";
     case "gate":
       return `${NO_FURTHER_PASS}${step.summary ? "say the completion summary, then " : ""}run ` +
         `\`${step.report}\`, then \`${step.brief}\`, printing its output as the review brief, and ask the approval ` +

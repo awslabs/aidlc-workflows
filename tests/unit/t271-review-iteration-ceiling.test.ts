@@ -564,21 +564,23 @@ describe("t271 review iteration ceiling", () => {
       expect(turnMarkersShowConversational(proj)).toBe(false);
     });
 
-    test("with the learnings ceremony on, the learnings question comes first and is the only step", () => {
+    // The learnings step asks only after a correction, which is the agent's to
+    // read, so the step names it before the gate's own report.
+    test("with the learnings ceremony on, the learnings step comes first, then the gate's report", () => {
       const { step } = verdictNote("-", "READY");
-      expect(step).toContain("learnings ritual");
-      expect(step).not.toContain("--result");
-      verifiesFirst(step, "completion summary", "learnings ritual", BRIEF_FIRST);
+      expect(step).toContain("take the learnings step");
+      expect(step).toContain("report --stage requirements-analysis --result awaiting-approval");
+      verifiesFirst(step, "completion summary", "take the learnings step", "report --stage", BRIEF_FIRST);
     });
 
-    test("an open gate is shown again, and a revision's gate with --result revised", () => {
+    test("an open gate is shown again, and a revision's gate with --result revised after the learnings step", () => {
       const open = verdictNote("?", "READY").step;
       expect(open).toContain("report --stage requirements-analysis --result awaiting-approval");
       verifiesFirst(open, "report --stage", BRIEF_FIRST);
       const revised = verdictNote("R", "READY").step;
       expect(revised).toContain("report --stage requirements-analysis --result revised");
-      verifiesFirst(revised, "report --stage", "aidlc-review-brief.ts review --stage requirements-analysis --why revision");
-      expect(revised).not.toContain("learnings");
+      verifiesFirst(revised, "take the learnings step", "report --stage",
+        "aidlc-review-brief.ts review --stage requirements-analysis --why revision");
     });
 
     // The step's brief command runs as named: it prints the gate's brief, adds

@@ -48,9 +48,9 @@ The chain **selection** is resolved **once**, when the framework compiles your s
 
 ## The learning loop
 
-The learning loop is the mechanism that turns a one-time correction into a durable rule. Most stage runs add nothing — and that is healthy. The loop fires only when something surfaced during the stage that you decide is worth keeping.
+The learning loop is the mechanism that turns a one-time correction into a durable rule. Most stage runs add nothing, and that is healthy. The loop comes in only when you corrected the agent in a stage, or asked it to keep something for next time.
 
-When the learnings ritual is on, the loop has four user-visible moments: the agent keeps a diary while the stage runs, the gate surfaces candidates, you confirm what to keep, and the framework writes the kept items for next time. When it is off, neither the diary nor the gate ritual runs.
+When learnings are on, the loop has three moments you see: you correct the agent (or ask it to keep something), it asks once whether to keep that correction for next time, and the framework writes what you keep. With nothing corrected you are asked nothing: the stage goes from its summary straight to its approval question. When learnings are off, none of this runs and no diary is kept.
 
 ### The memory.md diary
 
@@ -61,95 +61,64 @@ When the learnings ritual is on, the framework keeps a running observation log a
 - **Tradeoffs** — alternatives considered and the reason for the pick
 - **Open questions** — anything to confirm before the next run, or context that's still uncertain
 
-Each entry carries a timestamp. The language model writes observations to `memory.md` during the stage and, at admission time, the orchestrator performs the section-level conflict comparison described below. Deterministic tooling extracts the candidates and writes the selections you explicitly keep at the gate.
+Each entry carries a timestamp. The diary is the stage's record of the agent's own reasoning: it is never offered to you as something to keep.
 
-### The gate ritual
+### The question after a correction
 
-Before each approval gate, the framework runs the learning gate (the protocol calls it the §13 ritual). It collects candidates from two sources and presents them as one confirm-list:
+Before the approval question of a stage where you corrected the agent, it asks about each correction that would hold next time, in your words:
 
-1. **Your agent's diary, surfaced verbatim.** A deterministic tool reads `memory.md` and offers each entry under Interpretations, Deviations and Tradeoffs as a candidate, with its source heading attached. No paraphrase, no "interesting" filtering: the entries are shown as written. Each entry is one line in the diary. Open questions are never offered: they stay in the diary as things to look into, not rules to install.
-2. **A question that always asks "Anything to add for next time?"** Choose **Add a note**, say the observation in your own words, and pick which of the four headings it belongs under. That heading pick is the only classification asked of you.
+- you asked for changes at the stage's approval (Request Changes) and the agent made them: the question comes before the approval is asked again;
+- or you corrected, in your own words, what the agent did or assumed while it worked.
 
-You tick the candidates you want to keep, or **Keep none of these**, the first choice, to keep none. If `memory.md` was empty for the stage, no one asks you to attest to whether the diary was kept: the framework records that quietly and moves on, and you are asked only "Anything to add for next time?".
+A one-off fix (a typo, a wrong name, one value) is not asked about. Whether you corrected the agent, and whether that would hold next time, is the agent's reading of your words, as it reads any reply; no list of words decides it. Each correction is asked about once.
+
+When you ask the agent outright to keep something ("approve, and next time use the shared fixtures"), it keeps it with no question and tells you in one line where it went: this project's rules unless you named the team, so you can move it or take it out.
 
 ### What it looks like
 
-From a Claude Code run at the Intent Capture gate (shortened, drawing characters shown as plain text). The diary held one Interpretation and one Deviation, so the first question offers both:
+At the Intent Capture approval, after you told the agent to call a stock item a SKU (shortened, drawing characters shown as plain text):
 
 ```text
- Keep notes
- Which notes from this step should I keep as practices for future work? (select all that apply)
- > 1. [ ] Keep none of these
-          Don't save any of these notes
-   2. [ ] Treated store customers as the people the first release helps, not as a stakeholder group
-          -> project.md ## Corrections (say if it should go to team.md instead)
-   3. [ ] Added a ninth question for the vision document's open per-warehouse question
-          -> project.md ## Corrections (say if it should go to team.md instead)
+ Keep for next time
+ You asked me to call a stock item a SKU in every document, never a product. Keep that for next time?
+ > 1. Yes, for this project
+   2. Yes, for the team
+   3. No
 ```
 
-Then the question that is always asked:
-
-```text
- Anything to add for next time?
- > 1. Nothing to add
-      Go on to the approval question
-   2. Add a note
-      Tell me something to remember for future work
-```
-
-After **Add a note** and the note "Call a stock item a SKU in every document, never a product.", the agent asks which heading it belongs under:
-
-```text
- Note type
- Which kind of note is "Call a stock item a SKU in every document, never a product"? I'll file it
- under the right practice heading from your pick.
- > 1. Interpretation
-      How to read or name something where it could be ambiguous
-   2. Deviation
-      A place where we deliberately do things differently
-   3. Tradeoff
-      A choice between alternatives and why
-   4. Open question
-      Something to confirm later (kept as a reminder, not a practice)
-```
-
-With candidate 2 kept and the note filed as an Interpretation, `aidlc/spaces/default/memory/project.md` ends with two practice lines (the agent words a kept candidate as a practice; your note is kept as you wrote it):
+With **Yes, for this project**, `aidlc/spaces/default/memory/project.md` ends with the practice line the agent words from your correction:
 
 ```text
 ## Corrections
 ...
-- Treat online store customers as the people the first release helps, not as a stakeholder group, unless the user names them as stakeholders (learned 2026-10-13) <!-- cid:... -->
 - Call a stock item a SKU in every document, never a product. (learned 2026-10-13) <!-- cid:... -->
 ```
 
-and the audit shard gets one row for each, here the note's:
+and the audit shard gets a row for it:
 
 ```text
 ## Rule Learned
 **Timestamp**: 2026-10-13T10:41:30Z
 **Event**: RULE_LEARNED
 **Stage**: intent-capture
-**Candidate-ID**: u1
+**Candidate-ID**: c1
 **Content-Hash**: 3a3aa8df...
 **Destination**: <project-dir>/aidlc/spaces/default/memory/project.md
 **Heading**: ## Corrections
 **Source**: user_addition
 ```
 
-Asked at that gate which knowledge it had used, the agent said the two notes were written after the stage's documents were finished and would be in force from the next stage on, as [Applies from the next applicable stage](#applies-from-the-next-applicable-stage) describes.
+The kept line is in force from the next stage on, as [Applies from the next applicable stage](#applies-from-the-next-applicable-stage) describes.
 
 ### Where a kept learning goes
 
-You never pick a file path. The heading determines the destination:
+You never pick a file path or a heading. A correction you keep lands as a practice in `aidlc/spaces/<active-space>/memory/project.md` (**Yes, for this project**) or `memory/team.md` (**Yes, for the team**), under the topical heading the agent picks for it (`## Corrections`, `## Testing Posture`, `## Forbidden`).
 
-- Interpretations, Deviations, and Tradeoffs land as practices in `aidlc/spaces/<active-space>/memory/project.md` (a confirmed learning *is* a practice) under topical headings.
-- Open questions don't promote — they're research items, not rules to install.
-
-The default scope is **project**. A one-click "promote to team" affordance widens a kept learning from `memory/project.md` to `memory/team.md` when the lesson applies beyond this one project. There is no widen-to-org path: org rules are framework-shipped or organization-authored through a separate process, so the learning loop never writes at org scope. Defaulting to the narrowest scope keeps one project's surprise from becoming an organization-wide rule by accident.
+The default scope is **project**: **Yes, for the team** widens a kept learning to `memory/team.md` when the lesson applies beyond this one project. There is no widen-to-org path: org rules are framework-shipped or organization-authored through a separate process, so the learning loop never writes at org scope. Defaulting to the narrowest scope keeps one project's surprise from becoming an organization-wide rule by accident.
 
 A confirmed learning *is* a practice: it lands in the same active-space memory files (`aidlc/spaces/<active-space>/memory/project.md`, `team.md`) that practices-discovery affirms — there is no separate rolling `*-learnings.md` surface. The two paths into those files differ by lifecycle: practices-discovery affirms a whole section deterministically, while the learning loop appends one dated, topically-headed entry at a time through the gate.
 
-When a kept learning is a **sensor binding** rather than a rule (you want a new deterministic check to fire on a stage's output), the framework does a two-write install atomically: it scaffolds the sensor manifest and appends the new sensor's id to the originating stage's import list. The diary, the gate confirmation, and the resulting file write each leave an audit row (`RULE_LEARNED` or `SENSOR_PROPOSED`), so no rule is ever installed silently.
+When a kept learning is a **sensor binding** rather than a rule (you want a new deterministic check to fire on a stage's output), the framework does a two-write install atomically: it scaffolds the sensor manifest and appends the new sensor's id to the originating stage's import list. The question, your answer, and the resulting file write each leave an audit row (the write's is `RULE_LEARNED` or `SENSOR_PROPOSED`), so no rule is ever installed silently.
 
 ### Admission-time conflict checks
 
@@ -173,11 +142,9 @@ Sam runs `/aidlc feature` on a banking project. The workflow lands on `requireme
 
 Nothing in the framework predicted this. There's no rule about the bank's own terminology and no sensor catching generic-versus-domain term clashes. The agent simply hit an ambiguity.
 
-**1. The diary records it.** The agent appends one line under `## Interpretations` in `<record>/inception/requirements-analysis/memory.md`: its time, a short summary ("Stakeholder note used 'transaction'; interpreted as database-transaction") and the context (Sam corrected it to mean the payment being processed, not the database write). Each entry is a single line; a note wrapped onto a second line would be offered as two candidates.
+**1. Sam's correction is what counts.** Sam's words ("transaction" means the payment being processed) correct what the agent assumed, in a way that holds for the whole project. The agent's own diary line about it stays in the stage's record; nothing is offered from it.
 
-No rule is installed yet: this is just the agent's diary.
-
-**2. The gate surfaces it.** The stage finishes. Before the approval gate, the learning gate reads `memory.md` and shows the interpretation line as a candidate. It also asks "Anything to add for next time?" Sam ticks the transaction-terminology candidate (Interpretation → lands in `memory/project.md`) and adds a free-text note: "the agent kept defaulting to AWS account terminology — should always say 'bank customer' for the banking customer entity." Sam picks the Deviation heading for that addition, which routes it to the same `memory/project.md` file.
+**2. The step asks once.** The stage finishes. Before the approval question the agent asks: "You asked me to read 'transaction' as the payment being processed, not a database write. Keep that for next time?" Sam picks **Yes, for this project**. At the approval question Sam also says "approve, and next time always say 'bank customer' for the banking customer entity": the agent keeps that as well, with no second question, and says in one line that it went to this project's rules in `memory/project.md`.
 
 **3. The conflict check runs.** The orchestrator compares both entries against the org practices (`memory/org.md`) as a section-level LLM check. Neither the "transaction" nor the "bank customer" terminology is covered by an org rule, so both pass. The deterministic tool then writes both lines into `memory/project.md` with provenance, and the audit log records a `RULE_LEARNED` event for each.
 
@@ -185,7 +152,7 @@ No rule is installed yet: this is just the agent's diary.
 
 **5. Later workflows receive them too.** Later that day Sam runs `/aidlc bugfix`. `memory/project.md` is in every stage's selection (the org, team, and project files attach to every stage), so from stage one of the bugfix workflow, the agent knows "transaction" means a payment and the customer entity is the "bank customer."
 
-The cost was paid once — one gate confirmation, one file write — and it pays back on every future workflow for the price of one more file in the directory walk.
+The cost was paid once (one question, one file write), and it pays back on every future workflow for the price of one more file in the directory walk.
 
 ---
 

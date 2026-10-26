@@ -80,12 +80,13 @@ const NARRATION_TOKENS = [
 ];
 
 const LEARNINGS_QUESTION_TOKENS = [
-  "at least two explicit options",
-  "Nothing to add",
-  "Add a note",
-  "one-option",
-  "even when `surface` returns zero candidates",
-  "never infer `Nothing to add`",
+  "take the **section 13 learnings step**",
+  "otherwise it asks nothing and you go straight to step 4",
+  "--correction '<their change>'",
+  "`--correction-file`",
+  "`Yes, for this project` / `Yes, for the team` / `No`",
+  "--question-kind learnings-note",
+  "Never infer their answer.",
 ];
 
 // The in-session configuration steps ride the engine's own --config print
@@ -745,7 +746,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     }
   });
 
-  test("every shipped conductor SKILL requires a valid two-option learning question", () => {
+  test("every shipped conductor SKILL asks the learnings question only after a correction, with its three options", () => {
     const missing: string[] = [];
     for (const rel of skills) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");

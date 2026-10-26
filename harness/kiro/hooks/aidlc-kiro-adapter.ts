@@ -70,6 +70,7 @@ import {
   unrecordedKiroCliSteers,
 } from "../tools/aidlc-lib.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
+import { SAY_ONCE_BEFORE_THEY_REPLY } from "../tools/aidlc-directive.ts";
 import { ACTIVE_MEMORY_DIR, refreshActiveMemory } from "../tools/aidlc-includes.ts";
 import { aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 
@@ -550,27 +551,35 @@ const PRE_DISPATCH_FLAGS = new Set([
 // question's numbered rendering (the engine's, with its Other line) or an
 // error's message. The warning said once per chat is left to the agent's rule,
 // and a question that is the agent's own work is no question for the person.
+// On a step the turn goes on from, its notices keep the step's own order (said
+// before the person replies), so the hand-over never says one twice.
 function personLead(step: unknown): string | null {
   if (step === null || typeof step !== "object" || Array.isArray(step)) return null;
   const d = step as Record<string, unknown>;
   const lines: string[] = [];
-  const push = (value: unknown): void => {
-    if (typeof value === "string" && value.trim().length > 0) lines.push(value.trim());
+  const notices: string[] = [];
+  const push = (value: unknown, into = lines): void => {
+    if (typeof value === "string" && value.trim().length > 0) into.push(value.trim());
   };
   push(d.narration);
-  if (Array.isArray(d.change_notices)) for (const notice of d.change_notices) push(notice);
+  if (Array.isArray(d.change_notices)) for (const notice of d.change_notices) push(notice, notices);
   if (d.kind === "ask" && d.agent_work !== true) {
+    lines.push(...notices);
     push(typeof d.numbered_prose_question === "string" ? d.numbered_prose_question : d.question);
     if (lines.length === 0) return null;
     return "Say this to the person word for word, then end your turn (the step below is for when they reply):\n\n" +
       lines.join("\n\n");
   }
   if (d.kind === "error") {
+    lines.push(...notices);
     push(d.message);
     return lines.length === 0 ? null : `Say this to the person word for word, then stop:\n\n${lines.join("\n\n")}`;
   }
-  if (lines.length === 0) return null;
-  return `Say this to the person first, word for word, with nothing in front of it:\n\n${lines.join("\n\n")}`;
+  const lead = lines.length === 0
+    ? []
+    : [`Say this to the person first, word for word, with nothing in front of it:\n\n${lines.join("\n\n")}`];
+  if (notices.length > 0) lead.push(`Say this to the person ${SAY_ONCE_BEFORE_THEY_REPLY}:\n\n${notices.join("\n\n")}`);
+  return lead.length === 0 ? null : lead.join("\n\n");
 }
 
 function shouldPreDispatchNext(args: string[], cwd: string): boolean {

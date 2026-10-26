@@ -199,12 +199,12 @@ off Guard Policy such a change is kept instead: the batch stays ready, and `ask`
 and `approve` return the one line to tell the person in `notices`. Automatic
 completion uses the recorded autonomous policy, needs no `ask`, and omits `--user-input`.
 
-At a human batch checkpoint, run the §13 learning-selection question only when
-`directive.protocol_modules` lists `learnings`. With the module listed,
-consolidate the relevant Unit diaries into that question and persist only explicit
-human selections, then open the batch approval with `ask` below as a separate question and turn.
-Automatic batches retain pending candidates for the next human checkpoint or
-final handoff only when `directive.protocol_modules` lists `learnings`. When the
+At a human batch checkpoint, take the section 13 learnings step only when
+`directive.protocol_modules` lists `learnings`. With the module listed, it asks
+only about a correction the person made for the batch's Units (the module says
+when); persist only what they keep, then open the batch approval with `ask` below as a separate question and turn.
+In automatic batches, a correction they made waits for the next human checkpoint or
+final handoff, only when `directive.protocol_modules` lists `learnings`. When the
 module is absent, keep no diary and ask no learning question; go straight to the
 batch approval procedure when a human is required. Bookkeeping settlement never
 repeats an already handled ritual.

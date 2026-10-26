@@ -492,7 +492,8 @@ function bare(p: string, session: string, after: () => void = () => {}) {
   const result = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, [], { env });
   expect(result.directive, result.out).not.toBeNull();
   return result.directive as {
-    kind: string; stage?: string; message?: string; narration?: string; construction_checkpoint?: { unit: string };
+    kind: string; stage?: string; message?: string; narration?: string; change_notices?: string[];
+    construction_checkpoint?: { unit: string };
   };
 }
 
@@ -525,7 +526,7 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
     expect(shown.message).toContain('"core", "main"');
     expect(shown.message).toContain("end your turn");
     expect(shown.message).toContain("answer --stage functional-design --details");
-    expect(shown.narration).toContain("Picking up where we left off");
+    expect(String(shown.change_notices)).toContain("Picking up where we left off");
   });
 
   // Under "Continue automatically" the person who is there still answers the

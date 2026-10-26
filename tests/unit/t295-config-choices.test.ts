@@ -940,6 +940,82 @@ describe("t295 flags section", () => {
     expect(existsSync(shared)).toBe(false);
   });
 
+  // A local file keeps the review freeze check off while a piece of work is open.
+  function heldOffLocally(): {
+    project: string;
+    flags: (...args: string[]) => ReturnType<typeof run>;
+    local: string;
+    shared: string;
+    recorded: string;
+  } {
+    const project = install();
+    const flags = (...args: string[]) => run(
+      ["config", "flags", "--project-dir", project, ...args],
+      project,
+      runtimeEnv(),
+    );
+    const intents = join(project, "aidlc", "spaces", "default", "intents");
+    mkdirSync(join(intents, "held-off"), { recursive: true });
+    writeFileSync(join(intents, "active-intent"), "held-off\n");
+    writeFileSync(
+      join(intents, "held-off", "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Project Information\n- **Scope**: classic\n\n## Current Status\n- **Status**: Running\n",
+    );
+    expect(flags("--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes").status).toBe(0);
+    const local = join(project, "aidlc.settings.local.json");
+    return { project, flags, local, shared: join(project, "aidlc.settings.json"), recorded: readFileSync(local, "utf-8") };
+  }
+
+  const STILL_OFF_LOCALLY = "The review freeze check (it stops edits to work you already approved) is still off: " +
+    "the switch is recorded in aidlc.settings.local.json. To clear it there: " +
+    "bun .claude/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --local --yes";
+
+  test("a clear aimed at the shared file with the message it was asked in says the file that keeps the check off", () => {
+    const { flags, local, shared, recorded } = heldOffLocally();
+    // The command the agent ran in a live run: the id it is handed for every
+    // typed message changes nothing a clear does, and neither does --verbose
+    // or the harness the project has.
+    for (const extra of [["--message", "e60e556c"], ["--verbose"], ["--harness", "claude"]]) {
+      const named = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes", "--project", ...extra);
+      expect(named.status, named.stdout + named.stderr).toBe(0);
+      expect(named.stdout.trim(), extra.join(" ")).toBe(STILL_OFF_LOCALLY);
+      expect(existsSync(shared), extra.join(" ")).toBe(false);
+      expect(readFileSync(local, "utf-8")).toBe(recorded);
+    }
+    const other = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--project", "--harness", "codex", "--yes");
+    expect(other.status).toBe(2);
+    expect(other.stdout + other.stderr).toContain("project uses claude; refusing codex");
+  });
+
+  test("a clear that also changes something else names the file that still keeps the check off", () => {
+    const { project, flags, local, recorded } = heldOffLocally();
+    // The second writes nothing: the shared file already holds it.
+    for (const extra of [["--question-retention-days", "3"], ["--question-retention-days", "3"], ["--harness", "claude"]]) {
+      const beside = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--project", ...extra, "--yes");
+      expect(beside.status, beside.stdout + beside.stderr).toBe(0);
+      expect(beside.stdout, extra.join(" ")).toContain(STILL_OFF_LOCALLY);
+      expect(readFileSync(local, "utf-8")).toBe(recorded);
+    }
+    expect(resolvedFlags(project)?.questionRetentionDays).toBe(3);
+  });
+
+  test("from a chat, a clear naming no file and the message it was asked in leaves the shared file as it is", () => {
+    const { flags, shared } = heldOffLocally();
+    expect(flags("--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--project", "--yes").status).toBe(0);
+    const teams = readFileSync(shared, "utf-8");
+    const plain = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes");
+    expect(plain.status, plain.stdout + plain.stderr).toBe(0);
+    expect(flags("--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes").status).toBe(0);
+    const named = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--message", "e60e556c", "--yes");
+    expect(named.status, named.stdout + named.stderr).toBe(0);
+    expect(named.stdout).toBe(plain.stdout);
+    expect(named.stdout).toStartWith(
+      "The project's shared settings in aidlc.settings.json keep the review freeze check " +
+        "(it stops edits to work you already approved) off for everyone on this project. Changing that file changes it.",
+    );
+    expect(readFileSync(shared, "utf-8")).toBe(teams);
+  });
+
   test("a clear that reaches the machine file says which files changed when that file cannot be written", () => {
     // A read-only folder is the way to make the machine step fail here.
     if (process.platform === "win32" || process.getuid?.() === 0) return;

@@ -3,19 +3,23 @@
 // A person move in a scope run, with no model (tests/harness/scope-run.ts),
 // between a stage's finished review and its approval gate. A `next` there, or a
 // new chat's `/aidlc --resume`, brings the step the review's verdict named: the
-// learnings question when it was never asked (a step that ends the turn),
-// otherwise the gate's own report. It never hands the stage again, with its
+// gate's own report, after the learnings question only where the person
+// corrected the agent in that stage (the step asks nothing otherwise), and never
+// that question again once answered. It never hands the stage again, with its
 // "Now working on" line for written, reviewed work and a second review request
 // the stage's one pass refuses, and a new chat says where it picks up. Classic's
 // six Inception reviewer stages (Requirements Analysis to Contract Design), and
 // bugfix's Requirements Analysis, which runs with learnings off; there a
-// revision's re-review goes on to the revised gate. A note the person asked to
-// add at the learnings question and that is not written yet keeps the stage's
-// own route, so the ritual can run again; once it is written, the gate comes.
+// revision's re-review goes on to the revised gate. A correction the person kept
+// that is not written yet keeps the stage's own route, so the step can run
+// again; once it is written, the gate comes. After a Request Changes, the change
+// asked for is asked about before the revised gate, also when the chat ends at
+// that question.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { learningsCorrectionQuestion } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AgentStandIn, auditEvents, cleanupScopeProjects, clip, createScopeProject, type Directive, field, PersonScript,
   SCOPE_RUN_TIMEOUT_MS, sourceStages,
@@ -29,10 +33,9 @@ const REVIEWED = [
 // Stages with no reviewer, left out to keep the walk short.
 const SKIPPED = ["practices-discovery", "delivery-planning"];
 const CONSTRUCTION = new Set(sourceStages().filter((s) => s.phase === "construction").map((s) => s.slug));
-const LEARNINGS = "Anything to add for next time?";
-const LEARNINGS_CHOICES = ["Nothing to add", "Add a note"];
-const LEARNINGS_KEEP = "Which notes from this step should I keep as practices for future work?";
-const LEARNINGS_KEEP_NONE = "Keep none of these";
+const LEARNINGS_CHOICES = ["Yes, for this project", "Yes, for the team", "No"];
+/** The correction the person made in a stage, as the learnings question carries it. */
+const correctionAt = (stage: string) => `name each file in ${stage} after what it holds`;
 
 type Point = "review" | "learnings" | "gate";
 
@@ -57,11 +60,16 @@ class Walk {
   private watching: { stage: string; seen: Directive[] } | null = null;
   private readonly stopped = new Set<string>();
 
+  /** The stages where the person corrected the agent: only there is the learnings question asked. */
+  readonly corrected: Set<string>;
+
   constructor(
     shape: "code" | "empty",
     at: Partial<Record<Point, readonly string[]>>,
     endsAt: (stage: string) => boolean = (stage) => CONSTRUCTION.has(stage),
+    corrected: readonly string[] = [],
   ) {
+    this.corrected = new Set(corrected);
     const { host } = createScopeProject(shape);
     const stop = (point: Point, stage: string) => {
       const key = `${point} ${stage}`;
@@ -75,9 +83,10 @@ class Walk {
         if (unit === null) stop("review", stage);
       },
       answers: {
+        correction: (stage) => this.corrected.has(stage) ? correctionAt(stage) : undefined,
         learnings: (stage) => {
           stop("learnings", stage);
-          return "Nothing to add";
+          return "No";
         },
         approve: (stage) => {
           stop("gate", stage);
@@ -145,17 +154,14 @@ class Walk {
   }
 
   /**
-   * The move's step should be the learnings ritual, ending the turn at its
-   * question. The caller asks it either way, so the walk goes on.
+   * The move's step should name the learnings step before the gate's report.
+   * The caller asks its question either way, so the walk goes on.
    */
   learningsStep(where: string, first: Directive, pickUp: boolean): void {
     const wrong = stepProblems(first, pickUp);
-    if (first.kind === "print" && !/run the learnings ritual and ask its questions/.test(String(first.message))) {
-      wrong.push(`the step names no learnings ritual: ${clip(String(first.message), 400)}`);
+    if (first.kind === "print" && !/take the learnings step/.test(String(first.message))) {
+      wrong.push(`the step names no learnings step: ${clip(String(first.message), 400)}`);
     }
-    // The question ends the turn, so the turn may end at it.
-    const stop = this.agent.host.stop();
-    if (stop.blocked) wrong.push(`the turn may not end at the learnings question: ${clip(stop.reason, 300)}`);
     this.problems.push(...wrong.map((problem) => `${where}: ${problem}`));
   }
 
@@ -171,27 +177,30 @@ class Walk {
 function stepProblems(d: Directive, pickUp: boolean): string[] {
   const problems: string[] = [];
   const said = String(d.narration ?? "");
+  const told = Array.isArray(d.change_notices) ? d.change_notices.map(String).join(" ") : "";
   if (d.kind !== "print") {
     problems.push(`handed ${String(d.kind)} ${String(d.stage ?? "")}${d.gate_only === true ? " gate_only" : ""}, not the next step`);
   }
   if (said.includes("Now working on")) problems.push(`the person reads "${clip(said, 300)}"`);
-  if (pickUp && !said.includes("Picking up where we left off, at ")) problems.push("a new chat is not told where it picks up");
+  if (pickUp && !told.includes("Picking up where we left off, at ")) problems.push("a new chat is not told where it picks up");
   return problems;
 }
 
 /** The person answers the open learnings question; the agent records it as the step says. */
-function answerLearnings(agent: AgentStandIn, stage: string, pick = "Nothing to add"): void {
-  agent.askPerson("learnings", stage, LEARNINGS, LEARNINGS_CHOICES, pick);
+function answerLearnings(agent: AgentStandIn, stage: string, pick = "No"): void {
+  agent.askPerson("learnings", stage, learningsCorrectionQuestion(correctionAt(stage)), LEARNINGS_CHOICES, pick);
   agent.must("log", "answer", "--stage", stage, "--details", pick);
 }
 
-/** A note the person picked or gave, written as the ritual's persist step writes it. */
-function writeNote(agent: AgentStandIn, stage: string, note: string, source: "user_addition" | "orchestrator"): void {
+/** The correction the person kept, written as the step's persist writes it. */
+function writeNote(agent: AgentStandIn, stage: string, scope: "project" | "team" = "project"): void {
   const surfaced = agent.must("learnings", "surface", "--slug", stage);
   const file = String(surfaced.selections_file);
   agent.host.write(file, `${JSON.stringify({
     stage_slug: stage, space: surfaced.space, intent: surfaced.intent,
-    selections: [{ candidate_id: "c1", type: "learning", scope: "project", heading: "Corrections", text: note, source }],
+    selections: [{
+      candidate_id: "c1", type: "learning", scope, heading: "Corrections", text: correctionAt(stage), source: "user_addition",
+    }],
   })}\n`);
   agent.must("learnings", "persist", "--slug", stage, "--selections-json", file);
 }
@@ -207,12 +216,15 @@ function reviewedDocument(agent: AgentStandIn, stage: string): string {
 describe("next between a stage's review and its gate", () => {
   // Every other stage, the agent fixes something in a reviewed document first.
   const EDITED = ["user-stories", "domain-design", "contract-design"];
+  // The person corrected the agent in these stages; nowhere else is the learnings question asked.
+  const CORRECTED = ["requirements-analysis", "domain-design"];
+  const UNCORRECTED = REVIEWED.filter((stage) => !CORRECTED.includes(stage));
 
   test("next between a stage's review and its gate brings the gate, not the stage again", () => {
-    const walk = new Walk("empty", { learnings: REVIEWED });
+    const walk = new Walk("empty", { learnings: CORRECTED, review: UNCORRECTED }, undefined, CORRECTED);
     const { agent } = walk;
-    walk.run(agent.begin("build the classic work", ["--scope", "classic", "--skip", SKIPPED.join(",")]), (_, stage) => {
-      answerLearnings(agent, stage);
+    walk.run(agent.begin("build the classic work", ["--scope", "classic", "--skip", SKIPPED.join(",")]), (point, stage) => {
+      if (point === "learnings") answerLearnings(agent, stage);
       const edit = EDITED.includes(stage);
       if (edit) {
         // Guard Policy off (classic's own): the change is carried to the gate.
@@ -221,9 +233,12 @@ describe("next between a stage's review and its gate", () => {
       }
       return walk.toGate(`${stage}${edit ? " (after an edit)" : ""}`, stage, agent.next(), "awaiting-approval", false);
     });
-    expect(walk.moved).toEqual(REVIEWED.map((stage) => `learnings ${stage}`));
+    expect(walk.moved.sort()).toEqual([
+      ...CORRECTED.map((stage) => `learnings ${stage}`),
+      ...UNCORRECTED.map((stage) => `review ${stage}`),
+    ].sort());
     expect(walk.problems).toEqual([]);
-    expect(walk.learningsAsked()).toEqual(Object.fromEntries(REVIEWED.map((stage) => [stage, 1])));
+    expect(walk.learningsAsked()).toEqual(Object.fromEntries(CORRECTED.map((stage) => [stage, 1])));
   }, SCOPE_RUN_TIMEOUT_MS);
 });
 
@@ -232,13 +247,22 @@ describe("a new chat between a stage's review and its gate", () => {
   const ANSWERED_IN_NEW_CHAT = ["requirements-analysis", "domain-design"];
   // The person answers the learnings question, then the chat ends before the gate.
   const ANSWERED_BEFORE = ["user-stories", "units-generation"];
-  // The chat ends right after the review, before the learnings question is asked.
-  const AFTER_REVIEW = ["refined-mockups", "contract-design"];
+  // The chat ends right after the review, before the learnings question is asked (a correction there).
+  const AFTER_REVIEW = ["refined-mockups"];
+  // The chat ends right after the review of a stage with nothing corrected: the gate comes, nothing asked.
+  const UNCORRECTED = ["contract-design"];
 
   test("a new chat between a stage's review and its gate picks up at the gate (learnings on)", () => {
-    const walk = new Walk("empty", { learnings: [...ANSWERED_IN_NEW_CHAT, ...ANSWERED_BEFORE], review: AFTER_REVIEW });
+    const corrected = [...ANSWERED_IN_NEW_CHAT, ...ANSWERED_BEFORE, ...AFTER_REVIEW];
+    const walk = new Walk("empty", {
+      learnings: [...ANSWERED_IN_NEW_CHAT, ...ANSWERED_BEFORE], review: [...AFTER_REVIEW, ...UNCORRECTED],
+    }, undefined, corrected);
     const { agent } = walk;
     walk.run(agent.begin("build the classic work", ["--scope", "classic", "--skip", SKIPPED.join(",")]), (point, stage) => {
+      if (point === "review" && UNCORRECTED.includes(stage)) {
+        agent.host.newSession();
+        return walk.toGate(`${stage} (after the review, nothing corrected)`, stage, agent.personTypes("/aidlc --resume"), "awaiting-approval", true);
+      }
       if (point === "review") {
         agent.host.newSession();
         const first = agent.personTypes("/aidlc --resume");
@@ -259,17 +283,17 @@ describe("a new chat between a stage's review and its gate", () => {
     });
     expect(walk.moved.sort()).toEqual([
       ...[...ANSWERED_IN_NEW_CHAT, ...ANSWERED_BEFORE].map((stage) => `learnings ${stage}`),
-      ...AFTER_REVIEW.map((stage) => `review ${stage}`),
+      ...[...AFTER_REVIEW, ...UNCORRECTED].map((stage) => `review ${stage}`),
     ].sort());
     expect(walk.problems).toEqual([]);
-    expect(walk.learningsAsked()).toEqual(Object.fromEntries(REVIEWED.map((stage) => [stage, 1])));
+    expect(walk.learningsAsked()).toEqual(Object.fromEntries(corrected.map((stage) => [stage, 1])));
   }, SCOPE_RUN_TIMEOUT_MS);
 
-  test("a pick to add a note that is not yet written keeps the stage's route; once written, the gate comes", () => {
+  test("a correction kept and not yet written keeps the stage's route; once written, the gate comes", () => {
     const stages = ["requirements-analysis", "user-stories", "refined-mockups"];
-    const walk = new Walk("empty", { learnings: stages }, (stage) => stage === "domain-design");
+    const walk = new Walk("empty", { learnings: stages }, (stage) => stage === "domain-design", stages);
     const { agent } = walk;
-    // The chat ends with a pick not yet written; the new chat must not be taken past it to the gate.
+    // The chat ends with a kept correction not yet written; the new chat must not be taken past it to the gate.
     const resumedBeforeTheNote = (where: string) => {
       agent.host.newSession();
       const first = agent.personTypes("/aidlc --resume");
@@ -280,32 +304,27 @@ describe("a new chat between a stage's review and its gate", () => {
     };
     walk.run(agent.begin("build the classic work", ["--scope", "classic", "--skip", SKIPPED.join(",")]), (_, stage) => {
       if (stage === "refined-mockups") {
-        // The question box asked which diary notes to keep as well; the person kept one.
-        agent.person.pick(LEARNINGS_KEEP, [LEARNINGS_KEEP_NONE, "Use the design system's spacing"], "Use the design system's spacing");
-        answerLearnings(agent, stage);
-        resumedBeforeTheNote(`${stage} (a kept note not yet written)`);
-        writeNote(agent, stage, "Use the design system's spacing", "orchestrator");
-        return walk.toGate(`${stage} (the kept note written in the new chat)`, stage, agent.next(), "awaiting-approval", false);
+        answerLearnings(agent, stage, "Yes, for the team");
+        resumedBeforeTheNote(`${stage} (kept for the team, not yet written)`);
+        writeNote(agent, stage, "team");
+        return walk.toGate(`${stage} (written in the new chat)`, stage, agent.next(), "awaiting-approval", false);
       }
-      // The person picks Add a note; the agent asks what it should say, and that ends the turn.
-      answerLearnings(agent, stage, "Add a note");
+      answerLearnings(agent, stage, "Yes, for this project");
       if (stage === "requirements-analysis") {
-        resumedBeforeTheNote(`${stage} (a note to add not yet written)`);
-        agent.person.say("Name each requirement after the person who asked for it.");
-        writeNote(agent, stage, "Name each requirement after the person who asked for it.", "user_addition");
-        return walk.toGate(`${stage} (the note written in the new chat)`, stage, agent.next(), "awaiting-approval", false);
+        resumedBeforeTheNote(`${stage} (kept, not yet written)`);
+        writeNote(agent, stage);
+        return walk.toGate(`${stage} (written in the new chat)`, stage, agent.next(), "awaiting-approval", false);
       }
-      agent.person.say("Keep each story to one screen.");
-      writeNote(agent, stage, "Keep each story to one screen.", "user_addition");
+      writeNote(agent, stage);
       agent.host.newSession();
-      return walk.toGate(`${stage} (the note written, then a new chat)`, stage, agent.personTypes("/aidlc --resume"), "awaiting-approval", true);
+      return walk.toGate(`${stage} (written, then a new chat)`, stage, agent.personTypes("/aidlc --resume"), "awaiting-approval", true);
     });
     expect(walk.moved).toEqual(stages.map((stage) => `learnings ${stage}`));
     expect(walk.problems).toEqual([]);
     const notes = auditEvents(agent.host.proj).filter((row) => row.event === "RULE_LEARNED");
-    expect(notes.map((row) => [field(row.block, "Stage"), field(row.block, "Source")])).toEqual([
-      ["requirements-analysis", "user_addition"], ["user-stories", "user_addition"], ["refined-mockups", "orchestrator"],
-    ]);
+    expect(notes.map((row) => [field(row.block, "Stage"), field(row.block, "Source")])).toEqual(
+      stages.map((stage) => [stage, "user_addition"]),
+    );
   }, SCOPE_RUN_TIMEOUT_MS);
 
   test("a new chat between a stage's review and its gate picks up at the gate (learnings off, and a revision)", () => {
@@ -331,5 +350,38 @@ describe("a new chat between a stage's review and its gate", () => {
     expect(walk.moved).toEqual([`review ${stage}`, `gate ${stage}`]);
     expect(walk.problems).toEqual([]);
     expect(walk.learningsAsked()).toEqual({});
+  }, SCOPE_RUN_TIMEOUT_MS);
+
+  test("after a Request Changes the change is asked about before the revised gate, also across a new chat", () => {
+    const stage = "requirements-analysis";
+    const walk = new Walk("empty", { gate: [stage], learnings: [stage] }, (s) => s === "user-stories");
+    const { agent } = walk;
+    walk.run(agent.begin("build the classic work", ["--scope", "classic", "--skip", SKIPPED.join(",")]), (point) => {
+      if (point === "gate") {
+        // Nothing was corrected before the gate, so nothing was asked; now the
+        // person asks for a change that holds next time.
+        expect(walk.learningsAsked()).toEqual({});
+        agent.askPerson("approval", stage, `${stage} is ready for your review. How would you like to proceed?`,
+          ["Approve", "Request Changes"], `Request Changes: ${correctionAt(stage)}`);
+        agent.report(stage, "--result", "rejected", "--user-input", "Request Changes");
+        walk.corrected.add(stage);
+        const doc = reviewedDocument(agent, stage);
+        agent.host.write(doc, `${readFileSync(join(agent.host.proj, doc), "utf-8")}\nThe change the person asked for.\n`);
+        agent.review({ stage, reviewer: agent.worked.findLast((d) => d.stage === stage)?.reviewer });
+        return agent.next();
+      }
+      // The chat ends at the open question; the new chat shows it again, and the person keeps the change.
+      agent.host.newSession();
+      const again = agent.personTypes("/aidlc --resume");
+      expect(String(again.message), JSON.stringify(again)).toContain("has a question you asked");
+      answerLearnings(agent, stage, "Yes, for this project");
+      writeNote(agent, stage);
+      return walk.toGate(`${stage} (kept after the Request Changes)`, stage, agent.next(), "revised", false);
+    });
+    expect(walk.moved).toEqual([`gate ${stage}`, `learnings ${stage}`]);
+    expect(walk.problems).toEqual([]);
+    expect(walk.learningsAsked()).toEqual({ [stage]: 1 });
+    const notes = auditEvents(agent.host.proj).filter((row) => row.event === "RULE_LEARNED");
+    expect(notes.map((row) => field(row.block, "Stage"))).toEqual([stage]);
   }, SCOPE_RUN_TIMEOUT_MS);
 });

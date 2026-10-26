@@ -32,6 +32,7 @@ import { join, relative } from "node:path";
 import { hasPendingQuestion } from "../../dist/claude/.claude/hooks/aidlc-continue-workflow.ts";
 import {
   auditBlockField,
+  isLearningsNoteDecision,
   readAuditShardEvents,
   readBaselineSourceSnapshot,
   sourceChangedOutsideAidlc,
@@ -562,9 +563,14 @@ export function goldenPathProblems(j: GoldenJourney, run: GoldenRun): string[] {
   const summarised = sourceStages().some((s) => s.summaryConfirmation && live.includes(s.slug));
   if (!declared.summaryConfirmation && summaries > 0) problems.push(`a summary was confirmed ${summaries} times; ${j.scope} turns summary confirmation off`);
   if (declared.summaryConfirmation && summarised && summaries === 0) problems.push(`no summary was confirmed; ${j.scope} turns summary confirmation on`);
-  const learnings = run.toolResults.filter((t) => t.toolName === "Bash" && String(t.input.command ?? "").includes("engine learnings surface")).length;
-  if (!declared.learnings && learnings > 0) problems.push(`the learnings question was raised ${learnings} times; ${j.scope} turns learnings off`);
-  if (declared.learnings && learnings === 0) problems.push(`the learnings question was never raised; ${j.scope} turns learnings on`);
+  // The learnings question comes only after a correction: at most at
+  // the stage where the person asked for their one change.
+  const learnings = rows.filter((r) => r.event === "DECISION_RECORDED" && isLearningsNoteDecision(r.block));
+  if (!declared.learnings && learnings.length > 0) problems.push(`the learnings question was raised ${learnings.length} times; ${j.scope} turns learnings off`);
+  const uncorrected = learnings.map(stageField).filter((s) => s !== j.changeRequest?.stage);
+  if (declared.learnings && uncorrected.length > 0) {
+    problems.push(`the learnings question was raised at ${uncorrected.join(", ")}, where the person corrected nothing`);
+  }
 
   // The person answered one question in their own words, where the stage asked
   // one: a stage may find the request clear and ask none. That every answer is

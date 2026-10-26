@@ -6944,7 +6944,7 @@ export function clearKiroIdeLegacyPlanApprovalHost(
 // The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. The
 // session id is normalised to the slug shape so a host-supplied id can never
 // escape the sessions dir (path traversal / separators); an empty id yields "".
-function sessionRecordPath(projectDir: string, sessionId: string): string {
+export function sessionRecordPath(projectDir: string, sessionId: string): string {
   const valid = validSessionId(sessionId);
   if (!valid) return "";
   return join(sessionsDir(projectDir), valid);
@@ -25461,7 +25461,8 @@ function stableFileShas(
   }
 }
 
-function stableFileSha256(path: string): string | null {
+// The content id a source listing gives the file at `path`.
+export function stableFileSha256(path: string): string | null {
   const shas = stableFileShas(path);
   return shas === null || shas === "vanished" ? null : shas.sha;
 }
@@ -45014,17 +45015,13 @@ export function ceremonyPolicyValues(
   };
 }
 
-// Whether a stage's run lists the learnings ritual: the ceremony is on, and
-// the gate is at its first showing, never again for a revision of it
-// (stage-protocol.md, Request Changes). The run-stage directive and the
-// review verdict's next step both read it here.
-export function learningsRitualRuns(
-  learnings: CeremonyPolicy["learnings"],
-  stateContent: string | null | undefined,
-  slug: string,
-): boolean {
-  if (learnings !== "on") return false;
-  return !stateContent || parseCheckboxes(stateContent).find((row) => row.slug === slug)?.state !== "revising";
+// Whether a stage's gate has the learnings step: the ceremony is on. Whether
+// the step asks the person anything is the agent's reading of their words
+// (stage-protocol-learnings.md, When to run), so it is on at a revised gate
+// too, where the change asked for at the gate is the correction asked about.
+// The run-stage directive and the review verdict's next step both read it here.
+export function learningsRitualRuns(learnings: CeremonyPolicy["learnings"]): boolean {
+  return learnings === "on";
 }
 
 // --- Answer mode (stage-protocol.md section 3, Step 2) ---
@@ -45038,19 +45035,32 @@ export type AnswerModeChoice = "guide" | "file" | "chat";
 export const ANSWER_MODE_FIELD = "Answer Mode";
 /** The DECISION_RECORDED field naming which of the engine's own questions a row is. */
 export const QUESTION_KIND_FIELD = "Question Kind";
-/** The learnings ritual's "Anything to add?" question and options (stage-protocol-learnings.md section 13). */
+/**
+ * The learnings step's question about one correction the person made
+ * (stage-protocol-learnings.md section 13): their change, as it follows "You
+ * asked me to", then this, with these choices.
+ */
+export const LEARNINGS_CORRECTION_ASK = "Keep that for next time?";
+export const LEARNINGS_CORRECTION_CHOICES = ["Yes, for this project", "Yes, for the team", "No"] as const;
+export function learningsCorrectionQuestion(correction: string): string {
+  return `You asked me to ${learningsCorrectionText(correction)}. ${LEARNINGS_CORRECTION_ASK}`;
+}
+/** The correction as the question carries it: trimmed, with no closing stop of its own. */
+export function learningsCorrectionText(correction: string): string {
+  return correction.trim().replace(/[\s.!?]+$/, "");
+}
+/**
+ * The questions the step asked at every gate before it asked only after a
+ * correction: "Anything to add?" and which diary notes to keep. They are read
+ * in records that hold them, such as a stage left open across an upgrade.
+ */
 export const LEARNINGS_NOTE_QUESTION = "Anything to add for next time?";
 export const LEARNINGS_NOTE_CHOICES = ["Nothing to add", "Add a note"] as const;
-/**
- * Its question of which diary notes to keep, asked first when there are any.
- * Keeping none is an option of its own, listed first: Claude Code's question
- * box read a multi-select with nothing ticked as unanswered.
- */
 export const LEARNINGS_KEEP_QUESTION = "Which notes from this step should I keep as practices for future work?";
 export const LEARNINGS_KEEP_NONE = "Keep none of these";
 /** Its value for the mode question, written by the command the step note hands the agent. */
 export const ANSWER_MODE_QUESTION_KIND = "answer-mode";
-/** Its value for the learnings ritual's "Anything to add?", written by the command that module names. */
+/** Its value for the learnings step's question, written by the command that module names. */
 export const LEARNINGS_NOTE_QUESTION_KIND = "learnings-note";
 export const ANSWER_MODE_LABELS: Record<AnswerModeChoice, string> = {
   guide: "Guide me",
@@ -45075,16 +45085,18 @@ export function isAnswerModeDecision(block: string): boolean {
   return offered.length === labels.length && labels.every((label) => offered.includes(label));
 }
 /**
- * True when a DECISION_RECORDED block is the learnings ritual's "Anything to
- * add?": its Question Kind says so. A row with no kind is that question when it
- * offers both of the ritual's choices: one recorded before the field existed,
- * or the whole learnings box logged as one question.
+ * True when a DECISION_RECORDED block is the learnings step's question: its
+ * Question Kind says so. A row with no kind is that question when it offers
+ * every choice of the question about a correction, or both of "Anything to
+ * add?" (one recorded before the field existed, or the whole learnings box
+ * logged as one question).
  */
 export function isLearningsNoteDecision(block: string): boolean {
   const kind = auditBlockField(block, QUESTION_KIND_FIELD);
   if (kind !== null) return kind === LEARNINGS_NOTE_QUESTION_KIND;
   const offered = optionsList(auditBlockField(block, "Options"));
-  return LEARNINGS_NOTE_CHOICES.every((choice) => offered.includes(choice));
+  return LEARNINGS_CORRECTION_CHOICES.every((choice) => offered.includes(choice)) ||
+    LEARNINGS_NOTE_CHOICES.every((choice) => offered.includes(choice));
 }
 /** Its value for Intent Capture's Assumption Confirmation, written by the command that stage names. */
 export const ASSUMPTION_CONFIRMATION_QUESTION_KIND = "assumption-confirmation";

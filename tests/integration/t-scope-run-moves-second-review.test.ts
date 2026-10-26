@@ -114,13 +114,14 @@ describe("a second review the review cap refuses at a Unit's checkpoint", () => 
       const refused = host.engine("log", "review", "--stage", "code-generation", "--reviewer", reviewer,
         "--iteration", "2", "--unit", "extra");
       expect(refused.status).not.toBe(0);
-      // The person has spoken since the review was requested (their answers
-      // along the way use no message up), so the refusal is the agent's own
-      // step and puts no question to them: it names the retry for a review they
-      // asked for, and otherwise the checkpoint with the findings.
+      // Nothing was corrected, so no learnings question came between the
+      // review and the checkpoint, and the person has not spoken since the
+      // review was requested: the refusal's one way on is the agent's own step,
+      // put to nobody, the checkpoint again with the findings.
       const said = refused.stdout + refused.stderr;
-      expect(refusalAsk(said), said).toBeNull();
-      expect(said).toContain("If the person asked for this review");
+      const ask = refusalAsk(said);
+      expect(ask?.agent_work, said).toBe(true);
+      expect(ask?.remedies.map((remedy) => [remedy.op, remedy.executableNow])).toEqual([["present-findings-at-gate", true]]);
       expect(said).toContain("include the findings in the approval summary");
 
       // The agent takes the step with nothing put to the person.

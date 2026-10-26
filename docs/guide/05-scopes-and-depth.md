@@ -55,7 +55,7 @@ Each scope's stage count below is the stages it runs after Initialization's thre
 - **Default depth:** Minimal
 - **Includes:** Deployment Pipeline and Deployment Execution so the verified fix ships
 - **Skips:** Market Research, Feasibility, Team Formation, Mockups, most design and architecture stages, environment provisioning, and broader operational readiness
-- **Ceremony:** No "Anything to add for next time?" question after each stage and no summary to confirm before an artifact is written. Sensors, every stage approval, and plan approval stay on, and each stage runs with its lead agent only; type `/aidlc --learnings on`, `/aidlc --summary-confirmation on`, or `/aidlc --collaborators on` to bring one back for this piece of work
+- **Ceremony:** No stage diary and no "Keep that for next time?" question after a correction, and no summary to confirm before an artifact is written. Sensors, every stage approval, and plan approval stay on, and each stage runs with its lead agent only; type `/aidlc --learnings on`, `/aidlc --summary-confirmation on`, or `/aidlc --collaborators on` to bring one back for this piece of work
 
 ### refactor
 
@@ -97,9 +97,9 @@ Override ceremonies for an intent with `/aidlc --sensors on|off`, `/aidlc --lear
 
 #### Fewer stops for a workshop or small work
 
-Two per-stage checks add the most stops to a long run: the learnings question
-and the summary confirmation. To start a plan without them, type both switches
-with the request, so the new work is created with them off:
+Two per-stage checks can add stops to a long run: the learnings question
+after a correction and the summary confirmation. To start a plan without them,
+type both switches with the request, so the new work is created with them off:
 
 ```
 /aidlc workshop --learnings off --summary-confirmation off <the work>
@@ -107,7 +107,7 @@ with the request, so the new work is created with them off:
 
 | Switch | What it removes at each stage | What you lose |
 |--------|-------------------------------|---------------|
-| `--learnings off` | The "Anything to add for next time?" question before the approval gate, and the stage diary (`memory.md`) | Nothing from this work is written to `memory/project.md` or `memory/team.md`, so the next run does not pick up what this one taught. Practices already in memory still load |
+| `--learnings off` | The "Keep that for next time?" question before the approval gate of a stage where you corrected the agent, and the stage diary (`memory.md`) | Nothing from this work is written to `memory/project.md` or `memory/team.md`, so the next run does not pick up what this one taught. Practices already in memory still load |
 | `--summary-confirmation off` | The `Looks correct` check on a summary of your answers before the stage writes its artifact | The stage writes straight from your answers. A misread answer shows up in the artifact at the approval gate, where fixing it costs a revision |
 
 Neither switch removes a stage's questions or its approval gate. `bugfix` and

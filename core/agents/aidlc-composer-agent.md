@@ -638,6 +638,11 @@ keep it as advisory evidence only. Route solely on
   that second result; require the selected stock scope to rank at `diff: 0`.
   The proposal is not ready until its grid, summary, distance, and rendered
   stage decisions all describe this same adopted stock grid.
+- Stage changes the dispatch names as the person's own (typed with their
+  request) are not flips you fold: keep them in every grid you propose and never
+  adopt a stock grid that undoes them (a near-stock grid with them is custom on
+  that scope), until the person changes them at the gate (then route as that
+  edit leaves the grid, Step 9).
 - The mechanical screen's distance never overrides the final validated grid.
   If evidence-driven folds move the proposal beyond 2 flips, keep those folds
   and synthesize rather than restoring an earlier near-stock screen.

@@ -47,7 +47,7 @@ import {
   reviewInvalidationAttemptView,
   markStageWorkLogged,
   markTurnEnd,
-  LEARNINGS_NOTE_QUESTION,
+  LEARNINGS_CORRECTION_ASK,
   learningsRitualRuns,
   ceremonyPolicyValues,
   terminalReviewVerdict,
@@ -561,6 +561,7 @@ const LOG_INTERACTION_OPTIONS = [
 const DECISION_OPTIONS: ReadonlySet<string> = new Set([
   ...LOG_INTERACTION_OPTIONS,
   "--decision",
+  "--decision-file",
   "--rationale",
   "--exact-option-labels",
   "--question-kind",
@@ -1005,7 +1006,7 @@ function demoteReviewHeadings(body: Buffer): { bytes: Buffer; changed: string[] 
 }
 
 // --- Subcommand: decision ---
-// Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>]
+// Usage: aidlc-log decision --stage <slug> (--decision <text> | --decision-file <file>) [--options <csv>]
 //   [--rationale <text>] [--question-kind answer-mode|learnings-note|assumption-confirmation]
 //   [--checkpoint summary-confirmation --questions-file <path> [--unit <unit>] [--single]]
 //
@@ -1036,7 +1037,17 @@ function latestDecisionMessageId(pd: string, stage: string, unit: string | undef
 function handleDecision(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
-  if (!flags.decision) error("Missing --decision <text>");
+  // A question holding the person's words arrives in a file the agent wrote, as
+  // an answer's text does, so no shell reads it on the way.
+  if (flags["decision-file"] !== undefined) {
+    if (flags.decision !== undefined) error("Pass either --decision or --decision-file, not both.");
+    try {
+      flags.decision = readAnswerTextFile(resolveActiveProjectDir(projectDir), flags["decision-file"]);
+    } catch (err) {
+      error(errorMessage(err));
+    }
+  }
+  if (!flags.decision) error("Missing --decision <text> (or --decision-file <file>)");
   if (flags.checkpoint !== undefined && !DECISION_CHECKPOINTS.includes(flags.checkpoint)) {
     error(unknownCheckpointMessage(flags.checkpoint, DECISION_CHECKPOINTS));
   }
@@ -1120,7 +1131,7 @@ function handleDecision(args: string[]): void {
       error(
         `--question-kind ${JSON.stringify(kind)} is not a kind log decision records. Its kinds are ` +
           `"${ANSWER_MODE_QUESTION_KIND}", for the question of how the person answers a stage's questions, ` +
-          `"${LEARNINGS_NOTE_QUESTION_KIND}", for the learnings question "${LEARNINGS_NOTE_QUESTION}", and ` +
+          `"${LEARNINGS_NOTE_QUESTION_KIND}", for the learnings question about a correction ("... ${LEARNINGS_CORRECTION_ASK}"), and ` +
           `"${ASSUMPTION_CONFIRMATION_QUESTION_KIND}", for Intent Capture's Assumption Confirmation; leave the ` +
           "flag off for any other question.",
       );
@@ -2610,9 +2621,9 @@ function handleAnswer(args: string[]): void {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
 
-    // The learnings question's Add a note: the person's next reply answers
-    // what follows, so the turn ends at that question (stage-protocol-learnings.md
-    // section 13). A pick in a question box is read from the person's own
+    // Add a note at an "Anything to add?" question a record still holds (the
+    // step asked it at every gate before it asked only after a correction): the
+    // person's next reply answers what follows, so the turn ends at that question. A pick in a question box is read from the person's own
     // recorded reply; a typed one from the exact option the agent recorded on
     // the question its kind (or its two options) names. Whether their reply
     // already holds the note is the agent's to read.
@@ -3156,7 +3167,7 @@ function stageBox(state: string, stage: string): string | undefined {
 // of the work ended its turn before the approval gate, and on a host that
 // ignores the Stop hook (Kiro IDE) nothing put it back on track. Whether
 // another pass follows is the engine's own terminal rule (terminalReviewVerdict),
-// whether the learnings question comes first is the run-stage's own rule
+// whether the stage has the learnings step is the run-stage's own rule
 // (learningsRitualRuns), and the gate's command is the report the stage
 // protocol names. A review the person asked for past the budget (even with
 // reviews off) and the one bounded stale-receipt recovery are one-off passes:
@@ -3170,8 +3181,10 @@ function stageBox(state: string, stage: string): string | undefined {
 // directive names: no note. `next` names the same step between the verdict
 // and the gate's report (aidlc-orchestrate.ts finishedReviewStep), where the
 // person's words go with the step `next` hands (their branch would name `next`
-// again) and a learnings question answered since the stage started is not
-// asked again; `endsTurn` says the step ends the turn at the learnings question.
+// again) and a learnings question answered since the stage started (since the
+// Request Changes, for a stage being revised) is not asked again. Whether the
+// step asks one is the agent's reading of the person's words, so the note names
+// it beside the gate's report, and either may end the turn.
 export function reviewVerdictStep(
   pd: string,
   flags: Record<string, string>,
@@ -3186,7 +3199,7 @@ export function reviewVerdictStep(
   },
   selection: { intent: string | null; space: string },
   request: { personAsked: boolean; recovery: boolean },
-  fromNext: { learningsAnswered: boolean; endsTurn?: boolean } | null = null,
+  fromNext: { learningsAnswered: boolean } | null = null,
 ): string | null {
   const { state, node, reviewClass } = context;
   const unit = flags.unit;
@@ -3241,16 +3254,11 @@ export function reviewVerdictStep(
   const stale = request.recovery ||
     backwardJumpBoundary(reviewInvalidationAttemptView(readAuditShardEvents(pd), flags.stage).floor) !== undefined;
   const brief = stageReviewBriefCommand(flags.stage, stale ? "stale" : box === "revising" ? "revision" : "first");
+  const learnings = fromNext?.learningsAnswered !== true &&
+    learningsRitualRuns(ceremonyPolicyValues(getField(state, "Scope"), state).learnings);
   if (box === "in-progress") {
-    if (
-      fromNext?.learningsAnswered !== true &&
-      learningsRitualRuns(ceremonyPolicyValues(getField(state, "Scope"), state).learnings, state, flags.stage)
-    ) {
-      if (fromNext !== null) fromNext.endsTurn = true;
-      return reviewVerdictNote({ kind: "learnings", brief });
-    }
     return reviewVerdictNote({
-      kind: "gate",
+      kind: learnings ? "learnings" : "gate",
       report: stageGateReportCommand(flags.stage, "awaiting-approval"),
       summary: true,
       brief,
@@ -3282,7 +3290,7 @@ export function reviewVerdictStep(
     }
   }
   return reviewVerdictNote({
-    kind: "gate",
+    kind: box === "revising" && learnings ? "learnings" : "gate",
     report: stageGateReportCommand(flags.stage, box === "revising" ? "revised" : "awaiting-approval"),
     summary: false,
     brief,

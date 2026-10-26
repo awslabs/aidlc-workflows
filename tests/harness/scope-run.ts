@@ -607,7 +607,10 @@ export interface PersonAnswers {
   questionMode(stage: string): string;
   question(stage: string): string;
   summary(stage: string): string;
+  /** Their answer to the learnings question, asked only after a correction. */
   learnings(stage: string): string;
+  /** A correction they made in the stage that would apply next time: unset, the learnings step asks nothing. */
+  correction?(stage: string): string | undefined;
   plan(unit: string | null): string;
   autonomy(): "Continue automatically" | "Review each checkpoint";
   verificationCommand(): string;
@@ -625,7 +628,7 @@ export const PLAIN_ANSWERS: PersonAnswers = {
   questionMode: () => "Guide me",
   question: () => "A",
   summary: () => "Looks correct",
-  learnings: () => "Nothing to add",
+  learnings: () => "No",
   plan: () => "Approve Plan",
   autonomy: () => "Review each checkpoint",
   verificationCommand: () => "Approve",
@@ -1093,6 +1096,9 @@ export class AgentStandIn {
             break;
           }
           if (!this.named("[^`]+").test(message)) this.fail("a print mid-run named no step to take", d);
+          // The learnings step the step names comes first, when the person corrected the agent.
+          const learningsAt = /take the learnings step[\s\S]*?report --stage (\S+) /.exec(message)?.[1];
+          if (learningsAt !== undefined) this.learnings({ kind: "run-stage", stage: learningsAt });
           // The agent's own work the step names: the units block, from the Units it wrote.
           const repaired = this.repairUnitsBlockIfNamed(message, "next");
           if (!repaired || !/orchestrate(?:\.ts)? next`\.$/.test(message)) this.actOnPrint(d);
@@ -1469,15 +1475,33 @@ export class AgentStandIn {
     this.reviews.set(`${stage} ${unit ?? ""}`, { reviewer, iteration });
   }
 
+  /** Each correction the learnings step asked about, by stage: it is asked once. */
+  private readonly learned = new Set<string>();
+
+  /** The learnings step (stage-protocol-learnings.md): a question only about a correction the person made. */
   learnings(d: Directive): void {
     const stage = String(d.stage);
+    const correction = this.answers.correction?.(stage);
+    if (correction === undefined || this.learned.has(`${stage} ${correction}`)) return;
+    this.learned.add(`${stage} ${correction}`);
     const unit = typeof d.unit === "string" ? ["--unit", d.unit] : [];
-    this.must("learnings", "surface", "--slug", stage);
-    this.must("log", "decision", "--stage", stage, "--decision", "Anything to add for next time?",
-      "--options", "Nothing to add,Add a note", ...unit);
-    const words = this.answers.learnings(stage);
-    this.askPerson("learnings", stage, "Anything to add for next time?", ["Nothing to add", "Add a note"], words);
-    this.must("log", "answer", "--stage", stage, "--details", "Nothing to add", ...unit);
+    const surfaced = this.must("learnings", "surface", "--slug", stage, "--correction", correction);
+    const asked = (surfaced.questions as Array<{ question: string; options: string[] }> | undefined)?.[0];
+    if (asked === undefined) this.fail(`learnings surface printed no question for the correction "${correction}"`, d);
+    this.must("log", "decision", "--stage", stage, "--decision", asked.question,
+      "--options", `|${asked.options.join("|")}`, "--question-kind", "learnings-note", ...unit);
+    const choice = this.askPerson("learnings", stage, asked.question, asked.options, this.answers.learnings(stage));
+    this.must("log", "answer", "--stage", stage, "--details", choice, ...unit);
+    if (!choice.startsWith("Yes")) return;
+    const file = String(surfaced.selections_file);
+    this.host.write(file, `${JSON.stringify({
+      stage_slug: stage, space: surfaced.space, intent: surfaced.intent,
+      selections: [{
+        candidate_id: "c1", type: "learning", scope: choice === "Yes, for the team" ? "team" : "project",
+        heading: "Corrections", text: correction, source: "user_addition",
+      }],
+    })}\n`);
+    this.must("learnings", "persist", "--slug", stage, "--selections-json", file);
   }
 
   gate(d: Directive): void {

@@ -230,7 +230,8 @@ function atATerminal(proj: string, args: string[]): { status: number; out: strin
 const hasPty = spawnSync("script", ["-qec", "true", "/dev/null"], { encoding: "utf-8" }).status === 0;
 
 function heard(proj: string, step: { directive: Record<string, unknown> | null }): string {
-  return `${String(step.directive?.narration ?? "")} ${pendingPersonLines(proj, SESSION).lines.join(" ")}`;
+  const told = Array.isArray(step.directive?.change_notices) ? step.directive.change_notices.map(String) : [];
+  return `${told.join(" ")} ${String(step.directive?.narration ?? "")} ${pendingPersonLines(proj, SESSION).lines.join(" ")}`;
 }
 
 function holdAtGate(proj: string): void {

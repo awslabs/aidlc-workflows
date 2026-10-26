@@ -1247,7 +1247,8 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(r.stdout.indexOf(question)).toBeGreaterThan(said);
       expect(r.stdout.indexOf(handOver)).toBeGreaterThan(r.stdout.indexOf(question));
       expect(r.stdout).toContain("--- DIRECTIVE ---");
-      // A step with a line for the person and a notice: the line, then the notice, then the step.
+      // A step with a line for the person and a notice: the line first, then the notice under the step's own order
+      // (said before the person replies), then the step.
       stubNext(dir, JSON.stringify({
         kind: "print", message: "run the thing", narration: "Picking up where we left off.",
         change_notices: ["Guard Policy is relaxed for this piece of work."],
@@ -1255,6 +1256,9 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
       expect(r.stdout).toContain(
         "Say this to the person first, word for word, with nothing in front of it:\n\nPicking up where we left off.\n\n" +
+          "Say this to the person once, as written (only a verb's tense may change to fit when you say it), as your " +
+          "own sentence with nothing in front of it, in the last message you write before they reply (when you end " +
+          "your turn with a question, the text you write just before it):\n\n" +
           "Guard Policy is relaxed for this piece of work.\n\n",
       );
       expect(r.stdout.indexOf("Picking up")).toBeLessThan(r.stdout.indexOf(handOver));
