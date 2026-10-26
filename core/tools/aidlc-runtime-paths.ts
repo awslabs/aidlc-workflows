@@ -289,18 +289,79 @@ export function hasControlCharacters(value: string): boolean {
   return /[\u0000-\u001f\u007f]/.test(value);
 }
 
+// A repo is named by its folder directly in the workspace, as the person named
+// it, so a name resolves only to an immediate child of the workspace and never
+// escapes it. A name is left out only where it breaks something named here, in
+// words that finish "its name ...": why a typed name is refused and a folder
+// found on disk is left out of the work. Null when the name can be a repo's.
+export function repoNameProblem(name: string): string | null {
+  if (name === "" || name === "." || name === ".." || /[/\\\0]/.test(name)) {
+    return 'is not one folder\'s name (no "/" or "\\", not "." or "..")';
+  }
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: finding them is the point
+  if (/[\u0001-\u001f\u007f\u2028\u2029]/.test(name)) return "has a control character, which AI-DLC's records cannot keep";
+  if (name.trim() !== name) return "starts or ends with a space, which AI-DLC's records cannot keep";
+  // A teammate's clone on Windows could not check out the records named after it.
+  const windows = /[<>:"|?*]/.exec(name);
+  if (windows) return `has "${windows[0]}", which a folder name on Windows cannot have`;
+  // A native Windows install runs every AI-DLC command through aidlc.cmd, whose
+  // cmd.exe reads these again, however the command quotes them.
+  const cmd = /[&^%]/.exec(name);
+  if (cmd) return `has "${cmd[0]}", which breaks AI-DLC's commands on Windows`;
+  // Cursor's adapter stops a delegated agent's own AI-DLC command holding
+  // these, quoted or not (runsAdmittedAidlcCommand).
+  const cursor = /[()[\]{};$`]/.exec(name);
+  if (cursor) return `has "${cursor[0]}", which stops AI-DLC's commands on Cursor`;
+  if (name.includes(",")) return 'has ",", which AI-DLC puts between repo names';
+  if (name === "-") return 'is "-", which AI-DLC\'s records use for no repo';
+  if (name.startsWith("--")) return 'starts with "--", which AI-DLC\'s commands read as an option';
+  if (name.endsWith("@checkout")) return 'ends with "@checkout", which names a checkout AI-DLC records';
+  // On Windows the agent's shell is PowerShell or Git Bash, and only double
+  // quotes read an apostrophe alike in both (quoteCommandArgument); these end
+  // or act inside them.
+  const apostrophe = /['\u2018-\u201b]/.exec(name);
+  const alongside = /[!\u201c-\u201e]/.exec(name);
+  if (apostrophe && alongside) {
+    return `has "${apostrophe[0]}" with "${alongside[0]}", which AI-DLC cannot quote one way for both PowerShell and Git Bash on Windows`;
+  }
+  return null;
+}
+
+// The refusal of a typed name that cannot be a repo's, after its flag or field.
+export function repoNameRefusal(what: string, name: string): string {
+  return `${what} "${name}": its name ${repoNameProblem(name) ?? "cannot be a repo's"}.`;
+}
+
+// Text bash, zsh, PowerShell and cmd.exe all read as written inside double
+// quotes: nothing in it expands or ends the quotes (PowerShell ends them at a
+// typographic double quote too), and nothing acts in cmd.exe when PowerShell
+// hands the word on without them.
+export function readsAlikeInDoubleQuotes(value: string): boolean {
+  return /^[^"\u201c-\u201e$`\\%!^&|<>\r\n]+$/.test(value);
+}
+
+// The characters PowerShell reads as a single quote: the apostrophe and the
+// typographic ones a pasted name can hold.
+const POWERSHELL_SINGLE_QUOTE = /['\u2018-\u201b]/;
+
 // One argument of a command we print for someone to run: bare when it cannot
 // expand, else single-quoted so no shell substitutes into it. It stays one
 // line of plain text: a control character is shown as "?", never emitted.
+// "windows" is the agent's shell on Windows, which may be PowerShell or Git Bash
+// (Claude Code's).
 export function quoteCommandArgument(
   value: string,
-  shell: "posix" | "powershell" = process.platform === "win32" ? "powershell" : "posix",
+  shell: "posix" | "powershell" | "windows" = process.platform === "win32" ? "windows" : "posix",
 ): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
   value = value.replace(/[\u0000-\u001f\u007f]/g, "?");
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
-  return shell === "powershell"
-    ? `'${value.replaceAll("'", "''")}'`
+  // PowerShell reads a bare word that starts with "@" as splatting a variable.
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value) && !(shell !== "posix" && value.startsWith("@"))) return value;
+  // The two shells quote an apostrophe differently, so it is double-quoted
+  // when both read that alike.
+  if (shell === "windows" && POWERSHELL_SINGLE_QUOTE.test(value) && readsAlikeInDoubleQuotes(value)) return `"${value}"`;
+  return shell !== "posix"
+    ? `'${value.replaceAll(new RegExp(POWERSHELL_SINGLE_QUOTE.source, "g"), "$&$&")}'`
     : `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 

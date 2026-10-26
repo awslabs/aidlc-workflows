@@ -2,7 +2,7 @@
 
 import { dirname, resolve } from "node:path";
 import { appendJsoncArrayItem } from "./aidlc-distribution.ts";
-import { isValidRepoName, REPO_NAME_REGEX } from "./aidlc-lib.ts";
+import { isValidRepoName, repoNameRefusal } from "./aidlc-lib.ts";
 
 export interface WorkspaceRepoEntry {
   name: string;
@@ -116,9 +116,7 @@ export function parseWorkspaceManifest(raw: string): WorkspaceManifest {
       throw new Error('every repos.json entry needs a non-empty string "name".');
     }
     if (!isValidRepoName(entry.name)) {
-      throw new Error(
-        `repos.json entry "${entry.name}": "name" must be a single path segment matching ${REPO_NAME_REGEX} (no separators or "..").`,
-      );
+      throw new Error(repoNameRefusal("repos.json entry", entry.name));
     }
     if (names.has(entry.name)) {
       throw new Error(`repos.json contains duplicate repo name "${entry.name}".`);

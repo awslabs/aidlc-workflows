@@ -150,6 +150,7 @@ function copyCore(root: string, relativePath: string): void {
       "aidlc-reply-reader.ts",
       "aidlc-runtime-budget.ts",
       "aidlc-lock-line.ts",
+      "aidlc-review-manifest.ts",
       "aidlc-command.ts",
       "aidlc-color.ts",
     ]) {

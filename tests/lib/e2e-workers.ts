@@ -109,9 +109,13 @@ export function shortTemporaryRoot(): string {
 }
 
 // Each file's fixtures sit under shortTemporaryRoot() first, so a test whose
-// subject is not the folder's depth meets a folder like a person's.
+// subject is not the folder's depth meets a folder like a person's. A live
+// Codex leg keeps the runner's own TEMP and nothing else: Codex's Windows
+// sandbox refuses AI-DLC's writes under %SystemRoot%, where no person's
+// project lives, so falling back there would only fail later.
 function defaultTemporaryRoots(): string[] {
   if (process.platform !== "win32") return [tmpdir(), "/var/tmp"];
+  if (process.env.AIDLC_CODEX_EXEC_LIVE === "1") return [tmpdir()];
   return [shortTemporaryRoot(), tmpdir(), join(process.env.SystemRoot || "C:\\Windows", "Temp")];
 }
 

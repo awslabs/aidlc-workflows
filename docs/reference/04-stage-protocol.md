@@ -1218,6 +1218,14 @@ is read this way: a file with a NUL byte, a lone CR, or more than one control
 byte in 128 printable ones is binary to Git and fingerprinted as it is, so a
 lone CR in it is a change. Source files are read a chunk at a time.
 
+**Optional outputs.** A declared output that is not there is a `missing`
+entry in the review fingerprint, optional or not. A receipt recorded before
+the stage declared an optional output has no entry for it, so while that
+output is still missing the receipt matches the same documents (over LF or
+raw line endings; `reviewManifestForms` in `aidlc-review-manifest.ts`). An
+optional output that appears, changes or goes away after the review is still
+a change.
+
 Reviewed outputs remain frozen. If `review_artifact` explicitly names a
 questions artifact, it remains fully byte-bound and frozen, including its
 confirmation answer; stages without `summary_confirmation` have no question

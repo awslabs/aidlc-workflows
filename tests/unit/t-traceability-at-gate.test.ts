@@ -14,10 +14,13 @@
 // record: one the table leaves out is said, and a team's own form adds no line.
 //
 // The Requirements Analysis gate open across the update that adds its record to
-// what the stage produces: the review receipt it holds lists one more declared
-// output, so it reads stale at Approve. Under relaxed and off the person's
-// Approve goes through with one line; under strict the agent runs the one
-// recovery review it is handed, and the same Approve goes through.
+// what the stage produces: the review receipt it holds has no entry for the
+// record, which is still missing, so it covers the same documents and the
+// person's Approve goes through as before the update, with no line and no
+// second review, under every Guard Policy. A record written after that review
+// is a change: under relaxed and off the Approve goes through with one line;
+// under strict the agent runs the one recovery review it is handed, and the
+// same Approve goes through.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -282,8 +285,9 @@ describe("t-traceability-at-gate: the Requirements Analysis gate open across the
   }
 
   // The gate opened and reviewed under the graph from before the update, then
-  // the update recompiles it with the record in what the stage produces.
-  function gateOpenAcrossTheUpdate(policy: "strict" | "relaxed" | "off"): string {
+  // the update recompiles it with the record in what the stage produces; with
+  // `record`, the record is written after that.
+  function gateOpenAcrossTheUpdate(policy: "strict" | "relaxed" | "off", record = false): string {
     const proj = setupIntegrationProject({ withState: "state-mid-inception.md", stripEnvScope: true });
     projects.push(proj);
     const statePath = seededStateFile(proj);
@@ -303,6 +307,10 @@ describe("t-traceability-at-gate: the Requirements Analysis gate open across the
 
     writeFileSync(graphPath, shipped);
     expect(existsSync(join(seededRecordDir(proj), "inception", STAGE, "traceability.json"))).toBe(false);
+    if (record) {
+      recordFile(proj, `inception/${STAGE}/traceability.json`,
+        `${JSON.stringify({ stage: STAGE, upstream_ids: ["FR1"], coverage: [{ id: "FR1", status: "OK" }] }, null, 2)}\n`);
+    }
     personSays(proj, "Approve");
     return proj;
   }
@@ -310,18 +318,67 @@ describe("t-traceability-at-gate: the Requirements Analysis gate open across the
   const approve = (proj: string) =>
     reply(proj, ENV, ["engine", "orchestrate", "report", "--stage", STAGE, "--result", "approved", "--user-input", "Approve"]);
 
-  for (const policy of ["relaxed", "off"] as const) {
-    test(`${policy}: the person's Approve goes through, with one line`, () => {
+  const CHANGED = "The Requirements Analysis documents changed after they were reviewed; carrying on.";
+  const changesAccepted = (proj: string) =>
+    readAuditShardEvents(proj).filter((event) => event.event === "CHANGE_ACCEPTED").length;
+
+  for (const policy of ["strict", "relaxed", "off"] as const) {
+    test(`${policy}: the person's Approve goes through, with no line and no second review`, () => {
       const proj = gateOpenAcrossTheUpdate(policy);
       const approved = approve(proj);
       expect(approved.kind, JSON.stringify(approved)).toBe("done");
-      expect(approved.change_notices).toEqual(["The Requirements Analysis documents changed after they were reviewed; carrying on."]);
+      expect((approved.change_notices as string[] | undefined) ?? []).not.toContain(CHANGED);
+      expect(changesAccepted(proj)).toBe(0);
+      expect(readAuditShardEvents(proj).filter((event) => event.event === "REVIEW_REQUESTED")).toHaveLength(1);
       expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(/^- \[x\] requirements-analysis/m);
     });
   }
 
-  test("strict: the agent runs the one recovery review it is handed, and the same Approve goes through", () => {
-    const proj = gateOpenAcrossTheUpdate("strict");
+  for (const policy of ["relaxed", "off"] as const) {
+    test(`${policy}: the record written after that review is a change, said in one line`, () => {
+      const proj = gateOpenAcrossTheUpdate(policy, true);
+      const approved = approve(proj);
+      expect(approved.kind, JSON.stringify(approved)).toBe("done");
+      expect(approved.change_notices).toEqual([CHANGED]);
+      expect(changesAccepted(proj)).toBe(1);
+      expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(/^- \[x\] requirements-analysis/m);
+    });
+  }
+
+  // The update lands while the reviewer works: the review asked for under the
+  // graph from before records its verdict after it, and the gate it opens takes
+  // the person's Approve.
+  test("strict: a review asked for before the update records its verdict after it, and the person's Approve goes through", () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-inception.md", stripEnvScope: true });
+    projects.push(proj);
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, setGuardPolicyLine(readFileSync(statePath, "utf-8"), "strict (set by you)"));
+    const graphPath = join(proj, ".claude", "tools", "data", "stage-graph.json");
+    const shipped = readFileSync(graphPath, "utf-8");
+    const graph = JSON.parse(shipped) as Array<{ slug: string; optional_produces?: string[] }>;
+    const stage = graph.find((entry) => entry.slug === STAGE)!;
+    stage.optional_produces = stage.optional_produces!.filter((name) => name !== "traceability");
+    writeFileSync(graphPath, JSON.stringify(graph));
+    recordFile(proj, `inception/${STAGE}/requirements.md`, "# Requirements\n\n- FR1 Sign up\n");
+    recordFile(proj, `inception/${STAGE}/${STAGE}-questions.md`, "# Questions\n");
+    const base = ["engine", "log", "review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "1"];
+    const requested = reply(proj, ENV, base);
+
+    writeFileSync(graphPath, shipped);
+    writeFileSync(join(proj, String(requested.reviewFile)), READY_REVIEW(REVIEWER, 1));
+    const recorded = engine(proj, ENV, [...base, "--verdict", "READY"]);
+    expect(recorded.status, recorded.out).toBe(0);
+    reply(proj, ENV, ["engine", "orchestrate", "report", "--stage", STAGE, "--result", "awaiting-approval"]);
+    personSays(proj, "Approve");
+    const approved = approve(proj);
+    expect(approved.kind, JSON.stringify(approved)).toBe("done");
+    expect(changesAccepted(proj)).toBe(0);
+    expect(readAuditShardEvents(proj).filter((event) => event.event === "REVIEW_REQUESTED")).toHaveLength(1);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(/^- \[x\] requirements-analysis/m);
+  });
+
+  test("strict: with the record written after that review, the agent runs the one recovery review it is handed, and the same Approve goes through", () => {
+    const proj = gateOpenAcrossTheUpdate("strict", true);
     const refused = approve(proj);
     expect(refused.kind, JSON.stringify(refused)).toBe("ask");
     expect(refused.reason_codes).toEqual(["ARTIFACT_REVIEW_STALE"]);

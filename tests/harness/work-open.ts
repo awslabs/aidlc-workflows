@@ -8,7 +8,8 @@
 // and approve. openWork drives the first half on the tool's host
 // (scope-hosts.ts) through the person's installed `aidlc`, and resumeWork the
 // second; resumeWork says what the person lost on the way, if anything: the
-// gate, an answer asked for again, their approval, the next stage or a file.
+// gate, an answer asked for again, their approval, the next stage or a file,
+// and any change they were told of that they did not make.
 //
 // The check runs this file once per project, side by side (see the end of the
 // file), with the machine folder of the person's install, or `copy` for a
@@ -35,6 +36,8 @@ export interface OpenWork {
   /** What the agent had asked the person, and the stage bodies it had run, when the person stopped. */
   asked: number;
   worked: number;
+  /** The changes the record had accepted when the person stopped. */
+  accepted: number;
   /** The top-level paths git did not track when the work began: the release's own setup. */
   setup: string[];
 }
@@ -55,7 +58,8 @@ export function openWork(harness: "claude" | HostName, proj: string, base: NodeJ
   if (agent.parks.length !== 1 || at.stage !== GATE) {
     throw new Error(`the work did not stop at the open ${GATE} gate: the drive ended on ${clip(JSON.stringify(at), 300)}`);
   }
-  return { harness, host, person, agent, asked: agent.asked.length, worked: agent.worked.length, setup };
+  const accepted = changesAccepted(proj).length;
+  return { harness, host, person, agent, asked: agent.asked.length, worked: agent.worked.length, accepted, setup };
 }
 
 /** The person's next chat, on the release they updated to: `/aidlc --resume` and Approve. Returns what they lost. */
@@ -81,7 +85,13 @@ export function resumeWork(work: OpenWork): string[] {
     hookFailures: host instanceof NativeScopeHost ? host.hookFailures : [],
     blockedHandoffs: agent.handoffs.filter((h) => h.blocked).map((h) => `${h.what} ${h.stage}: ${clip(h.reason, 300)}`),
     changed: personChanges(host.proj, work.setup),
+    toldChanged: changesAccepted(host.proj).slice(work.accepted),
   });
+}
+
+/** What each change the record accepted told the person. */
+function changesAccepted(proj: string): string[] {
+  return auditEvents(proj).filter((e) => e.event === "CHANGE_ACCEPTED").map((e) => field(e.block, "Details") ?? "");
 }
 
 export interface ResumeFacts {
@@ -99,6 +109,8 @@ export interface ResumeFacts {
   hookFailures: string[];
   blockedHandoffs: string[];
   changed: string[];
+  /** What each change the record accepted after the person stopped told them: they changed nothing. */
+  toldChanged: string[];
 }
 
 export function resumeProblems(facts: ResumeFacts): string[] {
@@ -122,6 +134,7 @@ export function resumeProblems(facts: ResumeFacts): string[] {
   for (const f of facts.hookFailures) problems.push(`a hook failed: ${f}`);
   for (const h of facts.blockedHandoffs) problems.push(`the turn could not end when the person was asked: ${h}`);
   for (const c of facts.changed) problems.push(`a file of the person's changed: ${c}`);
+  for (const t of facts.toldChanged) problems.push(`after the update the person was told of a change they did not make: ${t}`);
   return problems;
 }
 

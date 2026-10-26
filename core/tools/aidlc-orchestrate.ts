@@ -129,9 +129,9 @@ import {
   takeRestartRequest,
 } from "./aidlc-question-store.ts";
 import {
-  latestMessage, listMessages, noReplySince, personTurnStands, readMessage, standingPersonTurn,
+  latestMessage, listMessages, messageBeforeJoining, noReplySince, personTurnStands, readMessage, standingPersonTurn,
 } from "./aidlc-message-store.ts";
-import { aidlcEntryWords, APPROVAL_GATE_CHOICES, protectedChoices } from "./aidlc-reply-reader.ts";
+import { aidlcEntryWords, APPROVAL_GATE_CHOICES, protectedChoices, SUMMARY_CONFIRMATION_CHOICES } from "./aidlc-reply-reader.ts";
 import {
   type AskDirective,
   type Directive,
@@ -228,6 +228,8 @@ import {
   clearActiveDirectiveMarker,
   codeGenerationIsTheStep,
   codekbRepoName,
+  discoverSiblingRepos,
+  repoNameProblem,
   currentUnitLifecycleMode,
   constructionSkeletonOn,
   constructionCheckpointGaps,
@@ -3878,9 +3880,11 @@ function questionOptions(block: string): string[] {
 // all it needs. `wordsKept`: the person's words go on the answer's row as
 // Person Reply (personsGateReply, personsWordsKept). `alone`: no other question
 // waits on the same reply (openStageQuestion). `stateContent`: whether a yes
-// to building the Units in parallel needs stage by stage first.
+// to building the Units in parallel needs stage by stage first. `message`:
+// their message the plain answer names, when no turn stands for it
+// (messageBeforeJoining).
 function openQuestionAnswer(
-  stage: string, block: string, wordsKept: boolean, alone: boolean, stateContent: string,
+  stage: string, block: string, wordsKept: boolean, alone: boolean, stateContent: string, message?: string,
 ): string {
   const checkpoint = auditBlockField(block, "Checkpoint");
   const unit = auditBlockField(block, "Unit");
@@ -3928,8 +3932,15 @@ function openQuestionAnswer(
     ? " --checkpoint verification-command --command-file verification-command.txt"
     : policy ? ` --checkpoint construction-policy --field ${shellArg(field)} --value ${shellArg(value)}` : null;
   // The summary confirmation is recorded against its questions file, whose
-  // `[Answer]:` tag holds the choice first (stage-protocol-summary.md).
+  // `[Answer]:` tag holds the choice first (stage-protocol-summary.md). Each
+  // choice has its own command: one whose --details named what they asked to
+  // change left a bare Request changes unrecorded while the agent asked what.
   const summaryFile = checkpoint === SUMMARY_CONFIRMATION_CHECKPOINT ? auditBlockField(block, "Questions File") : null;
+  const summaryAnswer = (choice: string) => `\`${summaryConfirmationCommands({
+    stage, unit, questionsFile: summaryFile,
+    single: auditBlockField(block, "Workflow")?.startsWith("single-stage:") === true,
+    details: choice,
+  }).answer}\``;
   return gate
     ? `${numbered}answer it through that checkpoint, never \`log answer\` (which would not approve it): ` +
       `run \`${gate} --action approve${target}\` or \`${gate} --action reject${target}\`` +
@@ -3937,12 +3948,12 @@ function openQuestionAnswer(
       "(and their feedback as `--reason` when they ask for changes)"
     : summaryFile !== null
       ? `${options.length > 0 ? numberedChoices(options) : ""}write the choice they made on the summary's ` +
-        `\`[Answer]:\` line in ${summaryFile}, then record it with \`${summaryConfirmationCommands({
-          stage, unit, questionsFile: summaryFile,
-          single: auditBlockField(block, "Workflow")?.startsWith("single-stage:") === true,
-          // What they asked to change rides after Request changes (aidlc-log.ts keeps it as Feedback).
-          details: options.length === 2 ? `<${options[0]}, or ${options[1]}: what they asked to change>` : "<their choice>",
-        }).answer}\``
+        `\`[Answer]:\` line in ${summaryFile}, then record it: for ${SUMMARY_CONFIRMATION_CHOICES[0]} run ` +
+        `${summaryAnswer(SUMMARY_CONFIRMATION_CHOICES[0])}; for ${SUMMARY_CONFIRMATION_CHOICES[1]} run ` +
+        `${summaryAnswer(SUMMARY_CONFIRMATION_CHOICES[1])} before you ask them what should change` +
+        // aidlc-log.ts keeps what rides after Request changes as Feedback.
+        " (when their reply already says what, it goes after it, as 'Request changes: <what>'), and do what its " +
+        "output says next"
     : flags !== null
       ? `${numbered}record the choice they made with ` +
         `\`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)}${flags} ` +
@@ -3951,7 +3962,7 @@ function openQuestionAnswer(
         `${policy ? ", with `<id>` the message they answered in," : ""} and ` +
         `${setters.length > 1 ? "say their notice lines" : "say its notice line"}`
       : `${reading ? `${numberedChoices(options)}record the choice they made, as you read it from their reply, with` : "record it with"} ` +
-        `\`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)} ` +
+        `\`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)}${message ? ` --message ${message}` : ""} ` +
         `--details '${reading ? "<their choice>" : "<their exact reply>"}'\` ` +
         "(with the checkpoint flags that question was logged with, when it has them)";
 }
@@ -3962,15 +3973,18 @@ function openQuestionAnswer(
 // was asked, with its choices, which a chat that never saw it asked needs, and
 // a command for each: the question's own answer command, or `next --request`
 // with the person's words, kept as `requestId`, which asks where that work
-// belongs.
+// belongs. `before`: the id of their message from before this chat joined the
+// work (messageBeforeJoining), named on the answer; its proof takes only a
+// message that carries their words, which `log answer` keeps beside it.
 function openQuestionReplyDirective(
   { stage, block, alone }: { stage: string; block: string; alone: boolean },
   requestId: string,
   { replies, wordsKept }: ReturnType<typeof chatReplies>,
   stateContent: string,
+  before: string | null = null,
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
-  const answer = openQuestionAnswer(stage, block, wordsKept, alone, stateContent);
+  const answer = openQuestionAnswer(stage, block, wordsKept || before !== null, alone, stateContent, before ?? undefined);
   const decision = auditBlockField(block, "Decision");
   const choices = questionOptions(block);
   const asked = decision
@@ -6817,6 +6831,11 @@ function createPrintDirective(
   if (!flags.projectType && newProjectDropsReverseEngineering(scope, projectDir, flags.planChanges)) {
     directive.narration +=
       " The folder has no code yet, so I'm starting this as a new project without Reverse Engineering. If the work is on existing code, tell me.";
+  }
+  // A repo folder whose name cannot be a repo's is not part of the work, said
+  // once, with why.
+  for (const name of discoverSiblingRepos(projectDir, true)) {
+    directive.narration += ` The folder "${name}" is not part of this work: its name ${repoNameProblem(name)}.`;
   }
   if (routedGuardPolicyNote) directive.narration += ` ${routedGuardPolicyNote}`;
   // Beside other work the chat still holds that work's conversation: the
@@ -10648,16 +10667,19 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
     const [verb, ...tail] = argv;
+    // Quoted for the shell the agent runs it in: a repo's name can hold an
+    // apostrophe, which PowerShell quotes its own way.
+    const word = (value: string): string => quoteCommandArgument(value);
     const route = verb === "intent-create"
       ? "intent create"
       : verb === "space-create"
       ? "space create"
       : verb === "intent"
-      ? `intent ${tail[0] && !tail[0].startsWith("--") ? shellArg(tail.shift()!) : "list"}`
+      ? `intent ${tail[0] && !tail[0].startsWith("--") ? word(tail.shift()!) : "list"}`
       : verb === "space"
-      ? `space ${tail[0] && !tail[0].startsWith("--") ? shellArg(tail.shift()!) : "list"}`
+      ? `space ${tail[0] && !tail[0].startsWith("--") ? word(tail.shift()!) : "list"}`
       : verb;
-    const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
+    const suffix = tail.length > 0 ? ` ${tail.map(word).join(" ")}` : "";
     // Words typed after the name ride with the switch, whole, for the agent to
     // act on for the work just selected: a request, or a setting such as
     // `--guard-policy relaxed`. Nothing of theirs is dropped or read here.
@@ -11980,7 +12002,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
-      emit(openQuestionReplyDirective(open, words.id, chatReplies(pd, open.stage), stateContent));
+      // With no reply of theirs on record here, the words may be from before
+      // this chat joined the work (a teammate's clone): the answer names them.
+      const replies = chatReplies(pd, open.stage);
+      const before = replies.replies.length === 0 ? messageBeforeJoining(pd, words.messageId) : null;
+      emit(openQuestionReplyDirective(open, words.id, replies, stateContent, before));
       return;
     }
     // Words at the engine's recovery question, once it holds the person's

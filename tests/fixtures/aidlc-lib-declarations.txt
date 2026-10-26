@@ -1275,7 +1275,6 @@ isSafeIntentRecordName
 isScopeName
 isScopedReviewCopy
 isShellToolName
-isSingleStageStart
 isSourceFileName
 isSourceHarnessShellDir
 isStageOrGateEvent
@@ -1826,8 +1825,6 @@ repoChangeWords
 repoCwdOrThrow
 repoDir
 repoIsWorkspace
-repoNameProblem
-repoNameRefusal
 repoScopeAsked
 repoScopePassedOver
 reportResult
@@ -2019,8 +2016,6 @@ shellCommandText
 shellToolResponseText
 shippedRulesSubdir
 shownLastWrittenAt
-siblingGitFolders
-siblingReposLeftOut
 singleGitMetadataLine
 singleRunRequest
 singleRunRequestDigest
@@ -2228,7 +2223,6 @@ unitParkedPath
 unitParticipantPath
 unitPlainName
 unitReleasePendingPath
-unitReopenMovedTo
 unitScopePath
 unitScopedLifecycleFloors
 unitSkippedItsCode

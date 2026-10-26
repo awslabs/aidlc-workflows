@@ -1,10 +1,11 @@
 // covers: function:folderRepoName, function:codekbRepoName, function:sourceCheckoutLabelFor, subcommand:aidlc-utility:codekb-path, subcommand:aidlc-utility:codekb-snapshot, subcommand:aidlc-utility:codekb-publish
 //
-// A project folder named with a space or another character a repo name cannot
-// hold ("portal app", an accented name, "R&D", ".hidden") still gets its code knowledge
-// base: the engine makes the name it derives from the folder fit the repo-name
-// rule itself, the same way every time, and the folder keeps its name. A name
-// typed as --repo is checked as before. The accent case runs in both Unicode
+// A project folder named with a space or another character outside letters,
+// digits, ".", "_" and "-" ("portal app", an accented name, "R&D", ".hidden")
+// still gets its code knowledge base: the engine makes the name it derives
+// from the folder that shape itself, the same way every time, and the folder
+// keeps its name. A name typed as --repo is taken as typed and checked by the
+// repo-name rule. The accent case runs in both Unicode
 // spellings, because a name on macOS can come back decomposed (NFD) where
 // Windows and Linux usually keep it composed (NFC).
 
@@ -185,11 +186,14 @@ describe("Reverse Engineering's tools in a project folder named with a space or 
     expect(existsSync(project)).toBe(true);
   });
 
-  test("a --repo typed with the space is checked as before", () => {
+  test("a --repo is taken as typed, and refused only for a name the repo-name rule refuses", () => {
     const project = projectNamed("portal app");
-    const typed = utility(project, ["codekb-snapshot", "--repo", "portal app", "--paths", "./", "--json"]);
+    const path = utility(project, ["codekb-path", "--repo", "portal app", "--json"]);
+    expect(path.status, path.stdout + path.stderr).toBe(0);
+    expect(JSON.parse(path.stdout).dir).toBe(`aidlc/spaces/${DEFAULT_SPACE}/codekb/portal app`);
+    const typed = utility(project, ["codekb-snapshot", "--repo", "a/b", "--paths", "./", "--json"]);
     expect(typed.status).toBe(1);
-    expect(typed.stdout + typed.stderr).toContain("Invalid --repo \\\"portal app\\\"");
+    expect(typed.stdout + typed.stderr).toContain("Invalid --repo \\\"a/b\\\"");
   });
 
   test("a folder name with no letter or digit left keeps one store, named project", () => {

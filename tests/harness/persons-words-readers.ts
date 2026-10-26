@@ -1080,6 +1080,7 @@ export const ALLOWED: Record<string, Allowed> = {
   // The request the agent forwards to next (its free text) and the question store that keeps it: shown back, quoted
   // into a command, kept; each with its reason.
   "core/tools/aidlc-runtime-paths.ts#quoteCommandArgument": { use: "decides", why: "shell-quotes their words into a command the agent runs", from: [`${ORCH}#reshapeReplyArgument`, `${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`, `${ORCH}#wordsForNextStep`] },
+  "core/tools/aidlc-runtime-paths.ts#readsAlikeInDoubleQuotes": { use: "decides", why: "whether every shell reads their words alike in double quotes, for quoteCommandArgument", from: ["core/tools/aidlc-runtime-paths.ts#quoteCommandArgument"] },
   [`${LIB}#parseLiteralShellInvocation`]: { use: "decides", why: "as above", from: [`${LIB}#isTerminalConfigurationDispatch`] },
   [`${LIB}#isTerminalConfigurationDispatch`]: { use: "decides", why: "reads the engine's own step message (which may quote their request) for a configuration command" },
   [`${LIB}#addPendingPersonLines`]: { use: "keeps", why: "keeps a step's narration, or a setter's lines, for the person's next line", from: [`${ORCH}#sayPendingPersonLines`, `core/tools/aidlc-utility.ts#handleScopeChange`] },

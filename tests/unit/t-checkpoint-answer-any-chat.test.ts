@@ -21,7 +21,9 @@
 // `/aidlc` in a new chat shows again, as it was asked, the question the stage
 // has open: one asked in chat, the verification command with the command it
 // asks about, a Construction policy question, and the summary confirmation
-// from its questions file. A Unit checkpoint's approval and a question the
+// from its questions file, with one command for each of its choices, so a
+// Request changes that says nothing about what is recorded before they are
+// asked what should change. A Unit checkpoint's approval and a question the
 // questions file still holds come back through their own step.
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -37,6 +39,7 @@ import {
   runOrchestrateNext, seedAidlcMemory, seedBoltDag, seededRecordDir, seededStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { quoteCommandArgument } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 import { recordProtectedHumanResponse } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
   artifactFilename, auditBlockField, findStageBySlug, getField, latestMainWorkflowStageRunFloorForProject,
@@ -765,19 +768,23 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
     expect(asked.status, asked.out).toBe(0);
     // The agent writes the choice on the summary's tag, as the shown step says, before recording it.
     const tag = (choice: string) => writeFileSync(file, readFileSync(file, "utf-8").replace(/\[Answer\]:\n$/, `[Answer]: ${choice}\n`));
-    return { p, stage, relative, identity, tag };
+    // The command the shown step names for `choice`, in full: the span closes after it.
+    const command = (choice: string) =>
+      `answer --checkpoint summary-confirmation --stage ${stage}${unit ? ` --unit ${unit}` : ""} --questions-file ` +
+      `${relative} --details ${quoteCommandArgument(choice)}\``;
+    return { p, stage, relative, identity, tag, command };
   }
 
   for (const unit of [null, "alpha"] as const) {
     test(`a summary confirmation open ${unit ? "for a Unit " : "at a stage "}comes back from its questions file, answered by its own flags`, () => {
-      const { p, stage, relative, identity, tag } = openSummary(unit);
+      const { p, relative, identity, tag, command } = openSummary(unit);
       const shown = bare(p, NEW);
       expect(shown.kind, JSON.stringify(shown)).toBe("print");
       expect(shown.message).toContain('"Does this all look correct?"');
       expect(shown.message).toContain('"Looks correct", "Request changes"');
       expect(shown.message).toContain(relative);
       expect(shown.message).toContain("end your turn");
-      expect(shown.message).toContain(`answer --checkpoint summary-confirmation --stage ${stage}${unit ? ` --unit ${unit}` : ""} --questions-file ${relative} --details`);
+      expect(shown.message).toContain(command("Looks correct"));
       person(p, "yes", NEW);
       tag("Looks correct");
       const recorded = tool(p, "log", ["answer", ...identity, "--session", NEW, "--details", "Looks correct"]);
@@ -791,7 +798,7 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
   test("a Request changes reply to the summary shown again is recorded with what they asked to change", () => {
     const { p, identity, tag } = openSummary(null);
     const shown = bare(p, NEW);
-    expect(shown.message).toContain("Request changes: what they asked to change");
+    expect(shown.message).toContain("'Request changes: <what>'");
     const said = "Request changes: blank titles include whitespace-only ones";
     person(p, said, NEW);
     tag("Request changes");
@@ -800,6 +807,29 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
     expect(recorded.stdout).not.toContain("What should change?");
     const receipt = readAuditShardEvents(p).filter((row) => row.event === "SUMMARY_CONFIRMATION_RECORDED").at(-1);
     expect(auditBlockField(receipt!.block, "Feedback")).toBe("blank titles include whitespace-only ones");
+  });
+
+  // Live, a command whose --details named what they asked to change left a
+  // bare Request changes unrecorded while the agent asked what should change.
+  test("a Request changes reply that says nothing about what, to the summary shown again, is recorded before they are asked what should change", () => {
+    const { p, identity, tag, command } = openSummary(null);
+    const shown = bare(p, NEW);
+    // Tied to the follow-up it comes before: a pick in a question box went
+    // straight to that question with the command only beside it.
+    expect(shown.message).toContain(`${command("Request changes")} before you ask them what should change`);
+    person(p, "Request changes", NEW);
+    tag("Request changes");
+    const recorded = tool(p, "log", ["answer", ...identity, "--session", NEW, "--details", "Request changes"]);
+    expect(recorded.status, recorded.out).toBe(0);
+    expect(recorded.stdout).toContain("What should change?");
+    const receipt = readAuditShardEvents(p).filter((row) => row.event === "SUMMARY_CONFIRMATION_RECORDED").at(-1);
+    expect(auditBlockField(receipt!.block, "Details")).toBe("Request changes");
+    expect(auditBlockField(receipt!.block, "Feedback")).toBeNull();
+    // A chat that ends here leaves them at what should change, not the summary.
+    const next = bare(p, "t-any-chat-third");
+    expect(next.kind, JSON.stringify(next)).toBe("print");
+    expect(next.message).toContain('"What should change?"');
+    expect(next.message).not.toContain('"Does this all look correct?"');
   });
 
   test("a Unit checkpoint question is asked again by its checkpoint step", () => {
