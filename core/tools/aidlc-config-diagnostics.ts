@@ -39,6 +39,7 @@ import { homedir, platform as hostPlatform } from "node:os";
 import { delimiter, dirname, join, relative, resolve } from "node:path";
 import {
   assertProjectionPathHasNoSymlinks,
+  holdsRecordedWrite,
   isSafeOnboardingPath,
   jsonEntryHash,
   jsonEntryId,
@@ -3457,10 +3458,7 @@ function instructionStates(
     return {
       path,
       kind: contribution.policy,
-      state: sha256Matching(block, [contribution.hash]) === contribution.hash ||
-          // A space switch pointed its include lines at another space.
-          sha256Matching(withSpace(block, "default"), [contribution.hash]) === contribution.hash ||
-          ownTitleOnly(block, contribution.hash)
+      state: holdsRecordedWrite(block, contribution.hash) || ownTitleOnly(block, contribution.hash)
         ? "intact"
         : "conflict",
     };
@@ -4128,9 +4126,7 @@ function changedFrameworkFiles(
     if (regular) {
       const content = readFileSync(path);
       if (
-        sha256Matching(content, [hash]) === hash ||
-        // A space switch pointed its include lines at another space.
-        sha256Matching(withSpace(content.toString("utf-8"), "default"), [hash]) === hash ||
+        holdsRecordedWrite(content, hash) ||
         content.includes("generated-by: aidlc-runner-gen")
       ) continue;
     }

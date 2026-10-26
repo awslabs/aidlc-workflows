@@ -874,6 +874,15 @@ export function sha256Matching(value: string | Buffer, known: readonly (string |
   return own;
 }
 
+// Whether a file, or AI-DLC's marked part of one, holds what config recorded
+// writing for it: line endings aside, or with include lines a space switch
+// pointed at another space put back. Doctor's changed-files rows and the
+// build's brought-files line both ask it.
+export function holdsRecordedWrite(content: string | Buffer, hash: string): boolean {
+  const text = typeof content === "string" ? content : content.toString("utf-8");
+  return sha256Matching(content, [hash]) === hash || sha256Matching(withSpace(text, "default"), [hash]) === hash;
+}
+
 export function sha256FileMatching(path: string, known: readonly (string | undefined)[]): string {
   return sha256Matching(readFileSync(path), known);
 }

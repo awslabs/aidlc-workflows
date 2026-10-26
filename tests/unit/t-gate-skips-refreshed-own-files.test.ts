@@ -106,7 +106,7 @@ function builtOverUpdate(tree: Tree, options: { type?: "Greenfield" | "Brownfiel
     .replace("- **Project Type**: Brownfield", `- **Project Type**: ${options.type ?? "Greenfield"}`)
     .replace("- [ ] code-generation", "- [-] code-generation")
     .replace(/^(- \[.\] units-generation) \u2014 EXECUTE$/m, "$1 \u2014 SKIP"), "utf-8");
-  write(proj, { "README.md": README, "src/app.js": "export const greet = (name) => `Hello ${name}`;\n" });
+  write(proj, { "README.md": README, "src/app.js": "export const greet = (name) => \"Hello \" + name;\n" });
   const release = join(REPO_ROOT, "dist-release", tree);
   config(proj, release, tree);
   if (options.git ?? true) {
@@ -173,7 +173,7 @@ describe("t-gate-skips-refreshed-own-files", () => {
 
   test("opencode, existing code (the finding's own path): the build changed only its code, and the gate says nothing of files", () => {
     const proj = builtOverUpdate("opencode", { type: "Brownfield" });
-    write(proj, { "src/app.js": "export const greet = (name) => `Hello, ${name}!`;\n" });
+    write(proj, { "src/app.js": "export const greet = (name) => \"Hello, \" + name + \"!\";\n" });
     expect(openGate(proj)).not.toContain("you had before this work started");
   });
 

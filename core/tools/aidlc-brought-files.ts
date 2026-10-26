@@ -7,9 +7,15 @@
 // with or without git and on every harness; this compares those listings with
 // the files as they are now, so a write by a helper or a shell counts the same
 // as the lead's. Silent when a listing is not on this machine (AI-DLC's ignored
-// copy: a team clone that did not start the work), or cannot be read.
+// copy: a team clone that did not start the work), or cannot be read. A file
+// AI-DLC's install or a refresh wrote, as its install record says it wrote it,
+// is AI-DLC's and not the build's change (an `aidlc update` and `aidlc config`
+// while the work was open rewrite them).
 import { spawnSync } from "node:child_process";
-import { basename } from "node:path";
+import { readFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import { holdsRecordedWrite, managedBlockMarkers } from "./aidlc-distribution.ts";
+import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
 import {
   committedTextSha256,
   constructionCheckpointsApply,
@@ -91,15 +97,103 @@ function heldAtHead(dir: string, files: readonly BroughtFile[]): Set<BroughtFile
   return held;
 }
 
-// The newest commit that touched `path` and holds the content the build replaced.
-function olderCommit(dir: string, file: BroughtFile): string | null {
+// The newest commit that touched `path` and holds the content the build
+// replaced, with that content.
+function committedCopy(dir: string, file: BroughtFile): { rev: string; blob: Buffer } | null {
   const revs = git(dir, ["rev-list", "-n", String(COMMITS_SEARCHED), "HEAD", "--", `./${file.path}`]);
   for (const rev of revs?.toString("utf-8").split("\n").filter(Boolean) ?? []) {
     const blob = git(dir, ["cat-file", "blob", `${rev}:./${file.path}`]);
-    if (blob === null || !holdsContent(blob, file.sha)) continue;
-    return git(dir, ["rev-parse", "--short", rev])?.toString("utf-8").trim() || rev;
+    if (blob !== null && holdsContent(blob, file.sha)) return { rev, blob };
   }
   return null;
+}
+
+function olderCommit(dir: string, file: BroughtFile): string | null {
+  const copy = committedCopy(dir, file);
+  if (copy === null) return null;
+  return git(dir, ["rev-parse", "--short", copy.rev])?.toString("utf-8").trim() || copy.rev;
+}
+
+// What the project's AI-DLC installs recorded writing (each harness's
+// `tools/data/aidlc-manifest.json`, kept by `aidlc config`): the files written
+// whole, and the shared files that hold AI-DLC's marked part, each with the
+// hash written. A record that cannot be read records nothing.
+interface InstallRecord {
+  whole: Map<string, string[]>;
+  parts: Map<string, Array<{ marker: string; hash: string }>>;
+}
+
+function installRecord(projectDir: string): InstallRecord {
+  const record: InstallRecord = { whole: new Map(), parts: new Map() };
+  const add = <T>(map: Map<string, T[]>, path: string, value: T): void => {
+    map.set(path, [...(map.get(path) ?? []), value]);
+  };
+  const object = (value: unknown): Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  try {
+    for (const harness of discoverProjectHarnesses(projectDir)) {
+      let manifest: Record<string, unknown>;
+      try {
+        manifest = object(JSON.parse(readFileSync(join(harness.root, "tools", "data", "aidlc-manifest.json"), "utf-8")));
+      } catch {
+        continue;
+      }
+      for (const [path, hash] of Object.entries(object(manifest.files))) {
+        if (typeof hash === "string") add(record.whole, path, hash);
+      }
+      for (const [path, value] of Object.entries(object(manifest.rootContributions))) {
+        const part = object(value);
+        if (typeof part.hash !== "string") continue;
+        if (part.policy === "whole-file") add(record.whole, path, part.hash);
+        if (part.policy === "managed-block") {
+          add(record.parts, path, { marker: typeof part.marker === "string" && part.marker ? part.marker : basename(path), hash: part.hash });
+        }
+      }
+    }
+  } catch {
+    // No harness the project can name: nothing is recorded.
+  }
+  return record;
+}
+
+// A shared file's marked part and the person's part around it, line endings
+// and the blank lines beside the markers aside; `block` is null for a file
+// with no marked part, and the whole is null when its markers are broken.
+function markedPart(path: string, text: string, marker: string): { block: string | null; person: string } | null {
+  const { begin, end } = managedBlockMarkers(path, marker);
+  const begins = text.split(begin).length - 1;
+  const ends = text.split(end).length - 1;
+  const plain = (part: string): string => part.replace(/\r\n/g, "\n").trim();
+  if (begins === 0 && ends === 0) return { block: null, person: plain(text) };
+  const at = text.indexOf(begin);
+  const to = text.indexOf(end);
+  if (begins !== 1 || ends !== 1 || to < at) return null;
+  const person = [plain(text.slice(0, at)), plain(text.slice(to + end.length))].filter(Boolean).join("\n");
+  return { block: text.slice(at, to + end.length), person };
+}
+
+// Whether AI-DLC's install wrote this file as it is now: the whole file, or in
+// a shared file its marked part, with the person's part as it was before the
+// build (git's copy of it). With no copy, only a file that is all AI-DLC's
+// part counts: which part changed cannot be told.
+function writtenByInstall(projectDir: string, record: InstallRecord, file: BroughtFile): boolean {
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(join(projectDir, file.path));
+  } catch {
+    return false;
+  }
+  if ((record.whole.get(file.path) ?? []).some((hash) => holdsRecordedWrite(bytes, hash))) return true;
+  const text = bytes.toString("utf-8");
+  for (const { marker, hash } of record.parts.get(file.path) ?? []) {
+    const now = markedPart(file.path, text, marker);
+    if (now?.block == null || !holdsRecordedWrite(now.block, hash)) continue;
+    const copy = committedCopy(projectDir, file);
+    if (copy === null ? now.person === "" : markedPart(file.path, copy.blob.toString("utf-8"), marker)?.person === now.person) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -123,6 +217,7 @@ export function broughtFilesChanged(
   const greenfield = declaredProjectType(getField(stateContent, "Project Type") ?? undefined) === "Greenfield";
   const recorded = recordedSourceListingForCompare(projectDir, before.listing, current);
   const files: BroughtFile[] = [];
+  let install: InstallRecord | undefined;
   for (const key of sourceListingChangedKeys(recorded, current.listing)) {
     const entry = recorded.get(key);
     if (entry === undefined || !brought.listing.has(key)) continue;
@@ -131,7 +226,13 @@ export function broughtFilesChanged(
     if (parsed === null || parsed.path.endsWith("@target") || /^[^/]*@checkout\//.test(parsed.path)) continue;
     const deleted = !current.listing.has(key);
     if (!deleted && !greenfield && isSourceFileName(basename(parsed.path))) continue;
-    files.push({ repo: parsed.repo, path: parsed.path, deleted, sha: entry.split(" ").at(-1) ?? "" });
+    const file = { repo: parsed.repo, path: parsed.path, deleted, sha: entry.split(" ").at(-1) ?? "" };
+    // AI-DLC installs at the project's root, never in a sibling repo.
+    if (!deleted && file.repo === "") {
+      install ??= installRecord(projectDir);
+      if (writtenByInstall(projectDir, install, file)) continue;
+    }
+    files.push(file);
   }
   if (files.length === 0) return null;
   return { files, attempt: sourceListingSha256(serializeSourceListing(before.listing)) };
