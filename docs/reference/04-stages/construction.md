@@ -904,7 +904,8 @@ Code is written to the workspace root, never to
 ### Inputs
 
 - Functional design from
-  `<record>/construction/{unit-name}/functional-design/` (if exists)
+  `<record>/construction/{unit-name}/functional-design/` (if exists),
+  including `frontend-components.md` for a Unit with a user interface
 - NFR requirements from
   `<record>/construction/{unit-name}/nfr-requirements/` (if exists)
 - NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)

@@ -792,7 +792,11 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     expect(out.result.missing_from_upstream_ids).toEqual(["UX1.1.1"]);
 
     out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target: "BR1.1" }]));
-    expect(out.result.invalid_targets).toContain("UX1.1.1: target must be frontend-components.md");
+    expect(out.result.invalid_targets).toContain("UX1.1.1: target must be this Unit's frontend-components.md");
+
+    write(proj, "construction/u1-auth/functional-design/frontend-components.md", "# Components\n\nOne page (UX1.1.1).\n");
+    out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target: "bogus/frontend-components.md" }]));
+    expect(out.result.invalid_targets).toContain("UX1.1.1: target must be this Unit's frontend-components.md");
 
     write(proj, "construction/u1-auth/functional-design/frontend-components.md", "# Components\n\n## LoginForm\n");
     out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target: "frontend-components.md" }]));
@@ -1875,6 +1879,36 @@ describe("t281 Build and Test: every requirement and criterion is built", () => 
     expect(out.pass, out.reason).toBe(true);
     expect(out.uncovered).toEqual([]);
     expect(row(out, "UX1.2.1")).toEqual({ id: "UX1.2.1", covered: true, built_in: ["u2-profile: src/profile/reset.ts"] });
+  });
+
+  test("does not report a decision whose stories only a spec or packaging Unit has", () => {
+    const proj = project();
+    const tables = seedStoryPath(proj, { status: "OK", target: "src/profile/reset.ts" });
+    write(proj, "inception/refined-mockups/interaction-spec.md", [
+      "# Interaction Spec",
+      "",
+      "- UX1.1.1 Sign in on one page, not a wizard [Q2]",
+      "- UX1.2.1 The reset link opens the reset form directly [Q5]",
+    ].join("\n"));
+    write(proj, "inception/units-generation/unit-of-work-dependency.md", [
+      "```yaml",
+      "units:",
+      "  - name: u1-auth",
+      "    kind: service",
+      "    depends_on: []",
+      "  - name: u2-profile",
+      "    kind: spec",
+      "    depends_on: [u1-auth]",
+      "```",
+    ].join("\n"));
+    const auth = JSON.parse(readFileSync(tables.auth, "utf-8"));
+    auth.upstream_ids.push("UX1.1.1");
+    auth.coverage.push({ id: "UX1.1.1", status: "OK", target: "src/auth/login.ts" });
+    writeFileSync(tables.auth, JSON.stringify(auth));
+
+    const out = runFinal(proj);
+    expect(out.pass, out.reason).toBe(true);
+    expect(row(out, "UX1.2.1")).toBeUndefined();
   });
 
   test("without stories (security-patch shape), FR leaves are built by their own rows and NFR1 through NFR1.1", () => {

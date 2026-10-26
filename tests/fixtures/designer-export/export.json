@@ -2377,6 +2377,10 @@
           "required": false
         },
         {
+          "artifact": "frontend-components",
+          "required": false
+        },
+        {
           "artifact": "contract-summary",
           "required": false
         },

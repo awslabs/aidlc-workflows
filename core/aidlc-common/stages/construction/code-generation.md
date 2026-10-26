@@ -23,6 +23,8 @@ consumes:
     required: false
   - artifact: entities
     required: false
+  - artifact: frontend-components
+    required: false
   - artifact: contract-summary
     required: false
   - artifact: performance-design
@@ -89,7 +91,7 @@ outputs: application code + code-generation-plan.md, code-generation-questions.m
 ### Step 1: Read All Unit Artifacts
 
 Read all design artifacts for the current unit:
-- Functional design from `<record>/construction/{unit-name}/functional-design/` (if exists)
+- Functional design from `<record>/construction/{unit-name}/functional-design/` (if exists), including `frontend-components.md` for a Unit with a user interface: the component design that realises its `UX` decisions
 - NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/` (if exists)
 - NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
 - Infrastructure design from `<record>/construction/{unit-name}/infrastructure-design/` (if exists)

@@ -292,16 +292,15 @@ function criteriaOfStories(storiesContent: string, stories: Set<string>): Set<st
 function decisionsOfStories(specContent: string, stories: Set<string> | null): Set<string> {
   const decisions = new Set<string>();
   for (const ux of extractIds(specContent, [ID_PATTERNS.UX])) {
-    const [group, story] = ux.slice(2).split(".");
-    if (stories === null || stories.has(`US${group}.${story}`)) decisions.add(ux);
+    if (stories === null || stories.has(storyOfDecision(ux))) decisions.add(ux);
   }
   return decisions;
 }
 
 // A spec or packaging Unit has no screen to build an experience decision in;
 // every other Unit, untagged included, builds the decisions of its stories.
-function buildsExperience(context: UnitContext): boolean {
-  return context.kind !== "spec" && context.kind !== "packaging";
+function buildsExperience(kind: string | undefined): boolean {
+  return kind !== "spec" && kind !== "packaging";
 }
 
 // Functional Design designs a decision in frontend-components.md, so a Unit
@@ -314,6 +313,25 @@ function designsExperience(context: UnitContext): boolean {
   } catch {
     return true;
   }
+}
+
+function storyOfDecision(ux: string): string {
+  const [group, story] = ux.slice(2).split(".");
+  return `US${group}.${story}`;
+}
+
+// The stories the story map gives only to Units with no screen: no Unit owes
+// their decisions, so the final gate does not either.
+function storiesWithoutScreen(projectDir: string, docsDir: string): Set<string> {
+  const none = new Set<string>();
+  const storyMap = join(docsDir, "inception", "units-generation", "unit-of-work-story-map.md");
+  const dag = resolveBoltDag(projectDir);
+  if (dag.state !== "ok" || !existsSync(storyMap)) return none;
+  const unitIds = unitIdMap(join(docsDir, "inception", "units-generation", "unit-of-work.md"), dag.units);
+  for (const [story, units] of storyAssignments(storyMap, dag.units, unitIds, [ID_PATTERNS.US]).assignments) {
+    if (units.size > 0 && [...units].every((unit) => !buildsExperience(dag.unitKinds?.get(unit)))) none.add(story);
+  }
+  return none;
 }
 
 function addExperienceDecisions(result: UpstreamResolution, docsDir: string, stories: Set<string> | null): void {
@@ -710,7 +728,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string, 
       addRequirements(result, ["functional", "non-functional"], declared);
       decisionStories = null;
     }
-    if (decisionStories !== undefined && buildsExperience(resolvedUnit.context)) {
+    if (decisionStories !== undefined && buildsExperience(resolvedUnit.context.kind)) {
       addExperienceDecisions(result, docsDir, decisionStories);
     }
     for (const id of detailedNfrIds(constructionDir(docsDir, unit, "nfr-requirements"), NFR_REQUIREMENT_FILES) ?? []) {
@@ -785,7 +803,7 @@ function verifyTargets(
         // An experience decision is designed in a component, not a rule: its
         // target is frontend-components.md, which must cite its ID.
         if (extractIds(entry.id, [ID_PATTERNS.UX]).size > 0) {
-          const problem = experienceTargetProblem(components, entry.id, entry.target);
+          const problem = experienceTargetProblem(components, unit, entry.id, entry.target);
           if (problem) invalidTargets.push(`${entry.id}: ${problem}`);
           continue;
         }
@@ -816,9 +834,11 @@ function verifyTargets(
 
 // Why a Functional Design `OK` row for an experience decision does not point at
 // a frontend-components.md that cites it.
-function experienceTargetProblem(components: string, id: string, rawTarget: string | undefined): string | null {
-  if (!/(^|\/)frontend-components\.md$/.test(normalizePath(rawTarget?.trim() ?? ""))) {
-    return "target must be frontend-components.md";
+function experienceTargetProblem(components: string, unit: string, id: string, rawTarget: string | undefined): string | null {
+  const target = normalizePath(rawTarget?.trim() ?? "");
+  const own = unit ? `construction/${unit}/functional-design/frontend-components.md` : "";
+  if (target !== "frontend-components.md" && !(own && (target === own || target.endsWith(`/${own}`)))) {
+    return "target must be this Unit's frontend-components.md";
   }
   const read = readText(components);
   if (read.content === null) return read.reason ?? `cannot read ${components}`;
@@ -993,7 +1013,10 @@ function finalCoverage(projectDir: string): FinalCoverage {
   if (existsSync(interactionSpec) && (storyContent !== null || existsSync(join(construction, "code-generation", "traceability.json")))) {
     const read = readText(interactionSpec);
     if (read.reason) reasons.push(read.reason);
-    if (read.content !== null) experience.push(...extractIds(read.content, [ID_PATTERNS.UX]));
+    if (read.content !== null) {
+      const noScreen = storiesWithoutScreen(projectDir, docsDir);
+      experience.push(...[...extractIds(read.content, [ID_PATTERNS.UX])].filter((id) => !noScreen.has(storyOfDecision(id))));
+    }
   }
   // Without a record requirements.md's reasons are not said, as in addRequirements.
   const requirementIds = recorded !== null ? [...recorded.keys()] : [

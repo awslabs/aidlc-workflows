@@ -509,6 +509,13 @@ describe("t116 per-unit {unit-name} injection", () => {
     }
   });
 
+  test("13b: a code-generation worker is pointed at the Unit's frontend-components.md", () => {
+    const { directive } = emitForWithProject("state-construction.md", "code-generation");
+    expect(allConsumePaths(directive)).toContain(
+      `${RP}/construction/{unit-name}/functional-design/frontend-components.md`,
+    );
+  });
+
   test("14: brownfield Refined Mockups reads the code's UI inventory and may write its HTML preview", () => {
     const { directive, projectDir } = emitForWithProject(
       "state-brownfield-feature.md",

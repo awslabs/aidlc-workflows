@@ -47,8 +47,9 @@ opens, on the tables as they are then:
    Code Generation also owes every `UX{x}.{y}.{n}` experience decision that
    `interaction-spec.md` records for its stories, unless the Unit is a `spec`
    or `packaging` Unit; Functional Design owes them when the Unit's kind gives
-   it `frontend-components.md`, and an `OK` row there must target that file,
-   which must cite the ID. Without `interaction-spec.md` neither owes any.
+   it `frontend-components.md`, and an `OK` row there must target the Unit's
+   own file, which must cite the ID. Without `interaction-spec.md` neither owes
+   any.
 6. Derives functional-design orphans from `rules.md` rather than
    trusting only the self-reported `reverse` array.
 
@@ -59,8 +60,9 @@ holds, and writes nothing when nothing is missing.
 
 Build and Test's coverage gate runs the same tool with `--stage build-and-test`
 and no output path. It reads every Code Generation table and prints each
-requirement, acceptance criterion, and owed `UX` experience decision as built
-or not: a requirement with sub-requirements is built when each Unit has built
+requirement, acceptance criterion, and owed `UX` experience decision (one
+whose stories the story map gives only to `spec` or `packaging` Units is owed
+by no Unit, so not here either) as built or not: a requirement with sub-requirements is built when each Unit has built
 its own, a row for the parent alone not covering them; otherwise by its own row
 or, when User Stories ran, through the criteria of the stories User Stories
 traced it to. One that nothing builds is settled when the latest stage that
