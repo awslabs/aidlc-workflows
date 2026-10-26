@@ -20,7 +20,7 @@ import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { AIDLC_SRC, REPO_ROOT, cleanupTestProject, createOrchestrationTestProject, intentsDirOf, seededRecordDir } from "../harness/fixtures.ts";
 import {
-  buildState, type Directive, env, exec, type Harness, type RunOptions, SECOND_SESSION, say,
+  buildState, type Directive, env, exec, type Harness, type RunOptions, SECOND_SESSION, say, UTILITY,
 } from "../harness/aidlc-input-corpus.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -247,5 +247,40 @@ describe("an answer given in the file counts in a clone whose agent logs the que
     expect(refused.status, said).not.toBe(0);
     expect(said).toContain("no new human reply has arrived for the question");
     expect(said).not.toContain(id);
+  });
+
+  test("a reply the same chat gave on other work is never offered for this one", async () => {
+    // The chat answers other work in the project, then asks to pick up the teammate's work, whose question was
+    // never logged: the refusal names the message that picked it up, never the reply given for the other work.
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    install(proj, "codex");
+    await buildState(proj, "work-open");
+    appendAuditEntry("STAGE_STARTED", { Stage: STAGE }, proj);
+    const made = await exec([process.execPath, UTILITY, "intent-create", "--scope", "bugfix", "--arguments", "fix the login session timeout", "--label", "auth", "--project-dir", proj], {
+      cwd: proj, env: { ...process.env },
+    });
+    expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+    const other = readdirSync(intentsDirOf(proj, "default")).find((name) => name !== PIECE && /auth/.test(name));
+    expect(other).toBeDefined();
+    const engine = (args: string[]) => exec([process.execPath, join(tools(proj, "codex"), "aidlc.ts"), "engine", ...args, "--project-dir", proj], {
+      cwd: proj, env: env(proj, CLONE),
+    });
+    const onOther = await engine(["intent", "switch", other!]);
+    expect(onOther.status, `${onOther.stdout}${onOther.stderr}`).toBe(0);
+    await laterSecond();
+    expect((await say(proj, "Q1: A", "codex", CLONE)).status).toBe(0);
+    const otherReply = messageId(proj, "Q1: A");
+    await laterSecond();
+    const pickup = `$aidlc switch to ${PIECE}, ${WORDS}`;
+    expect((await say(proj, pickup, "codex", CLONE)).status).toBe(0);
+    const pickupId = messageId(proj, pickup);
+    const onThis = await engine(["intent", "switch", PIECE]);
+    expect(onThis.status, `${onThis.stdout}${onThis.stderr}`).toBe(0);
+    const refused = await questionThenAnswer(proj, "codex");
+    const said = `${refused.stdout}${refused.stderr}`;
+    expect(refused.status, said).not.toBe(0);
+    expect(said).toContain(`run the same command with --message ${pickupId}; do not ask them again.`);
+    expect(said).not.toContain(otherReply);
   });
 });
