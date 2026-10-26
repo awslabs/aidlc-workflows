@@ -7817,7 +7817,7 @@ class NeedsRelease extends Error {
 
 // What is wrong, in one sentence the user recognizes.
 function releaseNeedSentence(need: ReleaseNeed): string {
-  const dir = need.harnessDir ?? need.distribution;
+  const dir = need.harnessDir ?? typedHarnessName(need.distribution);
   switch (need.cause) {
     case "pin":
       return `This project is pinned to ${need.version}, but ${dir} has ${need.current} files.`;
