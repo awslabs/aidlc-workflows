@@ -6,6 +6,7 @@ import {
   filterProducesByKind,
   getField,
   loadStageGraph,
+  markdownBlocks,
   parseCheckboxes,
   parseStateStageSuffixes,
   printUsageAndExit,
@@ -14,6 +15,7 @@ import {
   resolveBoltDag,
   resolveProjectDir,
   usesStageLevelPerUnitArtifacts,
+  visibleMarkdownLines,
 } from "./aidlc-lib.ts";
 import { aidlcDispatcherInvocation, sensorFireUsage } from "./aidlc-runtime-paths.ts";
 
@@ -291,10 +293,34 @@ function criteriaOfStories(storiesContent: string, stories: Set<string>): Set<st
 // way an acceptance criterion does; `null` stories means the run owes them all.
 function decisionsOfStories(specContent: string, stories: Set<string> | null): Set<string> {
   const decisions = new Set<string>();
-  for (const ux of extractIds(specContent, [ID_PATTERNS.UX])) {
+  for (const ux of experienceDefinitions(specContent).keys()) {
     if (stories === null || stories.has(storyOfDecision(ux))) decisions.add(ux);
   }
   return decisions;
+}
+
+// A decision is defined where its ID opens a visible list item, a table row's
+// first cell, or a heading; a mention elsewhere, or in code or a comment, is
+// not one. Returns how many times each ID is defined.
+function experienceDefinitions(specContent: string): Map<string, number> {
+  const { lines } = markdownBlocks(specContent);
+  const visible = visibleMarkdownLines(specContent);
+  const items = new Set<number>();
+  const defined = new Map<string, number>();
+  lines.forEach((line, index) => {
+    const text = visible[index] ?? "";
+    const item = line.containers.at(-1);
+    let head: string | null = null;
+    if (line.kind === "table") head = text.replace(/^[\s>]*\|/, "").split("|")[0];
+    else if (line.kind === "heading") head = text.slice(line.contentStart).replace(/^\s*#+/, "");
+    else if (item?.kind === "listItem" && !items.has(item.id)) {
+      items.add(item.id);
+      head = text.slice(line.contentStart);
+    }
+    const id = head === null ? undefined : /^[\s*_~`]*(UX\d+\.\d+\.\d+)\b/.exec(head)?.[1];
+    if (id) defined.set(id, (defined.get(id) ?? 0) + 1);
+  });
+  return defined;
 }
 
 // Whether Functional Design's produces_kinds gives a Unit of this kind the
@@ -319,19 +345,15 @@ function storyOfDecision(ux: string): string {
   return `US${group}.${story}`;
 }
 
-// A decision is defined where its ID opens a table row or list item. Two
-// decisions under one ID would be traced as one, and a decision whose story
-// stories.md lacks belongs to no Unit: both are fixed at Refined Mockups.
-function experienceProblems(specContent: string, decisions: Set<string>, storiesContent: string | null): string[] {
-  const defined = new Map<string, number>();
-  for (const line of specContent.split(/\r?\n/)) {
-    const id = /^\s*(?:[-*+]\s+|\|\s*)(UX\d+\.\d+\.\d+)\b/.exec(line)?.[1];
-    if (id) defined.set(id, (defined.get(id) ?? 0) + 1);
-  }
+// Two decisions under one ID would be traced as one, and a decision whose story
+// stories.md lacks belongs to no Unit: both are fixed at Refined Mockups, so
+// every table that reads the spec reports them.
+function experienceProblems(specContent: string, storiesContent: string | null): string[] {
+  const defined = experienceDefinitions(specContent);
   const stories = storiesContent === null ? null : extractIds(storiesContent, [ID_PATTERNS.US]);
   const problems: string[] = [];
-  for (const id of decisions) {
-    if ((defined.get(id) ?? 0) > 1) {
+  for (const [id, count] of defined) {
+    if (count > 1) {
       problems.push(`interaction-spec.md defines ${id} more than once; give each experience decision its own ID at Refined Mockups`);
     }
     if (stories && !stories.has(storyOfDecision(id))) {
@@ -346,9 +368,10 @@ function addExperienceDecisions(result: UpstreamResolution, docsDir: string, sto
   if (!existsSync(interactionSpec)) return;
   const read = readText(interactionSpec);
   if (read.content === null) return;
-  const decisions = decisionsOfStories(read.content, stories);
-  for (const id of decisions) result.ids.add(id);
-  result.reasons.push(...experienceProblems(read.content, decisions, null));
+  for (const id of decisionsOfStories(read.content, stories)) result.ids.add(id);
+  const storiesFile = join(docsDir, "inception", "user-stories", "stories.md");
+  const storiesContent = existsSync(storiesFile) ? readText(storiesFile).content : null;
+  result.reasons.push(...experienceProblems(read.content, storiesContent));
 }
 
 function idsFromFile(path: string, patterns: RegExp[], label: string): { ids: Set<string>; reason?: string } {
@@ -1029,9 +1052,8 @@ function finalCoverage(projectDir: string): FinalCoverage {
     const read = readText(interactionSpec);
     if (read.reason) reasons.push(read.reason);
     if (read.content !== null) {
-      const decisions = extractIds(read.content, [ID_PATTERNS.UX]);
-      experience.push(...decisions);
-      reasons.push(...experienceProblems(read.content, decisions, storyContent));
+      experience.push(...experienceDefinitions(read.content).keys());
+      reasons.push(...experienceProblems(read.content, storyContent));
     }
   }
   // Without a record requirements.md's reasons are not said, as in addRequirements.

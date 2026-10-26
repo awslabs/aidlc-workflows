@@ -514,7 +514,7 @@ them so agents can cite them instead of guessing.
 | `/aidlc knowledge onboard [path]` | Add one file or folder from anywhere in your project (one outside `documents/` is copied in first, and the result says where), or sweep every not-yet-indexed file under `documents/` when no path is given |
 | `/aidlc knowledge sync` | Reconcile the catalog with what is on disk; rebuild an index that was deleted |
 | `/aidlc knowledge list [--json]` | The catalog — every document with its state |
-| `/aidlc knowledge show <id>` | One document's full record plus its extracted text |
+| `/aidlc knowledge show <id>` | One document's full record plus its extracted text; `--no-content` leaves the text out and keeps the summary |
 | `/aidlc knowledge associate <id> --intent [slug]` | Scope a document to one intent |
 | `/aidlc knowledge dissociate <id> --intent [slug]` | Remove that scoping |
 | `/aidlc knowledge rebind <id> --to <path>` | Repair a row whose original moved *and* changed |

@@ -791,6 +791,44 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     expect(out.result.reason).toContain("interaction-spec.md defines UX1.1.1 more than once");
   });
 
+  test("code-generation finds a duplicate ID in any list or table form, and ignores hidden IDs", () => {
+    const proj = project();
+    seedExperience(proj);
+    const forms = [
+      ["1. UX1.1.1 Sign in on one page [Q2]", "2. UX1.1.1 A failed sign-in keeps the email [Q4]"],
+      ["| `UX1.1.1` | Sign in on one page [Q2] |", "| **UX1.1.1** | A failed sign-in keeps the email [Q4] |"],
+      ["* `UX1.1.1` Sign in on one page [Q2]", "### UX1.1.1 A failed sign-in keeps the email [Q4]"],
+    ];
+    for (const [first, second] of forms) {
+      const table = first.startsWith("|") ? ["| ID | Decision |", "|---|---|", first, second] : [first, "", second];
+      write(proj, "inception/refined-mockups/interaction-spec.md", ["# Interaction Spec", "", ...table].join("\n"));
+      const out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1"]));
+      expect(out.result.reason, first).toContain("interaction-spec.md defines UX1.1.1 more than once");
+    }
+
+    write(proj, "inception/refined-mockups/interaction-spec.md", [
+      "# Interaction Spec",
+      "",
+      "- UX1.1.1 Sign in on one page [Q2]",
+      "",
+      "```",
+      "- UX1.1.2 an example in code",
+      "```",
+      "<!-- - UX1.1.3 a draft left in a comment -->",
+    ].join("\n"));
+    const out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1"]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+  });
+
+  test("code-generation reports a decision naming a story stories.md lacks", () => {
+    const proj = project();
+    seedExperience(proj);
+    write(proj, "inception/refined-mockups/interaction-spec.md", "# Interaction Spec\n\n- UX1.1.1 Sign in on one page [Q2]\n- UX1.9.1 A story nobody wrote [assumption]\n");
+    const out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1"]));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.reason).toContain("interaction-spec.md's UX1.9.1 names story US1.9, which stories.md does not have");
+  });
+
   test("functional-design owes a Unit that writes frontend-components.md the decisions of its stories, cited there", () => {
     const proj = project();
     seedExperience(proj);

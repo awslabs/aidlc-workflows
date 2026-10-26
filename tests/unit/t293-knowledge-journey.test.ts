@@ -225,6 +225,10 @@ describe("t293 the documented workflow, end to end, through the public dispatche
       const shownA = run(p, "show a.md", ["show", aRow.id]);
       expect(shownA.citation as string).toContain("documents/a.md");
       expect(shownA.content as string).toBe("a v1\n");
+      const recordA = run(p, "show a.md --no-content", ["show", aRow.id, "--no-content"]);
+      expect(recordA.citation).toBe(shownA.citation);
+      expect(recordA.content, "--no-content leaves the text out").toBeUndefined();
+      expect(recordA.content_notice).toBeUndefined();
 
       // 4. edit a.md in place, onboard again: exactly ONE live row, status
       // "edited", same id (identity survives a same-path edit).

@@ -2373,7 +2373,12 @@ function verifiedSummaryBytes(
  * point: a caller that receives `content` cannot receive it without also
  * receiving the declaration that it is data, not instructions.
  */
-export function showDocument(projectDir: string, space: string, id: string): ShownDocument {
+export function showDocument(
+  projectDir: string,
+  space: string,
+  id: string,
+  options: { content?: boolean } = {},
+): ShownDocument {
   assertKnowledgeRootTrusted(projectDir, space);
   const index = readIndex(projectDir, space);
   const row = index.documents.find((r) => r.id === id);
@@ -2411,7 +2416,9 @@ export function showDocument(projectDir: string, space: string, id: string): Sho
   // matches the row's digest describes a revision that no longer exists, so it is
   // withheld rather than shown with a caveat.
   let out: ShownDocument = base;
-  if (row.content !== undefined && derivativeIsCurrent(row)) {
+  // `--no-content` keeps the record and its summary, so a caller can judge a
+  // document before reading its full text.
+  if (options.content !== false && row.content !== undefined && derivativeIsCurrent(row)) {
     const bytes = verifiedContentBytes(projectDir, space, row);
     if (bytes === null) {
       out = { ...out, state: "invalidated" };
@@ -4147,6 +4154,7 @@ function parseFlags(
   json: boolean;
   intent?: string;
   allowInactive: boolean;
+  noContent: boolean;
   positional: string[];
   values: Record<string, string>;
 } {
@@ -4157,6 +4165,7 @@ function parseFlags(
   let intent: string | undefined;
   let json = false;
   let allowInactive = false;
+  let noContent = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--space") {
@@ -4177,6 +4186,8 @@ function parseFlags(
       json = true;
     } else if (a === "--allow-inactive") {
       allowInactive = true;
+    } else if (a === "--no-content") {
+      noContent = true;
     } else if (
       a === "--to" || a === "--text-file" || a === "--source-revision" || a === "--tags" ||
       a === "--copied-from" || a === "--copied-ignored" || a === "--copied-left-out"
@@ -4195,7 +4206,7 @@ function parseFlags(
       positional.push(a);
     }
   }
-  return { space, json, intent, allowInactive, positional, values };
+  return { space, json, intent, allowInactive, noContent, positional, values };
 }
 
 let projectDir: string | undefined;
@@ -4256,12 +4267,12 @@ export function main(argv: string[]): void {
         break;
       }
       case "show": {
-        const { space: spaceFlag, json, positional } = parseFlags(args.slice(1));
+        const { space: spaceFlag, json, noContent, positional } = parseFlags(args.slice(1));
         if (positional[0] === undefined) error("show requires a document id.");
         const pd = resolveProjectDir(projectDir);
         const space = resolveSpaceFlag(spaceFlag, pd);
         assertKnowledgeRootTrusted(pd, space);
-        const doc = showDocument(pd, space, positional[0]);
+        const doc = showDocument(pd, space, positional[0], { content: !noContent });
         if (json) emitJson(doc as unknown as Record<string, unknown>);
         else emitHuman(renderShow(doc));
         break;
@@ -4388,6 +4399,7 @@ export function main(argv: string[]): void {
             "                  --allow-inactive to target a finished intent.\n" +
             "  list            The catalog: every row, with its state visible.\n" +
             "  show <id>       One document's full record, plus its extracted text.\n" +
+            "                  Add --no-content to leave the text out.\n" +
             "  associate <id> --intent [slug]    Scope a document to an intent.\n" +
             "  dissociate <id> --intent [slug]   Remove that scoping.\n" +
             "  sync            Reconcile with documents/; rebuild a lost index.\n" +
