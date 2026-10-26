@@ -49,6 +49,7 @@ import {
   type GuardFence,
   type SwitchableGuardFence,
   isSwitchableGuardFence,
+  guardFenceConfigKey,
   guardFenceFromConfigKey,
 } from "./aidlc-guard-fences.ts";
 export {
@@ -3149,6 +3150,66 @@ export function messageFill(projectDir: string, settings: readonly string[] = []
   return named.length === 0
     ? MESSAGE_FILL
     : `${MESSAGE_FILL} (${named.map((message) => `${message.id}, sent ${message.at}`).join("; ")})`;
+}
+
+// The per-work settings `config set` takes, by their flag names: the setter
+// (aidlc-guard-switch.ts) and a decision's own command (settingsBesideDecision)
+// read this one list.
+const GUARD_FENCE_CONFIG_KEYS = SWITCHABLE_GUARD_FENCES.map((fence) => guardFenceConfigKey(fence)) as
+  ["guard.plan-approval", "guard.review-freeze", "guard.state-transition", "guard.reviewer-scope"];
+export const CONFIG_KEYS = [
+  "depth",
+  "test-strategy",
+  "review",
+  "guard-policy",
+  "sensors",
+  "learnings",
+  "summary-confirmation",
+  "plan-approval",
+  "collaborators",
+  ...GUARD_FENCE_CONFIG_KEYS,
+] as const;
+
+// The settings the person asked for in the reply that gives a decision ride
+// that decision's own command (`report --result approved`, the plan answer):
+// the setter runs first, on that reply's message, so the message still stands
+// for them (one that already backed a decision does not), and the decision is
+// recorded after it. `settings` are `config set` keys with their values; the
+// setter proves the message and writes them as it does when run on its own.
+// Its lines for the person, or its refusal.
+export function settingsBesideDecision(
+  projectDir: string,
+  session: string | null,
+  settings: ReadonlyArray<readonly [string, string]>,
+  message: string | null,
+): { lines: string[] } | { refusal: string } {
+  const [[key, value], ...rest] = settings;
+  const args = [
+    "config", "set", key, value, ...rest.flatMap(([other, set]) => [`--${other}`, set]),
+    ...(message === null ? [] : ["--message", message]), "--project-dir", projectDir,
+  ];
+  // The child serves this command's chat, and runs this process's own
+  // identity, never one the environment names (as spawnState does).
+  const run = Bun.spawnSync({
+    cmd: isCompiledExecutable()
+      ? [process.execPath, ...args]
+      : [process.execPath, join(dirname(fileURLToPath(import.meta.url)), "aidlc.ts"), ...args],
+    env: hookChildEnv(projectDir, session ?? undefined),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const out = new TextDecoder().decode(run.stdout).trim();
+  if (run.exitCode === 0) return { lines: out === "" ? [] : out.split("\n") };
+  const err = new TextDecoder().decode(run.stderr).trim();
+  try {
+    const parsed: unknown = JSON.parse(err);
+    if (parsed !== null && typeof parsed === "object" && typeof (parsed as { error?: unknown }).error === "string") {
+      return { refusal: (parsed as { error: string }).error };
+    }
+  } catch {
+    // Not the tool's error line: its own words below.
+  }
+  return { refusal: err || out || `The setter exited ${run.exitCode}.` };
 }
 const dispatchStep = (doing: string): RegExp => new RegExp(
   `^Run \`([^\`]+)\` to ${doing}(${escapeRegex(MESSAGE_FILL)}(?: \\([^()]*\\))?)?, then print its output verbatim and stop\\.$`,
@@ -13440,16 +13501,28 @@ export function rowsAfterMark(projectDir: string, mark: AuditMark): ((row: Audit
   }
 }
 
-// Their latest reply after the mark, as personRepliedAfter counts one, by the
-// message its turn names: that message and its words as the store keeps them,
-// for a decision's row. Null when there is none, or its message is not on record.
-export function latestReplyAfter(projectDir: string, mark: AuditMark): { messageId: string; words: string | null } | null {
+// Their replies after the mark, as personRepliedAfter counts them, oldest
+// first: the message each turn names (null when it names none) and its time.
+// Empty when there is none, or the mark is another shard's.
+export function repliesAfter(projectDir: string, mark: AuditMark): Array<{ messageId: string | null; at: string }> {
   try {
     const shardPath = auditFilePath(projectDir);
-    if (projectRelativePath(projectDir, shardPath) !== mark.shard) return null;
+    if (projectRelativePath(projectDir, shardPath) !== mark.shard) return [];
     const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(mark.offset).toString("utf-8");
-    const turn = auditShardBlocks(after).findLast((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
-    const id = turn === undefined ? null : auditBlockField(turn, "Message Id");
+    return auditShardBlocks(after)
+      .filter((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }))
+      .map((block) => ({ messageId: auditBlockField(block, "Message Id"), at: auditBlockField(block, "Timestamp") ?? "" }));
+  } catch {
+    return [];
+  }
+}
+
+// Their latest reply after the mark, by the message its turn names: that
+// message and its words as the store keeps them, for a decision's row. Null
+// when there is none, or its message is not on record.
+export function latestReplyAfter(projectDir: string, mark: AuditMark): { messageId: string; words: string | null } | null {
+  try {
+    const id = repliesAfter(projectDir, mark).at(-1)?.messageId ?? null;
     if (id === null) return null;
     const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
     const message = readMessage(projectDir, id);
@@ -13770,6 +13843,12 @@ export function turnsPersonCheckOff(key: string, value: string): boolean {
 // The setter's two names for plan approval, and the value that turns it off.
 export function turnsPlanApprovalOff(key: string, value: string | undefined): boolean {
   return (key === "plan-approval" || key === "guard.plan-approval") && value?.trim().toLowerCase() === "off";
+}
+
+// Whether `--<key> <value>` turns one of the person's checks off.
+export function turnsPersonsCheckOff(key: string, value: string | undefined): boolean {
+  const values = Object.hasOwn(PERSON_CHECK_SWITCH_VALUES, key) ? PERSON_CHECK_SWITCH_VALUES[key] : undefined;
+  return values !== undefined && value !== undefined && values.off.includes(value.trim().toLowerCase());
 }
 
 // Whether `config set <key> <value>` switches one of the person's checks with
@@ -14215,29 +14294,48 @@ export function authorizedConstructionPolicyChange(
   value: string,
   rows?: AuditShardEvent[],
 ): boolean {
+  return constructionPolicyReceipt(projectDir, stateContent, field, value, rows) !== null;
+}
+
+// The person's recorded choice at a Construction policy question that this
+// change carries out, or null. Their yes to building the Units in parallel is
+// also their yes to the stage-by-stage iteration it needs first.
+export function constructionPolicyReceipt(
+  projectDir: string,
+  stateContent: string,
+  field: string,
+  value: string,
+  rows?: AuditShardEvent[],
+): AuditShardEvent | null {
+  if (field === "Construction Iteration" && value === "stage-major" && swarmNeedsStageMajor(stateContent)) {
+    const swarm = constructionPolicyReceipt(projectDir, stateContent, "Construction Execution", "swarm", rows);
+    if (swarm !== null) return swarm;
+  }
   // Applying a receipt sets its value. Returning to another value requires a
   // newer receipt for this field, so a consumed receipt can never become live again.
   if (!validConstructionPolicyChange(field, value) || getField(stateContent, field) === value ||
-    !activeIntentUuid(projectDir)) return false;
+    !activeIntentUuid(projectDir)) return null;
   const unreadable: string[] = [];
   const events = (rows ?? readAuditShardEvents(projectDir, undefined, undefined, unreadable)).filter(
     (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
   );
-  if (unreadable.length) return false;
+  if (unreadable.length) return null;
   const workflows = maximalAttemptEvents(events.filter((row) => row.event === "WORKFLOW_STARTED"));
-  if (workflows.length !== 1) return false;
+  if (workflows.length !== 1) return null;
   const actions = maximalAttemptEvents(events.filter((row) =>
     ["DECISION_RECORDED", "QUESTION_ANSWERED", "CONSTRUCTION_POLICY_RECORDED"].includes(row.event) &&
     auditBlockField(row.block, "Checkpoint") === CONSTRUCTION_POLICY_CHECKPOINT &&
     auditBlockField(row.block, "Field") === field,
   ));
-  if (actions.length !== 1) return false;
+  if (actions.length !== 1) return null;
   const receipt = actions[0];
   return receipt.event === "CONSTRUCTION_POLICY_RECORDED" &&
     attemptEventDefinitelyBefore(workflows[0], receipt) &&
     auditBlockField(receipt.block, "Value") === value &&
     !!auditBlockField(receipt.block, "Session")?.trim() &&
-    auditBlockField(receipt.block, "User Input") === "Approve";
+    auditBlockField(receipt.block, "User Input") === "Approve"
+    ? receipt
+    : null;
 }
 
 /**

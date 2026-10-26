@@ -587,10 +587,8 @@ describe("source and native guard remedies execute their owning operations", () 
 
     const before = p.audit();
     const finished = json(p.exact(finishCommand!));
-    expect(finished).toMatchObject({
-      kind: "print",
-      message: `Recorded revised for "${STAGE}".`,
-    });
+    expect(finished).toMatchObject({ kind: "print" });
+    expect(finished.message).toStartWith(`Recorded revised for "${STAGE}".`);
     expect(p.state()).toContain(`- [?] ${STAGE} — EXECUTE`);
     const appended = p.audit().slice(before.length);
     expect(appended).toContain("**Event**: STAGE_AWAITING_APPROVAL");

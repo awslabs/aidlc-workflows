@@ -378,16 +378,21 @@ describe.each(POLICIES)("Guard Policy %s: a message stands for what it asks besi
   };
 
   // ans-ga-13: "approve, and turn plan approval off for the rest of this work".
-  test("approve first, then the setter naming that message: set by you, with no refusal", () => {
+  // Arden's rule for every setting: a message that already gave an approval
+  // does not also stand for a setting; the setting goes first, or rides the
+  // approval's own report (t-setting-spent-message).
+  test("approve first, then the setter naming that message: refused, naming no message, and plan approval stays on", () => {
     const proj = project();
     const slug = openGate(proj);
     const id = said(proj, "approve, and turn plan approval off for the rest of this work");
     tick();
     approve(proj, slug);
+    const before = planApproval();
     const off = setter(proj, ["--plan-approval", "off", "--message", id]);
-    expect(off.status, off.out).toBe(0);
-    expect(planApproval()).toBe("off (set by you)");
-    expect(field(rows(proj, "CEREMONY_SET").at(-1), "Message Id")).toBe(id);
+    expect(off.status).not.toBe(0);
+    expect(off.out).not.toContain(id);
+    expect(off.out).toContain("already gave an approval or another decision");
+    expect(planApproval()).toBe(before);
   });
 
   test("the setter first, then the approval on the same message: both are recorded", () => {
@@ -401,57 +406,59 @@ describe.each(POLICIES)("Guard Policy %s: a message stands for what it asks besi
     expect(rows(proj, "GATE_APPROVED")).toHaveLength(1);
   });
 
-  test("stages approved together are one approval, so the message still stands", () => {
+  // The grant of autonomy is a request: what one message asks beside the one
+  // decision it gave still stands for it, and a setting does not.
+  const grant = (proj: string, id: string) =>
+    run(proj, [BOLT, "set-autonomy", "--mode", "autonomous", "--message", id, "--project-dir", proj]);
+
+  test("stages approved together are one approval, so the message still stands for a request", () => {
     const proj = project();
-    const id = said(proj, "approve both, and turn plan approval off");
+    const id = said(proj, "approve both, and run Construction on its own from here");
     tick();
     append(proj, "GATE_APPROVED", { Stage: "feasibility", "User Input": "Approve", "Message Id": id });
     append(proj, "GATE_APPROVED", {
       Stage: "approval-handoff", "User Input": "Approve", "Approved Together With": "feasibility", "Message Id": id,
     });
-    const off = setter(proj, ["--plan-approval", "off", "--message", id]);
-    expect(off.status, off.out).toBe(0);
-    expect(planApproval()).toBe("off (set by you)");
+    expect(setter(proj, ["--plan-approval", "off", "--message", id]).status).not.toBe(0);
+    const granted = grant(proj, id);
+    expect(granted.status, granted.out).toBe(0);
   });
 
-  test("one plan answer for several Units is one decision, so the message still stands", () => {
+  test("one plan answer for several Units is one decision, so the message still stands for a request", () => {
     const proj = project();
-    const id = said(proj, "approve the plans, and turn plan approval off from here");
+    const id = said(proj, "approve the plans, and run Construction on its own from here");
     tick();
     for (const unit of ["core", "extra"]) {
       append(proj, "PLAN_APPROVAL_RECORDED", { Stage: "code-generation", Details: "Approve Plan", "Asked By": "engine", Unit: unit });
     }
-    const off = setter(proj, ["--plan-approval", "off", "--message", id]);
-    expect(off.status, off.out).toBe(0);
-    expect(planApproval()).toBe("off (set by you)");
+    expect(setter(proj, ["--plan-approval", "off", "--message", id]).status).not.toBe(0);
+    const granted = grant(proj, id);
+    expect(granted.status, granted.out).toBe(0);
   });
 
   // A jump over several Units writes one row per Unit: one decision, like the plan answers above. Two jumps are two.
-  test("one jump over several Units is one decision, so the message still stands", () => {
+  test("one jump over several Units is one decision, so the message still stands for a request", () => {
     const proj = project();
-    const id = said(proj, "redo units a and b, and turn plan approval off from here");
+    const id = said(proj, "redo units a and b, and run Construction on its own from here");
     tick();
     const reopen = (stage: string, unit: string) => append(proj, "GATE_REJECTED", {
       Stage: stage, "Gate Stages": stage, "Gate Scope": "unit-end", Unit: unit, Reopen: "jump", Feedback: `Reopened for unit ${unit}.`,
     });
     for (const unit of ["a", "b"]) reopen("functional-design", unit);
-    const off = setter(proj, ["--plan-approval", "off", "--message", id]);
-    expect(off.status, off.out).toBe(0);
-    expect(planApproval()).toBe("off (set by you)");
+    const granted = grant(proj, id);
+    expect(granted.status, granted.out).toBe(0);
 
     const second = project();
-    const twice = said(second, "redo units a and b, and turn plan approval off from here");
+    const twice = said(second, "redo units a and b, and run Construction on its own from here");
     tick();
     const reopenThere = (stage: string, unit: string) => append(second, "GATE_REJECTED", {
       Stage: stage, "Gate Stages": stage, "Gate Scope": "unit-end", Unit: unit, Reopen: "jump", Feedback: `Reopened for unit ${unit}.`,
     });
     reopenThere("functional-design", "a");
     reopenThere("code-generation", "a");
-    const before = planApproval();
-    const refused = setter(second, ["--plan-approval", "off", "--message", twice]);
+    const refused = grant(second, twice);
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain(`message ${twice} arrived before the last approval or decision`);
-    expect(planApproval()).toBe(before);
   });
 
   test("the run's own approvals use none of it up", () => {
@@ -475,7 +482,7 @@ describe.each(POLICIES)("Guard Policy %s: a message stands for what it asks besi
     const before = planApproval();
     const off = setter(proj, ["--plan-approval", "off", "--message", id]);
     expect(off.status).not.toBe(0);
-    expect(off.out).toContain(`message ${id} arrived before the last approval or decision`);
+    expect(off.out).toContain("already gave an approval or another decision");
     expect(planApproval()).toBe(before);
   });
 

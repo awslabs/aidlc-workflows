@@ -4,6 +4,7 @@ import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./
 import {
   assertChangeControlLedgerWritable,
   auditBlockField,
+  CONFIG_KEYS,
   type GuardPolicy,
   guardPolicyAtLeast,
   keepActiveDirectiveOverSettingWrite,
@@ -94,20 +95,7 @@ export const VALID_TEST_STRATEGIES: Record<string, string> = {
   comprehensive: "Comprehensive",
 };
 
-const GUARD_FENCE_CONFIG_KEYS = SWITCHABLE_GUARD_FENCES.map((fence) => guardFenceConfigKey(fence)) as
-  ["guard.plan-approval", "guard.review-freeze", "guard.state-transition", "guard.reviewer-scope"];
-export const CONFIG_KEYS = [
-  "depth",
-  "test-strategy",
-  "review",
-  "guard-policy",
-  "sensors",
-  "learnings",
-  "summary-confirmation",
-  "plan-approval",
-  "collaborators",
-  ...GUARD_FENCE_CONFIG_KEYS,
-] as const;
+export { CONFIG_KEYS };
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 export type IntentSettingsRequest = Partial<Record<ConfigKey, { value: string; source: string }>>;
 export type ReviewOverride = "adversarial" | "advisory" | "none";
@@ -649,8 +637,8 @@ export function applyIntentSettings(
   }
   // Lowering a fence is the person's call. Their typed switch carries it out,
   // and so does this setter when the agent names the message they asked in
-  // (--message, proved by the caller; the approval they gave in that same
-  // message leaves the rest of it standing): the conductor runs what they asked
+  // (--message, proved by the caller; one that already gave an approval or
+  // another decision does not stand): the conductor runs what they asked
   // for, and the record names their message.
   // A command the person ran at their own terminal carries itself: this rule
   // protects them from a worker lowering a check on their behalf, and it has no

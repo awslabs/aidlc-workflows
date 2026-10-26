@@ -2490,27 +2490,42 @@ describe("t188: what the person's message asks for outlives the approval given i
     expect(autonomyMode()).toBe("gated");
   });
 
-  test("approve, and turn plan approval off: both halves of the one message are carried out", () => {
+  // A setting is the exception (Arden's rule for every setting): a message that
+  // already gave an approval does not also stand for one, so the setting goes
+  // first, then the approval, which the message still backs.
+  test("approve, and turn plan approval off: the setting first, then the approval, both carried out", () => {
+    const slug = openGate();
+    const id = recordTypedReply(proj, "approve, and turn plan approval off");
+    tick();
+    const off = setter(["config-change", "--plan-approval", "off", "--message", id]);
+    expect(off.rc, off.out).toBe(0);
+    expect(off.out).toContain("Each code plan is now built without asking you first.");
+    const approved = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(approved.rc, approved.out).toBe(0);
+    expect(planApproval()).toBe("off");
+  });
+
+  test("approve, and turn plan approval off: the approval first, then the setter on that message, is refused", () => {
     const slug = openGate();
     const id = recordTypedReply(proj, "approve, and turn plan approval off");
     tick();
     const approved = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
     expect(approved.rc, approved.out).toBe(0);
     const off = setter(["config-change", "--plan-approval", "off", "--message", id]);
-    expect(off.rc, off.out).toBe(0);
-    expect(off.out).toContain("Each code plan is now built without asking you first.");
-    expect(planApproval()).toBe("off");
+    expect(off.rc).not.toBe(0);
+    expect(off.out).not.toContain(id);
+    expect(planApproval()).not.toBe("off");
   });
 
-  test("approve the plan, and turn plan approval off: one plan answer for several Units counts once", () => {
+  test("approve the plan, and turn plan approval off: after the plan answers for several Units, the setter is refused", () => {
     const id = recordTypedReply(proj, "approve the plans, and turn plan approval off");
     tick();
     for (const unit of ["core", "extra"]) {
       appendAuditEntry("PLAN_APPROVAL_RECORDED", { Stage: "code-generation", Details: "Approve Plan", "Asked By": "engine", Unit: unit }, proj);
     }
     const off = setter(["config-change", "--plan-approval", "off", "--message", id]);
-    expect(off.rc, off.out).toBe(0);
-    expect(planApproval()).toBe("off");
+    expect(off.rc).not.toBe(0);
+    expect(planApproval()).not.toBe("off");
   });
 
   test("the message that answered a question still asks for the switch: the answer recorded from it is not a second decision", () => {

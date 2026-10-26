@@ -7,11 +7,12 @@
 // person, a message of theirs from before it that a decision has followed is
 // not offered: a live Copilot run took their "Approve" for Requirements
 // Analysis from that offer and turned plan approval off, set by them, with the
-// plan question unanswered. Before the plan question, the message an approval
-// was given in is offered as before ("approve, and turn plan approval off",
-// the approval recorded first), and so is a reply sent since the question was
-// shown, or a message no decision has followed. The refusal, its next step and
-// the plan question are as they were; the tool reads no words.
+// plan question unanswered. A message that already gave an approval is offered
+// for no setting at all (t-setting-spent-message), so "approve, and turn plan
+// approval off" runs the setting first, before the plan question, where the
+// message is still offered; so is a reply sent since the question was shown, or
+// a message no decision has followed. The refusal, its next step and the plan
+// question are as they were; the tool reads no words.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -227,19 +228,79 @@ describe("a request that is not a setting is offered as before while the plan qu
   });
 });
 
-describe("before the plan question, the message an approval was given in is offered as before", () => {
-  test("approve, and turn plan approval off: the approval recorded first, the refusal names their message", () => {
+describe("before the plan question, the message an approval is given in is offered for the setting it asks for first", () => {
+  test("approve, and turn plan approval off: the setting first, the refusal names their message, then the approval", () => {
     const proj = bugfixAtRequirements();
     const both = said(proj, "approve, and turn plan approval off");
     tick();
-    // The agent never saw the id: the approval binds their reply by itself.
-    approveRequirements(proj);
+    // The agent never saw the id: the refusal names it, and the approval binds their reply by itself.
     const refused = planApprovalOff(proj);
     expect(refused.rc).not.toBe(0);
     expect(refused.out).toContain(`If their message ${both} (sent `);
     const off = planApprovalOff(proj, both);
     expect(off.rc, off.out).toBe(0);
+    approveRequirements(proj);
     expect(stateField(proj, "Plan Approval")).toBe("off (set by you)");
     expect(auditBlockField(lastCeremonySet(proj), "Person Reply")).toBe("approve, and turn plan approval off");
+  });
+
+  // The setting rides the plan answer itself: written first, on their reply since
+  // the plan question was shown, then the plan is approved on that same reply.
+  test("approve the plan, and turn plan approval off from here, as one plan answer: off as theirs, and the plan approved", () => {
+    const proj = bugfixAtRequirements();
+    const approve = said(proj, "Approve");
+    tick();
+    approveRequirements(proj, approve);
+    planQuestionShown(proj);
+    const both = said(proj, "approve the plan, and turn plan approval off from here");
+    tick();
+    const answered = run(proj, LOG, [
+      "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
+      "--plan-approval", "off",
+    ]);
+    expect(answered.rc, answered.out).toBe(0);
+    expect(answered.out).toContain("Plan Approval changed");
+    expect(stateField(proj, "Plan Approval")).toBe("off (set by you)");
+    expect(auditBlockField(lastCeremonySet(proj), "Message Id")).toBe(both);
+    const plan = readAuditShardEvents(proj).filter((row) => row.event === "PLAN_APPROVAL_RECORDED").at(-1);
+    expect(plan, answered.out).toBeDefined();
+  });
+
+  // Two replies since the plan question and no message named: the setting would
+  // carry the words of whichever came last, so the agent names the one that asked.
+  test("two replies since the plan question and no message named: the answer names both and records nothing", () => {
+    const proj = bugfixAtRequirements();
+    approveRequirements(proj, said(proj, "Approve"));
+    planQuestionShown(proj);
+    const both = said(proj, "approve the plan, and turn plan approval off from here");
+    const other = said(proj, "oh and keep the blue theme");
+    tick();
+    const unnamed = run(proj, LOG, [
+      "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
+      "--plan-approval", "off",
+    ]);
+    expect(unnamed.rc).not.toBe(0);
+    expect(unnamed.out).toContain(both);
+    expect(unnamed.out).toContain(other);
+    expect(stateField(proj, "Plan Approval")).not.toBe("off (set by you)");
+    expect(readAuditShardEvents(proj).filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toHaveLength(0);
+    const named = run(proj, LOG, [
+      "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan",
+      "--plan-approval", "off", "--message", both,
+    ]);
+    expect(named.rc, named.out).toBe(0);
+    expect(auditBlockField(lastCeremonySet(proj), "Person Reply")).toBe("approve the plan, and turn plan approval off from here");
+  });
+
+  test("the approval recorded first: no refusal names their message for the setting any more", () => {
+    const proj = bugfixAtRequirements();
+    const both = said(proj, "approve, and turn plan approval off");
+    tick();
+    approveRequirements(proj);
+    const refused = planApprovalOff(proj);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).not.toContain(both);
+    expect(planApprovalOff(proj, both).rc).not.toBe(0);
+    expect(stateField(proj, "Plan Approval")).not.toBe("off (set by you)");
   });
 });

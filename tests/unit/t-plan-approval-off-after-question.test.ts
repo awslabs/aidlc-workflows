@@ -275,12 +275,14 @@ describe("while the code plan question waits, plan approval goes off only on a m
 });
 
 describe("before the plan question, and for every other setting, as before", () => {
+  // The setting goes first (a message that already gave an approval does not
+  // also stand for a setting, t-setting-spent-message), then the approval.
   test("approve, and turn plan approval off, carried out before the plan is shown: off, set by them", () => {
     const proj = bugfixAtRequirements();
     const both = said(proj, "approve, and turn plan approval off");
-    approveRequirements(proj);
     const off = planApprovalOff(proj, both);
     expect(off.rc, off.out).toBe(0);
+    approveRequirements(proj);
     expect(stateField(proj, "Plan Approval")).toBe("off (set by you)");
   });
 
@@ -313,23 +315,31 @@ describe("before the plan question, and for every other setting, as before", () 
   // As on poc and express, which ship plan approval off: the written plan is built, not asked about.
   test("plan approval already off from the scope: the written plan is not waiting, and saying so goes through", () => {
     const proj = bugfixAtRequirements("off", "off");
-    const both = said(proj, "approve, and turn plan approval off");
-    approveRequirements(proj);
+    approveRequirements(proj, said(proj, "Approve"));
     expect(["run-stage", "load-steering"]).toContain(next(proj).kind ?? "");
     planWritten(proj);
-    const off = planApprovalOff(proj, both);
+    // A message after the written plan: nothing waits, so it stands (one that
+    // gave the approval would not, for any setting).
+    const asked = said(proj, "and keep plan approval off for good");
+    const off = planApprovalOff(proj, asked);
     expect(off.rc, off.out).toBe(0);
     expect(off.out).not.toContain(LINE);
   });
 
-  test("another setting on the earlier message is not this rule's", () => {
+  // Every other setting takes the rule for every setting (t-setting-spent-message):
+  // the message gave an approval, so it does not also stand for one, and the
+  // step is the setter with no message, which carries it out as a command's.
+  test("another setting on the earlier message is the rule for every setting's, not this one's", () => {
     const proj = bugfixAtRequirements();
     const both = said(proj, "approve, and turn sensors off");
     approveRequirements(proj);
     planQuestionShown(proj);
     const set = run(proj, DISPATCHER, ["engine", "config", "set", "sensors", "off", "--message", both]);
-    expect(set.rc, set.out).toBe(0);
+    expect(set.rc).not.toBe(0);
+    expect(set.out).toContain("run the same command with no --message");
     expect(set.out).not.toContain(LINE);
+    const plain = run(proj, DISPATCHER, ["engine", "config", "set", "sensors", "off"]);
+    expect(plain.rc, plain.out).toBe(0);
   });
 
   test("turning plan approval back on needs nobody's word, as before", () => {

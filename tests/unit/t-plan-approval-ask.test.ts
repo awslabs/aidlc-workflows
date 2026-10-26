@@ -988,7 +988,9 @@ describe("the engine asks for Plan Approval", () => {
   // "Approve it, and turn the sensors off": the agent records the approval
   // first, then runs the setter naming their message, with no chat it can name.
   // The approval their reply led to leaves the setting it also asked for theirs.
-  test("an approval and a setting in one reply: the approval recorded first, the setting is still theirs", () => {
+  // A message that already gave an approval does not also stand for a setting
+  // (t-setting-spent-message): the setting rides the answer, or goes first.
+  test("an approval and a setting in one reply: riding the answer, the setting is theirs; after the answer, refused", () => {
     const proj = project();
     askFor(proj);
     const words = "approve it, and turn the sensors off";
@@ -996,16 +998,17 @@ describe("the engine asks for Plan Approval", () => {
     const id = turnId(proj);
     // The approval row lands in a later second than their reply.
     Bun.sleepSync(1100);
-    const approved = answer(proj, "Approve Plan");
+    const approved = answer(proj, "Approve Plan", ["--sensors", "off"]);
     expect(approved.code, approved.message).toBe(0);
-    const set = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "sensors", "off", "--message", id, "--project-dir", proj], {
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Sensors**: off (set by you)");
+    const set = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "sensors", "on", "--message", id, "--project-dir", proj], {
       cwd: proj,
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
       encoding: "utf-8",
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
-    expect(set.status, `${set.stdout}${set.stderr}`).toBe(0);
-    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Sensors**: off (set by you)");
+    expect(set.status).not.toBe(0);
+    expect(`${set.stdout}${set.stderr}`).not.toContain(id);
   });
 
   // The other order: the setter naming their message runs first, as the plan

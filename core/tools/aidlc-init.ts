@@ -3521,7 +3521,7 @@ function validateChoiceArgs(
     if (chat !== null) {
       const named = valuesAfter(argv, "--message").at(-1);
       const planApprovalOff = valuesAfter(argv, "--bypass").includes(CEREMONY_ENV.plan_approval);
-      const proof = named === undefined ? null : proveMessage(projectDir, named, "setting", { request: true, planApprovalOff });
+      const proof = named === undefined ? null : proveMessage(projectDir, named, "setting", { request: true, planApprovalOff, lowers: true });
       if (proof !== null && "refusal" in proof) return proof.refusal;
       if (!personAskedForThisLowering(proof?.message) && !fenceKeyBypassed(projectDir, chat)) {
         return guardSwitchRefusal(bypassedCheck(lowered), projectDir);
