@@ -16,12 +16,14 @@
 // Mechanism: function - the shipped hook (Claude Code's own command, Codex
 // through its adapter) and the shipped setters; no agent runs.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { cpSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { auditBlockField, readAuditShardEvents, writeSessionPidEntry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   type AnswersItem, PICKER_HARNESSES, buildQuestion, env, exec, pick, recordByAgent, say,
 } from "../harness/aidlc-answers-corpus.ts";
-import { DISPATCHER } from "../harness/aidlc-input-corpus.ts";
-import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
+import { DISPATCHER, SESSION } from "../harness/aidlc-input-corpus.ts";
+import { REPO_ROOT, cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -83,6 +85,33 @@ describe("t-setter-box-answer-words: a setting asked in a box answer is recorded
       expect(auditBlockField(row.block, "Message Id")).toBe(boxId as string);
     });
   }
+
+  // Codex hands a note the person adds beside their pick back as a second answer to the same question.
+  test("codex: a setting asked in the note beside a pick is recorded with the note, not the pick alone", async () => {
+    const proj = await gateOpen();
+    await say(proj, QUEUED, "codex");
+    const codexTree = join(proj, ".codex");
+    if (!existsSync(codexTree)) cpSync(join(REPO_ROOT, "dist", "codex", ".codex"), codexTree, { recursive: true });
+    writeSessionPidEntry(proj, process.pid, SESSION);
+    const box = await exec([process.execPath, join(codexTree, "hooks", "aidlc-codex-adapter.ts"), "record-human-turn"], {
+      cwd: proj,
+      env: { ...env(proj), CLAUDE_PROJECT_DIR: undefined, USER_PROMPT: undefined, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined },
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse", tool_name: "request_user_input", session_id: SESSION, turn_id: "t1", cwd: proj,
+        tool_input: { questions: [{ id: "q1", header: "Approval", question: GATE, options: [{ label: "Approve", description: "" }, { label: "Request Changes", description: "" }] }] },
+        tool_response: JSON.stringify({ answers: { q1: { answers: ["Approve", "user_note: turn the guard policy off, its only docs"] } } }),
+      }),
+    });
+    expect(box.status, box.stderr).toBe(0);
+    const boxId = namedId(box.stdout) as string;
+    expect(boxId, box.stdout).toBe(latestId(proj));
+    const set = await run(proj, ["engine", "config", "set", "guard-policy", "off", "--message", boxId]);
+    expect(set.status, set.stdout + set.stderr).toBe(0);
+    expect(set.stdout).toContain("turn the guard policy off, its only docs");
+    const row = lastRow(proj, "GUARD_POLICY_SET")!;
+    expect(auditBlockField(row.block, "Person Reply")).toContain("turn the guard policy off, its only docs");
+    expect(auditBlockField(row.block, "Message Id")).toBe(boxId);
+  });
 
   test("claude: every setter that takes --message stands on the box answer's id", async () => {
     const proj = await gateOpen();
