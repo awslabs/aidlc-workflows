@@ -1275,7 +1275,6 @@ isSafeIntentRecordName
 isScopeName
 isScopedReviewCopy
 isShellToolName
-isSingleStageStart
 isSourceFileName
 isSourceHarnessShellDir
 isStageOrGateEvent
@@ -2228,7 +2227,6 @@ unitParkedPath
 unitParticipantPath
 unitPlainName
 unitReleasePendingPath
-unitReopenMovedTo
 unitScopePath
 unitScopedLifecycleFloors
 unitSkippedItsCode

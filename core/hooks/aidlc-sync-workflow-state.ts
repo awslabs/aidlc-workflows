@@ -11,6 +11,9 @@
 // Receives JSON on stdin from the adapter / Claude Code.
 import { existsSync } from "node:fs";
 import {
+  auditBlockField,
+  type AuditShardEvent,
+  gateStagesFromBlock,
   hookStandsOutside,
   enterHookWorkflow,
   type ClaudeCodeHookInput,
@@ -21,6 +24,7 @@ import {
   isClaudeCodeHookInput,
   isoTimestamp,
   latestStartedStageSlug,
+  maximalAttemptEvents,
   parseCheckboxes,
   readActiveDirectiveMarker,
   readAllAuditShards,
@@ -28,9 +32,23 @@ import {
   readStateFile,
   resolveProjectDirFromHook,
   stateFilePath,
-  unitReopenMovedTo,
 } from "../tools/aidlc-lib.ts";
 import { setStatus } from "../tools/aidlc-utility.ts";
+
+// Whether Current Stage `stage` is where a Unit reopen moved the work back to,
+// with no main-workflow STAGE_STARTED definitely after it. `aidlc-jump.ts
+// reopen` marks its GATE_REJECTED rows `Moved From` only when it moved Current
+// Stage back from a later stage, a move that writes no start of its own, so the
+// latest start still names the stage the work left. Rows two clones wrote in
+// the same second are unordered, and then the move holds.
+function unitReopenMovedTo(rows: readonly AuditShardEvent[], stage: string): boolean {
+  const moves = rows.filter((row) =>
+    (row.event === "STAGE_STARTED" && !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")) ||
+    (row.event === "GATE_REJECTED" && auditBlockField(row.block, "Reopen") !== null &&
+      (auditBlockField(row.block, "Moved From") ?? "") !== ""));
+  return maximalAttemptEvents(moves).some((row) =>
+    row.event === "GATE_REJECTED" && gateStagesFromBlock(row.block).includes(stage));
+}
 
 export async function run(input: string): Promise<number> {
   const projectDir = resolveProjectDirFromHook(import.meta.url);

@@ -5930,6 +5930,17 @@ describe("t218 sync-workflow-state keeps a Unit reopen's Current Stage", () => {
     });
   }
 
+  test("a --single run started after the move does not lift it", () => {
+    withProject((dir) => {
+      reopenedTo(dir);
+      appendStageStarted(dir, "build-and-test", ts);
+      appendReopen(dir, { stages: "code-generation", unit: "u1-single-order", movedFrom: "build-and-test" });
+      appendSingleStageStarted(dir, "build-and-test", ts);
+      syncOnce(dir);
+      expect(stateField(dir, "Current Stage")).toBe("code-generation");
+    });
+  });
+
   test("a start another clone wrote a second after the move still syncs forward", () => {
     withProject((dir) => {
       reopenedTo(dir);
