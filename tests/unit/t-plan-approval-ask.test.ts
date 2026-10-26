@@ -1309,6 +1309,35 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
+  // Codex's other box (request_user_input_async) sends the answer back as a
+  // new prompt in its own reply envelope, the agent's question beside it
+  // (captured live on Codex CLI 0.164.0). The plan question keeps the answer
+  // alone, as the words of a reply typed in the chat.
+  test("an answer in Codex's async question box answers the plan question in the person's own words", () => {
+    const proj = project();
+    askFor(proj);
+    cpSync(join(REPO_ROOT, "dist", "codex", ".codex"), join(proj, ".codex"), { recursive: true });
+    writeSessionPidEntry(proj, process.pid, SESSION);
+    const reply = "<send_user_message_question_reply>\n" + JSON.stringify([{
+      answer: "Approve Plan",
+      question: "Approve the code plan? It builds slugify for titles and adds three unit tests.",
+      questionItemId: JSON.stringify(["request_user_input_async", "call_e67db833bc2f5fc8811b5c62c85d35f2", 0]),
+    }]) + "\n</send_user_message_question_reply>";
+    const result = spawnSync(BUN, [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, turn_id: "codex-async-turn", cwd: proj, prompt: reply }),
+      env: { ...process.env, AIDLC_UNATTENDED: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const recorded = answer(proj, "Approve Plan");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(auditText(proj)).toContain("**Person Reply**: Approve Plan\n");
+    expect(auditText(proj)).not.toContain("send_user_message_question_reply");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
   test("a question records nothing; the agent answers it, and their next reply decides", () => {
     const proj = project();
     askFor(proj);

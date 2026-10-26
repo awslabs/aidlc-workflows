@@ -710,6 +710,8 @@ export class AgentStandIn {
   readonly hooks: Pick<StandInOptions, "onCode" | "afterCheckpoint" | "afterReview" | "beforePlanAnswer" | "atGate" | "artifactText">;
   /** Each time an engine step sent the agent to repair the units block: where, and how many questions came before. */
   readonly unitsBlockRepairs: { where: string; asked: number }[] = [];
+  // Each time the stage's checks handed the agent their findings first.
+  readonly checksSteps: { stage: string; where: string }[] = [];
   private steps = 0;
   /** A directive a person move produced, acted on before the next `next`. */
   private pending: Directive | undefined;
@@ -894,8 +896,25 @@ export class AgentStandIn {
     if (res.status !== 0 || !out || (out.kind !== "print" && out.kind !== "done")) {
       this.refused(`report ${stage} ${args.join(" ")}`, `${res.stdout}${res.stderr}`);
     }
+    // The stage's checks found something before its gate opened: the agent
+    // leaves the stand-in's documents as they are and runs the same report.
+    if (this.checksStepIfNamed(out, stage, "gate")) return this.report(stage, ...args);
     this.heard(out);
     return out;
+  }
+
+  /**
+   * The step the stage's checks hand the agent before the review or the gate
+   * (completionChecksStep): the stand-in's documents are what its scope run
+   * means them to be, so it runs the same command again, which goes on. True
+   * when the reply was that step.
+   */
+  checksStepIfNamed(reply: Record<string, unknown> | null, stage: string, where: string): boolean {
+    if (reply?.kind !== "print" || !/^Before the (review|approval), this stage's checks ran on its documents\./.test(String(reply.message ?? ""))) {
+      return false;
+    }
+    this.checksSteps.push({ stage, where });
+    return true;
   }
 
   /** `next`, following load-steering continuations as the skill does. */
@@ -1455,10 +1474,11 @@ export class AgentStandIn {
       ...(personAsked ? ["--person-asked", "--message", this.latestMessageId()] : [])];
     let request = this.must(...requestArgs);
     // A units block the engine cannot read comes back as the agent's step, a
-    // print: write the block, then ask again. A failed command over it would
-    // have the agent tell the person a step instead, so that stops the run.
-    if (request.kind === "print") {
-      if (!this.repairUnitsBlockIfNamed(String(request.message ?? ""), "review")) {
+    // print: write the block, then ask again; so does what the stage's checks
+    // found first. A failed command over it would have the agent tell the
+    // person a step instead, so that stops the run.
+    for (let round = 0; request.kind === "print" && round < 3; round++) {
+      if (!this.checksStepIfNamed(request, stage, "review") && !this.repairUnitsBlockIfNamed(String(request.message ?? ""), "review")) {
         this.fail(`the ${stage} review request printed a step the stand-in has no repair for: ${String(request.message)}`);
       }
       request = this.must(...requestArgs);

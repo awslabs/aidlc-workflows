@@ -26,7 +26,9 @@ timeout_seconds: 300
 # traceability sensor
 
 Deterministic element-level verification of each stage's JSON coverage table,
-run when the stage's gate opens, on the tables as they are then:
+run when the stage's documents are handed on (its review request, or the report
+that opens its gate when no review took them first) and again when its gate
+opens, on the tables as they are then:
 
 1. Validates the runtime JSON shape and the closed status set.
 2. Fails on `GAP`, `ORPHAN`, missing coverage rows, or undeclared upstream IDs.

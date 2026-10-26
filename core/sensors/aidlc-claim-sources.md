@@ -22,8 +22,8 @@ timeout_seconds: 300
 
 # claim-sources sensor
 
-Checks the existing Intent Capture deliverables as a set when the stage enters
-its approval gate.
+Checks the existing Intent Capture deliverables as a set when they are handed
+to their review, and again when the stage enters its approval gate.
 
 For each deliverable, the sensor verifies:
 

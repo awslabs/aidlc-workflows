@@ -25,6 +25,7 @@ import {
 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { putBackBeforePick, sayWritesDuringWork } from "./aidlc-before-pick.ts";
 import {
   approvalDispositionField,
   rejectedFindingDispositionField,
@@ -279,6 +280,9 @@ import {
   keptSummaryOutputs,
   SUMMARY_AUTHORIZATION_FIELD,
   UNIT_NAME_REGEX,
+  attemptEventDefinitelyBefore,
+  resolveAuditProjectPath,
+  swarmWorkerWorktreeMeta,
 } from "./aidlc-lib.js";
 import {
   personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
@@ -1073,6 +1077,9 @@ export function main(argv: string[]): void {
       case "gate-start":
         handleGateStart(args.slice(1));
         break;
+      case "completion-checks":
+        handleCompletionChecks(args.slice(1));
+        break;
       case "approve":
         handleApprove(args.slice(1));
         break;
@@ -1120,7 +1127,7 @@ export function main(argv: string[]): void {
         break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-construction-verification-command, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
+          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-construction-verification-command, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, completion-checks, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
         );
     }
   } catch (e) {
@@ -3763,6 +3770,16 @@ interface BlockingSensorIssue {
 interface GateSensorEvaluation {
   issues: BlockingSensorIssue[];
   fingerprints: Map<string, string>;
+  // The fires whose verdict reported findings (a detail file), advisory or not.
+  failedFires: string[];
+}
+
+// A fire of chosen gate checks on chosen outputs, each row naming the Unit when
+// one is given (completionChecksStep).
+interface GateSensorChoice {
+  sensorIds: ReadonlySet<string>;
+  paths: string[];
+  unit: string | null;
 }
 
 function pathIsWithin(root: string, candidate: string): boolean {
@@ -3991,20 +4008,23 @@ function fireGateSensors(
   stateContent: string,
   artifacts?: string,
   personAnswers = true,
+  choice?: GateSensorChoice,
 ): GateSensorEvaluation {
   const issues: BlockingSensorIssue[] = [];
   const fingerprints = new Map<string, string>();
+  const failedFires: string[] = [];
   if (
     resolveCeremony("sensors", getField(stateContent, "Scope"), stateContent).value === "off"
-  ) return { issues, fingerprints };
-  const paths = existingDeclaredArtifactPaths(pd, stage, artifacts);
-  if (paths.length === 0) return { issues, fingerprints };
+  ) return { issues, fingerprints, failedFires };
+  const paths = choice?.paths ?? existingDeclaredArtifactPaths(pd, stage, artifacts);
+  if (paths.length === 0) return { issues, fingerprints, failedFires };
 
   // Advisory gate sensors are evidence for whoever answers the gate. When no
   // person will, only the blocking sensors, which halt an unattended run, fire:
   // a check nobody reads costs the gate its time and the audit its signal.
   const sensors = (stage.sensors_applicable ?? []).filter((sensor) =>
-    sensor.fire_on === "gate" && (personAnswers || sensor.default_severity === "blocking")
+    sensor.fire_on === "gate" && (personAnswers || sensor.default_severity === "blocking") &&
+    (choice === undefined || choice.sensorIds.has(sensor.id))
   );
   for (const sensor of sensors) {
     if (sensor.default_severity !== "blocking") continue;
@@ -4055,6 +4075,7 @@ function fireGateSensors(
         stage.slug,
         "--output-path",
         outputPath,
+        ...(choice?.unit ? ["--unit", choice.unit] : []),
         ...(fire.pathSet ? ["--paths-stdin", "json"] : []),
       ];
       const command = executable
@@ -4071,7 +4092,11 @@ function fireGateSensors(
         },
         ...(fire.pathSet ? { input: JSON.stringify(fire.covered) } : {}),
       });
-      if (sensor.default_severity !== "blocking") continue;
+      if (sensor.default_severity !== "blocking") {
+        const verdict = parseSensorFireVerdict(result.stdout ?? "");
+        if (verdict?.result === "failed" && verdict.detail_path !== null) failedFires.push(verdict.fire_id);
+        continue;
+      }
       const changedDuring = changedOutput(fire.covered);
       if (changedDuring !== null) {
         issues.push({
@@ -4143,6 +4168,7 @@ function fireGateSensors(
         continue;
       }
       if (verdict.result === "failed" && verdict.detail_path !== null) {
+        failedFires.push(verdict.fire_id);
         issues.push({
           sensorId: sensor.id,
           outputPath: verdict.output_path,
@@ -4167,7 +4193,7 @@ function fireGateSensors(
       });
     }
   }
-  return { issues, fingerprints };
+  return { issues, fingerprints, failedFires };
 }
 
 function verifyGateSensorArtifactsUnchanged(
@@ -5361,8 +5387,13 @@ function verifyReviewerPrecondition(
     // the walk (a cache excluded after the stage started: its baseline entries
     // are nobody's change).
     const aidlcOwned = aidlcOwnedSourceKey(pd);
+    // A file the agent changed before the person picked this work's plan, put
+    // back since (the undo the pick's line named), holds what it held before
+    // the agent's write: nobody's change.
+    const putBack = putBackBeforePick(pd);
     let outsideClaims = [...baselineChanged].filter((pathKey) =>
-      !aidlcOwned(pathKey) && !claimModels.some((claims) => sourceClaimCovers(pathKey, claims))
+      !aidlcOwned(pathKey) && !claimModels.some((claims) => sourceClaimCovers(pathKey, claims)) &&
+      !putBack(pathKey, receipts.currentSourceListing?.get(pathKey))
     );
     // Nor is a file another open piece of work in this folder claims: a second
     // chat building its own work here made it, so it is that work's change.
@@ -7070,7 +7101,6 @@ function failedCheckWhere(stage: GateStage, rel: string, failedOutputs: string |
 // says nothing about the checks. A team's Unit gate speaks for that Unit's
 // outputs and writes only.
 export function failedCheckNotices(pd: string, stage: GateStage, unit: string | null = null): string[] {
-  const FAILED_CHECK_LINES = 3;
   let failed: LatestCheckResults["failed"];
   let couldNotRun: LatestCheckResults["couldNotRun"];
   try {
@@ -7085,13 +7115,7 @@ export function failedCheckNotices(pd: string, stage: GateStage, unit: string | 
   } catch {
     return [];
   }
-  const checkName = (id: string): string => (id.endsWith("check") ? id : `${id} check`);
-  const lines = failed.slice(0, FAILED_CHECK_LINES).map(({ id, rel, findings, failedOutputs }) => {
-    const count = /^\d+$/.test(findings) ? `${findings} finding${findings === "1" ? "" : "s"}` : "findings";
-    return `The ${checkName(id)} reports ${count} in ${failedCheckWhere(stage, rel, failedOutputs)}.`;
-  });
-  const more = failed.length - lines.length;
-  if (more > 0) lines.push(`${more} more check${more === 1 ? " reports" : "s report"} findings on this stage's outputs.`);
+  const lines = failedCheckLines(stage, failed);
   if (couldNotRun.length > 0) {
     const checks = [...new Set(couldNotRun.map(({ id }) => checkName(id)))];
     const files = [...new Set(couldNotRun.map(({ rel }) => rel))];
@@ -7105,6 +7129,141 @@ export function failedCheckNotices(pd: string, stage: GateStage, unit: string | 
     lines.push(`${who} could not run on ${where}.`);
   }
   return lines;
+}
+
+function checkName(id: string): string {
+  return id.endsWith("check") ? id : `${id} check`;
+}
+
+// One line per failing check, at most three and then a count: the gate's
+// words, and the completion step's.
+function failedCheckLines(
+  stage: GateStage,
+  failed: ReadonlyArray<{ id: string; rel: string; findings: string; failedOutputs: string | null }>,
+): string[] {
+  const FAILED_CHECK_LINES = 3;
+  const lines = failed.slice(0, FAILED_CHECK_LINES).map(({ id, rel, findings, failedOutputs }) => {
+    const count = /^\d+$/.test(findings) ? `${findings} finding${findings === "1" ? "" : "s"}` : "findings";
+    return `The ${checkName(id)} reports ${count} in ${failedCheckWhere(stage, rel, failedOutputs)}.`;
+  });
+  const more = failed.length - lines.length;
+  if (more > 0) lines.push(`${more} more check${more === 1 ? " reports" : "s report"} findings on this stage's outputs.`);
+  return lines;
+}
+
+// The stage's advisory gate checks run when its documents are written and
+// handed on, before their review, so the agent fixes its own slips and the
+// gate says only what is left. The hand-offs every harness shares: the review
+// request (`log review`, through the `completion-checks` command) and, when no
+// review took them first, the report that opens the gate. The first of them in an attempt fires each check
+// on the scope's documents; when one reports findings, the hand-off records
+// nothing and this is the agent's step, with the same command to run again.
+// Its own fires end the hold, so the next call goes on. The gate fires every
+// check again when it opens, and a blocking check stays the gate's alone. A
+// check that could not run holds nothing. Null lets the hand-off go on.
+export function completionChecksStep(
+  pd: string,
+  slug: string,
+  unit: string | null,
+  again: string,
+  handOff: "review" | "approval",
+): string | null {
+  const stage = findStageBySlug(slug);
+  if (!stage) return null;
+  let stateContent: string;
+  try {
+    stateContent = readStateFile(pd);
+  } catch {
+    return null;
+  }
+  // The switch as the gate's own fire reads it, the environment's included.
+  if (resolveCeremony("sensors", getField(stateContent, "Scope"), stateContent).value === "off") return null;
+  const advisory = (stage.sensors_applicable ?? []).filter((sensor) =>
+    sensor.fire_on === "gate" && sensor.default_severity !== "blocking"
+  );
+  if (advisory.length === 0) return null;
+  // A gate the engine approves itself has no reader for advisory evidence (the
+  // gate's rule); a team's Unit is a person's gate. A swarm worker's checkout
+  // leaves its checks to the stage gate in the main checkout.
+  const teamUnit = unit !== null && isTeamUnitOwnership(stateContent);
+  if (!teamUnit && isAutonomousConstructionGate(stateContent, stage, pd)) return null;
+  if (swarmWorkerWorktreeMeta(pd) !== null) return null;
+  if (!requiredOutputsWritten(pd, stage, unit, stateContent)) return null;
+  const paths = declaredOutputsForGate(pd, stage, unit);
+  if (paths.length === 0) return null;
+
+  const view = reviewAttemptWindow(pd, stateContent, stage);
+  const floor = view.floorIdx >= 0 ? view.events[view.floorIdx] : null;
+  const inAttempt = (row: AuditShardEvent): boolean => floor === null || attemptEventDefinitelyBefore(floor, row);
+  // At the gate's report, a review asked for in this attempt was the hand-off:
+  // its documents may be frozen by its receipt.
+  if (
+    handOff === "approval" &&
+    view.events.some((row) =>
+      row.event === "REVIEW_REQUESTED" && auditBlockField(row.block, "Stage") === slug &&
+      (unit === null || auditBlockField(row.block, "Unit") === unit) && inAttempt(row)
+    )
+  ) return null;
+  // Compared as canonical paths: a row spells its output from the project
+  // folder as given (or as `<project-dir>/...` when the canonical path lies
+  // outside that spelling, under a symlink or junction), and the hold must end
+  // on its own fires whatever the spelling.
+  const canonical = (path: string | null): string | null => {
+    if (path === null) return null;
+    try {
+      return realpathSync(resolveAuditProjectPath(pd, path));
+    } catch {
+      return null;
+    }
+  };
+  const pairs = new Set(advisory.flatMap((sensor) =>
+    gateSensorOutputs(sensor, paths, stage.slug).map((fire) => `${sensor.id}@${canonical(fire.outputPath)}`)
+  ));
+  const firedInAttempt = view.allEvents.some((row) =>
+    row.event === "SENSOR_FIRED" && auditBlockField(row.block, "Stage slug") === slug && inAttempt(row) &&
+    pairs.has(`${auditBlockField(row.block, "Sensor ID")}@${canonical(auditBlockField(row.block, "Output path"))}`)
+  );
+  if (firedInAttempt) return null;
+
+  const { failedFires } = fireGateSensors(pd, stage, stateContent, undefined, true, {
+    sensorIds: new Set(advisory.map((sensor) => sensor.id)),
+    paths,
+    unit,
+  });
+  if (failedFires.length === 0) return null;
+  const fired = new Set(failedFires);
+  const failed = readAuditShardEvents(pd).filter((row) =>
+    row.event === "SENSOR_FAILED" && fired.has(auditBlockField(row.block, "Fire id") ?? "")
+  ).map((row) => ({
+    id: auditBlockField(row.block, "Sensor ID") ?? "",
+    rel: auditBlockField(row.block, "Output path") ?? "",
+    findings: auditBlockField(row.block, "Findings count") ?? "?",
+    failedOutputs: auditBlockField(row.block, "Failed outputs"),
+    detail: auditBlockField(row.block, "Detail path"),
+  }));
+  if (failed.length === 0) return null;
+  const details = [...new Set(failed.flatMap((f) => f.detail === null ? [] : [f.detail]))];
+  // The run again does not check again, so the step says so: an agent that
+  // read it as a re-check told the person the checks passed.
+  const next = handOff === "review"
+    ? "it records the review request without checking again, and the gate checks again and says what is left."
+    : "it opens the gate, which checks again and says what is left.";
+  return `Before the ${handOff}, this stage's checks ran on its documents. ${failedCheckLines(stage, failed).join(" ")} ` +
+    `The findings are in ${details.join(", ")}. Fix what is yours in those documents, then run \`${again}\` again: ${next}`;
+}
+
+// Whether every required output of the scope (the stage's, or one Unit's) is
+// on disk: before that the review request or the gate refuses as it always
+// has, and the checks wait for the documents.
+function requiredOutputsWritten(pd: string, stage: GateStage, unit: string | null, stateContent: string): boolean {
+  try {
+    if (unit === null || usesStageLevelPerUnitArtifacts(getField(stateContent, "Scope"), stateContent)) {
+      return inspectRequiredArtifactInstances(pd, stage, { stateContent }).ok;
+    }
+    return missingUnitArtifacts(pd, stage, unit).length === 0;
+  } catch {
+    return false;
+  }
 }
 
 // What the person asked to leave out of a build (#1342), said once with the
@@ -7197,6 +7356,26 @@ function teamGateFields(
     "Gate Stages": context.stages.map((entry) => entry.slug).join(","),
     ...claimAttemptFields(resolveProjectDir(projectDir), context.unit),
   };
+}
+
+// completion-checks <slug> [--unit <unit>] --hand-off review|approval --again
+// <command>: completionChecksStep for a tool that cannot load this one (the
+// review request). Prints {"held":false} or {"held":true,"message":...}; a
+// failure holds nothing, since the checks are advisory.
+function handleCompletionChecks(args: string[]): void {
+  const slug = args[0];
+  const handOff = getFlagValue(args.slice(1), "--hand-off");
+  const again = getFlagValue(args.slice(1), "--again");
+  if (!slug || slug.startsWith("--") || (handOff !== "review" && handOff !== "approval") || !again) {
+    error("Usage: aidlc-state.ts completion-checks <slug> [--unit <unit>] --hand-off review|approval --again <command>");
+  }
+  let message: string | null = null;
+  try {
+    message = completionChecksStep(resolveProjectDir(projectDir), slug, getFlagValue(args.slice(1), "--unit") ?? null, again, handOff);
+  } catch {
+    message = null;
+  }
+  console.log(JSON.stringify(message === null ? { held: false } : { held: true, message }));
 }
 
 // gate-start <slug> — fire gate-bound sensors, then open either the global
@@ -7640,7 +7819,7 @@ function handleApprove(args: string[]): void {
     unrecordedRevisionSinceGateOpen(pd, preflightStage);
   const backstopSensorEvaluation = preflightBackstop
     ? fireGateSensors(pd, preflightStage, preflightContent)
-    : { issues: [], fingerprints: new Map<string, string>() };
+    : { issues: [], fingerprints: new Map<string, string>(), failedFires: [] };
 
   // Per-stage token/cost rollup - computed BEFORE the lock opens (ledger read
   // only, try/caught). Approve is the STAGE_COMPLETED that fires in the normal
@@ -7733,6 +7912,7 @@ function handleApprove(args: string[]): void {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
     writeStateFile(pd, content);
+    sayChangedBeforeCodeGeneration(pd, slug);
     console.log(JSON.stringify({
       slug,
       unit: teamGate.unit,
@@ -7927,6 +8107,7 @@ function handleApprove(args: string[]): void {
   }
 
   writeStateFile(pd, content);
+  sayChangedBeforeCodeGeneration(pd, slug);
   if (personCall?.overUnfinishedReview) {
     console.log(JSON.stringify({ change_notices: [unfinishedReviewNotice(stage)] }));
   }
@@ -7949,6 +8130,17 @@ function handleApprove(args: string[]): void {
     handleCompleteWorkflow([slug], validationWarning, personCall);
   }
   });
+}
+
+// The person's files the agent changed while this work was before Code
+// Generation, said once with the way back on the step after this approval
+// (aidlc-before-pick.ts).
+function sayChangedBeforeCodeGeneration(pd: string, slug: string): void {
+  try {
+    sayWritesDuringWork(pd, slug, resolveInvokingSessionId(pd));
+  } catch {
+    // Unsaid: the approval stands.
+  }
 }
 
 // Look up a flag's value while guarding against value-starting-with-"--"

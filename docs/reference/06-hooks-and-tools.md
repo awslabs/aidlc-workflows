@@ -387,7 +387,13 @@ before the core hook when a UserPromptSubmit carries a nonblank `agent_id` or a
 rollout path naming another thread, so those prompts record no `HUMAN_TURN`,
 no kept gate words, no answer, and no typed switch. A transcript path in any
 other form decides nothing. A `request_user_input` answer is the person's own
-choice and is read as before, whichever thread asked. When Codex's question box
+choice and is read as before, whichever thread asked. An answer in the other box
+Codex offers on some models, `request_user_input_async`, comes back as a new
+prompt wrapped in Codex's `<send_user_message_question_reply>` envelope (a JSON
+list of answer, question and question id); the adapter forwards the answers in
+it, each whole and one per line, as the prompt (`questionReplyWords`), so they
+are kept and read like a reply typed in the chat. Any other prompt, an envelope
+with words around it included, goes on as it came. When Codex's question box
 runs out (about two minutes in default mode) it returns no answers,
 `{"answers":{}}`. The adapter forwards exactly that shape to the core hook,
 which records `QUESTION_UNANSWERED` instead of a `HUMAN_TURN`: the row spends
@@ -1876,6 +1882,25 @@ This is one of the framework's flow-altering hooks and `PreToolUse` controls. Th
 **Postapproval content changes.** For the same intent, target, and stage attempt, edits to the plan, unit test instructions, or Testing Contract reopen approval when the effective `plan-approval` fence is on (Guard Policy `strict`; status names it `plan re-approval`). A fence lowered by `relaxed` or `off` permits continuation with the current content through the engine without mandatory reapproval. Testing Posture, scope, test strategy, and project type input changes use that same rule: refresh the current contract and instructions as needed and continue while the fence remains lowered. The conductor does not reset the answer, re-fingerprint the approval, or invent a replacement receipt for that continuation. The original human answer and approval evidence still describe only what was actually approved. New attempts, explicit Request Changes, and other gates keep their existing rules.
 
 **Guard Policy: the fence half.** Once the predicate above has decided to block, the hook calls `codeGenerationPlanApprovalFence` before it refuses. That helper uses `decideFence` with the live verified parent intent for delegated workers, or the current project otherwise. A `stand-aside` (the fence lowered by `relaxed`, `off`, a `Guards Off: plan-approval` entry written before `guard.plan-approval` became an alias of `plan-approval`, or `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`) prints one line naming the dispatch or write target, writes one `GUARD_STOOD_ASIDE` row once the build has started, and exits 0. The row is the fence's account of what it let through, not approval evidence, so a ledger that cannot take it (busy or not writable) never refuses the build: the line then says it was not recorded, and the miss goes to the hook health log the doctor reports. A generic human reply cannot lower this fence: a `hold` refuses exactly as described above and names no switch, because the only switch left is turning plan approval off, which is the person's idea alone; the engine asks about an edited plan again on the next `next`. Initial Plan Approval (while plan approval is on) is the engine's question either way; postapproval content changes follow the effective-fence rule above. A lowered fence never supplies a missing or stale directive, a target, or an approval, so those refusals stand under every Guard Policy (plain text ending "The plan-approval setting is unchanged.") in the same words the fence-on refusal uses, with two exceptions, each the last instruction on record (`setAsideBuildUnderOff` in aidlc-testing-posture.ts): under Guard Policy `off`, a build step a compaction, a task-list sync or a Copilot sync set aside (the marker reads `kind: "error"` with `out_of_date.kind: "run-stage"` and still matches the state); and under `relaxed` or `off`, at the held Code Generation gate, the build step whose own report opened the gate, which moved the state past it and published no step after it. When the person's approval for its target still stands, the write, the shell command, `testing-posture brief` and the developer handoff go on as they did while it was current, with one `GUARD_STOOD_ASIDE` row and nothing said (the row names why the step went out of date where a writer recorded it, and says only that it went out of date at the held gate); at the held gate AI-DLC's own commands this guard holds (a jump or a switch nobody asked for) still wait for a current step. A question, any other gate, a parallel batch, a step whose rules were still arriving, a missing step and a step a jump replaced keep the refusal and its `next`. Every refusal names the step that ends it in this install's spelling (`aidlc engine orchestrate next`, or `bun <harness-dir>/tools/aidlc-orchestrate.ts next` in a source tree; for an isolated Code Generation run's step, that run's own `next --stage code-generation --single --scope <its scope>`), to be run exactly as written, as a command of its own, because a `cd` it cannot follow, a pipe, or a second command around it makes the line a shell the guard cannot read. When the directive went stale (the chat compacted, the state moved) or is still the Plan Approval question, and the check `next` uses says the plan it was building is approved, the refusal says so (or, with the fence lowered, that the person approved an earlier version and the build may go on with the changes), so the agent does not ask the person again. A developer handoff refused for the handoff itself (no target or several, a target this workflow does not build, a contract line that is not the approved plan's) says that, not that the plan is unapproved, and names the exact `testing-posture brief` command for the target the current step builds.
+
+**Before a plan is picked.** While a chat's plan question for new work is
+open (the question store's plan question for new work that chat asked: a root
+question, or the first one a routing question's new-work answer leads to; until
+the work it starts retires it), the guard keeps each project file the agent's call writes,
+read exactly as it reads targets for the plan (`mutationIntent`), with what the
+file held just before the first write: its source-listing content id, its git
+blob and HEAD (`core/tools/aidlc-before-pick.ts`). It does so before any of its
+plan checks, in a chat that joined no work too, and it refuses nothing; a write
+it cannot read goes unkept. AI-DLC's own files are never kept. The pick says the
+ones that still differ once, with the way back
+([Lines carried to the next spoken step](03-orchestrator.md#lines-carried-to-the-next-spoken-step)).
+Once the work has started, the same call keeps the agent's writes with that
+work while a chat taking part in it writes before Code Generation: the stage
+the work is on (its Unit Stage under unit-major Construction, else its Current
+Stage) declares no `workspace_requires` and comes before code-generation, and
+the step the engine last issued is not a Code Generation step. Each approval of
+the work names the kept files that still differ, once, and spends the record;
+an approval of a stage that declares `workspace_requires` spends it unsaid.
 
 ---
 

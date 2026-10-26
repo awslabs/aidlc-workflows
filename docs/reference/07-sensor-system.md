@@ -301,6 +301,21 @@ before matching against the manifest `id`.
 ## `default_severity`
 
 `advisory` outcomes produce their audit rows but do not block the stage gate.
+Before the gate, the advisory gate checks run once when the stage's documents
+are handed on (`completionChecksStep` in `aidlc-state.ts`): the review request
+(`aidlc-log.ts review`, through the state tool's `completion-checks` command,
+which prints `{"held":false}` or `{"held":true,"message":...}`), or, when no
+review was asked for in the attempt, the report that opens the gate or shows it
+again after a revision. The first such hand-off of an attempt (the floor
+`reviewAttemptWindow` reads) fires the advisory checks on the scope's declared
+outputs (one Unit's, with `Unit` on the rows) when none of its (check, output)
+pairs has a `SENSOR_FIRED` row since the floor (paths compared canonically),
+once every required output exists. When
+a fire reports findings the hand-off records nothing and returns a `print`: the
+gate's own sentence for each, the detail files and the same command. A pass
+with a note holds nothing. A review the person asked for (`--person-asked`), a
+`--retry-pending` or `--single` request, the person's Override pick, a swarm
+worker's checkout and a gate the engine approves itself are not held.
 When the gate opens or is shown again, the orchestrator's reply carries, in
 its `narration` on a line after what the stage produced, one sentence per check whose
 latest result on a declared output is a failure (`failedCheckNotices` in

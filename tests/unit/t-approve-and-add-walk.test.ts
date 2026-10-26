@@ -31,6 +31,8 @@ const POLICIES = ["off", "relaxed", "strict"] as const;
 type Policy = (typeof POLICIES)[number];
 // Domain Design's own documents and review are not what this walk is about.
 const NO_OUTPUT_CHECKS = {
+  // The stage's checks before its review (completionChecksStep) are not this walk either.
+  AIDLC_DISABLE_SENSORS: "1",
   AIDLC_SKIP_ARTIFACT_GUARD: "1",
   AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
   AIDLC_SKIP_REVIEWER_GATE_GUARD: "1",

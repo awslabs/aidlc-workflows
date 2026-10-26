@@ -75,6 +75,8 @@ import {
 } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
+import { keepWritesBeforePick, keepWritesDuringWork, workBeforeCodeGeneration } from "../tools/aidlc-before-pick.ts";
+import { openPlanQuestion } from "../tools/aidlc-question-store.ts";
 import { CONFIG_SECTIONS } from "../tools/aidlc-command.ts";
 import { commandPath, readActiveExecutable } from "../tools/aidlc-install-paths.ts";
 import {
@@ -2084,6 +2086,40 @@ async function mutationIntent(
   };
 }
 
+// The agent's write while this chat's plan question for new work is open, kept
+// with what each file was just before, so the pick can say what changed and
+// how to undo it; otherwise, while the work this chat takes part in is before
+// Code Generation at a stage that writes only AI-DLC's records, kept with that
+// work for its next approval to say (aidlc-before-pick.ts). It reads the
+// targets this guard reads and refuses nothing; a failure keeps nothing, and
+// the write goes unnamed.
+async function keepWriteBeforePick(
+  parsed: ClaudeCodeHookInput,
+  workflow: ReturnType<typeof enterHookWorkflow>,
+): Promise<void> {
+  try {
+    const toolName = parsed.tool_name ?? "";
+    const selection = workflow.selection;
+    const chat = selection?.sessionId;
+    if ((toolName !== "Bash" && !WRITE_TOOLS.has(toolName)) || !selection || !chat) return;
+    const projectDir = workflow.projectDir;
+    const question = openPlanQuestion(projectDir, chat);
+    const work = question === null && selection.intent !== null && workflow.participation === "participant"
+      ? { intent: selection.intent, space: selection.space, stage: workBeforeCodeGeneration(projectDir, selection) }
+      : null;
+    if (question === null && !work?.stage) return;
+    const cwd = typeof parsed.cwd === "string" ? parsed.cwd : projectDir;
+    const { targets } = await mutationIntent(
+      projectDir, toolName, parsed.tool_input, cwd, parsed.aidlc_shell === "powershell",
+    );
+    const inside = targets.filter((target) => !isOutsideProject(projectDir, target));
+    if (question !== null) keepWritesBeforePick(projectDir, chat, question, inside);
+    else if (work?.stage) keepWritesDuringWork(projectDir, work, work.stage, inside);
+  } catch {
+    // Unkept.
+  }
+}
+
 // The person is editing the plan files themselves (they answered the plan
 // question with "I'll edit the files"), and the write names one of the asked
 // plans' own plan or test-instruction files: those are theirs while they edit.
@@ -2205,6 +2241,9 @@ async function evaluate(
   judgedStep = null;
   // Runtime integrity is not a fence and cannot be disabled with this hook.
   if (refuseRuntimeIntegrityViolation(parsed)) return 2;
+  // Kept whatever this guard then decides, in a chat that joined no work too:
+  // a record, never a gate.
+  await keepWriteBeforePick(parsed, workflow);
 
   // A conversation that has not joined the selected workflow is not held to its
   // Plan Approval: its ordinary edits pass as in a workspace with no workflow.

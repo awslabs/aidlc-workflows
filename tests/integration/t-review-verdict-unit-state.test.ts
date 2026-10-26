@@ -126,6 +126,9 @@ class UnitReview {
     for (const key of Object.keys(this.env)) {
       if (/^AIDLC_(?:SKIP|DISABLE|ALLOW_DIRECT)_/.test(key)) this.env[key] = "0";
     }
+    // The stage's checks before the review (completionChecksStep, advisory, no
+    // guard) are not this file's subject, and its documents are not written for them.
+    this.env.AIDLC_DISABLE_SENSORS = "1";
     for (const key of [
       "AIDLC_SKIP_ARTIFACT_GUARD",
       "AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD",

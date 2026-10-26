@@ -366,9 +366,19 @@ describe("the link check over hundreds of repositories", () => {
 // The gate used to fire each check once per file (1,900 fires at 190
 // repositories, seven minutes on Windows); it now reads every repository's
 // files in one fire per check, and a failing file is named with its repository,
-// since every repository's files share their names.
+// since every repository's files share their names. The stage has no review,
+// so its first report runs the checks once before the gate (completionChecksStep)
+// and hands what they found to the agent; the report run again opens the gate,
+// which fires them once more.
 describe("the gate's checks over a code knowledge base", () => {
   const tree = TREES[0];
+  const openGate = (proj: string, env: NodeJS.ProcessEnv, line: string) => {
+    const held = engine(tree, proj, ["report", "--stage", RE, "--result", "awaiting-approval"], env);
+    expect(String(held.final.message), JSON.stringify(held.final).slice(0, 600)).toContain(`Before the approval, this stage's checks ran on its documents. ${line}`);
+    const fires = readAuditShardEvents(proj).filter((row) => row.event === "SENSOR_FIRED").map((row) => auditBlockField(row.block, "Sensor ID"));
+    expect(fires.sort()).toEqual(["required-sections", "upstream-coverage"]);
+    return engine(tree, proj, ["report", "--stage", RE, "--result", "awaiting-approval"], env);
+  };
   test("each check fires once for the stage, and the failing file is named with its repository", () => {
     const { proj, repos } = workspace(tree, { repos: 12, stage: RE, stores: true });
     const templates = join(proj, "aidlc", "spaces", "default", "memory", "templates");
@@ -377,15 +387,15 @@ describe("the gate's checks over a code knowledge base", () => {
     for (const repo of repos) {
       if (repo !== "service-007") appendFileSync(join(proj, CODEKB, repo, "dependencies.md"), "\n## Direct\n\nnone\n");
     }
-    const gate = engine(tree, proj, ["report", "--stage", RE, "--result", "awaiting-approval"],
-      childEnv({ AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1" }));
+    const line = "The required-sections check reports 1 finding in service-007/dependencies.md.";
+    const gate = openGate(proj, childEnv({ AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1" }), line);
     expectWithin(tree, gate.printed);
     const rows = readAuditShardEvents(proj);
     const fired = rows.filter((row) => row.event === "SENSOR_FIRED").map((row) => auditBlockField(row.block, "Sensor ID"));
-    expect(fired.sort()).toEqual(["required-sections", "upstream-coverage"]);
+    expect(fired.sort()).toEqual(["required-sections", "required-sections", "upstream-coverage", "upstream-coverage"]);
     const failed = rows.filter((row) => row.event === "SENSOR_FAILED");
-    expect(failed.map((row) => auditBlockField(row.block, "Failed outputs"))).toEqual([`${CODEKB}/service-007/dependencies.md`]);
-    expect(String(gate.final.narration)).toContain("The required-sections check reports 1 finding in service-007/dependencies.md.");
+    expect(failed.map((row) => auditBlockField(row.block, "Failed outputs"))).toEqual(Array(2).fill(`${CODEKB}/service-007/dependencies.md`));
+    expect(String(gate.final.narration)).toContain(line);
   });
 
   test("two failing files are named as the first and how many others", () => {
@@ -394,11 +404,9 @@ describe("the gate's checks over a code knowledge base", () => {
     mkdirSync(templates, { recursive: true });
     writeFileSync(join(templates, "dependencies.md"), "# dependencies\n\n## Overview\n\n## Direct\n");
     for (const repo of repoNames(12).slice(2)) appendFileSync(join(proj, CODEKB, repo, "dependencies.md"), "\n## Direct\n\nnone\n");
-    const gate = engine(tree, proj, ["report", "--stage", RE, "--result", "awaiting-approval"],
-      childEnv({ AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1" }));
-    expect(String(gate.final.narration)).toContain(
-      "The required-sections check reports 2 findings in service-000/dependencies.md and 1 other file.",
-    );
+    const line = "The required-sections check reports 2 findings in service-000/dependencies.md and 1 other file.";
+    const gate = openGate(proj, childEnv({ AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1" }), line);
+    expect(String(gate.final.narration)).toContain(line);
   });
 
   for (const policy of ["relaxed", "off"] as const) {
@@ -414,10 +422,11 @@ describe("the gate's checks over a code knowledge base", () => {
       expect(refused.final.reason_codes, JSON.stringify(refused.final).slice(0, 600)).toEqual(["REQUIRED_ARTIFACTS_MISSING"]);
       expect(JSON.stringify(refused.final)).toContain("required artifacts are missing (service-000: architecture.md)");
       writeFileSync(join(proj, CODEKB, "service-000", "architecture.md"), "# architecture\n\n## Overview\n\nback\n");
-      const gate = engine(tree, proj, ["report", "--stage", RE, "--result", "awaiting-approval"], evidenceOff);
+      const line = "The required-sections check reports 1 finding in service-001/dependencies.md.";
+      const gate = openGate(proj, evidenceOff, line);
       const fired = readAuditShardEvents(proj).filter((row) => row.event === "SENSOR_FIRED");
-      expect(fired).toHaveLength(2);
-      expect(String(gate.final.narration)).toContain("The required-sections check reports 1 finding in service-001/dependencies.md.");
+      expect(fired).toHaveLength(4);
+      expect(String(gate.final.narration)).toContain(line);
     });
   }
 });

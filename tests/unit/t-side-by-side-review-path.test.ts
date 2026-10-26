@@ -42,11 +42,15 @@ function brief(pd: string): string {
   return result.out;
 }
 
+// A request comes back as the agent's step when the stage's checks found
+// something in its documents (completionChecksStep); the agent runs it again.
 function review(cwd: string, projectDir: string, verdict?: string) {
-  return runCheckpointTool(cwd, "tools/aidlc-log.ts", [
+  const run = () => runCheckpointTool(cwd, "tools/aidlc-log.ts", [
     "review", "--stage", STAGE, "--unit", "alpha", "--reviewer", REVIEWER, "--iteration", "1",
     ...(verdict ? ["--verdict", verdict] : []), "--project-dir", projectDir,
   ]);
+  const first = run();
+  return verdict === undefined && first.out.includes("Before the review, this stage's checks ran") ? run() : first;
 }
 
 describe("a side-by-side Unit's reviewer writes the review the verdict reads", () => {
