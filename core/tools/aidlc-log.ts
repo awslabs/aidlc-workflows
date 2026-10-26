@@ -18,6 +18,7 @@ import {
   chatsSince,
   latestSpendingTimestamp,
   listMessages,
+  messageBeforeJoining,
   proveMessage,
   readMessage,
   type StoredMessage,
@@ -1038,6 +1039,29 @@ function decisionRowsInScope(rows: AuditShardEvent[], stage: string, unit: strin
 function latestDecisionMessageId(pd: string, stage: string, unit: string | undefined): string | null {
   const question = decisionRowsInScope(readAuditShardEvents(pd), stage, unit).at(-1);
   return question === undefined ? null : auditBlockField(question.block, "Message Id");
+}
+
+// With no reply on record, the refusal names this chat's messages from before
+// it was on this work (a teammate's clone, messageBeforeJoining), oldest first,
+// by id and time: one may hold the answer, and the agent names the one it
+// answers. Null when there are none.
+function keptMessagesRefusal(pd: string): string | null {
+  const chat = invokingChat(pd);
+  if (chat === null) return null;
+  const spentAt = latestSpendingTimestamp(readAuditShardEvents(pd));
+  const kept = listMessages(pd)
+    .filter((message) => message.session === chat && (spentAt === null || message.at >= spentAt) &&
+      messageBeforeJoining(pd, message.id) !== null);
+  if (kept.length === 0) return null;
+  const shown = kept.map((message) => `${message.id} (sent ${message.at})`);
+  const missed = unattendedHumanPresenceHint(pd);
+  const step = kept.length === 1
+    ? `the person's message ${shown[0]} came before this chat was on this work, so it is on record as no reply. ` +
+      `If it answers the question, run the same command with --message ${kept[0].id}; do not ask them again.`
+    : `the person's messages ${shown.join(", ")} came before this chat was on this work, so none is on record as a ` +
+      "reply. If one answers the question, run the same command with --message <id>, the id of the message it " +
+      "answers; do not ask them again.";
+  return `Cannot record this answer: ${step}` + (missed === "" ? "" : ` If no message of theirs answers it:${missed}`);
 }
 
 function handleDecision(args: string[]): void {
@@ -2642,7 +2666,8 @@ function handleAnswer(args: string[]): void {
       // One reply answers every question the agent asked, each as its own
       // answer: an answer spends no reply.
       error(
-        "Cannot record this answer because no new human reply has arrived for the question. "
+        keptMessagesRefusal(pd) ??
+          "Cannot record this answer because no new human reply has arrived for the question. "
           + "Wait for the human to type an answer, then try again."
           + commandTurnHint(pd)
           + unattendedHumanPresenceHint(pd),

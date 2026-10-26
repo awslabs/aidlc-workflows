@@ -738,15 +738,18 @@ function messageProof(
 // this work's record names it and it can answer the open question: their chat
 // had not joined the work when it came (a teammate's clone, where the
 // selection is not committed, so the human-turn hook kept the message and
-// wrote no turn), and the answer's own proof takes it. The step names it on
-// its answer command, by its id. No turn is made for it, so what a gate joins
+// wrote no turn), and the answer's own proof takes it. The work was on record
+// before it came: the message a piece of work starts with is kept the same way,
+// and it answers no question the work asks later. The step names it on its
+// answer command, by its id. No turn is made for it, so what a gate joins
 // (personsGateReply) stays the turns on the record. Null otherwise, and on any
 // read error.
 export function messageBeforeJoining(pd: string, id: string | undefined): string | null {
   if (id === undefined) return null;
   try {
     const message = readMessage(pd, id);
-    if (message === null || sentOnThisWork(readAuditShardEvents(pd))(message)) return null;
+    const rows = readAuditShardEvents(pd);
+    if (message === null || sentOnThisWork(rows)(message) || !rows.some((row) => row.timestamp < message.at)) return null;
     return "message" in proveMessage(pd, id, "answer") ? id : null;
   } catch {
     return null;
