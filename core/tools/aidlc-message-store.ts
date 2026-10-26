@@ -69,7 +69,7 @@ export interface StoredMessage {
   picker: Array<{ question: string; reply: PersonsWords | null }> | null;
   /**
    * The person's own words: the text after the entry word and after any flags. Null for a command with no words. A
-   * question box answered for several questions keeps every pick, one per line in the order shown.
+   * question box keeps every reply it carried, one per question in the order shown, a pick with its note included.
    */
   words: PersonsWords | null;
   /** The settings typed as flags, as the config setter names them ("depth" "minimal", "guard.review-freeze" "off"). */
@@ -732,6 +732,25 @@ function messageProof(
     };
   }
   return { message };
+}
+
+// The message a reading step kept the person's words under, when no turn on
+// this work's record names it and it can answer the open question: their chat
+// had not joined the work when it came (a teammate's clone, where the
+// selection is not committed, so the human-turn hook kept the message and
+// wrote no turn), and the answer's own proof takes it. The step names it on
+// its answer command, by its id. No turn is made for it, so what a gate joins
+// (personsGateReply) stays the turns on the record. Null otherwise, and on any
+// read error.
+export function messageBeforeJoining(pd: string, id: string | undefined): string | null {
+  if (id === undefined) return null;
+  try {
+    const message = readMessage(pd, id);
+    if (message === null || sentOnThisWork(readAuditShardEvents(pd))(message)) return null;
+    return "message" in proveMessage(pd, id, "answer") ? id : null;
+  } catch {
+    return null;
+  }
 }
 
 // Whether `a` comes after `b` on the record: a later second, or the same second

@@ -333,7 +333,8 @@ describe("Plan Approval recovery paths: every refusal names a step that works", 
     const project = presented(session);
     const reply = picker(project, session, approvalPicker("looks good, go ahead"));
     expect(reply.code).toBe(0);
-    expect(noticeOf(reply)).toBe("");
+    // The box answer's only line names the message it was kept as, never its words.
+    expect(noticeOf(reply)).toMatch(/^This message of the person's is on record as ([0-9a-f]+): a decision you record from it can name it with --message \1\.$/);
     expect(readPlanApprovalResponse(project, session)?.words).toBe("looks good, go ahead");
     expect(recordedChoice(project, session)).toBeNull();
     expectRecordsApproval(project, session);
