@@ -4763,37 +4763,60 @@ const SOURCE_DIFFERENCE_LIMIT = 3;
  * Names the first paths by which the selected repository's HEAD fails to
  * reproduce the approved source, and the nested repository one sits in, so the
  * refusal says what to commit and where. Both arguments are serialized source
- * listings; returns "" when none can be told apart.
+ * listings; returns "" when none can be told apart. A path git ignores, and a
+ * link to a file outside the repository, cannot be committed, so they are
+ * named as such instead of as uncommitted.
  */
-function describeSourceDifferences(repoCwd: string, committedBytes: string, expectedBytes: string): string {
+function describeSourceDifferences(
+  repoCwd: string,
+  repoName: string | null,
+  committedBytes: string,
+  expectedBytes: string,
+): string {
   const committed = parseSourceListing(committedBytes);
   const expected = parseSourceListing(expectedBytes);
   if (!committed || !expected) return "";
-  const differing: Array<{ path: string; what: string }> = [];
+  const differing = new Map<string, "new" | "deleted" | "modified" | "link">();
   for (const key of new Set([...committed.keys(), ...expected.keys()])) {
     const path = splitSourcePathKey(key)?.path;
     if (path === undefined) continue;
-    if (!committed.has(key)) differing.push({ path, what: "is not committed (new or untracked)" });
-    else if (!expected.has(key)) differing.push({ path, what: "is deleted but still committed" });
-    else if (committed.get(key) !== expected.get(key)) differing.push({ path, what: "differs from the last commit (modified)" });
+    // The live walk names what a link outside the root leads to `<link>@target`; a commit never has it.
+    const link = /^(.*?)@target(\/|$)/.exec(path);
+    if (link) differing.set(link[1], "link");
+    else if (!committed.has(key)) differing.set(path, "new");
+    else if (!expected.has(key)) differing.set(path, "deleted");
+    else if (committed.get(key) !== expected.get(key)) differing.set(path, "modified");
   }
-  differing.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  const segments = (path: string) => path.split("/").slice(0, -1);
+  const sorted = [...differing].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const nestedRepoOf = (path: string): string | null => {
-    for (let depth = segments(path).length; depth > 0; depth--) {
-      const dir = segments(path).slice(0, depth);
-      if (existsSync(join(repoCwd, ...dir, ".git"))) return dir.join("/");
+    const dirs = path.split("/").slice(0, -1);
+    for (let depth = dirs.length; depth > 0; depth--) {
+      if (existsSync(join(repoCwd, ...dirs.slice(0, depth), ".git"))) return dirs.slice(0, depth).join("/");
     }
     return null;
   };
   let nestedShown = false;
-  const shown = differing.slice(0, SOURCE_DIFFERENCE_LIMIT).map(({ path, what }) => {
+  const shown = sorted.slice(0, SOURCE_DIFFERENCE_LIMIT).map(([path, kind]) => {
     const nested = nestedRepoOf(path);
+    const shownPath = `${repoName === null ? "" : `${repoName}/`}${path}`;
+    if (kind === "link") return `${shownPath} links outside the repository, so a commit cannot carry what it points to`;
+    const where = nested === null ? "" : ` in the nested repository ${repoName === null ? "" : `${repoName}/`}${nested}`;
+    if (kind === "deleted" || kind === "modified") {
+      nestedShown ||= nested !== null;
+      return kind === "deleted"
+        ? `${shownPath} is deleted but still committed${where}`
+        : `${shownPath} differs from the last commit (modified)${where}`;
+    }
+    const owner = nested === null ? repoCwd : join(repoCwd, ...nested.split("/"));
+    const ignored = spawnSync("git", ["check-ignore", "-q", "--no-index", "--", nested === null ? path : path.slice(nested.length + 1)], {
+      cwd: owner, timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    }).status === 0;
+    if (ignored) return `${shownPath} is ignored by git, so a commit leaves it out`;
     nestedShown ||= nested !== null;
-    return nested === null ? `${path} ${what}` : `${path} ${what} in the nested repository ${nested}`;
+    return `${shownPath} is not committed (new or untracked)${where}`;
   });
   if (shown.length === 0) return "";
-  const more = differing.length - shown.length;
+  const more = sorted.length - shown.length;
   return ` ${shown.join("; ")}${more > 0 ? `; and ${more} more` : ""}.${
     nestedShown ? " Commit inside the nested repository first, then commit it in the parent repository." : ""}`;
 }
@@ -4871,7 +4894,7 @@ export function validateCodeGenerationForkApproval(
   const parentHead = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "HEAD^{commit}"]);
   const committed = gitCommitSourceListing(repo.cwd, parentHead, repo.repo === null);
   if (!committed || theirs(committed) !== expectedBytes) {
-    const detail = committed ? describeSourceDifferences(repo.cwd, theirs(committed), expectedBytes) : "";
+    const detail = committed ? describeSourceDifferences(repo.cwd, repo.repo, theirs(committed), expectedBytes) : "";
     throw new Error(`Approved parent source is not committed.${detail} Commit the already-approved parent source before prepare, then retry. No child was created and no parent commit was made.`);
   }
   const base = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "--end-of-options", `${baseCommit}^{commit}`]);
@@ -4907,7 +4930,7 @@ function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: str
     const parentHead = worktreeApprovalGit(provenance.repo.cwd, ["rev-parse", "HEAD"]);
     const committed = gitCommitSourceListing(provenance.repo.cwd, parentHead, provenance.repo.repo === null);
     if (!committed || theirs(committed) !== expectedBytes) {
-      const detail = committed ? describeSourceDifferences(provenance.repo.cwd, theirs(committed), expectedBytes) : "";
+      const detail = committed ? describeSourceDifferences(provenance.repo.cwd, provenance.repo.repo, theirs(committed), expectedBytes) : "";
       throw new Error(`Clean worktree needs approved parent source that is not committed.${detail} Commit the already-approved parent source, then retry; the worktree was preserved.`);
     }
     try {
