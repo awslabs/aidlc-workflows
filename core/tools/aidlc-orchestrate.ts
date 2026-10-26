@@ -14570,7 +14570,11 @@ function teamUnitProgressModel(
   mergeTracking: boolean,
   mainOwnedUnits: ReadonlySet<string>,
   mergedUnitOverrides?: ReadonlySet<string>,
+  unitRhythms?: ReadonlyMap<string, UnitGateRhythm>,
 ): TeamUnitProgressModel {
+  // Each Unit's row follows the rhythm its own walk ran under: the one it was
+  // claimed with, else this checkout's.
+  const rhythmOf = (unit: string): UnitGateRhythm => unitRhythms?.get(unit) ?? rhythm;
   const ledgers = new Map(
     block.map((stage) => [
       stage.slug,
@@ -14621,7 +14625,7 @@ function teamUnitProgressModel(
         const receipts = reviewReceipts.get(stage.slug);
         return receipts === null || receipts?.unitVerdicts.get(unit) === "READY";
       });
-      const gated = rhythm === "unit-end"
+      const gated = rhythmOf(unit) === "unit-end"
         ? (
           !!finalStage &&
           unitGateStatus(
@@ -14681,9 +14685,9 @@ function teamUnitProgressModel(
       );
       let state: CheckboxState;
       if (!applies) state = "completed";
-      else if (rhythm === "per-stage" && gate === "approved") state = "completed";
-      else if (rhythm === "per-stage" && gate === "revising") state = "revising";
-      else if (settled && rhythm === "per-stage") state = "awaiting-approval";
+      else if (rhythmOf(unit) === "per-stage" && gate === "approved") state = "completed";
+      else if (rhythmOf(unit) === "per-stage" && gate === "revising") state = "revising";
+      else if (settled && rhythmOf(unit) === "per-stage") state = "awaiting-approval";
       else if (settled) state = "completed";
       else if (ledger.checkpoint?.unit === unit) state = "in-progress";
       else state = "pending";
@@ -14698,7 +14702,7 @@ function teamUnitProgressModel(
     }
 
     let gateState: CheckboxState = "pending";
-    if (rhythm === "per-stage") {
+    if (rhythmOf(unit) === "per-stage") {
       if (allStageGatesApproved) gateState = "completed";
       else if (anyRevising) gateState = "revising";
       else if (anyAwaiting) gateState = "awaiting-approval";
@@ -14734,10 +14738,10 @@ function teamUnitProgressModel(
   }
 
   const allUnitEndApproved =
-    rhythm !== "unit-end" ||
     !finalStage ||
     units.every(
       (unit) =>
+        rhythmOf(unit) !== "unit-end" ||
         unitGateStatus(
           projectDir,
           finalStage.slug,
@@ -14881,7 +14885,21 @@ export function deriveTeamUnitProgressModel(
     mergeTracking,
     mainOwnedUnits,
     mergedUnitOverrides,
+    unitGateRhythmsFromAudit(orderedAuditRows),
   );
+}
+
+// The rhythm a team Unit was claimed with, as its gate rows record it: a Unit
+// claimed with unit-end approves once, on a row scoped unit-end. A Unit with
+// no such row walks this checkout's own rhythm.
+function unitGateRhythmsFromAudit(rows: readonly AuditShardEvent[]): Map<string, UnitGateRhythm> {
+  const rhythms = new Map<string, UnitGateRhythm>();
+  for (const row of rows) {
+    if (row.event !== "GATE_APPROVED" && row.event !== "STAGE_AWAITING_APPROVAL") continue;
+    const unit = auditBlockField(row.block, "Unit");
+    if (unit && auditBlockField(row.block, "Gate Scope") === "unit-end") rhythms.set(unit, "unit-end");
+  }
+  return rhythms;
 }
 
 function refreshTeamUnitProgress(
