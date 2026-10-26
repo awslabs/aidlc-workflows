@@ -425,6 +425,25 @@ describe.each(POLICIES)("Guard Policy %s: a message stands for what it asks besi
     expect(granted.status, granted.out).toBe(0);
   });
 
+  // The grant uses the message up, for a setting too: the approval's reply is
+  // no window past it (an agent's setter after "approve, and run Construction
+  // on its own" is not theirs).
+  test("approve, and run Construction on its own: after the grant, a setting on that message is refused", () => {
+    const proj = project();
+    const id = said(proj, "approve, and run Construction on its own from here");
+    tick();
+    append(proj, "GATE_APPROVED", { Stage: "feasibility", "User Input": "Approve", "Message Id": id });
+    const granted = grant(proj, id);
+    expect(granted.status, granted.out).toBe(0);
+    const before = planApproval();
+    const off = setter(proj, ["--plan-approval", "off", "--message", id]);
+    expect(off.status).not.toBe(0);
+    expect(off.out).not.toContain(id);
+    expect(off.out).toContain("It stays on; go on with the open step.");
+    expect(planApproval()).toBe(before);
+    expect(rows(proj, "CEREMONY_SET")).toHaveLength(0);
+  });
+
   test("one plan answer for several Units is one decision, so the message still stands for a request", () => {
     const proj = project();
     const id = said(proj, "approve the plans, and run Construction on its own from here");

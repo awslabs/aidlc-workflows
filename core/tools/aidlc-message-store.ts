@@ -633,10 +633,12 @@ const GUARD_REFUSALS: Record<GuardRefusalEvent, true> = {
 // setting. The reply is over, and its Approve stands for no setting
 // (messageReach), once the person has sent another message on this work (in
 // any chat: a resume is one), a later decision is on record (the run's own
-// approval included, which names no message), a guard has refused the agent,
-// or the next gate or the code plan question is up. Ids, the engine's own rows
-// and their places only, never words.
+// approval included, which names no message), the message no longer stands as
+// a request does (onlyItsOwnDecisionAfter: a grant of autonomy uses it up), a
+// guard has refused the agent, or the next gate or the code plan question is
+// up. Ids, the engine's own rows and their places only, never words.
 function answeringItsApproval(pd: string, rows: readonly AuditShardEvent[], message: StoredMessage): boolean {
+  if (!onlyItsOwnDecisionAfter(pd, rows, message)) return false;
   let approval: AuditShardEvent | null = null;
   for (const row of rows) {
     if (!MESSAGE_SPENDING_EVENTS.has(row.event) || auditBlockField(row.block, APPROVED_TOGETHER_WITH_FIELD) !== null) continue;
