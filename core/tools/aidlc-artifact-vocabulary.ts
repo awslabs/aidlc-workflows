@@ -6,6 +6,7 @@
 const ARTIFACT_FILENAMES: Readonly<Record<string, string>> = {
   "build-test-results": "test-results.md",
   "load-test-results": "test-results.md",
+  "mockups-preview": "mockups-preview.html",
   traceability: "traceability.json",
 };
 

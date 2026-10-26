@@ -173,12 +173,19 @@ beforeAll(() => {
     }
   }
 
-  // Consumer coverage: every consumes[].artifact has a producer.
+  // Consumer coverage: every consumes[].artifact has a producer. As in the
+  // engine's producersOf, an optional_produces entry is a producer too.
+  const producers = new Set(produces);
+  for (const p of parsed) {
+    if (Array.isArray(p.obj.optional_produces)) {
+      for (const name of p.obj.optional_produces as unknown[]) producers.add(name as string);
+    }
+  }
   const missingProducers: Aggregate["missingProducers"] = [];
   for (const p of parsed) {
     if (Array.isArray(p.obj.consumes)) {
       for (const c of p.obj.consumes as Array<Record<string, unknown>>) {
-        if (c && typeof c.artifact === "string" && !produces.has(c.artifact)) {
+        if (c && typeof c.artifact === "string" && !producers.has(c.artifact)) {
           missingProducers.push({ slug: p.slug, artifact: c.artifact });
         }
       }

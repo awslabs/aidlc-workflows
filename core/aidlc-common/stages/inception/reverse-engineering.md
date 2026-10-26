@@ -244,6 +244,9 @@ whole codebase) for:
 - Build systems, configuration, and dependency relationships
 - External and internal APIs (endpoints, contracts, methods)
 - Frameworks, libraries, and their versions
+- The user interface, when the code has one: UI library and version, shared
+  components and where they are used, recurring screen patterns, and theme
+  tokens and where they are defined
 - Test directories, test frameworks, coverage configuration
 - Code quality indicators (linting, CI/CD, documentation)
 - Technical debt signals
@@ -333,7 +336,7 @@ Architect synthesizes scan results into a complete 9-artifact candidate:
 2. **architecture.md** — System architecture, patterns, component relationships (with Mermaid diagrams). MUST include Interaction Diagrams section depicting how business transactions are implemented across components (sequence or flow diagrams).
 3. **code-structure.md** — Package/module organization, file classification, code patterns
 4. **api-documentation.md** — External and internal API surfaces, endpoints, contracts
-5. **component-inventory.md** — Complete component list with responsibilities and dependencies
+5. **component-inventory.md** — Complete component list with responsibilities and dependencies. When the code has a user interface, end it with a `## User Interface` section from the developer's scan: UI library and version, shared components and where they are used, screen patterns, and theme tokens with the file that defines them. It records what the code uses, not what the company approved, and it is not a component: leave it out of the Scope of Analysis `components` list.
 6. **technology-stack.md** — Languages, frameworks, libraries with versions
 7. **dependencies.md** — External dependencies, internal cross-package dependencies
 8. **code-quality-assessment.md** — Test coverage, linting, CI/CD, documentation quality, tech debt

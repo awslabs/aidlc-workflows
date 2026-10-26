@@ -2,7 +2,8 @@
 
 Use this template for experience decisions and component-level specifications in
 `interaction-spec.md` (Stage 2.5 Refined Mockups) and any stage requiring
-detailed UI component definitions.
+detailed UI component definitions, and its Design System Mapping table for
+`design-system-mapping.md`.
 
 ---
 
@@ -13,11 +14,22 @@ Give each decision a story-keyed ID: `UX{x}.{y}.{n}` belongs to story
 
 | ID | Decision | Component | States | Source |
 |---|---|---|---|---|
-| UX1.1.1 | [the interaction or layout the build must preserve] | [component or pattern] | [default, loading, empty, error, success, partial] | `[Q1]`, company document, memory rule, or `[assumption]` |
+| UX1.1.1 | [the interaction or layout the build must preserve] | [component or pattern] | [default, loading, empty, error, success, partial] | `[Q1]`, a document's `knowledge show` citation, memory rule, or `[assumption]` |
 
 Use one row per decision. A component observed in the existing code records
 what the product uses; it is a company standard only when a document or memory
 rule says so. Turn a conflict between sources into a question.
+
+---
+
+## Design System Mapping
+
+| Component or token | Used for | Observed in code | Standard because |
+|---|---|---|---|
+| FormLayout | [screen or decision, such as UX1.1.1] | [file, or `none`] | [a document's citation, memory rule, `[Q1]`, or `[assumption]`] |
+
+Keep the two columns apart: use in the code is not endorsement, and a standard
+the code does not use yet is a new dependency to name.
 
 ---
 

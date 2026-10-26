@@ -490,6 +490,7 @@ describe("t116 per-unit {unit-name} injection", () => {
   test("13: a fresh code-generation worker receives every approved Refined Mockups artifact", () => {
     const artifacts = [
       "mockups.md",
+      "mockups-preview.html",
       "interaction-spec.md",
       "design-system-mapping.md",
       "accessibility-checklist.md",
@@ -506,6 +507,20 @@ describe("t116 per-unit {unit-name} injection", () => {
     for (const artifact of artifacts) {
       expect(directive.consumes).toContain(`${RP}/inception/refined-mockups/${artifact}`);
     }
+  });
+
+  test("14: brownfield Refined Mockups reads the code's UI inventory and may write its HTML preview", () => {
+    const { directive, projectDir } = emitForWithProject(
+      "state-brownfield-feature.md",
+      "refined-mockups",
+      (proj) => {
+        const abs = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "codekb", basename(proj), "component-inventory.md");
+        mkdirSync(dirname(abs), { recursive: true });
+        writeFileSync(abs, "# Components\n\n## User Interface\n", "utf-8");
+      },
+    );
+    expect(directive.consumes).toContain(`aidlc/spaces/${DEFAULT_SPACE}/codekb/${basename(projectDir)}/component-inventory.md`);
+    expect(directive.produces).toContain(`${RP}/inception/refined-mockups/mockups-preview.html`);
   });
 });
 

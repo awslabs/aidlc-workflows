@@ -10,7 +10,7 @@ All RE artifacts are created under `aidlc/spaces/<active-space>/codekb/<repo>/` 
 2. **architecture.md** — System architecture, patterns, component relationships, Mermaid diagrams
 3. **code-structure.md** — Package/module organization, file classification, code patterns
 4. **api-documentation.md** — External and internal API surfaces, endpoints, contracts
-5. **component-inventory.md** — Complete component list with responsibilities and dependencies
+5. **component-inventory.md** — Complete component list with responsibilities and dependencies, ending with a `## User Interface` section when the code has one
 6. **technology-stack.md** — Languages, frameworks, libraries with versions
 7. **dependencies.md** — External dependencies, internal cross-package dependencies
 8. **code-quality-assessment.md** — Test coverage, linting, CI/CD, documentation quality, tech debt
@@ -39,6 +39,12 @@ All RE artifacts are created under `aidlc/spaces/<active-space>/codekb/<repo>/` 
 
 ### Frameworks & Libraries
 - [name] — [version] — [purpose]
+
+### User Interface
+- **UI library**: [name] — [version], or "None" when the code has no user interface
+- **Shared components**: [component] — [file] — [where it is used]
+- **Screen patterns**: [pattern, such as a list with inline edit or a form page] — [example file]
+- **Theme tokens**: [colours, type, spacing] — [file that defines them]
 
 ### Test Coverage
 - **Test Directories**: [list]
@@ -160,7 +166,7 @@ Rules:
 - `kind: full` only when the scan genuinely covered the whole repo deeply; `analyzed.paths` MUST include the repo root (`./`). Anything less is `kind: partial`.
 - `kind: partial` MUST NOT include `./` in `analyzed.paths`.
 - `analyzed.paths` entries are repo-relative, directories end with `/`, no glob characters.
-- Component names must match `component-inventory.md` headings verbatim - the rerun guard compares them literally.
+- Component names must match `component-inventory.md` headings verbatim - the rerun guard compares them literally. Its `## User Interface` section is not a component.
 - A folder the scan left out (the developer's **Left out** list, such as build output) does not go in `shallow.paths`: it stays out of the block.
 - A full rescan wholesale replaces all 9 artifacts and builds this block only from the new run.
 - For a focused scan of an existing store, read all 9 existing artifacts and the prior Scope of Analysis block first. Update or extend prose for the newly analyzed area and preserve prior prose outside it.

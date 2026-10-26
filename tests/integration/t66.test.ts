@@ -364,13 +364,19 @@ describe("t66 graph traversal — full graph (in-process)", () => {
 
   test("Construction declares every Refined Mockups output as an optional input", () => {
     const graph = loadGraph();
-    for (const stageSlug of ["code-generation", "build-and-test"]) {
+    for (const stageSlug of ["functional-design", "code-generation", "build-and-test"]) {
       const stage = graph.find((candidate) => candidate.slug === stageSlug);
       const consumes = new Map((stage?.consumes ?? []).map((input) => [input.artifact, input.required]));
-      for (const artifact of ["mockups", "interaction-spec", "design-system-mapping", "accessibility-checklist"]) {
+      for (const artifact of ["mockups", "mockups-preview", "interaction-spec", "design-system-mapping", "accessibility-checklist"]) {
         expect(consumes.get(artifact), `${stageSlug}: ${artifact}`).toBe(false);
       }
     }
+  });
+
+  test("Refined Mockups reads the brownfield UI inventory and may write its preview", () => {
+    const stage = loadGraph().find((candidate) => candidate.slug === "refined-mockups");
+    expect(stage?.consumes).toContainEqual({ artifact: "component-inventory", required: false, conditional_on: "brownfield" });
+    expect(stage?.optional_produces).toContain("mockups-preview");
   });
 
   // reverse-engineering is independent of ideation (brownfield fan-out root)
@@ -1082,7 +1088,7 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
   });
 
   // .sh:892-900 — Group B: element counts match live sources (4 assertions)
-  test("export element counts: stages=33, scopes=11, artifacts=122, agents=14", () => {
+  test("export element counts: stages=33, scopes=11, artifacts=123, agents=14", () => {
     const res = spawnSync(BUN, [GRAPH_TS, "export"], { encoding: "utf8" });
     const out = JSON.parse(res.stdout) as {
       stages: unknown[];
@@ -1092,7 +1098,7 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
     };
     expect(out.stages.length).toBe(33);
     expect(Object.keys(out.scopes).length).toBe(11);
-    expect(out.artifacts.length).toBe(122);
+    expect(out.artifacts.length).toBe(123);
     expect(out.agents.length).toBe(14);
   });
 

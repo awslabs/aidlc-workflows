@@ -3,7 +3,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import {
   asksForHelp,
   errorMessage,
+  filterProducesByKind,
   getField,
+  loadStageGraph,
   parseCheckboxes,
   parseStateStageSuffixes,
   printUsageAndExit,
@@ -53,6 +55,8 @@ interface UnitContext {
   unitName: string;
   units: string[];
   unitIds: Map<string, string>;
+  // The kind unit-of-work-dependency.md gives this Unit; absent when untagged.
+  kind?: string;
 }
 
 type RequirementKind = "functional" | "non-functional";
@@ -294,6 +298,32 @@ function decisionsOfStories(specContent: string, stories: Set<string> | null): S
   return decisions;
 }
 
+// A spec or packaging Unit has no screen to build an experience decision in;
+// every other Unit, untagged included, builds the decisions of its stories.
+function buildsExperience(context: UnitContext): boolean {
+  return context.kind !== "spec" && context.kind !== "packaging";
+}
+
+// Functional Design designs a decision in frontend-components.md, so a Unit
+// owes it there exactly when the stage's produces_kinds gives it that file.
+// Without a readable stage graph the Unit owes it and may mark it N/A.
+function designsExperience(context: UnitContext): boolean {
+  try {
+    const stage = loadStageGraph().find((candidate) => candidate.slug === "functional-design");
+    return filterProducesByKind(stage?.produces_kinds, ["frontend-components"], context.kind ?? null).length > 0;
+  } catch {
+    return true;
+  }
+}
+
+function addExperienceDecisions(result: UpstreamResolution, docsDir: string, stories: Set<string> | null): void {
+  const interactionSpec = join(docsDir, "inception", "refined-mockups", "interaction-spec.md");
+  if (!existsSync(interactionSpec)) return;
+  const read = readText(interactionSpec);
+  if (read.content === null) return;
+  for (const id of decisionsOfStories(read.content, stories)) result.ids.add(id);
+}
+
 function idsFromFile(path: string, patterns: RegExp[], label: string): { ids: Set<string>; reason?: string } {
   const read = readText(path);
   if (read.content === null) return { ids: new Set(), reason: read.reason };
@@ -462,11 +492,13 @@ function resolveUnitContext(
   if (dag.state === "ok" && !units.includes(unitName)) {
     return { reason: `unit "${unitName}" is not declared in unit-of-work-dependency.md` };
   }
+  const kind = dag.state === "ok" ? dag.unitKinds?.get(unitName) : undefined;
   return {
     context: {
       unitName,
       units,
       unitIds: unitIdMap(join(docsDir, "inception", "units-generation", "unit-of-work.md"), units),
+      ...(kind ? { kind } : {}),
     },
   };
 }
@@ -620,10 +652,12 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string, 
       }
       for (const ac of criteriaOfStories(storyRead.content, unitStories)) result.ids.add(ac);
       if (result.ids.size === 0) result.reasons.push(`stories mapped to unit "${unit}" contain no acceptance-criterion IDs`);
+      if (designsExperience(resolvedUnit.context)) addExperienceDecisions(result, docsDir, unitStories);
     } else if (unit && existsSync(storyMap)) {
       addUnitRows(result, storyMap, resolvedUnit.context, [ID_PATTERNS.FR]);
     } else {
       addRequirements(result, ["functional"], declared);
+      if (existsSync(stories) && designsExperience(resolvedUnit.context)) addExperienceDecisions(result, docsDir, null);
     }
     return result;
   }
@@ -648,7 +682,8 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string, 
   if (stage === "code-generation") {
     // The experience decisions this run owes follow its stories: a Unit's own
     // stories through the story map, every story otherwise. Without stories a
-    // Unit has no story to own a decision through, so it owes none.
+    // Unit has no story to own a decision through, so it owes none, and nor
+    // does a Unit with no screen.
     let decisionStories: Set<string> | null | undefined;
     if (existsSync(stories)) {
       if (unit && existsSync(storyMap)) {
@@ -675,12 +710,8 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string, 
       addRequirements(result, ["functional", "non-functional"], declared);
       decisionStories = null;
     }
-    const interactionSpec = join(docsDir, "inception", "refined-mockups", "interaction-spec.md");
-    if (decisionStories !== undefined && existsSync(interactionSpec)) {
-      const read = readText(interactionSpec);
-      if (read.content !== null) {
-        for (const id of decisionsOfStories(read.content, decisionStories)) result.ids.add(id);
-      }
+    if (decisionStories !== undefined && buildsExperience(resolvedUnit.context)) {
+      addExperienceDecisions(result, docsDir, decisionStories);
     }
     for (const id of detailedNfrIds(constructionDir(docsDir, unit, "nfr-requirements"), NFR_REQUIREMENT_FILES) ?? []) {
       result.ids.add(id);
@@ -749,7 +780,15 @@ function verifyTargets(
       const rules = idsFromFile(brPath, [ID_PATTERNS.BR], "rules.md");
       if (rules.reason) reasons.push(rules.reason);
       const targeted = new Set<string>();
+      const components = join(constructionDir(docsDir, unit, "functional-design"), "frontend-components.md");
       for (const entry of okEntries) {
+        // An experience decision is designed in a component, not a rule: its
+        // target is frontend-components.md, which must cite its ID.
+        if (extractIds(entry.id, [ID_PATTERNS.UX]).size > 0) {
+          const problem = experienceTargetProblem(components, entry.id, entry.target);
+          if (problem) invalidTargets.push(`${entry.id}: ${problem}`);
+          continue;
+        }
         const targets = extractIds(entry.target ?? "", [ID_PATTERNS.BR]);
         if (targets.size === 0) invalidTargets.push(`${entry.id}: target must name at least one BRx.y ID`);
         for (const target of targets) {
@@ -773,6 +812,17 @@ function verifyTargets(
   }
 
   return { invalidTargets, derivedOrphans, reasons };
+}
+
+// Why a Functional Design `OK` row for an experience decision does not point at
+// a frontend-components.md that cites it.
+function experienceTargetProblem(components: string, id: string, rawTarget: string | undefined): string | null {
+  if (!/(^|\/)frontend-components\.md$/.test(normalizePath(rawTarget?.trim() ?? ""))) {
+    return "target must be frontend-components.md";
+  }
+  const read = readText(components);
+  if (read.content === null) return read.reason ?? `cannot read ${components}`;
+  return extractIds(read.content, [ID_PATTERNS.UX]).has(id) ? null : `frontend-components.md does not cite ${id}`;
 }
 
 // Why a Code Generation `OK` target is not one existing workspace-relative file.

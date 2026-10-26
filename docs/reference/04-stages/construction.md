@@ -357,7 +357,7 @@ legacy name and require the selected intent's exact `WORKTREE_DISCARDED`
 | Lead Agent        | aidlc-architect-agent                                                                                   |
 | support_agents    | aidlc-developer-agent                                                                                   |
 | mode              | inline                                                                                            |
-| Inputs            | unit-of-work.md, unit-of-work-story-map.md, stories.md (if produced), requirements.md, domain design artifacts |
+| Inputs            | unit-of-work.md, unit-of-work-story-map.md, stories.md (if produced), requirements.md, domain design artifacts, Refined Mockups' approved experience (if produced) |
 | Outputs           | `<record>/construction/{unit-name}/functional-design/` -- functional-spec.md, rules.md, entities.md, traceability.json, CONDITIONAL: frontend-components.md (per Unit kind) |
 
 ### Purpose
@@ -373,11 +373,14 @@ feasibility input.
 - Acceptance criteria of those stories from `<record>/inception/user-stories/stories.md` (if produced)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md`
 - Domain design artifacts from `<record>/inception/domain-design/`
+- For a Unit with a user interface, Refined Mockups' approved experience from
+  `<record>/inception/refined-mockups/` (if produced)
 
 ### Steps
 
 1. **Read Unit Context** -- Read the unit definition, assigned stories and
-   their acceptance criteria, requirements, and domain design artifacts.
+   their acceptance criteria, requirements, and domain design artifacts. A
+   Unit with a user interface also reads the approved experience.
 
 2. **Create Functional Design Plan** -- Analyze the unit's scope and create a
    questions file at
@@ -416,7 +419,9 @@ feasibility input.
      attributes, lifecycle states, and entity interaction patterns
    - **frontend-components.md** (CONDITIONAL -- only if unit includes
      frontend/UI): Component hierarchy, props/state design, interaction flows,
-     form validation rules, API integration points
+     form validation rules, API integration points. It follows the approved
+     screens and cites each `UX{x}.{y}.{n}` decision of the Unit's stories at
+     the component that realises it; a departure is a recorded deviation.
 
 5. **Prepare Completion** -- Verify the unit's Functional Design artifacts.
    Do not edit state; report the gate outcome through `aidlc-orchestrate.ts`.
@@ -431,7 +436,7 @@ feasibility input.
 | rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
 | entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
 | frontend-components.md   | (CONDITIONAL) Component hierarchy, props/state, interaction flows, form validation, API integration |
-| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), each `OK` to `BRx.y` rules in rules.md, `N/A` or `Deferred` with its reason, or `GAP` |
+| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), plus, for a Unit that writes frontend-components.md, the `UX` decisions of its stories; each `OK` to `BRx.y` rules in rules.md (a `UX` decision to frontend-components.md, which must cite it), `N/A` or `Deferred` with its reason, or `GAP` |
 
 Which files a Unit gets follows its kind: a `ui` Unit gets no entities.md or
 rules.md, only a `ui` Unit gets frontend-components.md, and a `packaging`
@@ -1510,7 +1515,10 @@ with the aidlc-devsecops-agent providing security testing expertise.
 11. **Prepare Completion** -- Verify the build/test evidence. Do not edit
     stage or phase state; the reported gate outcome owns the transition.
 
-12. **Completion** -- Present completion message and approval gate.
+12. **Completion** -- Present completion message and approval gate. When
+    Refined Mockups wrote `mockups-preview.html`, it names the built screens to
+    compare with the preview; whether the build matches the approved
+    experience, brand and feel included, is the person's judgement at this gate.
 
 ### Outputs
 

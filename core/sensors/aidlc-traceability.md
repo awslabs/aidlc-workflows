@@ -45,7 +45,10 @@ opens, on the tables as they are then:
 5. Verifies deterministic targets where possible: stories, Unit mappings,
    business rules, and workspace-relative code paths.
    Code Generation also owes every `UX{x}.{y}.{n}` experience decision that
-   `interaction-spec.md` records for its stories; without that file it owes none.
+   `interaction-spec.md` records for its stories, unless the Unit is a `spec`
+   or `packaging` Unit; Functional Design owes them when the Unit's kind gives
+   it `frontend-components.md`, and an `OK` row there must target that file,
+   which must cite the ID. Without `interaction-spec.md` neither owes any.
 6. Derives functional-design orphans from `rules.md` rather than
    trusting only the self-reported `reverse` array.
 

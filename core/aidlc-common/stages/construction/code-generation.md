@@ -37,6 +37,8 @@ consumes:
     required: true
   - artifact: mockups
     required: false
+  - artifact: mockups-preview
+    required: false
   - artifact: interaction-spec
     required: false
   - artifact: design-system-mapping
@@ -96,7 +98,7 @@ Read all design artifacts for the current unit:
 - Unit definition from `<record>/inception/units-generation/unit-of-work.md` (if exists)
 - Story map from `<record>/inception/units-generation/unit-of-work-story-map.md` (if exists)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md` (if exists)
-- The approved experience from `<record>/inception/refined-mockups/`: `interaction-spec.md`, `design-system-mapping.md`, `accessibility-checklist.md` and `mockups.md` (if they exist); the `UX{x}.{y}.{n}` decisions of this unit's stories are inputs the plan implements
+- The approved experience from `<record>/inception/refined-mockups/`: `interaction-spec.md`, `design-system-mapping.md`, `accessibility-checklist.md`, `mockups.md` and `mockups-preview.html` (if they exist); the `UX{x}.{y}.{n}` decisions of this unit's stories are inputs the plan implements
 
 Incremental scopes (bugfix, poc, refactor, security-patch) and the zero-Unit
 `express` scope skip Units Generation by design. When those inputs are absent,
@@ -526,8 +528,9 @@ Create
 `<code-generation-record>/traceability.json` by running
 `{{INVOKE}} engine sensor-traceability --stage code-generation --output-path <that path> --write-upstream`:
 it lists every assigned AC, detailed `NFRx.y`, `BRx.y`, and `UX{x}.{y}.{n}`
-experience decision of this Unit's stories (or direct `FR` / `NFR` IDs when
-incremental scope skipped the design chain), each with a `GAP` row; a
+experience decision of this Unit's stories (a `spec` or `packaging` Unit owes
+none; or direct `FR` / `NFR` IDs when incremental scope skipped the design
+chain), each with a `GAP` row; a
 requirement with sub-requirements is traced through its `FR{n}.{m}` IDs and
 needs no row of its own. Set each row's `status` and `target`: every `OK` target
 must be one existing workspace-relative implementation or test file. When the

@@ -26,6 +26,8 @@ consumes:
     required: true
   - artifact: mockups
     required: false
+  - artifact: mockups-preview
+    required: false
   - artifact: interaction-spec
     required: false
   - artifact: design-system-mapping
@@ -71,7 +73,7 @@ generating instructions. Read all applicable stage-level and per-unit sources:
 
 - every artifact under `nfr-requirements/`
 - every artifact under `nfr-design/`
-- the approved `mockups.md`, `interaction-spec.md`,
+- the approved `mockups.md`, `mockups-preview.html`, `interaction-spec.md`,
   `design-system-mapping.md`, and `accessibility-checklist.md` under
   `<record>/inception/refined-mockups/` when they exist. Every `UX{x}.{y}.{n}`
   decision is a target under its own ID. Inventory each applicable interaction
@@ -310,6 +312,11 @@ in a browser was checked only in Node or a DOM emulator, say so once, in one
 line, naming what and where it ran, for example: "The transfer journey was
 checked in Happy DOM, not a real browser." The person decides at the gate with
 that in front of them.
+
+When Refined Mockups wrote `mockups-preview.html`, say in one line which built
+screens to compare with it, and where the preview is. Whether the build matches
+the experience they approved, brand and feel included, is the person's
+judgement at this gate; the tests cannot settle it.
 
 ```
 **Review:** `<record>/construction/build-and-test/`
