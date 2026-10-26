@@ -69,6 +69,7 @@ import {
   createTestProject,
   FIXTURES_DIR,
   REPO_ROOT,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
@@ -113,6 +114,7 @@ type Printed = {
   message?: string;
   wave?: { entries: Array<{ unit: string }> };
   kept_replies?: unknown;
+  questions_only?: boolean;
 };
 type Delivery = {
   stage: string;
@@ -1113,6 +1115,7 @@ describe("t-copilot-directive-budget: a Unit whose step is longer than one comma
 describe("t-copilot-directive-budget: building the Units in parallel hands them out within the budget", () => {
   test("the workflow's opening stage lists both Units in its wave, and every part fits", async () => {
     const proj = unitProject(COPILOT_ROOT, ".aidlc", "opening", "off", "swarm");
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     const delivery = await deliverIn(proj, ".aidlc", "functional-design");
     expectWholeDeliveries([delivery]);
     expect(delivery.final.wave?.entries.map(({ unit }) => unit)).toEqual(["alpha", "beta"]);
@@ -1135,10 +1138,11 @@ describe("t-copilot-directive-budget: building the Units in parallel hands them 
     expect(final.message).toContain("knowledge files");
   });
 
-  test("a wave picked up with the person's kept replies still goes out, with fewer Units", async () => {
+  test("a Unit's questions picked up with the person's kept replies still go out before its wave", async () => {
     const proj = unitProject(COPILOT_ROOT, ".aidlc", "after-inception", "off", "swarm");
     const units = Array.from({ length: 12 }, (_, index) => `unit-${String(index).padStart(2, "0")}`);
     seedBoltDag(proj, units);
+    seedAnsweredUnitQuestions(proj, "functional-design", units);
     const first = await deliverIn(proj, ".aidlc", "functional-design");
     expectWholeDeliveries([first]);
     const handedOut = first.final.wave?.entries.length ?? 0;
@@ -1156,8 +1160,9 @@ describe("t-copilot-directive-budget: building the Units in parallel hands them 
     const resumed = await deliverIn(proj, ".aidlc", "functional-design");
     expectWholeDeliveries([resumed]);
     expect(JSON.stringify(resumed.final.kept_replies ?? null)).toContain("A, the shop owner.");
-    const entries = resumed.final.wave?.entries.map(({ unit }) => unit) ?? [];
-    expect(entries[0]).toBe("unit-00");
-    expect(entries.length).toBeLessThan(handedOut);
+    // The open answer is unit-00's question step's, asked before the wave builds it.
+    expect(resumed.final.unit).toBe("unit-00");
+    expect(resumed.final.questions_only).toBe(true);
+    expect(resumed.final.wave).toBeUndefined();
   });
 });

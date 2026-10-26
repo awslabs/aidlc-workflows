@@ -67,7 +67,7 @@ outputs: application code + code-generation-plan.md, code-generation-questions.m
 
 - Application code goes to workspace root, NEVER to the record dir. The developer's one change there is ticking each step's box in the plan as it finishes that step
 - Brownfield: modify files in-place. NEVER create duplicates like ClassName_modified.java
-- Files already in the project that this work did not create (a README, LICENSE, docs, configs) are the person's, on a new project too: leave them as they are and build the code around them; this work's own notes on what it built with and how to run it go in `code-summary.md`, and its test command is already in `unit-test-instructions.md`. Change one of them only when the person asks for it or the work cannot be built without it (on brownfield, the code the work changes): name the change in the plan and say it once at the gate, naming the file and what changed in it, and the way back only when there is one
+- Files already in the project that this work did not create (a README, LICENSE, docs, configs) are the person's, on a new project too: leave them as they are and build the code around them; this work's own notes on what it built with and how to run it go in `code-summary.md`, and its test command is already in `unit-test-instructions.md`. Change one of them only when the person asks for it or the work cannot be built without it (on brownfield, the code the work changes), and name the change in the plan
 - Add data-testid attributes to interactive UI elements for test automation
 - Work in this order: plan (Step 2), Step 3 (the person's Plan Approval; with plan approval off, only its one-line notice), generation (Step 4), the Step 5 files, then the review (when `directive.protocol_modules` lists `reviewer`) and the completion handoff (Step 6). The review checks the finished work: never dispatch the reviewer before the Step 5 files exist. When the directive already carries `plan_approval.status: "approved"` (a resumed or continued build), the plan and test instructions on disk are the approved ones: skip Steps 2 and 3 and build them as they are. Never rewrite an approved plan or its test instructions; change them only when the person asks
 - For a Unit (`directive.unit` present), write `source-manifest.json` in Step 5, before the review, listing every application-source path this unit created, modified, or deleted in this stage, including shell-, scaffolding-, and generator-written files; a unit reopened by a rejection keeps the paths its earlier attempts listed. Zero-Unit work writes no `source-manifest.json`
@@ -251,8 +251,8 @@ When both files from Step 2 are written, run `next`:
   - `approved`: continue with Step 4. Say any `change_notices` line once.
     When it also carries `plan_approval.skipped: true`, plan approval is off
     for this piece of work: say `plan_approval.notice` as written (it names the
-    plan file and asks whether they want to look at it first), then continue
-    with Step 4 without waiting; a yes is their request to review the plan.
+    plan file and says they can ask to go over it at any time), then continue
+    with Step 4 without waiting.
   - `revise`: revise the plan and test instructions from
     `plan_approval.feedback` (the person's words, from their Request Changes
     or from the gate they rejected); when it is absent, ask "What should
@@ -595,6 +595,6 @@ file is subject to the `required-sections` floor.
 
 When `directive.protocol_modules` lists `learnings`, follow
 `stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
-working and run the ritual before the approval gate, applying its bootstrap,
-`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
-skip both the diary and the ritual.
+working, and take the learnings step before the approval gate; that module says
+when it asks the person anything. When the module is absent, skip both the diary
+and the step.

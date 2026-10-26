@@ -110,6 +110,15 @@ const manifest: HarnessManifest = {
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
   tierFlavor: "kiro",
   kiroLayout: "agent-v1",
+  // Kiro CLI starts a hook as `"powershell" -Command "<command>"` on Windows and
+  // `/bin/bash -c "<command>"` on Linux (measured on kiro-cli 2.34.0), and it
+  // stops a tool call only on exit 2. Windows PowerShell's -Command hands back
+  // 1 for every native exit code but 0 and 1, so without this no refusal
+  // stopped anything there. `exit $LASTEXITCODE` is PowerShell's own way to
+  // keep the code; in bash the unset variable leaves a plain `exit`, which
+  // keeps the last command's status. tests/unit/t-kiro-hook-exit-code.test.ts
+  // runs a refusal both ways.
+  hookCommandSuffix: "; exit $LASTEXITCODE",
   rootIntegrations: [
     {
       path: ".gitignore",

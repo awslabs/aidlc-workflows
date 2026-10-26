@@ -40,6 +40,7 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
@@ -371,6 +372,7 @@ describe("t208 engine unit-kind pruning", () => {
   test("2: covering only the pruned set advances iteration off the spec unit", () => {
     const proj = seedProject("nfr-requirements");
     seedBoltDag(proj, [{ name: "api", kind: "spec" }, { name: "svc" }]);
+    seedAnsweredUnitQuestions(proj, "nfr-requirements", ["svc"]);
     coverUnit(proj, "api", "nfr-requirements", NFR_REQ_SPEC);
     logReviewReady(proj, "api", 1, "nfr-requirements");
     completeWave(proj, "api", "nfr-requirements");
@@ -643,6 +645,7 @@ describe("t208 engine unit-kind pruning", () => {
   test("8b: a ui unit is covered without its optional artifact on disk", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, [{ name: "web", kind: "ui" }, { name: "svc" }]);
+    seedAnsweredUnitQuestions(proj, "functional-design", ["svc"]);
     coverUnit(proj, "web", "functional-design", ["functional-spec", "traceability"]);
     logReviewReady(proj, "web");
     completeWave(proj, "web", "functional-design");

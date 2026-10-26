@@ -752,7 +752,7 @@ describe("Kiro numbered-prose answer classification", () => {
     }
   });
 
-  test("answers guide batches, summary, learnings, and approval in order", () => {
+  test("answers guide batches, summary, the learnings question after a correction, and approval in order", () => {
     const state = createKiroNumberedProseAnswerState();
     expect(
       nextKiroNumberedProseAnswer(
@@ -774,10 +774,11 @@ describe("Kiro numbered-prose answer classification", () => {
     ).toBe("Looks correct");
     expect(
       nextKiroNumberedProseAnswer(
-        "Anything to add for next time?\n1. Nothing to add\n2. Add a note",
+        "You asked me to name files in kebab-case. Keep that for next time?\n" +
+          "1. Yes, for this project\n2. Yes, for the team\n3. No",
         state,
       ),
-    ).toBe("Nothing to add");
+    ).toBe("No");
     expect(
       nextKiroNumberedProseAnswer(
         "How would you like to proceed?\n1. Approve\n2. Request Changes",
@@ -811,21 +812,8 @@ describe("Kiro numbered-prose answer classification", () => {
     expect(state.learningsAnswered).toBe(1);
   });
 
-  test("rejects an approval prompt combined with the unanswered learning channel", () => {
+  test("answers an approval with no learning response: the step asks only after a correction", () => {
     const state = createKiroNumberedProseAnswerState();
-    expect(() =>
-      nextKiroNumberedProseAnswer(
-        "Anything to add for next time? Nothing to add / Add a note\n" +
-          "Approval\n1. Approve\n2. Request Changes",
-        state,
-      )
-    ).toThrow("approval before the mandatory learning response");
-    expect(state.learningsAnswered).toBe(0);
-    expect(state.approvalsAnswered).toBe(0);
-  });
-
-  test("answers an approval with no learning response when the scope turns learnings off", () => {
-    const state = createKiroNumberedProseAnswerState({ learnings: false });
     expect(
       nextKiroNumberedProseAnswer(
         "How would you like to proceed?\n1. Approve\n2. Request Changes",
@@ -942,6 +930,56 @@ describe("Kiro numbered-prose answer classification", () => {
       ),
     ).toBe("Q1: 1, Q2: 1, Q3: 1");
     expect(state.answeredQuestions).toEqual(new Set([1, 2, 3]));
+  });
+
+  test("reads a question labelled with who would answer it as the same question without the label", () => {
+    // Kiro CLI TUI intent-capture screens: the chat puts each question's trade
+    // in front of its text (stage-protocol.md, Step 3a of the question flow).
+    const batch = [
+      "    69   ## Q6. [Product] Decision-making and communication",
+      "\u2022 Pick \"Other\" on any question to answer in your own words or talk it through.",
+      "",
+      "  Q1 [Product owner] \u2014 Business problem. What problem is this todo app solving for the people who will use it?",
+      "",
+      "  1. Personal task tracking \u2014 individuals keeping their own to-dos organized",
+      "  2. Team/shared task coordination",
+      "",
+      "  Q2 [Product owner] \u2014 Target customer. Who is the customer for this app?",
+      "",
+      "  1. External end users (public web app)",
+      "",
+      "  Q3 [Product owner] \u2014 Success definition. What does success look like for this first version?",
+      "",
+      "  1. It works end to end \u2014 add, complete, and delete todos reliably",
+      "",
+      "  Q4 [Product owner] \u2014 Initiative trigger. What is driving this work now?",
+      "",
+      "  1. A personal need for a task tracker",
+      "  Reply with each question's number and the number of your choice (for example Q1: 2, Q2: 1), or just tell me.",
+    ].join("\n");
+    const state = createKiroNumberedProseAnswerState();
+    expect(nextKiroNumberedProseAnswer(batch, state)).toBe("Q1: 1, Q2: 1, Q3: 1, Q4: 1");
+    expect(nextKiroNumberedProseAnswer(batch, state)).toBeNull();
+    expect(state.answeredQuestions).toEqual(new Set([1, 2, 3, 4]));
+
+    for (const [labelled, plain] of [
+      [
+        "\u2022 Q1 [Product] \u2014 What is the core problem this todo app solves, and for whom?\n" +
+          "  1. A personal productivity tool for an individual to track their own tasks\n" +
+          "  Q2 [Product] \u2014 Who is the primary user, and what pain are they experiencing today?\n" +
+          "  1. Individuals who currently use paper/notes and want something simpler",
+        "\u2022 Q1 \u2014 What is the core problem this todo app solves, and for whom?\n" +
+          "  1. A personal productivity tool for an individual to track their own tasks\n" +
+          "  Q2 \u2014 Who is the primary user, and what pain are they experiencing today?\n" +
+          "  1. Individuals who currently use paper/notes and want something simpler",
+      ],
+      ["Q1 [Product owner] - Which outcome matters most?\n1. A", "Q1 - Which outcome matters most?\n1. A"],
+      ["Question 2 [Architect]: Which database?\n1. A", "Question 2: Which database?\n1. A"],
+    ]) {
+      const answer = nextKiroNumberedProseAnswer(plain, createKiroNumberedProseAnswerState());
+      expect(answer).not.toBeNull();
+      expect(nextKiroNumberedProseAnswer(labelled, createKiroNumberedProseAnswerState())).toBe(answer);
+    }
   });
 
   test("answers an explicitly restated pending question without repainted options", () => {

@@ -31,6 +31,7 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
@@ -488,6 +489,7 @@ describe("t215 bolt dag self-heal", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, ["alpha"]);
     seedAlphaBetaDependency(proj);
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
     logReview(proj, "alpha");
     const alphaCompletion = runNext(proj);

@@ -356,7 +356,9 @@ describe("t259 the engine's last word ended the turn", () => {
       const running = readFileSync(statePath, "utf-8");
       for (const [args, said, feasibility] of [
         [["--status"], "print its output verbatim, then stop", "- [-] feasibility"],
-        [["--scope", "mvp"], "to change scope, then print its output verbatim and stop", "- [?] feasibility"],
+        // At the open gate the switch also hands over the gate's answer, if the reply gave one; the turn still ends.
+        [["--scope", "mvp"], "to change scope, then print its output verbatim. If their message also answered the open " +
+          "Feasibility & Constraints question", "- [?] feasibility"],
       ] as const) {
         writeFileSync(statePath, running.replace("- [-] feasibility", feasibility));
         markHumanTurn(proj);
@@ -369,12 +371,13 @@ describe("t259 the engine's last word ended the turn", () => {
         expect(atEnd.stdout, args.join(" ")).not.toContain('"decision":"block"');
       }
       writeFileSync(statePath, running);
-      // A jump's print hands the agent back to `next`, so the turn goes on.
+      // A jump returns the step of the stage it lands on, so the turn goes on
+      // into that stage's work.
       markHumanTurn(proj);
       await Bun.sleep(20);
       const jump = JSON.parse(run(["engine", "orchestrate", "next", "--stage", "requirements-analysis"]).stdout);
-      expect(jump.kind).toBe("print");
-      expect(jump.message).toMatch(/[Tt]hen re-run `next`/);
+      expect(jump.kind).toBe("run-stage");
+      expect(jump.stage).toBe("requirements-analysis");
       expect(existsSync(turnEndMarkerPath(proj))).toBe(false);
       if (!copilot) expect(stop().stdout).toContain('"decision":"block"');
     });

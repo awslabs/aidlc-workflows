@@ -4,6 +4,7 @@ import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./
 import {
   assertChangeControlLedgerWritable,
   auditBlockField,
+  CONFIG_KEYS,
   type GuardPolicy,
   guardPolicyAtLeast,
   keepActiveDirectiveOverSettingWrite,
@@ -94,20 +95,7 @@ export const VALID_TEST_STRATEGIES: Record<string, string> = {
   comprehensive: "Comprehensive",
 };
 
-const GUARD_FENCE_CONFIG_KEYS = SWITCHABLE_GUARD_FENCES.map((fence) => guardFenceConfigKey(fence)) as
-  ["guard.plan-approval", "guard.review-freeze", "guard.state-transition", "guard.reviewer-scope"];
-export const CONFIG_KEYS = [
-  "depth",
-  "test-strategy",
-  "review",
-  "guard-policy",
-  "sensors",
-  "learnings",
-  "summary-confirmation",
-  "plan-approval",
-  "collaborators",
-  ...GUARD_FENCE_CONFIG_KEYS,
-] as const;
+export { CONFIG_KEYS };
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 export type IntentSettingsRequest = Partial<Record<ConfigKey, { value: string; source: string }>>;
 export type ReviewOverride = "adversarial" | "advisory" | "none";
@@ -481,7 +469,11 @@ export function applyIntentSettings(
     /** Settings carried with `typedByPerson` that were kept as a command's, not theirs. */
     notTheirs?: ReadonlySet<string>;
   },
-): { content: string; audit: AuditEntryInput[]; lines: string[] } {
+): {
+  content: string; audit: AuditEntryInput[]; lines: string[];
+  /** A line says a check of theirs is off for this piece of work, to a chat (not their own terminal). */
+  checkOffInTheirName: boolean;
+} {
   // `guard.plan-approval` is another way to say `plan-approval`: one switch that
   // removes the plan stop. Whether an edited plan asks again is Guard Policy's.
   if (requested["guard.plan-approval"] !== undefined) {
@@ -645,8 +637,8 @@ export function applyIntentSettings(
   }
   // Lowering a fence is the person's call. Their typed switch carries it out,
   // and so does this setter when the agent names the message they asked in
-  // (--message, proved by the caller; the approval they gave in that same
-  // message leaves the rest of it standing): the conductor runs what they asked
+  // (--message, proved by the caller; one that already gave an approval or
+  // another decision does not stand): the conductor runs what they asked
   // for, and the record names their message.
   // A command the person ran at their own terminal carries itself: this rule
   // protects them from a worker lowering a check on their behalf, and it has no
@@ -988,13 +980,15 @@ export function applyIntentSettings(
       if (offer) lines[lines.length - 1] = `${lines[lines.length - 1]} ${offer}`;
     }
   }
+  let checkOffInTheirName = false;
   for (const item of lowering) {
     if (!saidAsAsked(item.key)) continue;
     const line = askedSwitchLine(item, askedIn, cc.value, !atTheirTerminal);
     const offer = atTheirTerminal ? null : widerPlaceOffer(projectDir, projectSwitchOf(item.key), { work: content });
     lines.push(offer ? `${line} ${offer}` : line);
+    checkOffInTheirName ||= !atTheirTerminal;
   }
-  return { content, audit, lines };
+  return { content, audit, lines, checkOffInTheirName };
 }
 
 // The project's switch for a check set for this piece of work, which is where
@@ -1206,7 +1200,18 @@ function grantCovers(
   if (request === null) return false;
   const answered = grant.request ??
     firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: grant.withDescription === true });
-  if (answered === null) return false;
+  // Kept with no plan question about it, where work is here and none is
+  // selected ("for the work you pick up or start next"): the work started
+  // from a which-work question's new-work answer, asked in the same sitting,
+  // before or after the setting, with no plan question in between, is that
+  // next work.
+  if (answered === null) {
+    const asked = readQuestion(projectDir, request);
+    const kept = Date.parse(grant.recordedAt);
+    const at = Date.parse(asked?.createdAt ?? "");
+    return asked?.origin === "routing" && !Number.isNaN(kept) && !Number.isNaN(at) &&
+      Math.abs(at - kept) <= OPEN_QUESTION_WINDOW_MS && Date.now() - kept <= OPEN_QUESTION_WINDOW_MS;
+  }
   const rootOf = (id: string): string => readQuestion(projectDir, id)?.composedFrom ?? id;
   return answered === request || rootOf(request) === rootOf(answered);
 }
@@ -1282,6 +1287,13 @@ export function planApprovalCreationGranted(
   } catch {
     return false;
   }
+}
+
+/** Plan approval off asked for `request` in this chat before the work existed,
+ *  by a person in the session: what intent create applies, and what the plan
+ *  the person approved never fills over on its creation print. */
+export function planApprovalCreationAsked(projectDir: string, sessionId: string | null, request: string | null): boolean {
+  return planApprovalCreationGranted(projectDir, sessionId, request) && process.env.AIDLC_UNATTENDED !== "1";
 }
 
 /** Spent by the next piece of work this chat creates, whether or not it was the one asked for. */

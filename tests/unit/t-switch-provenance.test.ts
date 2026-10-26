@@ -230,7 +230,8 @@ function atATerminal(proj: string, args: string[]): { status: number; out: strin
 const hasPty = spawnSync("script", ["-qec", "true", "/dev/null"], { encoding: "utf-8" }).status === 0;
 
 function heard(proj: string, step: { directive: Record<string, unknown> | null }): string {
-  return `${String(step.directive?.narration ?? "")} ${pendingPersonLines(proj, SESSION).lines.join(" ")}`;
+  const told = Array.isArray(step.directive?.change_notices) ? step.directive.change_notices.map(String) : [];
+  return `${told.join(" ")} ${String(step.directive?.narration ?? "")} ${pendingPersonLines(proj, SESSION).lines.join(" ")}`;
 }
 
 function holdAtGate(proj: string): void {
@@ -282,10 +283,16 @@ describe("a check typed off with a request, routed through a second question", (
     reply(proj, TYPED);
     const first = next(proj, ["--guard.review-freeze", "off", "--", "fix the parser"]);
     const routing = next(proj, ["--request", requestIn(first.directive?.message, first.out)]);
-    const ask = routing.directive as { scope_commands?: Array<{ scope: string; command: string }> } | null;
-    // The person names a plan of their own instead of the proposed one: its
-    // Guard Policy is strict, so only their typed off can lower the check.
-    const strict = ask?.scope_commands?.find((row) => row.scope === "enterprise");
+    const ask = routing.directive as { new_intent_command?: string } | null;
+    // The which-work question named no plan, so its separate-work answer
+    // reaches the plan question first.
+    const offer = next(proj, answerArgs(ask?.new_intent_command));
+    expect(offer.directive?.ask_type, offer.out).toBe("scope-confirm");
+    // The person names a plan of their own there instead of the proposed one:
+    // its Guard Policy is strict, so only their typed off can lower the check.
+    reply(proj, "enterprise");
+    const rows = (offer.directive as { scope_commands?: Array<{ scope: string; command: string }> }).scope_commands;
+    const strict = rows?.find((row) => row.scope === "enterprise");
     const routed = next(proj, answerArgs(strict?.command));
     expect(heard(proj, routed), routed.out).toContain(FOR_NEW_WORK);
     const made = createFromPrint(proj, routed);

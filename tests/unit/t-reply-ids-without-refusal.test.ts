@@ -1,13 +1,16 @@
-// covers: hook:aidlc-record-human-turn, function:personDecisionPending, subcommand:aidlc-orchestrate:next
+// covers: hook:aidlc-record-human-turn, subcommand:aidlc-orchestrate:next
 // covers: function:openQuestionReplyDirective, function:openPlanQuestionReplyDirective
 //
 // The agent learns the id of the person's message without meeting a refusal
-// first, and never from their words. While a decision of theirs is open, the
-// human-turn hook's line to the agent names the message it just kept, on the
-// hosts that hand that line to the agent alone (Claude Code, Codex, Kiro CLI);
-// Kiro IDE draws a chat card for each command hook, unmeasured for what it
-// shows, so there, as on Copilot, the steps carry the ids. With nothing open
-// there is no line. The steps `next` prints for a reply
+// first, and never from their words. On the work, the human-turn hook's line
+// to the agent names the message it just kept, on the hosts that hand that line
+// to the agent alone (Claude Code, Codex, Kiro CLI); Kiro IDE draws a chat card
+// for each command hook, unmeasured for what it shows, so there, as on Copilot,
+// the steps carry the ids. A check the person asks in chat to change with
+// nothing waiting on them needs the id too, or the setter refuses the first
+// call in engine words before the retry lands (nightly 2026-10-25, 9 of 9 chat
+// requests on Claude Code). A chat on finished work gets no line.
+// The steps `next` prints for a reply
 // at an open question name this chat's replies by id and time, oldest first.
 // And the step for a reply at the agent's own open question carries the
 // question as it was asked, with its choices: in a second Claude Code chat
@@ -19,12 +22,14 @@
 // Mechanism: function - the shipped hook through each host's adapter, `next`,
 // and `log answer` on the answers corpus fixtures; no agent runs.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   type AnswersItem, SESSION, STAGE, buildQuestion, env, exec, next, recordByAgent, say,
 } from "../harness/aidlc-answers-corpus.ts";
-import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
+import { DISPATCHER, buildState } from "../harness/aidlc-input-corpus.ts";
+import { cleanupTestProject, seededStateFile, setupIntegrationProject } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -60,7 +65,7 @@ async function answer(proj: string, details: string, session = SESSION) {
     "--details", details], { cwd: proj, env: env(proj, { session }) });
 }
 
-describe("t-reply-ids-without-refusal: the hook's line names the kept message while a decision is open", () => {
+describe("t-reply-ids-without-refusal: the hook's line names the kept message", () => {
   for (const harness of ["claude", "codex", "kiro"] as const) {
     test(`${harness}: at an open question the line names the message and none of its words`, async () => {
       const proj = project();
@@ -90,7 +95,7 @@ describe("t-reply-ids-without-refusal: the hook's line names the kept message wh
     expect(said.stdout).toContain(`on record as ${latestId(proj)}`);
   });
 
-  test("with nothing open, a command line, or an unattended run, there is no line", async () => {
+  test("a command line or an unattended run has no line; once the question is answered, the next message still does", async () => {
     const proj = project();
     await buildQuestion(proj, "stage-question");
     const command = await say(proj, "/aidlc --status", "claude");
@@ -101,7 +106,52 @@ describe("t-reply-ids-without-refusal: the hook's line names the kept message wh
     const recorded = await answer(proj, "PostgreSQL");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     const after = await say(proj, "thanks", "claude");
-    expect(after.stdout).not.toContain("on record as");
+    expect(after.stdout).toContain(`on record as ${latestId(proj)}`);
+    expect(after.stdout).not.toContain("thanks");
+  });
+
+  for (const harness of ["claude", "codex", "kiro"] as const) {
+    test(`${harness}: a guard change asked in chat with nothing open lands on the first call, naming the message the line gave`, async () => {
+      const proj = project();
+      await buildState(proj, "work-open");
+      const run = (args: string[]) => exec([process.execPath, DISPATCHER, ...args], { cwd: proj, env: env(proj) });
+      const ask = async (words: string): Promise<string> => {
+        const said = await say(proj, words, harness);
+        expect(said.status, said.stderr).toBe(0);
+        const id = /on record as ([^:\s]+):/.exec(said.stdout)?.[1];
+        expect(id, said.stdout).toBe(latestId(proj));
+        expect(said.stdout).not.toContain(words);
+        return id as string;
+      };
+      const work = await run(["engine", "config", "set", "guard.review-freeze", "off", "--message",
+        await ask("turn the review freeze check off")]);
+      expect(work.status, work.stdout + work.stderr).toBe(0);
+      expect(work.stdout).toContain("is off for this piece of work");
+      const here = await run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEWER_SCOPE_HOOK", "--local", "--yes",
+        "--message", await ask("turn the reviewer read scope check off for this project")]);
+      expect(here.status, here.stdout + here.stderr).toBe(0);
+      expect(here.stdout).toContain("Recorded AIDLC_DISABLE_REVIEWER_SCOPE_HOOK");
+      const policy = await run(["engine", "config", "set", "guard-policy", "relaxed", "--message",
+        await ask("stop asking me to re-approve when files change")]);
+      expect(policy.status, policy.stdout + policy.stderr).toBe(0);
+      expect(policy.stdout).toContain("is relaxed for this piece of work");
+    });
+  }
+
+  test("under autonomous Construction a typed message gets the line too; on finished work there is none", async () => {
+    const proj = project();
+    await buildState(proj, "work-open");
+    const state = seededStateFile(proj);
+    writeFileSync(state, readFileSync(state, "utf-8").replace(/^(- \*\*Current Stage\*\*:.*)$/m,
+      "$1\n- **Construction Autonomy Mode**: autonomous"), "utf-8");
+    expect(readFileSync(state, "utf-8")).toContain("- **Construction Autonomy Mode**: autonomous");
+    const autonomous = await say(proj, "turn plan approval back on", "claude");
+    expect(autonomous.stdout).toContain(`on record as ${latestId(proj)}`);
+    const other = project();
+    await buildState(other, "finished");
+    const outside = await say(other, "turn the review freeze check off", "claude");
+    expect(outside.status, outside.stderr).toBe(0);
+    expect(outside.stdout).not.toContain("on record as");
   });
 });
 

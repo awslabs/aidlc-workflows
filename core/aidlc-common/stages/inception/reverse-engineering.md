@@ -120,6 +120,9 @@ read-only check:
 - **STALE / UNVERIFIED / UNKNOWN_SCOPE** - the store's knowledge is out of
   date, unverifiable, or predates scope tracking. Present the rescan question
   below WITHOUT the reuse option.
+- **SCANNED** - this run already scanned the repo and published the store: ask
+  nothing and record nothing for it; when no repo is left to scan, go on to
+  Step 4.
 
 Reuse question (CURRENT + coverage fits the intent) - fold the tool's output
 (store intent, analyzed paths) into the prompt so the human decides on
@@ -280,7 +283,7 @@ Developer writes the structured scan results following the Developer Code Scan
 Template in `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`:
 
 - Unrecorded project-root repo (no repo is registered, and `codekb-path`
-  prints the project folder's own name):
+  prints the name it gives the project folder):
   `<record>/inception/reverse-engineering/developer-scan.md`, also when you
   pass that name as `--repo`, so a rescan replaces the earlier handoff
 - Registered repo (including an exactly-one repo set):
@@ -475,8 +478,9 @@ completion sequence in this order:
 
 1. Present Step 5's announcement and per-repo summary, including any NARROWER
    warning.
-2. When `directive.protocol_modules` lists `learnings`, ask its questions and
-   end the turn; continue once the answer is logged.
+2. When `directive.protocol_modules` lists `learnings`, take the learnings
+   step: when it has a question for the person, ask it and end the turn;
+   continue once the answer is logged.
 3. Open the approval gate exactly once with
    `{{INVOKE}} engine orchestrate report --stage reverse-engineering --result awaiting-approval`.
 4. Ask Step 5's approval question.
@@ -527,6 +531,6 @@ Upstream targets: none.
 
 When `directive.protocol_modules` lists `learnings`, follow
 `stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
-working and run the ritual before the approval gate, applying its bootstrap,
-`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
-skip both the diary and the ritual.
+working, and take the learnings step before the approval gate; that module says
+when it asks the person anything. When the module is absent, skip both the diary
+and the step.

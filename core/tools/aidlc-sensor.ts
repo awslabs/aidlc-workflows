@@ -5,8 +5,9 @@
 //   describe <id>                 — print manifest fields for one sensor.
 //   fire <id> --stage <slug>      — invoke a sensor against a stage output;
 //        --output-path <path>       emits SENSOR_FIRED then a paired terminal
-//        [--unit <name>]            row (PASSED | FAILED | BUDGET_OVERRIDE);
-//                                   the Unit, when named, is on every row.
+//        [--unit <name>]            row (PASSED | FAILED | COULD_NOT_RUN |
+//                                   BUDGET_OVERRIDE); the Unit, when named, is
+//                                   on every row.
 //
 // The dispatcher is a thin routing surface (Q4/Q5 of the locked plan):
 //   1. Validate inputs + resolve graph + generate Fire id (no audit lock held).
@@ -20,15 +21,20 @@
 //   7. Print one compact JSON verdict line for deterministic callers.
 //   8. Exit 0. (Sensor failure ≠ CLI failure.)
 //
-// Truth-table branch ordering — locked, branch a precedes branch 0:
-//   a) signal === "SIGTERM" AND elapsed ≥ timeout - GRACE  → BUDGET_OVERRIDE
-//   0) error AND status===null AND signal===null           → PASSED script-error: spawn-failed
-//   b) status === 127                                       → PASSED tool-unavailable
-//   c) status === 0 AND JSON.pass === false                 → FAILED
-//   d) status === 0 AND JSON.pass === true                  → PASSED
-//   e) status non-0/non-127 (non-timeout)                   → PASSED script-error: exit-<n>
-//   f) bad JSON / missing pass                              → PASSED script-error: bad-output
-//   default                                                 → PASSED script-error: unknown
+// Truth-table branch ordering - locked, branch a precedes branch 0:
+//   a) signal === "SIGTERM" AND elapsed >= timeout - GRACE  -> BUDGET_OVERRIDE
+//   0) error AND status===null AND signal===null            -> COULD_NOT_RUN script-error: spawn-failed
+//   b) status === 127                                        -> PASSED tool-unavailable
+//   c) status === 0 AND JSON.pass === false                  -> FAILED
+//   d) status === 0 AND JSON.pass === true                   -> PASSED
+//   e) status non-0/non-127 (non-timeout)                    -> COULD_NOT_RUN script-error: exit-<n>
+//   f) bad JSON / missing pass                               -> COULD_NOT_RUN script-error: bad-output
+//   default                                                  -> COULD_NOT_RUN script-error: unknown
+//
+// A script that crashed, could not start or gave no verdict checked nothing,
+// so its row is its own state, never a pass and never a failure. Exit 127 is
+// the script's own answer that the tool it wraps is not in the project
+// (nothing to check there), so it stays a noted pass.
 //
 // CLI exits non-zero ONLY on dispatcher invocation errors (unknown id, missing
 // flag, missing path, matches-rejection). Sensor outcomes are advisory and
@@ -161,6 +167,7 @@ const __FILE_DIR = dirname(fileURLToPath(import.meta.url));
 
 type FireOutcome =
 	| { kind: "passed"; durationMs: number; note?: string }
+	| { kind: "could-not-run"; durationMs: number; note: string }
 	| {
 			kind: "failed";
 			durationMs: number;
@@ -785,8 +792,9 @@ function handleFire(args: string[]): void {
 	// --- 7b. On a verified pass, drop this output's superseded detail files ---
 	// Named per fire id, so a pass cannot overwrite an earlier failure's report;
 	// without this the directory keeps showing a failure that no longer exists.
-	// A noted pass (tool-unavailable, script-error, detail-write-failed) and a
-	// budget override do not verify a clean output, so they supersede nothing.
+	// A noted pass (tool-unavailable, detail-write-failed), a check that could
+	// not run and a budget override do not verify a clean output, so they
+	// supersede nothing.
 	if (finalOutcome.kind === "passed" && finalOutcome.note === undefined) {
 		pruneSupersededDetailFiles(detailDir, id, outputPath, startedAt);
 	}
@@ -807,7 +815,7 @@ function handleFire(args: string[]): void {
 			finalOutcome.kind === "failed"
 				? relativizePath(detailPath, projectDir)
 				: null,
-		...(finalOutcome.kind === "passed" && finalOutcome.note
+		...((finalOutcome.kind === "passed" || finalOutcome.kind === "could-not-run") && finalOutcome.note
 			? { note: finalOutcome.note }
 			: {}),
 	};
@@ -929,7 +937,7 @@ export function stripStdoutNoise(stdout: string, startChar: string): string {
 // Branch ordering is LOAD-BEARING: branch a (timeout) precedes branch 0
 // (true spawn failure) because Node 16+ sets result.error alongside
 // signal === "SIGTERM" on timeout. Reversed order swallows timeouts as
-// script-error and branch a becomes dead code.
+// could-not-run and branch a becomes dead code.
 function decideOutcome(
 	ctx: FireContext,
 	result: ReturnType<typeof spawnSync>,
@@ -955,7 +963,7 @@ function decideOutcome(
 	// (e.g., bun off PATH → ENOENT). Narrowed so timeouts can't sneak in.
 	if (result.error && result.status === null && result.signal === null) {
 		return {
-			kind: "passed",
+			kind: "could-not-run",
 			durationMs: elapsedMs,
 			note: `script-error: spawn-failed: ${(result.error as NodeJS.ErrnoException).code ?? "unknown"}`,
 		};
@@ -981,14 +989,14 @@ function decideOutcome(
 			parsed = JSON.parse(stripStdoutNoise(stdout, "{"));
 		} catch {
 			return {
-				kind: "passed",
+				kind: "could-not-run",
 				durationMs: elapsedMs,
 				note: "script-error: bad-output",
 			};
 		}
 		if (!isPlainObject(parsed) || typeof parsed.pass !== "boolean") {
 			return {
-				kind: "passed",
+				kind: "could-not-run",
 				durationMs: elapsedMs,
 				note: "script-error: bad-output",
 			};
@@ -1020,21 +1028,21 @@ function decideOutcome(
 		return { kind: "passed", durationMs: elapsedMs };
 	}
 
-	// Branch e — non-zero, non-127, non-timeout exit (incl. external SIGTERM
-	// before the timeout window). Advisory script-error.
+	// Branch e - non-zero, non-127, non-timeout exit (incl. external SIGTERM
+	// before the timeout window): the check could not run.
 	if (
 		result.signal === "SIGTERM" &&
 		elapsedMs < timeoutMs - DEFAULT_TIMEOUT_GRACE_MS
 	) {
 		return {
-			kind: "passed",
+			kind: "could-not-run",
 			durationMs: elapsedMs,
 			note: "script-error: external-sigterm",
 		};
 	}
 	if (result.status !== null) {
 		return {
-			kind: "passed",
+			kind: "could-not-run",
 			durationMs: elapsedMs,
 			note: `script-error: exit-${result.status}`,
 		};
@@ -1044,7 +1052,7 @@ function decideOutcome(
 	// rather than collapsing to the unknown default below.
 	if (result.signal !== null) {
 		return {
-			kind: "passed",
+			kind: "could-not-run",
 			durationMs: elapsedMs,
 			note: `script-error: signal-${result.signal}`,
 		};
@@ -1052,7 +1060,7 @@ function decideOutcome(
 
 	// Default — should be unreachable; advisory always closes the pair.
 	return {
-		kind: "passed",
+		kind: "could-not-run",
 		durationMs: elapsedMs,
 		note: "script-error: unknown",
 	};
@@ -1155,6 +1163,14 @@ function emitTerminal(
 			fields.Note = outcome.note;
 		}
 		appendAuditEntryUnlocked("SENSOR_PASSED", fields, projectDir);
+		return;
+	}
+	if (outcome.kind === "could-not-run") {
+		appendAuditEntryUnlocked("SENSOR_COULD_NOT_RUN", {
+			...baseFields,
+			"Duration ms": String(outcome.durationMs),
+			Note: outcome.note,
+		}, projectDir);
 		return;
 	}
 	if (outcome.kind === "failed") {

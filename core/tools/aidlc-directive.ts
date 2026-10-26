@@ -176,6 +176,9 @@ export interface RunStageWaveEntry {
   consumes_absent: Array<{ path: string; expected: boolean }>;
   produces: string[];
   required_produces: string[];
+  // The Unit's questions file, answered in the chat before the wave: the
+  // builder writes from it and asks nothing (the stage file's ARTIFACT-ONLY mode).
+  questions_file?: string;
 }
 
 export interface RunStageWave {
@@ -332,6 +335,9 @@ export interface RunStageDirective {
   inputs_note?: string;
   // planNote(): plan, revise, repair or build, from plan_approval.status.
   plan_note?: string;
+  // otherWorkNote(): on a stage that builds in the workspace, the files another
+  // open piece of work in this folder claims, to leave as they are.
+  other_work_note?: string;
   // briefNote(): the lines every agent brief carries on a dispatched topology.
   brief_note?: string;
   // ceremonyNote(): the summary confirmation, confirm when on, skip when off.
@@ -481,6 +487,10 @@ export interface RunStageDirective {
   // the beat presents the stage gate with nothing left to plan or build. Set by
   // the engine only; the conductor handles the beat as before.
   build_settled?: true;
+  // A Unit's questions before the stage's wave builds it: the step asks them and
+  // confirms the summary, and writes none of the stage's documents (the stage
+  // file's QUESTION-ONLY mode). Set by the engine only.
+  questions_only?: true;
   // The per-Unit stages one late approval covers (unit-major, Unit checkpoints
   // off), in order with display names, the Units, and the engine's question.
   // Set by the engine only; the first stage is `stage`.
@@ -1005,6 +1015,7 @@ const RUN_STAGE_FIELDS = [
   "context_note",
   "inputs_note",
   "plan_note",
+  "other_work_note",
   "brief_note",
   "ceremony_note",
   "unit_gate",
@@ -1039,6 +1050,7 @@ const RUN_STAGE_FIELDS = [
   "accept_as_is",
   "unit_record_step",
   "build_settled",
+  "questions_only",
   "approve_together",
   "conductor_persona",
   "next_stage",
@@ -1078,6 +1090,7 @@ const DISPATCH_SUBAGENT_FIELDS = [
       field !== "accept_as_is" &&
       field !== "unit_record_step" &&
       field !== "build_settled" &&
+      field !== "questions_only" &&
       field !== "approve_together" &&
       field !== "legacy_plan_approval_choices" &&
       field !== "plan_approval",
@@ -1208,9 +1221,17 @@ export function stageValidityNote(invocation: string, stage: string | null): str
     (stage ? ` If their next reply says yes to it, run \`${invocation} next --stage ${stage}\` and follow the step ` +
       "it returns." : "");
 }
+// The one order for a line the person must hear, in the step and in Kiro CLI's
+// hand-over of a step it ran itself. The last message before they reply is the
+// one every host shows: Copilot CLI headless writes one message a turn and
+// `claude -p` prints only the last, so a line said as its step came was lost
+// there (say-once-lands' measure).
+export const SAY_ONCE_BEFORE_THEY_REPLY =
+  "once, as written (only a verb's tense may change to fit when you say it), as your own sentence with nothing in " +
+  "front of it, in the last message you write before they reply (when you end your turn with a question, the text " +
+  "you write just before it)";
 export const CHANGE_NOTICES_NOTE =
-  "Say each change_notices line to the person once, word for word, as your own sentence with nothing in front of " +
-  "it, and add nothing about why.";
+  `Say each change_notices line to the person ${SAY_ONCE_BEFORE_THEY_REPLY}, and add nothing about why.`;
 
 // Every question the engine asks: whose it is, and what a pick does. A choice's
 // command answers the question; a routing command returns the next step, a
@@ -1299,9 +1320,13 @@ export function showsGateAgain(d: Record<string, unknown>): boolean {
 // and an autonomy question the agent never knew about).
 // A change the person asks of the code plan goes after the choice, in every
 // step that names the plan question's answer: the recorder never takes it from
-// their words (recordPlanApprovalAnswer).
+// their words (recordPlanApprovalAnswer). An approval that asks for a change
+// binds the plan as it is when "Approve Plan" is recorded, so the change is
+// made first; recorded first, it binds the plan without their change.
 export const PLAN_CHANGE_DETAILS =
-  "(a change they ask for is Request Changes, with what to change after it: --details 'Request Changes: <what they asked>')";
+  "(a change they ask for instead of approving is Request Changes, with what to change after it: " +
+  "--details 'Request Changes: <what they asked>'; when they approve and ask for a change, make it in the plan " +
+  "first, then record 'Approve Plan')";
 
 // The plan question's answer is recorded as the person's choice, then the
 // step goes on; with no skill loaded nothing else names that command. `next`
@@ -1318,6 +1343,15 @@ export function protocolNote(stageFile: string, modules: readonly string[]): str
   const dir = `${stageFile.slice(0, at)}/aidlc-common/protocols`;
   const files = [`${dir}/stage-protocol.md`, ...modules.map((module) => `${dir}/stage-protocol-${module}.md`)];
   return `Unless this chat already holds them, read ${files.join(", ")} before this step's work: they say how it runs.`;
+}
+
+// The step before a wave that asks one Unit's questions in the chat, where the
+// person is; the builders the wave hands out cannot ask them.
+export function unitQuestionsNote(unit: string, invocation: string): string {
+  return `This step is only ${unit}'s questions for this stage (the stage file's QUESTION-ONLY mode): ask them ` +
+    "and take the person's answers into the questions file (with nothing to ask, write the file with a line saying " +
+    "so), confirm their summary when this step's notes ask for it, and write none of the stage's documents; the " +
+    `builders write them from the answers. ${unitStepNote(invocation)}`;
 }
 
 export function unitStepNote(invocation: string): string {
@@ -1352,6 +1386,7 @@ export function reviewRequestNote(
   reviewFile: string,
   recordVerdict: string,
   dispatchAgent: string | null = null,
+  otherWork?: string,
 ): string {
   // A reviewer copy (Kiro) is dispatched by its own name; the brief and
   // the verdict keep the reviewer's.
@@ -1361,7 +1396,8 @@ export function reviewRequestNote(
       `dispatch ${reviewer} instead and tell the person in one line that this review runs without the reviewer ` +
       `read-scope check) as a subagent, name ${reviewer} as the reviewer in the brief,`;
   return `${dispatch} and have it write ${reviewFile}: that file is the reviewer's, so never ` +
-    `write it yourself and never stand in for it. When its verdict is back, record it with \`${recordVerdict}\`.`;
+    `write it yourself and never stand in for it. When its verdict is back, record it with \`${recordVerdict}\`.` +
+    (otherWork === undefined ? "" : ` Its brief carries this line word for word: ${otherWork}`);
 }
 
 // The step after a stage's verdict is recorded (#2400), as the logger decides
@@ -1377,8 +1413,7 @@ export type ReviewVerdictStep =
   | { kind: "person-wrote"; next: string }
   | { kind: "next-pass"; request: string }
   | { kind: "unit"; next: string; complete?: string }
-  | { kind: "learnings"; brief: string }
-  | { kind: "gate"; report: string; summary: boolean; brief: string }
+  | { kind: "learnings" | "gate"; report: string; summary: boolean; brief: string }
   | {
     kind: "reply-stands";
     stage: string;
@@ -1402,8 +1437,10 @@ export function reviewVerdictNote(step: ReviewVerdictStep): string {
       return `No further review pass follows: ${step.complete === undefined ? "" : `record this Unit's completion with \`${step.complete}\`, then `}` +
         `run \`${step.next}\` and follow the step it returns, in this turn.`;
     case "learnings":
-      return `${NO_FURTHER_PASS}say the completion summary, then run the learnings ritual and ask its questions, ` +
-        `which ends the turn. The approval gate comes after their answer, with the review brief that \`${step.brief}\` prints.`;
+      return `${NO_FURTHER_PASS}${step.summary ? "say the completion summary, then " : ""}take the learnings step ` +
+        "(stage-protocol-learnings.md): when it has a question for the person, ask it and end the turn there. After " +
+        `their answer, or now when it has none, run \`${step.report}\`, then \`${step.brief}\`, printing its output ` +
+        "as the review brief, and ask the approval question.";
     case "gate":
       return `${NO_FURTHER_PASS}${step.summary ? "say the completion summary, then " : ""}run ` +
         `\`${step.report}\`, then \`${step.brief}\`, printing its output as the review brief, and ask the approval ` +
@@ -1524,14 +1561,45 @@ export function planNote(
   }
 }
 
+const OTHER_WORK_PATHS_SHOWN = 20;
+const OTHER_WORKS_SHOWN = 5;
+
+// Another piece of work under way in this same folder (a second chat on its own
+// work) claims these files in its Units' source manifests: this build leaves
+// them as they are, and its review raises nothing about them, unless its own
+// plan changes one.
+export function otherWorkNote(
+  works: ReadonlyArray<{ work: string; record: string; paths: readonly string[] }>,
+  reader: "build" | "review" = "build",
+): string {
+  const listed = works.slice(0, OTHER_WORKS_SHOWN).map(({ work, record, paths }) => {
+    const shown = paths.slice(0, OTHER_WORK_PATHS_SHOWN).map((path) => `\`${path}\``).join(", ");
+    const more = paths.length > OTHER_WORK_PATHS_SHOWN
+      ? `, and ${paths.length - OTHER_WORK_PATHS_SHOWN} more, listed in its Units' source manifests under \`${record}/construction/\``
+      : "";
+    return `${work} (${shown}${more})`;
+  });
+  // The note stays bounded however many pieces of work there are.
+  if (works.length > OTHER_WORKS_SHOWN) {
+    listed.push(`and ${works.length - OTHER_WORKS_SHOWN} more, each listing its files in its Units' source manifests ` +
+      "under its record's `construction/` folder");
+  }
+  return `${works.length === 1 ? "Another piece of work is" : "Other pieces of work are"} under way in this same folder, ` +
+    `and these files are ${works.length === 1 ? "its" : "their"} own: ${listed.join("; ")}. ` +
+    (reader === "build"
+      ? "Leave them as they are unless this work's plan changes one of them."
+      : "They are not this work's to review: raise no finding about one unless this work's plan changes it.");
+}
+
 // A dispatched topology: the lines every agent brief carries, ready to paste,
 // so the agent copies a block instead of reading two fields into prose.
-export function briefNote(ceremony: Record<string, unknown>, modules: readonly string[]): string {
+export function briefNote(ceremony: Record<string, unknown>, modules: readonly string[], otherWork?: string): string {
   const switches = CEREMONY_KEYS
     .filter((key) => typeof ceremony[key] === "string")
     .map((key) => `${CEREMONY_FIELDS[key]}: ${String(ceremony[key])}.`);
   return "Every agent brief for this stage carries these lines word for word: " +
-    `${switches.join(" ")} Protocol modules: ${modules.length > 0 ? modules.join(", ") : "none"}.`;
+    `${switches.join(" ")} Protocol modules: ${modules.length > 0 ? modules.join(", ") : "none"}.` +
+    (otherWork === undefined ? "" : ` ${otherWork}`);
 }
 
 // Both states are said: off left as an absence read as the ask on Kiro CLI,
@@ -1542,12 +1610,16 @@ export function briefNote(ceremony: Record<string, unknown>, modules: readonly s
 // stage that asks questions: worded as if every stage had answers, it had
 // opencode record an answer-mode question at a first Reverse Engineering scan,
 // which asks none, and show the gate again on every reply.
-export function ceremonyNote(state: "on" | "off"): string {
+// A Unit's question step before a wave writes no outputs, so off says the skip alone.
+export function ceremonyNote(state: "on" | "off", questionsOnly = false): string {
   return state === "on"
     ? "After this stage's questions are answered and before writing anything, confirm the summary of the answers " +
       "with the person (stage-protocol-summary.md)."
-    : "If this stage puts questions to the person, write the stage's outputs once their answers are in the questions " +
-      "file; skip the stage file's Consolidated Summary step and record nothing for it.";
+    : questionsOnly
+      ? "If this stage puts questions to the person, skip the stage file's Consolidated Summary step and record " +
+        "nothing for it."
+      : "If this stage puts questions to the person, write the stage's outputs once their answers are in the " +
+        "questions file; skip the stage file's Consolidated Summary step and record nothing for it.";
 }
 
 // --- The numbered rendering of a question ---
@@ -1741,7 +1813,7 @@ export function withAgentNotes<T extends object>(
       const consumes = Array.isArray(d.consumes) ? d.consumes.filter((p): p is string => typeof p === "string") : [];
       notes.context_note = contextNote(paths, consumes, isPlainObject(d.lead_persona));
       if (isPlainObject(d.ceremony) && (d.ceremony.summary_confirmation === "on" || d.ceremony.summary_confirmation === "off")) {
-        notes.ceremony_note = ceremonyNote(d.ceremony.summary_confirmation);
+        notes.ceremony_note = ceremonyNote(d.ceremony.summary_confirmation, d.questions_only === true);
       }
       if (isPlainObject(d.answer_mode) && typeof d.stage === "string") {
         notes.answer_mode_note = answerModeNote(d.answer_mode as unknown as StageAnswerMode, d.stage, logInvocation);
@@ -1756,7 +1828,9 @@ export function withAgentNotes<T extends object>(
       }
     }
     const dispatched = d.mode === "subagent" || d.mode === "pipeline" || d.mode === "mob" || "wave" in d;
-    if (dispatched && isPlainObject(d.ceremony)) notes.brief_note = briefNote(d.ceremony, modules);
+    if (dispatched && isPlainObject(d.ceremony)) {
+      notes.brief_note = briefNote(d.ceremony, modules, typeof d.other_work_note === "string" ? d.other_work_note : undefined);
+    }
   }
   if (
     d.kind === "run-stage" &&
@@ -1774,6 +1848,8 @@ export function withAgentNotes<T extends object>(
       notes.gate_note = d.unit_record_step;
     } else if (showsGateAgain(d)) {
       notes.gate_note = gateOnlyNote();
+    } else if (d.questions_only === true && typeof d.unit === "string") {
+      notes.gate_note = unitQuestionsNote(d.unit, invocation);
     } else if (
       d.gate === false && typeof d.unit === "string" &&
       ![
@@ -1860,6 +1936,7 @@ export function validateDirective(obj: unknown): ValidationResult {
   checkAgentNote(o, "ceremony_note", "stage_file" in o, kind, errors);
   checkAgentNote(o, "inputs_note", Array.isArray(o.consumes_absent) && o.consumes_absent.length > 0, kind, errors);
   checkAgentNote(o, "plan_note", "plan_approval" in o, kind, errors);
+  checkAgentNote(o, "other_work_note", "stage_file" in o, kind, errors);
 
   // Rule 4-6: per-kind required-field presence + type checks, with specific,
   // kind-aware messages.
@@ -2322,6 +2399,7 @@ function checkRunStageShared(
     checkOptionalRevisionCycle(o, kind, errors);
     checkOptionalString(o, "unit_record_step", kind, errors);
     checkOptionalTrue(o, "build_settled", kind, errors);
+    checkOptionalTrue(o, "questions_only", kind, errors);
     checkOptionalApproveTogether(o, kind, errors);
   }
   // unit: optional on a run-stage directive (present only on a per-unit
@@ -3314,6 +3392,7 @@ function checkOptionalWave(
     "consumes_absent",
     "produces",
     "required_produces",
+    "questions_file",
   ]);
   const units = new Set<string>();
   value.entries.forEach((item: unknown, i: number) => {
@@ -3377,6 +3456,9 @@ function checkOptionalWave(
       if (typeof item[key] !== "string") {
         errors.push(`${prefix}.${key} must be string, got ${describe(item[key])}`);
       }
+    }
+    if ("questions_file" in item && typeof item.questions_file !== "string") {
+      errors.push(`${prefix}.questions_file must be string, got ${describe(item.questions_file)}`);
     }
     for (const key of ["consumes", "produces", "required_produces"] as const) {
       const nested = item[key];

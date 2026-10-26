@@ -19,6 +19,8 @@ import {
   delegatedWorktreeIntent,
   decideFence,
   aidlcOwnedSourceKey,
+  isLinkTargetListingKey,
+  sourcePathIsRegistered,
   attemptEventDefinitelyBefore,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
@@ -1614,20 +1616,45 @@ export const WORKER_BRIEF_SECTIONS: ReadonlyArray<ReadonlyArray<string>> = [
   ["## Approved unit-test instructions", "## Current unit-test instructions"],
 ];
 
-// A Unit of a parallel batch runs the tests the person approved through AI-DLC's
-// own check rather than as one more command for the person to allow; from the
-// main folder, where the tool path and the project are the batch's.
-function swarmUnitTestsLine(projectDir: string, unit: string | null): string {
-  if (!unit) return "";
+// The state when `unit` is one of the open parallel batch's Units, else null.
+function openSwarmBatchState(projectDir: string, unit: string | null): string | null {
+  if (!unit) return null;
   let state: string;
   try {
     state = readFileSync(stateFilePath(projectDir), "utf-8");
   } catch {
-    return "";
+    return null;
   }
   const marker = readActiveDirectiveMarker(projectDir, state);
-  const approved = authorizedVerificationCommand(projectDir, state);
-  if (marker?.kind !== "invoke-swarm" || !marker.units?.includes(unit) || !approved) return "";
+  return marker?.kind === "invoke-swarm" && marker.units?.includes(unit) ? state : null;
+}
+
+// A Unit of a parallel batch is built in its own worktree while its worker may
+// run in the main folder, so a relative record path can put the records where
+// nothing reads them: both folders are named absolute, the record folder at the
+// main folder's own record path inside the worktree. The protocol takes the
+// brief before prepare and hands it on at fan-out, so a brief taken before the
+// worktree exists names the one prepare makes for this Unit's Bolt.
+function swarmWorktreeLine(projectDir: string, unit: string | null): string {
+  if (!unit || openSwarmBatchState(projectDir, unit) === null) return "";
+  let worktree: string;
+  try {
+    worktree = resolve(resolveBoltIdentity(projectDir, boltSlugForUnit(unit), resolveWorkflowSelection(projectDir)).dir);
+  } catch {
+    return "";
+  }
+  const records = join(worktree, relative(projectDir, codeGenerationRecordDir(projectDir, unit)));
+  return `\nYour worktree is \`${toPosix(worktree)}\`: write this Unit's code there, and its records ` +
+    `(code-summary.md, source-manifest.json, traceability.json) in \`${toPosix(records)}\`.\n`;
+}
+
+// A Unit of a parallel batch runs the tests the person approved through AI-DLC's
+// own check rather than as one more command for the person to allow; from the
+// main folder, where the tool path and the project are the batch's.
+function swarmUnitTestsLine(projectDir: string, unit: string | null): string {
+  const state = openSwarmBatchState(projectDir, unit);
+  const approved = state === null ? null : authorizedVerificationCommand(projectDir, state);
+  if (!unit || !approved) return "";
   return `\nTo run the tests the person approved (\`${approved.label}\`), run \`${swarmUnitTestCommand(unit)}\` ` +
     `as a command of its own from the project's main folder \`${resolve(projectDir)}\`, not from your worktree and ` +
     "with no `cd` before it: it runs them in your worktree and shows their output, and its JSON line says " +
@@ -1687,7 +1714,8 @@ export function workerBrief(
     `${marker}\n` +
     `AIDLC-TESTING-CONTRACT: ${contractHash}\n` +
     (resume ? progressSection(resume) : "") +
-    `\n${files}\n\n${FILE_TOOLS_RULE}\n${swarmUnitTestsLine(projectDir, target.unit)}` +
+    `\n${files}\n\n${FILE_TOOLS_RULE}\n${swarmWorktreeLine(projectDir, target.unit)}` +
+    swarmUnitTestsLine(projectDir, target.unit) +
     `\n${planFileSection}\n\nTick each step's box in \`${planFile}\` as you finish the step. ` +
     "That is the only change you make to that file.\n" +
     `\n${continuation ? planHeadings[1] : planHeadings[0]}\n\n` +
@@ -3302,7 +3330,9 @@ function recordCodeGenerationContinuation(
   if (!recorded) {
     recordHookDrop(projectDir, "testing-posture", `GUARD_STOOD_ASIDE row not recorded (audit ledger busy or not writable): ${detail}`);
   }
-  const line = guardStoodAsideLine("plan-approval", continuation.fence.source, detail, recorded);
+  const line = guardStoodAsideLine(
+    "plan-approval", continuation.fence.source, detail, recorded, continuation.receipt.skipped !== undefined,
+  );
   // Under Guard Policy off the row is the whole account: the stand-aside line
   // is not said.
   const speaks = guardStandAsideSpeaks(continuation.fence);
@@ -4738,6 +4768,39 @@ export function captureCodeGenerationDiscardApproval(
   }
 }
 
+// A live listing without the paths Git ignores and does not track in the
+// checkout it was read from (a .env, a log): no commit holds them and no
+// checkout of a Unit gets them, so a worktree is never asked to reproduce them.
+// check-ignore without --no-index never reports a path that checkout's own
+// index tracks, and the person's own ignore rules are read as Git reads them.
+// A path registered as source in .aidlc-source-paths.json stays, as it does
+// for a Unit's claims. Commit listings are never passed here: they hold only
+// what was tracked. When Git cannot answer, nothing is left out.
+function withoutGitIgnored(
+  repoDir: string, carriesWorkspaceShell: boolean,
+): (listing: ReadonlyMap<string, string>) => Map<string, string> {
+  const ignored = new Map<string, boolean>();
+  const pathOf = (key: string): string => key.slice(key.indexOf("\0") + 1);
+  return (listing) => {
+    const unknown = [...new Set([...listing.keys()].map(pathOf))].filter((path) => !ignored.has(path));
+    if (unknown.length > 0) {
+      const checked = spawnSync("git", ["-C", repoDir, "check-ignore", "-z", "--stdin"], {
+        input: `${unknown.join("\0")}\0`,
+        encoding: "utf-8",
+        maxBuffer: 512 * 1024 * 1024,
+        timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+      });
+      if (checked.status === 0 || checked.status === 1) {
+        const hits = new Set(checked.stdout.split("\0").filter(Boolean));
+        for (const path of unknown) {
+          ignored.set(path, hits.has(path) && !sourcePathIsRegistered(repoDir, carriesWorkspaceShell, path));
+        }
+      }
+    }
+    return new Map([...listing].filter(([key]) => ignored.get(pathOf(key)) !== true));
+  };
+}
+
 interface DiscardedWorktreeApproval {
   commit: string;
   listingSha256: string;
@@ -4904,15 +4967,18 @@ function approvedWorktreeSource(
     throw new Error("Parent source has changed since Plan Approval or cannot be bound. Re-present and approve the plan against the current parent source.");
   }
   // AI-DLC's own files are no Unit's source: a worktree need not reproduce
-  // them, so an update the person took need not be committed first.
+  // them, so an update the person took need not be committed first. Nor is
+  // what a link leads to outside the project, or to nothing: no commit holds
+  // it, and the link itself is still compared. Nor are the files Git ignores
+  // and does not track in the parent's checkout.
   const owned = aidlcOwnedSourceKey(parent);
   const theirs = (listing: ReadonlyMap<string, string>): string => serializeSourceListing(
-    new Map([...listing].filter(([key]) => !owned(`${repo.repo ?? ""}${key}`))),
+    new Map([...listing].filter(([key]) => !owned(`${repo.repo ?? ""}${key}`) && !isLinkTargetListingKey(listing, key))),
   );
   const prefix = `${repo.repo ?? ""}\0`;
-  const expected = new Map([...parentSource.listing]
+  const expected = withoutGitIgnored(repo.cwd, repo.repo === null)(new Map([...parentSource.listing]
     .filter(([key]) => key.startsWith(prefix))
-    .map(([key, value]) => [key.slice(prefix.length - 1), value]));
+    .map(([key, value]) => [key.slice(prefix.length - 1), value])));
   return { parentSource, expectedBytes: theirs(expected), theirs };
 }
 
@@ -4970,17 +5036,24 @@ function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: str
   const discarded = discardedSha256 === undefined ? null : discardedWorktreeApproval(
     provenance.parent, unit, provenance.repo.cwd, provenance.repo.repo, discardedSha256,
   );
-  const { parentSource, expectedBytes, theirs } = approvedWorktreeSource(provenance.parent, approved, provenance.repo, discarded);
+  const { parentSource, expectedBytes, theirs } =
+    approvedWorktreeSource(provenance.parent, approved, provenance.repo, discarded);
   const childSource = workspaceSourceState(provenance.child);
   if (!childSource) throw new Error("Worktree source cannot be bound. Repair its source boundary before retrying.");
+  // A worker's own ignored log is no source either, asked of the Unit's own
+  // checkout, where a file it still tracks stays.
+  const childLive = discarded
+    ? childSource.listing : withoutGitIgnored(provenance.child, provenance.repo.repo === null)(childSource.listing);
   let syncCommit: string | null = null;
-  if (theirs(childSource.listing) !== expectedBytes) {
+  if (theirs(childLive) !== expectedBytes) {
     if (discarded) {
       throw new Error("Recreated worktree source differs from the discarded approval's immutable baseline. Nothing was changed.");
     }
     const childHead = worktreeApprovalGit(provenance.child, ["rev-parse", "HEAD"]);
     const base = gitCommitSourceListing(provenance.child, childHead, provenance.repo.repo === null);
-    if (!base || serializeSourceListing(base) !== serializeSourceListing(childSource.listing)) {
+    // The commit holds a link, never what it leads to outside the worktree.
+    const live = new Map([...childLive].filter(([key]) => !isLinkTargetListingKey(childSource.listing, key)));
+    if (!base || serializeSourceListing(base) !== serializeSourceListing(live)) {
       throw new Error("Preserved worktree source differs from the approved parent baseline and contains dirty or untracked source. Nothing was changed. Preserve that work, reconcile/review it on the parent, and obtain fresh Plan Approval before retrying.");
     }
     const parentHead = worktreeApprovalGit(provenance.repo.cwd, ["rev-parse", "HEAD"]);

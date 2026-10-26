@@ -80,12 +80,13 @@ const NARRATION_TOKENS = [
 ];
 
 const LEARNINGS_QUESTION_TOKENS = [
-  "at least two explicit options",
-  "Nothing to add",
-  "Add a note",
-  "one-option",
-  "even when `surface` returns zero candidates",
-  "never infer `Nothing to add`",
+  "take the **section 13 learnings step**",
+  "otherwise it asks nothing and you go straight to step 4",
+  "--correction '<their change>'",
+  "`--correction-file`",
+  "`Yes, for this project` / `Yes, for the team` / `No`",
+  "--question-kind learnings-note",
+  "Never infer their answer.",
 ];
 
 // The in-session configuration steps ride the engine's own --config print
@@ -323,6 +324,29 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(problems).toEqual([]);
   });
 
+  test("every shipped conductor SKILL switches a named plan at once, through next --scope", () => {
+    // "switch this to the express plan" at a gate went to the composer on Kiro
+    // CLI and opencode: the rule had a case for named stages only, and the
+    // composer keeps the running plan, so the person heard the switch could not
+    // be done mid-run. The engine's own mid-run switch does it in place. With
+    // their other words beside `--scope`, `next` asks whether those words are
+    // new work, so the name goes alone.
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const tok of [
+        "UNLESS the request names the stages to skip or add, or the plan to switch to,",
+        '(see "Named stage changes are done at once" and "A named plan is switched at once" below)',
+        "**A named plan is switched at once.**",
+        "run `{{INVOKE}} engine orchestrate next --scope <plan>` with that plan's name and none of their other words",
+        "The composer is not run for it.",
+      ]) {
+        if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
   test("every shipped conductor SKILL sends --help through the loop's first step, not the command-line help", () => {
     // A live agent sometimes answered /aidlc --help with `aidlc --help`, the
     // terminal tool's help. The clause sits on step 1 itself, so a harness's
@@ -369,7 +393,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "with \"The last AI-DLC step stopped on a problem: ...\" when its last step hit one.";
     const forYou = "it is for you, not for the person (some tools show it to them too), so say nothing about it.";
     const waiting = "If you had just asked the person a question in your own words and are waiting for their answer, record it with " +
-      "`{{INVOKE}} engine log decision --stage <stage> --decision \"<the question>\" --options \"<the choices>\"`";
+      "`{{INVOKE}} engine log decision --stage <stage> --decision '<the question>' --options '<the choices>'`";
     const missing = skills.flatMap((rel) => {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       return [
@@ -722,7 +746,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     }
   });
 
-  test("every shipped conductor SKILL requires a valid two-option learning question", () => {
+  test("every shipped conductor SKILL asks the learnings question only after a correction, with its three options", () => {
     const missing: string[] = [];
     for (const rel of skills) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
@@ -1017,6 +1041,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       ]) {
         if (stale.test(body)) missing.push(`${rel}  still double-quotes the person's words: ${stale}`);
       }
+      // A question's choices travel too, and a $0.00 in one was recorded as the shell's own name. The `|` list
+      // example stays double-quoted: the Copilot adapter's VS Code allow takes a `|` only inside double quotes.
+      if (/--(decision|options) \\?"</.test(body)) missing.push(`${rel}  still double-quotes a question's text`);
     }
     // The engine's own messages that print such a command, escaped quotes included.
     const tools = join(REPO_ROOT, "core", "tools");
@@ -1025,6 +1052,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       if (/--(details|reason) \\?\\?"(Request [Cc]hanges: <|<(feedback|requested changes))/.test(body)) {
         missing.push(`core/tools/${name}  still double-quotes the person's words`);
       }
+      if (/--(decision|options) \\?\\?"</.test(body)) missing.push(`core/tools/${name}  still double-quotes a question's text`);
     }
     expect(missing).toEqual([]);
   });

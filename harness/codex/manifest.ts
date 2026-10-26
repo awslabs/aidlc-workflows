@@ -45,6 +45,12 @@ const manifest: HarnessManifest = {
       "it, inside Codex: do not edit any Codex config and do not restart Codex. Their next " +
       "message counts in this same chat. Show the person this line and end your turn: " +
       '"In Codex, type /hooks, press t to trust all, then press Esc. Then carry on here."',
+    // Measured live (0.164.0): started in a folder inside the project, Codex
+    // offers $aidlc and lists the project's hooks as trusted, but runs them
+    // from that folder, where their commands do not find AI-DLC.
+    startedInsideProject:
+      "AI-DLC's hooks work only when Codex is started in the project folder. Exit Codex, start it again in " +
+      "<folder>, then type <entry>.",
   },
   harnessDir: ".codex",
   orchestratorSkillPath: ".agents/skills/aidlc/SKILL.md",

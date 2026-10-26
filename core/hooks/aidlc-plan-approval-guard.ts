@@ -93,6 +93,7 @@ import {
   auditBlockField,
   auditFilePath,
   type ClaudeCodeHookInput,
+  codeGenerationIsTheStep,
   composerProposalPath,
   docsRoot,
   ENGINE_TEXT_DIRS,
@@ -103,6 +104,7 @@ import {
   loadScopeMapping,
   loadStageGraph,
   nextLineFlags,
+  normalizeStageName,
   parseCheckboxes,
   parseStateStageSuffixes,
   PLAN_APPROVAL_ASK_TYPE,
@@ -115,6 +117,7 @@ import {
   writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
+  CEREMONY_ENV,
   personAskedSinceGate,
   readActiveDirectiveMarker,
   readIssuedDirectiveMarker,
@@ -125,13 +128,14 @@ import {
   resolveBoltDag,
   resolveProjectFlag,
   resolveProjectDirFromHook,
+  jumpClaimSha256,
   nextStageClaimSha256,
   nextStageInvocation,
   type NextStageUnits,
   selectedRecordIsFinished,
   stateDigest,
   stateFilePath,
-  addedStagesPassedOver,
+  owedJumpBack,
   worktreesDir,
   writeGuardAgentContext,
   writeGuardStoodAside,
@@ -190,6 +194,17 @@ const SHELL_INTERPRETERS = new Set([
 // heredoc is a program the person can see.
 const INLINE_CODE_RUNTIMES = new Set(["bun", "deno", "node", "perl", "php", "python", "python2", "python3", "ruby"]);
 const INLINE_CODE_FLAGS = new Set(["-c", "-e", "-E", "-p", "-r", "--eval", "--print", "eval"]);
+// AI-DLC's command named in a dynamic command, where a variable or
+// substitution may hide its invocation: a tools script (`aidlc.ts`,
+// `aidlc-<route>.ts`) or the launcher with its extension (`aidlc.exe`,
+// `.cmd`, `.ps1`, which a Windows path the POSIX reading drops the backslashes
+// of still shows) anywhere, or the bare launcher run by a substitution, which
+// the lexer does not read. The bare launcher as a command word is the literal
+// check's in mutationIntent, and a variable run as a command is
+// runsHiddenCommand's; a bare `aidlc` anywhere else is the record folder
+// (`R=aidlc`, `ls aidlc`, `aidlc/spaces`), not that command.
+const ENGINE_WORD =
+  /(?:(?:^|[\s;|&()<>'"`=:/\\])aidlc(?:(?:-[A-Za-z0-9._-]+)?\.ts|\.exe|\.cmd|\.ps1)|(?:\$\(|`)\s*aidlc)(?=$|[\s;|&()<>'"`])/i;
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const SAFE_READ_TOOLS = new Set([
   "Read",
@@ -272,6 +287,7 @@ const READ_ONLY_POWERSHELL_CMDLETS = new Set([
   "get-content",
   "get-item",
   "measure-object",
+  "out-null",
   "out-string",
   "resolve-path",
   "select-object",
@@ -293,6 +309,11 @@ const NO_CURRENT_DIRECTIVE =
   "the current state has no matching v2 code-generation active directive";
 const ENGINE_QUESTION_OPEN =
   "the engine is waiting for the person's answer to its recovery question";
+// Under strict every landing of the stage checks the main checkout against the
+// stage's start (assertAggregateSourceBeforeMerge), so nothing else changes it
+// while a parallel batch is out.
+const SWARM_MAIN_CHECKOUT_HELD =
+  "While the Units are built in parallel, the main checkout changes only by their landings, so each landing can check it";
 
 // --- The decision -------------------------------------------------------------
 
@@ -357,12 +378,7 @@ function approvalEvidenceIsCurrent(evidence: UnitEvidence | undefined): boolean 
   );
 }
 
-// Normalize a state-file stage value for comparison: the field usually holds
-// the slug (code-generation) but a display-cased value (Code Generation) must
-// compare equal rather than silently disable enforcement.
-export function normalizeStageName(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, "-");
-}
+export { normalizeStageName };
 
 const UNIT_MARKER_RE = /^[ \t]*AIDLC-UNIT[ \t]*:[ \t]*(.*?)[ \t]*$/;
 const STAGE_MARKER_RE = /^[ \t]*AIDLC-STAGE[ \t]*:[ \t]*(.*?)[ \t]*$/;
@@ -724,6 +740,10 @@ function authorityBlockReason(
   editingReply: string | null = null,
   wayOn: EngineInvocation | null = null,
 ): string {
+  if (reason === SWARM_MAIN_CHECKOUT_HELD) {
+    return `${authorityRemedy(reason, standing)} A change the person asks for in the main checkout can be made once ` +
+      "Code Generation is over.";
+  }
   if (reason === ENGINE_QUESTION_OPEN || reason === PLAN_APPROVAL_ASK_OPEN) {
     return authorityRemedy(reason, standing, asked, editingReply);
   }
@@ -1057,9 +1077,11 @@ function preparedBoltWorktreeUnit(projectDir: string, targets: string[], units: 
 }
 
 // Every target is a file of a landing AI-DLC staged in the main checkout for
-// one of `units` that git could not merge or that was combined since (the
-// landing owns which: stagedLandingClashFiles), reached through no symlink and
-// linked to no other file. Loaded only here, off every other tool call's path.
+// one of `units` that git could not merge or that was combined since, or, for a
+// clean merge whose commit the person's hook refused, that the landing staged
+// (the landing owns which: stagedLandingClashFiles), reached through no
+// symlink and linked to no other file. Loaded only here, off every other tool
+// call's path.
 async function landingClashFilesOnly(projectDir: string, targets: string[], units: readonly string[]): Promise<boolean> {
   if (units.length === 0) return false;
   try {
@@ -1202,6 +1224,9 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
   if (args[0] !== "config" || args[1] !== "flags") return false;
   let changes = false;
   let lowers = false;
+  // Plan approval's own switch stands only on what can turn plan approval off
+  // while a plan question waits (planApprovalOffStands).
+  let planApprovalOff = false;
   for (let index = 2; index < args.length; index++) {
     const arg = args[index];
     if (arg === "--bypass" || arg === "--clear-bypass") {
@@ -1209,6 +1234,7 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
       if (!(RECORDABLE_PROJECT_BYPASSES as readonly string[]).includes(name)) return false;
       changes = true;
       lowers ||= arg === "--bypass";
+      planApprovalOff ||= arg === "--bypass" && name === CEREMONY_ENV.plan_approval;
     } else if (arg === "--message") {
       // The message the person asked in, which the setter itself proves.
       if (args[++index] === undefined) return false;
@@ -1221,7 +1247,7 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
       return false;
     }
   }
-  return changes && (!lowers || personAskedSinceGate(projectDir));
+  return changes && (!lowers || personAskedSinceGate(projectDir, { planApprovalOff }));
 }
 
 // How a shell command line is read. Every harness keeps the POSIX reading
@@ -1235,12 +1261,15 @@ interface ShellDialect {
   // aidlc.cmd and absolute paths to the installed launcher or active
   // executable name the engine, as they do on Windows.
   enginePaths: boolean;
+  // A PowerShell cmdlet whose written paths the reader binds exactly.
+  pathBoundWriter: (name: string) => boolean;
 }
 
 const POSIX_DIALECT: ShellDialect = {
   powerShell: false,
   pathsAsWritten: false,
   enginePaths: false,
+  pathBoundWriter: () => false,
 };
 
 // A PowerShell stream redirect that writes no file: to $null, or into output.
@@ -1258,19 +1287,26 @@ const POWERSHELL_NULL_REDIRECT = /^(?:[1-6*]?>>?[ ]*\$null|[2-6*]>&1)(?=[ ;|]|$)
 // this reading admits only lines it can render exactly.
 function plainPowerShell(
   command: string,
-): { commands: string[][]; rendering: string } | null {
+  pathBoundWriter: (name: string) => boolean = () => false,
+): { commands: string[][]; starts: number[]; rendering: string } | null {
   // Controls, whitespace other than a space, and the typographic dashes and
   // quotes PowerShell reads as - and as quotes.
   // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this refuses.
   if (/[\x00-\x1f\x7f-\x9f\u2013-\u2015\u2018-\u201f]|[^\S ]/u.test(command)) return null;
+  // A cmdlet is handed its words as written, never through a native command
+  // line, so only a native program meets 5.1's splitting.
+  const cmdlet = (name: string): boolean =>
+    READ_ONLY_POWERSHELL_CMDLETS.has(name.toLowerCase()) || pathBoundWriter(name);
   const commands: string[][] = [];
   const joins: string[] = [];
+  // Where each command starts in the line as written.
+  const starts: number[] = [0];
   let words: string[] = [];
   let call = false;
   const finish = (): boolean => {
     if (words.length === 0) return false;
     if (
-      !READ_ONLY_POWERSHELL_CMDLETS.has(words[0].toLowerCase()) &&
+      !cmdlet(words[0]) &&
       words.slice(1).some((word) => word === "" || word.includes('"') || word.endsWith("\\"))
     ) return false;
     commands.push(words);
@@ -1289,6 +1325,7 @@ function plainPowerShell(
       if (command[i + 1] === "|" || !finish()) return null;
       joins.push(ch);
       i++;
+      starts.push(i);
       continue;
     }
     const redirect = POWERSHELL_NULL_REDIRECT.exec(command.slice(i));
@@ -1314,7 +1351,9 @@ function plainPowerShell(
     } else {
       word = /^[^ ;|&'"]+/.exec(command.slice(i))?.[0] ?? "";
       if (
-        /[`$@(){}#<>,%^![\]]/.test(word) ||
+        /[`$@(){}#<>%^![\]]/.test(word) ||
+        // A read-only cmdlet's list (Select-Object Name,Length) writes nothing.
+        (word.includes(",") && (first || !READ_ONLY_POWERSHELL_CMDLETS.has(words[0].toLowerCase()))) ||
         /\\(?![A-Za-z0-9._-])/.test(word) ||
         /^-[^-].*\./.test(word) ||
         (first && !call && !/^[A-Za-z][A-Za-z0-9._:\\/-]*$/.test(word))
@@ -1331,6 +1370,7 @@ function plainPowerShell(
     /^[A-Za-z0-9._/:+,@%-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
   return {
     commands,
+    starts,
     rendering: commands
       .map((command, index) =>
         `${index > 0 ? ` ${joins[index - 1]} ` : ""}${command.map(posixWord).join(" ")}`
@@ -1349,8 +1389,9 @@ function powerShellReading(
     args: string[]; executable?: string; launchers?: string[];
     dataDriven?: boolean; executableResolutionChanged?: boolean; ambiguous?: boolean;
   }>,
-): string | null {
-  const plain = plainPowerShell(command);
+  pathBoundWriter: (name: string) => boolean,
+): { rendering: string; starts: number[] } | null {
+  const plain = plainPowerShell(command, pathBoundWriter);
   if (!plain) return null;
   const invocations = invocationsOf(plain.rendering);
   const faithful = invocations.length === plain.commands.length &&
@@ -1361,7 +1402,7 @@ function powerShellReading(
         invocation.args.length === args.length &&
         invocation.args.every((arg, at) => arg === args[at]);
     });
-  return faithful ? plain.rendering : null;
+  return faithful ? { rendering: plain.rendering, starts: plain.starts } : null;
 }
 
 function sameFileIdentity(left: string, right: string): boolean {
@@ -1539,13 +1580,15 @@ interface EngineCommandContext {
   jumpAdmitted: (jump: JumpCommand) => boolean;
 }
 
-// The jump tool's verb (`execute` or `reopen`), its `--target`, and a reopen's `--units` and `--via`.
+// The jump tool's verb (`execute` or `reopen`), its `--target`, a reopen's
+// `--units` and `--via`, and every argument after `jump`, verb first.
 interface JumpCommand {
   verb: string;
   target: string | undefined;
   units: string | undefined;
   via: string | undefined;
   direction: string | undefined;
+  args: readonly string[];
 }
 
 const NO_ENGINE_CONTEXT: EngineCommandContext = { jumpAdmitted: () => false };
@@ -1555,7 +1598,8 @@ const NO_ENGINE_CONTEXT: EngineCommandContext = { jumpAdmitted: () => false };
 // reopen` to a stage that is an identifier, the `next --stage` its one
 // exception admits the jump after; else false. A superseded step waits for a
 // fresh `next`, with one exception: Copilot's settle supersedes the step after
-// every print, `next --stage`'s jump print included, so a `jump execute` to the
+// every print, the jump print `next --stage` gives at Code Generation included
+// (elsewhere it makes the jump itself), so a `jump execute` to the
 // stage the state-bound step's settled claim asked for with `next --stage`, on
 // the state as it is now, is the agent carrying that print out, and so is the
 // `jump reopen` it prints for a unit-major walk: one Unit's (with `--unit`,
@@ -1587,6 +1631,15 @@ function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand): bool
     if (marker === null) return true;
     if (marker.delivery === "superseded") {
       const attempt = current?.active_attempt;
+      // The same exception's other case: the jump a settled print named as its
+      // own step (noteNamedJump), run as named on the state it was named on, is
+      // the agent carrying that print out.
+      if (
+        attempt?.status === "settled" && current?.kind === "print" &&
+        attempt.named_jump_sha256 === jumpClaimSha256(jump.args) &&
+        attempt.named_jump_state_sha256 === stateDigest(state) &&
+        attempt.guard_recovery_selection_sha256 === undefined
+      ) return true;
       const target = jump.target;
       // The `next --stage` forms that print this reopen: for one Unit, plain
       // or naming it; for any number, for every Unit; each with `--change`
@@ -1642,14 +1695,17 @@ function jumpIsPersonsMove(
   return typeof last === "boolean" || runtimeHarnessName(projectDir) === "copilot" ? last : false;
 }
 
-// The jump `next` names back to a stage the plan added after the work had just
-// passed over it (addedStagesPassedOver, the check recompose and `next` read):
-// the person's own add carried out, leaving Code Generation before anything of
-// it is written, so it waits for no further turn of theirs.
-function jumpBackToAddedStage(projectDir: string, state: string, jump: JumpCommand): boolean {
-  if (jump.verb !== "execute" || jump.direction !== "backward" || jump.target === undefined) return false;
+// The jump `next` names back to a stage on the plan the work has passed and
+// not run (owedJumpBack, the check `next` prints it from): Reverse Engineering
+// the person put back behind the cursor, or a stage they added after the work
+// had just passed over it. It is their own change carried out, leaving Code
+// Generation before anything of it is written, so it waits for no further turn
+// of theirs.
+function jumpNextNamesBack(projectDir: string, state: string, jump: JumpCommand): boolean {
+  if (jump.verb !== "execute" || jump.target === undefined) return false;
   try {
-    return addedStagesPassedOver(state, projectDir).includes(jump.target);
+    const owed = owedJumpBack(state, projectDir);
+    return owed !== null && owed.target === jump.target && owed.direction === jump.direction;
   } catch {
     return false;
   }
@@ -1712,9 +1768,10 @@ function configToolAdmitted(projectDir: string, rest: readonly string[]): boolea
 // judged whole (recordedSwitchChangeAdmitted); the config tool's two forms above
 // keep theirs. One more has no other owner: a jump (the jump tool checks no pick
 // and no person) waits for the person's move (jumpIsPersonsMove), unless it is
-// the one `next` names back to a stage they just added (jumpBackToAddedStage). Every other
-// engine command is the engine's to judge, a Code Generation completion
-// included: `report` and `unit complete` hold it while its plan waits.
+// the one `next` names back to a stage the work passed and has not run
+// (jumpNextNamesBack). Every other engine command is the engine's to judge, a
+// Code Generation completion included: `report` and `unit complete` hold it
+// while its plan waits.
 function engineCommandAdmitted(
   projectDir: string,
   engineArgs: readonly string[],
@@ -1723,7 +1780,7 @@ function engineCommandAdmitted(
   const configArgs = configToolArgs(engineArgs);
   if (configArgs !== null && !configToolAdmitted(projectDir, configArgs)) return false;
   const args = configArgs !== null ? ["config", ...configArgs] : engineArgs[0] === "engine" ? engineArgs.slice(1) : engineArgs;
-  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted({ verb: args[1], target: lastFlag(args, "--target"), units: lastFlag(args, "--units"), via: lastFlag(args, "--via"), direction: lastFlag(args, "--direction") })) return false;
+  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted({ verb: args[1], target: lastFlag(args, "--target"), units: lastFlag(args, "--units"), via: lastFlag(args, "--via"), direction: lastFlag(args, "--direction"), args: args.slice(1) })) return false;
   // `next` takes no `--bypass`: on its line the token is one of the person's
   // words ("add a --bypass option"), never a check turned off, as the engine's
   // own reading says (nextLineFlags). Every other command is read whole, as its
@@ -1836,6 +1893,11 @@ function shellInvocationNeedsApproval(
     // A path, extension or wrapper would name some other program.
     return executable.toLowerCase() !== name || !unwrapped;
   }
+  // A cmdlet whose written paths are bound as PowerShell binds them writes
+  // only what the targets show, as a tracked mutator does.
+  if (dialect.powerShell && dialect.pathBoundWriter(name)) {
+    return executable.toLowerCase() !== name || !unwrapped || !hasConcreteTargets;
+  }
   if (name === "sort" || name === "uniq") return writesThroughOption(name, invocation.args);
   if (READ_ONLY_SHELL_COMMANDS.has(name)) return false;
   if (name === "git") {
@@ -1859,6 +1921,17 @@ function shellInvocationNeedsApproval(
     return false;
   }
   return true;
+}
+
+// A command word that is itself an expansion (`$x`, `"$A"`, `${cmd:-aidlc}`,
+// `$(...)`, a backtick), or a program that runs text the lexer does not read
+// (the interpreters, a runtime given its program inline): in a dynamic command
+// that names aidlc, it may run AI-DLC's command from a variable.
+function runsHiddenCommand(invocation: { name: string; args: string[]; executable?: string }): boolean {
+  const word = invocation.executable ?? invocation.name;
+  const program = normalizedCommandName(word);
+  return /^[$`]/.test(word) || SHELL_INTERPRETERS.has(program) ||
+    (INLINE_CODE_RUNTIMES.has(program) && invocation.args.some((arg) => INLINE_CODE_FLAGS.has(arg)));
 }
 
 function shellUsesDynamicEvaluation(command: string): boolean {
@@ -1917,6 +1990,7 @@ async function mutationIntent(
       leadingDirectoryChange,
       shellCommandAltersExecutableResolution,
       shellCommandInvocationDetails,
+      powerShellPathBoundWriter,
       shellWriteTargets,
     } = await import("./aidlc-review-freeze.ts");
     // A command the adapter ran in PowerShell is read as PowerShell when it is
@@ -1924,13 +1998,15 @@ async function mutationIntent(
     // reading: Bash drops the backslashes a Windows path is written with.
     // An unhinted shell may not be PowerShell, so it never gets the cmdlets
     // or Set-Location.
-    const powerShellCommand = powerShellHint
-      ? powerShellReading(command, shellCommandInvocationDetails)
+    const powerShellLine = powerShellHint
+      ? powerShellReading(command, shellCommandInvocationDetails, powerShellPathBoundWriter)
       : null;
+    const powerShellCommand = powerShellLine?.rendering ?? null;
     const dialect: ShellDialect = {
       powerShell: powerShellCommand !== null,
       pathsAsWritten: powerShellCommand !== null,
       enginePaths: powerShellCommand !== null || process.platform === "win32",
+      pathBoundWriter: powerShellCommand !== null ? powerShellPathBoundWriter : () => false,
     };
     // `cd <folder> && <command>` runs <command> from <folder>, so it is read
     // from there, each time the line starts by moving to a folder the reader
@@ -1938,11 +2014,23 @@ async function mutationIntent(
     let analysed = powerShellCommand ?? command;
     let from = cwd;
     const shell = dialect.powerShell ? "powershell" : "posix";
+    let moves = 0;
     for (let move = leadingDirectoryChange(analysed, from, shell); move !== null;
       move = leadingDirectoryChange(analysed, from, shell)) {
       ({ dir: from, rest: analysed } = move);
+      moves++;
     }
-    targets = shellWriteTargets(analysed, from);
+    // A line read as PowerShell writes what PowerShell binds: a cmdlet's named
+    // values (New-Item -ItemType Directory) are not paths, and a \ separates
+    // a path on every host. Each move above was one of its commands.
+    const targetWords: string[] = [];
+    targets = powerShellLine
+      ? shellWriteTargets(command.slice(powerShellLine.starts[moves]), from, targetWords, "powershell")
+      : shellWriteTargets(analysed, from);
+    // A PowerShell wildcard in a bound path names files the reading cannot
+    // list, and the reading drops it from the targets.
+    const wildcardTargets = targetWords.some((word) => /[*?[\]]/.test(word));
+    const concreteTargets = targets.length > 0 && !wildcardTargets;
     const invocations = shellCommandInvocationDetails(analysed);
     const dynamic =
       shellUsesDynamicEvaluation(analysed) ||
@@ -1950,7 +2038,7 @@ async function mutationIntent(
     opaqueShell =
       dynamic ||
       invocations.some((invocation) =>
-        shellInvocationNeedsApproval(projectDir, from, invocation, targets.length > 0, analysed, dialect, context)
+        shellInvocationNeedsApproval(projectDir, from, invocation, concreteTargets, analysed, dialect, context)
       );
     // A command that names AI-DLC and that the shell reading refused: an
     // untrusted spelling (a retained version, a copy of the tools outside the
@@ -1961,14 +2049,14 @@ async function mutationIntent(
     const looksLikeEngine = invocations.some((invocation) =>
       normalizedCommandName(invocation.executable ?? invocation.name).replace(/\.(?:cmd|ps1)$/, "") === "aidlc" ||
       invocation.args.some((arg) => /^aidlc(?:-[A-Za-z0-9._-]+)?\.ts$/.test(basename(arg)))) ||
-      (dynamic && /\baidlc\b/i.test(analysed));
+      (dynamic && (ENGINE_WORD.test(analysed) || (/\baidlc\b/i.test(analysed) && invocations.some(runsHiddenCommand))));
     engineRefused = looksLikeEngine && opaqueShell;
     // An escaped operator (`\>`, `\&`) is read as the lexer decodes it, which
     // is not trusted here; a variable, substitution or backtick (`dynamic`) can
     // hide a command or a write target, and a shell script run by name hides
     // commands the lexer never sees.
     readable = !dynamic && !/[^\S \t\n]/u.test(command) && !command.includes("\\\n") && !/\\[<>&|;]/.test(command) &&
-      !(powerShellHint && powerShellCommand === null) &&
+      !(powerShellHint && powerShellCommand === null) && !wildcardTargets &&
       !invocations.some((invocation) => {
         const program = normalizedCommandName(invocation.executable ?? invocation.name);
         return SHELL_INTERPRETERS.has(program) || writesThroughOption(program, invocation.args) ||
@@ -2355,9 +2443,10 @@ async function evaluate(
       promptUnitMarkers(dispatchPrompt).length > 0 ||
       promptStageMarkers(dispatchPrompt).length > 0 ||
       promptTestingContractMarkers(dispatchPrompt).length > 0;
+    // The step on record is the engine's to read too: where it is Code
+    // Generation, `next --stage` leaves a jump to the `jump execute` judged here.
     const codeGenerationRelevant =
-      directiveStage === GUARDED_STAGE ||
-      durableStage === GUARDED_STAGE ||
+      codeGenerationIsTheStep(directiveStage, durableStage) ||
       (guardedDispatch && explicitPlanDispatch);
     if (!codeGenerationRelevant) return 0;
     const knownMutationTool =
@@ -2377,7 +2466,7 @@ async function evaluate(
             {
               jumpAdmitted: (jump) => {
                 const move = toolName === "Bash" &&
-                  (jumpBackToAddedStage(projectDir, state ?? "", jump) ||
+                  (jumpNextNamesBack(projectDir, state ?? "", jump) ||
                     jumpIsPersonsMove(projectDir, cwd, toolInput.command, state ?? "", activeDirective, jump));
                 if (typeof move === "object") jumpWayOn = move;
                 return move === true;
@@ -2546,9 +2635,10 @@ async function evaluate(
           !mutation.opaqueShell && mutation.targets.length > 0 &&
           preparedBoltWorktreeUnit(projectDir, mutation.targets, listed) !== null
         ) return 0;
-        // A listed Unit's landing that clashed in the main checkout is finished
-        // there: the files git could not merge, or combined since, are the
-        // agent's to write, as the landing's own line says.
+        // A listed Unit's landing that clashed in the main checkout, or whose
+        // commit the person's hook refused, is finished there: the files git
+        // could not merge, or combined since, or for a clean merge the files it
+        // staged, are the agent's to write, as the landing's own line says.
         if (
           !mutation.opaqueShell && mutation.targets.length > 0 &&
           await landingClashFilesOnly(projectDir, mutation.targets, listed)
@@ -2565,9 +2655,23 @@ async function evaluate(
           gatherUnitEvidence(projectDir, listed).every(approvalEvidenceIsCurrent)
         ) return 0;
         swarmBatchOut = true;
-        authorityFailure =
-          `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +
-          outOfDateClause(activeDirective);
+        // A write seen only in the main checkout, at a step still current,
+        // waits for the landings; one that reaches under the worktrees folder
+        // (a Unit's own worktree whose approval no longer holds included), or a
+        // step that lists no Unit or is out of date, is refused as any other.
+        // Where a target lies decides it, never what its approval says.
+        const outOfDate = outOfDateClause(activeDirective);
+        const worktrees = resolve(worktreesDir(projectDir));
+        const mainCheckoutOnly = listed.length > 0 && outOfDate === "" && seen.length > 0 &&
+          seen.length === mutation.targets.length &&
+          seen.every((candidate) => {
+            const inside = relative(worktrees, resolve(candidate));
+            return inside.startsWith("..") || isAbsolute(inside);
+          });
+        authorityFailure = mainCheckoutOnly
+          ? SWARM_MAIN_CHECKOUT_HELD
+          : `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +
+            outOfDate;
         standing = planStanding(projectDir, activeDirective);
         verdict = { block: true, mentioned: listed };
         blockedMutation = {
@@ -2808,7 +2912,9 @@ async function evaluate(
         recordHookDrop(projectDir, HOOK_NAME, `GUARD_STOOD_ASIDE row not recorded (audit ledger busy or not writable): ${detail}`);
       }
       if (guardStandAsideSpeaks(gate)) {
-        writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail, recorded));
+        // Re-approval is named while any plan in the batch was approved by a person.
+        const planSkipped = selected.every(({ approval }) => approval.skipped === true);
+        writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail, recorded, planSkipped));
       }
       return 0;
     }

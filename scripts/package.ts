@@ -376,6 +376,21 @@ function projectKiroSharedKnowledge(content: Buffer): Buffer {
   return Buffer.from(`${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
 }
 
+// Every hook command of an authored Kiro agent JSON gets the row's
+// hookCommandSuffix (the manifest says why), so the authored files carry the
+// command an author writes and no hook can ship without it.
+function projectKiroHookCommands(content: Buffer, suffix: string | undefined): Buffer {
+  if (suffix === undefined) return content;
+  const parsed = JSON.parse(content.toString("utf-8")) as { hooks?: Record<string, Array<{ command?: unknown }>> };
+  if (parsed.hooks === undefined) return content;
+  for (const rows of Object.values(parsed.hooks)) {
+    for (const row of rows) {
+      if (typeof row.command === "string") row.command = `${row.command}${suffix}`;
+    }
+  }
+  return Buffer.from(`${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
+}
+
 // Merge the tier-derived chat.modelDefaults entries into an authored Kiro
 // settings/cli.json: one entry per distinct pinned Kiro model, carrying the
 // highest sharing tier's effort (the collapse rule - kiroModelDefaults()).
@@ -958,6 +973,7 @@ function buildTree(
     if (harnessKind === "kiro") {
       if (src.startsWith("agents/") && src.endsWith(".json")) {
         out = projectKiroSharedKnowledge(projectKiroAgentJson(srcPath, out));
+        out = projectKiroHookCommands(out, m.hookCommandSuffix);
       } else if (src === "settings/cli.json") {
         out = projectKiroCliJson(out);
       }

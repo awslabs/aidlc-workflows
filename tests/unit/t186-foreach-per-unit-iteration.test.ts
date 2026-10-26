@@ -63,6 +63,7 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seedBoltDagBatches,
   seededRecordDir,
@@ -317,6 +318,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
   test("1: per-unit stage with no artifacts emits the first unit with paths substituted", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
     expect(d.stage).toBe("functional-design");
@@ -349,6 +351,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
   test("3: covering the first unit keeps it active until its fresh review receipt", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
@@ -370,6 +373,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
   test("4: gate stays suppressed (false) on the last uncovered unit (its artifacts do not exist yet)", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
     logReviewReady(proj, "functional-design", "alpha");
     completeWave(proj, "functional-design", "alpha");

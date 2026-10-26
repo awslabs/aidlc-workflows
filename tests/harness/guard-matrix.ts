@@ -564,7 +564,9 @@ export function recordProblems(c: CellRun): string[] {
   const problems: string[] = [];
   const rows = auditEvents(c.run.proj).filter((e) => e.event === "CHANGE_ACCEPTED");
   const where = (e: { block: string }) => `${field(e.block, "Stage")}${field(e.block, "Unit") ? ` for ${field(e.block, "Unit")}` : ""}`;
-  const lines = c.run.agent.notices;
+  // change_notices also carries the lines that say where the work starts and where it picks up; they are not
+  // about a change.
+  const lines = c.run.agent.notices.filter((line) => !/^(Setting up |Picking up where we left off, )/.test(line));
   const policy = c.composed?.policyFromEngine ? resolvedPolicy(c) : c.policyAtChange;
   // No change, a second review the person asked for, or strict (which asks
   // for a fresh review instead of accepting the change): no row, no line.

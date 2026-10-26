@@ -39,6 +39,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Statusline not appearing | It shows only once you turn it on: `/aidlc --statusline on` (Claude Code and Codex). Then run `aidlc doctor`; for a copy install, verify `bun` is on PATH |
 | Subagent timed out | Run `/aidlc` to retry or run the stage inline |
 | `A program is watching the project folder (most likely a dev server or a test watcher still running)` (Windows) | A program that watches every folder of the project, such as a dev server (Vite) or a test watcher left running, keeps AI-DLC from moving the lock folder of its work record, so each step waits about 10 seconds. Stop that program (stopping `npm run dev` may stop only `npm` and leave the server running: close it from Task Manager or with `taskkill /T /PID <pid>`), and the next step goes on as normal. When the assistant, or an agent it sent, started that program in the conversation (to check the app, say), it stops it and the work goes on: you see this line only when neither started one, or the stop did not free the folder. With Guard Policy strict the build's writes are refused until it stops. |
+| Windows: git says `Filename too long` for a file under `aidlc/`, or a review or questions file cannot be written | The project folder is too deep: without long paths turned on, Windows tools and Git refuse paths over 260 characters, and AI-DLC's records sit deep under the project folder. `aidlc config` says so in one line, and `aidlc doctor` shows a `Project folder` row with how deep the folder is and how much the records add. Move the project to a shorter folder (for example `C:\src\<name>`), or turn long paths on: as an administrator, run `New-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force` in PowerShell, then run `git config --global core.longpaths true`. AI-DLC reads these two settings and says nothing when both are on; it never changes them, your folder or your git settings. Copilot CLI asks before every read of a path over 260 characters (`copilot -p` refuses it), whatever these two settings say, so with Copilot CLI only a shorter folder takes those questions away, and the line is said either way. |
 | Workflow stuck or misbehaving, need help | Run `/aidlc --doctor --export` and share the produced `.tar.gz` (redacted; no work product) |
 | A Bolt attempt was set aside | Ask the assistant to invoke the saved abort result's `restore_operation` with its exact argv; hints are display-only. Evidence-only attempts have no saved files to restore. See [getting the files back](#a-bolt-attempt-was-set-aside-getting-the-files-back) |
 
@@ -300,6 +301,22 @@ it again with just `opencode` in the project folder, then type `/aidlc` to
 carry on. When the agent stopped a request of yours with this step, type the
 `/aidlc --request <id>` line it showed you instead: that request carries on,
 once.
+
+### Claude Code or Codex started in a folder inside the project
+
+Both tools offer `/aidlc` (`$aidlc` in Codex) from a folder inside the project,
+such as `src/`, but AI-DLC's hooks work only when the tool is started in the
+project folder itself: Claude Code runs none of the project's hooks there, and
+Codex runs them from that folder, where they cannot start. No setting and no
+`/hooks` trust changes that. When the tool's own record of the chat says it was
+started in such a folder, the agent changes nothing and shows one line: exit the
+tool, start it again in the project folder, and type the `/aidlc --request <id>`
+line it showed you, which carries on with your request once. Doctor gives the
+same step. To find where the chat started, AI-DLC reads that record and nothing
+else in it: on Claude Code `sessions/<pid>.json` in its config folder
+(`CLAUDE_CONFIG_DIR`, else `~/.claude`), on Codex the first line of the chat's
+file under `sessions/` in its home (`CODEX_HOME`, else `~/.codex`). With no such
+record the usual step for hooks that are not running stands.
 
 ### Claude managed policy blocks project hooks
 
@@ -601,11 +618,16 @@ the one that fits: the Unit that made the change lists the path and is
 reviewed once more; a change nobody meant is undone; a path that
 is not source (a tool's cache written inside the repo, a build output, a nested
 repository that is not this project's code) is left out of the source checks by
-naming it under `exclude` in `.aidlc-source-paths.json` (the file in that repo's
-own folder for a recorded repo). The exclude works at once, with no further
-review; remove the line to put the path back. A path the project's `.gitignore`
-already ignores is never counted. Under Guard Policy relaxed or off the change
-is kept and said once instead.
+naming it under `exclude` in `.aidlc-source-paths.json` (the file in its own
+folder for a recorded repo or a recorded checkout). The exclude works at once,
+with no further review; remove the line to put the path back. A path the
+project's `.gitignore` already ignores is never counted, and neither is a file
+another open piece of work in this folder lists in its own Units' source
+manifests (a second chat building its own work here), or anything under a folder
+it lists: that is the other work's change, and its own checks cover it.
+Archiving a piece of work you will not finish (`/aidlc intent archive <name>`)
+ends its claims. Under Guard Policy relaxed or off the change is kept and said
+once instead.
 
 On a plan with no Units the same change answers with "the project source
 changed after <reviewer> reviewed it" (or, once the one recovery review is used,
@@ -633,7 +655,7 @@ record stays intact; it does not claim you approved the edits. The
 If code generation starts without asking you about the plan at all, plan
 approval is off for this piece of work: status shows where that came from, for
 example `Plan Approval: off (from scope poc)`. The line that names each plan
-asks whether you want to look at it first; you can also ask to be asked about
+says you can ask to go over it at any time; you can also ask to be asked about
 every plan. See [Plan approval](13-customization.md#plan-approval).
 
 Testing Posture, scope, test strategy, or project type changes follow the same

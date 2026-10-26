@@ -67,7 +67,10 @@ function run(tool: string, proj: string, args: string[]): { rc: number; out: str
   return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}`, stdout: res.stdout ?? "" };
 }
 
-type Directive = { kind: string; message?: string; stage?: string; reason?: string; produces?: string[]; narration?: string };
+type Directive = {
+  kind: string; message?: string; stage?: string; reason?: string; produces?: string[]; narration?: string;
+  change_notices?: string[];
+};
 
 function next(proj: string, args: string[] = []): Directive {
   const res = runOrchestrateNext(ORCH, proj, args, { cwd: proj, env });
@@ -264,13 +267,14 @@ describe("t-scope-change-reopens-finished-work: a scope switch on finished work 
     const step = next(proj);
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
     expect(step.stage).toBe(ADDED);
-    const said = step.narration ?? "";
+    const said = (step.change_notices ?? []).join(" ");
     expect(said.startsWith("Switched to express"), said).toBe(true);
     expect(said).toContain("Plan Approval changed: on (from scope bugfix) to off (from scope express).");
-    expect(said.endsWith("Now working on Observability Setup (stage 6 of 6), wearing the operations engineer hat."), said).toBe(true);
+    expect(step.narration).toBe("Now working on Observability Setup (stage 6 of 6), wearing the operations engineer hat.");
     // Said once: the next step does not say it again.
     expect(lib.pendingPersonLines(proj, SESSION).lines).toEqual([]);
-    expect(next(proj).narration ?? "").not.toContain("Switched to");
+    const again = next(proj);
+    expect(`${(again.change_notices ?? []).join(" ")} ${again.narration ?? ""}`).not.toContain("Switched to");
   });
 
   test("a new scope that adds nothing after the last stage leaves finished work finished", () => {
@@ -420,7 +424,10 @@ describe("t-scope-change-reopens-finished-work: a scope switch over running work
   test("at the stage's open gate the switch ends the turn and says where the work picks up", () => {
     const proj = featureAtFeasibility("awaiting-approval");
     const print = next(proj, ["--scope", "mvp"]);
-    expect(print.message).toContain(`to change scope, then ${STOP}`);
+    // An answer to the gate typed with the switch is recorded after it (t-approve-and-switch-plan); otherwise it stops.
+    expect(print.message).toContain("to change scope, then print its output verbatim. If their message also answered the " +
+      "open Feasibility & Constraints question");
+    expect(print.message).toContain("otherwise stop: the question still waits.");
     expect(print.narration).toBe("The work picks up at Feasibility & Constraints.");
     expect(actOnScopeChangePrint(proj, print)).toContain("Switched to mvp");
     expect(box(state(proj), "feasibility")).toBe("?");

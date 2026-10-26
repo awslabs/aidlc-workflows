@@ -50,6 +50,7 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seedBoltDagBatches,
   seededRecordDir,
@@ -242,6 +243,7 @@ function directiveFor(
 ): Directive {
   const proj = seedProject({ iteration });
   seedBoltDag(proj, ["alpha", "beta"]);
+  seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
   cover(proj);
   return runNext(proj);
 }

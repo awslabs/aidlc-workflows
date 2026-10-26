@@ -1466,6 +1466,15 @@ const POWERSHELL_ALIASES: Record<string, string> = {
   tee: "tee-object",
 };
 
+// A cmdlet whose every written path cmdletWriteTargets binds (New-Item,
+// Set-Content, Out-File, ...), named in full or by an alias PowerShell gives no
+// native program: PowerShell 7 runs sc.exe for `sc`.
+export function powerShellPathBoundWriter(name: string): boolean {
+  const command = name.toLowerCase();
+  if (command === "sc") return false;
+  return Object.hasOwn(CMDLET_WRITES, Object.hasOwn(POWERSHELL_ALIASES, command) ? POWERSHELL_ALIASES[command] : command);
+}
+
 function powerShellCommandName(name: string, args: CmdletArg[]): string {
   if (Object.hasOwn(POWERSHELL_ALIASES, name)) return POWERSHELL_ALIASES[name];
   // Copy-Item's -Destination is not cp's -t.

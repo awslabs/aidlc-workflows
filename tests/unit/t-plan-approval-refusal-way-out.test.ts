@@ -998,7 +998,7 @@ describe("the plan's Testing Contract changed after the person approved it", () 
     const relaxed = approvedBuildThenPostureEdit("relaxed").proj;
     const write = guardOut(relaxed, "Write", { file_path: join(relaxed, "src", "slugify.ts"), content: "x\n" });
     expect(write.code, write.stderr).toBe(0);
-    expect(write.stdout).toContain("Continuing past the plan-approval check");
+    expect(write.stdout).toContain("Continuing past the plan re-approval check");
     expect(contractRows(relaxed)).toHaveLength(0);
     const strict = approvedBuildThenPostureEdit("strict").proj;
     expect(said(writeSource(strict))).toContain("the approved Testing Contract is stale");

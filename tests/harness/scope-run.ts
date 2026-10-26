@@ -23,10 +23,13 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { AuditShardEvent } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { afterAll, describe, expect, test } from "bun:test";
-import { cleanupTestProject, REPO_ROOT, setupIntegrationProject } from "./fixtures.ts";
+import { cleanupTestProject, proposalFollowUp, REPO_ROOT, setupIntegrationProject } from "./fixtures.ts";
 import { PersonTurnLedger } from "./person-turns.ts";
 import { testGuardEnvironment } from "./runner-profile.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
+import kiroManifest from "../../harness/kiro/manifest.ts";
+
+const KIRO_HOOK_SUFFIX = kiroManifest.hookCommandSuffix ?? "";
 
 export type Directive = Record<string, unknown> & { kind?: string };
 
@@ -294,7 +297,12 @@ export class ScopeHost {
 
   /** The argv for an AI-DLC command line, as the agent's shell or the tool's hook runner would run it. */
   argv(line: string): string[] {
-    const [first, ...rest] = commandWords(line);
+    // A Kiro CLI hook line ends with its row's exit shape, which hands back the
+    // command's own status in the shell Kiro starts it in: running the command is the same.
+    const command = KIRO_HOOK_SUFFIX !== "" && line.trimEnd().endsWith(KIRO_HOOK_SUFFIX)
+      ? line.trimEnd().slice(0, -KIRO_HOOK_SUFFIX.length)
+      : line;
+    const [first, ...rest] = commandWords(command);
     if (first === "bun" && this.launcher === null) return [process.execPath, ...rest];
     if (first === "aidlc" && this.launcher !== null) return [...this.launcher, ...rest];
     throw new Error(`the stand-in runs only ${this.launcher === null ? "bun" : "aidlc"} commands, got: ${line}`);
@@ -599,7 +607,10 @@ export interface PersonAnswers {
   questionMode(stage: string): string;
   question(stage: string): string;
   summary(stage: string): string;
+  /** Their answer to the learnings question, asked only after a correction. */
   learnings(stage: string): string;
+  /** A correction they made in the stage that would apply next time: unset, the learnings step asks nothing. */
+  correction?(stage: string): string | undefined;
   plan(unit: string | null): string;
   autonomy(): "Continue automatically" | "Review each checkpoint";
   verificationCommand(): string;
@@ -617,7 +628,7 @@ export const PLAIN_ANSWERS: PersonAnswers = {
   questionMode: () => "Guide me",
   question: () => "A",
   summary: () => "Looks correct",
-  learnings: () => "Nothing to add",
+  learnings: () => "No",
   plan: () => "Approve Plan",
   autonomy: () => "Review each checkpoint",
   verificationCommand: () => "Approve",
@@ -953,7 +964,8 @@ export class AgentStandIn {
     while (true) {
       if (this.until?.(d)) return d;
       if (++this.steps > 600) this.fail("over 600 directives without done", d);
-      const key = `${String(d.kind)} ${String(d.stage ?? d.ask_type ?? "")} ${String(d.unit ?? "")} ${JSON.stringify(d.construction_checkpoint ?? d.plan_approval ?? d.gate ?? "")}`;
+      // A Unit's question step before the wave is a step of its own, not the Unit's build.
+      const key = `${String(d.kind)} ${String(d.stage ?? d.ask_type ?? "")} ${String(d.unit ?? "")} ${JSON.stringify(d.construction_checkpoint ?? d.plan_approval ?? d.gate ?? "")}${d.questions_only === true ? " questions" : ""}`;
       const times = (seen.get(key) ?? 0) + 1;
       seen.set(key, times);
       if (times > 3) {
@@ -1084,6 +1096,9 @@ export class AgentStandIn {
             break;
           }
           if (!this.named("[^`]+").test(message)) this.fail("a print mid-run named no step to take", d);
+          // The learnings step the step names comes first, when the person corrected the agent.
+          const learningsAt = /take the learnings step[\s\S]*?report --stage (\S+) /.exec(message)?.[1];
+          if (learningsAt !== undefined) this.learnings({ kind: "run-stage", stage: learningsAt });
           // The agent's own work the step names: the units block, from the Units it wrote.
           const repaired = this.repairUnitsBlockIfNamed(message, "next");
           if (!repaired || !/orchestrate(?:\.ts)? next`\.$/.test(message)) this.actOnPrint(d);
@@ -1155,6 +1170,12 @@ export class AgentStandIn {
     const listed = produces.find((p) => p.endsWith(`${stage}-questions.md`));
     const summaryStage = sourceStage(stage)?.summaryConfirmation === true;
     const questions = listed ?? (summaryStage && produces[0] ? `${dirname(produces[0])}/${stage}-questions.md` : undefined);
+    if (d.questions_only === true) {
+      // A Unit's questions before the stage's wave builds it: asked here; the
+      // wave writes its documents.
+      if (questions) this.askQuestions(d, questions);
+      return;
+    }
     const work = () => {
       if (stage === "code-generation") this.writeCode(d);
       for (const p of produces) {
@@ -1254,15 +1275,19 @@ export class AgentStandIn {
       return;
     }
     if (cp.ready !== true) {
-      // The protocol's repair for stale review evidence is one recovery review
-      // at the next pass; anything else, or a second time, is the engine's.
+      // The protocol's repair for stale review evidence is one recovery review,
+      // at the pass the checkpoint's re-review names (else the next one);
+      // anything else, or a second time, is the engine's.
       const errors = (cp.errors as string[] | undefined) ?? [];
       const said = JSON.stringify({ error: `Construction checkpoint is not ready: ${errors.join(" ")}` });
       const stale = errors.filter((e) => /review evidence/.test(e)).map((e) => e.split(":")[0]);
       const repair = `${unit} ${errors.join(" ")}`;
       if (stale.length === 0 || this.repaired.has(repair)) this.refused(`the ${unit} checkpoint`, said);
       this.repaired.add(repair);
-      for (const reviewed of stale) this.reviewAgain(reviewed, unit);
+      const named = cp.rereview as { stage?: string; iteration?: number } | null | undefined;
+      for (const reviewed of stale) {
+        this.reviewAgain(reviewed, unit, false, named?.stage === reviewed ? named.iteration : undefined);
+      }
       return;
     }
     if (cp.verified !== true) {
@@ -1413,14 +1438,14 @@ export class AgentStandIn {
   }
 
   /**
-   * Another review pass after the last one: the repair a stale receipt asks
-   * for, or a second look the person asked for (`personAsked`, which the
-   * request says as the skill's row does).
+   * Another review pass after the last one, or at the pass the engine names:
+   * the repair a stale receipt asks for, or a second look the person asked for
+   * (`personAsked`, which the request says as the skill's row does).
    */
-  reviewAgain(stage: string, unit: string | null, personAsked = false): void {
+  reviewAgain(stage: string, unit: string | null, personAsked = false, iteration?: number): void {
     const last = this.reviews.get(`${stage} ${unit ?? ""}`);
     if (!last) this.fail(`${stage} needs a fresh review, but it was never reviewed`);
-    this.reviewPass(stage, unit, last.reviewer, last.iteration + 1, personAsked);
+    this.reviewPass(stage, unit, last.reviewer, iteration ?? last.iteration + 1, personAsked);
   }
 
   private reviewPass(stage: string, unit: string | null, reviewer: string, iteration: number, personAsked = false): void {
@@ -1450,15 +1475,33 @@ export class AgentStandIn {
     this.reviews.set(`${stage} ${unit ?? ""}`, { reviewer, iteration });
   }
 
+  /** Each correction the learnings step asked about, by stage: it is asked once. */
+  private readonly learned = new Set<string>();
+
+  /** The learnings step (stage-protocol-learnings.md): a question only about a correction the person made. */
   learnings(d: Directive): void {
     const stage = String(d.stage);
+    const correction = this.answers.correction?.(stage);
+    if (correction === undefined || this.learned.has(`${stage} ${correction}`)) return;
+    this.learned.add(`${stage} ${correction}`);
     const unit = typeof d.unit === "string" ? ["--unit", d.unit] : [];
-    this.must("learnings", "surface", "--slug", stage);
-    this.must("log", "decision", "--stage", stage, "--decision", "Anything to add for next time?",
-      "--options", "Nothing to add,Add a note", ...unit);
-    const words = this.answers.learnings(stage);
-    this.askPerson("learnings", stage, "Anything to add for next time?", ["Nothing to add", "Add a note"], words);
-    this.must("log", "answer", "--stage", stage, "--details", "Nothing to add", ...unit);
+    const surfaced = this.must("learnings", "surface", "--slug", stage, "--correction", correction);
+    const asked = (surfaced.questions as Array<{ question: string; options: string[] }> | undefined)?.[0];
+    if (asked === undefined) this.fail(`learnings surface printed no question for the correction "${correction}"`, d);
+    this.must("log", "decision", "--stage", stage, "--decision", asked.question,
+      "--options", `|${asked.options.join("|")}`, "--question-kind", "learnings-note", ...unit);
+    const choice = this.askPerson("learnings", stage, asked.question, asked.options, this.answers.learnings(stage));
+    this.must("log", "answer", "--stage", stage, "--details", choice, ...unit);
+    if (!choice.startsWith("Yes")) return;
+    const file = String(surfaced.selections_file);
+    this.host.write(file, `${JSON.stringify({
+      stage_slug: stage, space: surfaced.space, intent: surfaced.intent,
+      selections: [{
+        candidate_id: "c1", type: "learning", scope: choice === "Yes, for the team" ? "team" : "project",
+        heading: "Corrections", text: correction, source: "user_addition",
+      }],
+    })}\n`);
+    this.must("learnings", "persist", "--slug", stage, "--selections-json", file);
   }
 
   gate(d: Directive): void {
@@ -1627,8 +1670,21 @@ export class AgentStandIn {
       const named = scopes.find((c) => new RegExp(`\\b${c.scope}\\b`, "i").test(words));
       const command = named?.command ?? String(d.new_intent_command ?? "");
       const res = this.host.bash(command);
-      const out = parseJson(res.stdout) as Directive | null;
+      let out = parseJson(res.stdout) as Directive | null;
       if (!out) this.fail(`${command} printed no directive: ${clip(res.stdout + res.stderr)}`, d);
+      // A question that named no plan leaves it to the person: its separate-work
+      // answer reaches the plan step, the agent proposes the plan their words
+      // name, and they go ahead with it on the plan question.
+      const plans = /Plans: (.*)$/s.exec(String(out.kind === "print" ? out.message ?? "" : ""))?.[1]
+        .split(" / ").map((entry) => entry.split(" ")[0].replace(/:$/, "")) ?? [];
+      const plan = plans.find((name) => new RegExp(`\\b${name}\\b`, "i").test(words));
+      const propose = plan === undefined ? null : proposalFollowUp(out, plan);
+      if (propose !== null) {
+        const offer = this.next(...propose);
+        if (offer.ask_type !== "scope-confirm") this.fail(`the plan step for ${plan} asked no plan question`, offer);
+        this.askPerson("plan", "", String(offer.question ?? ""), ["Go ahead", "A different plan", "Tailor one"], "Go ahead");
+        out = this.follow(this.host.bash(String(offer.confirm_command)));
+      }
       this.pending = this.createFromPrint(out);
       return;
     }

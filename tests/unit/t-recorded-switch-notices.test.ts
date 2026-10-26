@@ -554,7 +554,7 @@ describe("turning a check back on from the chat: the agent is handed the command
     const line = (step.change_notices ?? []).find((notice) => notice.startsWith(OFF)) ?? "";
     expect(line, first.out).toEndWith(OFFER);
     expect(line).not.toContain("--clear-bypass");
-    expect(step.change_notices_note).toStartWith("Say each change_notices line to the person once, word for word");
+    expect(step.change_notices_note).toStartWith("Say each change_notices line to the person once, as written");
     expect(BACK_ON_RUN.exec(step.change_notices_note ?? "")?.[1]).toEndWith(BACK_ON);
 
     const second = runOrchestrateNext(ORCHESTRATE, proj, [], { cwd: proj, env: quietEnv() });

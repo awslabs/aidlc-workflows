@@ -548,7 +548,9 @@ describe("bounded guard-remedy liveness", () => {
       const directive = JSON.parse(String(run.stdout ?? "").trim()) as {
         kind?: string;
       };
-      expect(["print", "run-stage"]).toContain(directive.kind ?? "");
+      // The restart is made by that `next`, which returns the step (its rules
+      // first, where the harness delivers them in parts).
+      expect(["print", "run-stage", "load-steering"]).toContain(directive.kind ?? "");
     }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -1787,7 +1789,7 @@ describe("AttemptView projections and refusal streaks", () => {
       allEvents: rows,
       events: rows,
       floorIdx: 0,
-      sensorFixes: new Set(),
+      sensorFixes: new Map(),
       mergedBoltUnits: new Set(),
       openBoltUnits: new Set(["alpha"]),
     };
@@ -1819,7 +1821,7 @@ describe("AttemptView projections and refusal streaks", () => {
       allEvents: rows,
       events: rows,
       floorIdx: 0,
-      sensorFixes: new Set(),
+      sensorFixes: new Map(),
       mergedBoltUnits: new Set(),
       openBoltUnits: new Set(),
     };
@@ -1859,7 +1861,7 @@ describe("AttemptView projections and refusal streaks", () => {
         allEvents: all,
         events: all,
         floorIdx: 0,
-        sensorFixes: new Set(),
+        sensorFixes: new Map(),
         mergedBoltUnits: new Set(),
         openBoltUnits: new Set(),
       };
@@ -1919,7 +1921,7 @@ describe("AttemptView projections and refusal streaks", () => {
           allEvents: rows.slice(0, count),
           events: rows.slice(0, count),
           floorIdx: 0,
-          sensorFixes: new Set(),
+          sensorFixes: new Map(),
           mergedBoltUnits: new Set(),
           openBoltUnits: new Set(),
         };
@@ -2050,7 +2052,7 @@ describe("AttemptView projections and refusal streaks", () => {
       allEvents: rows,
       events: rows,
       floorIdx: 2,
-      sensorFixes: new Set(),
+      sensorFixes: new Map(),
       mergedBoltUnits: new Set(),
       openBoltUnits: new Set(),
     };
@@ -3465,21 +3467,47 @@ describe("unit-major resets name what they throw away", () => {
   test("every stage-wide reset still offered names what it throws away", () => {
     const reopen = 'throws away every unit\'s finished "functional-design" work';
     const dropAll = "throws away the work every unit has finished";
-    for (const [marker, op, cost] of [
-      ["-", "request-changes", reopen],
-      ["?", "request-changes", reopen],
-      ["R", "redo-jump", dropAll],
-      ["x", "restore-or-jump", dropAll],
+    // A refusal that names no Unit: Request Changes is stage-wide.
+    for (const [marker, op, cost, extra] of [
+      ["-", "request-changes", reopen, { unit: undefined }],
+      ["?", "request-changes", reopen, { unit: undefined }],
+      ["R", "redo-jump", dropAll, {}],
+      ["x", "restore-or-jump", dropAll, {}],
     ] as const) {
-      const refusal = unitRefusal(marker);
+      const refusal = unitRefusal(marker, extra);
       const remedy = refusal.remedies.find((candidate) => candidate.op === op);
       expect(remedy, `${marker} ${op}`).toBeDefined();
       expect(remedy?.action, `${marker} ${op}`).toContain(cost);
       expect(refusal.remedies.map((candidate) => candidate.op)).not.toContain("restart-stage");
     }
-    const unattended = unitRefusal("-", { humanAuthority: { freshTurn: false, unattended: true } });
+    const unattended = unitRefusal("-", { unit: undefined, humanAuthority: { freshTurn: false, unattended: true } });
     expect(unattended.remedies.find((remedy) => remedy.op === "request-changes")?.action)
       .toContain(reopen);
+  });
+
+  test("Request Changes about a named Unit sends back that Unit's step only", () => {
+    const change = "next --stage functional-design --unit beta --change";
+    for (const marker of ["-", "?"] as const) {
+      const remedy = unitRefusal(marker).remedies.find((candidate) => candidate.op === "request-changes");
+      expect(remedy?.action, marker).toContain(change);
+      expect(remedy?.action, marker).toContain("every other unit keeps its finished work");
+      expect(remedy?.action, marker).not.toContain("throws away");
+      expect(remedy?.label).toBe("Request Changes");
+      expect(remedy?.description, marker).not.toContain("throws away");
+      expect(remedy?.interaction).toBe("human-input");
+      expect(remedy?.command).toBeUndefined();
+      expect(remedy?.operation).toBeUndefined();
+    }
+    const unattended = unitRefusal("-", { humanAuthority: { freshTurn: false, unattended: true } });
+    expect(unattended.remedies.find((remedy) => remedy.op === "request-changes")?.action).toContain(change);
+    // The Unit in progress on this step keeps today's stage-wide choice: the
+    // reopen would route the step it is already on.
+    const onTheStep = unitRefusal("-", {
+      stateContent: `${state("-")}- **Active Unit**: beta\n- **Unit Stage**: functional-design\n- **Unit State**: in-progress\n`,
+    });
+    const today = onTheStep.remedies.find((remedy) => remedy.op === "request-changes");
+    expect(today?.action).not.toContain("--change");
+    expect(today?.action).toContain('throws away every unit\'s finished "functional-design" work');
   });
 
   test("stage-major, team, and stage-level refusals keep today's remedies", () => {

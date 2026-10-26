@@ -108,6 +108,9 @@ function runCoreHook(
       child.on("close", (code: number | null) =>
         resolve({ stdout: out, stderr: err, code: code ?? 0 })
       );
+      // A hook that exits before it reads its input breaks this pipe; its exit
+      // still answers through "close".
+      child.stdin.on("error", () => {});
       child.stdin.write(JSON.stringify(input));
       child.stdin.end();
     } catch {
@@ -554,12 +557,13 @@ export default async ({
     _cwd = directory,
   ) => runCoreHook(hookFile, input, directory, aidlcCommand, platform);
 
-  // The rebuild-stage-graph hook's only stdout on this harness is the
-  // engine-error relay: one {"systemMessage": <exact directive.message>} line.
-  // opencode has no hook-to-transcript channel, so the closest human surface is
-  // a TUI toast. It is transient, which is why the opencode conductor skill
-  // still prints the message verbatim as well. A headless `opencode run` has no
-  // TUI: the request may fail and that is fine.
+  // The rebuild-stage-graph hook writes one line, or none: the engine-error
+  // relay ({"systemMessage": <exact directive.message>}, with no note for the
+  // model here) or the setter's say-once note (handModelNote, below). opencode
+  // has no hook-to-transcript channel, so the closest human surface for the
+  // relay is a TUI toast. It is transient, which is why the opencode conductor
+  // skill still prints the message verbatim as well. A headless `opencode run`
+  // has no TUI: the request may fail and that is fine.
   async function showEngineErrorToast(stdout: string): Promise<void> {
     let message: string | null = null;
     try {
@@ -578,6 +582,23 @@ export default async ({
     } catch {
       /* no TUI attached (headless run) - the toast is best-effort */
     }
+  }
+
+  // A PostToolUse note for the model (`hookSpecificOutput.additionalContext`,
+  // the setter's say-once order with its lines) follows the result the model
+  // reads. The TUI draws a bash call from its metadata.output, so the person
+  // does not see it.
+  function handModelNote(stdout: string, output?: { output?: string }): void {
+    if (typeof output?.output !== "string") return;
+    let note: unknown;
+    try {
+      note = (JSON.parse(stdout) as { hookSpecificOutput?: { additionalContext?: unknown } })
+        .hookSpecificOutput?.additionalContext;
+    } catch {
+      return;
+    }
+    if (typeof note !== "string" || note === "") return;
+    output.output = `${output.output.trimEnd()}\n\n${note}`;
   }
 
   // Sessions whose session-start hook reached an active workflow.
@@ -1007,6 +1028,7 @@ export default async ({
         };
         const result = await runCore("aidlc-rebuild-stage-graph.ts", payload, directory);
         await showEngineErrorToast(result.stdout);
+        handModelNote(result.stdout, output);
         return;
       }
       if (tool === "todowrite") {

@@ -285,8 +285,19 @@ function unbind(projectDir: string): void {
   }
 }
 
-function turns(projectDir: string, intent: string): number {
-  return readAllAuditShards(projectDir, intent, "default").split("**Event**: HUMAN_TURN").length - 1;
+/** The turns in one record's audit, read from its files, not through the lib:
+ *  its readers resolve the calling process's chat, and once the startup hook
+ *  has mapped this process's ancestry to the chat, a read there binds an
+ *  unbound chat to the selection. */
+function turns(recordDir: string): number {
+  const audit = join(recordDir, "audit");
+  if (!existsSync(audit)) return 0;
+  return readdirSync(audit)
+    .filter((name) => name.endsWith(".md"))
+    .reduce(
+      (count, name) => count + readFileSync(join(audit, name), "utf-8").split("**Event**: HUMAN_TURN").length - 1,
+      0,
+    );
 }
 
 /** The rebind lines the fixture chat's next `next` carries. */
@@ -782,6 +793,21 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(shard).toContain("HUMAN_TURN");
   });
 
+  test("6b: a Task let through is on record as sent, before its completion closes it", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    seedAuditFile(proj);
+    clearLedger(proj);
+    const completed = () => readAuditShardEvents(proj).filter((row) => row.event === "SUBAGENT_COMPLETED").length;
+    const before = completed();
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseTask", proj)));
+    const sent = readAuditShardEvents(proj).filter((row) => row.event === "SUBAGENT_DISPATCHED");
+    expect(sent).toHaveLength(1);
+    const sentAgent = (PAYLOADS.preToolUseTask.tool_input as { subagent_type: string }).subagent_type;
+    expect(sent[0].block).toContain(`**Agent Type**: ${sentAgent}`);
+    expect(completed()).toBe(before);
+  });
+
   test("7: a delegated conversation cannot spawn a nested Task or overwrite the parent ledger", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
@@ -886,13 +912,11 @@ describe("t276 cursor adapter payload conversion", () => {
       if (name.endsWith(".binding.json")) rmSync(join(sessions, name));
     }
     setActiveIntentCursor(proj, b.dirName, "default");
-    const turns = (dir: string) =>
-      readAllAuditShards(proj, dir, "default").split("**Event**: HUMAN_TURN").length - 1;
-    const [onA, onB] = [turns(a.dirName), turns(b.dirName)];
+    const [onA, onB] = [turns(a.recordDir), turns(b.recordDir)];
     const sent = runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, { session_id: undefined }));
     expect(sent.stdout.trim()).toBe("");
-    expect(turns(a.dirName)).toBe(onA + 1);
-    expect(turns(b.dirName)).toBe(onB);
+    expect(turns(a.recordDir)).toBe(onA + 1);
+    expect(turns(b.recordDir)).toBe(onB);
     const session = (JSON.parse(payload("beforeSubmitPrompt", proj)) as { conversation_id: string }).conversation_id;
     const r = spawnSync("bun", [join(proj, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", proj], {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -916,15 +940,15 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
     unbind(proj);
     setActiveIntentCursor(proj, b.dirName, "default");
-    const [onA, onB] = [turns(proj, a.dirName), turns(proj, b.dirName)];
+    const [onA, onB] = [turns(a.recordDir), turns(b.recordDir)];
     const sent = runAdapter(
       proj,
       "mint",
       payload("beforeSubmitPrompt", proj, { session_id: undefined, prompt: `/aidlc intent ${b.dirName}` }),
     );
     expect(sent.stdout.trim()).toBe("");
-    expect(turns(proj, a.dirName)).toBe(onA + 1);
-    expect(turns(proj, b.dirName)).toBe(onB);
+    expect(turns(a.recordDir)).toBe(onA + 1);
+    expect(turns(b.recordDir)).toBe(onB);
     expect(rebindLines(proj)).toHaveLength(0);
   });
 

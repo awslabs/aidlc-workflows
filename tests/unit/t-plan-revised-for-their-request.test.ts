@@ -399,11 +399,11 @@ describe("one Unit's own change request and its reopen", () => {
     expect(handed.code, handed.stderr).toBe(0);
   });
 
-  // A jump back from Build and Test reopens this Unit's Code Generation. That is
-  // a fresh attempt, not a change to the built result, so its plan comes back
-  // for approval even under off. The person asked for no change, so the plan is
-  // asked about as it stands: never sent back for a revision nobody asked for,
-  // which an unchanged plan could never clear.
+  // A jump back from Build and Test, or a Redo, reopens this Unit's Code
+  // Generation. That is a fresh attempt, not a change to the built result, so
+  // its plan comes back for approval even under off. The person asked for no
+  // change, so the plan is asked about as it stands: never sent back for a
+  // revision nobody asked for, which an unchanged plan could never clear.
   // Neither a jump nor a Redo inherits approval from the previous attempt.
   test("a reopen or a Redo is a fresh attempt; a change request is not", () => {
     const row = (reopen?: string): string =>
@@ -418,12 +418,6 @@ describe("one Unit's own change request and its reopen", () => {
       const proj = unitProject("off", UNIT);
       approved(proj, UNIT);
       reopened(proj, UNIT, how);
-      if (how === "redo") {
-        const revise = next(proj);
-        expect(revise.kind, JSON.stringify(revise)).toBe("run-stage");
-        expect(revise.plan_approval?.status).toBe("revise");
-        writePlan(proj, "- [ ] Step 2: a different approach\n", UNIT);
-      }
       const asked = next(proj);
       expect(asked.kind, JSON.stringify(asked)).toBe("ask");
       expect(asked.ask_type).toBe("plan-approval");

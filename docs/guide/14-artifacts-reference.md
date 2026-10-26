@@ -132,8 +132,9 @@ aidlc/spaces/default/intents/261013-inventory-api/
 level up, in the space-level per-repo CodeKB —
 `aidlc/spaces/<space>/codekb/<repo>/` — one store per repo rather than a copy
 per intent. When the project folder is itself the repo, `<repo>` starts as the
-folder's name (the main checkout's name in a linked git worktree) and stays with
-the store: a moved, renamed or copied project folder keeps reading the same
+folder's name (the main checkout's name in a linked git worktree), with each
+character a repo name cannot hold made a hyphen (`portal app` is `portal-app`;
+the folder keeps its name), and stays with the store: a moved, renamed or copied project folder keeps reading the same
 store. The exception is a space holding two or more stores that no intent
 records as its repo: there the current folder name is used, and the next step
 can warn that completed stage results have drifted. On each applicable
@@ -168,10 +169,11 @@ under an optional `aidlc-shared/` and per-agent subdirectories. See
 also keeps a committed `memory.md` alongside its artifacts (e.g.
 `<record>/inception/requirements-analysis/memory.md`). It is the
 stage's observation diary — created by the engine from a template when it emits
-the run-stage directive, maintained by the orchestrator during the stage, and
-read by the §13 Learnings Ritual at the approval gate. It is never hand-edited.
-See [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) for how the
-diary feeds the learning loop.
+the run-stage directive and maintained by the orchestrator during the stage, as
+the stage's record of the agent's reasoning; nothing in it is offered to you as
+something to keep. It is never hand-edited. See
+[Rules and the Learning Loop](09-rules-and-the-learning-loop.md) for the
+learning loop, which keeps the corrections you make.
 
 **Code lives in sibling repos, not the record dir.** The `aidlc/` tree holds only
 method, state, audit, and artifacts — never application code. Generated code lands

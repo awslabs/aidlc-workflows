@@ -15,9 +15,14 @@
 // asked with Request Changes alone too. The verification command question, and a
 // Construction policy question a record carries, are answered in any chat
 // the same way, and the step for prose names the flags their answer is
-// recorded with. A bare `/aidlc` in a
-// new chat shows again, as it was asked, a question with no step of its own
-// that asks it again; the others come back through their own step.
+// recorded with and the setters an Approve runs: a yes to building the Units
+// in parallel while they are built one at a time names the stage-by-stage
+// setter first, each with the person's message, and the two apply. A bare
+// `/aidlc` in a new chat shows again, as it was asked, the question the stage
+// has open: one asked in chat, the verification command with the command it
+// asks about, a Construction policy question, and the summary confirmation
+// from its questions file. A Unit checkpoint's approval and a question the
+// questions file still holds come back through their own step.
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -25,7 +30,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
@@ -34,7 +39,7 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { recordProtectedHumanResponse } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
-  artifactFilename, auditBlockField, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
+  artifactFilename, auditBlockField, findStageBySlug, getField, latestMainWorkflowStageRunFloorForProject,
   mintProtectedQuestion, protectedTargetDigest, readAuditShardEvents, readProtectedQuestion, readProtectedResponse,
   requireProtectedResponse, reviewArtifactFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -95,8 +100,8 @@ ${stages.map((stage) => `- [${stage === "functional-design" ? "-" : " "}] ${stag
   return p;
 }
 
-// Alpha built and its verification command recorded.
-function fixture() {
+// Alpha built, with no verification command yet.
+function built() {
   const p = construction();
   for (const slug of stages) {
     const stage = findStageBySlug(slug)!;
@@ -116,8 +121,26 @@ function fixture() {
       "Artifact Fingerprint": fingerprint!,
     }, p);
   }
+  return p;
+}
+
+// Alpha built and its verification command recorded.
+function fixture() {
+  const p = built();
   recordCommand(p);
   expect(checkpoint(p, ["--action", "verify"]).status).toBe(0);
+  return p;
+}
+
+// The same work back in Inception, at `stage`, started.
+function inception(stage: string) {
+  const p = construction();
+  writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
+    .replace(`- [-] functional-design ${SEPARATOR}`, `- [ ] functional-design ${SEPARATOR}`)
+    .replace("### CONSTRUCTION PHASE", `### INCEPTION PHASE\n- [-] ${stage} ${SEPARATOR} EXECUTE\n### CONSTRUCTION PHASE`)
+    .replace("- **Current Stage**: functional-design", `- **Current Stage**: ${stage}`)
+    .replace("- **Lifecycle Phase**: CONSTRUCTION", "- **Lifecycle Phase**: INCEPTION"));
+  appendAuditEntry("STAGE_STARTED", { Stage: stage }, p);
   return p;
 }
 
@@ -436,20 +459,41 @@ describe("t-checkpoint-answer-any-chat: the step for prose at a verification com
     const print = next(p, ["approve"]);
     expect(print.kind, JSON.stringify(print)).toBe("print");
     expect(print.message).toContain("answer --stage functional-design --checkpoint construction-policy --field 'Construction Execution' --value swarm --details");
-    expect(print.message).toContain("set-construction-execution swarm`");
+    // Built one Unit at a time here, and parallel needs stage by stage first:
+    // an Approve runs both setters, in that order, each with their message.
+    expect(namedSetters(print.message)).toEqual([
+      "set-construction-iteration stage-major --message <id>", "set-construction-execution swarm --message <id>",
+    ]);
+  });
+
+  test("names the one setter, with the person's message, when Construction already goes stage by stage", () => {
+    const p = askedInOldChat("Construction policy");
+    writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8").replace(
+      "- **Construction Iteration**: unit-major", "- **Construction Iteration**: stage-major"));
+    const print = next(p, ["approve"]);
+    expect(print.kind, JSON.stringify(print)).toBe("print");
+    expect(namedSetters(print.message)).toEqual(["set-construction-execution swarm --message <id>"]);
   });
 });
 
-// The person types a bare `/aidlc` in `session`, and the agent runs `next` there.
-function bare(p: string, session: string) {
+// The state setters a step names, in the order it names them.
+function namedSetters(message: string | undefined): string[] {
+  return [...(message ?? "").matchAll(/`[^`]*aidlc-state\.ts (set-[^`]*)`/g)].map((match) => match[1]);
+}
+
+// The person types a bare `/aidlc` in `session`, the host may write rows of
+// its own after it (`after`), and the agent runs `next` there.
+function bare(p: string, session: string, after: () => void = () => {}) {
   person(p, "/aidlc", session);
+  after();
   const env: Record<string, string | undefined> = {
     ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p, AIDLC_SESSION_OVERRIDE: session, AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
   };
   const result = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, [], { env });
   expect(result.directive, result.out).not.toBeNull();
   return result.directive as {
-    kind: string; stage?: string; message?: string; narration?: string; construction_checkpoint?: { unit: string };
+    kind: string; stage?: string; message?: string; narration?: string; change_notices?: string[];
+    construction_checkpoint?: { unit: string };
   };
 }
 
@@ -482,7 +526,7 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
     expect(shown.message).toContain('"core", "main"');
     expect(shown.message).toContain("end your turn");
     expect(shown.message).toContain("answer --stage functional-design --details");
-    expect(shown.narration).toContain("Picking up where we left off");
+    expect(String(shown.change_notices)).toContain("Picking up where we left off");
   });
 
   // Under "Continue automatically" the person who is there still answers the
@@ -514,6 +558,109 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
     expect(recorded.status, recorded.out).toBe(0);
   });
 
+  // Copilot CLI runs its session-start hook beside the prompt hook in no fixed
+  // order, so the chat's own session rows can land after the person's line.
+  const HOST_ROWS: Array<[string, Array<[string, Record<string, string>]>]> = [
+    ["a new chat's SESSION_ENDED for the last chat and its SESSION_STARTED", [
+      ["SESSION_ENDED", { Session: OLD }], ["SESSION_STARTED", { Source: "startup", Session: NEW }],
+    ]],
+    ["SESSION_RESUMED and SESSION_COMPACTED", [
+      ["SESSION_RESUMED", { Source: "resume", Session: NEW }], ["SESSION_COMPACTED", { Session: NEW }],
+    ]],
+  ];
+  for (const [what, rows] of HOST_ROWS) {
+    test(`the open question still comes back when the host writes ${what} after the line`, () => {
+      const p = askedInOldChat("Construction policy");
+      const shown = bare(p, NEW, () => {
+        for (const [event, fields] of rows) appendAuditEntry(event, fields, p);
+      });
+      expect(shown.kind, JSON.stringify(shown)).toBe("print");
+      expect(shown.message).toContain('"Build the Units in parallel?"');
+    });
+  }
+
+  test("a row the agent wrote after the line still means the line was acted on", () => {
+    const p = askedInOldChat("Construction policy");
+    const resumed = bare(p, NEW, () => appendAuditEntry("ARTIFACT_UPDATED", {
+      Tool: "Write", File: `${p}/notes.md`, Context: "notes.md",
+    }, p));
+    expect(resumed.kind, JSON.stringify(resumed)).toBe("run-stage");
+  });
+
+  // Each chat reads only its own line (takePersonsOwnLine reads the invoking
+  // chat's latest message, and turnIsLatestRow matches that message's turn).
+  test("another chat opened after the line never reads that line as its own", () => {
+    const p = askedInOldChat("Construction policy");
+    const other = "t-any-chat-other";
+    person(p, "/aidlc", NEW);
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: other }, p);
+    const nextIn = (session: string) => runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, [], {
+      env: { ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p, AIDLC_SESSION_OVERRIDE: session, AIDLC_SESSION_OVERRIDE_SOURCE: undefined },
+    }).directive as { kind: string };
+    const there = nextIn(other);
+    expect(there.kind, JSON.stringify(there)).toBe("run-stage");
+    // The chat that typed it still reads it, past the other chat's session row.
+    const here = nextIn(NEW);
+    expect(here.kind, JSON.stringify(here)).toBe("print");
+  });
+
+  test("a yes to building the Units in parallel, shown again while they are built one at a time, applies both setters it names", () => {
+    const p = askedInOldChat("Construction policy");
+    const shown = bare(p, NEW);
+    expect(shown.kind, JSON.stringify(shown)).toBe("print");
+    const setters = namedSetters(shown.message);
+    expect(setters).toEqual([
+      "set-construction-iteration stage-major --message <id>", "set-construction-execution swarm --message <id>",
+    ]);
+    person(p, "that's right", NEW);
+    const id = auditBlockField(readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN").at(-1)!.block, "Message Id");
+    expect(id).not.toBeNull();
+    const recorded = answer(p, "Construction policy", NEW);
+    expect(recorded.status, recorded.out).toBe(0);
+    for (const setter of setters) {
+      const ran = tool(p, "state", setter.replace("<id>", id!).split(" "));
+      expect(ran.status, ran.out).toBe(0);
+    }
+    const state = readFileSync(seededStateFile(p), "utf-8");
+    expect(getField(state, "Construction Iteration")).toBe("stage-major");
+    expect(getField(state, "Construction Execution")).toBe("swarm");
+    const set = readAuditShardEvents(p).filter((row) => row.event === "CONSTRUCTION_POLICY_SET");
+    expect(set.map((row) => auditBlockField(row.block, "Field"))).toEqual(["Construction Iteration", "Construction Execution"]);
+    expect(auditBlockField(set[0].block, "Message Id")).toBe(id);
+  });
+
+  // A question that takes the person's own reply is held for it under
+  // aidlc/.aidlc-sessions/, which is not committed: a teammate's fresh clone
+  // holds none, so the question shown again is registered there first.
+  for (const which of Object.keys(PROTECTED) as (keyof typeof PROTECTED)[]) {
+    test(`in a fresh clone the ${which} question shown again is registered first, so one pick records it`, () => {
+      const p = askedInOldChat(which);
+      writeFileSync(join(seededRecordDir(p), "verification-command.txt"), "npm test", "utf-8");
+      renameSync(join(p, "aidlc", ".aidlc-sessions"), join(p, "aidlc", ".aidlc-sessions-of-the-first-clone"));
+      const shown = bare(p, NEW);
+      expect(shown.kind, JSON.stringify(shown)).toBe("print");
+      const flags = which === "verification command"
+        ? "--checkpoint verification-command --command-file verification-command.txt"
+        : "--checkpoint construction-policy --field 'Construction Execution' --value swarm";
+      expect(shown.message).toContain(`decision --stage functional-design ${flags} --decision`);
+      const asked = PROTECTED[which].asked;
+      const registered = tool(p, "log", ["decision", "--stage", "functional-design",
+        ...(which === "verification command"
+          ? ["--checkpoint", "verification-command", "--command-file", "verification-command.txt"]
+          : ["--checkpoint", "construction-policy", "--field", "Construction Execution", "--value", "swarm"]),
+        "--decision", asked[asked.indexOf("--decision") + 1], "--options", "Approve,Request Changes", "--session", NEW]);
+      expect(registered.status, registered.out).toBe(0);
+      person(p, "approve", NEW);
+      const recorded = answer(p, which, NEW);
+      expect(recorded.status, recorded.out).toBe(0);
+    });
+  }
+
+  test("on the machine that asked it, the question shown again is not registered again", () => {
+    const shown = bare(askedInOldChat("verification command"), NEW);
+    expect(shown.message).not.toContain(" decision --stage ");
+  });
+
   test("a question its stage's questions file still holds is asked again by the stage's own step, from the file", () => {
     // A guided batch: logged as its question numbers and every option shown, its questions in the file.
     const p = construction();
@@ -532,10 +679,127 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
     expect(JSON.stringify(resumed.kept_replies?.replies ?? [])).toContain("Q1: B, Q2: D");
   });
 
-  test("a verification command question is asked again by its own step, not shown from its row", () => {
+  // The stage's own step never names it: at Functional Design the step is
+  // the design itself, so a new chat went on past the question.
+  test("a verification command question comes back with the command it asks about, answered by its own flags", () => {
     const p = askedInOldChat("verification command");
-    const resumed = bare(p, NEW);
-    expect(resumed.kind, JSON.stringify(resumed)).toBe("run-stage");
+    const shown = bare(p, NEW);
+    expect(shown.kind, JSON.stringify(shown)).toBe("print");
+    expect(shown.message).toContain('"Use this command to verify each completed Unit?"');
+    expect(shown.message).toContain('followed by the command it asks about, "npm test", in a code span');
+    expect(shown.message).toContain("end your turn");
+    expect(shown.message).toContain("answer --stage functional-design --checkpoint verification-command --command-file verification-command.txt --details");
+    expect(shown.message).toContain("set-construction-verification-command --command-file verification-command.txt`");
+    picked(p, NEW, "Use this command to verify each completed Unit? `npm test`", ["Approve", "Request Changes"], "Approve");
+    expect(readProtectedResponse(p, NEW)?.choice).toBe("Approve");
+    const recorded = answer(p, "verification command", NEW);
+    expect(recorded.status, recorded.out).toBe(0);
+  });
+
+  test("a verification command question Delivery Planning asked comes back the same way", () => {
+    const p = inception("delivery-planning");
+    const asked = tool(p, "log", ["decision", "--stage", "delivery-planning", ...PROTECTED["verification command"].asked,
+      "--session", OLD, "--options", "Approve,Request Changes"]);
+    expect(asked.status, asked.out).toBe(0);
+    const shown = bare(p, NEW);
+    expect(shown.kind, JSON.stringify(shown)).toBe("print");
+    expect(shown.message).toContain('"Use this command to verify each completed Unit?"');
+    expect(shown.message).toContain("answer --stage delivery-planning --checkpoint verification-command");
+  });
+
+  // Its checkpoint step asks for a command and never names the one asked, so
+  // the question comes back from its row here too; once it is approved the
+  // checkpoint step runs the check.
+  test("a verification command question a Unit checkpoint asked comes back, and once approved the checkpoint can verify", () => {
+    const p = built();
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "npm test"];
+    const asked = tool(p, "log", ["decision", ...identity, "--session", OLD,
+      "--decision", "Use this command to verify each completed Unit?", "--options", "Approve,Request Changes"]);
+    expect(asked.status, asked.out).toBe(0);
+    const shown = bare(p, NEW);
+    expect(shown.kind, JSON.stringify(shown)).toBe("print");
+    expect(shown.message).toContain('followed by the command it asks about, "npm test", in a code span');
+    expect(shown.message).toContain("answer --stage code-generation --checkpoint verification-command");
+    picked(p, NEW, "Use this command to verify each completed Unit? `npm test`", ["Approve", "Request Changes"], "Approve");
+    const recorded = tool(p, "log", ["answer", ...identity, "--session", NEW, "--details", "Approve"]);
+    expect(recorded.status, recorded.out).toBe(0);
+    const set = tool(p, "state", ["set-construction-verification-command", "npm test"]);
+    expect(set.status, set.out).toBe(0);
+    const step = next(p) as { construction_checkpoint?: { unit: string; command_authorized: boolean } };
+    expect(step.construction_checkpoint?.unit, JSON.stringify(step)).toBe("alpha");
+    expect(step.construction_checkpoint?.command_authorized).toBe(true);
+  });
+
+  // The question is not in the questions file, so a blank answer there is
+  // not it: the stage's own step would not ask it.
+  test("a Construction policy question comes back while the stage's questions file still has a blank answer", () => {
+    const p = askedInOldChat("Construction policy");
+    const dir = join(seededRecordDir(p), "construction", "alpha", "functional-design");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "functional-design-questions.md"), "# Questions\n\n## Q1\n\nWhich store?\n\nA. Files\nB. A database\n\n[Answer]: \n");
+    const shown = bare(p, NEW);
+    expect(shown.kind, JSON.stringify(shown)).toBe("print");
+    expect(shown.message).toContain('"Build the Units in parallel?"');
+  });
+
+  // The person answered the stage's questions and was shown the summary of
+  // them. A new chat's stage step only named the file, and an agent wrote new
+  // questions over it; the summary now comes back as it was asked.
+  // The summary asked in the old chat, with the question's answers in the file.
+  function openSummary(unit: string | null) {
+    const p = unit ? construction() : inception("requirements-analysis");
+    if (unit) appendAuditEntry("STAGE_STARTED", { Stage: "functional-design" }, p);
+    const stage = unit ? "functional-design" : "requirements-analysis";
+    const dir = unit ? join(seededRecordDir(p), "construction", unit, stage) : join(seededRecordDir(p), "inception", stage);
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `${stage}-questions.md`);
+    writeFileSync(file, [
+      "# Questions", "", "## Q1", "Which bug?", "", "A) Done items come back", "X) Other (please specify)", "",
+      "[Answer]: A", "", "## Consolidated Summary Confirmation", "", "- Done items come back after a reload.", "",
+      "- Looks correct", "- Request changes", "", "[Answer]:", "",
+    ].join("\n"));
+    const relative = file.slice(p.length + 1).replaceAll("\\", "/");
+    const identity = ["--checkpoint", "summary-confirmation", "--stage", stage, ...(unit ? ["--unit", unit] : []), "--questions-file", relative];
+    const asked = tool(p, "log", ["decision", ...identity, "--session", OLD,
+      "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes"]);
+    expect(asked.status, asked.out).toBe(0);
+    // The agent writes the choice on the summary's tag, as the shown step says, before recording it.
+    const tag = (choice: string) => writeFileSync(file, readFileSync(file, "utf-8").replace(/\[Answer\]:\n$/, `[Answer]: ${choice}\n`));
+    return { p, stage, relative, identity, tag };
+  }
+
+  for (const unit of [null, "alpha"] as const) {
+    test(`a summary confirmation open ${unit ? "for a Unit " : "at a stage "}comes back from its questions file, answered by its own flags`, () => {
+      const { p, stage, relative, identity, tag } = openSummary(unit);
+      const shown = bare(p, NEW);
+      expect(shown.kind, JSON.stringify(shown)).toBe("print");
+      expect(shown.message).toContain('"Does this all look correct?"');
+      expect(shown.message).toContain('"Looks correct", "Request changes"');
+      expect(shown.message).toContain(relative);
+      expect(shown.message).toContain("end your turn");
+      expect(shown.message).toContain(`answer --checkpoint summary-confirmation --stage ${stage}${unit ? ` --unit ${unit}` : ""} --questions-file ${relative} --details`);
+      person(p, "yes", NEW);
+      tag("Looks correct");
+      const recorded = tool(p, "log", ["answer", ...identity, "--session", NEW, "--details", "Looks correct"]);
+      expect(recorded.status, recorded.out).toBe(0);
+      expect(readAuditShardEvents(p).some((row) => row.event === "SUMMARY_CONFIRMATION_RECORDED")).toBe(true);
+    });
+  }
+
+  // What they asked to change rides with the choice, so they are not asked
+  // "What should change?" for words they already said.
+  test("a Request changes reply to the summary shown again is recorded with what they asked to change", () => {
+    const { p, identity, tag } = openSummary(null);
+    const shown = bare(p, NEW);
+    expect(shown.message).toContain("Request changes: what they asked to change");
+    const said = "Request changes: blank titles include whitespace-only ones";
+    person(p, said, NEW);
+    tag("Request changes");
+    const recorded = tool(p, "log", ["answer", ...identity, "--session", NEW, "--details", said]);
+    expect(recorded.status, recorded.out).toBe(0);
+    expect(recorded.stdout).not.toContain("What should change?");
+    const receipt = readAuditShardEvents(p).filter((row) => row.event === "SUMMARY_CONFIRMATION_RECORDED").at(-1);
+    expect(auditBlockField(receipt!.block, "Feedback")).toBe("blank titles include whitespace-only ones");
   });
 
   test("a Unit checkpoint question is asked again by its checkpoint step", () => {

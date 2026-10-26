@@ -42,7 +42,7 @@ const STEPS = [
   "never record it as their answer or reply to it as if they wrote it",
   "For a problem, follow the `error` row.",
   // A question shown before it was recorded is recorded, never asked again.
-  '`{{INVOKE}} engine log decision --stage <stage> --decision "<the question>" --options "<the choices>"`',
+  "`{{INVOKE}} engine log decision --stage <stage> --decision '<the question>' --options '<the choices>'`",
   'adding `--unit "<directive.unit>"` in team-owned Unit work',
   "`--single`, `--checkpoint` or `--questions-file`",
   "end your turn without asking it again",

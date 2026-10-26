@@ -26,7 +26,10 @@
 //     ticks; a resume never clears ticks;
 //   - an approved plan edited before the build (the fence lowered): the build
 //     that started on the edited plan picks up where it got to;
-//   - a swarm batch keeps its own continuation rule: no progress section.
+//   - a swarm batch keeps its own continuation rule: no progress section;
+//   - a revision picked up later, in any chat, is handed the person's answer to
+//     "What should change?" beside the bare Request Changes the rejection
+//     recorded.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -60,6 +63,8 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { publishPlanApprovalAsk, routeCodeGenerationPlanApproval } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import {
+  auditBlockField,
+  readAuditShardEvents,
   stateDigest,
   workspaceSourceListing,
   writeActiveDirectiveMarker,
@@ -193,10 +198,10 @@ function next(proj: string): Emitted {
   return result.directive as unknown as Emitted;
 }
 
-function reply(proj: string, prompt: string): string {
+function reply(proj: string, prompt: string, session = SESSION): string {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj,
-    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
     env: env(proj),
     encoding: "utf-8",
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -490,6 +495,53 @@ function freshRunThenResume(proj: string): void {
 }
 
 describe("a fresh start for the steps", () => {
+  // Live on Claude Code: the person picked Request Changes, the rejection was
+  // recorded with that pick, and their answer to "What should change?" came
+  // after it; a new chat then revised from the bare pick.
+  test("a revision picked up later gets what the person said after Request Changes", () => {
+    const proj = project();
+    interrupted(proj, 1, 2, 3, 4);
+    reply(proj, "Request Changes");
+    const pick = auditBlockField(readAuditShardEvents(proj).findLast((row) => row.event === "HUMAN_TURN")!.block, "Message Id");
+    expect(pick).not.toBeNull();
+    // What `report --result rejected` writes for that pick.
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "code-generation", Unit: UNIT, "User Input": "Request Changes", Feedback: "Request Changes",
+      "Message Id": pick!,
+    }, proj);
+    reply(proj, "log every part");
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "Request Changes\nlog every part" });
+    // A new chat after the terminal closed: its own words stay its own.
+    reply(proj, "where were we?", "01995000-7a11-7000-8000-00000000beef");
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "Request Changes\nlog every part" });
+  });
+
+  // The store drops a day-old message once a decision has used it, as the
+  // rejection used the pick; their answer after it is kept.
+  test("a revision picked up the next day still gets their answer, after the pick's own record is gone", () => {
+    const proj = project();
+    interrupted(proj, 1, 2, 3, 4);
+    reply(proj, "Request Changes");
+    const pick = auditBlockField(readAuditShardEvents(proj).findLast((row) => row.event === "HUMAN_TURN")!.block, "Message Id");
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "code-generation", Unit: UNIT, "User Input": "Request Changes", Feedback: "Request Changes",
+      "Message Id": pick!,
+    }, proj);
+    reply(proj, "log every part");
+    rmSync(join(proj, "aidlc", ".aidlc-sessions", "messages", `${pick}.json`));
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "Request Changes\nlog every part" });
+  });
+
+  test("a rejection that names no message of theirs is revised from its own feedback alone", () => {
+    const proj = project();
+    interrupted(proj, 1, 2, 3, 4);
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "code-generation", Unit: UNIT, "User Input": "Request Changes", Feedback: "log every part",
+    }, proj);
+    reply(proj, "and keep it short");
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "log every part" });
+  });
+
   test("Request Changes at the completion gate: the revised, re-approved plan starts fresh", () => {
     const proj = project();
     interrupted(proj, 1, 2, 3, 4);

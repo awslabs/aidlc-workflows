@@ -97,10 +97,14 @@ function guarded(
   host: NodeJS.ProcessEnv = {},
 ): { rc: number; out: string } {
   const env = { ...process.env };
-  // The host the agent's shell is in is the case's own, never the runner's.
+  // The host the agent's shell is in is the case's own, never the runner's,
+  // and so is the chat it names.
   delete env.VSCODE_IPC_HOOK;
   delete env.VSCODE_PID;
   delete env.TERM_PROGRAM;
+  for (const hostChat of ["CLAUDE_PID", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "KIRO_SESSION_ID"]) {
+    delete env[hostChat];
+  }
   Object.assign(env, host);
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
@@ -603,6 +607,84 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(kiro.rc, kiro.out).toBe(0);
     expect(kiro.out).toContain("this host can miss one");
     expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+  });
+
+  // Live on Claude Code with the hooks switched off in a new chat after the
+  // person chose "Continue automatically" in an earlier one: their "let's stop
+  // here for today" was refused in the engine's words and the build went on.
+  // A chat none of whose messages reached the record could not have had its
+  // stop recorded, so the stop is theirs with the note, and their choice stays.
+  // A chat the hooks did record keeps the guard, and so does a chat the engine
+  // cannot name (Cursor, opencode or Copilot with every hook off).
+  describe("a stop in a chat whose messages never reached the record", () => {
+    const CHAT = "01995000-7a11-7000-8000-00000000e877";
+    const GRANT_CHAT = "01995000-7a11-7000-8000-00000000e878";
+    const NO_HOST_CHAT = { CLAUDE_PID: "", CLAUDE_CODE_SESSION_ID: "", CODEX_THREAD_ID: "", KIRO_SESSION_ID: "" };
+    const claudeChat = { ...NO_HOST_CHAT, CLAUDE_PID: String(process.pid), CLAUDE_CODE_SESSION_ID: CHAT };
+    const codexChat = { ...NO_HOST_CHAT, CODEX_THREAD_ID: CHAT };
+    const CODEX_STATE = join(REPO_ROOT, "dist", "codex", ".codex", "tools", "aidlc-state.ts");
+
+    // "Continue automatically", granted with the message of `session` (none: a
+    // row from before rows named their chat).
+    function grantedFrom(session: string | null): string {
+      const sf = seededStateFile(proj);
+      writeFileSync(sf, readFileSync(sf, "utf-8").replace(
+        "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
+      ), "utf-8");
+      appendAuditEntry("HUMAN_TURN", session === null ? {} : { Session: session }, proj);
+      appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, proj);
+      return sf;
+    }
+
+    test.each([
+      ["Claude Code", STATE, claudeChat],
+      ["Codex", CODEX_STATE, codexChat],
+    ])("on %s the stop parks as theirs and Continue automatically stays", (_host, tool, host) => {
+      const sf = grantedFrom(GRANT_CHAT);
+      const park = guarded(proj, ["park", "--person-asked"], false, tool, host);
+      expect(park.rc, park.out).toBe(0);
+      expect(park.out).toContain("none of this chat's messages reached the record");
+      expect(park.out).not.toContain("this host can miss one");
+      const state = readFileSync(sf, "utf-8");
+      expect(state).toContain("- **Parked By**: person");
+      expect(state).toContain("- **Construction Autonomy Mode**: autonomous");
+    });
+
+    // Cursor's chat whose prompt hook never runs while its session-start hook
+    // does: the engine names the chat from the session-start hook's own map.
+    test("a chat named by the session-start hook's map parks as theirs too", () => {
+      const sf = grantedFrom(GRANT_CHAT);
+      writeSessionPidEntry(proj, process.pid, CHAT);
+      const park = guarded(proj, ["park", "--person-asked"], false, STATE, NO_HOST_CHAT);
+      expect(park.rc, park.out).toBe(0);
+      expect(park.out).toContain("none of this chat's messages reached the record");
+      expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+    });
+
+    test("the engine's park returns the paused step", () => {
+      const sf = grantedFrom(GRANT_CHAT);
+      const env: NodeJS.ProcessEnv = { ...process.env, ...claudeChat, AIDLC_SKIP_ARTIFACT_GUARD: "1" };
+      delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+      delete env.AIDLC_UNATTENDED;
+      const r = spawnSync(BUN, [ORCHESTRATE, "park", "--person-asked", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env,
+      });
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+      expect(JSON.parse(r.stdout).kind, r.stdout).toBe("parked");
+      expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+    });
+
+    test.each([
+      ["the grant came from this chat", CHAT, claudeChat],
+      ["a row names no chat", null, claudeChat],
+      ["the engine cannot name the chat", GRANT_CHAT, NO_HOST_CHAT],
+    ])("the guard holds when %s", (_case, session, host) => {
+      const sf = grantedFrom(session);
+      const park = guarded(proj, ["park", "--person-asked"], false, STATE, host);
+      expect(park.rc).not.toBe(0);
+      expect(park.out).toContain("no reply from the person is on record");
+      expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+    });
   });
 
   // An unattended run never parks itself, whatever the ledger holds, and an
@@ -2148,9 +2230,11 @@ describe("t188: a late-logged question takes the reply that answered it", () => 
   // beside it; the same move at the next stage was refused, so the outcome hung
   // on whether an earlier answer had already used the turn. Which question a
   // reply answers is the agent's reading: any reply no decision has used yet
-  // backs an answer, the same way every time, and the row names it.
+  // backs an answer, the same way every time. The row names it, except for a
+  // question logged after another answer already named it: that link is the
+  // agent's to make (--message), never the engine's guess.
   describe("an answer takes any reply no decision has used yet, logged before or after it", () => {
-    test("a plain answer on a reply older than its question records on it, at the next question too", () => {
+    test("a plain answer on a reply older than its question records on it, and the next question records too", () => {
       const slug = field(proj, "Current Stage");
       const id = reply("done. Moving forward - don't ask me any questions.", CHAT, 30);
       expect(log(["decision", "--stage", slug, "--decision", "Anything to add for next time?"], inChat).rc).toBe(0);
@@ -2159,7 +2243,7 @@ describe("t188: a late-logged question takes the reply that answered it", () => 
       expect(log(["decision", "--stage", slug, "--decision", "And for the next stage?"], inChat).rc).toBe(0);
       const again = log(["answer", "--stage", slug, "--details", "Nothing to add"], inChat);
       expect(again.rc, again.out).toBe(0);
-      expect(rows("QUESTION_ANSWERED").map((row) => fieldOf(row, "Message Id"))).toEqual([id, id]);
+      expect(rows("QUESTION_ANSWERED").map((row) => fieldOf(row, "Message Id"))).toEqual([id, null]);
     });
 
     test("a reply after the question records as before", () => {
@@ -2406,27 +2490,42 @@ describe("t188: what the person's message asks for outlives the approval given i
     expect(autonomyMode()).toBe("gated");
   });
 
-  test("approve, and turn plan approval off: both halves of the one message are carried out", () => {
+  // A setting is the exception (Arden's rule for every setting): a message that
+  // already gave an approval does not also stand for one, so the setting goes
+  // first, then the approval, which the message still backs.
+  test("approve, and turn plan approval off: the setting first, then the approval, both carried out", () => {
+    const slug = openGate();
+    const id = recordTypedReply(proj, "approve, and turn plan approval off");
+    tick();
+    const off = setter(["config-change", "--plan-approval", "off", "--message", id]);
+    expect(off.rc, off.out).toBe(0);
+    expect(off.out).toContain("Each code plan is now built without asking you first.");
+    const approved = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(approved.rc, approved.out).toBe(0);
+    expect(planApproval()).toBe("off");
+  });
+
+  test("approve, and turn plan approval off: the approval first, then the setter on that message, is refused", () => {
     const slug = openGate();
     const id = recordTypedReply(proj, "approve, and turn plan approval off");
     tick();
     const approved = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
     expect(approved.rc, approved.out).toBe(0);
     const off = setter(["config-change", "--plan-approval", "off", "--message", id]);
-    expect(off.rc, off.out).toBe(0);
-    expect(off.out).toContain("Each code plan is now built without asking you first.");
-    expect(planApproval()).toBe("off");
+    expect(off.rc).not.toBe(0);
+    expect(off.out).not.toContain(id);
+    expect(planApproval()).not.toBe("off");
   });
 
-  test("approve the plan, and turn plan approval off: one plan answer for several Units counts once", () => {
+  test("approve the plan, and turn plan approval off: after the plan answers for several Units, the setter is refused", () => {
     const id = recordTypedReply(proj, "approve the plans, and turn plan approval off");
     tick();
     for (const unit of ["core", "extra"]) {
       appendAuditEntry("PLAN_APPROVAL_RECORDED", { Stage: "code-generation", Details: "Approve Plan", "Asked By": "engine", Unit: unit }, proj);
     }
     const off = setter(["config-change", "--plan-approval", "off", "--message", id]);
-    expect(off.rc, off.out).toBe(0);
-    expect(planApproval()).toBe("off");
+    expect(off.rc).not.toBe(0);
+    expect(planApproval()).not.toBe("off");
   });
 
   test("the message that answered a question still asks for the switch: the answer recorded from it is not a second decision", () => {

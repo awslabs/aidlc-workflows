@@ -932,6 +932,28 @@ writeFileSync(${JSON.stringify(trace)}, await Bun.stdin.text(), "utf-8");
     expect(payload.tool_input?.command).toContain("engine intent create");
     expect(payload.tool_response).toContain("Intent created: fixture-record");
   });
+
+  test("a hook that ends before it reads its input leaves no broken-pipe error in opencode's process", async () => {
+    const root = freshProject();
+    writeHook(root, "aidlc-rebuild-stage-graph.ts", "process.exit(0);\n");
+    const { client } = fakeClient();
+    const adapter = await createTestAdapter(client, root);
+    // bun test fails the case on an error nothing caught, as opencode run
+    // prints it and exits 1.
+    let answered = 0;
+    for (let call = 0; call < 3; call++) {
+      const done = adapter["tool.execute.after"](
+        postTool("bash", { command: "bun .aidlc/tools/aidlc.ts engine intent create --scope poc" }),
+        { output: "Intent created: fixture-record (space: default)\n" },
+      );
+      // A busy host: the hook has exited before its input reaches the pipe.
+      process.nextTick(() => Bun.sleepSync(200));
+      await done;
+      answered++;
+    }
+    await new Promise((settle) => setTimeout(settle, 50));
+    expect(answered).toBe(3);
+  });
 });
 
 describe("t241 OpenCode adapter reviewer scope", () => {

@@ -954,8 +954,8 @@ deterministic `recompose` command. For `mode: "matched"` and `mode: "custom"`,
 the conductor creates the workflow on `scopeName` (matched) or `baseScope`
 (custom) with the typed `changes` and `creationSettings`, and the plan applies
 to that piece of work only. When the person picks "Approve and save as scope",
-the conductor asks for a name (your `scopeName` is the default) and runs the
-engine's `scope save`, which writes the scope from the running work's plan.
+the conductor asks for a name (your `scopeName` is the default) and the
+creation it runs saves the scope from the new work's plan (`--save-as`).
 
 ---
 

@@ -296,11 +296,18 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
 
    Gate dispositions are receipt-safe audit data, never artifact edits:
    - **Approve** records every current `New` or `Unresolved` finding on the
-     tool-owned `GATE_APPROVED` row.
+     tool-owned `GATE_APPROVED` row. When the human asks, as they approve, for
+     an open finding to be fixed (for example
+     `approve, but make sure R-03 gets handled`), append
+     `--fix-finding "<review-artifact>#R-03"` to the approval command (the
+     stage gate's `report --result approved`, or a checkpoint's
+     `--action approve`) for each one: it is recorded as
+     `Fix requested` and stays open for the next review.
    - **Request Changes** leaves open findings unresolved. When the human
      explicitly rejects a finding as inapplicable, append
      `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` to the
-     ordinary rejected report command for each rejected finding. When the human
+     rejection command (the rejected report, or a checkpoint's
+     `--action reject`) for each rejected finding. When the human
      disagrees that a reviewer-fixed finding is fixed (for example
      `R-03 isn't fixed: <why>`), append
      `--reopen-finding "<review-artifact>#R-03=<why>"`. The review artifact
@@ -308,7 +315,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
      finding carries the id; when two findings share it, the refusal names
      both. Never
      infer either decision from generic revision feedback. The same ID cannot
-     appear in both flags. The state tool validates the artifact, ID, current
+     appear in both flags. The engine validates the artifact, ID, current
      status, and nonblank reason before recording the decision on
      `GATE_REJECTED`.
 

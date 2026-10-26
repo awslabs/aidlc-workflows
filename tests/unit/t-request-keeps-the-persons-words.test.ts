@@ -1,0 +1,200 @@
+// covers: function:takePersonsOwnLine
+//
+// The request a piece of work is recorded with is the person's own words. Live
+// on opencode in Spanish: the person typed "/aidlc quiero agregar un modo oscuro
+// a la página de la panadería, con un botón ...", the agent passed the words to
+// `next` without their accents, and the work's description, its Project line
+// and every audit Request kept the agent's copy, while the message record kept
+// what they typed. The agent's command still routes as passed; the engine's own
+// parse of their /aidlc line says which of its words are the request. Driven
+// over the real hook, the real engine and the real creation step.
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import {
+  AIDLC_SRC,
+  cleanupTestProject,
+  createOrchestrationTestProject,
+  FIXTURES_DIR,
+  resetAidlcEnv,
+  runOrchestrateNext,
+  seedStateFile,
+} from "../harness/fixtures.ts";
+import { auditBlockField, getField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+
+setDefaultTimeout(120_000);
+
+const BUN = process.execPath;
+const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
+const SESSION = "01995000-7a11-7000-8000-0000000000d1";
+const TYPED = "quiero agregar un modo oscuro a la página de la panadería, con un botón para cambiarlo";
+const RETYPED = "quiero agregar un modo oscuro a la pagina de la panaderia, con un boton para cambiarlo";
+
+function env(): Record<string, string | undefined> {
+  const e: Record<string, string | undefined> = {
+    ...process.env,
+    AIDLC_SKIP_ARTIFACT_GUARD: "1",
+    AIDLC_UNATTENDED: "0",
+    AIDLC_SESSION_OVERRIDE: SESSION,
+  };
+  delete e.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  delete e.AIDLC_SESSION_OVERRIDE_SOURCE;
+  return e;
+}
+
+// What the person types, through the real UserPromptSubmit route every harness uses.
+function says(proj: string, prompt: string): void {
+  const r = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+    cwd: proj,
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
+    env: { ...env(), CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(r.status, r.stderr).toBe(0);
+}
+
+function next(proj: string, args: string[]): { kind?: string; message?: string } {
+  const r = runOrchestrateNext(ORCHESTRATE, proj, args, { cwd: proj, env: env() });
+  expect(r.directive, r.out).not.toBeNull();
+  return r.directive as { kind?: string; message?: string };
+}
+
+// The creation step `next` hands the agent for a plan the person named, run as
+// the agent runs it.
+function create(proj: string, step: { message?: string }): void {
+  const command = String(step.message).match(/Run `[^`]*?engine (intent create [^`]*)`/)?.[1];
+  expect(command, String(step.message)).toBeDefined();
+  const args = (command as string).replace("<2-3 word kebab essence>", "the-work").split(" ")
+    .map((arg) => arg.replace(/^"(.*)"$/, "$1"));
+  const r = spawnSync(BUN, [DISPATCHER, "engine", ...args, "--project-dir", proj], {
+    cwd: proj, env: env(), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+}
+
+// Where the work's record keeps its request: the description, the Project line, the audit's Request.
+function recorded(proj: string): { description: string; project: string; requests: string[] } {
+  const intents = join(proj, "aidlc", "spaces", "default", "intents");
+  const dir = readdirSync(intents).find((name) => existsSync(join(intents, name, "project-description.json"))) ?? "";
+  return {
+    description: JSON.parse(readFileSync(join(intents, dir, "project-description.json"), "utf-8")) as string,
+    project: getField(readFileSync(join(intents, dir, "aidlc-state.md"), "utf-8"), "Project") ?? "",
+    requests: readAuditShardEvents(proj).map((row) => auditBlockField(row.block, "Request")).filter((value): value is string => value !== null),
+  };
+}
+
+describe("the request is recorded in the person's own words", () => {
+  let proj: string;
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createOrchestrationTestProject();
+  });
+  afterEach(() => cleanupTestProject(proj));
+
+  test("a request the agent passes retyped, with the plan they named, is recorded as they typed it", () => {
+    says(proj, `/aidlc poc ${TYPED}`);
+    create(proj, next(proj, ["poc", RETYPED]));
+    const record = recorded(proj);
+    expect(record.description).toBe(TYPED);
+    expect(record.project).toBe(TYPED);
+    expect(record.requests.length).toBeGreaterThan(0);
+    for (const request of record.requests) expect(request).toBe(`/aidlc ${TYPED}`);
+  });
+
+  test("with no plan named, the plan step quotes the person's own words", () => {
+    says(proj, `/aidlc ${TYPED}`);
+    const step = next(proj, [RETYPED]);
+    expect(step.kind).toBe("print");
+    expect(step.message).toContain(`The person asked for new work: "${TYPED}"`);
+    expect(step.message).not.toContain(RETYPED);
+  });
+
+  // The plan's name typed before the task routes on that plan: the request is
+  // the rest of the line, as they typed it.
+  test("a plan named first, the agent routing on it: the request is the rest of their line", () => {
+    says(proj, "/aidlc classic Build a Notes App");
+    create(proj, next(proj, ["classic", "build a notes app"]));
+    expect(recorded(proj).description).toBe("Build a Notes App");
+  });
+
+  // A first word that is also a plan's name, kept in the request by the agent:
+  // the whole line is the request, and the reading step carries it as typed.
+  test("a plan's name the agent keeps in the request: the reading step carries their whole line", () => {
+    says(proj, "/aidlc classic Bike Rental Shop");
+    const step = next(proj, ["classic bike rental shop"]);
+    // Quoted for the platform's shell: single quotes on POSIX, double on Windows.
+    expect(step.message).toMatch(/next -- ['"]classic Bike Rental Shop['"]/);
+    expect(step.message).toMatch(/--scope classic -- ['"]Bike Rental Shop['"]/);
+    expect(step.message).not.toContain("bike rental shop");
+  });
+
+  test("over work in hand, their line still the latest row: the question that asks where it belongs quotes it", () => {
+    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    says(proj, `/aidlc ${TYPED}`);
+    const step = next(proj, [RETYPED]);
+    const id = String(step.message).match(/--request ([0-9a-f]{8})/)?.[1];
+    expect(id, String(step.message)).toBeDefined();
+    const routing = JSON.stringify(next(proj, ["--request", id as string]));
+    expect(routing).toContain(`You said: \\"${TYPED}\\"`);
+    expect(routing).not.toContain(RETYPED);
+  });
+
+  test("the step that answers the request by its id carries their own words", () => {
+    says(proj, `/aidlc ${TYPED}`);
+    const step = next(proj, [RETYPED]);
+    const id = String(step.message).match(/--request ([0-9a-f]{8})/)?.[1];
+    expect(id).toBeDefined();
+    const again = next(proj, ["--request", id as string, "--propose", "poc"]);
+    expect(JSON.stringify(again)).toContain(TYPED);
+  });
+});
+
+describe("the agent's words stay where the line is not the person's request", () => {
+  let proj: string;
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createOrchestrationTestProject();
+  });
+  afterEach(() => cleanupTestProject(proj));
+
+  test("a plain message last, not an /aidlc line", () => {
+    says(proj, TYPED);
+    const step = next(proj, [RETYPED]);
+    expect(step.message).toContain(`The person asked for new work: "${RETYPED}"`);
+  });
+
+  test("a line naming another plan than the agent's call", () => {
+    says(proj, `/aidlc poc ${TYPED}`);
+    create(proj, next(proj, ["bugfix", RETYPED]));
+    expect(recorded(proj).description).toBe(RETYPED);
+  });
+
+  // A flag they mistyped is not taken by `next`, which hands the agent the
+  // correction; the agent's corrected call carries the request without it, and
+  // that stays the request, not their line with the mistyped flag in it.
+  test("a flag they mistyped, which the agent corrected", () => {
+    says(proj, "/aidlc --plan-aprroval off add the export");
+    const reading = next(proj, ["--plan-aprroval", "off", "add", "the", "export"]);
+    expect(reading.kind, JSON.stringify(reading)).toBe("print");
+    const step = next(proj, ["--plan-approval", "off", "add the export"]);
+    expect(JSON.stringify(step)).not.toContain("--plan-aprroval");
+    expect(step.message).toContain('"add the export"');
+  });
+
+  // Over work in hand their line is the request only while their turn is still
+  // the record's latest row, as when the agent passes nothing.
+  test("over work in hand, a row recorded since their line", () => {
+    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    says(proj, `/aidlc ${TYPED}`);
+    appendAuditEntry("ERROR_LOGGED", { Details: "a row since their line" }, proj);
+    const step = next(proj, [RETYPED]);
+    const id = String(step.message).match(/--request ([0-9a-f]{8})/)?.[1];
+    expect(id, String(step.message)).toBeDefined();
+    expect(JSON.stringify(next(proj, ["--request", id as string]))).toContain(RETYPED);
+  });
+});

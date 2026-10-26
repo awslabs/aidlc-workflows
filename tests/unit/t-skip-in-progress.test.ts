@@ -316,3 +316,150 @@ describe("a stage the person asks to skip at its own approval question is skippe
     expect(readFileSync(stateFile(proj), "utf-8")).toBe(before);
   });
 });
+
+// "Switch to bugfix and skip this stage" in one command: the scope change runs
+// first, then the stage the person is on is skipped where it stands, as the
+// skip alone does. The scope-change step used to hand recompose every stage
+// named, and recompose refused the one already started, so the switch went
+// through, the skip did not, and a plain "go on" ran the stage they asked to
+// skip.
+describe("a stage the person asks to skip with a scope switch in the same command is skipped where it stands", () => {
+  const SESSION = "01995000-7a11-7000-8000-00000000d3d3";
+
+  // The commands a step names, in the order it names them, without the undo.
+  function namedCommands(message: string): string[] {
+    const until = message.indexOf("If they later ask to undo");
+    return [...(until === -1 ? message : message.slice(0, until)).matchAll(/`(bun [^`]*\.ts [^`]*)`/g)].map((m) => m[1]);
+  }
+
+  // Runs one named command as the agent would, its words split as a shell does.
+  function runNamed(proj: string, command: string): { status: number; out: string } {
+    const words = command.match(/'[^']*'|\S+/g) ?? [];
+    const at = words.findIndex((word) => word.endsWith(".ts"));
+    const tool = String(words[at]).split("/").at(-1) ?? "";
+    return run(proj, tool, words.slice(at + 1).map((word) => word.replace(/^'(.*)'$/, "$1")));
+  }
+
+  function switchesAndSkips(proj: string, scope: string, stage: string): { message: string; commands: string[] } {
+    const res = runOrchestrateNext(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), proj, ["--scope", scope, "--skip", stage], {
+      cwd: proj,
+      env: { ...env, CLAUDE_PROJECT_DIR: proj, AIDLC_SESSION_OVERRIDE: SESSION },
+    });
+    const step = res.directive as { kind?: string; message?: string } | null;
+    expect(step?.kind, res.out).toBe("print");
+    const message = String(step?.message);
+    return { message, commands: namedCommands(message) };
+  }
+
+  function atItsQuestion(scope: string, stage: string): string {
+    const proj = startedAt(scope, stage);
+    const path = stateFile(proj);
+    writeFileSync(path, readFileSync(path, "utf-8").replace(`- [-] ${stage} — EXECUTE`, `- [?] ${stage} — EXECUTE`));
+    return proj;
+  }
+
+  const SWITCH = "bun .claude/tools/aidlc.ts engine scope change --scope bugfix";
+  const skipsIt = (stage: string): string =>
+    `bun .claude/tools/aidlc-orchestrate.ts report --stage ${stage} --result skipped --reason 'the person asked to skip it'`;
+
+  for (const [where, at] of [["in progress", startedAt], ["at its own approval question", atItsQuestion]] as const) {
+    test(`${where}: the scope changes, then the stage is skipped, and the work goes on`, () => {
+      const proj = at("feature", "requirements-analysis");
+      const { message, commands } = switchesAndSkips(proj, "bugfix", "requirements-analysis");
+      expect(commands, message).toEqual([SWITCH, skipsIt("requirements-analysis")]);
+      expect(message).not.toContain("engine recompose --skip");
+      expect(message).toContain(
+        '"Skipped Requirements Analysis. It can still be run on its own with `/aidlc --stage requirements-analysis --single`."',
+      );
+      expect(message).toContain("re-run `next`");
+      for (const command of commands) {
+        const ran = runNamed(proj, command);
+        expect(ran.status, ran.out).toBe(0);
+      }
+      const after = readFileSync(stateFile(proj), "utf-8");
+      expect(after).toContain("- **Scope**: bugfix");
+      expect(after).toContain("- [S] requirements-analysis — EXECUTE");
+      expect(after).toContain("- **Current Stage**: code-generation");
+      expect(after).toContain("- **Status**: Running");
+    });
+  }
+
+  // A stage the new scope does not run is skipped by the switch itself: the
+  // line says so, recompose is not asked, and nothing reads as refused.
+  for (const [where, stage] of [["a stage ahead", "user-stories"], ["the stage the person is on", "user-stories"]] as const) {
+    test(`${where} that the new scope does not run: the switch skips it, and the line says it is skipped`, () => {
+      const proj = startedAt("feature", where === "a stage ahead" ? "requirements-analysis" : stage);
+      const { message, commands } = switchesAndSkips(proj, "bugfix", stage);
+      expect(commands, message).toEqual([SWITCH]);
+      expect(message).toContain('"User Stories is already skipped."');
+      expect(message).not.toContain("The plan is unchanged");
+      // The switch alone goes on with the running work here, and so does this.
+      expect(message).toEndWith("Then re-run `next` to carry on with the work.");
+      const ran = runNamed(proj, SWITCH);
+      expect(ran.status, ran.out).toBe(0);
+      expect(readFileSync(stateFile(proj), "utf-8")).toContain(`${stage} — SKIP`);
+    });
+  }
+
+  // A stage already done is never said to be skipped: recompose names it done,
+  // as it does without the switch.
+  test("a stage already done, named with the switch: it is not said to be skipped", () => {
+    const proj = startedAt("feature", "units-generation");
+    const path = stateFile(proj);
+    writeFileSync(path, readFileSync(path, "utf-8").replace("- [S] user-stories — EXECUTE", "- [x] user-stories — EXECUTE"));
+    const { message, commands } = switchesAndSkips(proj, "bugfix", "user-stories");
+    expect(message).not.toContain("already skipped");
+    expect(commands, message).toEqual([
+      SWITCH, "bun .claude/tools/aidlc.ts engine recompose --skip user-stories --reason 'the person asked to skip it'",
+    ]);
+  });
+
+  // A new project's plan skips Reverse Engineering whatever the scope's grid
+  // says, and the switch writes it so: an add of it after the switch is a
+  // change for recompose to carry out, never said to be on the plan already.
+  test("on a new project, Reverse Engineering added with the switch is added after it", () => {
+    const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
+    tempDirs.push(proj);
+    const created = run(proj, "aidlc-utility.ts", ["intent-create", "--scope", "feature"]);
+    expect(created.status, created.out).toBe(0);
+    expect(readFileSync(stateFile(proj), "utf-8")).toContain("- **Project Type**: Greenfield");
+    const res = runOrchestrateNext(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), proj,
+      ["--scope", "bugfix", "--add", "reverse-engineering"], { cwd: proj, env: { ...env, CLAUDE_PROJECT_DIR: proj } });
+    const message = String((res.directive as { message?: string } | null)?.message);
+    expect(message, res.out).not.toContain("already on the plan");
+    const commands = namedCommands(message);
+    expect(commands).toEqual([SWITCH, "bun .claude/tools/aidlc.ts engine recompose --add reverse-engineering"]);
+    for (const command of commands) {
+      const ran = runNamed(proj, command);
+      expect(ran.status, ran.out).toBe(0);
+    }
+    expect(readFileSync(stateFile(proj), "utf-8")).toContain("- [ ] reverse-engineering — EXECUTE");
+  });
+
+  // The open question stays the person's to answer: the step names its report
+  // after the switch and the change, as the skip alone does at an open gate.
+  test("at the open question, a stage ahead skipped with the switch: the step names the question's report after both", () => {
+    const proj = atItsQuestion("feature", "requirements-analysis");
+    const { message, commands } = switchesAndSkips(proj, "bugfix", "deployment-pipeline");
+    expect(commands[0], message).toBe(SWITCH);
+    expect(commands[1]).toBe("bun .claude/tools/aidlc.ts engine recompose --skip deployment-pipeline --reason 'the person asked to skip it'");
+    expect(message).toContain(
+      "If their message also answered the open Requirements Analysis question, record it now with " +
+        "`bun .claude/tools/aidlc-orchestrate.ts report --stage requirements-analysis --result approved --user-input Approve`",
+    );
+  });
+
+  // Work whose saved scope this install no longer defines switches the same way.
+  test("on work whose saved scope is no longer installed: the scope changes, then the stage is skipped where it stands", () => {
+    const proj = startedAt("feature", "requirements-analysis");
+    const path = stateFile(proj);
+    writeFileSync(path, readFileSync(path, "utf-8").replace("- **Scope**: feature", "- **Scope**: retired-scope"));
+    const { message, commands } = switchesAndSkips(proj, "bugfix", "requirements-analysis");
+    expect(commands, message).toEqual([SWITCH, skipsIt("requirements-analysis")]);
+    for (const command of commands) {
+      const ran = runNamed(proj, command);
+      expect(ran.status, ran.out).toBe(0);
+    }
+    expect(readFileSync(path, "utf-8")).toContain("- [S] requirements-analysis — EXECUTE");
+  });
+});

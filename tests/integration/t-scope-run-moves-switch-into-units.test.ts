@@ -88,6 +88,13 @@ function moveAt(
   const said: string[] = [];
   for (const line of lines) {
     const answer = agent.personTypes(line);
+    // A jump the line asks for is made by that `next`, which answers with the
+    // step it lands on and the jump's own line.
+    if (answer.kind !== "print" && line.includes("--stage")) {
+      expect(["run-stage", "load-steering", "ask"], JSON.stringify(answer)).toContain(String(answer.kind));
+      said.push([...((answer.change_notices as string[] | undefined) ?? []), String(answer.narration ?? "")].join("\n"));
+      continue;
+    }
     expect(answer.kind, JSON.stringify(answer)).toBe("print");
     // The step the line names, run as the agent runs it; its reply is what the person is shown.
     const step = /`(bun \.claude\/tools\/[^`]+)`/.exec(String(answer.message ?? ""))?.[1];

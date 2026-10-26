@@ -174,7 +174,10 @@ since the stage started (the request that started the work answers nothing the
 stage made), after the gate was first shown unless the conductor names the
 message it read the choice from (`report --message <id>`: an approval given at
 the learnings question just before the gate; the refusal and the step for
-their reply at an open gate list the ids). It records the person's words: every
+their reply at an open gate list the ids). A message sent by the time the
+outputs the gate shows were last written on this clone (every output of each
+stage it approves, optional ones included, the questions file aside) is no
+approval of them: it is neither listed nor taken. It records the person's words: every
 reply of theirs in that chat since then, except one an answer on record already
 names unless it is the latest, as the message record keeps them, on
 `GATE_APPROVED` as `Person Reply` and on `GATE_REJECTED` as the feedback, with
@@ -430,6 +433,13 @@ them when none is answered yet, then an unanswered summary confirmation, then
 the stage's next step), never creating it again, writing new questions over it,
 or asking an answered question again (#1873). A redo the person asked for
 (`artifact_reuse`, which drops the field, or Redo from scratch) starts afresh.
+After a jump back or a restart, which starts a new attempt that confirms the
+summary again, the engine clears the file's summary `[Answer]:` when its only
+confirmation is from an earlier attempt and the summary has not been asked in
+this one (`clearEarlierAttemptSummaryAnswer`, before the step is emitted, never
+under the Stop hook's probe), so the conductor asks it once; every other answer
+is kept as written. A Keep at Artifact Re-use after that confirmation records the kept
+documents under it (`reuse-artifact`), so they need no save to descend from it.
 
 **Step 2: How the person answers.** The engine resolves the stage's answer
 mode (`resolveStageAnswerMode`: `mode`, `ask`, `reused_from`, `notice`), and the
@@ -1245,7 +1255,11 @@ change. See
    as a refused completion. It returns `reviewed_at` too, the UTC time this
    review is dated: the dispatch brief carries it as `Date for this review:`
    and the reviewer writes its `**Date:**` line from the brief, so no reviewer
-   runs a command of its own for the time. The directive's `review_artifact` field
+   runs a command of its own for the time. On a stage that builds in the
+   workspace, when another open piece of work in this checkout claims files in
+   its Units' source manifests, its `agent_note` gives the line the brief
+   carries word for word: those files are that work's, not this work's to
+   review (the same set `other_work_note` names to the build). The directive's `review_artifact` field
    names the required Markdown output the review is about: the record is
    keyed to it, the gate names it, and finding selectors address it; output
    ordering and plugin additions cannot change it, and nothing writes to it
@@ -1308,7 +1322,16 @@ change. See
    <first|revision|stale>` renders the exact stage, ordinary-language outcome,
    review artifact(s), the engine-owned findings list, decision effects, and
    concrete upstream/downstream invalidation paths (`reviewer_max_iterations`
-   is 1, engine-enforced). The final gate of a per-Unit stage renders every Unit
+   is 1, engine-enforced). At a stage's gate, one line after the findings names
+   the open findings Approve records as `Accepted risk`, each with the start of
+   its text (and its Unit when they span Units), and says, in plain words, that
+   the person can instead approve and ask for one to be fixed (`--fix-finding`)
+   or reject one as not applying, with their reason (`--reject-finding` on a
+   Request Changes, whose gate comes back with the review as it stands when
+   nothing else changed); the Approve option then does not say it again. The ids come from the builder
+   `GATE_APPROVED` writes through. A Unit's own approval (`--unit`, below), and
+   a gate whose one approval also covers later stages with open findings of
+   their own, show no such line. The final gate of a per-Unit stage renders every Unit
    covered by that single approval. A Unit's own approval (its Construction
    checkpoint or team Unit gate) passes `--unit "<unit>"` and shows only that
    Unit's review; reviewer dispatch context is always Unit-filtered.
@@ -1381,12 +1404,14 @@ back to the decision made before it was fixed. A Redo row resets the list of
 each Unit whose artifacts it names, or every Unit when it names none. `GATE_APPROVED` atomically records `Accepted risk` for each
 current open finding the person approved, `Approved autonomously` for one
 Construction approved on its own, or `Changed after review` for one whose
-reviewed work changed after that review with no finished review since; the
-last two are no decision, so the finding stays open and the next review
+reviewed work changed after that review with no finished review since. One
+the approval names with `--fix-finding <review-artifact>#R-NN` (the person
+asked for it to be fixed) records `Fix requested` instead. All but
+`Accepted risk` are no decision, so the finding stays open and the next review
 re-checks it. A Unit's checkpoint and a swarm batch's approval record their
 Units' findings, and a stage's approval nobody gave records none that a Unit's
-own approval recorded. A Request Changes report records `Rejected: <reason>`
-only for explicit
+own approval recorded. A Request Changes report, or a checkpoint's
+`--action reject`, records `Rejected: <reason>` only for explicit
 `--reject-finding <review-artifact>#R-NN=<exact human reason>` values. It uses
 `--reopen-finding <review-artifact>#R-NN=<exact human reason>` when the person
 disagrees that a `Resolved (reviewer)` finding is fixed. The artifact may be
@@ -1451,24 +1476,23 @@ Ritual handles this, not a separate guardrail-emission flow.
 
 *(Conditional module: `stage-protocol-learnings.md`, Section 13; the base protocol keeps a loading stub.)*
 
-When `directive.protocol_modules` lists `learnings`, the ritual runs between the completion message and the approval gate. Bootstrap stages keep only a diary; isolated `single: true` runs keep no diary or ritual; per-unit `gate: false` iterations defer the ritual to the final stage gate, except team-owned unit-major gates run it at each emitted Unit gate. Gate revisions never rerun it. With the module absent, keep no diary, surface no candidates, ask no learning question, and go directly to the approval gate. The enabled ritual is:
+When `directive.protocol_modules` lists `learnings`, the step sits between the completion message and the approval gate, and asks the person something only when they corrected the agent in that stage (asked for changes at its gate, or corrected it in their own words) in a way that would hold next time; with no correction it asks nothing and the gate follows the completion message. Bootstrap stages keep only a diary; isolated `single: true` runs keep no diary or step; per-unit `gate: false` iterations defer the step to the final stage gate, except team-owned unit-major gates run it at each emitted Unit gate. After a Request Changes, the change asked for is asked about before the revised gate. With the module absent, keep no diary, ask no learning question, and go directly to the approval gate. The enabled step is:
 
 1. **Diary**: the agent maintains a per-stage `memory.md` (Interpretations /
    Deviations / Tradeoffs / Open questions) as it works. A Unit's turn tags its
-   entries `[unit <name>]` after the timestamp, so a Unit's checkpoint surfaces
-   that Unit's entries and the untagged ones.
-2. **Surface**: `aidlc-learnings.ts surface --slug <slug>` reads the diary and
-   emits structured candidates — the LLM does not re-parse or classify.
-3. **Confirm**: the conductor renders the candidates; the user picks which to
-   keep and, for free-text additions, picks the heading that derives the
-   destination. The always-present "Anything to add?" channel renders at least
-   `Nothing to add` and `Add a note`; one-option structured questions are
-   invalid on Claude Code and Codex. Its `log decision` carries
-   `--question-kind learnings-note`, so an answer of `Add a note` is known by
-   that field, never by the question's wording (a question recorded before
-   the field existed is known by exactly those two options): it ends the turn
-   at the follow-up, and its `agent_note` tells the agent to take the note
-   from the person's reply when they already gave it, and ask only otherwise.
+   entries `[unit <name>]` after the timestamp. The diary is the stage's
+   record; nothing in it is offered to the person.
+2. **Surface**: `aidlc-learnings.ts surface --slug <slug> --correction
+   '<their change>'` (or `--correction-file`) prints, for each correction the agent read in the
+   person's words, the question "You asked me to <it>. Keep that for next
+   time?" with `Yes, for this project`, `Yes, for the team` and `No`; with no
+   correction it prints none.
+3. **Confirm**: the conductor asks each printed question; the person's pick
+   is the only thing asked, and the conductor routes the practice line to its
+   heading. Its `log decision` carries `--question-kind learnings-note`, so the
+   question is known by that field, never by its wording (a question recorded
+   before the field existed is known by its options). A note the person asked
+   to keep is kept with no question, and said in one line with where it went.
 4. **Admission check**: each kept learning is checked against `org.md`'s
    matching section; a contradiction is surfaced to revise / skip / escalate.
 5. **Persist**: `aidlc-learnings.ts persist` writes each confirmed learning as a practice to

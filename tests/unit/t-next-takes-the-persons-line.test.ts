@@ -46,8 +46,10 @@ import {
   type RunOptions,
   say,
   SECOND_SESSION,
+  SESSION,
 } from "../harness/aidlc-input-corpus.ts";
 import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { sessionPidMapDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 type Record = Parameters<typeof saveMessage>[1];
@@ -409,6 +411,19 @@ describe("with work open, the agent's first step after `/aidlc <words>` reads th
   // The recorded miss (t176 run 8 on main b9c3e9000f), replayed: the widget
   // feature at Feasibility, the line exactly as Claude Code delivered it, the
   // agent's `next --resume`, then the step the reading names for new work.
+  // Copilot CLI writes the chat's session rows beside the prompt hook in no
+  // fixed order: they can follow the person's line, and are not the agent's.
+  test("copilot shape: the chat's SESSION_ENDED and SESSION_STARTED after the line do not stop a bare next reading it", async () => {
+    const proj = await workOpen();
+    await say(proj, NEW_LINE, "claude");
+    appendAuditEntry("SESSION_ENDED", { Session: SECOND_SESSION }, proj);
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: SESSION }, proj);
+    const { directive, out } = await next(proj, "claude", []);
+    expect(directive.kind, out).toBe("print");
+    expect(directive.message ?? "", out).toContain(READING);
+    expect(questionTexts(proj)).toEqual([NEW_WORK]);
+  });
+
   test("claude: the t176 miss replayed: next --resume, then the reading's own step, asks where the new work belongs", async () => {
     const proj = fresh();
     writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8"), "utf-8");
@@ -501,6 +516,9 @@ describe("with work open, the agent's first step after `/aidlc <words>` reads th
 // with what was typed (nothing), and the recorded line decides: it picks the
 // work back up, as `--resume` does, whichever the agent sent.
 const PICK_UP = "Picking up where we left off, at ";
+// Where the work picks up is a line the person must hear: it rides the step's change_notices.
+const pickUpSaid = (directive: Directive): boolean =>
+  Array.isArray(directive.change_notices) && directive.change_notices.some((line) => String(line).startsWith(PICK_UP));
 
 /** `next` as the agent runs it, its rules parts continued to the step they lead to. */
 async function stepAfter(proj: string, harness: Harness, args: string[]): Promise<{ directive: Directive; out: string }> {
@@ -531,7 +549,7 @@ describe("the entry word alone over work in hand picks the work back up, whichev
       expect(said.status, `${said.stdout}${said.stderr}`).toBe(0);
       const { directive, out } = await stepAfter(proj, harness, []);
       expect(directive.kind, out).toBe("run-stage");
-      expect(directive.narration ?? "", out).toStartWith(PICK_UP);
+      expect(pickUpSaid(directive), out).toBe(true);
     });
   }
 
@@ -540,7 +558,7 @@ describe("the entry word alone over work in hand picks the work back up, whichev
     await say(proj, "/aidlc", "claude");
     const { directive, out } = await stepAfter(proj, "claude", ["--resume"]);
     expect(directive.kind, out).toBe("run-stage");
-    expect(directive.narration ?? "", out).toStartWith(PICK_UP);
+    expect(pickUpSaid(directive), out).toBe(true);
   });
 
   test("claude: once something is recorded after \"/aidlc\", a bare next is the work's own step with no pick-up line", async () => {
@@ -554,6 +572,7 @@ describe("the entry word alone over work in hand picks the work back up, whichev
     const { directive, out } = await stepAfter(proj, "claude", []);
     expect(directive.kind, out).toBe("run-stage");
     expect(directive.narration ?? "", out).not.toContain(PICK_UP);
+    expect(pickUpSaid(directive), out).toBe(false);
   });
 
   test("claude: \"/aidlc\" alone with no work yet leaves today's answer", async () => {

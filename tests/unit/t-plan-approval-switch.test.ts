@@ -74,6 +74,7 @@ interface Emitted {
   ask_type?: string;
   question?: string;
   change_notices?: string[];
+  plan_note?: string;
   plan_approval: { status?: string; skipped?: boolean; notice?: string; note?: string };
 }
 
@@ -302,7 +303,11 @@ describe("plan approval off builds the plan as written", () => {
     expect(build.plan_approval.notice).toContain(
       "Plan approval (you approve each code plan before it is built) is off for this piece of work (from scope poc).",
     );
-    expect(build.plan_approval.notice).toContain("Starting code generation now. Do you want me to go over the plan with you?");
+    // The build is already running, so the line asks nothing: it says the plan
+    // can be gone over whenever the person wants.
+    expect(build.plan_approval.notice).toContain("Starting code generation now. You can ask me to go over the plan at any time.");
+    expect(build.plan_approval.notice).not.toContain("?");
+    expect(build.plan_note ?? "").not.toContain("?");
     // The record says it was not asked; it never claims the person approved.
     const audit = auditText(proj);
     expect(audit).toContain("**Event**: PLAN_APPROVAL_SKIPPED");

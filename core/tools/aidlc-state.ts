@@ -50,8 +50,9 @@ import {
   withdrawProtectedQuestions,
   VERIFICATION_COMMAND_CHECKPOINT,
   verificationCommandRecovery,
-  constructionPolicyChangeAuthority,
+  constructionPolicyReceipt,
   CONSTRUCTION_POLICY_RECOVERY,
+  swarmNeedsStageMajor,
   leftOutLine,
   PERSON_ASKED_SKIP_REASON,
   auditShardName,
@@ -99,6 +100,8 @@ import {
   firstPlannedStageOfPhase,
   formatReceivedReply,
   freshReviewReceipts,
+  unchangedChangeRequest,
+  REVIEW_KEPT_FIELD,
   getField,
   guardRecoveryAnswerAdmits,
   readActiveDirectiveMarker,
@@ -108,7 +111,11 @@ import {
   CONDUCTOR_SUMMARY_FIELD,
   selectedGuardRecoveryRemedyAction,
   answeredBeforeShownStep,
+  gateOutputWriting,
+  shownLastWrittenAt,
+  type ShownWriting,
   messageRetryStep,
+  personCommandedSinceGateShown,
   personRepliedSinceGateShown,
   unshownGateReplyStands,
   personsGateReply,
@@ -125,6 +132,7 @@ import {
   humanAuthorityState,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
+  COMMAND_TURN_SENTENCE,
   commandTurnHint,
   humanRepliedSinceGate,
   humanPresenceGuardDisabled,
@@ -186,6 +194,7 @@ import {
   readUnitMergeTransaction,
   readUnitGateRhythm,
   readUnitScopeStamp,
+  otherOpenWorkClaims,
   recordDir,
   recoveryGuidance,
   requestChangesResetIsExecutable,
@@ -204,6 +213,7 @@ import {
   resolveProjectFlag,
   resolveWorkflowSelection,
   sourceClaimCovers,
+  readUnitSourceManifest,
   aidlcOwnedSourceKey,
   onlyAidlcFilesChangedSince,
   sourceBaselineAuditFields,
@@ -222,6 +232,7 @@ import {
   teamUnitGateStatus,
   unclaimableIgnoredSourceKeys,
   registryExcludedSourceKeys,
+  sourceKeyRegistryFiles,
   renderChangedPaths,
   renderSourcePathKeys,
   unitCompletedReceipts,
@@ -254,6 +265,7 @@ import {
   currentStageSourceBaseline,
   discoverSiblingRepos,
   latestMainWorkflowStageRunFloorForProject,
+  latestSensorResults,
   resolveGuardPolicy,
   sourceChangedOutsideAidlc,
   SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS,
@@ -263,9 +275,13 @@ import {
   readRecordedSourceCheckouts,
   sourceBoundaryRepairStep,
   sourceWalkReach,
+  KEPT_OUTPUTS_FIELD,
+  keptSummaryOutputs,
+  SUMMARY_AUTHORIZATION_FIELD,
+  UNIT_NAME_REGEX,
 } from "./aidlc-lib.js";
 import {
-  personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn, type StoredMessage,
+  personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
@@ -1293,8 +1309,7 @@ function setConstructionPolicyField(content: string, field: string, value: strin
     getField(content, "Construction Checkpoints") !== "enabled"
   ) error("Enable Construction Checkpoints before selecting Construction Execution.");
   if (
-    field === "Construction Execution" && value === "swarm" &&
-    getField(content, "Construction Iteration") === "unit-major"
+    field === "Construction Execution" && value === "swarm" && swarmNeedsStageMajor(content)
   ) error("Select stage-major iteration before choosing swarm execution.");
   return setOrInsertField(content, "## Runtime State", field, value);
 }
@@ -1422,33 +1437,35 @@ function withMessageArg(args: string[]): { values: string[]; message?: string } 
   return { values: [...args.slice(0, at), ...args.slice(at + 2)], message };
 }
 
-// During Construction a policy change is the person's: the agent names the
-// message they asked for it in (--message, proved), or they chose it at an
-// older policy question. Returns that message, for the record, or null.
+// During Construction a policy change is the person's: they chose it at an
+// older policy question (its receipt, read first, so the yes they gave there is
+// never refused for having answered that question), or the agent names the
+// message they asked for it in (--message, proved). Returns their words and
+// message, for the record, or null.
 function requireHumanConstructionPolicyChange(
   pd: string, content: string, field: string, value: string, message: string | undefined,
 ): PolicyAsk | null {
   if (getField(content, "Lifecycle Phase")?.toLowerCase() !== "construction") return null;
+  const receipt = constructionPolicyReceipt(pd, content, field, value);
   // An unattended run never changes it on its own, whatever presence bypass is
   // in force: only a choice the person recorded earlier counts there.
-  if (process.env.AIDLC_UNATTENDED === "1" && constructionPolicyChangeAuthority(pd, content, field, value, false) !== "receipt") {
+  if (process.env.AIDLC_UNATTENDED === "1" && receipt === null) {
     error(`An unattended run does not change ${field}: it changes when the person asks for it. ` + CONSTRUCTION_POLICY_RECOVERY);
   }
   if (humanPresenceGuardDisabled()) return null;
-  let named: StoredMessage | undefined;
-  if (message !== undefined) {
-    const proof = proveMessage(pd, message, "setting", { request: true });
-    if ("refusal" in proof) error(proof.refusal);
-    named = proof.message;
+  if (receipt !== null) {
+    const id = auditBlockField(receipt.block, PERSONS_MESSAGE_FIELD);
+    return id === null ? null : { words: auditBlockField(receipt.block, PERSONS_WORDS_FIELD), message: id };
   }
-  const authority = constructionPolicyChangeAuthority(pd, content, field, value, named !== undefined);
-  if (authority === null) {
+  if (message === undefined) {
     error(
       requestMessageStep(pd, `No message of the person's that asks to change ${field} is named. Change it only ` +
-        "when they ask for it, never to clear a refusal or on your own.") + ` ${CONSTRUCTION_POLICY_RECOVERY}`,
+        "when they ask for it, never to clear a refusal or on your own.", "setting") + ` ${CONSTRUCTION_POLICY_RECOVERY}`,
     );
   }
-  return authority === "asked" && named !== undefined ? { words: personsWordsText(named.words ?? named.text), message: named.id } : null;
+  const proof = proveMessage(pd, message, "setting", { request: true, lowers: field === "Construction Checkpoints" && value === "disabled" });
+  if ("refusal" in proof) error(proof.refusal);
+  return { words: personsWordsText(proof.message.words ?? proof.message.text), message: proof.message.id };
 }
 
 // set-skeleton-stance <on|off|scope-dependent> — record the conductor's
@@ -2417,7 +2434,8 @@ export interface ParkResult {
 // conductor's reading of those words (--person-asked); the tool proves only that
 // a turn of theirs in this chat stands behind it (personTurnStands). Their stop wins
 // over the autonomous grant and is recorded as theirs. On a host whose hooks can
-// miss a reply (its hookActivation says so), a stop they asked for in an
+// miss a reply (its hookActivation says so), or in a chat none of whose messages
+// reached the record (noMessageOfThisChat), a stop they asked for in an
 // attended session under the autonomous grant is theirs too, with a note that no
 // reply was on record. The conductor's own park is never theirs: gated work
 // pauses unmarked, and a run set to go on by itself goes on (the answer is the
@@ -2440,16 +2458,38 @@ function handlePark(args: string[]): void {
   // the same message gave (personTurnStands).
   const replied = asked && attendedSession && personTurnStands(pd, "request");
   const activation = hookActivation();
-  const missedReply = asked && attendedSession && !replied &&
-    (activation?.missedReply !== undefined || activation?.missesReplies === true) && autonomous();
+  const hostMissesReplies = activation?.missedReply !== undefined || activation?.missesReplies === true;
+  const missedReply = asked && attendedSession && !replied && autonomous() &&
+    (hostMissesReplies || noMessageOfThisChat(pd));
   const result = parkWorkflow(pd, { attended: replied || missedReply });
+  const why = hostMissesReplies ? "this host can miss one" : "none of this chat's messages reached the record";
   console.log(JSON.stringify(missedReply
     ? {
       ...result,
-      note: "No reply from the person was on record (this host can miss one), so this stop is recorded as theirs. " +
+      note: `No reply from the person was on record (${why}), so this stop is recorded as theirs. ` +
         "Tell them in one line that the work is parked and resumes when they ask.",
     }
     : result));
+}
+
+// A chat the engine can name (Claude Code's and Codex's shells name it, and the
+// session-start hook's map does elsewhere) with no message on the record: its
+// hooks are off, or its prompt hook never runs, so no stop typed there could be
+// on record. With the hooks running, every chat's message is, the grant's
+// included. A row naming no chat counts as this chat's, as personTurnStands
+// reads it, and a chat the engine cannot name proves nothing.
+function noMessageOfThisChat(pd: string): boolean {
+  try {
+    const chat = resolveInvokingSessionId(pd);
+    if (chat === null) return false;
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(pd, undefined, undefined, unreadable);
+    return unreadable.length === 0 && !rows.some((row) =>
+      row.event === "HUMAN_TURN" && (auditBlockField(row.block, "Session") ?? chat) === chat
+    );
+  } catch {
+    return false;
+  }
 }
 
 // The person's words that stop the work here, and the message that holds them,
@@ -2734,11 +2774,20 @@ function handleUnit(args: string[]): void {
     const routed = action === "complete"
       ? {}
       : readEngineUnitDirective(pd, slug, unit, action);
+    // A Unit's questions before the wave are the wave's own step.
     if (
       routed.kind === "run-stage" &&
       routed.stage === slug &&
-      routed.wave
+      (routed.wave || routed.questions_only === true)
     ) {
+      if (!routed.wave) {
+        throw new UnitWaveRouteRefusalError(
+          `Refusing unit ${action} for "${unit}" of "${slug}": this step asks ` +
+            `${typeof routed.unit === "string" ? routed.unit : unit}'s questions before the stage's wave builds it, ` +
+            "and a serial Unit receipt here would drop that wave. Ask them, then run " +
+            `\`${aidlcToolInvocation("orchestrate")} next\`.`,
+        );
+      }
       throw new UnitWaveRouteRefusalError(
         `Refusing unit ${action} for "${unit}" of "${slug}": a wave is active for this stage ` +
           "(the orchestration engine currently routes it as a batch). " +
@@ -3013,6 +3062,7 @@ interface EngineUnitDirective {
   stage?: unknown;
   unit?: unknown;
   wave?: unknown;
+  questions_only?: unknown;
 }
 
 function readEngineUnitDirective(
@@ -3698,7 +3748,7 @@ interface SensorFireVerdict {
   sensor_id: string;
   stage: string;
   output_path: string;
-  result: "passed" | "failed" | "budget-override";
+  result: "passed" | "failed" | "could-not-run" | "budget-override";
   detail_path: string | null;
   note?: string;
 }
@@ -3833,6 +3883,7 @@ function parseSensorFireVerdict(stdout: string): SensorFireVerdict | null {
         typeof value.output_path === "string" &&
         (value.result === "passed" ||
           value.result === "failed" ||
+          value.result === "could-not-run" ||
           value.result === "budget-override") &&
         (value.detail_path === null || typeof value.detail_path === "string") &&
         (value.note === undefined || typeof value.note === "string")
@@ -4108,9 +4159,11 @@ function fireGateSensors(
         reason:
           verdict.result === "passed"
             ? verdict.note ?? "invalid passed verdict"
-            : verdict.result === "budget-override"
-              ? "sensor execution exceeded its budget"
-              : "failed verdict omitted its detail path",
+            : verdict.result === "could-not-run"
+              ? `could not run (${verdict.note ?? "no reason recorded"})`
+              : verdict.result === "budget-override"
+                ? "sensor execution exceeded its budget"
+                : "failed verdict omitted its detail path",
       });
     }
   }
@@ -4212,12 +4265,13 @@ function verifyGateOpeningGuards(
   content: string,
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
   personCall?: PersonApproval,
+  keptReview?: KeptReview,
 ): void {
   verifyStageArtifacts(pd, stage, "present-approval-gate", personCall !== undefined);
   verifySummaryConfirmationPrecondition(pd, content, stage);
   verifyPipelineLinkPrecondition(pd, stage);
   if (!reviewerGateGuardDisabled()) {
-    verifyReviewerPrecondition(pd, content, stage, "present-approval-gate", true, personCall);
+    verifyReviewerPrecondition(pd, content, stage, "present-approval-gate", true, personCall, keptReview);
   }
   sayEditedReview(pd, content, stage);
 }
@@ -5144,6 +5198,7 @@ function verifyReviewerPrecondition(
   action: ReviewerPreconditionAction = "complete",
   requireReceiptExistence = true,
   personCall?: PersonApproval,
+  keptReview?: KeptReview,
 ): void {
   if (!stage.reviewer) return; // stage declares no reviewer — nothing to enforce
 
@@ -5177,7 +5232,11 @@ function verifyReviewerPrecondition(
   // resolved here (an invalid memory value errors; a memory edit that moved it
   // is recorded), the rows for what the scan accepted under relaxed are written,
   // and the human is told once.
-  const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
+  // A Request Changes that changed nothing brings the gate back with the
+  // review it was made on; the revise that shows it records which.
+  const unchanged = unchangedChangeRequest(pd, content, stage, reviewClass);
+  if (unchanged !== null && keptReview !== undefined) keptReview.rejection = unchanged.rejection;
+  const receipts = unchanged?.receipts ?? freshReviewReceipts(pd, content, stage, { reviewClass });
   observeChangeControl(pd, content, receipts);
   const perUnit =
     stage.for_each === "unit-of-work" &&
@@ -5302,9 +5361,15 @@ function verifyReviewerPrecondition(
     // the walk (a cache excluded after the stage started: its baseline entries
     // are nobody's change).
     const aidlcOwned = aidlcOwnedSourceKey(pd);
-    const outsideClaims = [...baselineChanged].filter((pathKey) =>
+    let outsideClaims = [...baselineChanged].filter((pathKey) =>
       !aidlcOwned(pathKey) && !claimModels.some((claims) => sourceClaimCovers(pathKey, claims))
     );
+    // Nor is a file another open piece of work in this folder claims: a second
+    // chat building its own work here made it, so it is that work's change.
+    if (outsideClaims.length > 0) {
+      const otherWork = otherOpenWorkClaims(pd, stage.slug);
+      outsideClaims = outsideClaims.filter((pathKey) => !otherWork.some((work) => sourceClaimCovers(pathKey, work.claims)));
+    }
     const unclaimable = unclaimableIgnoredSourceKeys(pd, outsideClaims);
     for (const key of registryExcludedSourceKeys(pd, outsideClaims)) unclaimable.add(key);
     baselineUnclaimed = outsideClaims
@@ -5348,6 +5413,27 @@ function verifyReviewerPrecondition(
     staleSource &&
     !(staleRecovery?.recovery === true && approvableUnfinishedReview(pd, content, receipts, personCall, staleUnit))
   ) {
+    // On a stage built Unit by Unit, a change no Unit's manifest claims is
+    // named first: its way on (the Unit that made it lists the path and is
+    // reviewed once more) is then the one recovery review, which the
+    // stale-source line would spend without the claim. A path a Unit claims
+    // whose review went stale stays with that Unit's review once more.
+    // Already-[x] recovery checks no claims, and a spent recovery has no review
+    // left to carry one.
+    if (
+      requireReceiptExistence &&
+      applicableReconciliationUnits.length > 0 &&
+      receipts.sourceStaleReason === "fingerprint-mismatch" &&
+      receipts.sourceStaleProgress?.recoverySpent !== true &&
+      baselineUnclaimed !== null &&
+      baselineUnclaimed.length > 0
+    ) {
+      const manifests = applicableReconciliationUnits.map((unit) => readUnitSourceManifest(pd, stage.slug, unit));
+      const claimedByNoUnit = baselineUnclaimed.filter((pathKey) =>
+        !manifests.some((manifest) => manifest.ok && sourceClaimCovers(pathKey, manifest))
+      );
+      if (claimedByNoUnit.length > 0) unclaimedSourcePreconditionError(pd, stage, claimedByNoUnit);
+    }
     staleSourcePreconditionError(
       pd,
       content,
@@ -5577,14 +5663,8 @@ function verifyReviewerPrecondition(
   ) {
     const unclaimed = baselineUnclaimed ?? [];
     if (unclaimed.length > 0) {
-      const rendered = unclaimed.slice(0, 10).map((key) => {
-        const separator = key.indexOf("\0");
-        const repo = key.slice(0, separator);
-        const path = key.slice(separator + 1);
-        return inertPath(repo ? `${repo}/${path}` : path);
-      });
-      const more = unclaimed.length > 10 ? ` and ${unclaimed.length - 10} more` : "";
       if (acceptsChanges) {
+        const { rendered, more } = renderUnclaimedSource(unclaimed);
         const listing = receipts.currentSourceListing;
         const entries = unclaimed.map((key) => `${key}\t${listing.get(key) ?? "-"}`).join("\n");
         acceptOutsideUnitChanges(pd, content, {
@@ -5598,27 +5678,43 @@ function verifyReviewerPrecondition(
         });
         return;
       }
-      // The person's line: what changed, and the three ways through, in their
-      // words. The agent knows the mechanics (the stage file and the reviewer
-      // protocol say how a manifest is written and a review recorded).
-      error(
-        `Refusing to complete "${stage.slug}": ${unclaimed.length} change${unclaimed.length === 1 ? "" : "s"} made during ${stage.name} ` +
-          `that no Unit's review covers (${rendered.join(", ")}${more}). A Unit that made one of them lists the path ` +
-          `in its source manifest and is reviewed once more; a change nobody meant is undone; ${notSourceWayThrough(unclaimed)}.`,
-      );
+      unclaimedSourcePreconditionError(pd, stage, unclaimed);
     }
   }
 }
 
+function renderUnclaimedSource(unclaimed: string[]): { rendered: string[]; more: string } {
+  const rendered = unclaimed.slice(0, 10).map((key) => {
+    const separator = key.indexOf("\0");
+    const repo = key.slice(0, separator);
+    const path = key.slice(separator + 1);
+    return inertPath(repo ? `${repo}/${path}` : path);
+  });
+  return { rendered, more: unclaimed.length > 10 ? ` and ${unclaimed.length - 10} more` : "" };
+}
+
+function unclaimedSourcePreconditionError(
+  pd: string,
+  stage: { slug: string; name: string },
+  unclaimed: string[],
+): never {
+  const { rendered, more } = renderUnclaimedSource(unclaimed);
+  // The person's line: what changed, and the three ways through, in their
+  // words. The agent knows the mechanics (the stage file and the reviewer
+  // protocol say how a manifest is written and a review recorded).
+  error(
+    `Refusing to complete "${stage.slug}": ${unclaimed.length} change${unclaimed.length === 1 ? "" : "s"} made during ${stage.name} ` +
+      `that no Unit's review covers (${rendered.join(", ")}${more}). A Unit that made one of them lists the path ` +
+      `in its source manifest and is reviewed once more; a change nobody meant is undone; ${notSourceWayThrough(pd, unclaimed)}.`,
+  );
+}
+
 // The way through for a changed path that is not source, the same on every
 // refusal that names changed paths. The registry that reaches a path is the
-// one in its own repo folder (the walk reads each repo root's file), so a
-// recorded repo's path names it.
-function notSourceWayThrough(keys: readonly string[]): string {
-  const registries = [...new Set(keys.map((key) => {
-    const repo = key.slice(0, key.indexOf("\0"));
-    return repo ? `${inertPath(repo)}/.aidlc-source-paths.json` : ".aidlc-source-paths.json";
-  }))].sort();
+// one its walk reads (a recorded repo's or a recorded checkout's own folder),
+// so such a path names that file.
+function notSourceWayThrough(pd: string, keys: readonly string[]): string {
+  const registries = sourceKeyRegistryFiles(pd, keys);
   const where = registries.length === 1 && registries[0] === ".aidlc-source-paths.json"
     ? ".aidlc-source-paths.json"
     : `the .aidlc-source-paths.json of the path's own folder (${registries.join(", ")})`;
@@ -5686,7 +5782,7 @@ function staleSourcePreconditionError(
   // cache) is left out by the exclude, and the review then still holds.
   const changed = receipts.sourceChangedKeys;
   const whatChanged = changed !== null && changed.length > 0
-    ? ` What changed: ${renderChangedPaths(renderSourcePathKeys(changed))}; ${notSourceWayThrough(changed)}.`
+    ? ` What changed: ${renderChangedPaths(renderSourcePathKeys(changed))}; ${notSourceWayThrough(pd, changed)}.`
     : "";
   if (recoverySpent) {
     const message =
@@ -6651,7 +6747,14 @@ export type StageAdmissionOptions = {
   entrypoint?: "approve" | "advance" | "finalize" | "complete-workflow";
   // The person's own approval (gate opening for it, or approve itself).
   personCall?: PersonApproval;
+  // Filled when the gate opens on the review a Request Changes that changed
+  // nothing was made on (unchangedChangeRequest).
+  keptReview?: KeptReview;
 };
+
+export interface KeptReview {
+  rejection?: AuditShardEvent;
+}
 
 function verifyConstructionCheckpointPrecondition(
   pd: string,
@@ -6721,7 +6824,7 @@ function admitStageAction(
     }
 
     if (options.action !== "complete") {
-      verifyGateOpeningGuards(pd, stateContent, stage, options.personCall);
+      verifyGateOpeningGuards(pd, stateContent, stage, options.personCall, options.keptReview);
       verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
       return;
     }
@@ -6859,49 +6962,46 @@ function latestGateBriefDigest(pd: string, stage: GateStage, unit: string | unde
 }
 
 // The latest terminal result of every applicable sensor for every declared
-// artifact on disk, from the audit shards; nothing is re-fired here. A failure
-// keeps what the gate row and the spoken line need (the findings count and the
-// detail file); a pass or a check that never ran is its `id@path` key with its
-// state, in the order the gate row spells them.
+// artifact on disk, from the audit shards (latestSensorResults); nothing is
+// re-fired here. A failure keeps what the gate row and the spoken line need
+// (the findings count and the detail file); a pass, a check that could not run
+// or a check that never ran is its `id@path` key with its state, in the order
+// the gate row spells them. A check that could not run is also kept for the
+// spoken line, and so is one that fires on the stage's writes (the code it
+// writes, never a declared output) whose latest row on a file still there is
+// could-not-run: at a Unit's gate, that Unit's writes only.
 type LatestCheckResults = {
   failed: Array<{ id: string; rel: string; findings: string; detail: string | null; failedOutputs: string | null }>;
+  couldNotRun: Array<{ id: string; rel: string }>;
   rest: string[];
 };
 function latestCheckResults(pd: string, stage: GateStage, unit: string | null = null): LatestCheckResults {
-  const results: LatestCheckResults = { failed: [], rest: [] };
+  const results: LatestCheckResults = { failed: [], couldNotRun: [], rest: [] };
   const sensors = stage.sensors_applicable ?? [];
+  if (sensors.length === 0) return results;
   const paths = declaredOutputsForGate(pd, stage, unit);
-  if (sensors.length === 0 || paths.length === 0) return results;
-  const latest = new Map<string, { kind: "passed" | "failed"; ts: string; pos: number; findings: string; detail: string | null; failedOutputs: string | null }>();
-  for (const row of readAuditShardEvents(pd)) {
-    if (row.event !== "SENSOR_PASSED" && row.event !== "SENSOR_FAILED") continue;
-    if (auditBlockField(row.block, "Stage slug") !== stage.slug) continue;
-    const id = auditBlockField(row.block, "Sensor ID");
-    const output = auditBlockField(row.block, "Output path");
-    if (id === null || output === null) continue;
-    const key = `${id}@${output}`;
-    const seen = latest.get(key);
-    if (seen && (seen.ts > row.timestamp || (seen.ts === row.timestamp && seen.pos > row.pos))) continue;
-    // A pass that carries a note (the tool was unavailable, the script failed)
-    // evaluated nothing: it does not clear the failure recorded before it.
-    if (row.event === "SENSOR_PASSED" && seen?.kind === "failed" && auditBlockField(row.block, "Note") !== null) continue;
-    latest.set(key, {
-      kind: row.event === "SENSOR_PASSED" ? "passed" : "failed",
-      ts: row.timestamp,
-      pos: row.pos,
-      findings: auditBlockField(row.block, "Findings count") ?? "?",
-      detail: auditBlockField(row.block, "Detail path"),
-      failedOutputs: auditBlockField(row.block, "Failed outputs"),
-    });
-  }
+  const latest = latestSensorResults(readAuditShardEvents(pd), stage.slug);
+  const declared = new Set<string>();
   for (const sensor of sensors) {
     for (const { outputPath: path } of gateSensorOutputs(sensor, paths, stage.slug)) {
       const rel = relative(pd, path).split(sep).join("/");
-      const result = latest.get(`${sensor.id}@${rel}`);
-      if (result === undefined) results.rest.push(`${sensor.id}@${rel}=not-run`);
-      else if (result.kind === "passed") results.rest.push(`${sensor.id}@${rel}=passed`);
-      else results.failed.push({ id: sensor.id, rel, findings: result.findings, detail: result.detail, failedOutputs: result.failedOutputs });
+      const key = `${sensor.id}@${rel}`;
+      declared.add(key);
+      const result = latest.get(key);
+      if (result === undefined) results.rest.push(`${key}=not-run`);
+      else if (result.kind === "passed") results.rest.push(`${key}=passed`);
+      else if (result.kind === "could-not-run") {
+        results.rest.push(`${key}=could-not-run`);
+        results.couldNotRun.push({ id: sensor.id, rel });
+      } else results.failed.push({ id: sensor.id, rel, findings: result.findings, detail: result.detail, failedOutputs: result.failedOutputs });
     }
+  }
+  const onWrites = new Set(sensors.flatMap((sensor) => (sensor.fire_on === "gate" ? [] : [sensor.id])));
+  for (const [key, result] of latest) {
+    if (declared.has(key) || result.kind !== "could-not-run" || !onWrites.has(result.id)) continue;
+    if (unit !== null && stage.for_each === "unit-of-work" && result.unit !== unit) continue;
+    if (!existsSync(isAbsolute(result.output) ? result.output : join(pd, result.output))) continue;
+    results.couldNotRun.push({ id: result.id, rel: result.output });
   }
   return results;
 }
@@ -6924,8 +7024,8 @@ function declaredOutputsForGate(pd: string, stage: GateStage, unit: string | nul
   return paths.filter((path) => pathIsWithin(unitDir, path));
 }
 
-// The gate-open row's field: `id@path=passed|failed(<n>) [detail: <path>]|not-run`,
-// failures first, at most 20 entries spelled out.
+// The gate-open row's field: `id@path=passed|failed(<n>) [detail: <path>]|could-not-run|not-run`
+// for the declared outputs, failures first, at most 20 entries spelled out.
 function sensorStateAtGate(pd: string, stage: GateStage): string {
   // Spelled out here, not at module level: this file runs its command before
   // later module-level declarations are initialized.
@@ -6961,15 +7061,18 @@ function failedCheckWhere(stage: GateStage, rel: string, failedOutputs: string |
 // What the person hears when a gate opens, or is shown again, while a check
 // still fails on a declared output (#2201): one line per failing check, in
 // plain words (the agent corrects from the detail file the sensors protocol
-// module names), at most three lines and then a count. The orchestrator carries
-// them in the gate reply's `narration`, beside what the stage produced, which
-// every harness's agent says to the person with the approval question. Nothing
-// is re-fired; a check that passed later, or never ran, says nothing, and an
-// unreadable record says nothing about the checks. A team's Unit gate speaks
-// for that Unit's outputs only.
+// module names), at most three lines and then a count; then one line, however
+// many, for the checks that could not run (their script crashed or did not
+// start, so they checked nothing). The orchestrator carries them in the gate
+// reply's `narration`, beside what the stage produced, which every harness's
+// agent says to the person with the approval question. Nothing is re-fired; a
+// check that passed later, or never ran, says nothing, and an unreadable record
+// says nothing about the checks. A team's Unit gate speaks for that Unit's
+// outputs and writes only.
 export function failedCheckNotices(pd: string, stage: GateStage, unit: string | null = null): string[] {
   const FAILED_CHECK_LINES = 3;
   let failed: LatestCheckResults["failed"];
+  let couldNotRun: LatestCheckResults["couldNotRun"];
   try {
     // Sensors the person switched off, the scope leaves off, or the project
     // recorded a bypass for say nothing: a check that will not run again is not
@@ -6978,17 +7081,29 @@ export function failedCheckNotices(pd: string, stage: GateStage, unit: string | 
     // checks from running in that process, not the record from being read.
     const stateContent = readStateFile(pd);
     if (resolveCeremony("sensors", getField(stateContent, "Scope"), stateContent, {}, pd).value === "off") return [];
-    failed = latestCheckResults(pd, stage, unit).failed;
+    ({ failed, couldNotRun } = latestCheckResults(pd, stage, unit));
   } catch {
     return [];
   }
+  const checkName = (id: string): string => (id.endsWith("check") ? id : `${id} check`);
   const lines = failed.slice(0, FAILED_CHECK_LINES).map(({ id, rel, findings, failedOutputs }) => {
-    const check = id.endsWith("check") ? id : `${id} check`;
     const count = /^\d+$/.test(findings) ? `${findings} finding${findings === "1" ? "" : "s"}` : "findings";
-    return `The ${check} reports ${count} in ${failedCheckWhere(stage, rel, failedOutputs)}.`;
+    return `The ${checkName(id)} reports ${count} in ${failedCheckWhere(stage, rel, failedOutputs)}.`;
   });
   const more = failed.length - lines.length;
   if (more > 0) lines.push(`${more} more check${more === 1 ? " reports" : "s report"} findings on this stage's outputs.`);
+  if (couldNotRun.length > 0) {
+    const checks = [...new Set(couldNotRun.map(({ id }) => checkName(id)))];
+    const files = [...new Set(couldNotRun.map(({ rel }) => rel))];
+    const who = checks.length === 1
+      ? `The ${checks[0]}`
+      : checks.length === 2
+        ? `The ${checks[0]} and the ${checks[1]}`
+        : `${checks.length} checks`;
+    const others = files.length - 1;
+    const where = `${failedCheckWhere(stage, files[0], null)}${others > 0 ? ` and ${others} other file${others === 1 ? "" : "s"}` : ""}`;
+    lines.push(`${who} could not run on ${where}.`);
+  }
   return lines;
 }
 
@@ -7308,6 +7423,7 @@ function approvesTogetherFlag(args: string[], content: string, slug: string): st
 }
 
 // approve <slug> [--user-input <the choice as read>] [--message <id>]
+//   [--fix-finding <review-artifact>#R-NN]...
 // Transition: [?] → [x] AND auto-advance to the next in-scope stage (or
 // complete the workflow if this was the final stage). Human judgment ends
 // at the gate response; everything after is deterministic bookkeeping, so
@@ -7353,9 +7469,20 @@ function verifyApprovalDecision(
     if (message !== undefined) {
       const proof = proveMessage(pd, message, "approval");
       if ("refusal" in proof) refuseForAgent(proof.refusal);
+      // Sent before the stage's output was last written, it did not see what
+      // the gate shows, so it approves nothing there (the summary's rule).
+      const { step, named, before } = answeredBeforeShownStep(pd, stage.slug, {
+        refused: `Cannot approve "${stage.slug}"`,
+        question: `the "${stage.slug}" gate`,
+        shown: "the gate",
+        command: "report",
+        why: "",
+        shownWriting: gateOutputWriting(pd, stage.slug),
+      }, proof.message);
+      if (before) refuseForAgent(step, { personDecided: named });
     } else if (!humanRepliedSinceGate(pd)) {
       const why = "no new human reply has been received for this approval question.";
-      const retry = openQuestionRetry(pd, stage.slug, why);
+      const retry = openQuestionRetry(pd, stage.slug, why, gateOutputWriting(pd, stage.slug));
       if (retry !== null) refuseForAgent(retry, { personDecided: true });
       refuseForAgent(
         `Cannot approve "${stage.slug}" because ${why} Wait for the human to type their choice, then retry the ` +
@@ -7365,11 +7492,13 @@ function verifyApprovalDecision(
     if (!repliedSinceStageStart(pd, stage.slug, message)) refuseForAgent(stageStartFloorRefusal("approve", stage.slug, message));
     const gate = { stage: stage.slug, ...(unit !== undefined ? { unit } : {}) };
     const shown = message === undefined ? personRepliedSinceGateShown(pd, gate) : undefined;
-    if (shown === false) refuseGateShownAfterReply(pd, "approve", stage.slug);
+    if (shown === false) refuseGateShownAfterReply(pd, "approve", stage.slug, gate);
     // A stage gate the record never shows stands on this chat's reply, never
-    // on another chat's answer to something else.
-    if (shown === null && unit === undefined && !unshownGateReplyStands(pd, stage.slug)) {
-      refuseUnshownGate(pd, stage.slug);
+    // on another chat's answer to something else, and never on one sent before
+    // what the gate shows was last written.
+    if (shown === null && unit === undefined) {
+      const shownWriting = gateOutputWriting(pd, stage.slug);
+      if (!unshownGateReplyStands(pd, stage.slug, shownWriting)) refuseUnshownGate(pd, stage.slug, shownWriting);
     }
   }
   // The conductor reports the choice the person made; a report that names none
@@ -7387,28 +7516,45 @@ function verifyApprovalDecision(
 }
 
 // A decision at a stage gate whose replies all came before the gate was shown:
-// the agent names the reply that already answered it, or shows the gate.
-function refuseGateShownAfterReply(pd: string, verb: "approve" | "request changes for", slug: string): never {
+// the agent names the reply that already answered it, or shows the gate. A
+// command the person typed after the gate is said to be one.
+function refuseGateShownAfterReply(
+  pd: string,
+  verb: "approve" | "request changes for",
+  slug: string,
+  gate: { stage: string; unit?: string },
+): never {
   const { step, named } = answeredBeforeShownStep(pd, slug, {
     refused: `Cannot ${verb} "${slug}"`,
     question: `the "${slug}" gate`,
     shown: "the gate",
     command: "report",
     why: "no new human reply has been received for this approval question since it was shown.",
+    ...(verb === "approve" ? { shownWriting: gateOutputWriting(pd, slug) } : {}),
   });
-  refuseForAgent(step, { personDecided: named });
+  const command = personCommandedSinceGateShown(pd, gate) === true ? ` ${COMMAND_TURN_SENTENCE}` : "";
+  refuseForAgent(`${step}${command}`, { personDecided: named });
 }
 
 // An approval of a stage gate the record never shows, with no reply of theirs
-// in this chat to stand on: the agent names the message that answered it, or
-// shows the gate.
-function refuseUnshownGate(pd: string, slug: string): never {
+// in this chat to stand on (since what the gate shows was last written, when
+// the record says): the agent names the message that answered it, or shows the
+// gate.
+function refuseUnshownGate(pd: string, slug: string, shownWriting: ShownWriting | undefined): never {
+  let written = false;
+  try {
+    written = shownWriting !== undefined && shownLastWrittenAt(pd, shownWriting) !== null;
+  } catch {
+    written = false;
+  }
+  const since = written ? `${shownWriting?.what} was last written` : "this stage last started";
   const { step, named } = answeredBeforeShownStep(pd, slug, {
     refused: `Cannot approve "${slug}"`,
     question: `the "${slug}" gate`,
     shown: "the gate",
     command: "report",
-    why: "no reply of the person's in this chat since this stage last started answers this gate.",
+    why: `no reply of the person's in this chat since ${since} answers this gate.`,
+    shownWriting,
   });
   refuseForAgent(step, { personDecided: named });
 }
@@ -7416,10 +7562,14 @@ function refuseUnshownGate(pd: string, slug: string): never {
 // A decision at a stage gate with no reply of theirs since the last decision
 // but messages they sent while another engine question was on screen: the
 // agent names the one that answered this gate, if one did. Ids and times only.
-function openQuestionRetry(pd: string, slug: string, why: string): string | null {
+// With `shown` (an approval), one sent by the time the stage's output was last
+// written is left out, as answeredBeforeShownStep leaves it out.
+function openQuestionRetry(pd: string, slug: string, why: string, shown?: ShownWriting): string | null {
   let held: Array<{ id: string; at: string }> = [];
   try {
-    held = personsGateReply(pd, resolveInvokingSessionId(pd), slug).elsewhere;
+    const writtenAt = shown === undefined ? null : shownLastWrittenAt(pd, shown);
+    held = personsGateReply(pd, resolveInvokingSessionId(pd), slug).elsewhere
+      .filter((entry) => writtenAt === null || entry.at > writtenAt);
   } catch {
     held = [];
   }
@@ -7429,9 +7579,14 @@ function openQuestionRetry(pd: string, slug: string, why: string): string | null
 }
 
 function handleApprove(args: string[]): void {
-  if (args.length < 1) error("Usage: aidlc-state.ts approve <slug> [--user-input <text>] [--message <id>]");
+  if (args.length < 1) {
+    error(
+      "Usage: aidlc-state.ts approve <slug> [--user-input <text>] [--message <id>] " +
+        "[--fix-finding <review-artifact>#R-NN]...",
+    );
+  }
   const slug = args[0];
-  const { userInput, message } = parseApproveFlags(args.slice(1));
+  const { userInput, message, fixFindings } = parseApproveFlags(args.slice(1));
 
   const pd = resolveProjectDir(projectDir);
   const preflightContent = readStateFile(pd);
@@ -7533,6 +7688,7 @@ function handleApprove(args: string[]): void {
       teamGate.stages,
       teamGate.unit,
       "person",
+      fixFindings,
     );
     const status = unitGateStatus(
       pd,
@@ -7706,6 +7862,7 @@ function handleApprove(args: string[]): void {
     stage,
     undefined,
     autonomousDecision ? "nobody" : "person",
+    fixFindings,
   );
 
   // Scope is required for next-stage derivation. Validate it before persisting
@@ -7847,11 +8004,13 @@ function getFlagValues(args: string[], flag: string): string[] {
   return values;
 }
 
-// Flag parser for approve: handles --user-input and --message (values).
-function parseApproveFlags(args: string[]): { userInput?: string; message?: string } {
+// Flag parser for approve: --user-input and --message (values), and each
+// --fix-finding (an open finding the person asked to have fixed).
+function parseApproveFlags(args: string[]): { userInput?: string; message?: string; fixFindings: string[] } {
   return {
     userInput: getFlagValue(args, "--user-input"),
     message: getFlagValue(args, "--message"),
+    fixFindings: getFlagValues(args, "--fix-finding"),
   };
 }
 
@@ -8011,12 +8170,13 @@ function handleReject(args: string[]): void {
   // the agent names the message it read the request from. A stage still
   // running ("that's wrong, redo it" mid-stage) and a guard-recovery choice
   // (it binds its own reply above) need only the checks around this one.
+  const gate = { stage: slug, ...(teamGate ? { unit: teamGate.unit } : {}) };
   if (
     !autonomousDecision && !humanPresenceGuardDisabled() && repliedHere &&
     feedbackStatus === "not-applicable" && message === undefined &&
-    personRepliedSinceGateShown(pd, { stage: slug, ...(teamGate ? { unit: teamGate.unit } : {}) }) === false
+    personRepliedSinceGateShown(pd, gate) === false
   ) {
-    refuseGateShownAfterReply(pd, "request changes for", slug);
+    refuseGateShownAfterReply(pd, "request changes for", slug, gate);
   }
   if (
     (!autonomousDecision || recoveryResetNeedsHuman) &&
@@ -8264,7 +8424,8 @@ function handleRevise(args: string[]): void {
     return;
   }
   validateSlugInState(content, slug, "revising");
-  admitStageAction(pd, content, stage, { action: "revise" });
+  const keptReview: KeptReview = {};
+  admitStageAction(pd, content, stage, { action: "revise", keptReview });
   verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
 
   const together = approvesTogetherFlag(args.slice(1), content, slug);
@@ -8276,6 +8437,7 @@ function handleRevise(args: string[]): void {
     const fields: Record<string, string> = {
       Stage: slug,
       Details: "Re-entering gate after revision",
+      ...(keptReview.rejection ? { [REVIEW_KEPT_FIELD]: keptReview.rejection.timestamp } : {}),
       ...approvesTogetherFields(together),
       ...gateAskFields(pd, stage, content, undefined, together),
     };
@@ -9203,16 +9365,18 @@ function handlePracticesPromote(args: string[]): void {
 }
 
 // reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv>
-//   [--repo <repo>] [--single]
+//   [--unit <unit>] [--repo <repo>] [--single]
 function handleReuseArtifact(args: string[]): void {
   if (args.length < 1)
-    error("Usage: aidlc-state.ts reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv> [--repo <repo>] [--single]");
+    error("Usage: aidlc-state.ts reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv> [--unit <unit>] [--repo <repo>] [--single]");
   const slug = args[0];
   const rest = args.slice(1);
   const decision = getFlagValue(rest, "--decision");
   const artifacts = getFlagValue(rest, "--artifacts");
   const repoFlag = getFlagValue(rest, "--repo");
+  const unitFlag = getFlagValue(rest, "--unit");
   const singleRun = rest.includes("--single");
+  if (unitFlag !== undefined && unitFlag !== null && !UNIT_NAME_REGEX.test(unitFlag)) error(`Invalid Unit name: ${unitFlag}`);
   if (!decision) error("Missing --decision <keep|modify|redo>");
   if (!artifacts) error("Missing --artifacts <csv>");
 
@@ -9294,6 +9458,25 @@ function handleReuseArtifact(args: string[]): void {
     };
     if (repo) fields.Repo = repo;
     if (singleRun) fields.Workflow = `single-stage:${slug}`;
+    // Keep records what it keeps under the current summary confirmation, so
+    // the kept documents need no save the host may not record. Anything it
+    // cannot read leaves the row as it was.
+    if (decision === "keep") {
+      if (unitFlag) fields.Unit = unitFlag;
+      try {
+        const kept = keptSummaryOutputs(pd, stage, {
+          stateContent: readStateFile(pd),
+          ...(unitFlag ? { unit: unitFlag } : {}),
+          ...(singleRun ? { single: true } : {}),
+        });
+        if (kept !== null && kept.outputs.length > 0) {
+          fields[SUMMARY_AUTHORIZATION_FIELD] = kept.authorization;
+          fields[KEPT_OUTPUTS_FIELD] = kept.outputs.join("; ");
+        }
+      } catch {
+        // The row records the pick as before.
+      }
+    }
     emitAudit(pd, "ARTIFACT_REUSED", fields);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);

@@ -165,15 +165,22 @@ export function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unk
   const selections = Object.entries(answers as Record<string, unknown>);
   if (selections.length === 0) return false;
   const offered = offeredOptionLabels(toolInput);
-  return selections.every(([questionId, selection]) => {
+  // A question the person moved past comes back as an empty list (Codex lets
+  // them submit with it unanswered); the box is theirs when another question
+  // carries a pick, and the core hook records the blank one as no reply.
+  let picked = false;
+  const wellFormed = selections.every(([questionId, selection]) => {
     if (selection === null || typeof selection !== "object" || Array.isArray(selection)) return false;
     const record = selection as Record<string, unknown>;
     if (Object.keys(record).length !== 1 || !Array.isArray(record.answers)) return false;
-    return record.answers.length > 0 && record.answers.every((answer) => {
+    if (record.answers.length === 0) return true;
+    picked = true;
+    return record.answers.every((answer) => {
       if (typeof answer !== "string" || answer.trim().length === 0) return false;
       return !isNonAnswer(answer) || offered.get(questionId)?.has(answer.trim()) === true;
     });
   });
+  return wellFormed && picked;
 }
 
 // The thread a Codex rollout file is for (rollout-<timestamp>-<thread id>[_<rollout
@@ -664,12 +671,14 @@ switch (target) {
 
   case "rebuild-stage-graph": {
     // Codex already names the shell tool "Bash" with tool_input.command —
-    // the core hook's exact contract. Verbatim pipe. The core hook's only
-    // stdout is the engine-error relay, one {"systemMessage": ...} line that
-    // Codex surfaces as a warning in the UI (documented for PostToolUse), so
-    // forward it. It is display-only, so unlike a decision it is deliberately
-    // NOT cached for the duplicate delivery: replaying it would show the same
-    // warning twice. The hook stays advisory (exit 0) either way.
+    // the core hook's exact contract. Verbatim pipe. The core hook's stdout is
+    // one line: the engine-error relay ({"systemMessage": ...}, which Codex
+    // surfaces as a warning in the UI, with a note for the model) or the
+    // setter's say-once note (PostToolUse additionalContext, which Codex hands
+    // the model as a developer message and draws nowhere), so forward it.
+    // Unlike a decision it is deliberately NOT cached for the duplicate
+    // delivery: replaying it would show the warning twice and hand the model
+    // the note twice. The hook stays advisory (exit 0) either way.
     const r = await runCoreHere("aidlc-rebuild-stage-graph.ts", rawInput);
     persistResponse("", 0);
     if (r.stdout) process.stdout.write(r.stdout);

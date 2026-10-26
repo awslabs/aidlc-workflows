@@ -51,7 +51,8 @@ before you author anything:
 
 Each fire leaves a row in the intent's `audit/` shards. The event names — exact casing
 matters when you grep the log — are **`SENSOR_FIRED`** when a sensor starts,
-**`SENSOR_PASSED`** when it clears, and **`SENSOR_FAILED`** when it finds a gap.
+**`SENSOR_PASSED`** when it clears, **`SENSOR_FAILED`** when it finds a gap, and
+**`SENSOR_COULD_NOT_RUN`** when its script crashed or could not start.
 A failed row links to a detail file under
 `<record>/.aidlc-engine/sensors/<stage-slug>/` (in the intent's record dir) that names the specific gap: the
 missing headings, the unreferenced upstream artifact, the lint error. The
@@ -288,9 +289,9 @@ and the audit shard gets the failed row:
 ```
 
 After the line is fixed, the next fire reports `"result":"passed"` and the
-earlier detail file is removed. A worker that exits non-zero is recorded as a
-pass with a note such as `"note":"script-error: exit-1"`, so check that note
-when a new sensor never fails.
+earlier detail file is removed. A worker that exits non-zero is recorded as
+`"result":"could-not-run"` with a note such as `"note":"script-error: exit-1"`,
+and the gate says the check could not run.
 
 ---
 

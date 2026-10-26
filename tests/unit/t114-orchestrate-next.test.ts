@@ -64,7 +64,7 @@
 //   Branch 3b UNCONDITIONAL invalid --scope -> "Unknown scope ...".
 //   Branch 4  env source -> shells resolve-env-scope -> verbatim "Invalid AWS_AIDLC_DEFAULT_SCOPE ...".
 //   Branch 5  scope-change print ("scope change --scope <s>").
-//   Branch 7  --stage/--phase jump -> emitJumpDirective; with-state -> print "aidlc-jump.ts execute --target ... --direction ...".
+//   Branch 7  --stage/--phase jump -> emitJumpDirective; with-state -> the jump is made, then the target's step (a print naming "aidlc-jump.ts execute" at Code Generation).
 //   Branch 10 happy path -> run-stage for the in-flight current stage.
 //   computeGate -> gate:true for every EXECUTE stage except initialization (the gate axis is NOT the execution axis).
 
@@ -846,22 +846,20 @@ describe("t114 knowledge (DocumentKB) terminal routing", () => {
 });
 
 // ===========================================================================
-// With-state jump commits via an `execute` print directive
+// With-state jump is made by the `next` the person's request reaches
 // ===========================================================================
-describe("t114 with-state jump -> execute print", () => {
-  test("12: with-state --phase jump -> print naming execute (commit is a mutation, next stays read-only)", () => {
+describe("t114 with-state jump -> the target's step", () => {
+  test("12: with-state --phase jump -> the jump is made and the target's step comes back", () => {
     // state-mid-ideation is feature scope, Current Stage=feasibility; --phase
-    // construction resolves forward to functional-design. A jump against an
-    // existing workflow is a MUTATION, and `next` is read-only — so the engine
-    // emits a `print` naming `aidlc-jump.ts execute`, carrying the tool-resolved
-    // target + direction.
+    // construction resolves forward to functional-design. The person asked for
+    // the jump, so `next` runs `aidlc-jump.ts execute` with the tool-resolved
+    // target + direction itself and routes on from the state it wrote.
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     const out = runNext(proj, ["--phase", "construction"]).out;
-    expect(out).toContain('"kind":"print"');
-    expect(out).toContain(
-      "aidlc-jump.ts execute --target functional-design --direction forward",
-    );
+    expect(out).toContain('"kind":"run-stage"');
+    expect(out).toContain('"stage":"functional-design"');
+    expect(out).not.toContain("aidlc-jump.ts execute");
   });
 });
 

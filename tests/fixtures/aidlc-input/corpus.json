@@ -6125,11 +6125,10 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print",
-          "ask"
+          "print"
         ],
         "names": [
-          "add rate limiting"
+          "next --request "
         ]
       },
       "end": {
@@ -6137,8 +6136,7 @@
         "work": "same"
       }
     },
-    "source": "FORMS.md C5",
-    "after": "pending"
+    "source": "FORMS.md C5"
   },
   {
     "id": "C6a-w",
@@ -6149,13 +6147,14 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "run-stage",
+          "load-steering"
         ],
         "words": null,
         "settings": [],
         "no_ask": true,
         "names": [
-          "jump"
+          "requirements-analysis"
         ]
       },
       "end": {
@@ -13161,12 +13160,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "run-stage",
+          "load-steering"
         ],
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-jump.ts execute --target reverse-engineering --direction backward --scope bugfix"
+          "reverse-engineering"
         ],
         "no_ask": true
       },
@@ -13213,12 +13213,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "run-stage",
+          "load-steering"
         ],
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-jump.ts execute --target requirements-analysis --direction redo --scope bugfix"
+          "requirements-analysis"
         ],
         "no_ask": true
       },
@@ -13239,12 +13240,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "run-stage",
+          "load-steering"
         ],
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-jump.ts execute --target requirements-analysis --direction redo --scope bugfix"
+          "requirements-analysis"
         ],
         "no_ask": true
       },
@@ -14141,12 +14143,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "run-stage",
+          "load-steering"
         ],
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-jump.ts execute --target deployment-pipeline --direction forward --scope bugfix"
+          "deployment-pipeline"
         ],
         "no_ask": true
       },
@@ -14190,12 +14193,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "run-stage",
+          "load-steering"
         ],
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-jump.ts execute --target code-generation --direction forward --scope bugfix"
+          "code-generation"
         ],
         "no_ask": true
       },
@@ -14265,12 +14269,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "run-stage",
+          "load-steering"
         ],
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-jump.ts execute --target requirements-analysis --direction redo --scope bugfix"
+          "requirements-analysis"
         ],
         "no_ask": true
       },
@@ -18368,12 +18373,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "run-stage",
+          "load-steering"
         ],
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-jump.ts execute --target code-generation --direction forward --scope bugfix"
+          "code-generation"
         ],
         "no_ask": true
       },

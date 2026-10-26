@@ -77,7 +77,7 @@ Phases execute sequentially. At each phase boundary (except Initialization → I
 **What can run in parallel**, within a stage or across Units in Construction:
 
 - **Units in Construction.** On a stage-major walk with `Construction Execution: swarm`, Units whose dependencies are done build together in one batch, then share one batch checkpoint. Unit-major stays serial. See [Parallel Unit batches](#parallel-unit-batches).
-- **Per-Unit design passes.** On a stage-major walk, the design stages can hand you a wave of Units that do not depend on each other.
+- **Per-Unit design passes.** On a stage-major walk, the design stages can hand you a wave of Units that do not depend on each other. Each Unit's questions are asked in your chat first, one Unit after another; then the Units are designed side by side from your answers.
 - **People, in team mode.** With `Unit Ownership: team`, each person claims a Unit and builds it in their own checkout at the same time as the others. Each checkout keeps its own place, so two people can be at different Construction stages at once. A claim is refused until that Unit's dependencies, and any required walking skeleton, are complete.
 - **Agents within a stage.** User Stories (2.4) is a mob: the design, developer, and quality agents contribute at the same time. Practices Discovery (2.2) has its inspectors look at the draft independently. Agents and design waves run at the same time where the harness can dispatch in parallel; on a harness that cannot, they run one after another with the same briefs. See [Stage Execution Modes Reference](#stage-execution-modes-reference).
 

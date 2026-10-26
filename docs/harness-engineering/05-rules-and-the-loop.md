@@ -168,7 +168,8 @@ change the exit code. See
 The other way a rule gets authored is that you never open a file — you correct an
 agent during a workflow, confirm the correction at a gate, and the framework
 writes it for you. That is the learning loop. Most stage runs add nothing, which
-is healthy; the loop fires only when something during the stage is worth keeping.
+is healthy; the loop comes in only when the person corrected the agent in a stage,
+or asked it to keep something for next time.
 
 The mechanics are covered in the
 [User Guide chapter](../guide/09-rules-and-the-learning-loop.md). The
@@ -178,36 +179,34 @@ harness-engineer view is what the loop produces and where it lands:
    session running the active stage) keeps an observation
    log at `<record>/<phase>/<stage>/memory.md` (under the intent's record dir, `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`), with entries under four
    headings — Interpretations, Deviations, Tradeoffs, Open questions. It is
-   auto-created and maintained for you; never hand-edit it. The language model
-   writes the diary, and the orchestrator later performs the admission comparison.
-   Candidate extraction and final writes are deterministic tooling; selections
-   and conflict disposition are your explicit choices at the gate.
-2. **The gate surfaces candidates.** Before the approval gate the learning gate
-   reads `memory.md` and shows each Interpretation, Deviation and Tradeoff entry
-   verbatim as a candidate (each entry is one line; Open questions are never
-   offered), then always asks "Anything to add for next time?", where you can
-   add a note in your own words and pick which of the four headings it belongs
-   under. The User Guide shows [what it looks like](../guide/09-rules-and-the-learning-loop.md).
-3. **You confirm what to keep, and it writes.** A confirmed learning lands as a
-   dated entry — you never pick a file path; the heading determines the
-   destination.
+   auto-created and maintained for you; never hand-edit it. It is the stage's
+   record of the agent's reasoning, and nothing in it is offered to the person.
+2. **A correction is asked about once.** Before the approval gate of a stage
+   where the person corrected the agent (Request Changes, or a correction in
+   their own words while it worked) in a way that would hold next time, the
+   agent asks "You asked me to <their change>. Keep that for next time?" with
+   `Yes, for this project`, `Yes, for the team` and `No`. With nothing
+   corrected, nothing is asked. A note they ask outright to keep is kept with
+   no question. The User Guide shows [what it looks like](../guide/09-rules-and-the-learning-loop.md).
+3. **It writes what they keep.** A kept correction lands as a dated practice
+   line: the person never picks a file path or a heading; their pick decides the
+   file and the agent routes the heading.
 
 ### Where a kept learning lands
 
 A confirmed learning *is* a practice: it lands in the same space memory files
 practices-discovery affirms (`aidlc/spaces/<active-space>/memory/team.md` /
-`memory/project.md`) — there is no separate `*-learnings.md` surface. The gate
-routes it by topical heading:
+`memory/project.md`), with no separate `*-learnings.md` surface. The person's
+pick decides the file:
 
-| Heading at the gate | Lands in | Audit event |
+| The person's pick | Lands in | Audit event |
 |---|---|---|
-| Interpretation / Deviation / Tradeoff | `aidlc/spaces/<active-space>/memory/project.md` (default) | `RULE_LEARNED` |
-| same, promoted one click | `aidlc/spaces/<active-space>/memory/team.md` | `RULE_LEARNED` |
-| Open question | nothing — research items don't promote | — |
+| Yes, for this project (and a note they asked to keep) | `aidlc/spaces/<active-space>/memory/project.md` | `RULE_LEARNED` |
+| Yes, for the team | `aidlc/spaces/<active-space>/memory/team.md` | `RULE_LEARNED` |
+| No | nothing | none |
 
-The default scope is **project**, the narrowest. A one-click "promote to team"
-affordance widens a learning to `memory/team.md` when the lesson applies
-beyond this project. There is no widen-to-org path — org practices are framework-
+The default scope is **project**, the narrowest. **Yes, for the team** widens
+a learning to `memory/team.md` when the lesson applies beyond this project. There is no widen-to-org path: org practices are framework-
 shipped or organization-authored through a separate process, so the loop never
 writes at org scope. Keeping the default narrow stops one project's surprise from
 becoming an organization-wide rule by accident. The learning loop and

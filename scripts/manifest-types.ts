@@ -232,6 +232,17 @@ export type HarnessManifest = {
      * `agentStep`.
      */
     registration?: { file: string; missing: string; invalid: string };
+    /**
+     * The line the person is shown instead of `agentStep`, and doctor's fix
+     * instead of `recovery` and `notRunYet`, when the host started this chat
+     * in a folder inside the project, where no setting brings its hooks back.
+     * The engine knows that folder only from the host's own record of the
+     * running chat, read only and only that field (aidlc-lib.ts
+     * hostChatStartFolder: Claude Code's sessions/<pid>.json, Codex's rollout
+     * session record); with no such record the usual lines stand.
+     * `<entry>` and `<folder>` as in `agentStep`.
+     */
+    startedInsideProject?: string;
   };
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor" | ".grok"). */
   harnessDir: string;
@@ -261,6 +272,13 @@ export type HarnessManifest = {
    * layout reads it from the installed tree instead of from the row name.
    */
   kiroLayout?: "agent-v1" | "kas";
+  /**
+   * Kiro `agent-v1` rows only: text the packager appends to every hook command
+   * in the row's `agents/*.json`, so the shell the host starts each hook in
+   * hands the hook's own exit code back. The authored JSON carries the command
+   * without it.
+   */
+  hookCommandSuffix?: string;
   /** core/<src> → <harnessDir>/<dst> projections. */
   coreDirs: DirMap[];
   /** harness/<name>/<src> → <harnessDir>/<dst> authored-file copies. */

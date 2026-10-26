@@ -36,7 +36,7 @@ This applies to **every** structured-question site, including but not limited to
 - the ladder prompt (autonomy mode after the walking skeleton);
 - halt-and-ask on Bolt failure (Retry / Skip / Abort);
 - consolidated-summary confirmation before artifact generation;
-- the §13 learnings gate (keep / heading / promote-to-team).
+- the section 13 learnings question after a correction (keep for this project, for the team, or not).
 
 (Literal ` ```question ` fences legitimately remain in framework documentation
 like THIS file and the stage-protocol because they are authoring specs, not chat
@@ -202,7 +202,7 @@ Rules (both tracks):
   `select_commands[].selector` and execute that entry's complete `command`
   verbatim; never interpolate a selector. `new-work-routing` carries its routes
   as fields: `new_intent_command` (or a `scope_commands` entry for a corrected
-  scope), `compose_command`, and `continue_command` for the active workflow or,
+  scope; there is none when no plan is proposed), `compose_command`, and `continue_command` for the active workflow or,
   with `available_intents`, per-record `select_commands` and `reshape_commands`. Run them verbatim and
   retain the `--request` id through selection or composition. Existing intents with no selected cursor and
   pending work receive this ask on every harness, including after scope

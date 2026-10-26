@@ -1,7 +1,7 @@
 // covers: function:routeCodeGenerationPlanApproval, function:publishPlanApprovalAsk, function:notePlanApprovalAskReply, function:recordPlanApprovalAnswer, function:requestPlanApprovalReviewNow, function:codeGenerationPlanReadiness, function:planSummaryLines,
 // function:PLAN_APPROVAL_ASK_TYPE, function:planApprovalRuntimeFile, function:readPlanApprovalRuntimeRecord,
 // function:writePlanApprovalRuntimeRecord, function:removePlanApprovalRuntimeRecord, function:releaseTakenGuardRecoveryReply,
-// function:keepPlanApprovalAskOverStateWrite, function:planNote
+// function:keepPlanApprovalAskOverStateWrite, function:planNote, function:preparePlanRecordFolders
 //
 // The engine asks for Plan Approval itself. These cases drive the real `next`,
 // the real human-turn hook, and the real plan-approval guard over one poc
@@ -46,11 +46,15 @@
 //   - an isolated Code Generation run with the workflow at another stage: its
 //     plan step, plan question and revision name that run's own `next`, which
 //     brings back that run's step; the workflow's own steps keep the bare `next`.
+//   - the step that writes a plan (stage-level, a Unit's, a parallel batch's)
+//     makes each plan's record folder first, so a file tool that makes no
+//     folders writes the plan; a route check makes nothing.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
-import { appendFileSync, cpSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -103,6 +107,7 @@ import {
   personsWordsText,
   writeBaselineSourceSnapshot,
   writeSessionPidEntry,
+  hooksHealthDir,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { listMessages, saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
@@ -134,6 +139,8 @@ interface Emitted {
     status?: string;
     feedback?: string;
     note?: string;
+    notice?: string;
+    skipped?: boolean;
     editing?: boolean;
     choices?: string[];
     targets?: Array<{ unit: string | null; plan_path: string; summary: string[] }>;
@@ -578,7 +585,9 @@ describe("the engine asks for Plan Approval", () => {
     // stage's dispatched mode and handed the plan to the developer, which the
     // guard refused), and the person hears who does what.
     expect(planning.mode).toBe("inline");
-    expect(planning.narration).toBe("Writing the code plan for Code Generation (stage 21 of 30) first; the developer builds from it.");
+    // The record's cursor is past User Stories to Infrastructure Design, never
+    // started, so the count leaves them out, as a plan switch's line does.
+    expect(planning.narration).toBe("Writing the code plan for Code Generation (stage 11 of 20) first; the developer builds from it.");
 
     const ask = askFor(proj);
     expect(ask.question).toBe("Approve the code plan?");
@@ -979,7 +988,9 @@ describe("the engine asks for Plan Approval", () => {
   // "Approve it, and turn the sensors off": the agent records the approval
   // first, then runs the setter naming their message, with no chat it can name.
   // The approval their reply led to leaves the setting it also asked for theirs.
-  test("an approval and a setting in one reply: the approval recorded first, the setting is still theirs", () => {
+  // A message that already gave an approval does not also stand for a setting
+  // (t-setting-spent-message): the setting rides the answer, or goes first.
+  test("an approval and a setting in one reply: riding the answer, the setting is theirs; after the answer, refused", () => {
     const proj = project();
     askFor(proj);
     const words = "approve it, and turn the sensors off";
@@ -987,16 +998,17 @@ describe("the engine asks for Plan Approval", () => {
     const id = turnId(proj);
     // The approval row lands in a later second than their reply.
     Bun.sleepSync(1100);
-    const approved = answer(proj, "Approve Plan");
+    const approved = answer(proj, "Approve Plan", ["--sensors", "off"]);
     expect(approved.code, approved.message).toBe(0);
-    const set = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "sensors", "off", "--message", id, "--project-dir", proj], {
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Sensors**: off (set by you)");
+    const set = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "sensors", "on", "--message", id, "--project-dir", proj], {
       cwd: proj,
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
       encoding: "utf-8",
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
-    expect(set.status, `${set.stdout}${set.stderr}`).toBe(0);
-    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Sensors**: off (set by you)");
+    expect(set.status).not.toBe(0);
+    expect(`${set.stdout}${set.stderr}`).not.toContain(id);
   });
 
   // The other order: the setter naming their message runs first, as the plan
@@ -2441,6 +2453,17 @@ describe("one question for several ready Units", () => {
     expect(guardWrite(pd, join(pd, "src", "alpha.ts")).code).toBe(2);
   });
 
+  // With plan approval off the batch builds at once, so its one line names
+  // every plan and asks nothing.
+  test("with plan approval off, the batch's line names every plan and says they can be gone over at any time", () => {
+    const pd = swarmFixture(true, GROUP, "off");
+    const routed = swarmState(pd);
+    expect(routed.plan_approval.skipped, JSON.stringify(routed)).toBe(true);
+    expect(routed.plan_approval.notice).toContain("Plans written: ");
+    expect(routed.plan_approval.notice).toContain("Starting code generation now. You can ask me to go over the plans at any time.");
+    expect(routed.plan_approval.notice).not.toContain("?");
+  });
+
   test("shows every Unit's summary, and 'approve all' approves each Unit separately", () => {
     const { pd, ask } = groupedProject();
     expect(ask.question).toBe("Approve these 2 code plans?");
@@ -3793,6 +3816,84 @@ describe("the zero-Unit Code Generation lockout reported in #1172", () => {
     const current = nextThroughParts(proj).directive;
     expect(current.kind, JSON.stringify(current)).toBe("run-stage");
     expect(current.stage).toBe("functional-design");
+  });
+});
+
+// The Copilot CLI's file tool makes no folders ("Parent directory does not
+// exist"), and while the plan waits the guard refuses every PowerShell way of
+// making one (New-Item, a variable, python), so on Windows the agent looped and
+// then turned plan approval off before the plan question was ever asked. The
+// engine makes the plan's folder when it issues the step that writes the plan.
+describe("the plan's record folder is there before the plan is written", () => {
+  const emptyFolder = (dir: string): void => {
+    expect(existsSync(dir), dir).toBe(true);
+    expect(readdirSync(dir)).toEqual([]);
+  };
+
+  test("a bugfix's stage-level plan step, with its rules in parts: the folder is there from the first part", () => {
+    const proj = zeroUnitProject("bugfix");
+    expect(existsSync(stageDir(proj))).toBe(false);
+    const first = engineCall(proj, ["next"]);
+    expect(first, JSON.stringify(first)).toMatchObject({ kind: "load-steering", stage: "code-generation", part: 1 });
+    emptyFolder(stageDir(proj));
+    const planning = continueEachPart(proj, first);
+    expect(planning.plan_approval).toEqual({ status: "plan" });
+    emptyFolder(stageDir(proj));
+    // The plan is one plain file write into it.
+    const write = guardWrite(proj, join(stageDir(proj), "code-generation-plan.md"));
+    expect(write.code, write.stderr).toBe(0);
+  });
+
+  test("a Unit's plan step makes that Unit's folder only", () => {
+    const proj = unitProject("unit-a");
+    const step = next(proj) as Emitted & { unit?: string };
+    expect(step).toMatchObject({ kind: "run-stage", unit: "unit-a", plan_approval: { status: "plan" } });
+    emptyFolder(stageDir(proj, "unit-a"));
+    expect(existsSync(stageDir(proj))).toBe(false);
+  });
+
+  test("a parallel batch's plan step makes each listed Unit's folder", () => {
+    const pd = swarmFixture(false);
+    // Installed as config installs it, and the person's message reached the
+    // hooks, so `next` hands out the batch.
+    mkdirSync(join(pd, ".claude"), { recursive: true });
+    cpSync(join(AIDLC_SRC, "settings.json"), join(pd, ".claude", "settings.json"));
+    reply(pd, "continue");
+    const batch = next(pd);
+    expect(batch.kind, JSON.stringify(batch)).toBe("invoke-swarm");
+    expect(batch.plan_approval.status).toBe("plan");
+    for (const unit of GROUP) emptyFolder(codeGenerationRecordDir(pd, unit));
+    expect(existsSync(codeGenerationRecordDir(pd, "later"))).toBe(false);
+  });
+
+  test("a file where the folder goes, or a link out of the project, leaves the step as it was", () => {
+    const blocked = project();
+    mkdirSync(dirname(stageDir(blocked)), { recursive: true });
+    writeFileSync(stageDir(blocked), "", "utf-8");
+    expect(next(blocked).plan_approval).toEqual({ status: "plan" });
+    expect(readFileSync(join(hooksHealthDir(blocked), "plan-approval-ask.drops"), "utf-8")).toContain("EEXIST");
+    if (process.platform === "win32") return; // A link needs a privilege Windows does not give by default.
+    const linked = project();
+    const outside = mkdtempSync(join(tmpdir(), "t-plan-folder-outside-"));
+    try {
+      symlinkSync(outside, join(seededRecordDir(linked), "construction"));
+      expect(next(linked).plan_approval).toEqual({ status: "plan" });
+      expect(readdirSync(outside)).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("a route check makes nothing, and a written plan's folder keeps what it holds", () => {
+    const proj = project();
+    const probe = runOrchestrateNext(ORCHESTRATE, proj, [], { env: { ...process.env, AIDLC_ROUTE_CHECK: "1" } });
+    expect(probe.directive).toMatchObject({ kind: "run-stage", stage: "code-generation" });
+    expect(existsSync(stageDir(proj))).toBe(false);
+    expect(next(proj).plan_approval).toEqual({ status: "plan" });
+    emptyFolder(stageDir(proj));
+    writePlan(proj);
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(readdirSync(stageDir(proj))).toEqual(expect.arrayContaining(["code-generation-plan.md", "unit-test-instructions.md"]));
   });
 });
 

@@ -145,8 +145,8 @@ Bugfix uses 6 stages at Minimal depth. It preserves workspace understanding,
 requirements, Code Generation, Build and Test, and the deployment path while
 dropping discovery, broad design, and unrelated Operation work.
 
-Bugfix also turns learnings and summary confirmation off, so no stage ends
-with "Anything to add for next time?". Sensors, stage approvals, and plan
+Bugfix also turns learnings and summary confirmation off, so no stage keeps a
+diary or asks "Keep that for next time?" after a correction. Sensors, stage approvals, and plan
 approval stay on.
 
 ## `refactor`

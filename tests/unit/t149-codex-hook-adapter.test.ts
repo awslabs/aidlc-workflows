@@ -29,6 +29,8 @@
 //   record-human-turn -> a question box that ran out ({"answers":{}}) records
 //                       QUESTION_UNANSWERED, which spends the turn before it,
 //                       and tells the agent to ask again.
+//   record-human-turn -> a box with one question left blank is still the
+//                       person's turn, and their other picks are on record.
 //
 // WHY SUBPROCESS. The adapter IS a subprocess shim — in-process unit testing
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
@@ -404,6 +406,34 @@ describe("t149 Codex structured request_user_input presence", () => {
       expect(replied).toHaveLength(1);
       expect(replied[0]).toContain("**Question**: Approve?");
       expect(replied[0]).toContain(`**Reply**: ${words}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Codex's box lets the person move past a question and submit with it
+  // unanswered: that question comes back as an empty list beside their other
+  // picks (captured on Codex CLI 0.164.0).
+  test("a box with one question left blank is the person's turn, and their pick is on record", () => {
+    const dir = scratchProject(true);
+    try {
+      const payload = {
+        ...structuredSelectionPayload(dir, JSON.stringify({
+          answers: { colour: { answers: [] }, fruit: { answers: ["Pear"] } },
+        }), "blank-question-turn"),
+        tool_input: {
+          questions: [
+            { header: "Colour", id: "colour", question: "Favourite colour?", options: [{ label: "Red", description: "Choose Red." }, { label: "Blue", description: "Choose Blue." }] },
+            { header: "Fruit", id: "fruit", question: "Favourite fruit?", options: [{ label: "Apple", description: "Choose Apple." }, { label: "Pear", description: "Choose Pear." }] },
+          ],
+        },
+      };
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(1);
+      const replied = readAudit(dir).split("\n## ").filter((block) => block.includes("**Event**: QUESTION_REPLIED"));
+      expect(replied).toHaveLength(1);
+      expect(replied[0]).toContain("**Question**: Favourite fruit?");
+      expect(replied[0]).toContain("**Reply**: Pear");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { appendAuditEntries, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   checkpointRecordForms, loadConstructionEvidence, type ApprovalFindingDispositions, type ConstructionEvidence,
+  type RejectedFindingDispositions,
 } from "./aidlc-construction-checkpoints.ts";
 import { APPROVAL_GATE_CHOICES } from "./aidlc-reply-reader.ts";
 import {
@@ -451,7 +452,7 @@ export function approveSwarmCheckpoint(
 
 export function rejectSwarmCheckpoint(
   pd: string, batch: number, units: string[], _reply: string, givenReason: string, session = "",
-  message?: string,
+  message?: string, rejectedFindings?: RejectedFindingDispositions,
 ): SwarmCheckpoint {
   // The conductor read the person's reply as a change request. The reason is
   // the conductor's --reason when given, otherwise the person's own words.
@@ -468,6 +469,8 @@ export function rejectSwarmCheckpoint(
       throw new Error("Swarm Request Changes needs what the person asked to change, on one line, in --reason.");
     }
     const after = recheck(pd, batch, units, current, selection.root, false);
+    // One decision for the batch: each Unit's row carries it.
+    const dispositions = rejectedFindings?.([STAGE], after.result.units);
     appendAuditEntries(after.result.units.map((unit) => ({
       eventType: "GATE_REJECTED",
       fields: {
@@ -475,6 +478,7 @@ export function rejectSwarmCheckpoint(
         Session: session,
         "User Input": userInput, Reason: reason, Feedback: reason,
         ...protectedResponseFields(response),
+        ...dispositions,
       },
     })), pd, selection.intent, selection.space);
     consumeProtectedQuestion(pd, session);

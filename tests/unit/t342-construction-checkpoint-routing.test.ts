@@ -339,15 +339,15 @@ describe("t342 Construction checkpoint routing", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A live Claude Code run picked the work back up at a waiting Unit checkpoint:
-  // its step has no line of its own, so the pick-up line rides that step itself.
+  // its step has no line of its own, so the pick-up line rides that step's lines for the person.
   test("picking the work back up at a Unit checkpoint says where it picks up", () => {
     const p = fixture();
     cover(p, "alpha", stages);
     const chat = { ...process.env, AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000000342", AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
     const resumed = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, ["--resume"], { env: chat });
-    const directive = resumed.directive as { construction_checkpoint?: { unit: string }; narration?: string } | null;
+    const directive = resumed.directive as { construction_checkpoint?: { unit: string }; change_notices?: string[] } | null;
     expect(directive?.construction_checkpoint?.unit, resumed.stderr).toBe("alpha");
-    expect(String(directive?.narration)).toStartWith("Picking up where we left off, at ");
+    expect(directive?.change_notices?.[0] ?? "").toStartWith("Picking up where we left off, at ");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A live run built two Units one at a time with checkpoints and learnings
@@ -368,15 +368,17 @@ describe("t342 Construction checkpoint routing", () => {
       expect(surfaced.status, `${slug}: ${surfaced.stderr}`).toBe(0);
     }
     expect(surface("requirements-analysis").status).toBe(1);
-    // Approved, the checkpoint's stages no longer wait on the person.
+    // Approved, the checkpoint's stages no longer wait on the person; the stage
+    // approved last still takes a note given with that approval.
     approve(p, "alpha");
-    expect(surface("code-generation").stderr).toContain('slug mismatch: requested "code-generation"');
+    expect(surface("code-generation").status).toBe(0);
+    expect(surface("requirements-analysis").stderr).toContain('slug mismatch: requested "requirements-analysis"');
   });
 
   // Every Unit's turn at a stage writes the one stage diary. A Unit's
-  // checkpoint lists the notes written for that Unit and the notes that name
-  // no Unit, never an earlier Unit's notes again.
-  test("a Unit's checkpoint lists only that Unit's notes and the notes that name no Unit", () => {
+  // checkpoint counts the notes written for that Unit and the notes that name
+  // no Unit, never an earlier Unit's notes again, and offers none of them.
+  test("a Unit's checkpoint counts only that Unit's notes and the notes that name no Unit", () => {
     const p = fixture();
     const surface = learningsSurface(p);
     const dash = "\u2014"; // the diary line's separator, an em dash
@@ -389,18 +391,21 @@ describe("t342 Construction checkpoint routing", () => {
       `- 2026-10-05T11:00:00Z [unit beta] ${dash} beta reads the store through alpha; no second copy`,
       "",
     ].join("\n"));
-    const offered = () => {
+    const counted = () => {
       const result = surface("functional-design");
       expect(result.status, result.stderr).toBe(0);
-      return (JSON.parse(result.stdout).candidates as Array<{ summary: string }>).map((c) => c.summary);
+      const out = JSON.parse(result.stdout) as { memory_entries_total: number; candidates: unknown[]; questions: unknown[] };
+      expect(out.candidates).toEqual([]);
+      expect(out.questions).toEqual([]);
+      return out.memory_entries_total;
     };
     cover(p, "alpha");
     expect(next(p).construction_checkpoint?.unit).toBe("alpha");
-    expect(offered()).toEqual(["alpha keeps its own store", "every Unit logs in UTC"]);
+    expect(counted()).toBe(2);
     approve(p, "alpha");
     cover(p, "beta");
     expect(next(p).construction_checkpoint?.unit).toBe("beta");
-    expect(offered()).toEqual(["every Unit logs in UTC", "beta reads the store through alpha"]);
+    expect(counted()).toBe(2);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the working skeleton's checkpoint offers the learnings of the stages its Unit walked", () => {
@@ -413,7 +418,8 @@ describe("t342 Construction checkpoint routing", () => {
     expect(directive.protocol_modules).toEqual(["construction", "checkpoint", "learnings", "sensors"]);
     for (const slug of stages) expect(surface(slug).status, slug).toBe(0);
     approve(p, "alpha", "skeleton");
-    expect(surface("code-generation").stderr).toContain('slug mismatch: requested "code-generation"');
+    expect(surface("code-generation").status).toBe(0);
+    expect(surface("requirements-analysis").stderr).toContain('slug mismatch: requested "requirements-analysis"');
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // At a Unit's checkpoint Current Stage still names the Unit's first stage,
@@ -1969,10 +1975,12 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     const p = fixture({ iteration: "stage-major" });
     for (const unit of ["alpha", "beta"]) cover(p, unit, stages.slice(0, 1));
     const said = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "functional-design", "--every-unit"]).stdout);
-    expect(said.kind, JSON.stringify(said)).toBe("print");
-    expect(said.message).toContain("jump.ts execute --target functional-design --direction redo");
-    expect(said.message).toContain('"Reopened Functional Design for every unit."');
-    expect(said.message).not.toContain("/aidlc --");
+    // The same `next` makes the redo and returns the step, saying what it reopened.
+    expect(said.kind, JSON.stringify(said)).not.toBe("print");
+    expect(said.stage).toBe("functional-design");
+    expect(said.change_notices).toContain("Reopened Functional Design for every unit.");
+    expect(JSON.stringify(said)).not.toContain("/aidlc --");
+    expect(jumped(p)).toBe(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("with Construction Checkpoints off, a stage approved for every unit is reopened for every unit only", () => {
@@ -1988,12 +1996,11 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
     expect(jumped(p)).toBe(0);
     const every = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--every-unit"]).stdout);
-    expect(every.kind, JSON.stringify(every)).toBe("print");
-    expect(every.message).toContain('"Reopened NFR Design and the steps after it for every unit."');
-    const command = /`[^`]*aidlc-jump\.ts (execute [^`]+)`/.exec(every.message)?.[1];
-    expect(command, every.message).toBe("execute --target nfr-design --direction backward --scope feature");
-    const ran = tool(p, "jump", command!.split(" "));
-    expect(ran.status, ran.out).toBe(0);
+    // The same `next` makes the backward jump and returns the step, saying what
+    // it reopened.
+    expect(every.kind, JSON.stringify(every)).not.toBe("print");
+    expect(every.stage).toBe("nfr-design");
+    expect(every.change_notices).toContain("Reopened NFR Design and the steps after it for every unit.");
     expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Current Stage**: nfr-design");
     expect(jumped(p)).toBe(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -2116,19 +2123,63 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "alpha" });
     const unknown = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--unit", "gamma"]).stdout);
     expect(unknown.kind).toBe("error");
-    expect(unknown.message).toContain('"gamma" is not one of this work\'s units (alpha, beta)');
+    expect(unknown.message).toContain("gamma is not one of this work's units (alpha, beta).");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  const resumedReport = (p: string, args: string[]) => JSON.parse(tool(p, "orchestrate", [
+    "report", "--result", "resumed", ...args,
+  ]).stdout) as { kind: string; message: string };
+  const askedWhichUnit =
+    "Tell the person in one line: \"gamma is not one of this work's units (alpha, beta). Which one did you mean?\"";
+
+  test("a re-entry jump or redo naming a Unit this work does not have asks which one, never 'accepted' first", () => {
+    const p = betaBuilding();
+    const before = readFileSync(seededStateFile(p), "utf-8");
+    for (const choice of [["jump", "--target", "nfr-design"], ["redo"]]) {
+      const asked = resumedReport(p, ["--choice", ...choice, "--unit", "gamma"]);
+      expect(asked.kind, choice.join(" ")).toBe("print");
+      expect(asked.message, choice.join(" ")).not.toContain("accepted");
+      expect(asked.message, choice.join(" ")).toContain(askedWhichUnit);
+    }
+    // A Unit the work has still goes to the jump.
+    expect(resumedReport(p, ["--choice", "jump", "--target", "nfr-design", "--unit", "alpha"]).message)
+      .toContain("Jump accepted. Run `next --stage nfr-design --unit alpha`");
+    expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("past the per-unit steps, a re-entry jump naming a Unit this work does not have asks the same way", () => {
+    const p = gatesApprovedUntil("code-generation");
+    for (const result of ["awaiting-approval", "approved"]) {
+      const report = tool(p, "orchestrate", [
+        "report", "--stage", "code-generation", "--result", result, "--user-input", "Approve",
+      ]);
+      expect(report.status, report.out).toBe(0);
+    }
+    const before = readFileSync(seededStateFile(p), "utf-8");
+    expect(before).toContain("- **Current Stage**: build-and-test");
+    const refused = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--unit", "gamma"]).stdout);
+    expect(refused.message).toContain("gamma is not one of this work's units (alpha, beta).");
+    const asked = resumedReport(p, ["--choice", "jump", "--target", "nfr-design", "--unit", "gamma"]);
+    expect(asked.message).not.toContain("accepted");
+    expect(asked.message).toContain(askedWhichUnit);
+    expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a forward jump that drops no Unit's work, and a stage-major forward jump, still jump", () => {
+    // A unit-major jump with a line to say about the steps it skips is named
+    // for the agent, line and all.
     const fresh = fixture();
     const clear = JSON.parse(tool(fresh, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
     expect(clear.kind, JSON.stringify(clear)).toBe("print");
     expect(clear.message).toContain("--target code-generation --direction forward");
+    // Stage by stage there is nothing to say or run around it, so the `next`
+    // makes the jump itself and returns the step it lands on.
     const stageMajor = fixture({ iteration: "stage-major" });
     cover(stageMajor, "alpha", stages.slice(0, 4));
     const jump = JSON.parse(tool(stageMajor, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
-    expect(jump.kind, JSON.stringify(jump)).toBe("print");
-    expect(jump.message).toContain("--target code-generation --direction forward");
+    expect(jump.kind, JSON.stringify(jump)).not.toBe("print");
+    expect(jump.stage).toBe("code-generation");
+    expect(jumped(stageMajor)).toBe(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit start records the Unit's stage and a new chat names it", () => {
@@ -2375,12 +2426,14 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(resumed.narration).toBe("Picking up beta's code at step 3 of 4 (1-2 done).");
   }
 
-  // beta does its Code Generation again from the start: its plan is redone and
-  // comes back for approval, and the old build is not picked up.
+  // beta does its Code Generation again from the start: its plan comes back
+  // for approval as it stands, and once approved the old build is not picked up.
   function redoneFromStart(p: string, label: string) {
+    expect(next(p), label).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit: "beta" });
+    approveCurrentPlan(p);
     const beat = next(p);
     expect(beat, label).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta" });
-    expect(beat.plan_approval?.status, label).not.toBe("approved");
+    expect(beat.plan_approval, label).toEqual({ status: "approved" });
     expect(beat.narration ?? "", label).not.toContain("Picking up");
     return beat;
   }
@@ -2411,7 +2464,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
         ));
         expect(message).toContain(
           'tell the person in one line: "Redoing Code Generation for unit beta from the start, plan included. ' +
-            'Its new plan comes back to you for approval."',
+            'Its plan comes back to you for approval."',
         );
         expect(message).not.toContain("unit resume");
         for (const [, name, rest] of message.matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
@@ -2458,7 +2511,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       );
       expect(answered.message).toContain(
         'tell the person in one line: "Redoing Code Generation for unit beta from the start, plan included. ' +
-          'Its new plan comes back to you for approval."',
+          'Its plan comes back to you for approval."',
       );
       for (const [, name, rest] of answered.message.matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
         if (name === "orchestrate" && rest === "park --person-asked") continue;
@@ -2755,6 +2808,68 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     const every = printedReopen(copilotNext(p, "next --stage code-generation --every-unit"));
     expect(every).toContain("--units alpha,beta");
     expect(copilotRuns(p, every!).refused).toBeNull();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The person's Redo on re-entry goes through `report --result resumed
+  // --choice redo`, whose print names the reopen itself (#2772). On Copilot
+  // that reopen runs on the first ask, as on every other harness: the Unit in
+  // flight starts its step over instead of picking up its old build, and a
+  // built Unit's step is redone as their redo. Only the reopen the print named
+  // runs that way.
+  const redoReopen = (step: Step) =>
+    /`(bun \.aidlc\/tools\/aidlc-jump\.ts reopen [^`]+)`/.exec(String(step.message ?? ""))?.[1];
+  function betaBuildingUnder(policy: string): string {
+    const p = betaBuilding();
+    writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
+      .replace("- **Change Control**: strict", `- **Guard Policy**: ${policy} (set by you)`));
+    startedBuild(p);
+    COPILOT.install(p);
+    copilotSays(p, "Redo Code Generation for beta from the start, please.");
+    return p;
+  }
+
+  for (const policy of ["strict", "off"]) {
+    test(`Copilot, Guard Policy ${policy}: the person's Redo of the Unit in flight, through report --result resumed --choice redo, runs the reopen it prints on the first ask`, () => {
+      const p = betaBuildingUnder(policy);
+      const reopen = redoReopen(copilotStep(p, "report --result resumed --choice redo"));
+      expect(reopen).toContain("--units beta --via redo");
+      expect(copilotRuns(p, reopen!).refused, "the Redo the person asked for was refused on Copilot").toBeNull();
+      // A Redo is a fresh attempt: beta's plan comes back to the person as it
+      // stands, and once approved the old build is not picked up.
+      const asked = copilotNext(p, "next") as Step & { choices?: { label: string; command: string }[] };
+      expect(asked).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit: "beta" });
+      copilotSays(p, "approve");
+      const approve = asked.choices?.find((choice) => choice.label === "Approve Plan")?.command;
+      expect(copilotRuns(p, String(approve)).refused).toBeNull();
+      const beat = copilotNext(p, "next");
+      expect(beat).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta" });
+      expect(beat.plan_approval).toEqual({ status: "approved" });
+      expect(beat.artifact_reuse).toEqual({ decision: "redo", unit: "beta" });
+      expect(beat.narration ?? "").not.toContain("Picking up");
+      expect(approved(p, "alpha")).toBe(true);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`Copilot, Guard Policy ${policy}: the person's Redo of a built Unit, through report --result resumed --choice redo, is redone as their redo`, () => {
+      const p = policyFixture("classic", `${policy} (set by you)`, "adversarial");
+      COPILOT.install(p);
+      buildReviewed(p, "alpha");
+      copilotSays(p, "carry on");
+      copilotNext(p, "next");
+      copilotSays(p, "Redo Code Generation for alpha, please.");
+      const reopen = redoReopen(copilotStep(p, "report --result resumed --choice redo"));
+      expect(reopen).toContain("--units alpha --via redo");
+      expect(copilotRuns(p, reopen!).refused, "the Redo the person asked for was refused on Copilot").toBeNull();
+      expect(reopenedAs(p)).toBe("redo");
+      expect(copilotNext(p, "next").artifact_reuse).toEqual({ decision: "redo", unit: "alpha" });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  test("Copilot: after the Redo's print, a reopen it did not name is still refused", () => {
+    const p = betaBuildingUnder("off");
+    const reopen = redoReopen(copilotStep(p, "report --result resumed --choice redo"));
+    expect(reopen).toContain("--via redo");
+    expect(copilotRuns(p, reopen!.replace(" --via redo", "")).refused, "a reopen the print did not name ran").not.toBeNull();
+    expect(copilotRuns(p, reopen!.replace("--units beta", "--units alpha")).refused, "another Unit's reopen ran").not.toBeNull();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A side-by-side build was prepared (a Bolt opened per Unit) and the person
@@ -3644,8 +3759,8 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
 
   // A team member's Request Changes at a team Unit's gate is a new attempt for
   // that Unit too.
-  function teamUnits(): string {
-    const p = checkpointsOff("strict");
+  function teamUnits(policy = "strict"): string {
+    const p = checkpointsOff(policy);
     writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
       .replace("- **Unit Ownership**: solo", "- **Unit Ownership**: team\n- **Unit Gate Rhythm**: unit-end"));
     return p;
@@ -3679,6 +3794,81 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(again.status).not.toBe(0);
     expect(again.out).toContain(SPENT);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Under relaxed and off a change after the review is accepted and no further
+  // review is owed (stage-protocol-reviewer.md 12a). A review the agent starts
+  // on its own past the one recovery is still refused, to the agent alone, and
+  // the step it names takes the Unit on to its approval: never a question for
+  // the person, a redo of the Unit or a restart of the stage. The change line
+  // the refused request recorded rides on the refusal, so it is said once.
+  function carriesOn(refused: { status: number | null; out: string }) {
+    expect(refused.status, refused.out).not.toBe(0);
+    for (const strictWayOn of [
+      '"ask_type":"guard-recovery"', "reopen --target", "Restart the stage", "changed again afterward", "on the human's behalf",
+    ]) expect(refused.out).not.toContain(strictWayOn);
+    expect(refused.out).toContain("the change is accepted");
+    expect(refused.out).toMatch(/`[^`]*orchestrate next`/);
+    const line = refused.out.split(/\r?\n/).find((entry) => entry.startsWith('{"error"'));
+    expect(JSON.parse(line ?? "{}").change_notices, refused.out).toEqual([ALPHA_EDIT_LINE]);
+  }
+
+  for (const policy of ["off", "relaxed"]) {
+    test(`${policy}, checkpoints off: after a redo of a Unit's Code Generation, a change and the agent's own review carry on`, () => {
+      const p = checkpointsOff(policy);
+      buildReviewed(p, "alpha", alphaAt(p, 1));
+      reopenCodeGeneration(p, "alpha", 2);
+      expect(reviewThroughLog(p, codeReview("alpha", 1)).request?.recovery).toBe("stale-receipt");
+      alphaAt(p, 3)();
+      carriesOn(tool(p, "log", codeReview("alpha", 2)));
+      expect(next(p)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha" });
+      cover(p, "alpha", ["code-generation"]);
+      expect(next(p)).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "beta" });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`${policy}, team: after a team Unit is sent back and rebuilt, a change and the agent's own review carry on to its gate`, () => {
+      const p = teamUnits(policy);
+      buildReviewed(p, "alpha", alphaAt(p, 1));
+      teamSendBack(p, "alpha", "Return a clear error for an empty name");
+      expect(buildReviewed(p, "alpha", alphaAt(p, 2)).request?.recovery).toBe("stale-receipt");
+      alphaAt(p, 3)();
+      carriesOn(tool(p, "log", codeReview("alpha", 2)));
+      expect(next(p)).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha", gate: true });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`${policy}: on a Unit's first build, a second change and the agent's own review carry on to the Unit's completion`, () => {
+      const p = checkpointsOff(policy);
+      for (const slug of stages.slice(0, 4)) {
+        cover(p, "alpha", [slug], false);
+        expect(reviewThroughLog(p, [
+          "review", "--stage", slug, "--reviewer", findStageBySlug(slug)!.reviewer!, "--unit", "alpha", "--iteration", "1",
+        ]).status).toBe(0);
+        appendAuditEntry("UNIT_COMPLETED", {
+          Stage: slug, Unit: "alpha", Mode: "wave", "Run floor": latestMainWorkflowStageRunFloorForProject(p, slug, true, "alpha"),
+          "Artifact Fingerprint": reviewArtifactFingerprint(p, findStageBySlug(slug)!, "alpha", { requireRequiredArtifacts: true })!,
+        }, p);
+      }
+      const started = tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "alpha"]);
+      expect(started.status, started.out).toBe(0);
+      const plan = planApproved(p, "alpha");
+      writeFileSync(plan, readFileSync(plan, "utf-8").replaceAll("- [ ] Step", "- [x] Step"));
+      const built = join(seededRecordDir(p), "construction", "alpha", "code-generation");
+      for (const name of ["code-summary", "traceability"]) writeFileSync(join(built, artifactFilename(name)), `# alpha ${name}\n`);
+      writeFileSync(join(built, "source-manifest.json"), JSON.stringify({
+        stage: "code-generation", unit: "alpha", version: 1, writes: [{ path: "src/alpha.ts" }],
+      }));
+      alphaAt(p, 1)();
+      expect(reviewThroughLog(p, codeReview("alpha", 1)).status).toBe(0);
+      alphaAt(p, 2)();
+      expect(reviewThroughLog(p, codeReview("alpha", 2)).request?.recovery).toBe("stale-receipt");
+      alphaAt(p, 3)();
+      const refused = tool(p, "log", codeReview("alpha", 3));
+      carriesOn(refused);
+      expect(refused.out).toContain("state unit complete --stage code-generation --unit alpha");
+      const completed = tool(p, "state", ["unit", "complete", "--stage", "code-generation", "--unit", "alpha"]);
+      expect(completed.status, completed.out).toBe(0);
+      expect(next(p)).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "beta" });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 });
 
 // The walking skeleton gates the per-unit stages. Once they are all done or

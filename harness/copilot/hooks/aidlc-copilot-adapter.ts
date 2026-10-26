@@ -544,13 +544,16 @@ export async function run(
   const PLAIN_WORD = `(?:[A-Za-z0-9_./:=,+-]+${PLAIN_QUOTED}?|${PLAIN_QUOTED})`;
   const PLAIN_COMMAND = new RegExp(`^ *${PLAIN_WORD}(?: +${PLAIN_WORD})* *$`);
   // The shell the command runs in. A shell the call names wins, so Git Bash
-  // or WSL on Windows keeps the POSIX reading; a tool named for its shell
-  // (`powershell`, `bash`) is that shell; VS Code's terminal tool runs the
-  // terminal's default shell, PowerShell or cmd on Windows.
+  // or WSL on Windows keeps the POSIX reading; a tool named `powershell` is
+  // that shell; VS Code's terminal tool runs the terminal's default shell,
+  // PowerShell or cmd on Windows; and the CLI hands its shell tool to these
+  // hooks as `Bash` on every host, which on Windows is PowerShell (the CLI's
+  // own record names that tool `powershell`).
   const terminalShell = typeof nativeToolInput?.shell === "string" ? nativeToolInput.shell.trim() : "";
   const windowsTerminal = terminalShell
     ? /(?:^|[\\/])(?:pwsh|powershell|cmd)(?:\.exe)?$/i.test(terminalShell)
-    : /^(?:pwsh|powershell)$/i.test(rawToolName) || (VSCODE_SHELL_TOOLS.has(rawToolName) && platform() === "win32");
+    : /^(?:pwsh|powershell)$/i.test(rawToolName) ||
+      ((VSCODE_SHELL_TOOLS.has(rawToolName) || /^bash$/i.test(rawToolName)) && platform() === "win32");
   // PowerShell itself: cmd never splits a command line at `;`.
   const powerShellTerminal = windowsTerminal && !/(?:^|[\\/])cmd(?:\.exe)?$/i.test(terminalShell);
   // The plan-approval guard reads a PowerShell command the way PowerShell runs
@@ -790,14 +793,17 @@ export async function run(
       // One of the person's checks switched as they asked runs click-free when
       // they asked since the last decision (on always), with or without the
       // message they asked in beside it (--message, which the setter proves), or
-      // the words form from before it (--person-words, --person-words-file);
-      // any other setting keeps the prompt.
-      case "config":
+      // the words form from before it (--person-words, --person-words-file),
+      // and with the --verbatim an engine step ends it with; any other setting
+      // keeps the prompt.
+      case "config": {
+        const own = rest.at(-1) === "--verbatim" ? rest.slice(0, -1) : rest;
         return verb === "set" && !(
-          (rest.length === 2 ||
-            (rest.length === 4 && (rest[2] === "--message" || rest[2] === "--person-words" || rest[2] === "--person-words-file"))) &&
-          personCheckSwitchAllowed(projectDir, rest[0], rest[1])
+          (own.length === 2 ||
+            (own.length === 4 && (own[2] === "--message" || own[2] === "--person-words" || own[2] === "--person-words-file"))) &&
+          personCheckSwitchAllowed(projectDir, own[0], own[1])
         );
+      }
       // Turning Construction checkpoints on or off runs click-free when the
       // setter's own check passes (the person asked for it since the last
       // decision, or chose it); without that it keeps the prompt.
