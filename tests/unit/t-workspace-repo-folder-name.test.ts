@@ -276,10 +276,15 @@ describe("a repo folder whose name AI-DLC cannot hold", () => {
     expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
     expect(readIntentRegistry(proj)[0]?.repos).toEqual(["api"]);
     const line = 'The folder "R&D" is not part of this work: its name has "&", which breaks AI-DLC\'s commands on Windows.';
-    const said = String(next().narration ?? "");
+    // What the person hears with a step: its lines for them, and its own line.
+    const heard = (step: Record<string, unknown>): string => [
+      ...(Array.isArray(step.change_notices) ? step.change_notices.map(String) : []),
+      ...(typeof step.narration === "string" ? [step.narration] : []),
+    ].join(" ");
+    const said = heard(next());
     expect(said).toContain(line);
     expect(said.split(line).length).toBe(2);
-    expect(String(next().narration ?? "")).not.toContain(line);
+    expect(heard(next())).not.toContain(line);
     expect(readdirSync(proj)).toContain("R&D");
   });
 
