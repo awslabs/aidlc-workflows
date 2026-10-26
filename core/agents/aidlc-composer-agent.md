@@ -638,6 +638,11 @@ keep it as advisory evidence only. Route solely on
   that second result; require the selected stock scope to rank at `diff: 0`.
   The proposal is not ready until its grid, summary, distance, and rendered
   stage decisions all describe this same adopted stock grid.
+- Stage changes the dispatch names as the person's own (typed with their
+  request) are not flips you fold: keep them in every grid you propose and never
+  adopt a stock grid that undoes them (a near-stock grid with them is custom on
+  that scope), until the person changes them at the gate (then route as that
+  edit leaves the grid, Step 9).
 - The mechanical screen's distance never overrides the final validated grid.
   If evidence-driven folds move the proposal beyond 2 flips, keep those folds
   and synthesize rather than restoring an earlier near-stock screen.
@@ -751,7 +756,7 @@ before the rename); the composer never flips it. Mark that row read-only in
 the rendered proposal: a recompose lands only `changes.skip` / `changes.add`,
 so a policy edit there would be discarded. Name the route instead: when the
 person asks to raise or lower it, the conductor runs
-`{{INVOKE}} engine config set guard-policy <value> --person-words '<their words>'`, before any scope change
+`{{INVOKE}} engine config set guard-policy <value> --message <id>` (`<id>` the message they asked in), before any scope change
 they also asked for. Changing scope alone never lowers the running policy.
 Pass `guardPolicy` to `validate-grid --guard-policy <value>` so the
 validator checks it with the grid. For a front composition the conductor
@@ -954,8 +959,8 @@ deterministic `recompose` command. For `mode: "matched"` and `mode: "custom"`,
 the conductor creates the workflow on `scopeName` (matched) or `baseScope`
 (custom) with the typed `changes` and `creationSettings`, and the plan applies
 to that piece of work only. When the person picks "Approve and save as scope",
-the conductor asks for a name (your `scopeName` is the default) and runs the
-engine's `scope save`, which writes the scope from the running work's plan.
+the conductor asks for a name (your `scopeName` is the default) and the
+creation it runs saves the scope from the new work's plan (`--save-as`).
 
 ---
 

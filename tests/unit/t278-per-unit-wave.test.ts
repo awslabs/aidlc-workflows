@@ -53,11 +53,17 @@ import {
   REPO_ROOT,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -650,6 +656,7 @@ describe("t278 engine-emitted wave contract", () => {
       { name: "web", kind: "ui" },
       { name: "contract", kind: "spec" },
     ]);
+    seedAnsweredUnitQuestions(proj, "infrastructure-design", ["api", "web", "contract"]);
 
     const result = next(proj);
     const directive = result.directive;
@@ -715,6 +722,7 @@ describe("t278 engine-emitted wave contract", () => {
   test("downstream consumes omit artifacts pruned by the producer for this unit kind", () => {
     const proj = project("nfr-design");
     seedBoltDag(proj, [{ name: "contract", kind: "spec" }]);
+    seedAnsweredUnitQuestions(proj, "nfr-design", ["contract"]);
 
     const entry = next(proj).directive.wave?.entries[0] as WaveEntry;
     const consumePaths = [
@@ -756,6 +764,7 @@ describe("t278 engine-emitted wave contract", () => {
       ],
       [["alpha", "beta"]],
     );
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     writeDependencyArtifact(proj, [
       { name: "alpha", kind: "service", depends_on: [] },
       { name: "beta", kind: "service", depends_on: ["alpha"] },
@@ -776,6 +785,7 @@ describe("t278 engine-emitted wave contract", () => {
       ["alpha", "beta"],
       [["alpha"], ["beta"]],
     );
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     cover(proj, "alpha", "functional-design", REQUIRED_FD);
 
     const alphaReview = next(proj).directive;
@@ -1352,6 +1362,7 @@ describe("t278 engine-emitted wave contract", () => {
   test("fully settled siblings are omitted from a repeated same-batch wave", () => {
     const proj = project();
     seedBoltDag(proj, ["alpha", "beta"]);
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     cover(proj, "alpha", "functional-design", REQUIRED_FD);
     review(proj, "alpha");
     completeWave(proj, "alpha");
@@ -1380,6 +1391,7 @@ describe("t278 engine-emitted wave contract", () => {
       kind: "service",
     }));
     seedBoltDag(proj, units);
+    seedAnsweredUnitQuestions(proj, "functional-design", units.map((unit) => unit.name));
     const result = next(proj);
     const entries = result.directive.wave?.entries ?? [];
     expect(entries.length).toBeGreaterThan(0);
@@ -1517,6 +1529,7 @@ describe("t278 engine-emitted wave contract", () => {
       const proj = project("functional-design", "stage-major", "none");
       addRuntimeState(proj);
       seedBoltDag(proj, ["alpha", "beta"], [["alpha"], ["beta"]]);
+      seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
       if (priorCompletion) {
         cover(proj, "alpha", "functional-design", REQUIRED_FD);
         completeWave(proj, "alpha");
@@ -1580,6 +1593,7 @@ describe("t278 engine-emitted wave contract", () => {
         readFileSync(file, "utf-8").replaceAll("- [ ]", "- [S]"),
       );
       seedBoltDag(proj, ["alpha", "beta"]);
+      seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
       appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
       if (rejectedWave) {
         appendAuditEntry("STAGE_STARTED", { Stage: "functional-design" }, proj);
@@ -1647,6 +1661,7 @@ describe("t278 engine-emitted wave contract", () => {
     const proj = project("nfr-requirements", "unit-major", "none");
     addRuntimeState(proj);
     seedBoltDag(proj, ["alpha"]);
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha"]);
     appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
     const file = seededStateFile(proj);
     writeFileSync(

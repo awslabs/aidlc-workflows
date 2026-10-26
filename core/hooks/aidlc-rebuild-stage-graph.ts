@@ -25,10 +25,17 @@
 // canonical `error` directive the engine emitted, the message is handed to the
 // human byte for byte through the harness's hook-to-human channel (a
 // `systemMessage` on Claude Code and Codex, a toast via the opencode plugin).
-// The same line carries a PostToolUse `additionalContext` note telling the
-// model the person has seen it; the Claude and Codex skills then add no copy
-// of their own. It needs no workflow state: the engine errors before any
-// intent exists too.
+// On Claude Code and Codex the same line carries a PostToolUse
+// `additionalContext` note telling the model the person has seen it; the
+// Claude and Codex skills then add no copy of their own. It needs no workflow
+// state: the engine errors before any intent exists too.
+//
+// Say-once note: when the setter switched a check of the person's off in their
+// name from this chat, it left the order to say its lines once, with the lines
+// (leaveSayOnceNote), instead of printing it where the tool panel draws it. The
+// hook hands that note to the model as PostToolUse `additionalContext` once,
+// on the chat's next shell call, the setter's own as a rule (sayOnceNoteLine),
+// and never beside a relay line.
 
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { statSync } from "node:fs";
@@ -59,6 +66,7 @@ import {
   runtimeGraphPath,
   validSessionId,
   harnessDir,
+  sayOnceNoteLine,
   writeEngineErrorRelay,
   writeSessionIntentHandoff,
   writeSessionBinding,
@@ -153,16 +161,26 @@ function bindCreatedIntentToInvokingSession(
 // engine orchestrate command, and stdout that is exactly the canonical `error`
 // directive. writeEngineErrorRelay decides per harness whether any channel
 // would show the line; where none does, the skill's verbatim-print rule stands.
-function relayEngineError(projectDir: string, parsed: ClaudeCodeHookInput): void {
+function relayEngineError(projectDir: string, parsed: ClaudeCodeHookInput): boolean {
   const message = engineErrorRelayMessage(
     parsed.tool_input?.command ?? "",
     parsed.tool_response,
   );
-  if (message === null) return;
+  if (message === null) return false;
   hookDebug(projectDir, "rebuild-stage-graph", "engine-error-relay", {
     bytes: Buffer.byteLength(message, "utf-8"),
   });
-  writeEngineErrorRelay(message);
+  return writeEngineErrorRelay(message);
+}
+
+// The setter's say-once note, taken by the chat's next shell call. A host that
+// gets two lines from one hook reads neither, so it is never written beside a
+// relay.
+function handSayOnceNote(projectDir: string, parsed: ClaudeCodeHookInput): void {
+  const line = sayOnceNoteLine(projectDir, parsed.session_id);
+  if (line === null) return;
+  hookDebug(projectDir, "rebuild-stage-graph", "say-once-note");
+  process.stdout.write(line);
 }
 
 export async function run(input: string): Promise<number> {
@@ -188,7 +206,9 @@ const command: string = parsed.tool_input?.command ?? "";
 //     workflow state, so it runs before the command/audit filters below. An
 //     orchestrate `next` is not a transition-class command and exits at the
 //     next gate; its error directive must already have been relayed by then.
-relayEngineError(projectDir, parsed);
+//     The setter's say-once note is not a transition either, and goes the
+//     same way when no relay line was written.
+if (!relayEngineError(projectDir, parsed)) handSayOnceNote(projectDir, parsed);
 
 // Session ownership is independent of runtime-graph compilation and must run
 // before the command/audit filters below. Most intent-create calls are not

@@ -198,10 +198,11 @@ function next(p: string): string {
   return runOrchestrateNext(ORCHESTRATE_TOOL, p, [], { env: { ...process.env, CLAUDE_PROJECT_DIR: p } }).out;
 }
 
-/** No self-loop: the step after the verdict is the stage's own, never the pass-1 verdict or retry again. */
+/** No self-loop: the step after the verdict is the one it named, never the pass-1 verdict or retry again. */
 function expectMovesOn(p: string): void {
   const after = next(p);
-  expect(after).toContain('"kind":"run-stage"');
+  expect(after).toContain('"kind":"print"');
+  expect(after).toContain("No further review pass follows");
   expect(after).not.toContain("--verdict");
   expect(after).not.toContain("--retry-pending");
 }

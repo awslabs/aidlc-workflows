@@ -21,6 +21,8 @@ import {
   readAllAuditShards,
   readAuditShardEvents,
   readUnitGateRhythm,
+  reviewAttemptAccounting,
+  reviewAttemptWindow,
   UNIT_GATE_RHYTHM_FIELD,
   UNIT_OWNERSHIP_FIELD,
   turnEndIsOpen,
@@ -50,6 +52,11 @@ import {
   readReviewFindingDispositions,
 } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1297,6 +1304,103 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     ]).toMatchObject([
       { status: "Rejected: This concern must be addressed" },
     ]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // At a team Unit gate the agent logs the blocking-check question and the
+  // person's Fix findings pick with --unit (stage-protocol-construction.md), and
+  // the pick starts a new attempt for that Unit only, as its Request Changes
+  // does. A teammate's question for the same stage, in their own shard between
+  // the two, does not take the pick's place.
+  test("a Unit's Fix findings pick at a blocking check floors only that Unit's review receipt", () => {
+    const proj = seedProject({ ownership: "team" });
+    for (const unit of ["alpha", "beta"]) {
+      coverUnit(proj, unit, "functional-design");
+      logReviewReady(proj, "functional-design", unit, "aidlc-architecture-reviewer-agent");
+    }
+    const stage = findStageBySlug("functional-design")!;
+    const reviewed = () => [...freshReviewReceipts(proj, state(proj), stage).unitVerdicts.keys()].sort();
+    expect(reviewed()).toEqual(["alpha", "beta"]);
+    const log = (args: string[]) => {
+      const r = spawnSync(BUN, [LOG, ...args, "--stage", "functional-design", "--unit", "alpha", "--project-dir", proj], {
+        env: ENV, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    };
+    log(["decision", "--decision", "Blocking gate sensor failure", "--options", "Fix findings,Override blocking sensors"]);
+    const asked = readAuditShardEvents(proj).findLast((row) => row.event === "DECISION_RECORDED")!;
+    writeFileSync(
+      join(seededAuditDir(proj), "zzzz-teammate.md"),
+      `## DECISION_RECORDED\n**Timestamp**: ${asked.timestamp}\n**Event**: DECISION_RECORDED\n` +
+        "**Stage**: functional-design\n**Unit**: beta\n**Decision**: Which entities does beta own?\n**Options**: A,B\n\n---\n",
+    );
+    Bun.sleepSync(1100);
+    appendAuditEntry("HUMAN_TURN", { Session: "t324-fix-findings" }, proj);
+    log(["answer", "--details", "Fix findings"]);
+    expect(reviewed()).toEqual(["beta"]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // In solo work the blocking check runs once at the stage's gate over every
+  // Unit's outputs, and the pick is logged with no Unit (solo gate-start takes
+  // no --unit). Where floors are per Unit, the pick starts a new attempt, its
+  // review budget included, for the Units whose outputs the failing check
+  // named on its latest result before the pick: a later pass clears a failure,
+  // and an advisory check's failure names nothing. A pick whose check named no
+  // Unit, and any pick in stage-major work, starts every Unit again.
+  test("a solo Fix findings pick starts again only the Units the failing check named", () => {
+    const reviewer = "aidlc-architecture-reviewer-agent";
+    const shipped = findStageBySlug("functional-design")!;
+    const stage = {
+      ...shipped,
+      sensors_applicable: [
+        { id: "no-tbd", path: ".claude/sensors/aidlc-no-tbd.md", fire_on: "gate" as const, default_severity: "blocking" as const },
+        { id: "required-sections", path: ".claude/sensors/aidlc-required-sections.md", fire_on: "gate" as const, default_severity: "advisory" as const },
+      ],
+    };
+    const picked = (iteration: string): string => {
+      const proj = seedProject({}, ["alpha", "beta", "gamma"]);
+      writeFileSync(seededStateFile(proj), state(proj).replace("- **Construction Iteration**: unit-major\n", iteration));
+      for (const unit of ["alpha", "beta", "gamma"]) {
+        coverUnit(proj, unit, "functional-design");
+        logReviewReady(proj, "functional-design", unit, reviewer);
+      }
+      const result = (event: string, id: string, unit: string) => appendAuditEntry(event, {
+        "Sensor ID": id,
+        "Stage slug": "functional-design",
+        "Output path": relative(proj, join(seededRecordDir(proj), "construction", unit, "functional-design",
+          artifactFilename("entities"))).replaceAll("\\", "/"),
+        ...(event === "SENSOR_FAILED" ? { "Detail path": "detail.md", "Findings count": "1" } : {}),
+      }, proj);
+      result("SENSOR_FAILED", "no-tbd", "alpha");
+      result("SENSOR_FAILED", "required-sections", "beta");
+      result("SENSOR_FAILED", "no-tbd", "gamma");
+      result("SENSOR_PASSED", "no-tbd", "gamma");
+      const log = (args: string[]) => {
+        const r = spawnSync(BUN, [LOG, ...args, "--stage", "functional-design", "--project-dir", proj], {
+          env: ENV, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+      };
+      log(["decision", "--decision", "Blocking gate sensor failure", "--options", "Fix findings,Override blocking sensors"]);
+      appendAuditEntry("HUMAN_TURN", { Session: "t324-solo-fix-findings" }, proj);
+      log(["answer", "--details", "Fix findings"]);
+      return proj;
+    };
+    const reviewed = (proj: string, at: typeof shipped) =>
+      [...freshReviewReceipts(proj, state(proj), at).unitVerdicts.keys()].sort();
+
+    const checkpoints = picked("- **Construction Iteration**: unit-major\n- **Construction Checkpoints**: enabled\n");
+    expect(reviewed(checkpoints, stage)).toEqual(["beta", "gamma"]);
+    const view = reviewAttemptWindow(checkpoints, state(checkpoints), stage);
+    const passes = ["alpha", "beta", "gamma"].map((unit) =>
+      reviewAttemptAccounting(checkpoints, view, state(checkpoints), stage, reviewer, unit, undefined));
+    expect(passes.map((pass) => pass.requestCount)).toEqual([0, 1, 1]);
+    expect(passes[0].budgetCount).toBe(0);
+    // The re-review its checkpoint names is that first pass.
+    expect(freshReviewReceipts(checkpoints, state(checkpoints), stage).unitStaleProgress.get("alpha")?.nextIteration).toBe(1);
+    expect(reviewed(checkpoints, shipped)).toEqual([]);
+
+    const stageMajor = picked("- **Construction Iteration**: stage-major\n");
+    expect(reviewed(stageMajor, stage)).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("legacy unitless rejection remains stage-global under team ownership", () => {

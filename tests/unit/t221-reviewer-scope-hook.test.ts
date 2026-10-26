@@ -39,6 +39,7 @@ import {
 import { stateDigest, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { hookGroupMembers } from "../../core/tools/aidlc-command.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+import kiroManifest from "../../harness/kiro/manifest.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -544,6 +545,8 @@ function scratchProject(): string {
     "aidlc-runtime-paths.ts",
     "aidlc-runtime-budget.ts",
     "aidlc-lock-line.ts",
+    "aidlc-command.ts",
+    "aidlc-color.ts",
     "aidlc-guard-fences.ts",
     "aidlc-guard-switch.ts",
     "aidlc-guard-operation.ts",
@@ -1075,7 +1078,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
           // The registration passes its own agent name so the adapter forwards
           // a real identity instead of a bare scoped_registration.
           expect(e.command).toBe(
-            `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter kiro reviewer-scope ${agent}`,
+            `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter kiro reviewer-scope ${agent}${kiroManifest.hookCommandSuffix}`,
           );
         }
         expect(

@@ -7,7 +7,8 @@
 // and the person's next reply approves. Reject follows the same rule. A gate
 // the engine backfills for the person's reported approval (report --stage on a
 // running stage) keeps the reply-since-the-last-decision rule: its row is
-// written after their reply by design.
+// written after their reply by design, and stands on a reply in the chat
+// that reports it.
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -34,6 +35,11 @@ import {
   latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -73,11 +79,11 @@ function report(proj: string, args: string[]) {
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
-function person(proj: string, prompt: string) {
+function person(proj: string, prompt: string, session = SESSION) {
   const r = spawnSync(BUN, [DISPATCH, "engine", "hook", "record-human-turn"], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", cwd: proj,
     env: { ...env(), AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj },
-    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
   });
   expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
 }
@@ -228,6 +234,37 @@ describe("t-approve-needs-reply-to-question: only the person's reply to the appr
     const opened = rows(proj, "STAGE_AWAITING_APPROVAL");
     expect(opened.length).toBe(1);
     expect(opened[0].block).toContain("**Recovered**: true");
+  });
+
+  // The agent in a chat that never spoke reports an approval for a stage whose
+  // gate it never opened, while two other chats replied since the stage
+  // started (answers to other questions): nothing of the person's in this chat
+  // answers the gate, so nothing is recorded and the agent shows it.
+  test("a gate never shown approves nothing in a chat with no reply of its own, while two other chats replied", () => {
+    const slug = slugOf(proj);
+    state(proj, ["checkbox", `${slug}=in-progress`]);
+    person(proj, "option 4", "t-approve-other-chat-1");
+    person(proj, "Nothing to add", "t-approve-other-chat-2");
+    const refused = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Add User Stories"]);
+    expect(refused.out).toContain("because no reply of the person's in this chat since this stage last started answers this gate.");
+    expect(refused.out.toLowerCase()).toContain(SHOW_IT);
+    expect(rows(proj, "GATE_APPROVED")).toEqual([]);
+    // Their reply in this chat approves it.
+    person(proj, "Approve");
+    const approved = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
+    expect(rows(proj, "GATE_APPROVED").length, approved.out).toBe(1);
+  });
+
+  // One other chat replied, to another question, and the chat that reports the
+  // approval has said nothing: whose reply would stand is a guess, so nothing
+  // is recorded and the agent shows the gate here.
+  test("a gate never shown approves nothing in a silent chat when one other chat replied", () => {
+    const slug = slugOf(proj);
+    state(proj, ["checkbox", `${slug}=in-progress`]);
+    person(proj, "Nothing to add", "t-approve-other-chat-1");
+    const refused = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
+    expect(refused.out.toLowerCase()).toContain(SHOW_IT);
+    expect(rows(proj, "GATE_APPROVED")).toEqual([]);
   });
 
   test("a team Unit gate is bound at its own Unit's row", () => {

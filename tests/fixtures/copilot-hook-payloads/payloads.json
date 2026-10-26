@@ -144,5 +144,27 @@
     "timestamp": "2026-10-14T06:54:13.105Z",
     "cwd": "/workspace/copilot-fixture/proj",
     "prompt": "Reply with the single word ok."
+  },
+  "preToolUse_askUserQuestion": {
+    "hook_event_name": "PreToolUse",
+    "session_id": "44e47e9b-b805-44c7-9265-342fcd064044",
+    "timestamp": "2026-10-24T09:07:31.566Z",
+    "cwd": "/workspace/copilot-fixture/proj",
+    "tool_name": "AskUserQuestion",
+    "tool_input": {
+      "message": "Which color do you prefer?",
+      "requestedSchema": {
+        "properties": {
+          "color": {
+            "type": "string",
+            "title": "Preferred color",
+            "enum": [
+              "Red",
+              "Blue"
+            ]
+          }
+        }
+      }
+    }
   }
 }

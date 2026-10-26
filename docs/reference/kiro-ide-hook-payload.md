@@ -79,7 +79,7 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 | PostToolUse (shell) | `execute_bash` | `{}` (empty) | `Output:\n<stdout>\n\nExit Code: 0` | command: **not** recoverable (only stdout) |
 
 When UserPromptSubmit carries a typed fence or Guard Policy switch, the adapter forwards it to the core human-turn hook, which records the message under the payload session and applies nothing; the agent runs the setter `next` names, and shell setters are not run inside the adapter.
-When the person's line is `/aidlc` alone, or `/aidlc` followed by words only (no flag or verb the engine takes) while this chat's workflow has no record yet, the `verb-intercept` member prints one context line naming the first step, `engine orchestrate next`, so Kiro's Default agent, which loads the aidlc skill on its own judgement only, starts AI-DLC instead of answering the line itself; the engine's `next` reads the recorded line (takePersonsOwnLine). A plan's name typed alone (`/aidlc bugfix`) gets the same line naming `engine orchestrate next <plan>`, the step the aidlc agent's skill takes for it, because a bare `next` does not read a plan named alone; that step asks what the work is for. A utility the member runs itself (`/aidlc --status`), a line with flags, a `/aidlc-<runner>` entry, plain words, and words typed while the chat's workflow is on record (a bare `next` would then be the work's continuation and read no recorded line; the aidlc agent's skill passes the words itself) get no such line.
+When the person's line is `/aidlc` alone, or `/aidlc` followed by words only (no flag or verb the engine takes) while this chat's workflow has no record yet, the `verb-intercept` member prints one context line naming the first step, `engine orchestrate next`, so Kiro's Default agent, which loads the aidlc skill on its own judgement only, starts AI-DLC instead of answering the line itself; the engine's `next` reads the recorded line (takePersonsOwnLine). A plan's name typed alone (`/aidlc bugfix`) gets the same line naming `engine orchestrate next <plan>`, the step the aidlc agent's skill takes for it, because a bare `next` does not read a plan named alone; that step asks what the work is for. A utility the member runs itself (`/aidlc --status`), a line with flags, a `/aidlc-<runner>` entry, plain words, and words typed while the chat's workflow is on record (a bare `next` would then be the work's continuation and read no recorded line, a plain reply to the stage's open question aside; the aidlc agent's skill passes the words itself) get no such line.
 A prompt Kiro made is not the person's turn: a message Kiro's own chat record (`~/.kiro/sessions/<workspace>/<session>/messages.jsonl`, the payload's session) marks with `_meta.kiro.syntheticUserMessageReason`, or a Workflows brief, which Kiro leaves unmarked, by its opening sentence whole and anchored, is forwarded with `origin: {kind: "host"}`: the core hook records `HOST_TURN` and nothing of the person's, and the adapter starts no session, remembers no chat and opens no turn for it; once the chat's turn has closed, it ends a terminal command's same-turn hold (see below). A message the record tags `_meta.kiro.userMessageTag` is the person's whatever its words, and so is anything unknown, including a payload `session_id` other than the chat's `KIRO_SESSION_ID` on its own (that variable named the chat even for a step's prompt, so it may not name the tab a message came from).
 On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations and summary confirmation `off`, and `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update to a prompt-capable IDE or start new work from a lower-default scope; for summary confirmation and for plan approval both also name the person's project-wide terminal command `<invoke> config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` or `--bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD` (`--clear-bypass` undoes it), which also works while the work runs. Raising to `strict` or turning a fence or summary confirmation `on` remains available.
 Before forwarding an empty prompt, the adapter renames a sole retired
@@ -290,8 +290,11 @@ cards doing the work, and the guard notes nothing for them.
   label; unrelated prompts receive no capability. Ownership is global for the
   active intent/revision rather than looked up through the incoming session.
   Recovery is human-gated: the owning window first receives a typed recovery
-  ask and must record the exact `Recover Plan Approval` response before a later
-  `next` rotates any offer or challenge. Another live window is refused. A
+  ask, which the agent asks in plain words; the agent records the person's yes,
+  in any words, with `log answer --checkpoint plan-approval --details
+  'Recover Plan Approval'` (the engine writes the response from its own choice
+  once a reply of theirs came after the ask) before a later `next` rotates any
+  offer or challenge. Another live window is refused. A
   replacement window can request the same human recovery only after the
   recorded owner PID is gone, or after an IPC-only owner's endpoint disappears.
   Takeover rotates any pending challenge and clears its prior response. The
@@ -299,8 +302,8 @@ cards doing the work, and the guard notes nothing for them.
   Missing or corrupt offer/challenge files do not make authority disappear:
   the pre-write window itself is an orphan-recovery latch if PostToolUse never
   arrives, and a matching write violation continues that latch when PostToolUse
-  does run. Fresh publication remains blocked until the exact human recovery
-  response. The adapter preserves a recovery ask and, after success, clears only
+  does run. Fresh publication remains blocked until the person's recovery yes
+  is recorded. The adapter preserves a recovery ask and, after success, clears only
   the violation/write window rather than deleting the replacement offer. Before each
   write, a latch is created; authoritative `toolSuccess: false` and recognized
   failure prose clear it because no mutation occurred, while unknown outcomes
@@ -324,7 +327,7 @@ cards doing the work, and the guard notes nothing for them.
   and attempt does not. Generation start re-baselines the source the plan is bound
   to, and refuses rather than deletes if the workspace source moved first.
   Shared `ask_type: "guard-recovery"` directives have a separate contract from
-  the legacy `Recover Plan Approval` capability handshake: follow the selected
+  the legacy recovery ask: follow the selected
   remedy's `interaction`, run a `command` exactly as returned after the required
   human choice, and collect separate exact feedback for a `human-input` Request
   Changes remedy. Native restart/abort commands come from structured operations;

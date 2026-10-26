@@ -1,6 +1,7 @@
 // covers: function:workspaceSourceFingerprint, function:unclaimableIgnoredSourceKeys
 // covers: function:gitCommitSourceListing
 // covers: function:unmergedRootSettingsNotices
+// covers: function:withRepoBaselineAdditions, function:repoBaselineAdditionField
 // covers: function:withWorkspaceSourceStateCache, subcommand:aidlc-state:gate-start, subcommand:aidlc-state:revise
 //
 // t314 - reviewer receipts bound to workspace source state (#629).
@@ -63,7 +64,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve as resolvePath } from "node:path";
+import { basename, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   _legacyWorkspaceSourceFingerprintForTests,
@@ -96,6 +97,7 @@ import {
   cleanupTestProject,
   cleanupWorktreeFixture,
   createTestProject,
+  intentsDirOf,
   resetAidlcEnv,
   seedBoltDag,
   seededAuditDir,
@@ -106,6 +108,11 @@ import {
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 import { approveSuppliedCheckCommand } from "../harness/verification-command.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 // The default also governs afterAll removal of a dozen-plus worktree fixtures,
 // which exceeds bun's 5s hook default under load; per-case literals stay.
@@ -2117,11 +2124,11 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     expect(gate.out).toContain("app.ts changed after the Code Generation review; carrying on.");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  // #2244: when the approved plan uses stage-level artifacts the guard returns
-  // after the stage review and the unclaimed check never runs, so excluding a
-  // cache after the review costs what any source change after a review costs:
-  // the one recovery review. Not a loop: the approve after it completes.
-  test("with stage-level artifacts, excluding a cache after the review costs one recovery review, then completes", () => {
+  // #2244: when the approved plan uses stage-level artifacts the guard compares
+  // the stage review's own listing, and a cache the registry's exclude list now
+  // leaves out of the walk is nobody's change there too, so the exclude works at
+  // once, as on the per-Unit path, even after the one recovery review.
+  function skipUnitsGeneration(): void {
     writeFileSync(
       seededStateFile(proj),
       readFileSync(seededStateFile(proj), "utf-8").replace(
@@ -2129,19 +2136,67 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
         "- [S] units-generation $1 SKIP",
       ),
     );
+  }
+
+  test("with stage-level artifacts, the refusal names the cache, and excluding it completes with no further review", () => {
+    skipUnitsGeneration();
     const cache = seedInTreeCache(proj);
     recordReview(proj);
     churnInTreeCache(cache);
     const stale = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(stale.rc).toBe(1);
     expect(stale.out).toContain("project source changed after");
+    expect(stale.out).toContain("apps/web/.jest-cache/haste-map-abc");
+    expect(stale.out).toContain('naming it under \\"exclude\\" in .aidlc-source-paths.json');
+    const requests = reviewRequestCount(proj);
     sourceRegistry(proj, { exclude: ["apps/web/.jest-cache"] });
-    const still = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
-    expect(still.rc).toBe(1);
-    expect(still.out).toContain("project source changed after");
-    recordReview(proj);
     const done = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(done.rc, done.out).toBe(0);
+    expect(reviewRequestCount(proj)).toBe(requests);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("with stage-level artifacts, a cache that changes again after the one recovery review completes once it is excluded", () => {
+    skipUnitsGeneration();
+    const cache = seedInTreeCache(proj);
+    recordReview(proj);
+    churnInTreeCache(cache);
+    expect(guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]).rc).toBe(1);
+    recordReview(proj);
+    writeFileSync(join(cache, "haste-map-abc"), "\u0000haste-v3", "utf-8");
+    const spent = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(spent.rc).toBe(1);
+    expect(spent.out).toContain("SOURCE_RECOVERY_SPENT");
+    expect(spent.out).toContain("apps/web/.jest-cache/haste-map-abc");
+    expect(spent.out).toContain('naming it under \\"exclude\\" in .aidlc-source-paths.json');
+    sourceRegistry(proj, { exclude: ["apps/web/.jest-cache"] });
+    const done = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(done.rc, done.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("with stage-level artifacts, excluding a cache still leaves a real source change refused", () => {
+    skipUnitsGeneration();
+    const cache = seedInTreeCache(proj);
+    recordReview(proj);
+    churnInTreeCache(cache);
+    writeFileSync(src, "export const answer = 1337; // edited after review\n", "utf-8");
+    sourceRegistry(proj, { exclude: ["apps/web/.jest-cache"] });
+    const stale = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(stale.rc).toBe(1);
+    expect(stale.out).toContain("What changed: app.ts; a path that is not source");
+    expect(stale.out).not.toContain(".jest-cache/");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("under relaxed, with stage-level artifacts, a cache excluded after the review is not said as a change", () => {
+    setGuardPolicy("relaxed (set by you)");
+    skipUnitsGeneration();
+    const cache = seedInTreeCache(proj);
+    recordReview(proj);
+    churnInTreeCache(cache);
+    sourceRegistry(proj, { exclude: ["apps/web/.jest-cache"] });
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).not.toContain("changed after the Code Generation review");
+    expect(readAllAuditShards(proj)).not.toMatch(/\*\*Event\*\*: CHANGE_ACCEPTED\n(?:\*\*[^\n]*\n)*?\*\*Checkpoint\*\*: review-receipt/);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test.each([
@@ -2881,6 +2936,41 @@ describe("t314 multi-unit source attribution", () => {
     // The step it names: beta's next pass, admitted as the one recovery review.
     recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
     expect(readAllAuditShards(proj)).toContain("**Recovery**: stale-receipt");
+    const approved = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(approved.rc, approved.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // Named as stale source, the edit's one recovery review would go without the
+  // claim, and the claim would then have no review left to ride on.
+  test("under strict, an edit no Unit claims after the last review is named first, and the one recovery review that claims it completes the stage", () => {
+    reviewBothUnits();
+    writeFileSync(join(proj, "notes.ts"), "export const note = 'nobody claimed me';\n", "utf-8");
+    const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("no Unit's review covers (notes.ts)");
+    expect(refused.out).not.toContain("project source changed after");
+    // The way it names: beta lists the path and is reviewed once more, admitted
+    // as the one recovery review.
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }, { path: "notes.ts" }]);
+    expect(readAllAuditShards(proj)).toContain("**Recovery**: stale-receipt");
+    const approved = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(approved.rc, approved.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // With a reviewed Unit's own file edited too, each Unit's review once more
+  // carries its own part and nothing is left for a Request Changes.
+  test("under strict, an unclaimed edit beside a reviewed Unit's own edit completes once each Unit is reviewed once more", () => {
+    reviewBothUnits();
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 9; // after its review\n", "utf-8");
+    writeFileSync(join(proj, "notes.ts"), "export const note = 'nobody claimed me';\n", "utf-8");
+    const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("no Unit's review covers (notes.ts)");
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }, { path: "notes.ts" }]);
+    const alphaOwed = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(alphaOwed.rc).not.toBe(0);
+    expect(alphaOwed.out).toContain("Changed after review: alpha");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
     const approved = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(approved.rc, approved.out).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -6476,5 +6566,137 @@ process.stdin.on("end", () => server.stop(true));
         expect(row?.change_notices).toEqual(["The listed Unit's list of files changed after it was reviewed. Kept the review."]);
       }
     }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+});
+
+// A repo that joins the work after the stage's baseline was taken (the
+// workflow's start here, as a unit-major Code Generation's is) joins that
+// baseline as it was at the add, so its existing files are nobody's change;
+// what a Unit writes there afterwards still needs a claim.
+describe("t314 a repo added during the work joins the stage-entry baseline", () => {
+  let proj: string;
+  const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
+
+  function sibling(name: string, files: Record<string, string>): void {
+    const dir = join(proj, name);
+    for (const [path, body] of Object.entries(files)) {
+      mkdirSync(join(dir, ...path.split("/").slice(0, -1)), { recursive: true });
+      writeFileSync(join(dir, ...path.split("/")), body, "utf-8");
+    }
+    git(dir, ["init", "-q"]);
+    git(dir, ["config", "user.email", "t@test"]);
+    git(dir, ["config", "user.name", "t"]);
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-qm", "seed"]);
+  }
+
+  function intent(...args: string[]): string {
+    const r = spawnSync(BUN, [UTILITY, "intent", ...args, "--project-dir", proj], { encoding: "utf-8" });
+    if ((r.status ?? -1) !== 0) throw new Error(`intent ${args.join(" ")} failed: ${r.stdout}${r.stderr}`);
+    return r.stdout;
+  }
+
+  function commitIn(repo: string, path: string, body: string): void {
+    writeFileSync(join(proj, repo, path), body, "utf-8");
+    git(join(proj, repo), ["add", "-A"]);
+    git(join(proj, repo), ["commit", "-qm", `edit ${path}`]);
+  }
+
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedStateFile(proj, "state-mid-ideation.md");
+    sibling("app-a", { "app.ts": "export const a = 1;\n" });
+    sibling("payments", { "src/api.ts": "export const api = 1;\n", "README.md": "# payments\n" });
+    const registry = join(intentsDirOf(proj), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = ["app-a"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    seedTwoUnitDag(proj);
+    guarded(proj, ["checkbox", "code-generation=in-progress"]);
+    restartBaseline(proj);
+  });
+
+  afterEach(() => cleanupTestProject(proj));
+
+  function reviewUnitsInAppA(): void {
+    commitIn("app-a", "alpha.ts", "export const alpha = 1;\n");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ repo: "app-a", path: "alpha.ts" }]);
+    commitIn("app-a", "beta.ts", "export const beta = 2;\n");
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ repo: "app-a", path: "beta.ts" }]);
+  }
+
+  test("the new repo's existing files are no Unit's change", () => {
+    intent("add-repo", "payments");
+    reviewUnitsInAppA();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("payments/src/api.ts");
+    expect(r.out).not.toContain("no Unit's review covers");
+    expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a file a Unit writes in the new repo after the add still needs a claim", () => {
+    intent("add-repo", "payments");
+    commitIn("payments", "src/consent.ts", "export const consent = true;\n");
+    reviewUnitsInAppA();
+    const gate = guarded(proj, ["gate-start", "code-generation"], { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    const r = gate.rc === 0 ? guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]) : gate;
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("payments/src/consent.ts");
+    expect(r.out).not.toContain("payments/src/api.ts");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // The clone's install writes repos.json and aidlc.code-workspace at the
+  // workspace root (and the managed .gitignore block): AI-DLC's own writes at
+  // the add, nobody's change.
+  test("a cloned repo's own writes at the workspace root are no Unit's change", () => {
+    const bare = join(proj, "..", `${basename(proj)}-payments.git`);
+    git(join(proj, "payments"), ["clone", "-q", "--bare", ".", bare]);
+    rmSync(join(proj, "payments"), { recursive: true, force: true });
+    writeFileSync(join(proj, "repos.json"), '{ "org": "acme", "repos": [{ "name": "app-a" }] }\n', "utf-8");
+    intent("add-repo", "payments", "--url", bare);
+    expect(readFileSync(join(proj, "repos.json"), "utf-8")).toContain('"payments"');
+    expect(existsSync(join(proj, "aidlc.code-workspace"))).toBe(true);
+    reviewUnitsInAppA();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("no Unit's review covers");
+    expect(r.out).not.toContain("repos.json");
+    expect(r.rc, r.out).toBe(0);
+    rmSync(bare, { recursive: true, force: true });
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // The work's current repos are what the stage walks now, so a repo that left
+  // the work leaves the baseline too.
+  test("a repo added and removed again leaves nothing to claim", () => {
+    intent("add-repo", "payments");
+    intent("remove-repo", "payments");
+    reviewUnitsInAppA();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("payments/");
+    expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a repo the stage began with and set-repos left out leaves nothing to claim", () => {
+    const registry = join(intentsDirOf(proj), "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = ["app-a", "payments"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    restartBaseline(proj);
+    intent("set-repos", "app-a");
+    reviewUnitsInAppA();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("payments/");
+    expect(r.rc, r.out).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("after a remove and a second add, the latest add's listing is the one that counts", () => {
+    intent("add-repo", "payments");
+    commitIn("payments", "README.md", "# payments, edited between the adds\n");
+    intent("remove-repo", "payments");
+    intent("add-repo", "payments");
+    reviewUnitsInAppA();
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("payments/README.md");
+    expect(r.rc, r.out).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

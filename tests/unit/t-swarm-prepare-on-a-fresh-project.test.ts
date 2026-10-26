@@ -2,9 +2,10 @@
 // function:bindCodeGenerationWorktreeApproval, audit:AUDIT_FORKED, audit:WORKTREE_DISCARDED
 //
 // A side-by-side (swarm) build must start on a project whose AI-DLC records are not committed yet (every fresh
-// project), and on a long-lived repo whose committed audit already holds a fork row for the Unit. The t344 fixture
-// commits every record and ignores the audit dir; a real project's .gitignore (the block AI-DLC's setup writes)
-// commits the audit, so these cases use that block and three shapes of the base commit.
+// project), on a long-lived repo whose committed audit already holds a fork row for the Unit, and on the person's own
+// branch ahead of main when the agent names main as the base. The t344 fixture commits every record and ignores the
+// audit dir; a real project's .gitignore (the block AI-DLC's setup writes) commits the audit, so these cases use that
+// block and four shapes of the base commit.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -87,13 +88,15 @@ const REGISTRY = "aidlc/spaces/default/intents/intents.json";
 const OLDER_RECORD = "older-work-00000002";
 const OLDER_UUID = "00000000-0000-7000-8000-000000000002";
 
-type Shape = "records-untracked" | "registry-only" | "older-intent-committed" | "all-records";
+type Shape = "records-untracked" | "registry-only" | "older-intent-committed" | "all-records" | "branch-ahead";
 
 // A project at the Code Generation plan-approved point whose base commit holds:
 // records-untracked: source and memory only (a fresh project after a copy install; the registry and record dir are untracked);
 // registry-only: the registry too, but not the record dir;
 // older-intent-committed: an earlier intent's registry row and record dir; this intent's row and record dir are untracked;
-// all-records: every record, the audit included (a long-lived repo that commits its records).
+// all-records: every record, the audit included (a long-lived repo that commits its records);
+// branch-ahead: every record on main, then the person's branch "feature" with a source change main never had and the
+// records holding the plan approvals made there, committed (a team clone that commits its records with its work).
 function project(shape: Shape): string {
   const pd = setupWorktreeFixture();
   projects.push(pd);
@@ -103,6 +106,7 @@ function project(shape: Shape): string {
   seedBoltDagBatches(pd, [UNITS, ["later"]]);
   mkdirSync(join(pd, "src"), { recursive: true });
   for (const unit of UNITS) writeFileSync(join(pd, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
+  if (shape === "branch-ahead") writeFileSync(join(pd, "src", "shared.ts"), "export const shared = 2;\n");
   const baseline = writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!);
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
   appendAuditEntry("STAGE_STARTED", { Stage: STAGE, "Source Baseline": baseline }, pd);
@@ -111,8 +115,9 @@ function project(shape: Shape): string {
   for (const unit of UNITS) plan(pd, unit);
   const registry = join(pd, REGISTRY);
   const current = JSON.parse(readFileSync(registry, "utf-8")) as Array<Record<string, unknown>>;
-  if (shape === "all-records") {
+  if (shape === "all-records" || shape === "branch-ahead") {
     git(pd, ["add", "-A"]);
+    if (shape === "branch-ahead") git(pd, ["reset", "-q", "--", "src/shared.ts"]);
   } else {
     git(pd, ["add", "--", ".gitignore", "src", "aidlc/spaces/default/memory"]);
     if (shape === "registry-only") git(pd, ["add", "--", REGISTRY]);
@@ -127,7 +132,12 @@ function project(shape: Shape): string {
     }
   }
   git(pd, ["commit", "-qm", `project (${shape})`]);
+  if (shape === "branch-ahead") git(pd, ["checkout", "-q", "-b", "feature"]);
   for (const unit of UNITS) approvePlan(pd, unit);
+  if (shape === "branch-ahead") {
+    git(pd, ["add", "-A"]);
+    git(pd, ["commit", "-qm", "feature: a shared helper, and the records with the plan approvals"]);
+  }
   return pd;
 }
 
@@ -204,6 +214,53 @@ describe("a side-by-side build starts whatever the base commit holds of the reco
     expect(nextDirective(pd)).toMatchObject({ kind: "invoke-swarm", units: UNITS, resume_existing: true });
     for (const unit of UNITS) approvePlan(pd, unit, "second-round");
     expectPrepared(pd, prepare(pd, UNITS, true));
+  });
+});
+
+describe("the person's branch is ahead of main and carries the records: prepare --base main", () => {
+  // The plans were approved on the branch, so each Unit starts on the branch's commit. Started on main and moved to
+  // the branch after the fork had written the Unit's audit, every Unit failed on that file, and so did the discard
+  // and prepare the failure named.
+  test("every Unit starts on the branch's commit, records it as its base, and lands back on the branch", () => {
+    const pd = project("branch-ahead");
+    const head = git(pd, ["rev-parse", "HEAD"]);
+    expect(git(pd, ["diff", "--name-only", "main", "HEAD", "--", "aidlc"])).toContain("/audit/");
+    const result = prepare(pd, UNITS);
+    expectPrepared(pd, result);
+    expect(JSON.parse(result.out)).toMatchObject({ base: "main", landing_branch: "feature" });
+    const rows = readAuditShardEvents(pd);
+    for (const unit of UNITS) {
+      expect(units(result).find((entry) => entry.unit === unit)).toMatchObject({ base_commit: head });
+      expect(git(wt(pd, unit), ["rev-parse", "HEAD"])).toBe(head);
+      for (const event of ["WORKTREE_CREATED", "BOLT_STARTED"]) {
+        const row = rows.filter((entry) => entry.event === event &&
+          auditBlockField(entry.block, "Bolt slug") === boltSlugForUnit(unit)).at(-1);
+        expect(row && auditBlockField(row.block, "Base commit"), event).toBe(head);
+      }
+      writeUnitSource(pd, unit, 2);
+    }
+    checkReviewFinalizeAndLand(pd, Object.fromEntries(UNITS.map((unit) => [unit, 2])), "feature");
+    expect(git(pd, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("feature");
+    expect(readFileSync(join(pd, "src", "shared.ts"), "utf-8")).toBe("export const shared = 2;\n");
+  });
+
+  // The landing branch is the one prepare found, not whatever is checked out at landing: a switch in between is
+  // still caught by the landing's own branch check.
+  test("finalize names the branch prepare found even after the checkout moved, and the landing refuses there", () => {
+    const pd = project("branch-ahead");
+    expectPrepared(pd, prepare(pd, UNITS));
+    for (const unit of UNITS) writeUnitSource(pd, unit, 2);
+    git(pd, ["checkout", "-q", "-b", "elsewhere"]);
+    expect(() => checkReviewFinalizeAndLand(pd, { alpha: 2, beta: 2 }, "feature")).toThrow("expected branch feature, found elsewhere");
+  });
+
+  test("on main itself the Units start on the named base, as before", () => {
+    const pd = project("all-records");
+    const result = prepare(pd, UNITS);
+    expectPrepared(pd, result);
+    expect(JSON.parse(result.out)).toMatchObject({ base: "main", landing_branch: "main" });
+    const head = git(pd, ["rev-parse", "HEAD"]);
+    for (const unit of UNITS) expect(units(result).find((entry) => entry.unit === unit)).toMatchObject({ base_commit: head });
   });
 });
 

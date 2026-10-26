@@ -134,6 +134,32 @@ describe("structured guard recovery operations", () => {
     expect(ask.remedies.some((remedy) => remedy.op === "reconfirm-summary")).toBe(true);
   });
 
+  // With no questions file for some Units their answers were never summarized,
+  // so the way on offers a summary; a summary refusal over answers they gave
+  // keeps offering to confirm that summary again.
+  test("the summary way on names a summary of the answers only when the questions file exists", () => {
+    const summaryWayOn = (code: string) => guardRecoveryAskForRefusal(evaluateGuardRefusal({
+      code,
+      blockedAction: "complete",
+      stage: "functional-design",
+      unit: "alpha",
+      stateContent: "# State\n- [-] functional-design \u2014 EXECUTE\n",
+      invariant: "Completion requires the person's summary confirmation.",
+      userMessage: "The summary is not confirmed.",
+      attempt: { recovery: "spent", summaryCoverage: "missing", reviewCoverage: "missing", sourceCoverage: "current" },
+      humanAuthority: { freshTurn: true, unattended: false },
+    }))!.remedies.find((remedy) => remedy.op === "reconfirm-summary")!;
+    for (const code of ["SUMMARY_UNIT_EVIDENCE_MISSING"]) {
+      const remedy = summaryWayOn(code);
+      expect(remedy.label, code).toBe("Confirm a summary");
+      expect(remedy.description, code).toMatch(
+        /^I'll show you a summary of .+ for alpha to confirm, then save its documents again from it\.$/);
+    }
+    const answered = summaryWayOn("SUMMARY_RECEIPT_MISSING");
+    expect(answered.label).toBe("Confirm the summary again");
+    expect(answered.description).toContain("the current summary of your answers");
+  });
+
   test("native recovery admission is limited to the exact abort operation", () => {
     const args = [
       "engine", "bolt", "abort", "--name", "alpha", "--slug", "alpha",
@@ -460,13 +486,20 @@ describe("recovery selection records the next interaction", () => {
     return { project, state };
   }
 
-  test("a later unrelated reply supersedes a command selection instead of becoming its feedback", () => {
+  // The hook keeps each reply as the reply to the recovery question and picks
+  // nothing from its words; the agent records the remedy it read
+  // (recordGuardRecoveryChoice, `log answer --checkpoint guard-recovery`).
+  test("a typed reply picks nothing; the agent's record selects the command, and a later reply supersedes it", () => {
     const operation: GuardRecoveryOperation = { kind: "restart-stage", stage: "requirements-analysis" };
     const { project, state } = publish("command", operation);
     expect(consumeSharedDirectiveAsk(project, "1")).toBe(true);
+    const kept = readActiveDirectiveMarker(project, state)!;
+    expect(kept.delivery).toBe("consumed");
+    expect(kept.guard_recovery_response?.selected_op ?? null).toBeNull();
+    recordGuardRecoveryChoice(project, "restart-stage", false);
     const selected = readActiveDirectiveMarker(project, state)!;
     expect(selected.remedies?.[0].operation).toEqual(operation);
-    expect(selected.guard_recovery_response?.status).toBe("ready");
+    expect(selected.guard_recovery_response).toMatchObject({ status: "ready", selected_op: "restart-stage", picked_by: "person" });
     expect(selected.guard_recovery_response?.feedback_sha256).toBeUndefined();
     expect(consumeSharedDirectiveAsk(project, "an unrelated later message")).toBe(true);
     const superseded = readActiveDirectiveMarker(project, state)!;
@@ -474,41 +507,36 @@ describe("recovery selection records the next interaction", () => {
     expect(superseded.guard_recovery_response?.selected_op).toBeNull();
     expect(superseded.guard_recovery_response?.feedback_sha256).toBeUndefined();
     expect(superseded.delivery).toBe("consumed");
-    expect(consumeSharedDirectiveAsk(project, "1")).toBe(true);
+    recordGuardRecoveryChoice(project, "restart-stage", false);
     const reselected = readActiveDirectiveMarker(project, state)!;
     expect(reselected.guard_recovery_response?.status).toBe("ready");
     expect(reselected.guard_recovery_response?.selected_op).toBe("restart-stage");
     expect(reselected.remedies).toEqual(selected.remedies);
   });
 
-  // #1290: with Request Changes the only choice, its question asks "What should
-  // change?", so a reply that is not the bare pick is the answer to it. That is
-  // structure, not a reading of their words: the agent still decides whether to
-  // submit, and its own record of the same remedy changes nothing.
-  test("with Request Changes the only choice, a reply that does not pick it is the feedback (#1290)", () => {
+  // With Request Changes the only choice, a reply about something else is no
+  // longer taken as what should change: the agent reads it, and records the
+  // remedy with the words when the reply says what should change.
+  test("with Request Changes the only choice, the agent's record binds the reply it read as the feedback", () => {
     const { project, state } = publish("human-input");
     expect(consumeSharedDirectiveAsk(project, "Use Redis for the session store.")).toBe(true);
+    expect(readActiveDirectiveMarker(project, state)?.guard_recovery_response?.selected_op ?? null).toBeNull();
+    recordGuardRecoveryChoice(project, "Request Changes: Use Redis for the session store.", true);
     const response = readActiveDirectiveMarker(project, state)?.guard_recovery_response;
     expect(response).toMatchObject({ status: "ready", selected_op: "request-changes", picked_by: "person" });
     expect(response?.feedback_sha256).toMatch(/^[a-f0-9]{64}$/);
-    recordGuardRecoveryChoice(project, "Request Changes: Use Redis for the session store.", true);
-    expect(readActiveDirectiveMarker(project, state)?.guard_recovery_response).toEqual(response);
   });
 
-  test("with Request Changes the only choice, the latest reply is the feedback until it is submitted", () => {
+  test("the feedback the agent records is the person's latest reply", () => {
     const { project, state } = publish("human-input");
     expect(consumeSharedDirectiveAsk(project, "Why was this refused?")).toBe(true);
     const first = readActiveDirectiveMarker(project, state)?.guard_recovery_response;
     expect(consumeSharedDirectiveAsk(project, "Split the billing step in two.")).toBe(true);
+    recordGuardRecoveryChoice(project, "Request Changes: Split the billing step in two.", true);
     const latest = readActiveDirectiveMarker(project, state)?.guard_recovery_response;
     expect(latest).toMatchObject({ status: "ready", selected_op: "request-changes" });
-    expect(latest?.feedback_sha256).not.toBe(first?.feedback_sha256);
-    // Picking the option again, or a reply with no words, keeps the words given.
-    for (const kept of ["Request Changes", "   "]) {
-      consumeSharedDirectiveAsk(project, kept);
-      expect(readActiveDirectiveMarker(project, state)?.guard_recovery_response?.feedback_sha256)
-        .toBe(latest?.feedback_sha256);
-    }
+    expect(latest?.feedback_sha256).not.toBe(first?.selection_sha256);
+    expect(latest?.feedback_sha256).toBe(latest?.selection_sha256);
   });
 
   test("a reply with no words is not a reply; a cancellation word typed is one the conductor reads", () => {
@@ -519,15 +547,21 @@ describe("recovery selection records the next interaction", () => {
     // here is what the person typed, kept like any other words of theirs.
     expect(consumeSharedDirectiveAsk(project, "Cancelled")).toBe(true);
     expect(readActiveDirectiveMarker(project, state)?.guard_recovery_response)
-      .toMatchObject({ status: "ready", selected_op: "request-changes" });
+      .toMatchObject({ status: "awaiting-feedback", selected_op: null });
   });
 
-  test("Request Changes still needs separate human feedback", () => {
+  // The two-step Request Changes path: the agent records the remedy it read,
+  // asks what should change, and records once more on the person's next reply.
+  test("Request Changes still needs separate human feedback: one more record, no loop", () => {
     const { project, state } = publish("human-input");
     expect(consumeSharedDirectiveAsk(project, "Request Changes")).toBe(true);
-    expect(readActiveDirectiveMarker(project, state)?.guard_recovery_response?.status)
-      .toBe("awaiting-feedback");
+    const picked = recordGuardRecoveryChoice(project, "request-changes", false);
+    expect(picked.awaitingWords).toBe(true);
+    expect(readActiveDirectiveMarker(project, state)?.guard_recovery_response)
+      .toMatchObject({ status: "awaiting-feedback", selected_op: "request-changes", picked_by: "person" });
     expect(consumeSharedDirectiveAsk(project, "Add the missing acceptance criterion.")).toBe(true);
+    const words = recordGuardRecoveryChoice(project, "Request Changes: Add the missing acceptance criterion.", true);
+    expect(words.awaitingWords).toBe(false);
     const response = readActiveDirectiveMarker(project, state)?.guard_recovery_response;
     expect(response?.status).toBe("ready");
     expect(response?.feedback_sha256).toMatch(/^[a-f0-9]{64}$/);
@@ -537,6 +571,7 @@ describe("recovery selection records the next interaction", () => {
     const { project, state } = publish("human-input");
     const feedback = "Add the missing acceptance criterion.";
     expect(consumeSharedDirectiveAsk(project, feedback)).toBe(true);
+    recordGuardRecoveryChoice(project, `Request Changes: ${feedback}`, true);
     const current = readActiveDirectiveMarker(project, state)!;
     const markerPath = join(seededRecordDir(project), ".aidlc-engine", "active-directive.json");
     const legacy = JSON.parse(readFileSync(markerPath, "utf-8"));

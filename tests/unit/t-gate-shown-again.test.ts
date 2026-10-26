@@ -29,6 +29,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   readAuditShardEvents,
+  personsWordsText,
   setGuardPolicyLine,
   turnEndMarkerPath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -181,7 +182,7 @@ describe("t-gate-shown-again", () => {
         const args = shownBy === "next" ? ["next"] : ["report", "--stage", STAGE, "--result", "awaiting-approval"];
         const shown = step(proj, args);
         if (shownBy === "next") expect(shown).toMatchObject({ kind: "run-stage", gate_only: true });
-        else expect(shown.message).toBe(`Stage "${STAGE}" is already awaiting approval; gate evidence revalidated.`);
+        else expect(shown.message).toStartWith(`Stage "${STAGE}" is already awaiting approval; gate evidence revalidated.`);
         const transcript = evidence === "claude"
           ? claudeTranscript(proj, `bun .claude/tools/aidlc.ts engine orchestrate ${args.join(" ")}`)
           : undefined;
@@ -201,7 +202,8 @@ describe("t-gate-shown-again", () => {
           expect(owed.stdout).not.toContain(CARRY_ON);
           const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1)?.block ?? "";
           const id = /\*\*Message Id\*\*: (\S+)/.exec(turn)?.[1] ?? "";
-          expect(readMessage(proj, id)?.text).toBe("Approve");
+          const kept = readMessage(proj, id);
+          expect(kept && personsWordsText(kept.text)).toBe("Approve");
         }
       });
     }

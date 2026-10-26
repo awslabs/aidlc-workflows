@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-jump:reopen, subcommand:aidlc-bolt:checkpoint, function:routeCodeGenerationPlanApproval, function:unitGateStatus
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-jump:reopen, subcommand:aidlc-bolt:checkpoint, function:routeCodeGenerationPlanApproval, function:unitGateStatus
 //
 // A Unit's Code Generation plan was approved, built, reviewed READY and its
 // checkpoint verified. The person then reopens that step with
@@ -7,7 +7,8 @@
 // comes back for the person's approval. Nothing in the plan needs changing,
 // so `next` must ask the Plan Approval question, not hand the agent a
 // `revise` whose only "feedback" is the reopen notice; with an unchanged plan
-// that `revise` never clears.
+// that `revise` never clears. A Redo of that step is a fresh attempt too, and
+// its plan is asked about the same way.
 //
 // Everything below drives the real tools: `next` (plan-approval ask and the
 // `--stage` reopen print), the human-turn hook, `aidlc-jump.ts reopen` exactly
@@ -21,7 +22,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
@@ -33,6 +34,11 @@ import {
   readAuditShardEvents, reviewArtifactFingerprint, unitGateStatus,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -150,6 +156,13 @@ function says(p: string, prompt: string, session = SESSION): void {
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
 }
 
+// The person answers "1" at the plan question; the agent records the choice it read.
+function approves(p: string): void {
+  says(p, "1");
+  const recorded = tool(p, "log", ["answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan"]);
+  expect(recorded.status, recorded.out).toBe(0);
+}
+
 function next(p: string, args: string[] = []): Directive {
   const result = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, args, { env: agentEnv() });
   expect(result.directive, result.out).not.toBeNull();
@@ -177,7 +190,7 @@ function approvePlan(p: string): void {
   const ask = next(p);
   expect(ask.kind, JSON.stringify(ask).slice(0, 800)).toBe("ask");
   expect(ask.ask_type).toBe("plan-approval");
-  says(p, "1");
+  approves(p);
   expect(next(p).plan_approval, "plan approved").toEqual({ status: "approved" });
 }
 
@@ -217,6 +230,28 @@ function checkpoint(p: string, action: string, extra: string[] = []) {
   return tool(p, "bolt", ["checkpoint", "--unit", UNIT, "--kind", "unit", "--action", action, "--session", SESSION, ...extra]);
 }
 
+// The person turns Plan Approval off after approving the plan: the field the
+// switch writes.
+function planApprovalOff(p: string): void {
+  writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
+    .replace("- **Plan Approval**: on (set by you)", "- **Plan Approval**: off (set by you)"));
+}
+
+// The person asks to redo the step: the agent reports their Redo and runs the
+// reopen it prints, exactly as printed.
+function redo(p: string): void {
+  says(p, "redo code generation for alpha");
+  const reported = tool(p, "orchestrate", ["report", "--result", "resumed", "--choice", "redo"]);
+  expect(reported.status, reported.out).toBe(0);
+  const message = String(reported.json?.message ?? reported.out);
+  const command = /reopen --target \S+ --stages \S+ --units \S+ --via redo --scope \S+/.exec(message)?.[0];
+  expect(command, message).toBeDefined();
+  const reopened = tool(p, "jump", command!.split(" "));
+  expect(reopened.status, reopened.out).toBe(0);
+  const row = readAuditShardEvents(p).filter((event) => event.event === "GATE_REJECTED").at(-1);
+  expect(auditBlockField(row?.block ?? "", "Reopen")).toBe("redo");
+}
+
 // `/aidlc --stage code-generation --unit alpha`: `next` prints the reopen it
 // wants run; run exactly that command's arguments. After a checkpoint Request
 // Changes the Unit's step is already open again, so `next` routes it instead
@@ -249,7 +284,7 @@ function builtAndVerified(p: string): void {
 // The person approves the plan the engine asks about; the Unit is built,
 // reviewed and approved at its checkpoint, which closes its gate.
 function approveAndFinish(p: string): void {
-  says(p, "1");
+  approves(p);
   expect(next(p).plan_approval).toEqual({ status: "approved" });
   build(p);
   reviewReady(p, 1);
@@ -321,5 +356,46 @@ describe("a --stage reopen of a Unit's approved Code Generation", () => {
     expect(asked.kind, JSON.stringify(asked).slice(0, 800)).toBe("ask");
     expect(asked.ask_type).toBe("plan-approval");
     approveAndFinish(p);
+  });
+});
+
+describe("a Redo of a Unit's built Code Generation", () => {
+  // The person asked to do the step again, not for a change: the plan comes
+  // back for approval as it stands, as after a jump back, never as a `revise`
+  // whose only "feedback" is the redo notice.
+  test("next asks the Plan Approval question, and their approval builds it again", () => {
+    const p = fixture();
+    builtAndVerified(p);
+    redo(p);
+    const after = next(p);
+    console.log(`[t402] redo: directive ${summary(after)}`);
+    expect(after.plan_approval?.status, JSON.stringify(after.plan_approval)).not.toBe("revise");
+    expect(after.kind, JSON.stringify(after).slice(0, 800)).toBe("ask");
+    expect(after.ask_type).toBe("plan-approval");
+    approveAndFinish(p);
+  });
+
+  test("an unchanged plan written again is never sent back for revision", () => {
+    const p = fixture();
+    builtAndVerified(p);
+    redo(p);
+    const seen: (string | undefined)[] = [];
+    for (let round = 0; round < 3; round++) {
+      writePlan(p);
+      seen.push(next(p).plan_approval?.status);
+    }
+    console.log(`[t402] redo loop: plan_approval.status per round ${JSON.stringify(seen)}`);
+    expect(seen, "an unchanged plan after a Redo is asked about, never sent back for revision").not.toContain("revise");
+  });
+
+  test("with Plan Approval off the approved plan builds again, with no question", () => {
+    const p = fixture();
+    builtAndVerified(p);
+    planApprovalOff(p);
+    redo(p);
+    const after = next(p);
+    console.log(`[t402] redo, plan approval off: directive ${summary(after)}`);
+    expect(after.kind, JSON.stringify(after).slice(0, 800)).toBe("run-stage");
+    expect(after.plan_approval?.status, JSON.stringify(after.plan_approval)).toBe("approved");
   });
 });

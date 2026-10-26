@@ -210,7 +210,9 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     // by stage it is taken at once, with no question.
     expect(LOOPBACK_PROTOCOL).toContain("Only for a cause that spans every\n   unit, or names none, run `next --stage code-generation` instead");
     expect(LOOPBACK_PROTOCOL).toContain("`unit-major`), one unit cannot be reopened alone: run that\n   `next --stage code-generation` at once, without asking");
-    expect(LOOPBACK_PROTOCOL).toContain("`aidlc-jump.ts execute --target code-generation --direction backward\n   --scope <scope>`");
+    // That `next` makes the stage-wide jump itself and returns the step.
+    expect(LOOPBACK_PROTOCOL).toContain("run `next --stage code-generation` instead: it runs\n   `aidlc-jump.ts execute --target code-generation --direction backward\n   --scope <scope>` itself");
+    expect(LOOPBACK_PROTOCOL).toContain("and returns Code\n   Generation's step.");
     expect(LOOPBACK_PROTOCOL).toContain(
       "Never compose the `reopen` or `execute` call by hand: the engine's print\n   is the validated form.",
     );

@@ -628,8 +628,10 @@ lock forms record the holder's process generation (the OS start record the
 gate's reaper also compares), and a lock from a release that recorded none is
 judged by whether the live process started more than 2 s after the lock was
 written. Each recovery prints one line on stderr. Directory recovery also
-requires a matching host/boot identity; unknown, foreign, or incomplete
-directory owners are retained for manual diagnosis.
+requires a matching host/boot identity; a directory stamp that never finished
+(no owner file, an empty one, or one that does not parse) is cleared once the
+folder is past the workflow locks' unstamped grace (5 s by default), and unknown, foreign, or
+invalid directory owners are retained for manual diagnosis.
 
 The coordination contract covers cooperating processes on one continuously
 running mount on one host with a common local temporary directory (`TMPDIR` on
@@ -729,6 +731,7 @@ dist/claude/.claude/
 |   +-- aidlc-operations-agent.md
 +-- knowledge/
 |   +-- aidlc-shared/
+|   |   +-- adding-a-repo.md
 |   |   +-- ai-dlc-principles.md
 |   |   +-- verification.md
 |   |   +-- brownfield.md
@@ -950,9 +953,9 @@ an idle machine, and on a busy one it finishes instead of losing the chat.
 Multiple Kiro IDE chats
 and opencode sessions can still share one process; process ancestry cannot
 distinguish those conversations. AI-DLC's opencode plugin gives each shell
-command its chat as `AIDLC_SESSION_OVERRIDE` (opencode's `shell.env` hook); a
-file write's audit and sensors, and the to-do list sync, still go by the
-process there. Spawned tools with unavailable or ambiguous
+command its chat as `AIDLC_SESSION_OVERRIDE` (opencode's `shell.env` hook), and
+forwards a file write's audit and sensors and the to-do list sync with the chat's
+session id. Spawned tools with unavailable or ambiguous
 ancestry use shared-cursor behavior unless a payload-bearing hook or the harness
 process supplies `AIDLC_SESSION_OVERRIDE`.
 
@@ -1013,7 +1016,7 @@ readers read the rows they share once (`copiedAuditBlocks` in
 
 11. **Phase boundary verification** -- Traceability checks run at the end of Ideation, Inception and Construction (the Initialization->Ideation transition has none), written by the phase's last stage to `<record>/verification/`. This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 123-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 126-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 

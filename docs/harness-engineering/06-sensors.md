@@ -32,10 +32,26 @@ before you author anything:
 - **`fire_on: gate` runs once per deliverable.** Immediately before
   `gate-start` opens its state transaction, the state tool fires each gate-bound
   sensor once for every existing declared deliverable path (`upstream-coverage` and `claim-sources`, which read
-  the whole stage's output, once per output folder); a gate the engine
+  the whole stage's output, once per output folder). At Reverse Engineering,
+  whose files repeat in every repository's code knowledge base folder,
+  `required-sections` and `upstream-coverage` fire once for the stage over every
+  repository's files, and a failing file is named with its repository
+  (`service-007/dependencies.md`). A gate the engine
   approves itself under Construction autonomy fires only blocking sensors, since
   advisory evidence has no reader there. The dispatch stays outside the
   transaction because the sensor dispatcher takes the audit lock.
+- **Advisory gate checks run once before the gate, too.** When the stage's
+  documents are written and handed on, the first hand-off of the attempt (the
+  review request, or the report that opens the gate when no review took them
+  first) fires the advisory gate checks on those documents. When one reports
+  findings, the hand-off records nothing and comes back to the agent as its
+  step, naming the findings and the same command; the agent fixes what is its
+  own and runs it again, and it goes on. So the review sees the tidied
+  documents, and the gate, which fires every check again, names only what is
+  left. Blocking checks run only at the gate. A review the person asks for, an
+  isolated `--single` run, Units built in a swarm worker's checkout and a gate
+  the engine approves itself skip this step (`completionChecksStep` in
+  `aidlc-state.ts`).
 - **Severity controls gate enforcement.** `advisory` outcomes are recorded and
   the gate still opens. A `blocking` binding requires a verified pass: findings,
   unavailable tools, script/dispatcher errors, malformed verdicts, and timeouts
@@ -47,7 +63,8 @@ before you author anything:
 
 Each fire leaves a row in the intent's `audit/` shards. The event names — exact casing
 matters when you grep the log — are **`SENSOR_FIRED`** when a sensor starts,
-**`SENSOR_PASSED`** when it clears, and **`SENSOR_FAILED`** when it finds a gap.
+**`SENSOR_PASSED`** when it clears, **`SENSOR_FAILED`** when it finds a gap, and
+**`SENSOR_COULD_NOT_RUN`** when its script crashed or could not start.
 A failed row links to a detail file under
 `<record>/.aidlc-engine/sensors/<stage-slug>/` (in the intent's record dir) that names the specific gap: the
 missing headings, the unreferenced upstream artifact, the lint error. The
@@ -284,9 +301,9 @@ and the audit shard gets the failed row:
 ```
 
 After the line is fixed, the next fire reports `"result":"passed"` and the
-earlier detail file is removed. A worker that exits non-zero is recorded as a
-pass with a note such as `"note":"script-error: exit-1"`, so check that note
-when a new sensor never fails.
+earlier detail file is removed. A worker that exits non-zero is recorded as
+`"result":"could-not-run"` with a note such as `"note":"script-error: exit-1"`,
+and the gate says the check could not run.
 
 ---
 

@@ -61,6 +61,7 @@ import {
   writeSessionIntentHandoff,
   writeSessionIntentUuid,
   stateDigest,
+  personsWordsText,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
@@ -74,6 +75,7 @@ import {
 import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
 import { listMessages } from "../../core/tools/aidlc-message-store.ts";
 import { resolveAction } from "../../core/tools/aidlc.ts";
+import kiroManifest from "../../harness/kiro/manifest.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -419,7 +421,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       const [record] = listMessages(dir);
       // Only the text after the last request header is the person's turn, and
       // their line is a command to AI-DLC, so it carries no words of their own.
-      expect(record.text).toBe("/aidlc config set summary-confirmation off");
+      expect(personsWordsText(record.text)).toBe("/aidlc config set summary-confirmation off");
       expect(record.words).toBeNull();
       const lowered = spawnSync(
         process.execPath,
@@ -735,6 +737,46 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(pwsh.code).toBe(2);
       expect(pwsh.stderr).toBe(bash.stderr);
       expect(pwsh.stdout).toBe(bash.stdout);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Kiro CLI on Windows runs its shell tool in PowerShell, whatever name the
+  // call carries (`execute_pwsh`, or `execute_bash` and `shell`, the names its
+  // agent hooks match); elsewhere only `execute_pwsh` is PowerShell's.
+  test("1bd: a Kiro shell command reaches the plan-approval guard and the review freeze read as PowerShell where it runs in PowerShell", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const rec = relative(dir, join(seededRecordDir(dir), "construction", "todo-core", "code-generation")).replaceAll("/", "\\");
+      const command = `New-Item -ItemType File -Force -Path '${rec}\\code-generation-plan.md' | Out-Null`;
+      const call = (target: string, toolName: string) =>
+        runAdapter(dir, target, {
+          hook_event_name: "preToolUse",
+          cwd: dir,
+          tool_name: toolName,
+          tool_input: { command },
+        }, [], { AIDLC_COMPILED_EXECUTABLE: "" });
+      // The plan's own file before any plan: PowerShell's reading puts it in
+      // the stage's record; the POSIX reading drops the backslashes.
+      const windows = process.platform === "win32";
+      expect(call("plan-approval-guard", "execute_pwsh").code).toBe(0);
+      expect(call("plan-approval-guard", "execute_bash").code).toBe(windows ? 0 : 2);
+      for (const [target, file] of [
+        ["plan-approval-guard", "aidlc-plan-approval-guard.ts"],
+        ["review-freeze", "aidlc-review-freeze.ts"],
+      ] as const) {
+        const capture = join(dir, `${target}.jsonl`);
+        writeFileSync(join(dir, ".kiro", "hooks", file), recordingGuard(capture), "utf-8");
+        for (const toolName of ["execute_pwsh", "execute_bash", "shell"]) {
+          expect(call(target, toolName).code, `${target} ${toolName}`).toBe(0);
+        }
+        const shells = readFileSync(capture, "utf-8").trim().split("\n")
+          .map((line) => (JSON.parse(line) as { aidlc_shell?: unknown }).aidlc_shell);
+        const posix = windows ? "powershell" : undefined;
+        expect({ target, shells }).toEqual({ target, shells: ["powershell", posix, posix] });
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1205,7 +1247,8 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(r.stdout.indexOf(question)).toBeGreaterThan(said);
       expect(r.stdout.indexOf(handOver)).toBeGreaterThan(r.stdout.indexOf(question));
       expect(r.stdout).toContain("--- DIRECTIVE ---");
-      // A step with a line for the person and a notice: the line, then the notice, then the step.
+      // A step with a line for the person and a notice: the line first, then the notice under the step's own order
+      // (said before the person replies), then the step.
       stubNext(dir, JSON.stringify({
         kind: "print", message: "run the thing", narration: "Picking up where we left off.",
         change_notices: ["Guard Policy is relaxed for this piece of work."],
@@ -1213,6 +1256,9 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       r = runAdapter(dir, "verb-intercept", { cwd: dir, prompt });
       expect(r.stdout).toContain(
         "Say this to the person first, word for word, with nothing in front of it:\n\nPicking up where we left off.\n\n" +
+          "Say this to the person once, as written (only a verb's tense may change to fit when you say it), as your " +
+          "own sentence with nothing in front of it, in the last message you write before they reply (when you end " +
+          "your turn with a question, the text you write just before it):\n\n" +
           "Guard Policy is relaxed for this piece of work.\n\n",
       );
       expect(r.stdout.indexOf("Picking up")).toBeLessThan(r.stdout.indexOf(handOver));
@@ -2006,19 +2052,19 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
         matcher: "execute_bash",
         command:
-          `bun .kiro/tools/aidlc.ts engine adapter kiro state-transition-guard ${config.name}`,
+          `bun .kiro/tools/aidlc.ts engine adapter kiro state-transition-guard ${config.name}${kiroManifest.hookCommandSuffix}`,
         timeout_ms: EXTENDED_SUBPROCESS_TIMEOUT_MS,
       });
       expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
         matcher: "fs_write",
         command:
-          "bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard",
+          `bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard${kiroManifest.hookCommandSuffix}`,
         timeout_ms: EXTENDED_SUBPROCESS_TIMEOUT_MS,
       });
       expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
         matcher: "execute_bash",
         command:
-          "bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard",
+          `bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard${kiroManifest.hookCommandSuffix}`,
         timeout_ms: EXTENDED_SUBPROCESS_TIMEOUT_MS,
       });
     }
@@ -2037,7 +2083,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       const hooks = Object.values(config.hooks).flat();
       expect(hooks.length, name).toBeGreaterThan(0);
       for (const hook of hooks) {
-        const compound = /\b(?:continue-workflow|audit-and-sensors)(?:\s|$)/.test(hook.command);
+        const compound = /\b(?:continue-workflow|audit-and-sensors)(?:[\s;]|$)/.test(hook.command);
         expect(hook.timeout_ms, `${name}: ${hook.command}`).toBe(compound ? 3_600_000 : 1_800_000);
       }
     }

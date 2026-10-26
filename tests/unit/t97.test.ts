@@ -20,7 +20,8 @@
 //             parseMemoryEntries(raw).length === parseMemoryHeadings(raw).total
 //             holds for ANY input — no multi-line merge)
 //   dist/claude/.claude/tools/aidlc-learnings.ts
-//     surface --slug <s> [--project-dir <p>]  -> JSON candidates + parked;
+//     surface --slug <s> [--correction <c>]... [--project-dir <p>] -> JSON: one
+//             question per correction, the diary counted and never offered;
 //             exit 1 on missing --slug / missing state / slug-not-Active.
 //     persist --slug <s> --selections-json <p> [--project-dir <p>] -> writes
 //       practice file + RULE_LEARNED audit row (cid-marker idempotency,
@@ -351,7 +352,7 @@ describe("t97 surface (cli)", () => {
     expect(j.candidates.length).toBe(0);
   });
 
-  test("I/D/T -> one candidate each with correct source_heading", () => {
+  test("I/D/T diary entries are counted and never offered", () => {
     const pd = mkproj("p13");
     writeFileSync(
       memoryFile(pd),
@@ -370,9 +371,9 @@ describe("t97 surface (cli)", () => {
     );
     const res = runCli(["surface", "--slug", "user-stories", "--project-dir", pd]);
     const j = JSON.parse(res.stdout);
-    expect(j.candidates.map((c: { source_heading: string }) => c.source_heading).join(",")).toBe(
-      "Interpretations,Deviations,Tradeoffs",
-    );
+    expect(j.memory_entries_total).toBe(3);
+    expect(j.candidates).toEqual([]);
+    expect(j.questions).toEqual([]);
     expect(res.out).not.toContain("suggested_kind");
   });
 
@@ -396,7 +397,7 @@ describe("t97 surface (cli)", () => {
     expect(`${j.candidates.length}:${j.parked_open_questions.length}`).toBe("0:1");
   });
 
-  test("mixed headings -> correct partition (2 candidates, 1 parked)", () => {
+  test("mixed headings -> all counted, the open question parked, nothing offered", () => {
     const pd = mkproj("p15");
     writeFileSync(
       memoryFile(pd),
@@ -415,7 +416,7 @@ describe("t97 surface (cli)", () => {
     );
     const res = runCli(["surface", "--slug", "user-stories", "--project-dir", pd]);
     const j = JSON.parse(res.stdout);
-    expect(`${j.candidates.length}:${j.parked_open_questions.length}`).toBe("2:1");
+    expect(`${j.memory_entries_total}:${j.candidates.length}:${j.parked_open_questions.length}`).toBe("3:0:1");
   });
 
   test("slug not Active stage -> exit 1", () => {
@@ -424,44 +425,37 @@ describe("t97 surface (cli)", () => {
   });
 
   // The agent asks what surface prints, so the box the person sees and the
-  // question the record names are the same: live runs folded the two into one
-  // question of the agent's own and recorded a pick the person never made.
-  const NOTE_QUESTION = {
-    question: "Anything to add for next time?",
-    multi_select: false,
-    options: ["Nothing to add", "Add a note"],
-  };
-
-  test("nothing in the diary -> only the Anything to add question", () => {
+  // question the record names are the same: live runs folded questions of
+  // the agent's own together and recorded a pick the person never made.
+  test("nothing corrected -> no question", () => {
     const pd = mkproj("p40");
     writeFileSync(memoryFile(pd), "", "utf-8");
     const j = JSON.parse(runCli(["surface", "--slug", "user-stories", "--project-dir", pd]).stdout);
-    expect(j.questions).toEqual([NOTE_QUESTION]);
+    expect(j.questions).toEqual([]);
   });
 
-  test("notes in the diary -> which to keep first, Keep none of these first, then Anything to add", () => {
+  test("a correction -> its one question, whatever the diary holds", () => {
     const pd = mkproj("p41");
     writeFileSync(
       memoryFile(pd),
       `## Interpretations
-- 2026-05-28T14:00:00Z \u2014 Single-package React/Vite SPA, no backend; ctx i
-
-## Deviations
-- 2026-05-28T14:01:00Z \u2014 dev one; ctx d
+- 2026-05-28T14:00:00Z - Single-package React/Vite SPA, no backend; ctx i
 
 ## Open questions
-- 2026-05-28T15:00:00Z \u2014 q?
+- 2026-05-28T15:00:00Z - q?
 `,
       "utf-8",
     );
-    const j = JSON.parse(runCli(["surface", "--slug", "user-stories", "--project-dir", pd]).stdout);
+    const j = JSON.parse(runCli([
+      "surface", "--slug", "user-stories", "--correction", "keep each story to one screen", "--project-dir", pd,
+    ]).stdout);
     expect(j.questions).toEqual([
       {
-        question: "Which notes from this step should I keep as practices for future work?",
-        multi_select: true,
-        options: ["Keep none of these", "Single-package React/Vite SPA, no backend", "dev one"],
+        question: "You asked me to keep each story to one screen. Keep that for next time?",
+        multi_select: false,
+        options: ["Yes, for this project", "Yes, for the team", "No"],
+        question_kind: "learnings-note",
       },
-      NOTE_QUESTION,
     ]);
   });
 });
@@ -588,6 +582,55 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     expect(ftBlock.endsWith("---")).toBe(true);
     expect(ftBlock).toContain("Source**: user_addition");
     expect(ftBlock).toContain("Candidate-ID**: free_text_1");
+  });
+
+  // "Keep none of these" picked, and the agent listed the candidate anyway with
+  // `keep: false` (a live Kiro run did): the note the person declined is not
+  // written to their memory and the record does not say a rule was learned.
+  test("a candidate marked keep:false is never written and never recorded", () => {
+    const pd = mkproj("p18-keep-false");
+    const sel = writeSel(
+      pd,
+      `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [
+  { "id": "c1", "keep": false, "source_heading": "Interpretations", "heading": "Interpretations", "text": "Declined by the person" } ] }
+`,
+    );
+    const res = runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
+    expect(res.rc, res.out).toBe(0);
+    expect(JSON.parse(res.stdout).rule_learned).toBe(0);
+    expect(existsSync(projectPractices(pd)) ? readFile(projectPractices(pd)) : "").not.toContain("Declined by the person");
+    expect(grepCountAudit(pd, /Event.*: RULE_LEARNED/)).toBe(0);
+  });
+
+  test("a bare keep:false entry, with no heading or text, keeps nothing", () => {
+    const pd = mkproj("p18-keep-false-bare");
+    const sel = writeSel(
+      pd,
+      `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [ { "id": "c1", "keep": false } ] }
+`,
+    );
+    const res = runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
+    expect(res.rc, res.out).toBe(0);
+    expect(JSON.parse(res.stdout).rule_learned).toBe(0);
+    expect(grepCountAudit(pd, /Event.*: RULE_LEARNED/)).toBe(0);
+  });
+
+  test("beside a kept candidate, only the kept note is written", () => {
+    const pd = mkproj("p18-keep-mixed");
+    const sel = writeSel(
+      pd,
+      `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [
+  { "id": "c1", "keep": false, "heading": "Corrections", "text": "Declined by the person" },
+  { "candidate_id": "c2", "type": "learning", "scope": "project", "heading": "Corrections", "text": "Kept by the person" } ] }
+`,
+    );
+    const res = runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
+    expect(res.rc, res.out).toBe(0);
+    expect(JSON.parse(res.stdout).rule_learned).toBe(1);
+    const practices = readFile(projectPractices(pd));
+    expect(practices).toContain("Kept by the person");
+    expect(practices).not.toContain("Declined by the person");
+    expect(grepCountAudit(pd, /Event.*: RULE_LEARNED/)).toBe(1);
   });
 
   test("idempotent re-run -> exactly one audit row + one file line", () => {

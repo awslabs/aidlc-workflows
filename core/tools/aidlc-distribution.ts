@@ -1280,6 +1280,16 @@ function jsoncNodeValue(text: string, node: JsoncNode): unknown {
   }
 }
 
+/**
+ * The value of a text that is exactly one JSONC value, comments and whitespace
+ * around it allowed; undefined otherwise. Bun.JSONC.parse alone stops at the
+ * first complete value and drops anything after it.
+ */
+export function jsoncDocumentValue(text: string): unknown {
+  const node = jsoncTree(text);
+  return node ? jsoncNodeValue(text, node) : undefined;
+}
+
 function plainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -1353,6 +1363,14 @@ function insertJsoncEntry(
   const last = entries[entries.length - 1];
   if (last && last.end === last.valueEnd) next = `${next.slice(0, last.valueEnd)},${next.slice(last.valueEnd)}`;
   return next;
+}
+
+/** `value` after the last item of the root object's `key` array, in the layout around it; null when there is no such array. */
+export function appendJsoncArrayItem(text: string, key: string, value: unknown): string | null {
+  const root = jsoncTree(text);
+  const array = root?.kind === "object" ? root.members.findLast((member) => member.key === key)?.node : undefined;
+  if (!root || array?.kind !== "array") return null;
+  return insertJsoncEntry(text, jsonLayout(text, root), array, false, undefined, value, false);
 }
 
 function replaceJsoncNode(text: string, layout: JsonLayout, node: JsoncNode, value: unknown): string {

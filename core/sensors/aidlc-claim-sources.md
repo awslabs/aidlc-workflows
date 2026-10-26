@@ -22,8 +22,8 @@ timeout_seconds: 300
 
 # claim-sources sensor
 
-Checks the existing Intent Capture deliverables as a set when the stage enters
-its approval gate.
+Checks the existing Intent Capture deliverables as a set when they are handed
+to their review, and again when the stage enters its approval gate.
 
 For each deliverable, the sensor verifies:
 
@@ -44,7 +44,10 @@ For each deliverable, the sensor verifies:
 - `[scope]` grounds claims only in a workflow-selected Initial Scope Signal
 - `[assumption]` appears only in the assumptions section
 - retained assumptions exactly match entries under an
-  `## Assumption Confirmation` answered exactly `A. Accept assumptions`
+  `## Assumption Confirmation` the person accepted: the answer the agent
+  recorded to that question (`log answer` after `log decision
+  --question-kind assumption-confirmation`), never the file's answer line;
+  with no such question on record, nothing is said about acceptance
 
 Contract headings (`Sources`, `Q<n>`, `Assumption Confirmation`,
 `Assumptions & Open Questions`, `Initial Scope Signal`) are recognised by this

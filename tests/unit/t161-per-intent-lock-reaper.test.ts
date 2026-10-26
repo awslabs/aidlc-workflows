@@ -11,8 +11,8 @@
 // __workspace__ sentinel bucket distinct from every per-intent bucket (intent
 // auto-create + every intents.json write depend on this). The reaper stamps owner
 // PID+generation-token on acquire and reclaims only a provably-dead (ESRCH)
-// owner or an old genuinely-missing stamp. Live/malformed/unreadable owners
-// fail closed.
+// owner or an old stamp that never finished (none, empty, or cut off). Live
+// owners, stamps that name no valid owner, and unreadable stamps fail closed.
 //
 // SOURCE UNDER TEST (core/tools/aidlc-lib.ts):
 //   auditLockDir(pd, intent?, space?) / auditLockIdentity — per-intent + sentinel.
@@ -48,6 +48,7 @@ import {
   stateDigest,
 } from "../../core/tools/aidlc-lib.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
+import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -528,33 +529,37 @@ describe("t161 per-intent lock independence", () => {
     }
   });
 
-  test("failed pre-stamp cleanup never removes a successor generation", () => {
-    const lockDir = auditLockDir(PD);
-    const displaced = `${lockDir}.pre-stamp-displaced`;
-    const successorToken = randomUUID();
-    _setAuditLockFaultHooksForTests({
-      beforeAcquirerOwnerStamp: (currentLockDir) => {
-        renameSync(currentLockDir, displaced);
-        mkdirSync(join(currentLockDir, successorToken), { recursive: true });
-        writeFileSync(join(currentLockDir, "owner.json"), JSON.stringify({
-          pid: process.pid,
-          startedAtMs: Math.floor(performance.timeOrigin + performance.now()),
-          reapLiveOwnerAfterStale: true,
-          token: successorToken,
-        }));
-      },
-    });
-    try {
-      expect(acquireAuditLock(PD, 0, 1)).toBe(false);
-      expect(existsSync(lockDir)).toBe(true);
-      expect(JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf-8")).token)
-        .toBe(successorToken);
-    } finally {
-      _setAuditLockFaultHooksForTests(null);
-      rmSync(displaced, { recursive: true, force: true });
-      rmSync(lockDir, { recursive: true, force: true });
-    }
-  });
+  // POSIX rename replaces an empty directory and Windows refuses any existing
+  // one, so the empty case is the one that differs by platform.
+  test.each(["empty", "stamped"] as const)(
+    "a lock that appears at the lock path while ours is stamped (%s) is never replaced",
+    (kind) => {
+      const projectDir = `${PD}-successor-${kind}`;
+      const lockDir = auditLockDir(projectDir);
+      const successor = { stamp: "" };
+      _setAuditLockFaultHooksForTests({
+        beforeAcquirerOwnerStamp: () => {
+          mkdirSync(lockDir, { recursive: true });
+          if (kind === "stamped") successor.stamp = seedLiveOwner(lockDir);
+        },
+      });
+      try {
+        expect(acquireAuditLock(projectDir, 0, 1)).toBe(false);
+        if (kind === "empty") {
+          expect(readdirSync(lockDir)).toEqual([]);
+        } else {
+          expect(readFileSync(join(lockDir, "owner.json"), "utf-8")).toBe(successor.stamp);
+          expect(readdirSync(lockDir)).toHaveLength(2);
+        }
+        expect(readdirSync(tmpdir()).some((entry) =>
+          entry.startsWith(`${basename(lockDir)}.candidate.`)
+        )).toBe(false);
+      } finally {
+        _setAuditLockFaultHooksForTests(null);
+        rmSync(lockDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("a failed private gate publication never deletes a successor gate", () => {
     const lockDir = auditLockDir(PD);
@@ -970,16 +975,18 @@ describe("t161 stale-lock reaper", () => {
     }
   });
 
-  test("aged malformed and unreadable owner stamps fail closed", () => {
+  test("aged stamps that name no valid owner and unreadable stamps fail closed", () => {
     process.env.AIDLC_LOCK_UNSTAMPED_GRACE_MS = "1";
     try {
-      for (const kind of ["malformed", "unreadable"] as const) {
+      for (const kind of ["wrong-shape", "token-without-folder", "unreadable"] as const) {
         const projectDir = `${PD}-${kind}`;
         const lockDir = auditLockDir(projectDir);
         mkdirSync(lockDir, { recursive: true });
         const ownerPath = join(lockDir, "owner.json");
-        if (kind === "malformed") {
-          writeFileSync(ownerPath, `{"pid":${process.pid},"startedAtMs":`);
+        if (kind === "wrong-shape") {
+          writeFileSync(ownerPath, `{"pid":"${process.pid}","startedAtMs":1}`);
+        } else if (kind === "token-without-folder") {
+          writeFileSync(ownerPath, JSON.stringify({ pid: process.pid, startedAtMs: 1, token: randomUUID() }));
         } else {
           mkdirSync(ownerPath);
         }
@@ -988,7 +995,7 @@ describe("t161 stale-lock reaper", () => {
         expect(existsSync(lockDir)).toBe(true);
         const findings = detectLeakedLocks(projectDir, true);
         expect(findings).toContainEqual(expect.objectContaining({
-          reason: kind === "malformed" ? "invalid-owner" : "unreadable-owner",
+          reason: kind === "unreadable" ? "unreadable-owner" : "invalid-owner",
           cleared: false,
         }));
         expect(existsSync(lockDir)).toBe(true);
@@ -996,6 +1003,131 @@ describe("t161 stale-lock reaper", () => {
       }
     } finally {
       delete process.env.AIDLC_LOCK_UNSTAMPED_GRACE_MS;
+    }
+  });
+
+  // What a process killed inside acquisition left on main: the lock folder with
+  // its token folder and an owner.json it created but never finished writing,
+  // the coordination gate it held, stamped by its pid, and the native mutex file.
+  function seedKilledAcquirer(
+    lockDir: string,
+    stamp: string,
+    gateOwner: { pid: number; processGeneration?: string } = { pid: 2_000_000_000 },
+  ): void {
+    mkdirSync(join(lockDir, randomUUID()), { recursive: true });
+    writeFileSync(join(lockDir, "owner.json"), stamp);
+    const gateToken = randomUUID();
+    mkdirSync(join(`${lockDir}.reap`, gateToken), { recursive: true });
+    writeFileSync(join(`${lockDir}.reap`, "owner.json"), JSON.stringify({
+      pid: gateOwner.pid,
+      startedAtMs: Math.floor(performance.timeOrigin + performance.now()),
+      reapLiveOwnerAfterStale: false,
+      token: gateToken,
+      ...(gateOwner.processGeneration ? { processGeneration: gateOwner.processGeneration } : {}),
+    }));
+    writeFileSync(`${lockDir}.gate-mutex`, "");
+  }
+
+  function lockLeftovers(lockDir: string): string[] {
+    return readdirSync(tmpdir()).filter((entry) => entry.startsWith(`${basename(lockDir)}.`));
+  }
+
+  test.each([
+    ["empty", ""],
+    ["cut-off", `{"pid":${process.pid},"startedAtMs":`],
+  ])("a killed acquirer's %s stamp is cleared once its folder is past the grace", (kind, stamp) => {
+    const projectDir = `${PD}-killed-${kind}`;
+    const lockDir = auditLockDir(projectDir);
+    seedKilledAcquirer(lockDir, stamp);
+    try {
+      // Inside the grace the folder is left alone.
+      expect(acquireAuditLock(projectDir, 0, 1)).toBe(false);
+      expect(readFileSync(join(lockDir, "owner.json"), "utf-8")).toBe(stamp);
+      utimesSync(lockDir, new Date(0), new Date(0));
+      expect(acquireAuditLock(projectDir, 0, 1)).toBe(true);
+      expect(JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf-8")).pid).toBe(process.pid);
+      releaseAuditLock(projectDir);
+      expect(existsSync(lockDir)).toBe(false);
+      expect(existsSync(`${lockDir}.reap`)).toBe(false);
+      expect(lockLeftovers(lockDir)).toEqual([`${basename(lockDir)}.gate-mutex`]);
+    } finally {
+      releaseAuditLock(projectDir);
+      rmSync(lockDir, { recursive: true, force: true });
+      rmSync(`${lockDir}.reap`, { recursive: true, force: true });
+    }
+  });
+
+  test("doctor's probe clears an old empty stamp as unstamped", () => {
+    const projectDir = `${PD}-killed-doctor`;
+    const lockDir = auditLockDir(projectDir);
+    seedKilledAcquirer(lockDir, "");
+    utimesSync(lockDir, new Date(0), new Date(0));
+    try {
+      expect(detectLeakedLocks(projectDir, true)).toContainEqual(expect.objectContaining({
+        kind: "audit",
+        reason: "unstamped",
+        cleared: true,
+        lockDir,
+      }));
+      expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+      rmSync(`${lockDir}.reap`, { recursive: true, force: true });
+    }
+  });
+
+  test("a live gate owner keeps an old empty-stamp lock from being reaped", () => {
+    const projectDir = `${PD}-killed-live-gate`;
+    const lockDir = auditLockDir(projectDir);
+    const gateOwner = { pid: 424_243, processGeneration: "live-gate-generation" };
+    seedKilledAcquirer(lockDir, "", gateOwner);
+    utimesSync(lockDir, new Date(0), new Date(0));
+    const gateBefore = readFileSync(join(`${lockDir}.reap`, "owner.json"), "utf-8");
+    _setAuditLockFaultHooksForTests({
+      processProbe: (pid) => pid === gateOwner.pid
+        ? { alive: true, generation: gateOwner.processGeneration }
+        : undefined,
+    });
+    try {
+      expect(acquireAuditLock(projectDir, 0, 1)).toBe(false);
+      expect(readFileSync(join(lockDir, "owner.json"), "utf-8")).toBe("");
+      expect(readdirSync(lockDir)).toHaveLength(2);
+      expect(readFileSync(join(`${lockDir}.reap`, "owner.json"), "utf-8")).toBe(gateBefore);
+    } finally {
+      _setAuditLockFaultHooksForTests(null);
+      rmSync(lockDir, { recursive: true, force: true });
+      rmSync(`${lockDir}.reap`, { recursive: true, force: true });
+    }
+  });
+
+  test("a process killed just before it stamps its lock leaves no lock behind", () => {
+    const projectDir = `${PD}-killed-before-stamp`;
+    const lockDir = auditLockDir(projectDir);
+    const scratch = mkdtempSync(join(tmpdir(), "aidlc-t161-killed-"));
+    const driver = join(scratch, "acquirer.ts");
+    writeFileSync(driver, [
+      `import { _setAuditLockFaultHooksForTests, acquireAuditLock } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};`,
+      `_setAuditLockFaultHooksForTests({ beforeAcquirerOwnerStamp: () => { process.kill(process.pid, "SIGKILL"); } });`,
+      `acquireAuditLock(${JSON.stringify(projectDir)}, 0, 1);`,
+      'process.stdout.write("NOT KILLED");',
+    ].join("\n"));
+    try {
+      const child = spawnSync(process.execPath, [driver], {
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(child.stdout).toBe("");
+      expect(child.status).not.toBe(0);
+      expect(existsSync(lockDir)).toBe(false);
+      // The next command takes the lock at once, through the dead gate.
+      expect(acquireAuditLock(projectDir, 0, 1)).toBe(true);
+      releaseAuditLock(projectDir);
+      // Its private candidate folder is all a kill at that instant leaves.
+      expect(lockLeftovers(lockDir).filter((entry) => entry.includes(".candidate."))).toHaveLength(1);
+    } finally {
+      releaseAuditLock(projectDir);
+      rmSync(scratch, { recursive: true, force: true });
+      rmSync(lockDir, { recursive: true, force: true });
     }
   });
 
@@ -1492,4 +1624,62 @@ describe("t161 active-directive owner lock and doctor findings", () => {
       rmSync(fixture.projectDir, { recursive: true, force: true });
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The production budget on purpose: any lock taker on doctor's path that
+  // waits the full acquire budget behind a stuck lock shows as a red here.
+  test.each(["empty", "unreadable"] as const)(
+    "doctor behind a stuck workspace lock (%s stamp) names it and finishes its report",
+    (kind) => {
+      const fixture = markerProject();
+      const lockDir = auditLockDir(fixture.projectDir);
+      try {
+        cpSync(join(REPO_ROOT, "dist", "claude", ".claude"), join(fixture.projectDir, ".claude"), { recursive: true });
+        for (const tool of ["aidlc-lib.ts", "aidlc-utility.ts"]) {
+          cpSync(join(REPO_ROOT, "core", "tools", tool), join(fixture.projectDir, ".claude", "tools", tool));
+        }
+        appendAuditEntry("STAGE_STARTED", { Stage: "requirements-analysis", Agent: "aidlc-product-agent" }, fixture.projectDir);
+        mkdirSync(join(lockDir, randomUUID()), { recursive: true });
+        if (kind === "empty") writeFileSync(join(lockDir, "owner.json"), "");
+        else mkdirSync(join(lockDir, "owner.json"));
+        utimesSync(lockDir, new Date(0), new Date(0));
+        const env = { ...process.env };
+        delete env.AIDLC_AUDIT_LOCK_TIMEOUT_MS;
+        delete env.AIDLC_LOCK_UNSTAMPED_GRACE_MS;
+        const started = performance.now();
+        const doctor = spawnSync(process.execPath, [
+          join(fixture.projectDir, ".claude", "tools", "aidlc-doctor.ts"),
+          "doctor",
+          "--json",
+          "--project-dir",
+          fixture.projectDir,
+        ], { encoding: "utf-8", env, timeout: 60_000 });
+        const seconds = (performance.now() - started) / 1000;
+        const diagnostic = JSON.stringify({
+          seconds, status: doctor.status, signal: doctor.signal,
+          stdout: doctor.stdout?.slice(-1500), stderr: doctor.stderr?.slice(-1500),
+        });
+        expect(seconds, diagnostic).toBeLessThan(30);
+        expect(`${doctor.stdout}${doctor.stderr}`, diagnostic).not.toContain("Failed to acquire audit lock");
+        const labels = (JSON.parse(doctor.stdout).data.checks as Array<{ label: string }>)
+          .map((check) => check.label);
+        const audit = readdirSync(join(fixture.recordDir, "audit"))
+          .map((shard) => readFileSync(join(fixture.recordDir, "audit", shard), "utf-8"))
+          .join("\n");
+        if (kind === "empty") {
+          expect(labels, diagnostic).toContain('Leaked audit lock on bucket "__workspace__" (unstamped) - cleared');
+          expect(existsSync(lockDir)).toBe(false);
+          expect(audit).toContain("**Event**: HEALTH_CHECKED");
+        } else {
+          expect(labels, diagnostic).toContain('Leaked audit lock on bucket "__workspace__" (unreadable-owner) - not cleared');
+          expect(existsSync(join(lockDir, "owner.json"))).toBe(true);
+          expect(audit).not.toContain("**Event**: HEALTH_CHECKED");
+        }
+      } finally {
+        rmSync(lockDir, { recursive: true, force: true });
+        rmSync(`${lockDir}.reap`, { recursive: true, force: true });
+        rmSync(fixture.projectDir, { recursive: true, force: true });
+      }
+    },
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  );
 });

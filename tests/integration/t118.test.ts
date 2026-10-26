@@ -98,6 +98,7 @@ import {
   resetAidlcEnv,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -205,17 +206,13 @@ function eventCount(p: string, ev: string): number {
 
 describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated from t118-engine-differential.sh, plan 24)", () => {
   // A WITH-STATE jump is a MUTATION (mark intervening [S], emit STAGE_JUMPED,
-  // pivot Current Stage) the conductor commits, so `next --stage <fp>` emits a
-  // `print` naming `aidlc-jump.ts execute` carrying the resolved target +
-  // direction, NOT a run-stage (emitting run-stage directly produces ZERO state
-  // change). The corpus pins engine-vs-tool agreement on the resolved direction.
-  test("SP1: jump forward -> print naming execute(code-generation), resolve direction=forward", () => {
+  // pivot Current Stage) the person asked for, so `next --stage <fp>` runs
+  // `aidlc-jump.ts execute` with the resolved target + direction itself and
+  // returns the target's step. The corpus pins engine-vs-tool agreement on the
+  // resolved direction: resolve says forward, and the jump the engine made is
+  // the forward one.
+  test("SP1: jump forward -> the code-generation step, jumped forward as resolve says", () => {
     const p = projWithState("state-mid-ideation.md");
-    const out = directive(
-      run(ORCHESTRATE, ["next", "--stage", "code-generation", "--project-dir", p]),
-    );
-    expect(out.kind).toBe("print");
-    expect(out.message).toContain("execute --target code-generation --direction forward");
     const res = run(JUMP, [
       "resolve",
       "--stage",
@@ -227,6 +224,12 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ]);
     expect(res.status).toBe(0);
     expect(JSON.parse(res.stdout.trim()).direction).toBe("forward");
+    const out = directive(
+      run(ORCHESTRATE, ["next", "--stage", "code-generation", "--project-dir", p]),
+    );
+    expect(out.kind).not.toBe("print");
+    expect(out.stage).toBe("code-generation");
+    expect(readAllAuditShards(p)).toContain("**Direction**: FORWARD");
   });
 
   // SP1-exec: a forward `aidlc-jump.ts execute` does NOT auto-terminate the
@@ -577,6 +580,38 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
 
+  test("SP4i: a jump to an initialization stage gets the refusal `next --stage` gives, never 'Jump accepted' first", () => {
+    const p = projWithState("state-jumped.md");
+    const before = readFileSync(statePath(p), "utf-8");
+    const report = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
+    for (const stage of ["workspace-scaffold", "workspace-detection", "state-init"]) {
+      const refused = nextDirective(p, ["--stage", stage]);
+      expect(refused.message, stage).toContain("Cannot jump to initialization stages");
+      // A redo of an initialization stage that ran is the jump back to it.
+      for (const choice of ["jump", "redo"]) {
+        expect(report("--choice", choice, "--target", stage), `${choice} ${stage}`).toEqual(refused);
+      }
+    }
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
+  });
+
+  test("SP4j: a jump back to a stage the plan skips gets the question `next --stage` asks, never 'Jump accepted' first", () => {
+    // A bugfix plan at Requirements Analysis: it leaves out Intent Capture,
+    // behind the current stage, and User Stories, ahead of it.
+    const p = projWithState("state-mid-inception.md");
+    const before = readFileSync(statePath(p), "utf-8");
+    const report = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
+    const asked = nextDirective(p, ["--stage", "intent-capture"]);
+    expect(personLine(asked.message)).toContain("Do you want me to run it on its own now");
+    expect(report("--choice", "jump", "--target", "intent-capture")).toEqual(asked);
+    // A skipped stage ahead goes back on the plan through `next --stage`, so that jump is accepted.
+    expect(report("--choice", "jump", "--target", "user-stories").message)
+      .toContain("Jump accepted. Run `next --stage user-stories`");
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
+  });
+
   test("SP4f: a redo, jump, or fresh request at an open gate is that request, never a rejection", () => {
     const p = projWithState("state-mid-ideation.md");
     run(ORCHESTRATE, [
@@ -610,6 +645,99 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(after).not.toContain("- [?] feasibility");
     expect(eventCount(p, "GATE_REJECTED")).toBe(0);
     expect(eventCount(p, "STAGE_REVISING")).toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("SP4h: a re-entry request that keeps the gate's --stage is carried out, never an error that ends the turn", () => {
+    const p = projWithState("state-mid-ideation.md");
+    run(ORCHESTRATE, [
+      "report", "--stage", "feasibility", "--result", "awaiting-approval", "--project-dir", p,
+    ]);
+    const atGate = readFileSync(statePath(p), "utf-8");
+    expect(atGate).toContain("- [?] feasibility");
+    const report = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
+
+    // The agent keeps the --stage of its gate reports: the redo of the stage
+    // the work is on is that redo.
+    const redo = report("--stage", "feasibility", "--choice", "redo");
+    expect(redo.kind).toBe("print");
+    expect(redo.message).toContain('Redo accepted at "feasibility"');
+    expect(redo.message).toContain("execute --target feasibility --direction redo");
+    expect(redo.message).toBe(report("--choice", "redo").message);
+    expect(redo.message).toBe(report("--choice", "redo", "--target", "feasibility").message);
+
+    // Where the stage cannot pick the move, the report is the one without it.
+    for (const extra of [
+      ["--choice", "resume"],
+      ["--choice", "fresh"],
+      ["--choice", "jump", "--target", "market-research"],
+    ]) {
+      const kept = report("--stage", "feasibility", ...extra);
+      expect(kept.kind, extra.join(" ")).toBe("print");
+      expect(kept.message, extra.join(" ")).toBe(report(...extra).message);
+    }
+    expect(report("--stage", "scope-definition", "--choice", "redo", "--target", "feasibility").message)
+      .toBe(redo.message);
+    expect(report("--stage", "feasibility").message).toBe(report().message);
+    const unknown = report("--stage", "feasibility", "--choice", "sideways");
+    expect(unknown.kind).toBe("error");
+    expect(unknown.message).toContain('Unknown --choice "sideways"');
+
+    // Anywhere the stage would pick a move (a jump with no --target, a redo of
+    // another stage), the agent names the stage with --target: nothing moves,
+    // nothing is asked of the person.
+    for (const extra of [
+      ["--stage", "feasibility", "--choice", "jump"],
+      ["--stage", "market-research", "--choice", "redo"],
+      ["--stage", "scope-definition", "--choice", "redo"],
+      ["--stage", "no-such-stage", "--choice", "redo"],
+    ]) {
+      const named = report(...extra);
+      expect(named.kind, extra.join(" ")).toBe("print");
+      expect(named.message, extra.join(" ")).toContain("--target <stage>");
+      for (const moved of [
+        "--direction redo", "next --stage", "Redo accepted", "Ask the person", "Run nothing", "Tell the person",
+        "has not run yet",
+      ]) {
+        expect(named.message, extra.join(" ")).not.toContain(moved);
+      }
+    }
+    expect(readFileSync(statePath(p), "utf-8")).toBe(atGate);
+    expect(eventCount(p, "GATE_REJECTED")).toBe(0);
+
+    // Unit by Unit, the step the Unit is on is the stage the work is on: the
+    // kept --stage redoes that step, as --target names it, where a bare redo
+    // with no Unit work yet resets the block's first stage.
+    const u = projWithState("state-jumped.md");
+    writeFileSync(
+      statePath(u),
+      readFileSync(statePath(u), "utf-8")
+        .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: functional-design\n- **Unit Stage**: code-generation"),
+      "utf-8",
+    );
+    const unitReport = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", u]));
+    const forTheStep = unitReport("--stage", "code-generation", "--choice", "redo");
+    expect(forTheStep.kind).toBe("print");
+    expect(forTheStep.message).toContain('Redo accepted at "code-generation"');
+    expect(forTheStep.message).not.toContain("functional-design");
+    expect(forTheStep.message).toBe(unitReport("--choice", "redo", "--target", "code-generation").message);
+    // A redo for named Units, or for every Unit, reopens the step the Unit is
+    // on: the kept --stage of that step is the same redo, and one naming the
+    // block's first stage moves nothing until the agent names it with --target.
+    const unitsBefore = readFileSync(statePath(u), "utf-8");
+    for (const units of [["--unit", "beta"], ["--every-unit"]]) {
+      const label = units.join(" ");
+      expect(unitReport("--stage", "code-generation", "--choice", "redo", ...units).message, label)
+        .toBe(unitReport("--choice", "redo", ...units).message);
+      const first = unitReport("--stage", "functional-design", "--choice", "redo", ...units);
+      expect(first.kind, label).toBe("print");
+      expect(first.message, label).toContain("--target <the stage they named>");
+      for (const moved of ["next --stage", "Redo accepted", "reopen"]) {
+        expect(first.message, label).not.toContain(moved);
+      }
+    }
+    expect(readFileSync(statePath(u), "utf-8")).toBe(unitsBefore);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("SP4g: \"take me back to X and stop there\" makes the move, then parks instead of carrying on", () => {

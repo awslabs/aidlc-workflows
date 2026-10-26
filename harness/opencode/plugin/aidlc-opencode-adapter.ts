@@ -108,6 +108,9 @@ function runCoreHook(
       child.on("close", (code: number | null) =>
         resolve({ stdout: out, stderr: err, code: code ?? 0 })
       );
+      // A hook that exits before it reads its input breaks this pipe; its exit
+      // still answers through "close".
+      child.stdin.on("error", () => {});
       child.stdin.write(JSON.stringify(input));
       child.stdin.end();
     } catch {
@@ -554,12 +557,13 @@ export default async ({
     _cwd = directory,
   ) => runCoreHook(hookFile, input, directory, aidlcCommand, platform);
 
-  // The rebuild-stage-graph hook's only stdout on this harness is the
-  // engine-error relay: one {"systemMessage": <exact directive.message>} line.
-  // opencode has no hook-to-transcript channel, so the closest human surface is
-  // a TUI toast. It is transient, which is why the opencode conductor skill
-  // still prints the message verbatim as well. A headless `opencode run` has no
-  // TUI: the request may fail and that is fine.
+  // The rebuild-stage-graph hook writes one line, or none: the engine-error
+  // relay ({"systemMessage": <exact directive.message>}, with no note for the
+  // model here) or the setter's say-once note (handModelNote, below). opencode
+  // has no hook-to-transcript channel, so the closest human surface for the
+  // relay is a TUI toast. It is transient, which is why the opencode conductor
+  // skill still prints the message verbatim as well. A headless `opencode run`
+  // has no TUI: the request may fail and that is fine.
   async function showEngineErrorToast(stdout: string): Promise<void> {
     let message: string | null = null;
     try {
@@ -578,6 +582,23 @@ export default async ({
     } catch {
       /* no TUI attached (headless run) - the toast is best-effort */
     }
+  }
+
+  // A PostToolUse note for the model (`hookSpecificOutput.additionalContext`,
+  // the setter's say-once order with its lines) follows the result the model
+  // reads. The TUI draws a bash call from its metadata.output, so the person
+  // does not see it.
+  function handModelNote(stdout: string, output?: { output?: string }): void {
+    if (typeof output?.output !== "string") return;
+    let note: unknown;
+    try {
+      note = (JSON.parse(stdout) as { hookSpecificOutput?: { additionalContext?: unknown } })
+        .hookSpecificOutput?.additionalContext;
+    } catch {
+      return;
+    }
+    if (typeof note !== "string" || note === "") return;
+    output.output = `${output.output.trimEnd()}\n\n${note}`;
   }
 
   // Sessions whose session-start hook reached an active workflow.
@@ -687,7 +708,15 @@ export default async ({
       if (typed !== null) typedCommands.delete(input.sessionID);
       // Never treat this plugin's own continue-workflow-nudge injection as a human turn.
       if (output.parts.some((p) => p.id !== undefined && ownNudgeParts.delete(p.id))) return;
-      const first = output.parts.find((p) => p.type === "text");
+      // What the person typed is every text part opencode does not mark as its
+      // own: it leads with a synthetic note when an editor's open file or
+      // selection rides the message (opencode in Zed's terminal, or in VS
+      // Code's with the editor extension), and a client may send their words
+      // in more than one part. A message with none forwards its first text
+      // part.
+      const texts = output.parts.filter((p) => p.type === "text");
+      const own = texts.filter((p) => p.synthetic !== true && p.ignored !== true);
+      const said = own.length > 0 ? own.map((p) => p.text ?? "").join("\n") : texts[0]?.text;
       if (!(await isMainSession(input.sessionID))) return;
       sawHumanTurn.add(input.sessionID);
       interrupted.delete(input.sessionID);
@@ -711,7 +740,7 @@ export default async ({
         {
           hook_event_name: "UserPromptSubmit",
           session_id: input.sessionID,
-          prompt: typed ?? first?.text ?? "",
+          prompt: typed ?? said ?? "",
         },
         directory,
       );
@@ -980,6 +1009,8 @@ export default async ({
             hook_event_name: "PostToolUse",
             tool_name: "Write",
             tool_input: { file_path: absolutePath },
+            // The process names only the chat that started last; the write is its own chat's.
+            session_id: await owningSessionOrNone(input.sessionID),
           };
           // audit THEN sensors, mirroring the Claude settings.json order.
           await runCore("aidlc-write-audit-log.ts", payload, directory);
@@ -997,6 +1028,7 @@ export default async ({
         };
         const result = await runCore("aidlc-rebuild-stage-graph.ts", payload, directory);
         await showEngineErrorToast(result.stdout);
+        handModelNote(result.stdout, output);
         return;
       }
       if (tool === "todowrite") {
@@ -1011,6 +1043,7 @@ export default async ({
             hook_event_name: "PostToolUse",
             tool_name: "TaskUpdate",
             tool_input: { status: "in_progress", activeForm: active.content },
+            session_id: await owningSessionOrNone(input.sessionID),
           },
           directory,
         );

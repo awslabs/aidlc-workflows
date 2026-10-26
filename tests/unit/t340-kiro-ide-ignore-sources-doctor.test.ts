@@ -660,8 +660,10 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     expect(existsSync(join(project, ".kiro", "tools", "data", "plugin-compose-test-pro.json"))).toBe(true);
     expect(existsSync(join(project, ".kiro", "tools", "data", "plugin-owned-test-pro.json"))).toBe(true);
 
+    // The lead reads the plugin's persona from its copy without Kiro's
+    // dispatch lines, as it reads the core personas.
     const cases: [rule: string, folder: string][] = [
-      [".kiro/agents/test-pro-*", ".kiro/agents/"],
+      [".kiro/aidlc-common/personas/test-pro-*", ".kiro/aidlc-common/"],
       [".kiro/knowledge/test-pro-metrics-agent/", ".kiro/knowledge/"],
     ];
     for (const [rule, folder] of cases) {

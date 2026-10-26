@@ -149,10 +149,11 @@ exactly one value today:
   `pass` (plus `findings` and `findings_count`, the number the audit row
   records) and exits 0 whether the check passes or fails; the dispatcher
   writes the failure detail file. Exit 127 is recorded as a pass noted
-  `tool-unavailable`; any other non-zero exit, or output with no boolean
-  `pass`, is recorded as a pass with a `script-error` note (see
-  [`default_severity`](#default_severity) for what a blocking gate binding
-  does with it).
+  `tool-unavailable`; a worker that cannot start, any other non-zero exit,
+  or output with no boolean `pass` is recorded as `SENSOR_COULD_NOT_RUN`
+  with a `script-error` note, never as a pass (see
+  [`default_severity`](#default_severity) for what the gate says and what a
+  blocking gate binding does with it).
 
 Any other `kind`, `llm` included, is refused at parse time ("other kinds
 reserved for future releases").
@@ -268,7 +269,15 @@ being written against the glob and an entry without a glob never fires. For
 deliverable, skip paths outside each sensor's `matches` capability, and dispatch
 only matching paths; an omitted glob accepts every deliverable. `upstream-coverage` and `claim-sources`, which
 read the whole stage's output, dispatch once per output folder, on its first
-deliverable that is not a questions or timestamp file. A gate the engine
+deliverable that is not a questions or timestamp file. At a code knowledge base
+stage (Reverse Engineering), `required-sections` and `upstream-coverage`
+(`PATH_SET_SENSOR_IDS`, `aidlc-graph.ts`) dispatch once for the stage: the fire
+names the first matching path and takes every matching path on stdin behind
+`--paths-stdin json`, the sensor evaluates each file (or folder) as it would
+alone, and a failed fire's `SENSOR_FAILED` row lists the failing files in its
+`Failed outputs` field, which the gate's check line reads to name
+`<repo>/<file>`. A blocking binding holds every path the fire covers to the bytes
+fingerprinted before it. A call for one file never reads stdin. A gate the engine
 approves itself under Construction autonomy dispatches only blocking sensors
 (advisory evidence has no reader there). All six shipped
 manifests declare a glob. The compile resolver copies it into
@@ -292,27 +301,56 @@ before matching against the manifest `id`.
 ## `default_severity`
 
 `advisory` outcomes produce their audit rows but do not block the stage gate.
+Before the gate, the advisory gate checks run once when the stage's documents
+are handed on (`completionChecksStep` in `aidlc-state.ts`): the review request
+(`aidlc-log.ts review`, through the state tool's `completion-checks` command,
+which prints `{"held":false}` or `{"held":true,"message":...}`), or, when no
+review was asked for in the attempt, the report that opens the gate or shows it
+again after a revision. The first such hand-off of an attempt (the floor
+`reviewAttemptWindow` reads) fires the advisory checks on the scope's declared
+outputs (one Unit's, with `Unit` on the rows) when none of its (check, output)
+pairs has a `SENSOR_FIRED` row since the floor (paths compared canonically),
+once every required output exists. When
+a fire reports findings the hand-off records nothing and returns a `print`: the
+gate's own sentence for each, the detail files and the same command. A pass
+with a note holds nothing. A review the person asked for (`--person-asked`), a
+`--retry-pending` or `--single` request, the person's Override pick, a swarm
+worker's checkout and a gate the engine approves itself are not held.
 When the gate opens or is shown again, the orchestrator's reply carries, in
 its `narration` on a line after what the stage produced, one sentence per check whose
 latest result on a declared output is a failure (`failedCheckNotices` in
 `aidlc-state.ts`, at most three sentences and a count), so the agent says it to
-the person with the approval question. The change lines stay what changed. A
-pass recorded with a note (tool unavailable, script error) evaluated nothing and
+the person with the approval question. The change lines stay what changed.
+Then one line, however many, names the checks that could not run (their script
+crashed or did not start), on a declared output or on a file the stage wrote that
+is still there (a write-fired check such as `type-check`). A check that could
+not run, or a pass recorded with a note (tool unavailable), evaluated nothing and
 does not clear an earlier failure; a Unit's own gate names that Unit's outputs
-only; with Sensors off nothing is said.
+and writes only; with Sensors off nothing is said.
 A `blocking` gate binding proceeds only on a verified pass. Reported findings,
 dispatcher exit/spawn/timeout failures, malformed or mismatched verdicts,
-`SENSOR_BUDGET_OVERRIDE`, and `SENSOR_PASSED` rows carrying `tool-unavailable`
-or `script-error` all stop `gate-start`, `revise`, or approve-time recovered
+`SENSOR_BUDGET_OVERRIDE`, `SENSOR_COULD_NOT_RUN`, and `SENSOR_PASSED` rows
+carrying a note all stop `gate-start`, `revise`, or approve-time recovered
 revision re-entry before the gate opens.
 
 The operator can fix the findings and retry, or make a separate explicit
 override decision. The conductor records a `DECISION_RECORDED` offering
 `Fix findings,Override blocking sensors`, waits for a new human turn, records
 the exact `QUESTION_ANSWERED`, then retries the gate report with
-`--override-blocking-sensors --user-input "Override blocking sensors"`. A bare
-flag, an unoffered/paraphrased choice, a missing human-backed receipt, or
-autonomous mode is refused. A successful override records the sensor ids,
+`--override-blocking-sensors --user-input "Override blocking sensors"`. While
+that pick stands (nothing asked, answered or sent back on the stage since it,
+and the gate not yet open), `next` names the same report instead of the stage,
+outside autonomy, team Unit gates and a Unit step a solo walk owes first. A
+bare flag, an unoffered/paraphrased choice, a missing human-backed receipt, or
+autonomous mode is refused. The recorded answer names its option by label or
+by its number on the offered list. Fix findings starts a new attempt the way
+Request Changes does: the reviewed outputs open for the fix, and the retried
+report needs a fresh review. Where each Unit's review is its own (unit-major
+work, Construction checkpoints, team-owned Units), that is the pick's Unit when
+it was logged with one, and otherwise only the Units whose outputs the failing
+blocking check named in its latest result; a check that named no Unit's output,
+or stage-major work, starts every Unit again.
+A successful override records the sensor ids,
 optional detail paths, and evaluation reasons on `STAGE_AWAITING_APPROVAL`.
 Revalidating an already-open gate emits a fresh row with `Revalidated: true`,
 consuming the authorization receipt instead of leaving it reusable.
@@ -325,7 +363,8 @@ dispatch remains advisory.
 
 `write` is the default and preserves incremental PostToolUse feedback. `gate`
 fires once per existing declared deliverable (once per output folder for
-`upstream-coverage` and `claim-sources`) immediately before `gate-start`
+`upstream-coverage` and `claim-sources`, and once for the stage at Reverse
+Engineering for `required-sections` and `upstream-coverage`) immediately before `gate-start`
 opens the first gate, before `revise` re-enters the gate after revision work,
 and before the approve-time revision backstop performs recovered re-entry. When
 no person will answer the gate (the engine approves it itself under Construction
@@ -421,24 +460,22 @@ deterministic tool (`aidlc-learnings.ts`) and the conductor (the live
 `/aidlc` session) has two legs, with a knowledge step and a judgement
 step between them:
 
-1. **`surface` (stdout).** `aidlc engine learnings surface
-   --slug <stage-slug>` reads the stage's `memory.md` and prints structured
-   JSON: `candidates[]` (one per non-blank Interpretation / Deviation /
-   Tradeoff entry, each carrying `id`, `source_heading`, `ts`, `summary`,
-   `context`, `default_scope: "project"`), a read-only
-   `parked_open_questions[]`, and `questions[]`: what to ask, in order, with
-   exact options (which notes to keep, when there are any, **Keep none of
-   these** first and then each candidate `summary` verbatim; then always
-   "Anything to add for next time?"). No AskUserQuestion field names: pure domain
-   data. Open questions never become candidates (they are research items).
-2. **Conductor asks those questions (knowledge).** Each is its own question;
-   each candidate option gets a description naming the derived destination
-   (e.g. `-> memory/project.md (Deviation)`) plus a promote-to-team
-   affordance. After `multiSelect`, the conductor correlates each kept label
-   back to its candidate `id` + `source_heading`; any free-text gets
-   a single heading-pick AUQ (Interpretation / Deviation / Tradeoff / Open
-   question) — the heading pick is the user's only classification, and the
-   destination is derived from it.
+1. **`surface` (stdout).** The conductor runs it only when the person
+   corrected it in the stage, or asked it to keep something for next time
+   (reading that is the conductor's knowledge). `aidlc engine learnings surface
+   --slug <stage-slug> --correction '<their change>'` (one `--correction` per
+   correction, or a `--correction-file` in the record's answer-text folder for
+   one holding a character a shell reads) prints structured JSON: `candidates[]` (one per correction, each
+   carrying `id`, `correction`, `default_scope: "project"`) and `questions[]`:
+   for each, "You asked me to <correction>. Keep that for next time?" with the
+   exact options `Yes, for this project`, `Yes, for the team`, `No` and its
+   `question_kind`. With no `--correction` it prints no question. The stage's
+   `memory.md` diary is counted (`memory_entries_total`) and never offered. No
+   AskUserQuestion field names: pure domain data.
+2. **Conductor asks those questions (judgement is the person's).** Each is
+   its own question. The person's pick is the only thing asked: the conductor
+   writes the practice line from their correction and routes it to the
+   fitting heading itself. A note they asked to keep is not asked about.
 3. **Admission conflict-check (knowledge → orchestrator-LLM; gates which
    selections reach persist).** For each kept learning, the conductor
    compares the single proposed dated entry against `org.md`'s
@@ -513,7 +550,7 @@ overrides that enclosing allowance. A shorter enclosing cap can interrupt the
 dispatcher before it publishes a terminal sensor row; the hook records a drop
 for doctor. Reaching the sensor's own per-fire cap produces
 `SENSOR_BUDGET_OVERRIDE`. An incomplete nested lint/compile execution follows
-the script-error path, and an unavailable probe follows the tool-unavailable
+the could-not-run path, and an unavailable probe follows the tool-unavailable
 path; neither establishes a verified pass for a blocking gate.
 Gate dispatch separately accepts `AIDLC_GATE_SENSOR_DISPATCH_TIMEOUT_MS`;
 when unset, it adds no enclosing timeout beyond the sensor's per-fire cap.

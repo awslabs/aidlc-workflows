@@ -67,6 +67,7 @@ import {
   isTeamUnitOwnership,
   normalizeGuardRecoveryText,
   maximalAttemptEvents,
+  recordGuardRecoveryChoice,
   recordGuardRefusal,
   readActiveDirectiveMarker,
   readAllAuditShards,
@@ -120,6 +121,11 @@ import {
   worktreeOf,
   writeCode,
 } from "../harness/source-work-layouts.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -547,7 +553,9 @@ describe("bounded guard-remedy liveness", () => {
       const directive = JSON.parse(String(run.stdout ?? "").trim()) as {
         kind?: string;
       };
-      expect(["print", "run-stage"]).toContain(directive.kind ?? "");
+      // The restart is made by that `next`, which returns the step (its rules
+      // first, where the harness delivers them in parts).
+      expect(["print", "run-stage", "load-steering"]).toContain(directive.kind ?? "");
     }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -1786,6 +1794,7 @@ describe("AttemptView projections and refusal streaks", () => {
       allEvents: rows,
       events: rows,
       floorIdx: 0,
+      sensorFixes: new Map(),
       mergedBoltUnits: new Set(),
       openBoltUnits: new Set(["alpha"]),
     };
@@ -1817,6 +1826,7 @@ describe("AttemptView projections and refusal streaks", () => {
       allEvents: rows,
       events: rows,
       floorIdx: 0,
+      sensorFixes: new Map(),
       mergedBoltUnits: new Set(),
       openBoltUnits: new Set(),
     };
@@ -1856,6 +1866,7 @@ describe("AttemptView projections and refusal streaks", () => {
         allEvents: all,
         events: all,
         floorIdx: 0,
+        sensorFixes: new Map(),
         mergedBoltUnits: new Set(),
         openBoltUnits: new Set(),
       };
@@ -1915,6 +1926,7 @@ describe("AttemptView projections and refusal streaks", () => {
           allEvents: rows.slice(0, count),
           events: rows.slice(0, count),
           floorIdx: 0,
+          sensorFixes: new Map(),
           mergedBoltUnits: new Set(),
           openBoltUnits: new Set(),
         };
@@ -2045,6 +2057,7 @@ describe("AttemptView projections and refusal streaks", () => {
       allEvents: rows,
       events: rows,
       floorIdx: 2,
+      sensorFixes: new Map(),
       mergedBoltUnits: new Set(),
       openBoltUnits: new Set(),
     };
@@ -2445,6 +2458,74 @@ describe("AttemptView projections and refusal streaks", () => {
     return { first: first.ask, again: again.ask };
   }
 
+  test("outputs written before the stage's questions: the agent asks them first, and a repeat offers to answer them", () => {
+    const sentence = "Cannot start review for \"functional-design\": its question flow has no functional-design-questions.md " +
+      "file. Create and answer the stage questions, then record the consolidated summary checkpoint before generating artifacts.";
+    const attempt = {
+      recovery: "available" as const,
+      summaryCoverage: "missing" as const,
+      reviewCoverage: "missing" as const,
+      sourceCoverage: "current" as const,
+    };
+    const refusal = evaluateGuardRefusal({
+      code: "SUMMARY_QUESTIONS_MISSING",
+      blockedAction: "request-review",
+      stage: "functional-design",
+      unit: "alpha",
+      stateContent: state("-"),
+      invariant: "A stage's outputs stand on the person's confirmed answers.",
+      userMessage: sentence,
+      attempt,
+      humanAuthority: { freshTurn: false, unattended: false },
+    });
+    expect(refusal.remedies[0]).toMatchObject({ op: "ask-stage-questions", requiresHuman: false, interaction: "external-work" });
+    // Whose answers they are is said: the agent asks the person, never answers itself.
+    expect(refusal.remedies[0].action).toStartWith("Ask the person the stage's questions through its question flow");
+    const { first, again } = ownThenTheirs(refusal, attempt);
+    // Nothing goes to the person the first time: the agent asks the stage's questions.
+    expect(first.agent_work).toBe(true);
+    expect(first.remedies.map((remedy) => remedy.op)).toEqual(["ask-stage-questions"]);
+    // A repeat names what really happens: their questions, then the summary of their answers.
+    expect(again.agent_work).toBeUndefined();
+    const answer = again.remedies.find((remedy) => remedy.op === "reconfirm-summary");
+    expect(answer?.label).toBe("Answer its questions");
+    expect(answer?.description).toBe(
+      "I'll ask you the questions for Functional Design for alpha, show you a summary of your answers to confirm, " +
+        "then save its documents again from them.",
+    );
+    expect(answer?.action).toStartWith("Ask the person the stage's questions through its question flow");
+    expect(again.remedies.map((remedy) => remedy.label)).not.toContain("Confirm the summary again");
+  });
+
+  test("the agent's step names a Unit's own questions file, and none when the refusal names no Unit of a planned set", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const planned = [
+      "# AI-DLC State",
+      "- **Scope**: feature",
+      "- **Construction Iteration**: unit-major",
+      "- [x] units-generation \u2014 EXECUTE",
+      "- [-] functional-design \u2014 EXECUTE",
+      "",
+    ].join("\n");
+    const ask = (unit: string | undefined) => evaluateGuardRefusal({
+      code: "SUMMARY_QUESTIONS_MISSING",
+      blockedAction: "complete",
+      stage: "functional-design",
+      ...(unit ? { unit } : {}),
+      projectDir: project,
+      stateContent: planned,
+      invariant: "A stage's outputs stand on the person's confirmed answers.",
+      userMessage: "Refusing to complete \"functional-design\": its question flow has no functional-design-questions.md file.",
+      attempt: { recovery: "available", summaryCoverage: "missing", reviewCoverage: "missing", sourceCoverage: "current" },
+      humanAuthority: { freshTurn: false, unattended: false },
+    }).remedies.find((remedy) => remedy.op === "ask-stage-questions")?.action ?? "";
+    expect(ask("alpha")).toContain("/construction/alpha/functional-design/functional-design-questions.md");
+    // With Units planned the checks read each Unit's file, so a stage-level
+    // file named here would be one nothing reads.
+    expect(ask(undefined)).not.toContain("functional-design-questions.md`");
+  });
+
   test("a missing pipeline handoff is the agent's to dispatch, never a review request", () => {
     const wayOn = "Cannot complete \"reverse-engineering\" because these pipeline handoffs have not been recorded for " +
       "the current run: aidlc-architect-agent. Dispatch the missing pipeline links in their declared order.";
@@ -2783,6 +2864,8 @@ describe("AttemptView projections and refusal streaks", () => {
     });
     const feedback = "split the latency requirement in two";
     expect(consumeSharedDirectiveAsk(project, feedback)).toBe(true);
+    // The agent records the Request Changes it read, with what should change.
+    recordGuardRecoveryChoice(project, `Request Changes: ${feedback}`, true);
     const answered = readActiveDirectiveMarker(project, content)!;
     const markerPath = join(seededRecordDir(project), ".aidlc-engine", "active-directive.json");
     const legacy = JSON.parse(readFileSync(markerPath, "utf-8"));
@@ -2898,6 +2981,10 @@ describe("AttemptView projections and refusal streaks", () => {
         stateContent: walk("in-progress"), attempt: spentBudget,
       },
       { ...base, code: "REQUIRED_ARTIFACTS_MISSING", stateContent: state("-"), attempt: current },
+      {
+        ...base, code: "SUMMARY_QUESTIONS_MISSING", stateContent: state("-"),
+        attempt: { ...current, summaryCoverage: "missing", reviewCoverage: "missing" },
+      },
     ];
     const seen = new Set<string>();
     // The stage protocol's reserved words, the bookkeeping the person has no use
@@ -3008,7 +3095,9 @@ describe("AttemptView projections and refusal streaks", () => {
     );
   });
 
-  test("guard-recovery selections resolve only to an offered remedy", () => {
+  // A typed reply picks nothing at the hook; the agent's record of the remedy
+  // it read resolves only to one the question offered, by op, label or action.
+  test("guard-recovery: a typed reply picks nothing, and the agent's record resolves only to an offered remedy", () => {
     const commonRemedies: ActiveDirectiveGuardRemedy[] = [
       { op: "reconfirm-summary", action: "Present the current summary again" },
       { op: "request-changes", action: "Ask what should change" },
@@ -3016,62 +3105,25 @@ describe("AttemptView projections and refusal streaks", () => {
     const cases: Array<{
       name: string;
       remedies: ActiveDirectiveGuardRemedy[];
-      response: string;
+      details: string;
       selectedOp: GuardRemedyOp | null;
       feedbackStatus: GuardRecoveryFeedbackStatus;
     }> = [
-      {
-        name: "literal op",
-        remedies: commonRemedies,
-        response: "request-changes",
-        selectedOp: "request-changes",
-        feedbackStatus: "awaiting-feedback",
-      },
-      {
-        name: "plain number",
-        remedies: commonRemedies,
-        response: "2",
-        selectedOp: "request-changes",
-        feedbackStatus: "awaiting-feedback",
-      },
-      {
-        name: "number with punctuation",
-        remedies: commonRemedies,
-        response: "2)",
-        selectedOp: "request-changes",
-        feedbackStatus: "awaiting-feedback",
-      },
-      {
-        name: "number with a terminal dot",
-        remedies: commonRemedies,
-        response: "2.",
-        selectedOp: "request-changes",
-        feedbackStatus: "awaiting-feedback",
-      },
-      {
-        name: "unmatched text",
-        remedies: commonRemedies,
-        response: "Do something else",
-        selectedOp: null,
-        feedbackStatus: "other-remedy",
-      },
+      { name: "literal op", remedies: commonRemedies, details: "request-changes", selectedOp: "request-changes", feedbackStatus: "awaiting-feedback" },
+      { name: "op in words", remedies: commonRemedies, details: "request changes", selectedOp: "request-changes", feedbackStatus: "awaiting-feedback" },
+      { name: "the action shown", remedies: commonRemedies, details: "Ask what should change", selectedOp: "request-changes", feedbackStatus: "awaiting-feedback" },
+      { name: "unmatched text", remedies: commonRemedies, details: "Do something else", selectedOp: null, feedbackStatus: "other-remedy" },
       {
         name: "ambiguous duplicate action",
         remedies: [
           { op: "reconfirm-summary" as const, action: "Choose this remedy" },
           { op: "request-changes" as const, action: "Choose this remedy" },
         ],
-        response: "Choose this remedy",
+        details: "Choose this remedy",
         selectedOp: null,
         feedbackStatus: "other-remedy",
       },
-      {
-        name: "terminal ask",
-        remedies: [],
-        response: "Request Changes",
-        selectedOp: null,
-        feedbackStatus: "other-remedy",
-      },
+      { name: "terminal ask", remedies: [], details: "Request Changes", selectedOp: null, feedbackStatus: "other-remedy" },
     ];
 
     for (const scenario of cases) {
@@ -3086,24 +3138,20 @@ describe("AttemptView projections and refusal streaks", () => {
         state_sha256: stateDigest(state),
         remedies: scenario.remedies,
       });
-
-      expect(consumeSharedDirectiveAsk(project, scenario.response), scenario.name).toBe(true);
-      const marker = JSON.parse(
+      const selected = () => (JSON.parse(
         readFileSync(join(seededRecordDir(project), ".aidlc-engine/active-directive.json"), "utf-8"),
-      ) as {
-        guard_recovery_response?: { selected_op?: string | null };
-      };
-      expect(marker.guard_recovery_response?.selected_op, scenario.name).toBe(
-        scenario.selectedOp,
-      );
+      ) as { guard_recovery_response?: { selected_op?: string | null } }).guard_recovery_response?.selected_op ?? null;
+
+      expect(consumeSharedDirectiveAsk(project, "2"), scenario.name).toBe(true);
+      expect(selected(), scenario.name).toBeNull();
+      try {
+        recordGuardRecoveryChoice(project, scenario.details, false);
+      } catch {
+        // Names no offered remedy: nothing is recorded.
+      }
+      expect(selected(), scenario.name).toBe(scenario.selectedOp);
       expect(
-        guardRecoveryFeedbackStatus(
-          project,
-          state,
-          "functional-design",
-          undefined,
-          "anything",
-        ),
+        guardRecoveryFeedbackStatus(project, state, "functional-design", undefined),
         scenario.name,
       ).toBe(scenario.feedbackStatus);
     }
@@ -3134,11 +3182,13 @@ describe("AttemptView projections and refusal streaks", () => {
           { op: "request-changes", action: "Ask what should change" },
         ],
       });
-      const status = (stage: string, unit: string | undefined, feedback = "anything") =>
-        guardRecoveryFeedbackStatus(project, state, stage, unit, feedback);
+      const status = (stage: string, unit: string | undefined) =>
+        guardRecoveryFeedbackStatus(project, state, stage, unit);
       // No selection yet: nothing to bind to.
       expect(status("functional-design", undefined)).toBe("not-applicable");
       expect(consumeSharedDirectiveAsk(project, "Ask what should change")).toBe(true);
+      // The agent records the Request Changes it read.
+      recordGuardRecoveryChoice(project, "request-changes", false);
 
       const stageLevel = status("functional-design", undefined);
       const unitLevel = status("functional-design", "alpha");
@@ -3152,11 +3202,12 @@ describe("AttemptView projections and refusal streaks", () => {
       expect(status("functional-design", "beta")).toBe("not-applicable");
       expect(status("nfr-requirements", undefined)).toBe("not-applicable");
 
-      // The human's separate feedback, then the conductor's exact or altered copy.
+      // The human's separate feedback, which the agent records once more: the ask is ready, and the
+      // rejection takes their words from their messages, whatever text the conductor passes beside them.
       expect(consumeSharedDirectiveAsk(project, "Split the  save-search\nflow")).toBe(true);
+      recordGuardRecoveryChoice(project, "Request Changes: Split the save-search flow", true);
       const bound = ownership === "solo" ? undefined : "alpha";
-      expect(status("functional-design", bound, "Split the save-search flow")).toBe("match");
-      expect(status("functional-design", bound, "Split the save search flow")).toBe("mismatch");
+      expect(status("functional-design", bound)).toBe("ready");
     }
   });
 
@@ -3421,21 +3472,47 @@ describe("unit-major resets name what they throw away", () => {
   test("every stage-wide reset still offered names what it throws away", () => {
     const reopen = 'throws away every unit\'s finished "functional-design" work';
     const dropAll = "throws away the work every unit has finished";
-    for (const [marker, op, cost] of [
-      ["-", "request-changes", reopen],
-      ["?", "request-changes", reopen],
-      ["R", "redo-jump", dropAll],
-      ["x", "restore-or-jump", dropAll],
+    // A refusal that names no Unit: Request Changes is stage-wide.
+    for (const [marker, op, cost, extra] of [
+      ["-", "request-changes", reopen, { unit: undefined }],
+      ["?", "request-changes", reopen, { unit: undefined }],
+      ["R", "redo-jump", dropAll, {}],
+      ["x", "restore-or-jump", dropAll, {}],
     ] as const) {
-      const refusal = unitRefusal(marker);
+      const refusal = unitRefusal(marker, extra);
       const remedy = refusal.remedies.find((candidate) => candidate.op === op);
       expect(remedy, `${marker} ${op}`).toBeDefined();
       expect(remedy?.action, `${marker} ${op}`).toContain(cost);
       expect(refusal.remedies.map((candidate) => candidate.op)).not.toContain("restart-stage");
     }
-    const unattended = unitRefusal("-", { humanAuthority: { freshTurn: false, unattended: true } });
+    const unattended = unitRefusal("-", { unit: undefined, humanAuthority: { freshTurn: false, unattended: true } });
     expect(unattended.remedies.find((remedy) => remedy.op === "request-changes")?.action)
       .toContain(reopen);
+  });
+
+  test("Request Changes about a named Unit sends back that Unit's step only", () => {
+    const change = "next --stage functional-design --unit beta --change";
+    for (const marker of ["-", "?"] as const) {
+      const remedy = unitRefusal(marker).remedies.find((candidate) => candidate.op === "request-changes");
+      expect(remedy?.action, marker).toContain(change);
+      expect(remedy?.action, marker).toContain("every other unit keeps its finished work");
+      expect(remedy?.action, marker).not.toContain("throws away");
+      expect(remedy?.label).toBe("Request Changes");
+      expect(remedy?.description, marker).not.toContain("throws away");
+      expect(remedy?.interaction).toBe("human-input");
+      expect(remedy?.command).toBeUndefined();
+      expect(remedy?.operation).toBeUndefined();
+    }
+    const unattended = unitRefusal("-", { humanAuthority: { freshTurn: false, unattended: true } });
+    expect(unattended.remedies.find((remedy) => remedy.op === "request-changes")?.action).toContain(change);
+    // The Unit in progress on this step keeps today's stage-wide choice: the
+    // reopen would route the step it is already on.
+    const onTheStep = unitRefusal("-", {
+      stateContent: `${state("-")}- **Active Unit**: beta\n- **Unit Stage**: functional-design\n- **Unit State**: in-progress\n`,
+    });
+    const today = onTheStep.remedies.find((remedy) => remedy.op === "request-changes");
+    expect(today?.action).not.toContain("--change");
+    expect(today?.action).toContain('throws away every unit\'s finished "functional-design" work');
   });
 
   test("stage-major, team, and stage-level refusals keep today's remedies", () => {

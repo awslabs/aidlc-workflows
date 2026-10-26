@@ -36,7 +36,7 @@ This applies to **every** structured-question site, including but not limited to
 - the ladder prompt (autonomy mode after the walking skeleton);
 - halt-and-ask on Bolt failure (Retry / Skip / Abort);
 - consolidated-summary confirmation before artifact generation;
-- the §13 learnings gate (keep / heading / promote-to-team).
+- the section 13 learnings question after a correction (keep for this project, for the team, or not).
 
 (Literal ` ```question ` fences legitimately remain in framework documentation
 like THIS file and the stage-protocol because they are authoring specs, not chat
@@ -154,10 +154,12 @@ reviewer, learnings, or approval steps.
   and add the note that it comes after one more revision. Never count the
   rounds yourself.
 - **Batching limits**: max 4 questions per `AskUserQuestion` call, max 4
-  options per question, and **at least 2 options per question**. For 5+
-  options, split across multiple calls (options A-D, then E+); the questions
-  file retains the full option set as the authoritative record. Never send a
-  one-option call: the tool rejects it before the user can answer.
+  options per question, and **at least 2 options per question**. A question
+  from the questions file with more options is asked as a numbered list
+  instead (stage-protocol.md Step 3a; a multi-select ends "Reply with all
+  numbers that apply (e.g. 1, 3)."); the questions file retains the full
+  option set as the authoritative record. Never send a one-option call: the
+  tool rejects it before the user can answer.
 - **"Other" escape**: `AskUserQuestion` has a built-in "Other" option, always
   available — do NOT add an explicit Other option to the spec's options list
   for interactive batches. Claude Code labels that row "Type something", so

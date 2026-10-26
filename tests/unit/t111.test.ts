@@ -15,7 +15,7 @@
 //     escape (the forged-audit-entry defence in renderAuditBlock)
 //   - that appending twice keeps BOTH blocks (append-not-overwrite invariant)
 //   - that an invalid event type is rejected by throw, before any disk write
-//   - that EVERY one of the 104 event types in this fixture is accepted
+//   - that EVERY one of the 106 event types in this fixture is accepted
 // A regression that dropped escaping, overwrote prior history, reordered the
 // header fields, or rejected an event in this fixture would turn one of these
 // red.
@@ -87,7 +87,7 @@ afterAll(() => {
   }
 });
 
-// 104 of the event types in aidlc-audit.ts VALID_EVENT_TYPES (the source holds
+// 106 of the event types in aidlc-audit.ts VALID_EVENT_TYPES (the source holds
 // more). Kept as an explicit literal (not re-derived from the source) so that a
 // silent removal from the source surfaces here as a rejected append.
 // The CLI_PROTECTED_EVENT_TYPES members are included: appendAuditEntry takes
@@ -101,6 +101,7 @@ const VALID_EVENT_TYPES = [
   "STAGE_COMPLETED",
   "STAGE_JUMPED",
   "STAGE_SKIPPED",
+  "STAGE_OUTPUT_AMENDED",
   "PHASE_STARTED",
   "PHASE_COMPLETED",
   "PHASE_VERIFIED",
@@ -142,6 +143,7 @@ const VALID_EVENT_TYPES = [
   "ARTIFACT_CREATED",
   "ARTIFACT_UPDATED",
   "ARTIFACT_REUSED",
+  "SUBAGENT_DISPATCHED",
   "SUBAGENT_COMPLETED",
   "SUBAGENT_PROMPT_UNMATCHED",
   "REVIEWER_SCOPE_BLOCKED",
@@ -393,9 +395,9 @@ describe("appendAuditEntryUnlocked — escaping and append-not-overwrite", () =>
 });
 
 describe("VALID_EVENT_TYPES — every canonical type is accepted", () => {
-  test("the mirrored list has 104 entries with no duplicates", () => {
-    expect(VALID_EVENT_TYPES.length).toBe(104);
-    expect(new Set(VALID_EVENT_TYPES).size).toBe(104);
+  test("the mirrored list has 106 entries with no duplicates", () => {
+    expect(VALID_EVENT_TYPES.length).toBe(106);
+    expect(new Set(VALID_EVENT_TYPES).size).toBe(106);
   });
 
   // Loop over all fixture types: each must append a block whose **Event**

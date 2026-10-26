@@ -44,6 +44,10 @@ two invocation policies:
 | `dist/` | `bun <harness-dir>/tools/aidlc.ts` | `bun <harness-dir>/tools/` |
 | `dist-release/` | `aidlc` | `aidlc ` |
 
+Where core prose says how a questions file letters a question's options, it
+writes `{{OPTION_LETTERS}}`: `A-E`, or the shorter range the manifest's
+`questionOptions` sets (below).
+
 The transform applies to Markdown and structured command surfaces
 (`.json`/`.toml`/`.hook`), and to invocation tokens in TypeScript; it is not a
 general source rewrite. The runtime `harnessDir()` seam in
@@ -109,7 +113,14 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   AI-DLC's hook registrations from: while it is missing or is not valid JSON
   no setting brings those hooks back, so the step is the line `missing` (its
   `<repair>` is doctor's command that puts the file back) or `invalid` for the
-  person instead; Claude Code declares it for `.claude/settings.json`. Set
+  person instead; Claude Code declares it for `.claude/settings.json`.
+  `startedInsideProject` is the line for a chat the host started in a folder
+  inside the project, where no setting brings the hooks back: the person is
+  shown it instead of `agentStep`, and doctor gives it instead of `recovery`
+  and `notRunYet`. The engine knows that folder only from the host's own
+  record of the running chat, which `hostChatStartFolder` in `aidlc-lib.ts`
+  reads for Claude Code and Codex CLI, the two that declare it; a new host
+  needs its record read there too. Set
   `notRunYet` only when the harness's hooks leave a heartbeat on every chat
   message, the first one before
   any workflow included (the human-turn hook does, and so do the Copilot and
@@ -139,6 +150,12 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   (`HOST_LABELS` in `core/tools/aidlc-runtime-paths.ts`), never from the
   project-editable `productName`; add your harness there, or it reads "this
   assistant".
+- `questionOptions` (optional) - for a host whose structured-question box shows
+  fewer than five options besides its own Other row: the number it shows, the
+  one its `question-rendering.md` names. The questions file then letters each
+  question's options from A to that letter before `X. Other`, so the agent puts
+  every question in the box whole. Absent, the file uses A-E. Only Claude Code
+  declares it (4, for AskUserQuestion).
 - `agentFinishRecorded` (optional) - `{ env: [...] }`, only for a host whose own
   stop event runs the `log-subagent` hook (its `SUBAGENT_COMPLETED` row) before
   the agent that dispatched a helper sees the helper's result, for every
@@ -148,7 +165,12 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   hears it in one line. Declare it only after a live check shows the row lands
   first: on a host that writes it later or not at all, the person would be told
   no reviewer finished a review one did. Only Claude Code declares it
-  (`CLAUDE_CODE_SESSION_ID`).
+  (`CLAUDE_CODE_SESSION_ID`). Every other host gets the same mark from the
+  dispatch record instead: an adapter whose dispatches reach the
+  `deliver-stage-rules` hook writes it there, and one that runs no dispatch
+  hook forwards `hook_event_name: "SubagentStart"` with the helper's
+  `agent_type` to `log-subagent` once it lets the helper go. Without either,
+  the host never marks.
 - `statusLine` (optional) - only for a host with a status line AI-DLC can show
   its progress in, in that host's own shape (Claude Code: `{ type, command }`;
   Codex: `{ items }`). It is emitted into `tools/data/harness.json`, never into a
@@ -187,6 +209,11 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   1.x and Kiro CLI v3 run). It is written to `harness.json`, and runtime code
   that depends on the layout reads it from the installed tree rather than from
   `name`.
+- `hookCommandSuffix` (Kiro `agent-v1` rows only, optional) - text the packager
+  appends to every hook command in the row's `agents/*.json`, so the shell the
+  host starts a hook in hands its exit code back (Kiro CLI:
+  `; exit $LASTEXITCODE`, for PowerShell on Windows and bash elsewhere). The
+  authored JSON carries the command without it.
 - `coreDirs: DirMap[]` — which `core/<src>` dirs project into `<harnessDir>/<dst>`.
   Rename or drop dirs here (Kiro `rules → steering`; Codex `rules → aidlc-rules`
   and drops `skills/` — see emit). The 3 session skills are core dirs for

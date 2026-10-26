@@ -1420,7 +1420,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(result.status).toBe(0);
     const printed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
     expect(printed.kind).toBe("print");
-    expect(printed.message).toBe('Recorded awaiting-approval for "requirements-analysis".');
+    expect(printed.message).toStartWith('Recorded awaiting-approval for "requirements-analysis".');
     expect(typeof printed.next_stage).toBe("string");
     expect(String(printed.narration)).toMatch(
       /^Requirements Analysis is ready for your review\. (It produced .+, in|Its output goes in) aidlc\//,
@@ -2264,7 +2264,8 @@ describe("t115 the gate and a skip say what the plan does next", () => {
     expect(lastDirective(skipped.stdout).narration).toBeUndefined();
     const next = runOrchestrateNext(ORCH_TOOL, p, [], { env: { ...process.env, ...chat } });
     expect(next.directive?.kind, next.out).toBe("run-stage");
-    expect(String(next.directive?.narration)).toMatch(/^Feasibility[^.]* does not apply here, so I skipped it\. /);
-    expect(String(next.directive?.narration)).not.toContain("approve every gate");
+    const told = ((next.directive?.change_notices ?? []) as string[]).join(" ");
+    expect(told).toMatch(/^Feasibility[^.]* does not apply here, so I skipped it\.$/);
+    expect(`${told} ${next.directive?.narration ?? ""}`).not.toContain("approve every gate");
   });
 });

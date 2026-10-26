@@ -2,8 +2,9 @@
 //
 // t-live-aidlc-answers-corpus: a sample of the answers corpus (tests/fixtures/aidlc-answers/corpus.json) driven through
 // REAL agents on the shipped trees: Claude Code through the SDK, Codex through `codex exec`, Kiro CLI over ACP. The
-// question is asked first by the real agent (a bare `/aidlc` at the fixture's state shows it; the routing question, the
-// plan offer and the record pick come from the typed line that produces them), then the person replies: in chat (the box
+// question is asked first by the real agent (a bare `/aidlc` at the fixture's state shows it, the record pick included;
+// the routing question and the plan offer come from the typed line that produces them, so their fixture stops before
+// that line: seedWait in tests/harness/live-gate-fuzz.ts), then the person replies: in chat (the box
 // dismissed with "Chat about this", the reply as their next message), after `/aidlc`, or in the box. At re-entry and a
 // jump the person's own line is the whole exchange.
 // On demand, never in PR CI: AIDLC_ANSWERS_LIVE=1 opens it, and each harness keeps its own live gate
@@ -44,8 +45,9 @@ import {
 } from "../harness/live-corpus.ts";
 import { codexWords } from "../harness/aidlc-input-corpus.ts";
 import {
-  ANSWERS, ASKED_IN_CHAT, NO_FIXTURE, buildQuestion, liveReply, messageRecord, recorded, rows, typedPrompt, waitsFor, workCarriedOn, type AnswersItem,
+  ANSWERS, ASKED_IN_CHAT, NO_FIXTURE, liveReply, messageRecord, recorded, rows, typedPrompt, waitsFor, workCarriedOn, type AnswersItem,
 } from "../harness/aidlc-answers-corpus.ts";
+import { openingLine, seedWait } from "../harness/live-gate-fuzz.ts";
 import { getField, listIntents, readAuditShardEvents, stateFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { planApprovalAskState } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 
@@ -239,18 +241,15 @@ function showsQuestion(item: AnswersItem, firstText: string): string | null {
 }
 
 /** What the person says first so the agent shows the question: a bare /aidlc re-enters the open work and shows the
- * question open there; the routing question, the plan offer and the record pick are the engine's reply to a typed line,
- * so that line (the fixture's own) is said first; null where the item's own line is the whole exchange. */
+ * question open there; the routing question and the plan offer are the engine's reply to a typed line, which opens
+ * them (openingLine); null where the item's own line is the whole exchange. */
 const FIRST_PROMPT: Partial<Record<AnswersItem["question"], string | null>> = {
-  routing: "/aidlc fix the login",
-  "plan-offer": "/aidlc fix the login: it rejects a correct password",
-  "scope-confirm": "/aidlc fix the login timeout",
   "resume-reentry": null,
   "jump-target": null,
   ...Object.fromEntries([...ASKED_IN_CHAT].map((question) => [question, null])),
 };
 function firstPrompt(item: AnswersItem, harness: LiveHarness): string | null {
-  const line = item.question in FIRST_PROMPT ? FIRST_PROMPT[item.question] ?? null : "/aidlc";
+  const line = openingLine(item.question) ?? (item.question in FIRST_PROMPT ? FIRST_PROMPT[item.question] ?? null : "/aidlc");
   return line === null ? null : harness === "codex" ? line.replace(/^\/aidlc/, "$aidlc") : line;
 }
 
@@ -274,7 +273,7 @@ async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutco
   let said = typed;
   let firstText = "";
   try {
-    await buildQuestion(proj, item.question);
+    await seedWait(proj, item.question);
     const start = startOf(proj);
     // Where the person's reply starts in the audit; with no first line, their line is the reply.
     let replyFrom: number | null = first === null ? start.events : null;

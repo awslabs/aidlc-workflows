@@ -132,13 +132,16 @@ function project(): string {
   return proj;
 }
 
-// A stateful project mid-ideation (Current Stage: feasibility, scope feature),
-// the shape whose run-stage plus rules fits one message (about 18.5 KB).
+// A stateful project mid-ideation (Current Stage: feasibility, scope feature).
 function statefulProject(withState = "state-mid-ideation.md"): string {
   const proj = setupIntegrationProject({ withState });
   projects.push(proj);
   return proj;
 }
+
+// Mid-inception (Requirements Analysis): its stock step and rules fit one
+// message with room, where Feasibility's sit at the cap.
+const ONE_MESSAGE_STATE = "state-mid-inception.md";
 
 function statefulProjectWithDrift(): string {
   const proj = statefulProject("state-operation.md");
@@ -1029,7 +1032,7 @@ describe("t248 deterministic steering delivery", () => {
   });
 
   test("an edited stateful hint cannot override the state route for a mismatched receipt", () => {
-    const proj = statefulProject();
+    const proj = statefulProject(ONE_MESSAGE_STATE);
     const first = invoke(proj, "next", []);
     expect(first.directive.kind).toBe("run-stage");
     expect(first.directive.stage).not.toBe("intent-capture");
@@ -1200,13 +1203,13 @@ describe("t248 deterministic steering delivery", () => {
   });
 
   test("one message: a stateful next carries its rules inline and any continue re-answers it byte for byte", () => {
-    const proj = statefulProject();
+    const proj = statefulProject(ONE_MESSAGE_STATE);
     const first = invoke(proj, "next", []);
     expect(first.directive.kind).toBe("run-stage");
     expect(first.bytes).toBeLessThan(MAX_DIRECTIVE_BYTES);
     expect(first.directive.rules_in_context).toEqual([
       "aidlc/spaces/default/memory/org.md",
-      "aidlc/spaces/default/memory/phases/ideation.md",
+      "aidlc/spaces/default/memory/phases/inception.md",
     ]);
     const content = first.directive.rules_content ?? [];
     expect([...new Set(content.map((entry) => entry.path))]).toEqual(
@@ -1469,7 +1472,7 @@ describe("t248 deterministic steering delivery", () => {
       validateDirective({ ...load, rules_content: [{ path: "a.md" }] }).valid,
     ).toBe(false);
 
-    const fitted = statefulProject();
+    const fitted = statefulProject(ONE_MESSAGE_STATE);
     const run = invoke(fitted, "next", []).directive;
     expect(run.kind).toBe("run-stage");
     expect(run.rules_content).toBeArray();
@@ -1638,15 +1641,15 @@ describe("t248 deterministic steering delivery", () => {
     writeFileSync(join(teamMemory, "phases", "inception.md"), "# Inception rules\n\n- Own rule\n", "utf-8");
 
     const first = invoke(proj, "next", ["--scope", "mvp", "--stage", "intent-capture"]).directive as
-      WireDirective & { narration?: string };
+      WireDirective & { narration?: string; change_notices?: string[] };
     expect(first.kind).toBe("run-stage");
-    expect(first.narration).toContain(
+    expect(String(first.change_notices)).toContain(
       "Space team-a had no rules for the ideation, construction and operation phases, so I added the " +
         "framework's to aidlc/spaces/team-a/memory/phases/; edit those files to change them.",
     );
     const again = invoke(proj, "next", ["--scope", "mvp", "--stage", "intent-capture"]).directive as
-      WireDirective & { narration?: string };
-    expect(again.narration ?? "").not.toContain("had no rules");
+      WireDirective & { narration?: string; change_notices?: string[] };
+    expect(`${again.narration ?? ""} ${again.change_notices ?? ""}`).not.toContain("had no rules");
   });
 
   test("the Stop hook's look at the step starts the stage too, and writes nothing", () => {

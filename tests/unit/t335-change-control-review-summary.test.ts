@@ -27,6 +27,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   artifactFilename,
   auditBlockField,
@@ -68,6 +69,22 @@ import {
   WORKER_BRIEF_SECTIONS_FIXTURE,
 } from "../harness/fixtures.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
+
+// The person's message, kept as the prompt hook keeps it: its id is what a
+// review they asked for names (--person-asked --message <id>).
+function personAsks(proj: string, words: string): string {
+  const kept = saveMessage(proj, {
+    session: null, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text: words, picker: null,
+    words, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+  });
+  appendAuditEntry("HUMAN_TURN", { "Message Id": kept.id }, proj);
+  return kept.id;
+}
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -314,8 +331,8 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     editReviewedArtifact(proj);
     expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
     expect(acceptedRows(proj)).toHaveLength(1);
-    appendAuditEntry("HUMAN_TURN", {}, proj);
-    const again = ["review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "2", "--person-asked"];
+    const asked = personAsks(proj, "review it again");
+    const again = ["review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "2", "--person-asked", "--message", asked];
     const requested = run(LOG_TOOL, again, proj);
     expect(requested.status, requested.stderr).toBe(0);
     appendFileSync(
@@ -339,8 +356,8 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
     editReviewedArtifact(proj);
     expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
-    appendAuditEntry("HUMAN_TURN", {}, proj);
-    const again = ["review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "2", "--person-asked"];
+    const asked = personAsks(proj, "review it again");
+    const again = ["review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "2", "--person-asked", "--message", asked];
     for (const args of [again, [...again, "--retry-pending"], [...again, "--verdict", "NOT-READY"]]) {
       const logged = run(LOG_TOOL, args, proj);
       expect(logged.status, logged.stderr).toBe(0);
@@ -1256,7 +1273,8 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
     const selfAnswered = run(LOG_TOOL, ["answer", ...identity, "--details", "Approve Plan"], proj, env);
     expect(selfAnswered.status, selfAnswered.stdout).not.toBe(0);
     expect(selfAnswered.stderr).toContain("requires the person's reply to this prompt, in this session");
-    assertBlocked("Plan Approval");
+    // The answer line written in the file approves nothing: the engine's receipt decides.
+    assertBlocked("the plan is not approved yet");
     const human = runHook(join(TOOLS, "aidlc.ts"), proj, {
       hook_event_name: "UserPromptSubmit", session_id: session, cwd: proj, prompt: "Approve Plan",
     }, env, ["engine", "hook", "record-human-turn"]);
@@ -1287,7 +1305,7 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
     expect(continuation.code, continuation.stderr).toBe(mode === "strict" ? 2 : 0);
     if (mode === "relaxed") {
       expect(continuation.stdout).toContain(
-        "Continuing past the plan-approval check because it is off for this piece of work (guard policy relaxed (set by you)). Recorded in the audit trail: dispatch of aidlc-developer-agent",
+        "Continuing past the plan re-approval check because it is off for this piece of work (guard policy relaxed (set by you)). Recorded in the audit trail: dispatch of aidlc-developer-agent",
       );
     } else if (mode === "off") {
       // Off means off: the row records the pass and nothing is said.

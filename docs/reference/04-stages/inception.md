@@ -129,7 +129,9 @@ and working-tree fingerprint before scanning. The fingerprint leaves out
 AI-DLC's own install, settings, and the root files it writes into, so an AI-DLC
 update or setting change does not make a store stale. The human may reuse a
 verified-current store whose coverage fits the intent; stale, unverified,
-legacy, or mismatched stores require a full or focused rescan. Full rescans
+legacy, or mismatched stores require a full or focused rescan. A store this
+run of the stage already scanned and published (a new chat picking the stage
+up) is not offered back: the stage goes on to its approval. Full rescans
 replace the store; focused rescans merge newly analyzed areas into it while
 preserving prior prose. For multi-repo intents, all decisions are resolved
 before one stage-level lifecycle report.
@@ -490,7 +492,7 @@ large scope with significant unknowns.
    all six dimensions. Create
    `<record>/inception/requirements-analysis/requirements-analysis-questions.md`
    using the `[Answer]:` tag format. Include context-appropriate questions with
-   A-E options. Every ordinary clarifying question must end with `X. Other (please specify)` as
+   A-E options (A-D on Claude Code). Every ordinary clarifying question must end with `X. Other (please specify)` as
    the final option. All `[Answer]:` tags left blank.
 
    Offer the tri-mode question flow: Guide Me / Edit File / Chat.

@@ -146,7 +146,7 @@ persona fidelity, developer on implementability and story sizing, quality on
 testability of the acceptance criteria.
 
 **If `directive.support_agents` is empty, skip Round 1 and the triage below** —
-the collaborators switch is off for this scope, so the stage runs lead-only
+the collaborators switch is off for this scope, so the lead works alone
 (§5): your draft stands as the user stories, with no mob round to dispatch,
 integrate, or triage, and no contribution files.
 
@@ -159,7 +159,7 @@ revised draft and the other participants' positions (they update their own
 contribution files). Maintained dissent is quoted verbatim in the Step 10
 completion summary. The dispatched collaborators' contribution files are this
 stage's ensemble evidence — the engine refuses approval while any in the
-directive's effective `support_agents` is missing. A lead-only run has none.
+directive's effective `support_agents` is missing. A lead working alone has none.
 
 **Write element-level traceability.** Create
 `<record>/inception/user-stories/traceability.json` by running
@@ -186,7 +186,7 @@ only with a named downstream stage and `N/A` only with a justification:
 ### Step 9: Open the Approval Gate
 
 After verifying the three lead artifacts and every dispatched collaborator's
-contribution file (none on a lead-only run), run:
+contribution file (none when the lead works alone), run:
 
 ```bash
 {{INVOKE}} engine orchestrate report \
@@ -225,6 +225,6 @@ declared and covered, and checks that each `OK` target exists in `stories.md`.
 
 When `directive.protocol_modules` lists `learnings`, follow
 `stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
-working and run the ritual before the approval gate, applying its bootstrap,
-`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
-skip both the diary and the ritual.
+working, and take the learnings step before the approval gate; that module says
+when it asks the person anything. When the module is absent, skip both the diary
+and the step.

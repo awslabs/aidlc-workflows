@@ -40,9 +40,8 @@ describe("the person's own words", () => {
     const events = auditEvents(run.proj);
     const at = (event: string) =>
       events.filter((e) => e.event === event && field(e.block, "Stage") === "requirements-analysis");
-    // Every reply the approval stands on, in order: the learnings answer just before it rides along.
-    expect(at("GATE_APPROVED").map((e) => field(e.block, "Person Reply")))
-      .toEqual(["Nothing to add\\nok that makes sense, approve"]);
+    // The reply the approval was given in: the learnings answer just before it is on its own row.
+    expect(at("GATE_APPROVED").map((e) => field(e.block, "Person Reply"))).toEqual(["ok that makes sense, approve"]);
     expect(at("STAGE_AWAITING_APPROVAL")).toHaveLength(1);
     const answers = at("QUESTION_ANSWERED").map((e) => field(e.block, "Details"));
     expect(answers).toContain("A");
@@ -51,7 +50,8 @@ describe("the person's own words", () => {
 
 describe("settings typed with new work", () => {
   test("--learnings on typed with the request carries through express, which ships it off", () => {
-    const run = runScope("express", { flags: ["--learnings", "on"] });
+    // The person corrects the agent at each stage, so the learnings step has its question.
+    const run = runScope("express", { flags: ["--learnings", "on"], answers: { correction: () => "keep handlers thin" } });
     runs.push(run);
     expect(run.declared.learnings).toBe(false);
     expect(scopeRunProblems(run, { skip: ["learnings"] })).toEqual([]);
@@ -61,7 +61,7 @@ describe("settings typed with new work", () => {
     const stages = run.agent.directives.filter((d) => d.kind === "run-stage" && d.ceremony);
     expect(stages.length).toBeGreaterThan(0);
     for (const d of stages) expect((d.ceremony as Record<string, string>).learnings).toBe("on");
-    const learned = auditEvents(run.proj).filter((e) => e.event === "QUESTION_ANSWERED" && field(e.block, "Details") === "Nothing to add");
+    const learned = auditEvents(run.proj).filter((e) => e.event === "QUESTION_ANSWERED" && field(e.block, "Details") === "No");
     expect(learned.length).toBeGreaterThan(0);
   }, SCOPE_RUN_TIMEOUT_MS);
 

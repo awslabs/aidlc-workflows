@@ -425,7 +425,7 @@ export function runCell(cell: GuardCell, change: GuardChange, options: CellOptio
       const then = beforeWaves?.(stage, agent);
       const walk = (mode: string, words: string) => {
         agent.person.say(words);
-        const set = agent.host.bash(`bun .claude/tools/aidlc-state.ts set-construction-iteration ${mode}`);
+        const set = agent.host.bash(`bun .claude/tools/aidlc-state.ts set-construction-iteration ${mode} --message ${agent.latestMessageId()}`);
         if (set.status !== 0) agent.fail(`${mode} was refused: ${set.stderr || set.stdout}`);
       };
       if (stage === "units-generation") walk("stage-major", "build it stage by stage: every Unit through each stage before the next");
@@ -564,7 +564,9 @@ export function recordProblems(c: CellRun): string[] {
   const problems: string[] = [];
   const rows = auditEvents(c.run.proj).filter((e) => e.event === "CHANGE_ACCEPTED");
   const where = (e: { block: string }) => `${field(e.block, "Stage")}${field(e.block, "Unit") ? ` for ${field(e.block, "Unit")}` : ""}`;
-  const lines = c.run.agent.notices;
+  // change_notices also carries the lines that say where the work starts and where it picks up; they are not
+  // about a change.
+  const lines = c.run.agent.notices.filter((line) => !/^(Setting up |Picking up where we left off, )/.test(line));
   const policy = c.composed?.policyFromEngine ? resolvedPolicy(c) : c.policyAtChange;
   // No change, a second review the person asked for, or strict (which asks
   // for a fresh review instead of accepting the change): no row, no line.

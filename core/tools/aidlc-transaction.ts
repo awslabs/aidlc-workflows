@@ -34,6 +34,7 @@ import {
   processGeneration,
   processStartedAtMs,
   runWithOwnerStampedLock,
+  unstampedPastGrace,
   withAuditLock,
 } from "./aidlc-lib.ts";
 
@@ -366,17 +367,32 @@ function heldByLaterProcess(pid: number, recorded: unknown, ownerPath: string): 
 }
 
 function clearStaleLock(lockPath: string): void {
-  const directory = pathExists(lockPath) && lstatSync(lockPath).isDirectory();
+  // The lock can go at any moment, since its holder may not share the local
+  // gate (a release from before it): one look here, and a lock gone by the
+  // owner read below is free for the caller's next attempt.
+  let directory = false;
+  try {
+    directory = lstatSync(lockPath).isDirectory();
+  } catch {
+    // Read below as a file lock, as an absent one is.
+  }
   const ownerPath = directory ? join(lockPath, "owner.json") : lockPath;
-  let raw: string;
+  // Null: a directory lock with no owner.json at all.
+  let raw: string | null;
+  let unfinished = false;
   try {
     if (directory && !lstatSync(ownerPath).isFile()) {
       throw new Error("directory owner is not a regular file");
     }
     raw = readFileSync(ownerPath, "utf-8");
   } catch (error) {
-    if (!directory && (error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw new Error(`cannot verify transaction lock ${lockPath}`);
+    const absent = (error as NodeJS.ErrnoException).code === "ENOENT";
+    if (absent && (!directory || !pathExists(lockPath))) return;
+    if (!absent || !unstampedPastGrace(lockPath)) {
+      throw new Error(`cannot verify transaction lock ${lockPath}`);
+    }
+    raw = null;
+    unfinished = true;
   }
   let lock: {
     schemaVersion?: unknown;
@@ -385,13 +401,23 @@ function clearStaleLock(lockPath: string): void {
     token?: unknown;
     processGeneration?: unknown;
   } = {};
+  let parsed = false;
   try {
-    lock = JSON.parse(raw) as typeof lock;
+    lock = JSON.parse(raw ?? "") as typeof lock;
+    parsed = true;
   } catch {
     // An empty lock can survive only if its process exited between open and write.
   }
+  // A live holder stamps its folder under the local gate withTransactionLock
+  // holds around this call, so a directory stamp that never finished (none,
+  // empty, or cut off before it parses) is what a command killed between
+  // making the folder and stamping it leaves. Past the grace, which covers a
+  // writer outside that gate, it is cleared like a dead owner's; the move and
+  // verify below are the second look. A stamp that parses keeps every check.
+  unfinished ||= directory && !parsed && unstampedPastGrace(lockPath);
   if (
     directory &&
+    !unfinished &&
     (
       lock.schemaVersion !== 1 ||
       !Number.isSafeInteger(lock.pid) ||
@@ -403,7 +429,7 @@ function clearStaleLock(lockPath: string): void {
   ) {
     throw new Error(`cannot verify incomplete directory transaction lock ${lockPath}`);
   }
-  if (directory && lock.host !== transactionHostIdentity()) {
+  if (directory && !unfinished && lock.host !== transactionHostIdentity()) {
     throw new Error(
       `transaction lock ${lockPath} belongs to another host or boot; ` +
       "directory locking requires one host and one shared mount",
@@ -423,11 +449,13 @@ function clearStaleLock(lockPath: string): void {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw error;
   }
-  let movedRaw: string | null = null;
+  let movedRaw: string | null | undefined;
   try {
     movedRaw = readFileSync(directory ? join(moved, "owner.json") : moved, "utf-8");
-  } catch {
-    // Restore below: ownership cannot be proved after the atomic move.
+  } catch (error) {
+    // Restore below: ownership cannot be proved after the atomic move, unless
+    // the owner is still as absent as it was judged.
+    if (raw === null && (error as NodeJS.ErrnoException).code === "ENOENT") movedRaw = null;
   }
   if (movedRaw !== raw) {
     try {

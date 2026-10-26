@@ -232,6 +232,17 @@ export type HarnessManifest = {
      * `agentStep`.
      */
     registration?: { file: string; missing: string; invalid: string };
+    /**
+     * The line the person is shown instead of `agentStep`, and doctor's fix
+     * instead of `recovery` and `notRunYet`, when the host started this chat
+     * in a folder inside the project, where no setting brings its hooks back.
+     * The engine knows that folder only from the host's own record of the
+     * running chat, read only and only that field (aidlc-lib.ts
+     * hostChatStartFolder: Claude Code's sessions/<pid>.json, Codex's rollout
+     * session record); with no such record the usual lines stand.
+     * `<entry>` and `<folder>` as in `agentStep`.
+     */
+    startedInsideProject?: string;
   };
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;
@@ -261,6 +272,13 @@ export type HarnessManifest = {
    * layout reads it from the installed tree instead of from the row name.
    */
   kiroLayout?: "agent-v1" | "kas";
+  /**
+   * Kiro `agent-v1` rows only: text the packager appends to every hook command
+   * in the row's `agents/*.json`, so the shell the host starts each hook in
+   * hands the hook's own exit code back. The authored JSON carries the command
+   * without it.
+   */
+  hookCommandSuffix?: string;
   /** core/<src> → <harnessDir>/<dst> projections. */
   coreDirs: DirMap[];
   /** harness/<name>/<src> → <harnessDir>/<dst> authored-file copies. */
@@ -279,6 +297,15 @@ export type HarnessManifest = {
    * agent-v1 JSON - without the injected line a delegate runs toolless.
    */
   frontmatterAdditions?: Array<{ file: string; lines: string[] }>;
+  /**
+   * The frontmatter lines a plugin's agent gets in place of frontmatterAdditions,
+   * which reach core's agents only: the dispatch surface of a persona with no
+   * role of its own. The packager writes them as the frontmatter of
+   * <harnessDir>/tools/data/plugin-agent.md, so the native release's rewrites
+   * reach them as they reach the personas, and the plugin compose hook adds
+   * them to every agent a plugin ships (each key the agent does not declare).
+   */
+  pluginAgentFrontmatter?: string[];
   /**
    * Exact text the native release swaps in before its generic invocation
    * rewrite, for projected content whose copy-channel spelling has no
@@ -331,6 +358,15 @@ export type HarnessManifest = {
    * newline: a UTF-8 byte count is never below the character count.
    */
   directiveMaxBytes?: number;
+  /**
+   * How many options this host's structured-question box shows besides its own
+   * Other row, for a box that shows fewer than five. The questions file letters
+   * each question's options from A to that letter before `X. Other`, so the
+   * agent puts every question in the box whole: the packager writes the letters
+   * into core prose for `{{OPTION_LETTERS}}`. Absent: A-E, the method's own
+   * five. The number is the one the harness's question-rendering annex names.
+   */
+  questionOptions?: number;
   /**
    * The host's status line setting that shows AI-DLC's progress, in the host's
    * own settings shape. Emitted into <harnessDir>/tools/data/harness.json, never

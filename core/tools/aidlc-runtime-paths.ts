@@ -527,6 +527,17 @@ export function harnessArgsAsTyped(args: readonly string[]): string[] {
   return args.map((arg, index) => (index > 0 && args[index - 1] === "--harness" ? typedHarnessName(arg) : arg));
 }
 
+/**
+ * Pin the harness a command names (`--harness-dir`) for this process and the
+ * tools it loads: a compiled aidlc has already pinned the first one installed
+ * here, which in a project with Claude Code beside it is .claude.
+ */
+export function pinNamedHarness(projectDir: string, harnessDir: string): void {
+  process.env.AIDLC_HARNESS_DIR = harnessDir;
+  delete process.env.AIDLC_HARNESS_NAME;
+  process.env.AIDLC_HARNESS_NAME = runtimeHarnessName(projectDir, harnessDir);
+}
+
 function distributionFor(harnessDir: string, projectDir = runtimeProjectDir()): string {
   return runtimeHarnessName(projectDir, harnessDir);
 }

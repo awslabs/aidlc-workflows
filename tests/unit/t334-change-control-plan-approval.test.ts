@@ -596,7 +596,7 @@ describe("t334 (6) F16: lowered fences allow post-approval content edits without
             `${guarded.stderr}\n${guarded.stdout}\n${hookDrops(project)}`,
           ).toBe(lowered ? 0 : 2);
           if (lowered) {
-            if (speaks) expect(guarded.stdout).toContain("Continuing past the plan-approval check");
+            if (speaks) expect(guarded.stdout).toContain("Continuing past the plan re-approval check");
             else expect(guarded.stdout).not.toContain("Continuing past");
             expect(guarded.stderr).not.toContain('"ask_type":"guard-recovery"');
             const rows = stoodAsideRows();
@@ -636,7 +636,7 @@ describe("t334 (6) F16: lowered fences allow post-approval content edits without
           expect(handoff.stdout).toContain("## Current unit-test instructions");
           expect(handoff.stdout).not.toContain("## Approved plan");
           expect(handoff.stdout).not.toContain("## Approved unit-test instructions");
-          if (speaks) expect(handoff.stderr).toContain("Continuing past the plan-approval check");
+          if (speaks) expect(handoff.stderr).toContain("Continuing past the plan re-approval check");
           else expect(handoff.stderr).not.toContain("Continuing past");
           expect(stoodAsideRows()).toHaveLength(beforeBrief + 1);
           const row = stoodAsideRows()[beforeBrief];
@@ -662,7 +662,7 @@ describe("t334 (6) F16: lowered fences allow post-approval content edits without
           expect(JSON.parse(started.stdout.trim().split("\n").pop() ?? "{}").status).toBe("generation");
           const notices = changeNotices(started.stdout);
           expect(notices).toHaveLength(speaks ? 1 : 0);
-          if (speaks) expect(notices[0]).toContain("Continuing past the plan-approval check");
+          if (speaks) expect(notices[0]).toContain("Continuing past the plan re-approval check");
           expect(stoodAsideRows()).toHaveLength(beforeBegin + 1);
           const row = stoodAsideRows()[beforeBegin];
           expect(auditBlockField(row.block, "Tool")).toBe("testing-posture begin");

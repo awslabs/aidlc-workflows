@@ -30,7 +30,15 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { hasPendingQuestion } from "../../dist/claude/.claude/hooks/aidlc-continue-workflow.ts";
-import { auditBlockField, readAuditShardEvents, stageDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  auditBlockField,
+  isLearningsNoteDecision,
+  readAuditShardEvents,
+  readBaselineSourceSnapshot,
+  sourceChangedOutsideAidlc,
+  stageDir,
+  workspaceSourceListing,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { parseDirectiveOutput } from "./directive-output.ts";
 import { declaredScope, expectedStages, sourceStages } from "./scope-run.ts";
 import type { AgentWords } from "./leg-evidence.ts";
@@ -117,6 +125,8 @@ export interface GoldenRun {
   ownWordsUsed: boolean;
   /** Prompts the person met that were theirs to decide (the project's own commands). */
   prompts: string[];
+  /** The person's files before their first line, as the engine lists its source; null when it could not. */
+  files: ReadonlyMap<string, string> | null;
 }
 
 function norm(text: string): string {
@@ -140,6 +150,14 @@ export function auditRows(proj: string): Row[] {
     return readAuditShardEvents(proj);
   } catch {
     return [];
+  }
+}
+
+export function sourceListing(proj: string): ReadonlyMap<string, string> | null {
+  try {
+    return workspaceSourceListing(proj);
+  } catch {
+    return null;
   }
 }
 
@@ -236,6 +254,7 @@ export class GoldenPerson {
   private readonly reached = new Set<string>();
   private latest: readonly CapturedToolResult[] = [];
   private readonly start: number;
+  private readonly files: ReadonlyMap<string, string> | null;
   // Typed tools: every tool call, this session's calls, and the question left open for the day.
   private readonly all: CapturedToolResult[] = [];
   private session: CapturedToolResult[] = [];
@@ -251,6 +270,7 @@ export class GoldenPerson {
 
   constructor(private readonly j: GoldenJourney) {
     this.start = auditRows(j.proj).length;
+    this.files = sourceListing(j.proj);
   }
 
   driveOptions(): DriveOptions {
@@ -283,7 +303,7 @@ export class GoldenPerson {
     if (prompts.listed.length) console.log(`Prompts the person decided on stock settings:\n  ${prompts.listed.join("\n  ")}`);
     return {
       toolResults: drive.toolResults, start: this.start, person: this.said, problems, planAsked: this.planAsked,
-      ownWordsUsed: this.ownWordsUsed, prompts: prompts.listed,
+      ownWordsUsed: this.ownWordsUsed, prompts: prompts.listed, files: this.files,
     };
   }
 
@@ -323,7 +343,7 @@ export class GoldenPerson {
     if (!approved(this.j.proj, this.j.lastStage)) problems.push(`${this.j.lastStage} was never approved (the journey ended at ${this.stageNow()})`);
     return {
       toolResults: this.all, start: this.start, person: this.said, problems, planAsked: this.planAsked,
-      ownWordsUsed: this.ownWordsUsed, prompts: [],
+      ownWordsUsed: this.ownWordsUsed, prompts: [], files: this.files,
     };
   }
 
@@ -483,7 +503,8 @@ export function driveTyped(
 /**
  * What the engine recorded against the scope's path, up to the journey's last
  * stage: the stages it ran, one approval each, the plan asked once where the
- * scope asks it, and its summary and learnings switches kept.
+ * scope asks it, its summary and learnings switches kept, and the person's
+ * files as they were until their pick started the work.
  */
 export function goldenPathProblems(j: GoldenJourney, run: GoldenRun): string[] {
   const problems: string[] = [];
@@ -535,15 +556,21 @@ export function goldenPathProblems(j: GoldenJourney, run: GoldenRun): string[] {
   if (count("PLAN_APPROVAL_RECORDED") !== plan) {
     problems.push(`PLAN_APPROVAL_RECORDED ${count("PLAN_APPROVAL_RECORDED")} times, ${j.scope} asks for the plan ${plan} times`);
   }
+  problems.push(...filesBeforePlanProblems(j.proj, run));
 
   // Summary confirmation and learnings, as the scope declares them.
   const summaries = count("SUMMARY_CONFIRMATION_RECORDED");
   const summarised = sourceStages().some((s) => s.summaryConfirmation && live.includes(s.slug));
   if (!declared.summaryConfirmation && summaries > 0) problems.push(`a summary was confirmed ${summaries} times; ${j.scope} turns summary confirmation off`);
   if (declared.summaryConfirmation && summarised && summaries === 0) problems.push(`no summary was confirmed; ${j.scope} turns summary confirmation on`);
-  const learnings = run.toolResults.filter((t) => t.toolName === "Bash" && String(t.input.command ?? "").includes("engine learnings surface")).length;
-  if (!declared.learnings && learnings > 0) problems.push(`the learnings question was raised ${learnings} times; ${j.scope} turns learnings off`);
-  if (declared.learnings && learnings === 0) problems.push(`the learnings question was never raised; ${j.scope} turns learnings on`);
+  // The learnings question comes only after a correction: at most at
+  // the stage where the person asked for their one change.
+  const learnings = rows.filter((r) => r.event === "DECISION_RECORDED" && isLearningsNoteDecision(r.block));
+  if (!declared.learnings && learnings.length > 0) problems.push(`the learnings question was raised ${learnings.length} times; ${j.scope} turns learnings off`);
+  const uncorrected = learnings.map(stageField).filter((s) => s !== j.changeRequest?.stage);
+  if (declared.learnings && uncorrected.length > 0) {
+    problems.push(`the learnings question was raised at ${uncorrected.join(", ")}, where the person corrected nothing`);
+  }
 
   // The person answered one question in their own words, where the stage asked
   // one: a stage may find the request clear and ask none. That every answer is
@@ -559,6 +586,35 @@ export function goldenPathProblems(j: GoldenJourney, run: GoldenRun): string[] {
       .some((words) => words !== null && norm(words).includes(norm(own.words))));
   if (own && run.ownWordsUsed && !kept) problems.push(`the person's own words at ${own.stage} are not on the record`);
   return problems;
+}
+
+/**
+ * Nothing of the person's changes before they pick a plan. Their pick starts
+ * the work: `intent create`, the agent's step after `next --scope` took their
+ * reply, writes WORKFLOW_STARTED, whose Source Baseline keeps the engine's
+ * listing of their files at that moment. That listing is compared with the one
+ * taken before their first line; with no pick in the journey, the files as
+ * they are now count. Which changed files are theirs is the engine's own
+ * reader, as Plan Approval reads it: AI-DLC's record, its install, the root
+ * files it shares (whole) and the host's own folder are not.
+ */
+export function filesBeforePlanProblems(proj: string, run: Pick<GoldenRun, "files" | "start">): string[] {
+  if (run.files === null) return ["the journey could not list the person's files before its first line, so it cannot tell whether they changed before a plan was picked"];
+  const rows = auditRows(proj);
+  // A plan picked before the journey began (a seeded leg) leaves nothing to check.
+  if (rows.slice(0, run.start).some((r) => r.event === "WORKFLOW_STARTED")) return [];
+  const started = rows.slice(run.start).find((r) => r.event === "WORKFLOW_STARTED");
+  const baseline = started && auditBlockField(started.block, "Source Baseline");
+  // The work's creation keeps the one listing under every stage it names, code-generation always among them.
+  const after = started ? (baseline ? readBaselineSourceSnapshot(proj, "code-generation", baseline) : null) : sourceListing(proj);
+  if (after === null) {
+    return [started
+      ? `the record keeps no list of the person's files from when their pick started the work (Source Baseline ${baseline || "missing"}), so the journey cannot tell whether they changed before it`
+      : "the journey could not list the person's files at its end, so it cannot tell whether they changed with no plan picked"];
+  }
+  const changed = sourceChangedOutsideAidlc(proj, run.files, after);
+  if (changed.length === 0) return [];
+  return [`the person's files changed ${started ? "before their pick started the work" : "and no plan was picked"}: ${changed.join(", ")}`];
 }
 
 /** Keep a journey's report beside its logs (the nightly keeps that folder) and print its one line. */

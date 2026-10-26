@@ -5,14 +5,19 @@
 // only what the journey covers, and a question the agent asked from the
 // stage's questions file without logging it reaches them as the Stop hook reads
 // it, and a question it asked in chat with nothing on record reaches them as a
-// model reads its words. Seeded audit rows, questions files, engine output and a
-// stand-in for the model stand in for a live run, so each case is exact.
+// model reads its words, and the person's files stay as they were until their
+// pick of a plan starts the work. Seeded audit rows, questions files, engine
+// output, shipped trees and a stand-in for the model stand in for a live run,
+// so each case is exact.
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { addRootBlocks } from "../../dist/claude/.claude/tools/aidlc-includes.ts";
+import { sourceBaselineAuditFields, workspaceBaselineStageSlugs } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codexReplies, codexToolResults, copilotToolResults, copilotTurnCommand, opencodeRunCommand, opencodeToolResults } from "../harness/exec-drive.ts";
-import { cleanupTestProject, createTestProject, seededAuditShard, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
+import { cleanupTestProject, createTestProject, REPO_ROOT, seededAuditShard, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { type GoldenJourney, type GoldenRun, goldenPathProblems, GoldenPerson } from "../harness/golden-journey.ts";
+import { seedGreeter } from "../harness/release-journey.ts";
 import type { CapturedToolResult } from "../harness/sdk-drive.ts";
 
 const projects: string[] = [];
@@ -431,5 +436,102 @@ describe("an opencode run turn", () => {
         { toolName: "Bash", input: { command: "rm -r x" }, toolUseId: "c2", resultText: "The user rejected permission to use this specific tool call.", isError: true },
       ],
     });
+  });
+});
+
+describe("the person's files until their pick of a plan starts the work", () => {
+  const TREES = ["claude", "codex", "copilot", "opencode", "kiro", "kiro-ide", "cursor"];
+  // A Copilot golden run of 2026-10-23: in its first turn, before the plan question was ever shown, the agent left
+  // src/app.js like this, and WORKFLOW_STARTED's Source Baseline listed it so.
+  const FIXED = `const name = process.argv[2];\nconsole.log(\`Hello, \${name}!\`);\n`;
+
+  /** The person's greeter with `tree`'s shipped files copied in, as a copy that config never ran in. */
+  function greeter(tree: string): string {
+    const dir = createTestProject();
+    projects.push(dir);
+    cpSync(join(REPO_ROOT, "dist", tree), dir, { recursive: true });
+    seedGreeter(dir);
+    return dir;
+  }
+
+  /** Their pick starts the work: `intent create` writes its state and WORKFLOW_STARTED, which lists their files. */
+  function picked(dir: string, baseline?: string): void {
+    writeFileSync(seededStateFile(dir), "# AI-DLC State\n\n- **Current Stage**: workspace-detection\n");
+    row(dir, "WORKFLOW_STARTED", {
+      Scope: "bugfix", ...(baseline === undefined ? sourceBaselineAuditFields(dir, workspaceBaselineStageSlugs()) : { "Source Baseline": baseline }),
+    });
+  }
+
+  const fileLines = (person: GoldenPerson, dir: string) =>
+    goldenPathProblems(journey(dir), run(person)).filter((p) => /the person's files|list of the person's files/.test(p));
+
+  test("an edit before their pick is named: the kept Copilot run", () => {
+    const dir = greeter("copilot");
+    const person = new GoldenPerson(journey(dir));
+    writeFileSync(join(dir, "src", "app.js"), FIXED);
+    picked(dir);
+    expect(fileLines(person, dir)).toEqual(["the person's files changed before their pick started the work: src/app.js"]);
+  });
+
+  test("a file removed and a file added before their pick are named too", () => {
+    const dir = greeter("copilot");
+    const person = new GoldenPerson(journey(dir));
+    unlinkSync(join(dir, "README.md"));
+    writeFileSync(join(dir, "src", "name.js"), "module.exports = (name) => name;\n");
+    picked(dir);
+    expect(fileLines(person, dir)).toEqual(["the person's files changed before their pick started the work: README.md, src/name.js"]);
+  });
+
+  for (const tree of TREES) {
+    test(`on the ${tree} tree, AI-DLC's own first session changes none of their files, and an edit is named`, () => {
+      const untouched = greeter(tree);
+      const person = new GoldenPerson(journey(untouched));
+      addRootBlocks(untouched);
+      picked(untouched);
+      expect(fileLines(person, untouched)).toEqual([]);
+      const edited = greeter(tree);
+      const ranAhead = new GoldenPerson(journey(edited));
+      addRootBlocks(edited);
+      writeFileSync(join(edited, "src", "app.js"), FIXED);
+      picked(edited);
+      expect(fileLines(ranAhead, edited)).toEqual(["the person's files changed before their pick started the work: src/app.js"]);
+    });
+  }
+
+  test("AI-DLC's part of the root files, the host's own folder and the work after their pick are not theirs changed first", () => {
+    // The kept opencode run: AI-DLC's first session added its part of .gitignore and AGENTS.md, and opencode installed
+    // its plugin's packages in .opencode, before the pick.
+    const dir = greeter("opencode");
+    const person = new GoldenPerson(journey(dir));
+    expect(addRootBlocks(dir)).toEqual(expect.arrayContaining([".gitignore", "AGENTS.md"]));
+    writeFileSync(join(dir, ".opencode", "package.json"), '{ "dependencies": { "@opencode-ai/plugin": "1.19.4" } }\n');
+    picked(dir);
+    writeFileSync(join(dir, "src", "app.js"), FIXED);
+    writeFileSync(join(dir, "src", "name.js"), "module.exports = (name) => name;\n");
+    expect(fileLines(person, dir)).toEqual([]);
+  });
+
+  test("with no pick in the journey, a change by its end is named", () => {
+    const dir = greeter("claude");
+    const person = new GoldenPerson(journey(dir));
+    writeFileSync(join(dir, "src", "app.js"), FIXED);
+    expect(fileLines(person, dir)).toEqual(["the person's files changed and no plan was picked: src/app.js"]);
+  });
+
+  test("a pick before the journey began leaves nothing to check", () => {
+    const dir = greeter("claude");
+    picked(dir);
+    const person = new GoldenPerson(journey(dir));
+    writeFileSync(join(dir, "src", "app.js"), FIXED);
+    expect(fileLines(person, dir)).toEqual([]);
+  });
+
+  test("a pick whose record keeps no list of their files says so", () => {
+    const dir = greeter("claude");
+    const person = new GoldenPerson(journey(dir));
+    picked(dir, "unbindable");
+    expect(fileLines(person, dir)).toEqual([
+      "the record keeps no list of the person's files from when their pick started the work (Source Baseline unbindable), so the journey cannot tell whether they changed before it",
+    ]);
   });
 });

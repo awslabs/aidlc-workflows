@@ -158,6 +158,20 @@ function reply(proj: string, prompt: string): void {
   expect(result.status, result.stderr).toBe(0);
 }
 
+// The agent's record of the choice it read from the person's reply.
+function agentRecords(proj: string, choice: string): void {
+  const result = spawnSync(BUN, [
+    join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+    "--details", choice, "--project-dir", proj,
+  ], {
+    cwd: proj,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+}
+
 /** The person's own Request Changes at the gate: the row `report --result rejected` writes. */
 function rejectedAtGate(proj: string, feedback: string, unit: string | null = null): void {
   appendAuditEntry("GATE_REJECTED", {
@@ -259,6 +273,7 @@ function approved(proj: string, unit: string | null = null): void {
   expect(ask.kind, JSON.stringify(ask)).toBe("ask");
   expect(ask.ask_type).toBe("plan-approval");
   reply(proj, "1");
+  agentRecords(proj, "Approve Plan");
   expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
   expect(next(proj).plan_approval).toEqual({ status: "approved" });
 }
@@ -384,11 +399,11 @@ describe("one Unit's own change request and its reopen", () => {
     expect(handed.code, handed.stderr).toBe(0);
   });
 
-  // A jump back from Build and Test reopens this Unit's Code Generation. That is
-  // a fresh attempt, not a change to the built result, so its plan comes back
-  // for approval even under off. The person asked for no change, so the plan is
-  // asked about as it stands: never sent back for a revision nobody asked for,
-  // which an unchanged plan could never clear.
+  // A jump back from Build and Test, or a Redo, reopens this Unit's Code
+  // Generation. That is a fresh attempt, not a change to the built result, so
+  // its plan comes back for approval even under off. The person asked for no
+  // change, so the plan is asked about as it stands: never sent back for a
+  // revision nobody asked for, which an unchanged plan could never clear.
   // Neither a jump nor a Redo inherits approval from the previous attempt.
   test("a reopen or a Redo is a fresh attempt; a change request is not", () => {
     const row = (reopen?: string): string =>
@@ -403,12 +418,6 @@ describe("one Unit's own change request and its reopen", () => {
       const proj = unitProject("off", UNIT);
       approved(proj, UNIT);
       reopened(proj, UNIT, how);
-      if (how === "redo") {
-        const revise = next(proj);
-        expect(revise.kind, JSON.stringify(revise)).toBe("run-stage");
-        expect(revise.plan_approval?.status).toBe("revise");
-        writePlan(proj, "- [ ] Step 2: a different approach\n", UNIT);
-      }
       const asked = next(proj);
       expect(asked.kind, JSON.stringify(asked)).toBe("ask");
       expect(asked.ask_type).toBe("plan-approval");

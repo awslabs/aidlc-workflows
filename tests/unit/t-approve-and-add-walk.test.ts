@@ -31,6 +31,8 @@ const POLICIES = ["off", "relaxed", "strict"] as const;
 type Policy = (typeof POLICIES)[number];
 // Domain Design's own documents and review are not what this walk is about.
 const NO_OUTPUT_CHECKS = {
+  // The stage's checks before its review (completionChecksStep) are not this walk either.
+  AIDLC_DISABLE_SENSORS: "1",
   AIDLC_SKIP_ARTIFACT_GUARD: "1",
   AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
   AIDLC_SKIP_REVIEWER_GATE_GUARD: "1",
@@ -41,13 +43,12 @@ afterAll(() => {
   for (const proj of [...projects, ...templateProjects()]) cleanupTestProject(proj);
 });
 
-// The Requirements Analysis gate open on a bugfix plan, its skipped stages written as intent creation writes them.
+// The Requirements Analysis gate open on a bugfix plan (the fixture's skipped stages read as intent creation writes them).
 async function gateAt(policy: Policy): Promise<string> {
   const proj = await projectAt("stage-gate");
   projects.push(proj);
   const file = seededStateFile(proj);
-  const engineRows = readFileSync(file, "utf-8").replace(/^- \[S\] (\S+) \u2014 SKIP \(bugfix scope\)$/gm, "- [ ] $1 \u2014 SKIP");
-  writeFileSync(file, setGuardPolicyLine(engineRows, `${policy} (set by you)`));
+  writeFileSync(file, setGuardPolicyLine(readFileSync(file, "utf-8"), `${policy} (set by you)`));
   return proj;
 }
 

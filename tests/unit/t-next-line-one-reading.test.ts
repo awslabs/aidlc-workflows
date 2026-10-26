@@ -17,6 +17,7 @@ import {
   isEngineEngagementSegment,
   isReadOnlyNextArgv,
   readNextLine,
+  readOrchestratorLauncherOptions,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { parseNextFlags } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
 import { REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
@@ -31,7 +32,7 @@ afterAll(() => {
 
 // An installed project, the reply of one `next` there, and the requests it kept.
 // `lead` goes in front of `next`, with `{proj}` naming the project.
-function nextIn(args: string[], lead: string[] = []): { message: string; kept: string[] } {
+function nextIn(args: string[], lead: string[] = []): { message: string; kept: string[]; proj: string } {
   let proj = mkdtempSync(join(process.env.TMPDIR || tmpdir(), "aidlc-next-reading-"));
   try {
     proj = realpathSync(proj);
@@ -58,7 +59,7 @@ function nextIn(args: string[], lead: string[] = []): { message: string; kept: s
       .filter((name) => name.endsWith(".json"))
       .map((name) => (JSON.parse(readFileSync(join(dir, name), "utf-8")) as { text: string }).text)
     : [];
-  return { message, kept };
+  return { message, kept, proj };
 }
 
 describe("a word behind the `--` mark is the person's, for every reader of the line", () => {
@@ -108,6 +109,14 @@ describe("a flag's value is never read as a flag of its own", () => {
     expect(classifyTerminalCommand(["--depth", "minimal", "--status"]))
       .toEqual({ subcommand: "status", source: "read-only-flag" });
   });
+
+  test("a flag that takes no value takes no word, so a utility among the person's words after it is theirs", () => {
+    expect(classifyTerminalCommand(["--single", "fix", "--status"])).toBeNull();
+    expect(isReadOnlyNextArgv(["--single", "fix", "--status"])).toBe(false);
+    expect(readNextLine(["--single", "fix", "--status"])).toEqual({ kind: "untaken-flag", token: "--status" });
+    expect(classifyTerminalCommand(["--resume", "add", "--help", "text"])).toBeNull();
+    expect(isReadOnlyNextArgv(["--resume", "add", "--help", "text"])).toBe(false);
+  });
 });
 
 describe("the launcher's options are taken the one way the engine takes them", () => {
@@ -126,7 +135,37 @@ describe("the launcher's options are taken the one way the engine takes them", (
       .toContain(`\`next\` does not take \`--project-dir ${elsewhere}\``);
   });
 
+  test("a word after a flag `next` takes with no value is theirs, so a folder named after it is theirs too", () => {
+    const { message, proj } = nextIn(["--new-intent", "fix", "--project-dir", "handling"]);
+    expect(message).toContain("`next` does not take `--project-dir handling`");
+    expect(existsSync(join(proj, "handling"))).toBe(false);
+  });
+
+  test("a word after a flag that takes no value is theirs even when it is one of the engine's own words", () => {
+    for (const word of ["help", "config", "intent", "space", "park", "team-board"]) {
+      for (const option of [["--project-dir", "handling"], ["--aidlc-attempt-id", "x"]]) {
+        const line = ["next", "--new-intent", word, "me", "add", ...option];
+        const read = readOrchestratorLauncherOptions(line);
+        expect(read.args, line.join(" ")).toEqual(line);
+        expect(read.projectDir).toBeUndefined();
+        expect(read.attemptId).toBeUndefined();
+      }
+    }
+    // Opening the line, the engine's own word is its command, whose options are its own wherever they sit.
+    expect(readOrchestratorLauncherOptions(["next", "intent", "list", "--project-dir", "/x"]).projectDir).toBe("/x");
+  });
+
   test("`--project-dir` never takes the mark as its folder, so the words behind it keep the line engaged", () => {
     expect(isEngineEngagementSegment("aidlc engine orchestrate next add --project-dir -- --config")).toBe(true);
+  });
+
+  test("a leading `compose` is the engine's verb: its folder is the launcher's in front of their words, and theirs among them", () => {
+    const dir = join(process.env.TMPDIR || tmpdir(), "aidlc-next-reading-compose");
+    const marked = readOrchestratorLauncherOptions(["next", "compose", "--request", "1234abcd", "--project-dir", dir, "--", "make it a docs update"]);
+    expect(marked.projectDir).toBe(dir);
+    expect(marked.args).toEqual(["next", "compose", "--request", "1234abcd", "--", "make it a docs update"]);
+    const among = readOrchestratorLauncherOptions(["next", "compose", "fix", "--project-dir", dir]);
+    expect(among.projectDir).toBeUndefined();
+    expect(among.args).toEqual(["next", "compose", "fix", "--project-dir", dir]);
   });
 });

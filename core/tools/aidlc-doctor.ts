@@ -39,6 +39,7 @@ import {
   typedHarnessName,
 } from "./aidlc-runtime-paths.ts";
 import { installRoot, windowsGitBashLauncherState } from "./aidlc-install-paths.ts";
+import { deepFolder } from "./aidlc-folder-depth.ts";
 import { versionChannel } from "./aidlc-channel.ts";
 import {
   configureColor,
@@ -148,6 +149,16 @@ function windowsGitBashLauncherCheck(): DoctorCheck | null {
       : "Windows launcher (Git Bash): a bare `aidlc` does not run in Git Bash, so hooks that call it fail there",
     fix: state.fix,
   };
+}
+
+// A Windows project folder too deep for AI-DLC's records: advisory, as config
+// says it; moving the folder is the person's call. Every harness installed in
+// the project counts, since one that refuses a long path on its own keeps it.
+function projectFolderDepthCheck(projectDir: string): DoctorCheck | null {
+  const deep = deepFolder(projectDir, process.platform, undefined, {
+    harnesses: discoverProjectHarnesses(projectDir).map((harness) => harness.distribution),
+  });
+  return deep && { pass: false, severity: "warn", label: `Project folder: ${deep.facts}`, fix: deep.fix };
 }
 
 export async function doctorUpdateState(
@@ -621,6 +632,8 @@ export async function main(argv: string[]): Promise<void> {
   checks.push(flagsDoctorCheck(projectDir, harnessDir(), switchesOffLines(projectDir, process.env, "command")));
   checks.push(providerDoctorCheck(projectDir, harnessDir()));
   checks.push(workspaceSiblingDoctorCheck(projectDir, harnessDir()));
+  const folderDepth = projectFolderDepthCheck(projectDir);
+  if (folderDepth) checks.push(folderDepth);
   checks.push(frameworkFilesDoctorCheck(projectDir, harnessDir()));
   const requestCap = vscodeRequestCapDoctorCheck(projectDir, harnessDir());
   if (requestCap) checks.push(requestCap);

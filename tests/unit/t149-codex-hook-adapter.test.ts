@@ -29,6 +29,8 @@
 //   record-human-turn -> a question box that ran out ({"answers":{}}) records
 //                       QUESTION_UNANSWERED, which spends the turn before it,
 //                       and tells the agent to ask again.
+//   record-human-turn -> a box with one question left blank is still the
+//                       person's turn, and their other picks are on record.
 //
 // WHY SUBPROCESS. The adapter IS a subprocess shim — in-process unit testing
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
@@ -40,6 +42,7 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { listMessages } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
+import { personsWordsText } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -408,6 +411,34 @@ describe("t149 Codex structured request_user_input presence", () => {
     }
   });
 
+  // Codex's box lets the person move past a question and submit with it
+  // unanswered: that question comes back as an empty list beside their other
+  // picks (captured on Codex CLI 0.164.0).
+  test("a box with one question left blank is the person's turn, and their pick is on record", () => {
+    const dir = scratchProject(true);
+    try {
+      const payload = {
+        ...structuredSelectionPayload(dir, JSON.stringify({
+          answers: { colour: { answers: [] }, fruit: { answers: ["Pear"] } },
+        }), "blank-question-turn"),
+        tool_input: {
+          questions: [
+            { header: "Colour", id: "colour", question: "Favourite colour?", options: [{ label: "Red", description: "Choose Red." }, { label: "Blue", description: "Choose Blue." }] },
+            { header: "Fruit", id: "fruit", question: "Favourite fruit?", options: [{ label: "Apple", description: "Choose Apple." }, { label: "Pear", description: "Choose Pear." }] },
+          ],
+        },
+      };
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(1);
+      const replied = readAudit(dir).split("\n## ").filter((block) => block.includes("**Event**: QUESTION_REPLIED"));
+      expect(replied).toHaveLength(1);
+      expect(replied[0]).toContain("**Question**: Favourite fruit?");
+      expect(replied[0]).toContain("**Reply**: Pear");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("substantive Codex answer arrays mint, including opaque question IDs and cancellation words in prose", () => {
     for (const [index, answer] of ["Approve", "cancel the standing order via cron"].entries()) {
       const dir = scratchProject(true);
@@ -640,7 +671,143 @@ describe("t149 Codex typed guard switch", () => {
       expect(typed.stdout).not.toContain("never run a setter for it");
       const [record] = listMessages(dir);
       expect(record.settings).toEqual([{ key: "guard.review-freeze", value: "off" }]);
-      expect(record.words).toBe("fix the parser");
+      expect(record.words && personsWordsText(record.words)).toBe("fix the parser");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// Codex 0.164.0 offers request_user_input_async beside its box on some models
+// (every gpt-6 model in its catalog). An answer given there comes back as a new
+// prompt in Codex's own reply envelope (codex-rs context-fragments
+// answered_question.rs at rust-v0.164.0; LIVE_REPLY is a live capture): the
+// person's turn, kept and read like a reply they typed in the chat, as their
+// answer alone.
+describe("t149 Codex async question box", () => {
+  const SESSION = "019f0000-0000-7000-8000-00000000a51c";
+  const OPEN = "<send_user_message_question_reply>";
+  const CLOSE = "</send_user_message_question_reply>";
+  const QUESTION = "How should I revise the tests in the code plan? The current plan checks Ada, Grace, a name containing a space, and a Unicode name.";
+  const ANSWER = "Keep the existing Ada test unchanged";
+  const LIVE_REPLY =
+    `${OPEN}\n[{"answer":"${ANSWER}","question":"${QUESTION}",` +
+    `"questionItemId":"[\\"request_user_input_async\\",\\"call_6973fa1c636951b6bd14f7d43cafd1e0\\",0]"}]\n${CLOSE}`;
+  const entry = (answer: unknown, question = QUESTION, index = 0) => ({
+    answer,
+    question,
+    questionItemId: JSON.stringify(["request_user_input_async", "call_6973fa1c636951b6bd14f7d43cafd1e0", index]),
+  });
+  const envelope = (entries: unknown, newline = "\n") => `${OPEN}${newline}${JSON.stringify(entries)}${newline}${CLOSE}`;
+  let turn = 0;
+
+  function prompt(dir: string, text: string, turnId?: string): { code: number; stderr: string } {
+    turn += 1;
+    return runAdapter(dir, "record-human-turn", {
+      hook_event_name: "UserPromptSubmit",
+      session_id: SESSION,
+      turn_id: turnId ?? `019f0000-0000-7000-8000-a51c${String(turn).padStart(8, "0")}`,
+      transcript_path: null,
+      cwd: dir,
+      model: "global.openai.gpt-6-astra",
+      permission_mode: "default",
+      prompt: text,
+    });
+  }
+
+  function keptTexts(dir: string): string[] {
+    return listMessages(dir).map((record) => personsWordsText(record.text));
+  }
+
+  test("an answer in Codex's async question box is the person's turn, kept and read at the gate as their own words", () => {
+    const dir = scratchProject(true);
+    try {
+      const stage = "requirements-analysis";
+      writeFileSync(
+        join(seededAuditDir(dir), pinnedShardName()),
+        `${readFileSync(join(seededAuditDir(dir), pinnedShardName()), "utf-8")}\n## Stage Awaiting Approval\n` +
+          `**Timestamp**: 2026-10-25T19:47:00Z\n**Event**: STAGE_AWAITING_APPROVAL\n**Stage**: ${stage}\n\n---\n`,
+      );
+      const sent = prompt(dir, LIVE_REPLY);
+      expect(sent.code, sent.stderr).toBe(0);
+      expect(humanTurnCount(dir)).toBe(1);
+      const [record] = listMessages(dir);
+      expect(record.source).toBe("prompt");
+      expect(personsWordsText(record.text)).toBe(ANSWER);
+      expect(record.words && personsWordsText(record.words)).toBe(ANSWER);
+      expect(personsGateReply(dir, SESSION, stage).words).toBe(ANSWER);
+      expect(readAudit(dir)).not.toContain(OPEN);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an envelope with several answers keeps each, one per line, in the order Codex sent them", () => {
+    const dir = scratchProject(true);
+    try {
+      prompt(dir, envelope([entry("Postgres", "Which database?", 0), entry("Keep the old login page until the new one is tested", "Anything else?", 1)]));
+      expect(keptTexts(dir)).toEqual(["Postgres\nKeep the old login page until the new one is tested"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an answer that holds Codex's closing marker, or CRLF around the body, is still one answer, unwrapped", () => {
+    const dir = scratchProject(true);
+    try {
+      const marked = `Name the tag ${CLOSE} in the README`;
+      prompt(dir, envelope([entry(marked)]));
+      prompt(dir, envelope([entry("Approve Plan")], "\r\n"));
+      expect(keptTexts(dir).sort()).toEqual(["Approve Plan", marked].sort());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a switch the person typed in the async box's own field is on record as typed", () => {
+    const dir = scratchProject(true);
+    try {
+      prompt(dir, envelope([entry("$aidlc --guard.review-freeze off fix the parser")]));
+      const [record] = listMessages(dir);
+      expect(record.settings).toEqual([{ key: "guard.review-freeze", value: "off" }]);
+      expect(record.words && personsWordsText(record.words)).toBe("fix the parser");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the envelope delivered twice is one turn", () => {
+    const dir = scratchProject(true);
+    try {
+      prompt(dir, LIVE_REPLY, "019f0000-0000-7000-8000-a51c0000d001");
+      prompt(dir, LIVE_REPLY, "019f0000-0000-7000-8000-a51c0000d001");
+      expect(humanTurnCount(dir)).toBe(1);
+      expect(keptTexts(dir)).toEqual([ANSWER]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Only Codex's envelope around the whole prompt, with its JSON body, is
+  // Codex's. Anything else is what the person sent, kept as it came,
+  // including Codex's own no-marker form for an over-long question id.
+  test("a prompt that only looks like Codex's envelope is kept as it came", () => {
+    const dir = scratchProject(true);
+    try {
+      const lookalikes = [
+        `what is this? ${LIVE_REPLY}`,
+        `${LIVE_REPLY} why does it show up?`,
+        `${OPEN}\n[{"answer":"Approve Plan",}]\n${CLOSE}`,
+        envelope(entry("Approve Plan")),
+        envelope([]),
+        envelope([{ question: QUESTION }]),
+        envelope([entry(42)]),
+        envelope([entry("Approve Plan"), "Request Changes"]),
+        `${OPEN}\n[{"answer":"Approve Plan"}]`,
+        `> ${QUESTION}\n\n${ANSWER}`,
+      ];
+      for (const said of lookalikes) prompt(dir, said);
+      expect(keptTexts(dir).sort()).toEqual([...lookalikes].sort());
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -142,7 +142,7 @@ never forces the user to select invented detail.
 The boundary question asks about the product (what is out of this first
 version), never about the workflow scope, which the person already chose. Use
 the [Answer]: tag format from
-stage-protocol.md. Include A-E options with X (Other) as final option. Leave
+stage-protocol.md. Include {{OPTION_LETTERS}} options with X (Other) as final option. Leave
 all [Answer]: tags blank. Follow-up questions continue the same `Q<n>`
 numbering so their source ids remain stable.
 
@@ -208,7 +208,9 @@ Otherwise:
    and these options: `A. Accept assumptions` and
    `B. Convert to follow-up questions`.
 2. Present those two options as a structured question, log it through the
-   standard question decision/answer pair, END YOUR TURN, and wait.
+   standard question decision/answer pair (`log decision` with
+   `--question-kind assumption-confirmation`, then `log answer` with the
+   choice they made), END YOUR TURN, and wait.
 3. On `Accept assumptions`, fill the confirmation answer exactly as
    `[Answer]: A. Accept assumptions` and retain the `[assumption]` labels.
    Acceptance does not turn an assumption into fact.
@@ -254,6 +256,6 @@ entails a claim.
 
 When `directive.protocol_modules` lists `learnings`, follow
 `stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
-working and run the ritual before the approval gate, applying its bootstrap,
-`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
-skip both the diary and the ritual.
+working, and take the learnings step before the approval gate; that module says
+when it asks the person anything. When the module is absent, skip both the diary
+and the step.

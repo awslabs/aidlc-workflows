@@ -4243,9 +4243,10 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   test("(h) typed guard-policy and ceremony switches through next allow the stop after their config result (#1369)", () => {
     for (const format of ["claude", "codex"] as const) {
       for (const { typed, command, reply } of [
-        { typed: "--guard-policy relaxed", command: "config set guard-policy relaxed", reply: "Guard Policy is already relaxed (set by you)" },
-        { typed: "--change-control Relaxed", command: "config set guard-policy relaxed", reply: "Guard Policy set to relaxed" },
-        { typed: "--depth minimal --summary-confirmation off", command: "config set depth minimal --summary-confirmation off", reply: "Depth set to Minimal" },
+        // A setting that turns a check off names the setter with --verbatim (the step prints its output as it is).
+        { typed: "--guard-policy relaxed", command: "config set guard-policy relaxed --verbatim", reply: "Guard Policy is already relaxed (set by you)" },
+        { typed: "--change-control Relaxed", command: "config set guard-policy relaxed --verbatim", reply: "Guard Policy set to relaxed" },
+        { typed: "--depth minimal --summary-confirmation off", command: "config set depth minimal --summary-confirmation off --verbatim", reply: "Depth set to Minimal" },
         // next names a level word lowercased, whatever case the person typed.
         { typed: "--review Advisory --depth Standard", command: "config set depth standard --review advisory", reply: "Depth set to Standard" },
       ]) {
@@ -4304,7 +4305,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(JSON.parse(result.out).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("(h) a setting their line did not carry, typed with next, allows the stop after the step that names their words", () => {
+  test("(h) a setting their line did not carry, typed with next, allows the stop after the step that names their message", () => {
     for (const format of ["claude", "codex"] as const) {
       for (const { typed, command, reply } of [
         { typed: "--scope mvp --sensors off", command: "scope change --scope mvp --sensors off", reply: "Switched to mvp: 22 stages (7 done), 19 approval gates." },
@@ -4312,13 +4313,13 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       ]) {
         const proj = makeProject();
         seedActive(proj);
-        const named = `${command} --person-words '<their words>'`;
+        const named = `${command} --message '<id>'`;
         const output = terminalModifierDispatch(proj, typed.split(" "), named, false);
         const tp = seedTranscriptEntries(proj, format, [
           { kind: "human", text: "switch to mvp and turn the checks off" },
           { kind: "bash", id: "modifier-call", command: `bun .claude/tools/aidlc.ts engine orchestrate next ${typed}` },
           { kind: "result", id: "modifier-call", output },
-          { kind: "bash", id: "setter-call", command: `bun .claude/tools/aidlc.ts engine ${command} --person-words 'switch to mvp and turn the checks off'` },
+          { kind: "bash", id: "setter-call", command: `bun .claude/tools/aidlc.ts engine ${command} --message 0a1b2c3d` },
           { kind: "result", id: "setter-call", output: reply },
           { kind: "text" },
         ]);

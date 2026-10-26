@@ -45,15 +45,15 @@ which each link advances the work product directly. The links are exactly
 `directive.pipeline.links` — the engine builds them from the directive's
 effective `support_agents`, so the collaborators switch governs the chain. With
 the full roster the chain is two links: the developer lead (link 1) scans and
-returns structured results; the architect (link 2, the final link) synthesizes
+returns structured results; the architect (link 2, the last) synthesizes
 those results and writes the 9 artifacts.
 
 **When the architect is switched off (collaborators off for this scope),
-`directive.pipeline.links` is just the developer lead, and the lead is then the
-sole and final link: it both scans AND synthesizes the results into the 9
-artifacts itself** (§5 lead-only rule). Either way, the FINAL link leaves the
-`produces[]` artifacts complete; that plus the tool-owned link receipt(s) for
-the links actually dispatched is the pipeline contract — no contribution files
+`directive.pipeline.links` is just the developer lead, and the developer then
+works alone: it both scans AND synthesizes the results into the 9 artifacts
+itself** (stage-protocol-ensemble.md section 5). Either way, the last link leaves the
+`produces[]` artifacts complete; that plus the recorded link for each agent
+actually dispatched is the pipeline contract: no contribution files
 on pipeline stages. On resume, read `directive.pipeline.completed` and dispatch
 only the first missing link; multi-repo entries are qualified as
 `<repo>:<agent>`. The store checks,
@@ -120,6 +120,9 @@ read-only check:
 - **STALE / UNVERIFIED / UNKNOWN_SCOPE** - the store's knowledge is out of
   date, unverifiable, or predates scope tracking. Present the rescan question
   below WITHOUT the reuse option.
+- **SCANNED** - this run already scanned the repo and published the store: ask
+  nothing and record nothing for it; when no repo is left to scan, go on to
+  Step 4.
 
 Reuse question (CURRENT + coverage fits the intent) - fold the tool's output
 (store intent, analyzed paths) into the prompt so the human decides on
@@ -280,7 +283,7 @@ Developer writes the structured scan results following the Developer Code Scan
 Template in `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`:
 
 - Unrecorded project-root repo (no repo is registered, and `codekb-path`
-  prints the project folder's own name):
+  prints the name it gives the project folder):
   `<record>/inception/reverse-engineering/developer-scan.md`, also when you
   pass that name as `--repo`, so a rescan replaces the earlier handoff
 - Registered repo (including an exactly-one repo set):
@@ -302,9 +305,9 @@ means the developer and the architect run again.
 ### Step 3: Architect Synthesis
 
 **Run this step only when `aidlc-architect-agent` is in `directive.pipeline.links`.**
-When the chain is lead-only (collaborators off, so the links are just the
-developer lead), do NOT dispatch an architect. Instead, the developer lead is
-the sole and final link and must itself produce the complete 9-artifact
+When the developer works alone (collaborators off, so the links are just the
+developer lead), do NOT dispatch an architect. Instead, the developer lead
+must itself produce the complete 9-artifact
 candidate described in this step: dispatch the developer with a brief that
 covers both the Step 2 scan AND this step's synthesis spec (same write-behavior
 rules, same staging-directory contract below), then mint only the developer
@@ -460,13 +463,13 @@ directory remains the durable per-repo code knowledge base shared across every
 intent in the space.
 
 After the architect return has been read and all 9 artifacts for that repo are
-present, record the final link with its command in `directive.pipeline.record`
-(full-roster path only: on a lead-only run the developer already wrote the
-artifacts and its link is the final one).
+present, record the architect's link with its command in `directive.pipeline.record`
+(full-roster path only: when the developer works alone it already wrote the
+artifacts and its link is the only one).
 
 Do not report completion until every selected repo's chain has a receipt for
 each link in `directive.pipeline.links` — both links on the full-roster path,
-the developer link alone on a lead-only run.
+the developer's link alone when it works alone.
 
 ### Step 4: Completion Handoff
 
@@ -475,8 +478,9 @@ completion sequence in this order:
 
 1. Present Step 5's announcement and per-repo summary, including any NARROWER
    warning.
-2. When `directive.protocol_modules` lists `learnings`, ask its questions and
-   end the turn; continue once the answer is logged.
+2. When `directive.protocol_modules` lists `learnings`, take the learnings
+   step: when it has a question for the person, ask it and end the turn;
+   continue once the answer is logged.
 3. Open the approval gate exactly once with
    `{{INVOKE}} engine orchestrate report --stage reverse-engineering --result awaiting-approval`.
 4. Ask Step 5's approval question.
@@ -527,6 +531,6 @@ Upstream targets: none.
 
 When `directive.protocol_modules` lists `learnings`, follow
 `stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
-working and run the ritual before the approval gate, applying its bootstrap,
-`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
-skip both the diary and the ritual.
+working, and take the learnings step before the approval gate; that module says
+when it asks the person anything. When the module is absent, skip both the diary
+and the step.

@@ -558,18 +558,9 @@ for one confirmation before it writes anything:
 
 Then it writes the stage's documents. When they rest on assumptions your
 answers did not settle, it asks whether to keep them as assumptions or turn
-them into questions. A reviewer agent reads the main document, and the last
-question before the approval is whether anything from this stage is worth
-remembering next time:
-
-```text
- Notes
- Anything to add for next time?
- > 1. Nothing to add
-      Move on to the approval for this step
-   2. Add a note
-      Record something AI-DLC should remember for future runs
-```
+them into questions. A reviewer agent reads the main document. Had you
+corrected the agent along the way, it would ask here whether to keep that
+correction for next time; you corrected nothing, so the approval comes next.
 
 Then the first approval (trimmed: the source-check lines, the review file's
 path and two of the three findings are left out):
@@ -595,8 +586,12 @@ Review outcome: Concerns remain for your decision.
   metric is sufficient, or ask a follow-up to add a data-accuracy or reliability metric before
   inception begins.
 
+Approve accepts the open review findings R-01 (...), R-02 (...) and R-03 (The table carries a
+single, binary success metric ("at least one real...) as risk; you can also approve and ask for
+one to be fixed, or reject one as not applying, saying why.
+
 Decision options:
-- Approve - continue with the open findings accepted.
+- Approve - continue.
 - Request Changes - return to the listed artifacts so the required actions can be addressed.
 
 Review: aidlc/spaces/default/intents/261013-inventory-rest-api/ideation/intent-capture/

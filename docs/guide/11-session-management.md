@@ -59,7 +59,7 @@ Bare `/aidlc` resumes from the last checkpoint. Ask for one of the others in you
 | Option | What happens | What is preserved | What is lost |
 |--------|-------------|-------------------|-------------|
 | **Resume from last checkpoint** | Continue from the in-progress or next pending stage. Task sidebar is rebuilt from the state file when the session has task tools. | All artifacts, state, audit trail | In-memory conversation context from the prior session |
-| **Redo current stage** | Reset the current stage's checkbox (via `aidlc-jump.ts execute --direction redo`) and re-execute it from scratch. When Construction runs one Unit at a time and a Unit has finished work, Redo instead redoes only the active Unit's step from the start, also when that Unit is paused or waiting for its summary confirmation or checkpoint approval. For Code Generation that includes the plan, so the new plan comes back to you for approval (unless plan approval is off). | All other artifacts and state (and, one Unit at a time, the other Units' finished work) | Current stage's completion status and partial work (one Unit at a time: that Unit's step) |
+| **Redo current stage** | Reset the current stage's checkbox (via `aidlc-jump.ts execute --direction redo`) and re-execute it from scratch. When Construction runs one Unit at a time and a Unit has finished work, Redo instead redoes only the active Unit's step from the start, also when that Unit is paused or waiting for its summary confirmation or checkpoint approval. For Code Generation that includes the plan, so the plan comes back to you for approval (unless plan approval is off). | All other artifacts and state (and, one Unit at a time, the other Units' finished work) | Current stage's completion status and partial work (one Unit at a time: that Unit's step) |
 | **Jump to stage** | Skip to a specific stage (via `next --stage <slug>`). After a forward jump, AI-DLC tells you in one line which stages it skipped and how to go back. | All existing artifacts | Stages between current and target are marked `[S]` (skipped) |
 | **Start fresh** | Start a new intent alongside the existing one (via `next --new-intent`, after confirming scope and description). | The existing workflow's artifacts, state, and audit trail (it stays in place) | Nothing - the prior intent remains resumable |
 
@@ -169,13 +169,13 @@ This jumps to the first stage of the specified phase. As with a stage jump, AI-D
 
 ### Combining jumps with scope
 
-For projects without a state file, you can combine `--stage` or `--phase` with `--scope`:
+You can combine `--stage` or `--phase` with `--scope`:
 
 ```
 /aidlc --stage code-generation --scope bugfix
 ```
 
-This creates a new workflow with the specified scope and jumps directly to the target stage.
+With no workflow yet, this creates a new workflow with the specified scope and jumps directly to the target stage. On running work, AI-DLC changes the scope first and then makes the jump in the new scope; a `--depth`, `--test-strategy` or `--guard-policy` setting typed beside them is applied with the change. Set `--review` and the ceremony switches such as `--sensors` on their own before the jump.
 
 ---
 
@@ -222,6 +222,7 @@ For example, `/aidlc-session-cost` in a Claude Code run that had just finished I
     Fired:            9
     Passed:           9
     Failed:           0
+    Could not run:    0
     Budget-override:  0
     Incomplete:       0
   Learnings captured

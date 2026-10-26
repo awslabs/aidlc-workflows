@@ -140,6 +140,13 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
     });
   }
 
+  // The engine holds the work's depth and test strategy; an agent left to fill
+  // in a level said Standard for Minimal work.
+  test("§2: the first completion message says the levels the run-stage carries, none left to fill in", () => {
+    expect(protocolMatches(/FIRST completion message[^\n]*the levels the run-stage carries as `depth` and `test_strategy`/)).toBe(true);
+    expect(protocolHas("[Minimal/Standard/Comprehensive]")).toBe(false);
+  });
+
   // =========================================================================
   // Section 2 - Progress/depth tables list every scope. `| <scope>` is a
   // markdown table cell opening with the scope name.

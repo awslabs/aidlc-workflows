@@ -165,15 +165,22 @@ export function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unk
   const selections = Object.entries(answers as Record<string, unknown>);
   if (selections.length === 0) return false;
   const offered = offeredOptionLabels(toolInput);
-  return selections.every(([questionId, selection]) => {
+  // A question the person moved past comes back as an empty list (Codex lets
+  // them submit with it unanswered); the box is theirs when another question
+  // carries a pick, and the core hook records the blank one as no reply.
+  let picked = false;
+  const wellFormed = selections.every(([questionId, selection]) => {
     if (selection === null || typeof selection !== "object" || Array.isArray(selection)) return false;
     const record = selection as Record<string, unknown>;
     if (Object.keys(record).length !== 1 || !Array.isArray(record.answers)) return false;
-    return record.answers.length > 0 && record.answers.every((answer) => {
+    if (record.answers.length === 0) return true;
+    picked = true;
+    return record.answers.every((answer) => {
       if (typeof answer !== "string" || answer.trim().length === 0) return false;
       return !isNonAnswer(answer) || offered.get(questionId)?.has(answer.trim()) === true;
     });
   });
+  return wellFormed && picked;
 }
 
 // The thread a Codex rollout file is for (rollout-<timestamp>-<thread id>[_<rollout
@@ -209,6 +216,38 @@ function explicitHumanSelectionText(toolResponse: unknown): string {
     // Non-structured prompt payloads use the direct fields below.
   }
   return "";
+}
+
+// Codex's other question box (request_user_input_async, offered beside
+// request_user_input on some models) sends the person's answer back as a new
+// prompt: its own markers around a JSON array of {answer, question,
+// questionItemId} (codex-rs context-fragments answered_question.rs, measured
+// on 0.164.0). What the person said is the answers, each whole, one per line in
+// Codex's order; null for any other prompt, which is theirs as it came. The
+// markers anchor the whole prompt and the body between them is parsed whole,
+// so an answer holding the closing marker is still one answer.
+const QUESTION_REPLY_OPEN = "<send_user_message_question_reply>";
+const QUESTION_REPLY_CLOSE = "</send_user_message_question_reply>";
+
+export function questionReplyWords(prompt: string): string | null {
+  const text = prompt.trim();
+  if (!text.startsWith(QUESTION_REPLY_OPEN) || !text.endsWith(QUESTION_REPLY_CLOSE)) return null;
+  let replies: unknown;
+  try {
+    replies = JSON.parse(text.slice(QUESTION_REPLY_OPEN.length, text.length - QUESTION_REPLY_CLOSE.length));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(replies) || replies.length === 0) return null;
+  const answers: string[] = [];
+  for (const reply of replies) {
+    if (reply === null || typeof reply !== "object" || Array.isArray(reply)) return null;
+    const { answer, question, questionItemId } = reply as Record<string, unknown>;
+    if (typeof answer !== "string") return null;
+    if (![question, questionItemId].every((field) => field === undefined || typeof field === "string")) return null;
+    if (answer.trim()) answers.push(answer);
+  }
+  return answers.join("\n");
 }
 
 export async function run(
@@ -664,12 +703,14 @@ switch (target) {
 
   case "rebuild-stage-graph": {
     // Codex already names the shell tool "Bash" with tool_input.command —
-    // the core hook's exact contract. Verbatim pipe. The core hook's only
-    // stdout is the engine-error relay, one {"systemMessage": ...} line that
-    // Codex surfaces as a warning in the UI (documented for PostToolUse), so
-    // forward it. It is display-only, so unlike a decision it is deliberately
-    // NOT cached for the duplicate delivery: replaying it would show the same
-    // warning twice. The hook stays advisory (exit 0) either way.
+    // the core hook's exact contract. Verbatim pipe. The core hook's stdout is
+    // one line: the engine-error relay ({"systemMessage": ...}, which Codex
+    // surfaces as a warning in the UI, with a note for the model) or the
+    // setter's say-once note (PostToolUse additionalContext, which Codex hands
+    // the model as a developer message and draws nowhere), so forward it.
+    // Unlike a decision it is deliberately NOT cached for the duplicate
+    // delivery: replaying it would show the warning twice and hand the model
+    // the note twice. The hook stays advisory (exit 0) either way.
     const r = await runCoreHere("aidlc-rebuild-stage-graph.ts", rawInput);
     persistResponse("", 0);
     if (r.stdout) process.stdout.write(r.stdout);
@@ -992,7 +1033,10 @@ switch (target) {
     // Plan Approval choice from either channel, but the break-glass override
     // phrase counts only when the human typed it as a prompt. The box's reply
     // goes along as it came, so each question's reply is kept word for word.
+    // An answer in Codex's other box arrives as a prompt in Codex's envelope
+    // and goes on as the answer alone, read like a reply typed in the chat.
     const selectionText = explicitHumanSelectionText(codex.tool_response);
+    const typed = codex.prompt || codex.user_prompt || codex.message || "";
     const forwarded =
       codex.tool_name === "request_user_input"
         ? {
@@ -1006,7 +1050,7 @@ switch (target) {
         : {
             hook_event_name: "UserPromptSubmit",
             ...(codex.session_id ? { session_id: codex.session_id } : {}),
-            prompt: codex.prompt || codex.user_prompt || codex.message || "",
+            prompt: questionReplyWords(typed) ?? typed,
           };
     const turn = runCoreWithStderr("aidlc-record-human-turn.ts", JSON.stringify(forwarded));
     // The core hook's note says what a switch the person typed did, and that the

@@ -48,8 +48,9 @@ const STAGE_VALIDITY_SAY =
   "you have not said it in this chat yet, then carry on with this step; it is about their own change, so never say " +
   "who made it or call it stray or a mistake.";
 const CHANGE_NOTICES_NOTE =
-  "Say each change_notices line to the person once, word for word, as your own sentence with nothing in front of " +
-  "it, and add nothing about why.";
+  "Say each change_notices line to the person once, as written (only a verb's tense may change to fit when you say " +
+  "it), as your own sentence with nothing in front of it, in the last message you write before they reply (when you " +
+  "end your turn with a question, the text you write just before it), and add nothing about why.";
 // The question note names the install's own `next` for a pick whose command returns no step.
 const questionNote = (directiveModule as unknown as { questionNote: (invocation: string, oneChoice?: boolean) => string }).questionNote;
 const QUESTION_NOTE = questionNote("bun .claude/tools/aidlc-orchestrate.ts");
@@ -290,7 +291,9 @@ describe("t-rules-travel-with-steps: the notes and their checks", () => {
     expect(plan.startsWith(questionNote("bun x/aidlc-orchestrate.ts").replace(/\.$/, ""))).toBe(true);
     expect(plan).toContain(
       "record the choice they made with `bun x/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval " +
-        "--details '<their choice>'`, then run `bun x/aidlc-orchestrate.ts next`",
+        "--details '<their choice>'` (a change they ask for instead of approving is Request Changes, with what to " +
+        "change after it: --details 'Request Changes: <what they asked>'; when they approve and ask for a change, " +
+        "make it in the plan first, then record 'Approve Plan'), then run `bun x/aidlc-orchestrate.ts next`",
     );
   });
 

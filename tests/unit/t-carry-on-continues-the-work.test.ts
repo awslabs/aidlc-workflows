@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, function:takePersonsOwnLine, function:wordsAlreadyRead
+// covers: subcommand:aidlc-orchestrate:next, function:takePersonsOwnLine, function:saveReadingQuestion
 //
 // No word list decides what the person meant. "carry on", "proceed", "ok go" or
 // "keep going please" typed after /aidlc over work in progress are words like
@@ -10,7 +10,8 @@
 // should I do? 1. Part of the active work ..."). Where work is here but none is
 // selected in this chat (a teammate's clone), the same reading comes first, so
 // "carry on" is never offered as new work, and the bare `next` the print names
-// is not read as that line again (takePersonsOwnLine, wordsAlreadyRead), and words
+// is not read as that line again (takePersonsOwnLine; saveReadingQuestion marks the
+// message by id, never its words), and words
 // that name one piece and ask for it to go on ("continue auth") get the pick
 // question's own one-step answer, `next --pick <name>`, so the person never
 // says it twice. Parked work picked that way after `/aidlc --resume` (a fresh
@@ -376,11 +377,10 @@ describe("t-carry-on-continues-the-work: work here but none selected in this cha
       expect(goOn.calls).toBe(2);
       const request = follow(tools, proj, ["fix the login"], "request");
       expect(request.last.kind, JSON.stringify(request.last).slice(0, 300)).toBe("ask");
-      expect(request.last.ask_type).toBe(harness === "kiro" ? ROUTING_QUESTION : "scope-confirm");
+      expect(request.last.ask_type).toBe(ROUTING_QUESTION);
       expect(String(request.last.question)).toContain("fix the login");
-      // Kiro asks which work it belongs to at once; the others take the plan
-      // proposal step first, then the plan the agent proposes, then the question.
-      expect(request.calls).toBe(harness === "kiro" ? 2 : 3);
+      // Every tool asks which work it belongs to at once, naming the plan the agent proposed.
+      expect(request.calls).toBe(2);
     });
 
     // A fresh clone with one piece of work: `/aidlc --resume` picks it up and
@@ -432,7 +432,7 @@ describe("t-carry-on-continues-the-work: work here but none selected in this cha
 
     // Only a bare --resume picks the one piece up: anything typed with it keeps
     // its own route, so a stage target jumps there as it always did, and a
-    // setting gets the pick question, as before.
+    // setting is kept for the work picked, then gets the pick question, as before.
     test(`${harness}: one piece, none selected: --resume with a stage target jumps there`, () => {
       proj = cloneWithWork(tools, ["auth"]);
       const jump = next(tools, proj, ["--resume", "--stage", "code-generation"]);
@@ -440,9 +440,13 @@ describe("t-carry-on-continues-the-work: work here but none selected in this cha
       expect(jump.stage).toBe("code-generation");
     });
 
-    test(`${harness}: one piece, none selected: --resume with a setting asks which work, as before`, () => {
+    test(`${harness}: one piece, none selected: --resume with a setting keeps it, then asks which work, as before`, () => {
       proj = cloneWithWork(tools, ["auth"]);
-      const ask = next(tools, proj, ["--resume", "--guard-policy", "relaxed"]);
+      const kept = next(tools, proj, ["--resume", "--guard-policy", "relaxed"]);
+      expect(kept.kind, JSON.stringify(kept).slice(0, 300)).toBe("print");
+      expect(String(kept.message)).toContain("engine config set guard-policy relaxed");
+      expect(String(kept.message)).toMatch(/aidlc-orchestrate\.ts next` and follow what it returns\.$/);
+      const ask = next(tools, proj, []);
       expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("intent-pick");
     });
   }
