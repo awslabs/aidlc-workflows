@@ -649,7 +649,7 @@ describe("the summary confirmation records the choice the agent read", () => {
     summary("Request changes");
     const r = answer("Request changes");
     expect(r.rc, r.out).toBe(0);
-    expect(r.out).toContain('Ask \\"What should change?\\" and end the turn');
+    expect(r.out).toContain('Ask the free-text question \\"What should change?\\" and end the turn');
     expect(turnEndIsOpen(proj)).toBe(true);
   });
 

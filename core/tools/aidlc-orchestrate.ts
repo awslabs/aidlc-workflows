@@ -3944,11 +3944,12 @@ function openQuestionAnswer(
       "(and their feedback as `--reason` when they ask for changes)"
     : summaryFile !== null
       ? `${options.length > 0 ? numberedChoices(options) : ""}write the choice they made on the summary's ` +
-        `\`[Answer]:\` line in ${summaryFile}, then, before you ask them anything, record it with ` +
-        `${summaryAnswer(SUMMARY_CONFIRMATION_CHOICES[0])} or ${summaryAnswer(SUMMARY_CONFIRMATION_CHOICES[1])}` +
+        `\`[Answer]:\` line in ${summaryFile}, then record it: for ${SUMMARY_CONFIRMATION_CHOICES[0]} run ` +
+        `${summaryAnswer(SUMMARY_CONFIRMATION_CHOICES[0])}; for ${SUMMARY_CONFIRMATION_CHOICES[1]} run ` +
+        `${summaryAnswer(SUMMARY_CONFIRMATION_CHOICES[1])} before you ask them what should change` +
         // aidlc-log.ts keeps what rides after Request changes as Feedback.
-        " (when their reply says what should change, it goes after Request changes, as 'Request changes: <what>'), " +
-        "and follow what it prints"
+        " (when their reply already says what, it goes after it, as 'Request changes: <what>'), and do what its " +
+        "output says next"
     : flags !== null
       ? `${numbered}record the choice they made with ` +
         `\`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)}${flags} ` +

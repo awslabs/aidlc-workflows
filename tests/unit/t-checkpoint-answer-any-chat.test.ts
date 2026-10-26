@@ -814,7 +814,9 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
   test("a Request changes reply that says nothing about what, to the summary shown again, is recorded before they are asked what should change", () => {
     const { p, identity, tag, command } = openSummary(null);
     const shown = bare(p, NEW);
-    expect(shown.message).toContain(command("Request changes"));
+    // Tied to the follow-up it comes before: a pick in a question box went
+    // straight to that question with the command only beside it.
+    expect(shown.message).toContain(`${command("Request changes")} before you ask them what should change`);
     person(p, "Request changes", NEW);
     tag("Request changes");
     const recorded = tool(p, "log", ["answer", ...identity, "--session", NEW, "--details", "Request changes"]);

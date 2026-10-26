@@ -2413,7 +2413,7 @@ function handleAnswer(args: string[]): void {
           ...(summaryFeedback !== null ? { feedback: summaryFeedback } : {}),
           ...(asksWhat
             ? {
-              agent_note: `Ask "${SUMMARY_CHANGES_QUESTION}" and end the turn; ` +
+              agent_note: `Ask the free-text question "${SUMMARY_CHANGES_QUESTION}" and end the turn; ` +
                 (whatAsked
                   ? `when they reply, record what they said with \`${whatAnswer}\`.`
                   : "their next reply is what should change."),
