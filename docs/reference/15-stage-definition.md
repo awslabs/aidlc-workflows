@@ -366,12 +366,13 @@ artifact Y is moot because Y's producer is SKIP in this scope." That's
 advisory, not blocking — the user has already opted into the
 truncation by picking the scope.
 
-**`when:` (accepted, not yet evaluated).** A stage may declare a `when:`
-predicate; today the schema accepts only `producer-in-plan`, checks its shape,
-and nothing acts on it yet, so the stage runs under its `scopes:` as if it were
-absent. The `required: true` + `conditional_on: brownfield|greenfield` pair
-covers the two dimensions the engine evaluates today; `when:` is meant to
-generalise it.
+**What `when:` adds.** `when: {producer-in-plan: <artifact>}` names an
+input a stage takes from another stage. It never removes the stage from
+a plan: when nothing on the plan produces the artifact, the person hears
+at workflow start that the stage will run without it. Richer predicates
+(`mode == brownfield`, `scope != poc`) are still to come; today's
+`required: true` + `conditional_on: brownfield|greenfield` pair covers
+those two dimensions.
 
 ### `consumes[].conditional_on`
 
@@ -744,7 +745,9 @@ prevents future contributions from colliding with ad-hoc additions.
 | `retry` | the loop driver | Retry policy on failure. Homed in loop config, not stage frontmatter |
 
 `when` is no longer reserved: the schema accepts it with the `producer-in-plan`
-predicate and checks its shape, and its evaluation is still to come (see
+predicate, and a plan checks it at workflow set-up. The stage stays on every
+plan its `scopes:` put it on; when no stage on the plan produces the named
+artifact, the person is told at set-up that the stage will run without it (see
 `consumes[].required` above).
 
 Design rationale: Claude Code's own task primitives (TaskCreate family plus

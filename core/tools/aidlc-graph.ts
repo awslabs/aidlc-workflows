@@ -105,6 +105,7 @@ import {
   scalarField,
   type ScopeDefinition,
   scopeGuardPolicyDefault,
+  scopeGridStages,
   scopeSettingsOffList,
   type StageEntry,
   stageEnabledBySelection,
@@ -1016,6 +1017,7 @@ const FIELD_ORDER = [
   "produces",
   "optional_produces",
   "produces_kinds",
+  "when",
   "consumes",
   "cites",
   "requires_stage",
@@ -1688,7 +1690,6 @@ export function resolvePlanForScope(
  *  consumes. Without projectType, conditional consumes are checked as
  *  if they fire; advisories for scope-skipped producers still surface.
  *
- *  Future home of the reserved `when:` predicate evaluation —
  *  contributors extend opts rather than adding a new function. */
 export function validateScope(
   scope: string,
@@ -2250,14 +2251,7 @@ export function transposeScopeGrid(
   }
   const grid: ScopeGrid = {};
   for (const scope of [...scopeNames].sort()) {
-    const stagesMap: Record<string, "EXECUTE" | "SKIP"> = {};
-    for (const s of stages) {
-      stagesMap[s.slug] =
-        s.phase === "initialization" || (s.scopes ?? []).includes(scope)
-          ? "EXECUTE"
-          : "SKIP";
-    }
-    grid[scope] = { stages: stagesMap };
+    grid[scope] = { stages: scopeGridStages(stages, scope) };
   }
   return grid;
 }
@@ -3043,6 +3037,9 @@ function buildGraphStage(
   }
   if (parsed.produces_kinds !== undefined) {
     stage.produces_kinds = parsed.produces_kinds;
+  }
+  if (parsed.when !== undefined) {
+    stage.when = parsed.when;
   }
   if (parsed.sensors !== undefined) {
     stage.sensors = parsed.sensors;
