@@ -16,7 +16,6 @@
 // Mechanism: function - the shipped hook (Claude Code's own command, Codex
 // through its adapter) and the shipped setters; no agent runs.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { join } from "node:path";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   type AnswersItem, PICKER_HARNESSES, buildQuestion, env, exec, pick, recordByAgent, say,
@@ -81,7 +80,7 @@ describe("t-setter-box-answer-words: a setting asked in a box answer is recorded
       expect(set.stdout).not.toContain(QUEUED);
       const row = lastRow(proj, "GUARD_POLICY_SET")!;
       expect(auditBlockField(row.block, "Person Reply")).toBe(BOX_ANSWER);
-      expect(auditBlockField(row.block, "Message Id")).toBe(boxId);
+      expect(auditBlockField(row.block, "Message Id")).toBe(boxId as string);
     });
   }
 
