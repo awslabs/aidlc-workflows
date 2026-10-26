@@ -1619,7 +1619,7 @@ describe("t243 project initialization", () => {
       }, "baseline is not a regular file"],
       ["another harness", (path) => {
         writeFileSync(path, readFileSync(path, "utf-8").replace("\"distribution\": \"kiro\"", "\"distribution\": \"kiro-ide\""));
-      }, "it names kiro in .kiro"],
+      }, "it names kiro-ide in .kiro"],
       ["wrong shape", (path) => {
         writeFileSync(path, `${JSON.stringify({ ...JSON.parse(readFileSync(path, "utf-8")), files: "none" }, null, 2)}\n`);
       }, "files is not a map of hashes"],

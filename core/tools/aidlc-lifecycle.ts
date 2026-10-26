@@ -1861,7 +1861,7 @@ async function installVersion(options: {
       const root = join(candidate, "runtime", distribution);
       const { stamp } = projectionFiles(root);
       if (stamp.frameworkVersion !== version || stamp.distribution !== distribution) {
-        throw new Error(`${distribution} runtime stamp does not match release ${version}`);
+        throw new Error(`${typedHarnessName(distribution)} runtime stamp does not match release ${version}`);
       }
     }
     const baselinePath = join(candidate, basename(runtimeIntegrityPath(version)));

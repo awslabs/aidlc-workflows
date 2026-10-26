@@ -4634,7 +4634,7 @@ function assertSwitchBaseline(occupant: ProjectHarness, requested: string): void
     const baseline = readBaseline(path);
     if (!baseline) throw new SwitchRefusal(`${lead} has no ownership baseline (${rel}); ${refresh}`, remedy());
     problem = baselineShapeProblem(baseline) ??
-      (!baselineNamesHarness(baseline, occupant) ? `it names ${typedHarnessName(baseline.distribution)} in ${baseline.harnessDir}` : null);
+      (!baselineNamesHarness(baseline, occupant) ? `it names ${baseline.distribution} in ${baseline.harnessDir}` : null);
     // A baseline from before it held only shipped paths may also list the
     // project's own files, so the refresh planner keeps every file it names.
     // A switch would then leave the installed row's files behind; a refresh of
@@ -7683,10 +7683,10 @@ function materializeSource(
         .sort();
       const pick = distribution ?? (available.length === 1 ? available[0] : undefined);
       if (!pick) {
-        throw new Error(`${path} holds the ${available.map(typedHarnessName).join(", ")} harnesses; pass --harness <name>`);
+        throw new Error(`${path} holds the ${available.map(typedHarnessName).sort().join(", ")} harnesses; pass --harness <name>`);
       }
       if (!available.includes(pick)) {
-        throw new Error(`${path} does not include the ${typedHarnessName(pick)} harness; it has ${available.map(typedHarnessName).join(", ")}`);
+        throw new Error(`${path} does not include the ${typedHarnessName(pick)} harness; it has ${available.map(typedHarnessName).sort().join(", ")}`);
       }
       root = join(runtimes, pick);
       return { root, cleanup, note, holds: available };
@@ -7861,7 +7861,7 @@ function releaseNeedDownload(need: ReleaseNeed, host: string, form: "ask" | "sta
     case "mcp":
       return `${fetch} and ${restore} it`;
     default:
-      return `${fetch} and ${update} ${need.harnessDir ?? need.distribution}`;
+      return `${fetch} and ${update} ${need.harnessDir ?? typedHarnessName(need.distribution)}`;
   }
 }
 

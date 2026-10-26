@@ -211,7 +211,7 @@ describe("Kiro harness names a person types", () => {
     const trust = spawnSync(process.execPath, [INIT, "config", "trust", "--project-dir", kiro, "--check"], {
       cwd: kiro, encoding: "utf-8", env: { ...process.env, AIDLC_TEST_NAME: process.env.AIDLC_TEST_NAME ?? "t-kiro-typed-harness-names" },
     });
-    expect(`${trust.stdout}${trust.stderr}`).toContain("for kiro");
+    expect(`${trust.stdout}${trust.stderr}`).toMatch(/for kiro(?!-)/);
     expect(`${trust.stdout}${trust.stderr}`).not.toContain("kiro-ide");
   });
 

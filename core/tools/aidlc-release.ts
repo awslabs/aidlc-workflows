@@ -982,7 +982,7 @@ export async function acquireCopyRuntime(options: {
       // Terminal, not a transport failure: no retry of this release fixes it.
       throw new Error(
         `${version} does not include the ${typedHarnessName(options.distribution)} harness; it has ${
-          manifest.distributions.map((item) => typedHarnessName(item.name)).join(", ")
+          manifest.distributions.map((item) => typedHarnessName(item.name)).sort().join(", ")
         }`,
       );
     }
