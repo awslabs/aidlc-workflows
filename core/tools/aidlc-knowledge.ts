@@ -2322,6 +2322,10 @@ export interface ShownDocument extends ListedDocument {
    *  is, so it carries the identical inline notice discipline, never a
    *  sidecar. */
   summary_notice?: string;
+  /** `--brief` only, when there is no current summary: the text's opening
+   *  characters, under `content_notice`. */
+  excerpt?: string;
+  excerpt_truncated?: boolean;
 }
 
 /** Shared by content and summary: read a derivative through the full
@@ -2377,7 +2381,7 @@ export function showDocument(
   projectDir: string,
   space: string,
   id: string,
-  options: { content?: boolean } = {},
+  options: { brief?: boolean } = {},
 ): ShownDocument {
   assertKnowledgeRootTrusted(projectDir, space);
   const index = readIndex(projectDir, space);
@@ -2416,13 +2420,12 @@ export function showDocument(
   // matches the row's digest describes a revision that no longer exists, so it is
   // withheld rather than shown with a caveat.
   let out: ShownDocument = base;
-  // `--no-content` keeps the record and its summary, so a caller can judge a
-  // document before reading its full text.
-  if (options.content !== false && row.content !== undefined && derivativeIsCurrent(row)) {
+  let text: string | null = null;
+  if (row.content !== undefined && derivativeIsCurrent(row)) {
     const bytes = verifiedContentBytes(projectDir, space, row);
     if (bytes === null) {
       out = { ...out, state: "invalidated" };
-    } else {
+    } else if (!options.brief) {
       out = {
         ...out,
         content: bytes.toString("utf-8"),
@@ -2432,6 +2435,8 @@ export function showDocument(
         content_trust: "untrusted",
         content_handling: "data-not-instructions",
       };
+    } else {
+      text = bytes.toString("utf-8");
     }
   }
   // Same revision-binding gate as content, and the SAME inline-notice
@@ -2450,8 +2455,24 @@ export function showDocument(
       };
     }
   }
+  // `--brief` leaves the full text out, so a caller can judge many documents
+  // before reading any: the summary stands for the text, or, without one, the
+  // text's opening characters, under the same notice as the text.
+  if (text !== null && out.summary_text === undefined) {
+    const chars = Array.from(text);
+    out = {
+      ...out,
+      excerpt: chars.slice(0, BRIEF_EXCERPT_CHARS).join(""),
+      excerpt_truncated: chars.length > BRIEF_EXCERPT_CHARS,
+      content_notice: UNTRUSTED_CONTENT_NOTICE,
+      content_trust: "untrusted",
+      content_handling: "data-not-instructions",
+    };
+  }
   return out;
 }
+
+const BRIEF_EXCERPT_CHARS = 2000;
 
 /** Human-readable catalog. `--json` carries the same rows, so a caller filters
  *  deliberately rather than being filtered for. */
@@ -4154,7 +4175,7 @@ function parseFlags(
   json: boolean;
   intent?: string;
   allowInactive: boolean;
-  noContent: boolean;
+  brief: boolean;
   positional: string[];
   values: Record<string, string>;
 } {
@@ -4165,7 +4186,7 @@ function parseFlags(
   let intent: string | undefined;
   let json = false;
   let allowInactive = false;
-  let noContent = false;
+  let brief = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--space") {
@@ -4186,8 +4207,8 @@ function parseFlags(
       json = true;
     } else if (a === "--allow-inactive") {
       allowInactive = true;
-    } else if (a === "--no-content") {
-      noContent = true;
+    } else if (a === "--brief") {
+      brief = true;
     } else if (
       a === "--to" || a === "--text-file" || a === "--source-revision" || a === "--tags" ||
       a === "--copied-from" || a === "--copied-ignored" || a === "--copied-left-out"
@@ -4206,7 +4227,7 @@ function parseFlags(
       positional.push(a);
     }
   }
-  return { space, json, intent, allowInactive, noContent, positional, values };
+  return { space, json, intent, allowInactive, brief, positional, values };
 }
 
 let projectDir: string | undefined;
@@ -4267,12 +4288,12 @@ export function main(argv: string[]): void {
         break;
       }
       case "show": {
-        const { space: spaceFlag, json, noContent, positional } = parseFlags(args.slice(1));
+        const { space: spaceFlag, json, brief, positional } = parseFlags(args.slice(1));
         if (positional[0] === undefined) error("show requires a document id.");
         const pd = resolveProjectDir(projectDir);
         const space = resolveSpaceFlag(spaceFlag, pd);
         assertKnowledgeRootTrusted(pd, space);
-        const doc = showDocument(pd, space, positional[0], { content: !noContent });
+        const doc = showDocument(pd, space, positional[0], { brief });
         if (json) emitJson(doc as unknown as Record<string, unknown>);
         else emitHuman(renderShow(doc));
         break;
@@ -4399,7 +4420,8 @@ export function main(argv: string[]): void {
             "                  --allow-inactive to target a finished intent.\n" +
             "  list            The catalog: every row, with its state visible.\n" +
             "  show <id>       One document's full record, plus its extracted text.\n" +
-            "                  Add --no-content to leave the text out.\n" +
+            "                  Add --brief for the summary, or a 2,000-character\n" +
+            "                  excerpt without one, instead of the text.\n" +
             "  associate <id> --intent [slug]    Scope a document to an intent.\n" +
             "  dissociate <id> --intent [slug]   Remove that scoping.\n" +
             "  sync            Reconcile with documents/; rebuild a lost index.\n" +

@@ -225,10 +225,18 @@ describe("t293 the documented workflow, end to end, through the public dispatche
       const shownA = run(p, "show a.md", ["show", aRow.id]);
       expect(shownA.citation as string).toContain("documents/a.md");
       expect(shownA.content as string).toBe("a v1\n");
-      const recordA = run(p, "show a.md --no-content", ["show", aRow.id, "--no-content"]);
-      expect(recordA.citation).toBe(shownA.citation);
-      expect(recordA.content, "--no-content leaves the text out").toBeUndefined();
-      expect(recordA.content_notice).toBeUndefined();
+      const briefA = run(p, "show a.md --brief", ["show", aRow.id, "--brief"]);
+      expect(briefA.citation).toBe(shownA.citation);
+      expect(briefA.content, "--brief leaves the full text out").toBeUndefined();
+      expect(briefA.excerpt, "with no summary, the opening text stands for it").toBe("a v1\n");
+      expect(briefA.excerpt_truncated).toBe(false);
+      expect(briefA.content_notice).toBe(shownA.content_notice);
+      doc(p, "long.md", "x".repeat(5000));
+      run(p, "onboard long.md", ["onboard", join(documentsDir(p), "long.md")]);
+      const longRow = listRows(p, "after onboarding long.md").find((r) => r.path === "documents/long.md")!;
+      const briefLong = run(p, "show long.md --brief", ["show", longRow.id, "--brief"]);
+      expect((briefLong.excerpt as string).length).toBe(2000);
+      expect(briefLong.excerpt_truncated).toBe(true);
 
       // 4. edit a.md in place, onboard again: exactly ONE live row, status
       // "edited", same id (identity survives a same-path edit).

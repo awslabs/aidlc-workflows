@@ -300,8 +300,8 @@ function decisionsOfStories(specContent: string, stories: Set<string> | null): S
 }
 
 // A decision is defined where its ID opens a visible list item, a table row's
-// first cell, or a heading; a mention elsewhere, or in code or a comment, is
-// not one. Returns how many times each ID is defined.
+// first cell, or a heading, after markup only; a mention elsewhere, or in code
+// or a comment, is not one. Returns how many times each ID is defined.
 function experienceDefinitions(specContent: string): Map<string, number> {
   const { lines } = markdownBlocks(specContent);
   const visible = visibleMarkdownLines(specContent);
@@ -317,7 +317,8 @@ function experienceDefinitions(specContent: string): Map<string, number> {
       items.add(item.id);
       head = text.slice(line.contentStart);
     }
-    const id = head === null ? undefined : /^[\s*_~`]*(UX\d+\.\d+\.\d+)\b/.exec(head)?.[1];
+    // Only markup may precede the ID: emphasis, code, or a link's bracket.
+    const id = head === null ? undefined : /^[^\p{L}\p{N}]*(UX\d+\.\d+\.\d+)\b/u.exec(head)?.[1];
     if (id) defined.set(id, (defined.get(id) ?? 0) + 1);
   });
   return defined;

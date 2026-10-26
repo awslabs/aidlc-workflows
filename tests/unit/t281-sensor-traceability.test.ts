@@ -798,6 +798,7 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
       ["1. UX1.1.1 Sign in on one page [Q2]", "2. UX1.1.1 A failed sign-in keeps the email [Q4]"],
       ["| `UX1.1.1` | Sign in on one page [Q2] |", "| **UX1.1.1** | A failed sign-in keeps the email [Q4] |"],
       ["* `UX1.1.1` Sign in on one page [Q2]", "### UX1.1.1 A failed sign-in keeps the email [Q4]"],
+      ["- [UX1.1.1](#sign-in) Sign in on one page [Q2]", "- **[`UX1.1.1`](#keep)** A failed sign-in keeps the email [Q4]"],
     ];
     for (const [first, second] of forms) {
       const table = first.startsWith("|") ? ["| ID | Decision |", "|---|---|", first, second] : [first, "", second];
@@ -816,8 +817,12 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
       "```",
       "<!-- - UX1.1.3 a draft left in a comment -->",
     ].join("\n"));
-    const out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1"]));
+    let out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1"]));
     expect(out.result.pass, out.result.reason).toBe(true);
+
+    write(proj, "inception/refined-mockups/interaction-spec.md", "# Interaction Spec\n\n- [UX1.1.1](#sign-in) Sign in on one page [Q2]\n");
+    out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2"]));
+    expect(out.result.missing_from_upstream_ids, "a linked ID is a decision").toEqual(["UX1.1.1"]);
   });
 
   test("code-generation reports a decision naming a story stories.md lacks", () => {
