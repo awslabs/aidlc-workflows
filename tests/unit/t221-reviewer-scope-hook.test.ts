@@ -538,6 +538,7 @@ function scratchProject(): string {
     "aidlc-lib.ts",
     "aidlc-artifact-vocabulary.ts",
     "aidlc-settings.ts",
+    "aidlc-markdown.ts",
     "aidlc-install-paths.ts",
     "aidlc-distribution.ts",
     "aidlc-channel.ts",

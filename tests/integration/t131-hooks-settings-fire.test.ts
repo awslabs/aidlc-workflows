@@ -282,6 +282,7 @@ function makeProject(withState: boolean): string {
     "aidlc-runtime.ts",
     "aidlc-lib.ts",
     "aidlc-settings.ts",
+    "aidlc-markdown.ts",
     "aidlc-install-paths.ts",
     "aidlc-distribution.ts",
     "aidlc-channel.ts",
