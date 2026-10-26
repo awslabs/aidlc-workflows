@@ -4946,7 +4946,13 @@ function approvedWorktreeSource(
     if (!parentSource || hashObject(approved.receipt) !== discarded.parentReceiptSha256) {
       throw new Error("Discarded worktree Plan Approval changed or current parent source cannot be bound.");
     }
-    return { parentSource, expectedBytes: discarded.expectedBytes, theirs: serializeSourceListing };
+    return {
+      parentSource,
+      expectedBytes: discarded.expectedBytes,
+      theirs: serializeSourceListing,
+      expectedSource: new Map<string, string>(),
+      theirsListing: (listing: ReadonlyMap<string, string>): Map<string, string> => new Map(listing),
+    };
   }
   // Worktrees are made from the parent's files, so they must be readable even
   // when a single-checkout build could go ahead without that record.
@@ -4972,14 +4978,37 @@ function approvedWorktreeSource(
   // it, and the link itself is still compared. Nor are the files Git ignores
   // and does not track in the parent's checkout.
   const owned = aidlcOwnedSourceKey(parent);
-  const theirs = (listing: ReadonlyMap<string, string>): string => serializeSourceListing(
-    new Map([...listing].filter(([key]) => !owned(`${repo.repo ?? ""}${key}`) && !isLinkTargetListingKey(listing, key))),
+  const theirsListing = (listing: ReadonlyMap<string, string>): Map<string, string> => new Map(
+    [...listing].filter(([key]) => !owned(`${repo.repo ?? ""}${key}`) && !isLinkTargetListingKey(listing, key)),
   );
+  const theirs = (listing: ReadonlyMap<string, string>): string => serializeSourceListing(theirsListing(listing));
   const prefix = `${repo.repo ?? ""}\0`;
   const expected = withoutGitIgnored(repo.cwd, repo.repo === null)(new Map([...parentSource.listing]
     .filter(([key]) => key.startsWith(prefix))
     .map(([key, value]) => [key.slice(prefix.length - 1), value])));
-  return { parentSource, expectedBytes: theirs(expected), theirs };
+  return { parentSource, expectedBytes: theirs(expected), theirs, expectedSource: theirsListing(expected), theirsListing };
+}
+
+function sourceListingDifferences(
+  expected: ReadonlyMap<string, string>,
+  committed: ReadonlyMap<string, string>,
+  limit = 5,
+): string {
+  const keys = [...new Set([...expected.keys(), ...committed.keys()])].sort();
+  const lines: string[] = [];
+  for (const key of keys) {
+    const want = expected.get(key);
+    const have = committed.get(key);
+    if (want === have) continue;
+    const path = key.replace(/^\//, "").replace(/^\.\//, "");
+    if (want !== undefined && have === undefined) lines.push(`${path} is not committed`);
+    else if (want === undefined) lines.push(`${path} is committed but is not part of the approved source`);
+    else lines.push(`${path} changed after the commit`);
+  }
+  if (lines.length === 0) return "";
+  const shown = lines.slice(0, limit);
+  const rest = lines.length - shown.length;
+  return `${shown.join("; ")}${rest > 0 ? `; and ${rest} more path${rest === 1 ? "" : "s"}` : ""}. `;
 }
 
 /**
@@ -5005,7 +5034,8 @@ export function validateCodeGenerationForkApproval(
   }
   const discarded = discardedSha256 === undefined
     ? null : discardedWorktreeApproval(parent, unit, repoCwd, repoName, discardedSha256);
-  const { expectedBytes, theirs } = approvedWorktreeSource(parent, approved, repo, discarded);
+  const { expectedBytes, theirs, expectedSource, theirsListing } =
+    approvedWorktreeSource(parent, approved, repo, discarded);
   if (discarded) {
     const base = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "--end-of-options", `${baseCommit}^{commit}`]);
     if (base !== discarded.commit) {
@@ -5016,7 +5046,12 @@ export function validateCodeGenerationForkApproval(
   const parentHead = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "HEAD^{commit}"]);
   const committed = gitCommitSourceListing(repo.cwd, parentHead, repo.repo === null);
   if (!committed || theirs(committed) !== expectedBytes) {
-    throw new Error("Approved parent source is not committed. Commit the already-approved parent source before prepare, then retry. No child was created and no parent commit was made.");
+    const differences = sourceListingDifferences(expectedSource, theirsListing(committed ?? new Map()));
+    throw new Error(
+      "Approved parent source is not committed. " +
+        (differences.length > 0 ? `Against ${parentHead.slice(0, 12)}: ${differences}` : "") +
+        "Commit the already-approved parent source (a nested repository's files are committed in that repository) before prepare, then retry. No child was created and no parent commit was made.",
+    );
   }
   const base = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "--end-of-options", `${baseCommit}^{commit}`]);
   const baseSource = gitCommitSourceListing(repo.cwd, base, repo.repo === null);
@@ -5036,7 +5071,7 @@ function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: str
   const discarded = discardedSha256 === undefined ? null : discardedWorktreeApproval(
     provenance.parent, unit, provenance.repo.cwd, provenance.repo.repo, discardedSha256,
   );
-  const { parentSource, expectedBytes, theirs } =
+  const { parentSource, expectedBytes, theirs, expectedSource, theirsListing } =
     approvedWorktreeSource(provenance.parent, approved, provenance.repo, discarded);
   const childSource = workspaceSourceState(provenance.child);
   if (!childSource) throw new Error("Worktree source cannot be bound. Repair its source boundary before retrying.");
@@ -5059,7 +5094,12 @@ function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: str
     const parentHead = worktreeApprovalGit(provenance.repo.cwd, ["rev-parse", "HEAD"]);
     const committed = gitCommitSourceListing(provenance.repo.cwd, parentHead, provenance.repo.repo === null);
     if (!committed || theirs(committed) !== expectedBytes) {
-      throw new Error("Clean worktree needs approved parent source that is not committed. Commit the already-approved parent source, then retry; the worktree was preserved.");
+      const differences = sourceListingDifferences(expectedSource, theirsListing(committed ?? new Map()));
+      throw new Error(
+        "Clean worktree needs approved parent source that is not committed. " +
+          (differences.length > 0 ? `Against ${parentHead.slice(0, 12)}: ${differences}` : "") +
+          "Commit the already-approved parent source (a nested repository's files are committed in that repository), then retry; the worktree was preserved.",
+      );
     }
     try {
       worktreeApprovalGit(provenance.child, ["merge-base", "--is-ancestor", childHead, parentHead]);
