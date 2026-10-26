@@ -149,10 +149,11 @@ exactly one value today:
   `pass` (plus `findings` and `findings_count`, the number the audit row
   records) and exits 0 whether the check passes or fails; the dispatcher
   writes the failure detail file. Exit 127 is recorded as a pass noted
-  `tool-unavailable`; any other non-zero exit, or output with no boolean
-  `pass`, is recorded as a pass with a `script-error` note (see
-  [`default_severity`](#default_severity) for what a blocking gate binding
-  does with it).
+  `tool-unavailable`; a worker that cannot start, any other non-zero exit,
+  or output with no boolean `pass` is recorded as `SENSOR_COULD_NOT_RUN`
+  with a `script-error` note, never as a pass (see
+  [`default_severity`](#default_severity) for what the gate says and what a
+  blocking gate binding does with it).
 
 Any other `kind`, `llm` included, is refused at parse time ("other kinds
 reserved for future releases").
@@ -304,14 +305,17 @@ When the gate opens or is shown again, the orchestrator's reply carries, in
 its `narration` on a line after what the stage produced, one sentence per check whose
 latest result on a declared output is a failure (`failedCheckNotices` in
 `aidlc-state.ts`, at most three sentences and a count), so the agent says it to
-the person with the approval question. The change lines stay what changed. A
-pass recorded with a note (tool unavailable, script error) evaluated nothing and
+the person with the approval question. The change lines stay what changed.
+Then one line, however many, names the checks that could not run (their script
+crashed or did not start), on a declared output or on a file the stage wrote that
+is still there (a write-fired check such as `type-check`). A check that could
+not run, or a pass recorded with a note (tool unavailable), evaluated nothing and
 does not clear an earlier failure; a Unit's own gate names that Unit's outputs
-only; with Sensors off nothing is said.
+and writes only; with Sensors off nothing is said.
 A `blocking` gate binding proceeds only on a verified pass. Reported findings,
 dispatcher exit/spawn/timeout failures, malformed or mismatched verdicts,
-`SENSOR_BUDGET_OVERRIDE`, and `SENSOR_PASSED` rows carrying `tool-unavailable`
-or `script-error` all stop `gate-start`, `revise`, or approve-time recovered
+`SENSOR_BUDGET_OVERRIDE`, `SENSOR_COULD_NOT_RUN`, and `SENSOR_PASSED` rows
+carrying a note all stop `gate-start`, `revise`, or approve-time recovered
 revision re-entry before the gate opens.
 
 The operator can fix the findings and retry, or make a separate explicit
@@ -326,7 +330,12 @@ bare flag, an unoffered/paraphrased choice, a missing human-backed receipt, or
 autonomous mode is refused. The recorded answer names its option by label or
 by its number on the offered list. Fix findings starts a new attempt the way
 Request Changes does: the reviewed outputs open for the fix, and the retried
-report needs a fresh review. A successful override records the sensor ids,
+report needs a fresh review. Where each Unit's review is its own (unit-major
+work, Construction checkpoints, team-owned Units), that is the pick's Unit when
+it was logged with one, and otherwise only the Units whose outputs the failing
+blocking check named in its latest result; a check that named no Unit's output,
+or stage-major work, starts every Unit again.
+A successful override records the sensor ids,
 optional detail paths, and evaluation reasons on `STAGE_AWAITING_APPROVAL`.
 Revalidating an already-open gate emits a fresh row with `Revalidated: true`,
 consuming the authorization receipt instead of leaving it reusable.
@@ -528,7 +537,7 @@ overrides that enclosing allowance. A shorter enclosing cap can interrupt the
 dispatcher before it publishes a terminal sensor row; the hook records a drop
 for doctor. Reaching the sensor's own per-fire cap produces
 `SENSOR_BUDGET_OVERRIDE`. An incomplete nested lint/compile execution follows
-the script-error path, and an unavailable probe follows the tool-unavailable
+the could-not-run path, and an unavailable probe follows the tool-unavailable
 path; neither establishes a verified pass for a blocking gate.
 Gate dispatch separately accepts `AIDLC_GATE_SENSOR_DISPATCH_TIMEOUT_MS`;
 when unset, it adds no enclosing timeout beyond the sensor's per-fire cap.

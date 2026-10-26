@@ -10,6 +10,7 @@ import {
   humanTurnMintAllowed,
   isReplyTurn,
   isRequestTurn,
+  rowsAfterMark,
   MESSAGE_SPENDING_EVENTS,
   type PersonsWords,
   promptHookRanRecently,
@@ -385,38 +386,98 @@ export function chatsSince(rows: readonly AuditShardEvent[], pd: string, spentAt
     .map((m) => m.session ?? "terminal"));
 }
 
+// What a request is for, as the messages that can stand behind it go: any
+// request, a setting, or turning plan approval off (planApprovalOffStands).
+export type RequestKind = "any" | "setting" | "plan-approval-off";
+
+// Which rows came since the waiting code plan question was shown, by their
+// place on this clone's record after the question's own mark (the one its
+// answer reads). Null when no plan question waits, or nothing can be ordered
+// against it (an older question with no mark, another clone's, a copy of the
+// tools without the plan question's module).
+function sincePlanQuestion(pd: string): ((row: AuditShardEvent) => boolean) | null {
+  let shown: import("./aidlc-lib.ts").AuditMark | "due" | null;
+  try {
+    // Typed by hand: a type import of the plan question module from here takes the tests' typecheck past its heap.
+    const { planQuestionShown } = require("./aidlc-plan-approval-ask.ts") as {
+      planQuestionShown(projectDir: string): import("./aidlc-lib.ts").AuditMark | "due" | null;
+    };
+    shown = planQuestionShown(pd);
+  } catch {
+    shown = null;
+  }
+  // A plan waiting for its question, not shown yet: nothing is sent since.
+  if (shown === "due") return () => false;
+  return shown === null ? null : rowsAfterMark(pd, shown);
+}
+
+// The ids of the messages whose turns come since the waiting plan question.
+function messagesSince(rows: readonly AuditShardEvent[], since: (row: AuditShardEvent) => boolean): Set<string> {
+  return new Set(rows.flatMap((row) => {
+    const id = row.event === "HUMAN_TURN" && since(row) ? auditBlockField(row.block, "Message Id") : null;
+    return id === null ? [] : [id];
+  }));
+}
+
+// Arden's call: while the code plan question waits for the person, turning
+// plan approval off stands only on a message they sent since that question was
+// shown, named by its id or read as their turn. Three live Copilot CLI runs
+// turned it off on a message that had approved something else before the plan
+// was shown, and the plan was built without them, recorded as theirs. With no
+// plan question waiting, a message stands as any request's does.
+export function planApprovalOffStands(pd: string, turn: string | AuditShardEvent | null): boolean {
+  const since = sincePlanQuestion(pd);
+  if (since === null) return true;
+  if (turn === null) return false;
+  if (typeof turn !== "string") return turn.event === "HUMAN_TURN" && since(turn);
+  return messagesSince(readAuditShardEvents(pd), since).has(turn);
+}
+
+// What the person reads when they asked before the plan was shown: why this
+// plan is asked about once, and how to turn it off now. True also when the
+// agent misread their words.
+export const PLAN_APPROVAL_OFF_AFTER_SHOWN_LINE = "Turning plan approval off needs your word after the plan is " +
+  "shown, so this plan is asked once; say so now and it is built without asking.";
+
+// The step for an agent turning plan approval off on what came before the
+// waiting plan question (planApprovalOffStands): the question, and the line
+// only when the person's words did ask for it.
+export function planApprovalOffWaitsStep(messageId?: string): string {
+  return `${messageId === undefined ? "Plan approval stays on for now" : `Cannot turn plan approval off on message ${messageId}`}: ` +
+    "the code plan question waits, and only a message the person sends since it was shown can turn plan approval " +
+    "off. Show them the plan question as it is (run next for it, if it is not shown yet) and end the turn. If " +
+    `their words did ask for plan approval off, say first, in one line: "${PLAN_APPROVAL_OFF_AFTER_SHOWN_LINE}"`;
+}
+
 // The person's messages in this chat a request can stand on (proveMessage's
 // request form), newest first, so an agent that takes the first names their
 // latest and not an old approval: the ids and times a refusal names so the
 // agent can name the one that asked. Never their words: the agent has them. Another
 // chat's ids would leave an agent that cannot tell the chats apart to pick one
 // by its time; a message named from there still proves.
-// For a `setting`, while the code plan question waits for the person, a
-// message from before it that a decision has followed (it arrived before the
-// last approval or decision) is not offered: a live Copilot CLI run took their
+// For a setting, while the code plan question waits for the person, a message
+// from before it that a decision has followed (it arrived before the last
+// approval or decision) is not offered: a live Copilot CLI run took their
 // "Approve" for the stage before from this list and turned plan approval off,
 // set by them, with the question unanswered. Before the question it is
 // offered, as "approve, and turn plan approval off" needs where the agent
 // learns ids only from these steps, and so is any other request (going back to
-// the plan their approval was for). A message in the question's own second
-// counts as after it, as in noReplySince.
-export function requestMessages(pd: string, setting = false): Array<{ id: string; at: string }> {
+// the plan their approval was for). For turning plan approval off, only what
+// can stand for it is offered (planApprovalOffStands).
+export function requestMessages(pd: string, kind: RequestKind = "any"): Array<{ id: string; at: string }> {
   try {
     const rows = readAuditShardEvents(pd);
     const spentAt = latestSpendingTimestamp(rows);
     const chat = windowChat(pd, rows, spentAt, true);
     if (chat === null) return [];
-    // Typed by hand: a type import of the plan question module from here takes the tests' typecheck past its heap.
-    const { planQuestionShownAt } = require("./aidlc-plan-approval-ask.ts") as {
-      planQuestionShownAt(projectDir: string): string | null;
-    };
-    const shown = setting ? planQuestionShownAt(pd) : null;
-    const from = shown === null ? null : Math.floor(Date.parse(shown) / 1000) * 1000;
+    const since = kind === "setting" ? sincePlanQuestion(pd) : null;
+    const sent = since === null ? null : messagesSince(rows, since);
     const offered = (message: StoredMessage): boolean =>
-      from === null || Date.parse(message.at) >= from || spentAt === null || message.at >= spentAt;
+      sent === null || sent.has(message.id) || spentAt === null || message.at >= spentAt;
+    const planApprovalOff = kind === "plan-approval-off";
     return listMessages(pd)
       .filter((message) => message.session === chat && offered(message) &&
-        "message" in messageProof(pd, message.id, "request", { request: true }))
+        "message" in messageProof(pd, message.id, "request", { request: true, planApprovalOff }))
       .map((message) => ({ id: message.id, at: message.at }))
       .reverse();
   } catch {
@@ -426,8 +487,8 @@ export function requestMessages(pd: string, setting = false): Array<{ id: string
 
 // The step a refused request leads with: the agent names the message that asked
 // for it, when one of theirs can stand behind it, else `otherwise`.
-export function requestMessageStep(pd: string, otherwise: string, setting = false): string {
-  const named = requestMessages(pd, setting);
+export function requestMessageStep(pd: string, otherwise: string, kind: RequestKind = "any"): string {
+  const named = requestMessages(pd, kind);
   if (named.length === 0) return otherwise;
   return `If their message ${named.map((message) => `${message.id} (sent ${message.at})`).join(" or ")} asked for ` +
     `it, run the same command with --message <id>. Otherwise: ${otherwise}`;
@@ -558,26 +619,28 @@ function reopenOf(row: AuditShardEvent): string | null {
 // (onlyItsOwnDecisionAfter): a setting, a lowering, a cap lifted, a grant, or a
 // choice it left to the agent. With `reopened`, a message whose only decision
 // since is the reopen it asked for (onlyItsReopenAfter) still answers the
-// question that reopen brought up.
+// question that reopen brought up. With `planApprovalOff`, it also stands for
+// turning plan approval off (planApprovalOffStands).
 export function proveMessage(
   pd: string,
   id: string,
   what: "answer" | "decision" | "approval" | "change request" | "setting" | "request",
-  options: { request?: boolean; reopened?: boolean } = {},
+  options: { request?: boolean; reopened?: boolean; planApprovalOff?: boolean } = {},
 ): { message: StoredMessage } | { refusal: string } {
   const proof = messageProof(pd, id, what, options);
   // A request's refusal leads with the messages that can stand behind it: the
   // agent has no other place to learn their ids, and a live Codex run guessed
   // the chat's id, then the person's words, before it found one.
   if (options.request !== true || !("refusal" in proof)) return proof;
-  return { refusal: requestMessageStep(pd, proof.refusal, what === "setting") };
+  const kind: RequestKind = options.planApprovalOff === true ? "plan-approval-off" : what === "setting" ? "setting" : "any";
+  return { refusal: requestMessageStep(pd, proof.refusal, kind) };
 }
 
 function messageProof(
   pd: string,
   id: string,
   what: "answer" | "decision" | "approval" | "change request" | "setting" | "request",
-  options: { request?: boolean; reopened?: boolean },
+  options: { request?: boolean; reopened?: boolean; planApprovalOff?: boolean },
 ): { message: StoredMessage } | { refusal: string } {
   const message = isMessageId(id) ? readMessage(pd, id) : null;
   if (message === null) {
@@ -624,6 +687,7 @@ function messageProof(
         "so it is spent. Only a message the person sent after it can answer this question.",
     };
   }
+  if (options.planApprovalOff === true && !planApprovalOffStands(pd, id)) return { refusal: planApprovalOffWaitsStep(id) };
   return { message };
 }
 
@@ -651,12 +715,13 @@ function rowAfter(a: AuditShardEvent, b: AuditShardEvent, crossShard: boolean): 
  * the engine and the row both name a chat, else the latest whatever its chat,
  * so a missing fact fails toward the person. It reads ids, times and the
  * engine's own rows, never words. A command that names its message proves that
- * one (proveMessage) instead.
+ * one (proveMessage) instead. With `planApprovalOff`, the turn also stands for
+ * turning plan approval off (planApprovalOffStands).
  */
 export function personTurnStands(
   pd: string,
   mode: "request" | "plain",
-  options: { replies?: boolean; requests?: boolean; intent?: string; space?: string } = {},
+  options: { replies?: boolean; requests?: boolean; intent?: string; space?: string; planApprovalOff?: boolean } = {},
 ): boolean {
   return standingPersonTurn(pd, mode, options) !== null;
 }
@@ -668,7 +733,7 @@ export function personTurnStands(
 export function standingPersonTurn(
   pd: string,
   mode: "request" | "plain",
-  options: { replies?: boolean; requests?: boolean; intent?: string; space?: string } = {},
+  options: { replies?: boolean; requests?: boolean; intent?: string; space?: string; planApprovalOff?: boolean } = {},
 ): AuditShardEvent | null {
   try {
     const unreadable: string[] = [];
@@ -699,6 +764,7 @@ export function standingPersonTurn(
         : of;
     }
     const id = auditBlockField(of.block, "Message Id");
+    if (options.planApprovalOff === true && !planApprovalOffStands(pd, of)) return null;
     const kept = id === null ? null : readMessage(pd, id);
     return onlyItsOwnDecisionAfter(
       pd,

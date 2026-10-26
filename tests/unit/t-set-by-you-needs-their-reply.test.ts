@@ -490,7 +490,7 @@ describe("every step that names the setter for the person's yes names their mess
     const line = tool.slice(at, at + 400);
     expect(line).toContain('config set guard.plan-approval off")} --message');
     expect(line).toContain("MESSAGE_SLOT");
-    expect(line).toContain("messageFill(projectDir)");
+    expect(line).toContain('messageFill(projectDir, ["plan-approval off"])');
   });
 });
 

@@ -1034,7 +1034,7 @@ export const SPENDING = new Set([
 const BOOKKEEPING = new Set([
   "HUMAN_TURN", "HOST_TURN", "QUESTION_REPLIED", "SUBAGENT_COMPLETED", "SUBAGENT_PROMPT_UNMATCHED", "ERROR_LOGGED",
   "GUARD_POLICY_SET", "COORDINATION_STOOD_ASIDE", "GUARD_STOOD_ASIDE", "SESSION_STARTED", "SESSION_ENDED", "SENSOR_PASSED",
-  "SENSOR_FAILED", "SENSOR_BUDGET_OVERRIDE", "MEMORY_EMPTY", "STATE_MERGED", "STATE_FORKED", "STAGE_DEFINITION_CHANGED",
+  "SENSOR_FAILED", "SENSOR_COULD_NOT_RUN", "SENSOR_BUDGET_OVERRIDE", "MEMORY_EMPTY", "STATE_MERGED", "STATE_FORKED", "STAGE_DEFINITION_CHANGED",
   "STAGE_OUTPUT_AMENDED", "DECISION_RECORDED", "STAGE_AWAITING_APPROVAL", "PLAN_APPROVAL_BLOCKED",
 ]);
 
@@ -1659,6 +1659,9 @@ export function checkRun(run: Run): Failure[] {
         if (t.step >= s.i) continue;
         // A quote may be cut short, so the first 30 characters are enough to show it.
         const words = t.text.trim().slice(0, 30);
+        // A pick in a question box is one of the choices the engine offered (turnText), whatever its shape: a step
+        // that names the open question's choices names the engine's own labels, not the person's words.
+        if (t.channel === "box-pick") continue;
         if (words.length >= 12 && !["label", "label-variant", "engine-string", "digit", "command-bare", "blank"].includes(t.shape) && op.out.includes(words)) {
           // Where in the step the words sit, when it is a JSON step: the field that hands them to the agent.
           const path = jsonPathHolding(op.out, words);

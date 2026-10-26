@@ -433,6 +433,13 @@ them when none is answered yet, then an unanswered summary confirmation, then
 the stage's next step), never creating it again, writing new questions over it,
 or asking an answered question again (#1873). A redo the person asked for
 (`artifact_reuse`, which drops the field, or Redo from scratch) starts afresh.
+After a jump back or a restart, which starts a new attempt that confirms the
+summary again, the engine clears the file's summary `[Answer]:` when its only
+confirmation is from an earlier attempt and the summary has not been asked in
+this one (`clearEarlierAttemptSummaryAnswer`, before the step is emitted, never
+under the Stop hook's probe), so the conductor asks it once; every other answer
+is kept as written. A Keep at Artifact Re-use after that confirmation records the kept
+documents under it (`reuse-artifact`), so they need no save to descend from it.
 
 **Step 2: How the person answers.** The engine resolves the stage's answer
 mode (`resolveStageAnswerMode`: `mode`, `ask`, `reused_from`, `notice`), and the
@@ -1315,7 +1322,16 @@ change. See
    <first|revision|stale>` renders the exact stage, ordinary-language outcome,
    review artifact(s), the engine-owned findings list, decision effects, and
    concrete upstream/downstream invalidation paths (`reviewer_max_iterations`
-   is 1, engine-enforced). The final gate of a per-Unit stage renders every Unit
+   is 1, engine-enforced). At a stage's gate, one line after the findings names
+   the open findings Approve records as `Accepted risk`, each with the start of
+   its text (and its Unit when they span Units), and says, in plain words, that
+   the person can instead approve and ask for one to be fixed (`--fix-finding`)
+   or reject one as not applying, with their reason (`--reject-finding` on a
+   Request Changes, whose gate comes back with the review as it stands when
+   nothing else changed); the Approve option then does not say it again. The ids come from the builder
+   `GATE_APPROVED` writes through. A Unit's own approval (`--unit`, below), and
+   a gate whose one approval also covers later stages with open findings of
+   their own, show no such line. The final gate of a per-Unit stage renders every Unit
    covered by that single approval. A Unit's own approval (its Construction
    checkpoint or team Unit gate) passes `--unit "<unit>"` and shows only that
    Unit's review; reviewer dispatch context is always Unit-filtered.
@@ -1394,8 +1410,8 @@ asked for it to be fixed) records `Fix requested` instead. All but
 `Accepted risk` are no decision, so the finding stays open and the next review
 re-checks it. A Unit's checkpoint and a swarm batch's approval record their
 Units' findings, and a stage's approval nobody gave records none that a Unit's
-own approval recorded. A Request Changes report records `Rejected: <reason>`
-only for explicit
+own approval recorded. A Request Changes report, or a checkpoint's
+`--action reject`, records `Rejected: <reason>` only for explicit
 `--reject-finding <review-artifact>#R-NN=<exact human reason>` values. It uses
 `--reopen-finding <review-artifact>#R-NN=<exact human reason>` when the person
 disagrees that a `Resolved (reviewer)` finding is fixed. The artifact may be

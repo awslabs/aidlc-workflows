@@ -138,6 +138,7 @@ import {
   _resetStageGraphForTests,
   activeSpace,
   activeWorkflowDescriptions,
+  CEREMONY_ENV,
   commandAtPersonsTerminal,
   composedPluginBase,
   DEFAULT_SPACE,
@@ -363,6 +364,7 @@ import {
   type TrustRecord,
 } from "./aidlc-config-diagnostics.ts";
 import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
+import { deepFolder } from "./aidlc-folder-depth.ts";
 import {
   LOCAL_SETTINGS_FILE,
   invalidateSettingsCache,
@@ -3518,7 +3520,8 @@ function validateChoiceArgs(
     }
     if (chat !== null) {
       const named = valuesAfter(argv, "--message").at(-1);
-      const proof = named === undefined ? null : proveMessage(projectDir, named, "setting", { request: true });
+      const planApprovalOff = valuesAfter(argv, "--bypass").includes(CEREMONY_ENV.plan_approval);
+      const proof = named === undefined ? null : proveMessage(projectDir, named, "setting", { request: true, planApprovalOff });
       if (proof !== null && "refusal" in proof) return proof.refusal;
       if (!personAskedForThisLowering(proof?.message) && !fenceKeyBypassed(projectDir, chat)) {
         return guardSwitchRefusal(bypassedCheck(lowered), projectDir);
@@ -8918,6 +8921,13 @@ function renderFirstRunEnding(
     writeMenuRow("  Note: ", `${warning}.`);
     process.stdout.write("\n");
   }
+  const deep = deepFolder(projectDir, process.platform, undefined, {
+    harnesses: [choices.candidate.stamp.distribution],
+  });
+  if (deep) {
+    writeMenuRow("  Note: ", deep.note);
+    process.stdout.write("\n");
+  }
   const steps = choices.candidate.descriptor.firstRunSteps ??
     firstRunNextCommands(choices.candidate.stamp.distribution);
   process.stdout.write("  Setup complete. Start your first workflow:\n\n");
@@ -13578,6 +13588,12 @@ export async function main(
         descriptor.rootIntegrations.some((integration) => integration.path === ".gitignore")
         ? committedRecordIgnoreConflicts(projectDir)
         : [];
+    // A Windows folder too deep for AI-DLC's records is named the same way, in
+    // one line; the folder stays where the person keeps it.
+    const deepProject = !choicesContext && !diagnosticsContext && !modelsContext
+      ? deepFolder(projectDir, process.platform, undefined, { harnesses: [stamp.distribution] })?.note
+      : undefined;
+    if (deepProject) prepared.notes.push(deepProject);
     // Kiro's v3 engine and Kiro IDE run every hook JSON file in the hooks
     // directory; the v2 engine the agent-v1 row runs on reads none. A switch to
     // a row that registers its hooks that way names each such file AI-DLC does
@@ -13660,7 +13676,12 @@ export async function main(
     // edit map AI-DLC writes into this project; the person hears it once here.
     const shortForm = stamp.distribution === "opencode" ? openCodeGlobalShortFormNote() : null;
     if (shortForm) prepared.notes.push(shortForm);
-    const quietWarnings = [...hiddenRecords, ...switchWarnings, ...(shortForm ? [shortForm] : [])];
+    const quietWarnings = [
+      ...hiddenRecords,
+      ...(deepProject ? [deepProject] : []),
+      ...switchWarnings,
+      ...(shortForm ? [shortForm] : []),
+    ];
     const withQuietWarnings = (message: string): string =>
       options.mode === "quiet" && quietWarnings.length > 0
         ? `${message}${quietWarnings.map((warning) => `\nWarning: ${warning}`).join("")}`

@@ -208,6 +208,8 @@ function built(p: string): void {
 // up to the plan question it brings up.
 function redoneToPlanQuestion(p: string): void {
   says(p, REDO);
+  // Records keep whole seconds, and a decision in the message's own second leaves it unspent: the reopen comes later.
+  Bun.sleepSync(1100);
   const printed = next(p, ["--stage", CG, "--unit", UNIT]);
   const command = /reopen --target \S+ --stages \S+ --units \S+ --scope \S+/.exec(printed.message ?? "")?.[0];
   expect(command, printed.message).toBeDefined();
@@ -251,6 +253,8 @@ describe("the change asked for with a Unit's redo answers its code plan question
     const p = fixture("disabled", "strict");
     built(p);
     says(p, "Request changes: in alpha's code generation, trim spaces around the name");
+    // As in redoneToPlanQuestion: the reopen comes in a later second than the message.
+    Bun.sleepSync(1100);
     const reopened = tool(p, "jump", ["reopen", "--target", CG, "--stages", CG, "--units", UNIT, "--scope", "classic", "--via", "change"]);
     expect(reopened.status, reopened.out).toBe(0);
     const revise = next(p);

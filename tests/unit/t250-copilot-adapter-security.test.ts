@@ -2086,6 +2086,11 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "guard.review-freeze=off")).toBe("allow");
       expect(decision("aidlc engine config set guard.review-freeze off --person-words-file .aidlc-engine/answer-text/answer.txt",
         "guard.review-freeze=off")).toBe("allow");
+      // An engine step that prints the setter's output as it is names --verbatim at the end: the same switch.
+      expect(decision("aidlc engine config set summary-confirmation off --verbatim", "summary-confirmation=off")).toBe("allow");
+      expect(decision("aidlc engine config set summary-confirmation off --message 0a1b2c3d --verbatim",
+        "summary-confirmation=off")).toBe("allow");
+      expect(decision("aidlc engine config set summary-confirmation off --verbatim")).toBeUndefined();
       // Another setting, or the switch with anything else joined to it, keeps the prompt.
       expect(decision("aidlc engine config set depth Minimal")).toBeUndefined();
       expect(decision("aidlc engine config set guard.review-freeze off --global", "guard.review-freeze=off")).toBeUndefined();

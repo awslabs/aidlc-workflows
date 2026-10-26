@@ -26,10 +26,8 @@ what they say, in their own words and in context, and do it.
   approval, "Review the plan" brings the question back.
 - When they ask to turn a check off for this piece of work, in their own words
   or by picking a guard's turn-it-off choice, run the setter yourself (that
-  choice's `command`, or `{{INVOKE}} engine config set guard.<fence> off --message <id>`, with `<id>` the message they asked in) and
-  say in one line that it is off for this piece of work, comes back on for the
-  next one, and that they can ask you to turn it back on. Never hand them a
-  command to type.
+  choice's `command`, or `{{INVOKE}} engine config set guard.<fence> off --message <id>`, with `<id>` the message they asked in).
+  Never hand them a command to type.
 - When they ask for a review of a stage or of a Unit ("review Unit 1 again",
   "have the reviewer look at the design", or yes to "Do you want me to have the
   new approach checked before you decide?"), record it through AI-DLC the first
@@ -658,7 +656,7 @@ When contradictions are detected:
   - Answers that dodge the question or change the subject
   - Relaxing, lowering, or disabling a previously defined quality target (e.g.
     a test coverage threshold) instead of meeting it
-- When a user leaves a choice to you ("up to you", "whatever you think is best", or "choose the recommended answers" for this stage), decide: pick the option that best fits what they have said so far and record it with `{{INVOKE}} engine log answer --stage <slug> --details '<your choice>' --on-instruction --message <id>`, with `<id>` the message of theirs that left it to you and the choice in single quotes as **Their words on a command line** above says (a choice's text can come from the project), so the record names their message and shows you chose it, reading it. Then say one line. For one question: **SAY:** "You left <the question> to me, so I chose <the choice>. Say if you want something else." For several: **SAY:** "You left <Stage>'s <N> questions to me, so I chose the recommended answers: <question: choice; ...>. Say if you want any of them changed." The first time in a piece of work, also say once: **SAY:** "Approvals are still yours: I'll stop at each stage for you to approve." A checkpoint or an approval is never left to you: ask the person. Outside an isolated `--single` run, when the message that left the questions to you also says not to ask them anything ("finish the stage, do not ask me anything"), it waives the summary confirmation and the learnings step (which asks what to keep for next time) for this piece of work: run `{{INVOKE}} engine config set summary-confirmation off --learnings off --message <id>` with that message's id, say in one line that both are off for this piece of work and that they can ask you to turn either back on, and generate.
+- When a user leaves a choice to you ("up to you", "whatever you think is best", or "choose the recommended answers" for this stage), decide: pick the option that best fits what they have said so far and record it with `{{INVOKE}} engine log answer --stage <slug> --details '<your choice>' --on-instruction --message <id>`, with `<id>` the message of theirs that left it to you and the choice in single quotes as **Their words on a command line** above says (a choice's text can come from the project), so the record names their message and shows you chose it, reading it. Then say one line. For one question: **SAY:** "You left <the question> to me, so I chose <the choice>. Say if you want something else." For several: **SAY:** "You left <Stage>'s <N> questions to me, so I chose the recommended answers: <question: choice; ...>. Say if you want any of them changed." The first time in a piece of work, also say once: **SAY:** "Approvals are still yours: I'll stop at each stage for you to approve." A checkpoint or an approval is never left to you: ask the person. Outside an isolated `--single` run, when the message that left the questions to you also says not to ask them anything ("finish the stage, do not ask me anything"), it waives the summary confirmation and the learnings step (which asks what to keep for next time) for this piece of work: run `{{INVOKE}} engine config set summary-confirmation off --learnings off --message <id>` with that message's id, and generate.
 
 ---
 
@@ -1109,8 +1107,10 @@ When a stage detects existing output artifacts in its artifact directory:
 {{INVOKE}} engine state reuse-artifact <stage-slug> \
   --decision <keep|modify|redo> \
   --artifacts "<comma-separated list of existing artifacts found>" \
-  [--repo <repo>] [--single]
+  [--unit <unit>] [--repo <repo>] [--single]
 ```
+
+On a per-Unit stage, a Keep passes `--unit` with `directive.unit`; the row then names that Unit.
 
 The tool emits `ARTIFACT_REUSED` with the `Stage` / `Decision` / `Artifacts`
 fields, optional `Repo`, and isolated `Workflow` when `--single` is used —

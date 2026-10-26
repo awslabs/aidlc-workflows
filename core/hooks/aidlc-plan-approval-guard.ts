@@ -117,6 +117,7 @@ import {
   writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
+  CEREMONY_ENV,
   personAskedSinceGate,
   readActiveDirectiveMarker,
   readIssuedDirectiveMarker,
@@ -127,6 +128,7 @@ import {
   resolveBoltDag,
   resolveProjectFlag,
   resolveProjectDirFromHook,
+  jumpClaimSha256,
   nextStageClaimSha256,
   nextStageInvocation,
   type NextStageUnits,
@@ -1222,6 +1224,9 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
   if (args[0] !== "config" || args[1] !== "flags") return false;
   let changes = false;
   let lowers = false;
+  // Plan approval's own switch stands only on what can turn plan approval off
+  // while a plan question waits (planApprovalOffStands).
+  let planApprovalOff = false;
   for (let index = 2; index < args.length; index++) {
     const arg = args[index];
     if (arg === "--bypass" || arg === "--clear-bypass") {
@@ -1229,6 +1234,7 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
       if (!(RECORDABLE_PROJECT_BYPASSES as readonly string[]).includes(name)) return false;
       changes = true;
       lowers ||= arg === "--bypass";
+      planApprovalOff ||= arg === "--bypass" && name === CEREMONY_ENV.plan_approval;
     } else if (arg === "--message") {
       // The message the person asked in, which the setter itself proves.
       if (args[++index] === undefined) return false;
@@ -1241,7 +1247,7 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
       return false;
     }
   }
-  return changes && (!lowers || personAskedSinceGate(projectDir));
+  return changes && (!lowers || personAskedSinceGate(projectDir, { planApprovalOff }));
 }
 
 // How a shell command line is read. Every harness keeps the POSIX reading
@@ -1574,13 +1580,15 @@ interface EngineCommandContext {
   jumpAdmitted: (jump: JumpCommand) => boolean;
 }
 
-// The jump tool's verb (`execute` or `reopen`), its `--target`, and a reopen's `--units` and `--via`.
+// The jump tool's verb (`execute` or `reopen`), its `--target`, a reopen's
+// `--units` and `--via`, and every argument after `jump`, verb first.
 interface JumpCommand {
   verb: string;
   target: string | undefined;
   units: string | undefined;
   via: string | undefined;
   direction: string | undefined;
+  args: readonly string[];
 }
 
 const NO_ENGINE_CONTEXT: EngineCommandContext = { jumpAdmitted: () => false };
@@ -1623,6 +1631,15 @@ function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand): bool
     if (marker === null) return true;
     if (marker.delivery === "superseded") {
       const attempt = current?.active_attempt;
+      // The same exception's other case: the jump a settled print named as its
+      // own step (noteNamedJump), run as named on the state it was named on, is
+      // the agent carrying that print out.
+      if (
+        attempt?.status === "settled" && current?.kind === "print" &&
+        attempt.named_jump_sha256 === jumpClaimSha256(jump.args) &&
+        attempt.named_jump_state_sha256 === stateDigest(state) &&
+        attempt.guard_recovery_selection_sha256 === undefined
+      ) return true;
       const target = jump.target;
       // The `next --stage` forms that print this reopen: for one Unit, plain
       // or naming it; for any number, for every Unit; each with `--change`
@@ -1763,7 +1780,7 @@ function engineCommandAdmitted(
   const configArgs = configToolArgs(engineArgs);
   if (configArgs !== null && !configToolAdmitted(projectDir, configArgs)) return false;
   const args = configArgs !== null ? ["config", ...configArgs] : engineArgs[0] === "engine" ? engineArgs.slice(1) : engineArgs;
-  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted({ verb: args[1], target: lastFlag(args, "--target"), units: lastFlag(args, "--units"), via: lastFlag(args, "--via"), direction: lastFlag(args, "--direction") })) return false;
+  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted({ verb: args[1], target: lastFlag(args, "--target"), units: lastFlag(args, "--units"), via: lastFlag(args, "--via"), direction: lastFlag(args, "--direction"), args: args.slice(1) })) return false;
   // `next` takes no `--bypass`: on its line the token is one of the person's
   // words ("add a --bypass option"), never a check turned off, as the engine's
   // own reading says (nextLineFlags). Every other command is read whole, as its

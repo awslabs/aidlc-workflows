@@ -209,14 +209,16 @@ export function nextKiroNumberedProseAnswer(
 
   // The viewport retains prior turns and tool diffs. Only line-anchored
   // conversational question labels count; source-file diffs such as "+## Q8"
-  // are not active prompts. Whichever prompt type appears latest wins.
+  // are not active prompts. Whichever prompt type appears latest wins. The
+  // label may name who would answer in brackets after the number
+  // ("Q1 [Product owner] - ...", stage-protocol.md Step 3a).
   const confirmationQuestionMatches = [
     ...screen.matchAll(/^[ \t]*Q(\d+):[ \t]*1 confirmed\b/gim),
   ];
   const visibleQuestionMatches = [
-    ...screen.matchAll(/^[ \t]*Q(\d+)(?:[ \t]+of[ \t]+\d+\b|[.:]|[ \t]*[—-])/gim),
+    ...screen.matchAll(/^[ \t]*Q(\d+)(?:[ \t]+\[[^\]\n]+\])?(?:[ \t]+of[ \t]+\d+\b|[.:]|[ \t]*[—-])/gim),
     ...screen.matchAll(
-      /^[ \t]*Question[ \t]+(\d+)(?:[ \t]+of[ \t]+\d+\b|[ \t]*[.:—-])/gim,
+      /^[ \t]*Question[ \t]+(\d+)(?:[ \t]+\[[^\]\n]+\])?(?:[ \t]+of[ \t]+\d+\b|[ \t]*[.:—-])/gim,
     ),
   ];
   const latestQuestionIndex = Math.max(

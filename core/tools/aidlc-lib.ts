@@ -1627,15 +1627,26 @@ function apostropheIsLetter(raw: string, i: number): boolean {
 }
 
 export function splitKiroCommandArgs(raw: string): string[] {
-  const tokens: string[] = [];
+  return commandArgSpans(raw).map((token) => token.text);
+}
+
+// Each token of the split with where it sits on the line: `start` is its first
+// character, `end` the whitespace that ends it (or the line's end), so only
+// whitespace lies between one token's end and the next one's start.
+interface CommandArgSpan { text: string; start: number; end: number }
+
+function commandArgSpans(raw: string): CommandArgSpan[] {
+  const tokens: CommandArgSpan[] = [];
   let current = "";
   let quote: "'" | '"' | null = null;
   let started = false;
+  let from = 0;
   for (let i = 0; i < raw.length; i++) {
     const ch = raw[i];
+    if (!started) from = i;
     if (ch === "\\") {
       const next = raw[i + 1];
-      const outputValueToken = tokens[tokens.length - 1] === "--output";
+      const outputValueToken = tokens[tokens.length - 1]?.text === "--output";
       const windowsPathToken =
         /^[A-Za-z]:$/.test(current) ||
         current.includes("\\");
@@ -1703,7 +1714,7 @@ export function splitKiroCommandArgs(raw: string): string[] {
     }
     if (/\s/.test(ch)) {
       if (started) {
-        tokens.push(current);
+        tokens.push({ text: current, start: from, end: i });
         current = "";
         started = false;
       }
@@ -1712,8 +1723,62 @@ export function splitKiroCommandArgs(raw: string): string[] {
     current += ch;
     started = true;
   }
-  if (started) tokens.push(current);
+  if (started) tokens.push({ text: current, start: from, end: raw.length });
   return tokens;
+}
+
+// The person's own spacing between the words of a line read through
+// splitKiroCommandArgs. The split reads argv, and the engine joins the word
+// tokens it keeps with one space (parseNextFlags), so a run of spaces typed
+// between two words was gone from the record and the request: Kiro CLI hands
+// its hooks a quoted phrase with the quotes removed and the spaces kept, so
+// "Hello,  World!" arrives as two tokens. `words` is some of the line's tokens
+// in order, separated by whitespace. When one stretch of the line's tokens,
+// side by side, spells them, each separator takes the spaces and tabs typed
+// there; any other gap (a line break, a no-break or other Unicode space) stays
+// one plain space, as the split hands it on. Read by text alone a flag's value
+// can spell a word too (`--scope bugfix  bugfix bugfix is broken`), so words no
+// stretch spells, or two stretches spell with different spacing, keep the
+// join's spaces. A token lines up only whole, at a whitespace boundary, and
+// only separators are rewritten, so the words never change.
+export function withTypedSpacing(words: string, raw: string): string {
+  const tokens = commandArgSpans(raw);
+  // A stretch holds as many whitespace-separated pieces as the words, so no
+  // stretch starts where fewer are left: a long pasted line stays one pass.
+  const pieces = (text: string): number => text.split(/\s+/).filter((piece) => piece.length > 0).length;
+  const wanted = pieces(words);
+  if (wanted === 0) return words;
+  let left = tokens.reduce((sum, token) => sum + pieces(token.text), 0);
+  let spelled: string | null = null;
+  for (let first = 0; first < tokens.length && left >= wanted; first++) {
+    const spaced = spacedFrom(words, raw, tokens, first);
+    left -= pieces(tokens[first].text);
+    if (spaced === null || spaced === spelled) continue;
+    if (spelled !== null) return words;
+    spelled = spaced;
+  }
+  return spelled ?? words;
+}
+
+// The words with the line's spacing when its tokens from `first` on, side by
+// side, spell them; null when they do not.
+function spacedFrom(words: string, raw: string, tokens: CommandArgSpan[], first: number): string | null {
+  let at = 0;
+  while (at < words.length && /\s/.test(words[at])) at++;
+  let spaced = words.slice(0, at);
+  for (let k = first; k < tokens.length; k++) {
+    const text = tokens[k].text;
+    if (text.length === 0 || !words.startsWith(text, at)) return null;
+    const to = at + text.length;
+    if (to < words.length && !/\s/.test(words[to])) return null;
+    spaced += text;
+    at = to;
+    while (at < words.length && /\s/.test(words[at])) at++;
+    if (at === words.length) return spaced + words.slice(to);
+    const typed = k + 1 < tokens.length ? raw.slice(tokens[k].end, tokens[k + 1].start) : "";
+    spaced += /^[ \t]+$/.test(typed) ? typed : words.slice(to, at);
+  }
+  return null;
 }
 
 export const RESERVED_RECORD_NAME_LIST = Object.freeze(
@@ -3070,11 +3135,17 @@ function isTerminalUtilityNext(invocation: { command: string; args: string[] }):
 export const MESSAGE_SLOT = "<id>";
 export const MESSAGE_FILL = `, with ${MESSAGE_SLOT} the id of the person's message that asked for it`;
 
-// The fill with the ids of their messages a request can stand on, oldest
-// first, with their times (requestMessages); never their words.
-export function messageFill(projectDir: string): string {
+// The fill with the ids of their messages a setting can stand on, oldest
+// first, with their times (requestMessages); never their words. `settings` are
+// the step's own (`plan-approval off`), so turning plan approval off names only
+// the messages that can stand for it.
+export function messageFill(projectDir: string, settings: readonly string[] = []): string {
   const { requestMessages } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
-  const named = requestMessages(projectDir, true);
+  const off = settings.some((setting) => {
+    const [key, value] = setting.split(" ");
+    return turnsPlanApprovalOff(key, value);
+  });
+  const named = requestMessages(projectDir, off ? "plan-approval-off" : "setting");
   return named.length === 0
     ? MESSAGE_FILL
     : `${MESSAGE_FILL} (${named.map((message) => `${message.id}, sent ${message.at}`).join("; ")})`;
@@ -3177,6 +3248,10 @@ function isTerminalConfigurationDispatch(
       : CONFIGURATION_STEP).exec(validated.data.message);
     if (!match) return false;
     if (match[2] !== undefined) expected.push("--message", MESSAGE_SLOT);
+    // The step asks the setter for its lines alone when one turns a check off.
+    if (scope === undefined && named.some((name) => turnsPersonCheckOff(name, values.get(name) ?? ""))) {
+      expected.push("--verbatim");
+    }
     const literal = parseLiteralShellInvocation(match[1]);
     if (!literal || literal.directory !== null) return false;
     const command = engineInvocationFromWords(literal.argv, literal.rawWords);
@@ -3801,16 +3876,36 @@ function mainCheckoutRepoName(projectDir: string): string | null {
   return name.length > 0 ? name : null;
 }
 
+// A folder's name as a repo name, for a name the engine records on its own (a
+// project root no repo is registered for, a checkout the work found), never a
+// name the person typed: those are checked as they are. A name the rule takes
+// comes back byte for byte. Otherwise accents are dropped first, so a macOS
+// (NFD) and a Windows or Linux (NFC) spelling of one name agree, each run of
+// characters the rule does not take becomes "-", and anything before the first
+// letter or digit and any trailing "-" go: "portal app" is portal-app. Empty
+// when no letter or digit is left; the caller names its fallback.
+export function folderRepoName(folder: string): string {
+  if (isValidRepoName(folder)) return folder;
+  return folder
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^[^A-Za-z0-9]+/, "")
+    .replace(/-+$/, "");
+}
+
 // The deterministic repo NAME for codekb keying (NOT the intent slug):
 //   1 recorded repo  -> that name
-//   0 recorded repos (workspace root IS the repo) -> the MAIN CHECKOUT's basename
-//                       (mainCheckoutRepoName), falling back to basename(projectDir)
-//                       when git cannot answer. Identical to basename(projectDir)
-//                       for every root that is not a linked worktree. A folder
-//                       that was moved keeps its earlier store
+//   0 recorded repos (workspace root IS the repo) -> the MAIN CHECKOUT's folder
+//                       name (mainCheckoutRepoName), falling back to
+//                       basename(projectDir) when git cannot answer, made a repo
+//                       name by folderRepoName ("project" when nothing is left).
+//                       Identical to basename(projectDir) for every root that is
+//                       not a linked worktree and whose name fits the rule. A
+//                       folder that was moved keeps its earlier store
 //                       (movedFolderStoreName).
-//   >1 recorded      -> caller loops per repo (this returns basename as a safe
-//                       default; callers that know the repo pass --repo explicitly).
+//   >1 recorded      -> caller loops per repo (this returns the folder's name as a
+//                       safe default; callers that know the repo pass --repo explicitly).
 // basename done here (lib has basename imported) so callers never inline it.
 export function codekbRepoName(
   projectDir: string,
@@ -3824,11 +3919,11 @@ export function codekbRepoName(
     selection.space,
   );
   if (repos.length === 1) return repos[0];
-  // Multi-repo (2+) keeps the basename namespace unchanged; only the
+  // Multi-repo (2+) keeps the project folder's own name; only the
   // NOTHING-RECORDED case consults git, where the project root is the repo and a
   // worktree basename is otherwise mistaken for the repository name.
-  if (repos.length > 1) return basename(projectDir);
-  const name = mainCheckoutRepoName(projectDir) ?? basename(projectDir);
+  if (repos.length > 1) return folderRepoName(basename(projectDir)) || "project";
+  const name = folderRepoName(mainCheckoutRepoName(projectDir) ?? basename(projectDir)) || "project";
   return movedFolderStoreName(projectDir, selection.space, selection.intent, name) ?? name;
 }
 
@@ -4346,13 +4441,22 @@ export function codekbFingerprintExcludes(projectDir: string, sourceDir: string)
 // .gitignore block or AGENTS.md, a second tool added) is no Unit's application
 // source, so no Unit has to claim it. Keys are `<repo>\0<path>`; a sibling
 // repo holds none of these files. The source registry is AI-DLC's boundary
-// file, like its settings files, and every repo root may hold one.
+// file, like its settings files, and every repo root may hold one, a recorded
+// checkout's included: known by its listing name
+// (`<label>@checkout/.aidlc-source-paths.json`), as a claim is read.
 export function aidlcOwnedSourceKey(projectDir: string): (pathKey: string) => boolean {
   const owned = codekbFingerprintExcludes(projectDir, projectDir);
   return (pathKey) => {
     const parsed = splitSourcePathKey(pathKey);
     if (parsed === null) return false;
     if (parsed.path === SOURCE_FINGERPRINT_REGISTRY) return true;
+    const slash = parsed.path.indexOf("/");
+    if (
+      parsed.repo === "" && slash > 0 && parsed.path.slice(slash + 1) === SOURCE_FINGERPRINT_REGISTRY &&
+      namesSourceCheckout(parsed.path)
+    ) {
+      return true;
+    }
     return parsed.repo === "" &&
       owned.some((entry) => parsed.path === entry || parsed.path.startsWith(`${entry}/`));
   };
@@ -4405,13 +4509,26 @@ export function sourceKeysChangedOutsideAidlcSince(
 ): Set<string> | null {
   const recorded = listing === undefined ? null : readBaselineSourceSnapshot(projectDir, stageSlug, listing, intent, space);
   if (recorded === null) return null;
+  return sourceKeysChangedOutsideAidlc(projectDir, recordedSourceListingForCompare(projectDir, recorded, current, intent, space), current.listing);
+}
+
+// A kept listing as the walk would list it now, to compare with `current`.
+export function recordedSourceListingForCompare(
+  projectDir: string,
+  recorded: ReadonlyMap<string, string>,
+  current: WorkspaceSourceState,
+  intent?: string,
+  space?: string,
+): WorkspaceSourceListing {
   const before = recordedSourceListingUnderCurrentBoundary(recorded, current.listing);
   // A path the registry's exclude list now leaves out of the walk (a cache
   // excluded after the listing was kept) is nobody's change, as on the per-Unit
   // unclaimed check.
-  const excluded = registryExcludedSourceKeys(projectDir, [...before.keys()].filter((key) => !current.listing.has(key)));
+  const excluded = registryExcludedSourceKeys(
+    projectDir, [...before.keys()].filter((key) => !current.listing.has(key)), intent, space,
+  );
   for (const key of excluded) before.delete(key);
-  return sourceKeysChangedOutsideAidlc(projectDir, before, current.listing);
+  return before;
 }
 
 // Whether the main checkout moved from a kept listing only in AI-DLC's own
@@ -7273,11 +7390,6 @@ export function markPersonLineHeardThisTurn(projectDir: string, sessionId: strin
 // must run, or one waiting at its own question, is skipped as they asked.
 export const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
 
-// The reason the same step hands the agent for the undo it names after the
-// person's skip: recompose puts the stage back over its strict check, as the
-// skip took it off.
-export const PERSON_ASKED_UNDO_SKIP_REASON = "the person asked to undo skipping it";
-
 // What the person asked to leave out of a build (#1342): the `Deferred` items
 // in these traceability.json files, at most ten by id and then a count, or
 // null when there are none or a file cannot be read.
@@ -9199,6 +9311,10 @@ interface ActiveDirectiveAttempt {
   // Present only when this claim started from a delivered, consumed restart
   // choice. It is not a result receipt and grants no Plan Approval.
   guard_recovery_selection_sha256?: string;
+  // The jump the print this claim returned names as its step (jumpClaimSha256),
+  // and the state it was named on (noteNamedJump). Grants no Plan Approval.
+  named_jump_sha256?: string;
+  named_jump_state_sha256?: string;
 }
 
 interface ActiveDirectiveResume {
@@ -10231,6 +10347,8 @@ function parseActiveDirectiveMarker(value: unknown): ActiveDirectiveMarker | nul
     ("resume_gate_revision" in attempt && !integer(attempt.resume_gate_revision)) ||
     ("guard_recovery_selection_sha256" in attempt &&
       !/^[0-9a-f]{64}$/.test(String(attempt.guard_recovery_selection_sha256 ?? ""))) ||
+    ("named_jump_sha256" in attempt && !/^[0-9a-f]{64}$/.test(String(attempt.named_jump_sha256 ?? ""))) ||
+    ("named_jump_state_sha256" in attempt && !/^[0-9a-f]{64}$/.test(String(attempt.named_jump_state_sha256 ?? ""))) ||
     (resume !== null &&
       (!["waiting", "selected", "superseded"].includes(String(resume.status)) ||
         typeof resume.issuing_stage !== "string" || !/^[0-9a-f]{64}$/.test(String(resume.issuing_state_sha256 ?? "")) ||
@@ -11141,6 +11259,19 @@ export function readIssuedDirectiveMarker(projectDir: string): ActiveDirectiveMa
       ? marker : null;
   } catch {
     return null;
+  }
+}
+
+// Whether the step the engine issued last for this work is an isolated
+// (`--single`) run of `stage`, even when a state write since then made it out
+// of date.
+export function issuedStepIsIsolatedRun(projectDir: string, stage: string): boolean {
+  try {
+    const target = resolveActiveDirectiveTarget(projectDir);
+    const marker = readActiveDirectiveMarkerRaw(target.markerPath);
+    return marker?.stage === stage && marker.single === true && (marker.intent_uuid ?? null) === target.intentUuid;
+  } catch {
+    return false;
   }
 }
 
@@ -12159,6 +12290,42 @@ export function nextStageClaimSha256(stage: string, units: NextStageUnits = {}):
   return invocation === null ? null : contentSha256(JSON.stringify(invocation.args));
 }
 
+// The claim identity of a jump command a step names: the jump tool's own
+// arguments, verb first, under its route, as the plan-approval guard reads the
+// command once the dispatcher prefix is gone. The same JSON-of-argv identity
+// as nextStageClaimSha256, over the arguments the print is formatted from.
+export function jumpClaimSha256(args: readonly string[]): string {
+  return contentSha256(JSON.stringify(["jump", ...args]));
+}
+
+// The jump a print just named as its step, kept on the Copilot command claim
+// that returned it, with the state it was named on. Copilot's settle leaves
+// every print out of date, so this is what lets the plan-approval guard admit
+// that one jump on the first ask, as every other harness does, while the
+// claim is still the last step (lastStepAdmitsPersonsMoves). Nothing is
+// written without that pending claim.
+export function noteNamedJump(projectDir: string, attemptId: string, args: readonly string[]): void {
+  transactActiveDirective(projectDir, (marker, target) => {
+    const attempt = marker?.active_attempt;
+    if (marker?.version !== 2 || attempt?.id !== attemptId || attempt.status !== "pending") {
+      return { marker, result: undefined, preserve: true };
+    }
+    let state: string;
+    try {
+      state = readFileSync(target.statePath, "utf-8");
+    } catch {
+      return { marker, result: undefined, preserve: true };
+    }
+    return {
+      marker: {
+        ...marker,
+        active_attempt: { ...attempt, named_jump_sha256: jumpClaimSha256(args), named_jump_state_sha256: stateDigest(state) },
+      },
+      result: undefined,
+    };
+  });
+}
+
 // The selected restart's own `next --stage` is matched by its claim identity
 // (nextStageClaimSha256), never by shell spelling or jumpRequest.
 // emitJumpDirective emits this exact {kind,message} print before stage-validity
@@ -12891,12 +13058,23 @@ export const BLOCKING_SENSOR_OVERRIDE_OPTIONS = [
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
 ] as const;
 
+// The stage's rows that start its gate over: an answer to the check's question
+// counts only after the latest of them (hasBlockingSensorOverrideAuthorization),
+// and a displaced question asked before one is not answered after it.
+export const BLOCKING_SENSOR_BOUNDARY_EVENTS: ReadonlySet<string> = new Set([
+  "STAGE_STARTED",
+  "STAGE_AWAITING_APPROVAL",
+  "GATE_REJECTED",
+]);
+
 // The person's picks at a stage's blocking-sensor question: each answer that
 // closes an open "Blocking gate sensor failure" decision offering both choices
-// (the nextOpenDecision pairing, per shard), with a HUMAN_TURN in that shard
-// between the two, read as the option it names: its label, or its number on
-// the decision's own Options. The override's authorization and the review
-// attempt floor both read this one pairing.
+// (the nextOpenDecision pairing, per shard; for an answer naming one of its
+// labels, also the one a later question displaced), with a HUMAN_TURN in that
+// shard between the two, read as the option it names: its label (the first
+// label a reply recorded for several questions names), or its number on the
+// decision's own Options. The override's authorization and the review attempt
+// floor both read this one pairing.
 export function blockingSensorPicks(
   rows: ReadonlyArray<AuditShardEvent>,
   slug: string,
@@ -12905,13 +13083,42 @@ export function blockingSensorPicks(
   // Each clone's shard keeps its own append order, so a teammate's question in
   // another shard never takes the place of the one this answer closes.
   const open = new Map<string, AuditShardEvent>();
+  // The check's question a later question took the open place of, per shard,
+  // until an answer takes it or the stage's next boundary: an answer naming one
+  // of the check's labels still answers it, so the person is not asked for
+  // their pick twice. A number reads only the open question's own Options.
+  const displaced = new Map<string, AuditShardEvent>();
+  const asksCheck = (row: AuditShardEvent | undefined): boolean =>
+    row !== undefined && auditBlockField(row.block, "Decision") === BLOCKING_SENSOR_OVERRIDE_DECISION;
+  // The check's label an answer names. One reply to several questions is one
+  // record (stage-protocol.md's `Q1: <choice>; Q2: <choice>`), so each part is
+  // read on its own, past its slot, and the first part naming a label is the
+  // pick: a record that starts with a label reads as that label.
+  const checkLabel = (details: string): (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number] | undefined => {
+    for (const part of details.split(/[;,]/)) {
+      const choice = offeredChoiceLabel(part.trim().replace(/^Q\d+:\s*/, ""), BLOCKING_SENSOR_OVERRIDE_OPTIONS)?.choice;
+      if (choice !== undefined) return BLOCKING_SENSOR_OVERRIDE_OPTIONS.find((option) => option === choice);
+    }
+    return undefined;
+  };
   for (const row of sortAttemptEvents(rows.filter((row) =>
-    DECISION_PAIRING_EVENTS.has(row.event) && auditBlockField(row.block, "Stage") === slug &&
+    (DECISION_PAIRING_EVENTS.has(row.event) || BLOCKING_SENSOR_BOUNDARY_EVENTS.has(row.event)) &&
+    auditBlockField(row.block, "Stage") === slug &&
     !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")
   ))) {
-    const decision = open.get(row.shard);
-    if (row.event === "DECISION_RECORDED") open.set(row.shard, row);
-    else if (nextOpenDecision(decision?.block ?? null, row.event, row.block) === null) open.delete(row.shard);
+    if (BLOCKING_SENSOR_BOUNDARY_EVENTS.has(row.event)) displaced.clear();
+    if (!DECISION_PAIRING_EVENTS.has(row.event)) continue;
+    const latest = open.get(row.shard);
+    if (row.event === "DECISION_RECORDED") {
+      open.set(row.shard, row);
+      if (asksCheck(row)) displaced.delete(row.shard);
+      else if (latest !== undefined && asksCheck(latest)) displaced.set(row.shard, latest);
+    } else if (nextOpenDecision(latest?.block ?? null, row.event, row.block) === null) open.delete(row.shard);
+    const details = auditBlockField(row.block, "Details") ?? "";
+    const takesDisplaced = row.event === "QUESTION_ANSWERED" && !asksCheck(latest) &&
+      checkLabel(details) !== undefined;
+    const decision = takesDisplaced ? displaced.get(row.shard) : latest;
+    if (takesDisplaced) displaced.delete(row.shard);
     if (
       decision === undefined || row.event !== "QUESTION_ANSWERED" ||
       auditBlockField(decision.block, "Decision") !== BLOCKING_SENSOR_OVERRIDE_DECISION
@@ -12921,24 +13128,122 @@ export function blockingSensorPicks(
     if (!rows.some((turn) =>
       turn.event === "HUMAN_TURN" && turn.shard === row.shard && turn.pos > decision.pos && turn.pos < row.pos
     )) continue;
-    const details = auditBlockField(row.block, "Details") ?? "";
     const numbered = /^(\d+)[.)]?$/.exec(details);
-    const named = numbered
-      ? offered[Number(numbered[1]) - 1]
-      : offeredChoiceLabel(details, BLOCKING_SENSOR_OVERRIDE_OPTIONS)?.choice;
+    const named = numbered ? offered[Number(numbered[1]) - 1] : checkLabel(details);
     const choice = BLOCKING_SENSOR_OVERRIDE_OPTIONS.find((option) => option === named);
     if (choice !== undefined) picks.set(row, choice);
   }
   return picks;
 }
 
-// The answers where the person picked Fix findings: each starts a new review
-// attempt for the stage, as a Request Changes does, because the fix rewrites
-// the reviewed document and the review before it no longer covers it.
-export function blockingSensorFixes(rows: ReadonlyArray<AuditShardEvent>, slug: string): Set<AuditShardEvent> {
-  return new Set([...blockingSensorPicks(rows, slug)].flatMap(([row, choice]) =>
-    choice === BLOCKING_SENSOR_OVERRIDE_OPTIONS[0] ? [row] : []
+// The latest terminal result of each of a stage's sensors on each output, by
+// `id@path` (the Output path its row records), from the SENSOR_PASSED,
+// SENSOR_FAILED and SENSOR_COULD_NOT_RUN rows given; nothing is re-fired. A
+// check that could not run, or a pass that carries a note (the tool was
+// unavailable), evaluated nothing: it does not clear the failure recorded
+// before it. The gate's own account of its checks (aidlc-state.ts
+// latestCheckResults) and the Units a Fix findings pick starts again
+// (blockingSensorFixes) read this one fold.
+export interface LatestSensorResult {
+  id: string;
+  output: string;
+  kind: "passed" | "failed" | "could-not-run";
+  // The Unit the write that fired it was for, when its row names one.
+  unit: string | null;
+  ts: string;
+  pos: number;
+  findings: string;
+  detail: string | null;
+  failedOutputs: string | null;
+}
+export function latestSensorResults(rows: ReadonlyArray<AuditShardEvent>, slug: string): Map<string, LatestSensorResult> {
+  const latest = new Map<string, LatestSensorResult>();
+  for (const row of rows) {
+    const kind: LatestSensorResult["kind"] | null = row.event === "SENSOR_PASSED"
+      ? "passed"
+      : row.event === "SENSOR_FAILED"
+        ? "failed"
+        : row.event === "SENSOR_COULD_NOT_RUN"
+          ? "could-not-run"
+          : null;
+    if (kind === null) continue;
+    if (auditBlockField(row.block, "Stage slug") !== slug) continue;
+    const id = auditBlockField(row.block, "Sensor ID");
+    const output = auditBlockField(row.block, "Output path");
+    if (id === null || output === null) continue;
+    const key = `${id}@${output}`;
+    const seen = latest.get(key);
+    if (seen && (seen.ts > row.timestamp || (seen.ts === row.timestamp && seen.pos > row.pos))) continue;
+    if (
+      seen?.kind === "failed" &&
+      (kind === "could-not-run" || (kind === "passed" && auditBlockField(row.block, "Note") !== null))
+    ) continue;
+    latest.set(key, {
+      id,
+      output,
+      kind,
+      unit: auditBlockField(row.block, "Unit"),
+      ts: row.timestamp,
+      pos: row.pos,
+      findings: auditBlockField(row.block, "Findings count") ?? "?",
+      detail: auditBlockField(row.block, "Detail path"),
+      failedOutputs: auditBlockField(row.block, "Failed outputs"),
+    });
+  }
+  return latest;
+}
+
+type SensorFixStage = Parameters<typeof producesArtifactUnit>[0] & Pick<StageEntry, "sensors_applicable">;
+
+// The answers where the person picked Fix findings, each with the Units whose
+// review attempt it starts again, as a Request Changes does, because the fix
+// rewrites the reviewed document and the review before it no longer covers it.
+// A pick logged for a Unit names that Unit. A pick logged with no Unit (a solo
+// stage gate, where the check runs once over every Unit's outputs) names the
+// Units owning the outputs a blocking gate check (what fireGateSensors
+// enforces) failed on in its latest result before the pick. Null is every
+// Unit: the stage is done once for the whole project, or a failure names no
+// one Unit's output, or none is on record.
+export function blockingSensorFixes(
+  rows: ReadonlyArray<AuditShardEvent>,
+  stage: SensorFixStage,
+): Map<AuditShardEvent, ReadonlySet<string> | null> {
+  const blocking = new Set((stage.sensors_applicable ?? []).flatMap((sensor) =>
+    sensor.fire_on === "gate" && sensor.default_severity === "blocking" ? [sensor.id] : []
   ));
+  const failedUnits = (pick: AuditShardEvent): ReadonlySet<string> | null => {
+    const units = new Set<string>();
+    const before = rows.filter((row) => attemptEventDefinitelyBefore(row, pick));
+    for (const result of latestSensorResults(before, stage.slug).values()) {
+      if (result.kind !== "failed" || !blocking.has(result.id)) continue;
+      // The gate fires on every declared output, so the matcher over all of
+      // them names the owner; only a codekb stage reads the recorded
+      // repositories, and none is per Unit.
+      const unit = producesArtifactUnit(stage, result.output, new Set());
+      if (typeof unit !== "string") return null;
+      units.add(unit);
+    }
+    return units.size > 0 ? units : null;
+  };
+  const fixes = new Map<AuditShardEvent, ReadonlySet<string> | null>();
+  for (const [row, choice] of blockingSensorPicks(rows, stage.slug)) {
+    if (choice !== BLOCKING_SENSOR_OVERRIDE_OPTIONS[0]) continue;
+    const unit = auditBlockField(row.block, "Unit");
+    fixes.set(row, unit ? new Set([unit]) : failedUnits(row));
+  }
+  return fixes;
+}
+
+// The Units a gate rejection or a Fix findings pick starts a new attempt for,
+// or null for every Unit: the Unit it was logged for, else the Units a pick's
+// failing check named (blockingSensorFixes). Read only where floors are per
+// Unit (unitScopedLifecycleFloors); elsewhere either starts every Unit again.
+function rejectionUnits(
+  event: AuditShardEvent,
+  sensorFixes: ReadonlyMap<AuditShardEvent, ReadonlySet<string> | null>,
+): ReadonlySet<string> | null {
+  const unit = auditBlockField(event.block, "Unit");
+  return unit ? new Set([unit]) : sensorFixes.get(event) ?? null;
 }
 
 function auditEventIsAfter(later: AuditShardEvent, earlier: AuditShardEvent): boolean {
@@ -12958,11 +13263,7 @@ export function hasBlockingSensorOverrideAuthorization(projectDir: string, slug:
     return auditBlockField(row.block, "Stage") === slug &&
       !workflow?.startsWith("single-stage:");
   });
-  const boundaries = stageRows.filter((row) =>
-    row.event === "STAGE_STARTED" ||
-    row.event === "STAGE_AWAITING_APPROVAL" ||
-    row.event === "GATE_REJECTED"
-  );
+  const boundaries = stageRows.filter((row) => BLOCKING_SENSOR_BOUNDARY_EVENTS.has(row.event));
   const interactions = stageRows.filter((row) =>
     row.event === "DECISION_RECORDED" ||
     row.event === "QUESTION_ANSWERED"
@@ -13118,6 +13419,24 @@ export function personRepliedAfter(projectDir: string, mark: AuditMark): boolean
     return auditShardBlocks(after).some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
   } catch {
     return false;
+  }
+}
+
+// Which rows (as readAuditShardEvents reads them) come after the mark: this
+// clone's shard, from the block the mark stood at. Null when the mark is
+// another shard's, or the trail cannot be read: no place on this record orders
+// rows against it.
+export function rowsAfterMark(projectDir: string, mark: AuditMark): ((row: AuditShardEvent) => boolean) | null {
+  try {
+    const shardPath = auditFilePath(projectDir);
+    const own = projectRelativePath(projectDir, shardPath);
+    if (own !== mark.shard) return null;
+    const content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard");
+    const from = auditShardBlocks(content.toString("utf-8")).length -
+      auditShardBlocks(content.subarray(mark.offset).toString("utf-8")).length;
+    return (row) => row.pos >= from && projectRelativePath(projectDir, row.shard) === own;
+  } catch {
+    return null;
   }
 }
 
@@ -13399,11 +13718,11 @@ export function humanRepliedSinceGate(projectDir: string): boolean {
 
 // Said when a decision is refused for want of a reply, and the person's message
 // since the question was a command to AIDLC.
+export const COMMAND_TURN_SENTENCE = "The person's message since then was a command to AIDLC, not a reply to this " +
+  "question: carry out the command and leave the question open for their reply.";
+
 export function commandTurnHint(projectDir: string): string {
-  return humanActedSinceGate(projectDir)
-    ? " The person's message since then was a command to AIDLC, not a reply to this question: carry out the " +
-      "command and leave the question open for their reply."
-    : "";
+  return humanActedSinceGate(projectDir) ? ` ${COMMAND_TURN_SENTENCE}` : "";
 }
 
 // The person asked for what the agent runs now: their chat turn stands behind
@@ -13413,7 +13732,10 @@ export function commandTurnHint(projectDir: string): string {
 // through read this, and so does a change to the plan or the scope while
 // Construction carries on by itself; a setter the command runs then proves
 // the message it names (--message).
-export function personAskedSinceGate(projectDir: string, work: { intent?: string; space?: string } = {}): boolean {
+export function personAskedSinceGate(
+  projectDir: string,
+  work: { intent?: string; space?: string; planApprovalOff?: boolean } = {},
+): boolean {
   if (process.env.AIDLC_UNATTENDED === "1") return false;
   const { personTurnStands } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
   return personTurnStands(projectDir, "request", { requests: true, ...work });
@@ -13439,6 +13761,16 @@ const PERSON_CHECK_SWITCH_VALUES: Readonly<Record<string, { on: readonly string[
   "guard.reviewer-scope": { on: ["on"], off: ["off"] },
   "guard-policy": { on: ["strict"], off: ["relaxed", "off"] },
 };
+
+/** Whether `config set <key> <value>` turns one of the person's checks off. */
+export function turnsPersonCheckOff(key: string, value: string): boolean {
+  return Object.hasOwn(PERSON_CHECK_SWITCH_VALUES, key) && PERSON_CHECK_SWITCH_VALUES[key].off.includes(value.toLowerCase());
+}
+
+// The setter's two names for plan approval, and the value that turns it off.
+export function turnsPlanApprovalOff(key: string, value: string | undefined): boolean {
+  return (key === "plan-approval" || key === "guard.plan-approval") && value?.trim().toLowerCase() === "off";
+}
 
 // Whether `config set <key> <value>` switches one of the person's checks with
 // the person behind it: on always, off only once they asked since the last
@@ -14250,12 +14582,19 @@ export function summaryConfirmationContentHash(content: string): string {
 // contract. The generic section extractor intentionally retains comments for
 // other callers, so it cannot safely validate this checkpoint.
 export function summaryConfirmationAnswer(content: string): string | null {
+  const answers = summaryAnswerLines(content);
+  return answers !== null && answers.length === 1 ? answers[0].value : null;
+}
+
+// The `[Answer]:` lines of the Consolidated Summary Confirmation section, by
+// line number in the file; null when the file has no such section.
+function summaryAnswerLines(content: string): Array<{ line: number; value: string }> | null {
 	const blocks = markdownBlocks(content);
 	const visibleLines = projectVisibleMarkdownLines(content, blocks, {
     preserveCommentBoundaries: true,
   });
   let inSummary = false;
-  const answers: string[] = [];
+  const answers: Array<{ line: number; value: string }> = [];
 
 	for (let index = 0; index < visibleLines.length; index++) {
 		const line = visibleLines[index];
@@ -14269,10 +14608,24 @@ export function summaryConfirmationAnswer(content: string): string | null {
     const answer = /^\[Answer\]:[ \t]*(.*)$/.exec(
       stripInvisibleCommentMarkers(line),
     );
-    if (answer) answers.push(answer[1].trim());
+    if (answer) answers.push({ line: index, value: answer[1].trim() });
   }
 
-  return inSummary && answers.length === 1 ? answers[0] : null;
+  return inSummary ? answers : null;
+}
+
+// The questions file with its one summary answer, a plain `[Answer]: Looks
+// correct` line, made blank again and every other byte as it was (line endings
+// included); null when the section holds anything else.
+function summaryAnswerCleared(content: string): string | null {
+  const answers = summaryAnswerLines(content);
+  if (answers === null || answers.length !== 1 || answers[0].value !== "Looks correct") return null;
+  const bom = content.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const parts = content.slice(bom.length).split(/(\r\n|\r|\n)/);
+  const at = answers[0].line * 2;
+  if (!/^\[Answer\]:[ \t]*Looks correct[ \t]*$/.test(parts[at] ?? "")) return null;
+  parts[at] = "[Answer]:";
+  return bom + parts.join("");
 }
 
 export function summaryConfirmationGuardDisabled(): boolean {
@@ -14394,6 +14747,17 @@ function summaryFlowStartedInAttempt(
   const floors = summaryAttemptFloors(
     events, stage.slug, options.workflow, unitMajor, isPerUnitStage(stage) ? events : undefined,
   );
+  return summaryFlowStartedAfter(projectDir, events, floors, stage, options);
+}
+
+// Whether the summary was asked or confirmed at or after the attempt's floors.
+function summaryFlowStartedAfter(
+  projectDir: string,
+  events: readonly AuditShardEvent[],
+  floors: readonly AuditShardEvent[],
+  stage: SummaryConfirmationStage,
+  options: { workflow?: string; unit?: string },
+): boolean {
   return events.some((entry) => {
     if (entry.event !== "DECISION_RECORDED" && entry.event !== "SUMMARY_CONFIRMATION_RECORDED") return false;
     if (auditBlockField(entry.block, "Stage") !== stage.slug ||
@@ -14408,6 +14772,119 @@ function summaryFlowStartedInAttempt(
       ? entry.pos > floor.pos
       : entry.timestamp >= floor.timestamp);
   });
+}
+
+// The floors of the current summary attempt, as the summary evidence reads them.
+function summaryEvidenceFloors(
+  stage: SummaryConfirmationStage,
+  stateContent: string | null,
+  workflow: string | undefined,
+  events: AuditShardEvent[],
+  auditRows: AuditShardEvent[],
+): AuditShardEvent[] {
+  const unitMajor =
+    isPerUnitStage(stage) &&
+    (
+      getField(stateContent ?? "", "Construction Iteration")?.trim() === "unit-major" ||
+      getField(stateContent ?? "", "Construction Checkpoints") === "enabled"
+    );
+  return summaryAttemptFloors(
+    events, stage.slug, workflow, unitMajor, isPerUnitStage(stage) ? auditRows : undefined,
+  );
+}
+
+// After every floor (true), before one (false), or unordered across shards (null).
+function afterSummaryFloor(entry: AuditShardEvent, floors: readonly AuditShardEvent[]): true | false | null {
+  if (floors.length === 0) return true;
+  const relations = floors.map((floor): true | false | null => {
+    if (entry.shard === floor.shard) return entry.pos > floor.pos;
+    if (entry.timestamp !== floor.timestamp) {
+      return entry.timestamp > floor.timestamp;
+    }
+    return null;
+  });
+  if (relations.every((relation) => relation === true)) return true;
+  if (relations.some((relation) => relation === false)) return false;
+  return null;
+}
+
+// A summary confirmation receipt for this stage, Unit and questions file.
+function summaryReceiptFor(
+  projectDir: string,
+  entry: AuditShardEvent,
+  slug: string,
+  workflow: string | undefined,
+  unit: string | null,
+  questionRelative: string,
+): boolean {
+  if (entry.event !== "SUMMARY_CONFIRMATION_RECORDED") return false;
+  if (auditBlockField(entry.block, "Stage") !== slug) return false;
+  if (
+    auditBlockField(entry.block, "Checkpoint") !==
+      SUMMARY_CONFIRMATION_CHECKPOINT
+  ) {
+    return false;
+  }
+  const eventWorkflow = auditBlockField(entry.block, "Workflow");
+  if (workflow !== undefined) {
+    if (eventWorkflow !== workflow) return false;
+  } else if (eventWorkflow?.startsWith("single-stage:")) {
+    return false;
+  }
+  const eventUnit = auditBlockField(entry.block, "Unit");
+  if ((eventUnit ?? null) !== unit) return false;
+  if (
+    eventUnit &&
+    !eventMatchesClaimAttempt(projectDir, entry.block, eventUnit)
+  ) {
+    return false;
+  }
+  return auditBlockField(entry.block, "Questions File") === questionRelative;
+}
+
+/**
+ * A jump back to a stage, or a restart of it, starts a new attempt, and a new
+ * attempt confirms its summary again. Its questions file still shows the
+ * earlier attempt's `[Answer]: Looks correct`, which reads as answered, so
+ * this clears that one answer when the file's only confirmation receipts are
+ * from before the current attempt and the summary has not been asked in it
+ * (a reply given in this attempt is never touched). Returns whether it wrote.
+ */
+export function clearEarlierAttemptSummaryAnswer(
+  projectDir: string,
+  stage: SummaryConfirmationStage,
+  options: { stateContent: string; questionsFile: string },
+): boolean {
+  if (!summaryConfirmationOwed(stage, { stateContent: options.stateContent })) return false;
+  const path = resolvePath(projectDir, options.questionsFile);
+  const question = summaryQuestionFiles(projectDir, stage, options.stateContent)
+    .find((candidate) => resolvePath(candidate.path) === path);
+  if (question === undefined) return false;
+  let content: string;
+  try {
+    content = readFileSync(path, "utf-8");
+  } catch {
+    return false;
+  }
+  const cleared = summaryAnswerCleared(content);
+  if (cleared === null) return false;
+  const auditRows = readAuditShardEvents(projectDir);
+  const events = auditRows.filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event));
+  const floors = summaryEvidenceFloors(stage, options.stateContent, undefined, events, auditRows);
+  if (floors.length === 0) return false;
+  const questionRelative = toPosix(relative(projectDir, path));
+  const receipts = events.filter((entry) =>
+    summaryReceiptFor(projectDir, entry, stage.slug, undefined, question.unit, questionRelative)
+  );
+  const earlier = receipts.some((entry) =>
+    afterSummaryFloor(entry, floors) === false && auditBlockField(entry.block, "Details") === "Looks correct"
+  );
+  if (!earlier || receipts.some((entry) => afterSummaryFloor(entry, floors) !== false)) return false;
+  if (summaryFlowStartedAfter(projectDir, auditRows, floors, stage, question.unit === null ? {} : { unit: question.unit })) {
+    return false;
+  }
+  writeFileAtomic(path, cleared);
+  return true;
 }
 
 function summaryAnswerFromFile(path: string): string | null {
@@ -14449,12 +14926,95 @@ export function summaryOutputDescent(
   };
 }
 
-/** Whether the output at `artifactAbs` descends from the summary authorization `id` (see summaryOutputDescent). */
+/**
+ * Whether the output at `artifactAbs` descends from the summary authorization
+ * `id`, as the summary guard reads it: its newest writes carry the stamp
+ * (summaryOutputDescent), or the person kept it, as it is, under that
+ * confirmation (keptUnderConfirmation).
+ */
 export function summaryOutputDescendsFrom(projectDir: string, artifactAbs: string, id: string): boolean {
-  const writes = readAuditShardEvents(projectDir)
+  const rows = readAuditShardEvents(projectDir);
+  const writes = rows
     .filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event) && auditRowWritesFile(projectDir, entry, artifactAbs));
   const { newestWrites, unauthorized } = summaryOutputDescent(writes, id);
-  return newestWrites.length > 0 && unauthorized.length === 0;
+  return (newestWrites.length > 0 && unauthorized.length === 0) || keptUnderConfirmation(projectDir, rows, artifactAbs, id);
+}
+
+/** The Keep row's list of kept outputs: `<sha256> <record-relative path>` entries joined by "; ". */
+export const KEPT_OUTPUTS_FIELD = "Kept Outputs";
+
+// A kept output as the Keep row names it: its bytes with line endings read as
+// LF (as the summary content hash reads them, so a clone that checks files out
+// with CRLF keeps the Keep), and its path under the record.
+function keptOutputEntry(record: string, path: string): string | null {
+  try {
+    // latin1 keeps every byte as it is, so only the line endings change.
+    const bytes = Buffer.from(readFileSync(path).toString("latin1").replace(/\r\n?/g, "\n"), "latin1");
+    const sha = createHash("sha256").update(bytes).digest("hex");
+    return `${sha} ${toPosix(relative(record, path))}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What a Keep pick keeps under the current summary confirmation: the stage's
+ * summary-governed outputs on disk for one scope (the stage, or the one Unit
+ * named on a per-Unit stage), each with its sha256, and the confirmation the
+ * write hook would stamp on them now. The Keep row that records them lets each
+ * one descend from that confirmation while its bytes still match
+ * (checkSummaryConfirmationEvidence), so keeping a document needs no save the
+ * host may not record. Null when the stage owes no summary, no confirmation is
+ * active for the scope, or a per-Unit stage names no Unit.
+ */
+export function keptSummaryOutputs(
+  projectDir: string,
+  stage: SummaryConfirmationStage,
+  options: { stateContent: string | null; unit?: string; single?: boolean },
+): { authorization: string; outputs: string[] } | null {
+  if (!summaryConfirmationOwed(stage, { stateContent: options.stateContent })) return null;
+  const record = recordDir(projectDir);
+  if (record === null) return null;
+  const stageLevel = options.stateContent !== null &&
+    usesStageLevelPerUnitArtifacts(getField(options.stateContent, "Scope"), options.stateContent);
+  const unit = options.unit ?? null;
+  if (isPerUnitStage(stage) && !stageLevel && !options.single && unit === null) return null;
+  const stages = loadStageGraphAll();
+  let authorization: string | null = null;
+  const outputs: string[] = [];
+  const questions = summaryQuestionFiles(projectDir, stage, options.single ? null : options.stateContent)
+    .filter((question) => question.unit === unit);
+  for (const question of questions) {
+    for (const path of summaryArtifactPaths(stage, question)) {
+      const id = activeSummaryAuthorizationForRecordPath(projectDir, toPosix(relative(record, path)), stages)?.id ?? null;
+      if (id === null || (authorization !== null && id !== authorization)) continue;
+      const entry = keptOutputEntry(record, path);
+      if (entry === null) continue;
+      authorization = id;
+      outputs.push(entry);
+    }
+  }
+  return authorization === null ? null : { authorization, outputs };
+}
+
+// Whether a Keep the person picked under this confirmation still covers this
+// output: a Keep row with the confirmation's id names the output with the
+// bytes it has now.
+function keptUnderConfirmation(
+  projectDir: string,
+  rows: readonly AuditShardEvent[],
+  path: string,
+  authorization: string,
+): boolean {
+  const record = recordDir(projectDir);
+  const entry = record === null ? null : keptOutputEntry(record, path);
+  if (entry === null) return false;
+  return rows.some((row) =>
+    row.event === "ARTIFACT_REUSED" &&
+    auditBlockField(row.block, "Decision") === "keep" &&
+    auditBlockField(row.block, SUMMARY_AUTHORIZATION_FIELD) === authorization &&
+    (auditBlockField(row.block, KEPT_OUTPUTS_FIELD) ?? "").split(";").some((kept) => kept.trim() === entry)
+  );
 }
 
 /** The audit events the summary-confirmation evidence reads. */
@@ -15264,28 +15824,8 @@ export function checkSummaryConfirmationEvidence(
     );
 
   const workflow = options.workflow;
-  const unitMajor =
-    isPerUnitStage(stage) &&
-    (
-      getField(options.stateContent ?? "", "Construction Iteration")?.trim() === "unit-major" ||
-      getField(options.stateContent ?? "", "Construction Checkpoints") === "enabled"
-    );
-  const floors = summaryAttemptFloors(
-    events, stage.slug, workflow, unitMajor, isPerUnitStage(stage) ? auditRows : undefined,
-  );
-  const afterFloor = (entry: AuditShardEvent): true | false | null => {
-    if (floors.length === 0) return true;
-    const relations = floors.map((floor): true | false | null => {
-      if (entry.shard === floor.shard) return entry.pos > floor.pos;
-      if (entry.timestamp !== floor.timestamp) {
-        return entry.timestamp > floor.timestamp;
-      }
-      return null;
-    });
-    if (relations.every((relation) => relation === true)) return true;
-    if (relations.some((relation) => relation === false)) return false;
-    return null;
-  };
+  const floors = summaryEvidenceFloors(stage, options.stateContent ?? null, workflow, events, auditRows);
+  const afterFloor = (entry: AuditShardEvent): true | false | null => afterSummaryFloor(entry, floors);
 
   if (workflow !== undefined && isPerUnitStage(stage)) {
     const candidates = events.filter((entry) =>
@@ -15340,31 +15880,9 @@ export function checkSummaryConfirmationEvidence(
     }
 
     const questionRelative = toPosix(relative(projectDir, question.path));
-    const receiptCandidates = events.filter((entry) => {
-      if (entry.event !== "SUMMARY_CONFIRMATION_RECORDED") return false;
-      if (auditBlockField(entry.block, "Stage") !== stage.slug) return false;
-      if (
-        auditBlockField(entry.block, "Checkpoint") !==
-          SUMMARY_CONFIRMATION_CHECKPOINT
-      ) {
-        return false;
-      }
-      const eventWorkflow = auditBlockField(entry.block, "Workflow");
-      if (workflow !== undefined) {
-        if (eventWorkflow !== workflow) return false;
-      } else if (eventWorkflow?.startsWith("single-stage:")) {
-        return false;
-      }
-      const eventUnit = auditBlockField(entry.block, "Unit");
-      if ((eventUnit ?? null) !== question.unit) return false;
-      if (
-        eventUnit &&
-        !eventMatchesClaimAttempt(projectDir, entry.block, eventUnit)
-      ) {
-        return false;
-      }
-      return auditBlockField(entry.block, "Questions File") === questionRelative;
-    });
+    const receiptCandidates = events.filter((entry) =>
+      summaryReceiptFor(projectDir, entry, stage.slug, workflow, question.unit, questionRelative)
+    );
     const orderedReceipts = receiptCandidates.filter(
       (entry) => afterFloor(entry) === true,
     );
@@ -15572,6 +16090,9 @@ export function checkSummaryConfirmationEvidence(
       if (isSummaryAuthorizationId(receiptAuthorization)) {
         const { newestWrites, unauthorized } = summaryOutputDescent(writes, receiptAuthorization);
         if (newestWrites.length === 0 || unauthorized.length > 0) {
+          // The person kept this output, as it is, under this confirmation:
+          // it descends from it with no save (keptSummaryOutputs).
+          if (keptUnderConfirmation(projectDir, auditRows, artifactAbs, receiptAuthorization)) continue;
           // The governed checkpoint: the output was saved without the current
           // confirmation. Strict refuses with the existing remedy; relaxed
           // records the change once, tells the human once, and continues. The
@@ -19538,9 +20059,44 @@ export function hostRecordsAgentFinishes(): boolean {
 }
 
 /**
+ * Off a host that records every finish: true only when a helper was sent since
+ * `request`, every one sent since came back (a completion of the same agent,
+ * any case, closes its earliest open dispatch) and none was the reviewer,
+ * nameless or a crew. Nothing sent (no proof this chat records what it sends)
+ * or a helper still out (a failed or cancelled task, a row still to land) reads
+ * as false.
+ */
+export function subagentDispatchesShowNoReviewer(
+  events: ReadonlyArray<AuditShardEvent>,
+  request: Pick<OpenReviewRequest, "reviewer" | "row">,
+): boolean {
+  const agentOf = (row: AuditShardEvent): string =>
+    (auditBlockField(row.block, "Agent Type") ?? "").trim().toLowerCase();
+  const open = new Map<string, AuditShardEvent[]>();
+  const sent: AuditShardEvent[] = [];
+  for (const row of sortAttemptEvents(events)) {
+    if (row.event === "SUBAGENT_DISPATCHED") {
+      open.set(agentOf(row), [...(open.get(agentOf(row)) ?? []), row]);
+      if (!attemptEventDefinitelyBefore(row, request.row)) sent.push(row);
+    } else if (row.event === "SUBAGENT_COMPLETED") {
+      open.get(agentOf(row))?.shift();
+    }
+  }
+  if (sent.length === 0) return false;
+  const stillOut = new Set([...open.values()].flat());
+  const reviewer = request.reviewer.toLowerCase();
+  return sent.every((row) => {
+    const agent = agentOf(row);
+    return agent !== "" && agent !== "unknown" && !agent.includes(",") && agent !== reviewer && !stillOut.has(row);
+  });
+}
+
+/**
  * Whether the record shows that the reviewer `request` named has not finished
- * its review since the request, on a host where a missing completion row means
- * that. The reviewer finished only when a SUBAGENT_COMPLETED row definitely
+ * its review since the request. On a host that records every finish before the
+ * result (hostRecordsAgentFinishes, Claude Code) a missing completion row means
+ * that, as #943 settled; elsewhere subagentDispatchesShowNoReviewer has to show
+ * it. The reviewer finished only when a SUBAGENT_COMPLETED row definitely
  * after the request names it as Agent Type and carries a Review File Digest for
  * the request's review file: the log-subagent hook writes that digest for every
  * review still open for the reviewer that finished, so a row naming any other
@@ -19548,9 +20104,10 @@ export function hostRecordsAgentFinishes(): boolean {
  * finishing this review (#943: dispatching an unrelated agent after the request
  * no longer reads as the reviewer having finished). Every doubt reads as false,
  * so a lost or late row can never put a wrong line in front of the person:
- * another host, a delegated worktree (its reviewers' rows land in the parent's
- * ledger), a chat whose hooks do not write into this record (the check
- * log-subagent makes), a background agent sent or finished since the request
+ * another host whose dispatch record does not show it, a delegated worktree
+ * (its reviewers' rows land in the parent's ledger), a chat whose hooks do not
+ * write into this record (the check log-subagent makes), a background agent
+ * sent or finished since the request
  * (the in-flight ledger written since, or an entry still fresh: the ledger
  * names no agent), a completion row that names no agent (`unknown`, a host
  * that sent no agent type), a completion hook that ran since and left no row
@@ -19565,7 +20122,7 @@ export function noReviewerFinishedSinceReview(
   selection: WorkflowSelection,
 ): boolean {
   try {
-    if (!hostRecordsAgentFinishes()) return false;
+    if (!hostRecordsAgentFinishes() && !subagentDispatchesShowNoReviewer(events, request)) return false;
     if (delegatedWorktreeIntent(projectDir) !== null) return false;
     if (selection.intent === null || workflowParticipation(projectDir, selection) !== "participant") return false;
     const requested = Date.parse(request.row.timestamp);
@@ -20291,11 +20848,41 @@ export interface AttemptFrontierView {
   floor: AuditShardEvent[];
 }
 
+// The field on a gate's re-entry row (STAGE_AWAITING_APPROVAL) that says the
+// gate came back with the review its Request Changes was made on: nothing of
+// the stage changed after it. Its value is that rejection's timestamp. `revise`
+// writes it when unchangedChangeRequest holds.
+export const REVIEW_KEPT_FIELD = "Review Kept";
+
+// The person's Request Changes rows for `slug` whose gate came back with the
+// review as it stood: each is the last stage-level rejection definitely before
+// a re-entry row that names it in REVIEW_KEPT_FIELD. None begins a new review
+// attempt, in the review window, its accounting or the brief's invalidation
+// view. A tie for the last rejection keeps none, which asks for the review again.
+export function keptReviewRejections(
+  rows: ReadonlyArray<AuditShardEvent>,
+  slug: string,
+): Set<AuditShardEvent> {
+  const kept = new Set<AuditShardEvent>();
+  for (const row of rows) {
+    if (row.event !== "STAGE_AWAITING_APPROVAL" || auditBlockField(row.block, "Stage") !== slug) continue;
+    const at = auditBlockField(row.block, REVIEW_KEPT_FIELD);
+    if (at === null) continue;
+    const last = maximalAttemptEvents(rows.filter((candidate) =>
+      candidate.event === "GATE_REJECTED" && auditBlockField(candidate.block, "Stage") === slug &&
+      auditBlockField(candidate.block, "Unit") === null && attemptEventDefinitelyBefore(candidate, row)
+    ));
+    if (last.length === 1 && last[0].timestamp === at) kept.add(last[0]);
+  }
+  return kept;
+}
+
 export function reviewInvalidationAttemptView(
   rows: ReadonlyArray<AuditShardEvent>,
   stageSlug: string,
 ): AttemptFrontierView {
   const events = sortAttemptEvents(rows);
+  const kept = keptReviewRejections(events, stageSlug);
   const floor = maximalAttemptEvents(
     events.filter(
       (event) =>
@@ -20303,7 +20890,7 @@ export function reviewInvalidationAttemptView(
         (event.event === "STAGE_JUMPED" && stageJumpReaches(event.block, stageSlug)) ||
         ((event.event === "GATE_APPROVED" ||
           event.event === "GATE_REJECTED") &&
-          auditBlockField(event.block, "Stage") === stageSlug),
+          auditBlockField(event.block, "Stage") === stageSlug && !kept.has(event)),
     ),
   );
   return { events, floor };
@@ -20349,8 +20936,9 @@ export interface AttemptView {
   allEvents: AuditShardEvent[];
   events: AuditShardEvent[];
   floorIdx: number;
-  // The person's Fix findings picks for this stage (blockingSensorFixes).
-  sensorFixes: ReadonlySet<AuditShardEvent>;
+  // The person's Fix findings picks for this stage, each with the Units it
+  // starts again, null for every Unit (blockingSensorFixes).
+  sensorFixes: ReadonlyMap<AuditShardEvent, ReadonlySet<string> | null>;
   mergedBoltUnits: Set<string>;
   openBoltUnits: Set<string>;
 }
@@ -20380,14 +20968,18 @@ function boltEventUnits(event: AuditShardEvent): string[] {
 export function reviewAttemptWindow(
   projectDir: string,
   stateContent: string,
-  stage: { slug: string; for_each?: string },
+  stage: SensorFixStage,
   auditRows?: AuditShardEvent[],
+  // The Request Changes `revise` is deciding to keep (unchangedChangeRequest).
+  keep?: AuditShardEvent,
 ): AttemptView {
   const allEvents = auditRows ?? readAuditShardEvents(projectDir);
-  const sensorFixes = blockingSensorFixes(allEvents, stage.slug);
+  const sensorFixes = blockingSensorFixes(allEvents, stage);
   const events = sortAttemptEvents(
     allEvents.filter((row) => REVIEW_RECEIPT_EVENTS.has(row.event) || sensorFixes.has(row)),
   );
+  const kept = keptReviewRejections(allEvents, stage.slug);
+  if (keep !== undefined) kept.add(keep);
   const perUnit = stage.for_each === "unit-of-work";
   const artifactPerUnit =
     perUnit &&
@@ -20401,8 +20993,9 @@ export function reviewAttemptWindow(
       getField(stateContent, "Construction Checkpoints") === "enabled");
   const teamOwnership = artifactPerUnit && (isTeamUnitOwnership(stateContent) ||
     getField(stateContent, "Construction Checkpoints") === "enabled");
-  // A Unit-tagged rejection starts a new attempt for that Unit only wherever
-  // lifecycle floors are per Unit, solo unit-major included (#1411).
+  // A rejection or Fix findings pick that names its Units (rejectionUnits)
+  // starts a new attempt for those Units only wherever lifecycle floors are
+  // per Unit, solo unit-major included (#1411).
   const unitScopedRejections =
     artifactPerUnit && unitScopedLifecycleFloors(stateContent);
   // A stage start recorded while unit-major flooring was in force is no
@@ -20411,12 +21004,13 @@ export function reviewAttemptWindow(
   let floorIdx = -1;
   for (let i = 0; i < events.length; i++) {
     const event = events[i];
+    if (kept.has(event)) continue;
     let boundary = event.event === "WORKFLOW_STARTED" ||
       (event.event === "STAGE_JUMPED" && stageJumpReaches(event.block, stage.slug));
     if (!boundary && auditBlockField(event.block, "Stage") === stage.slug) {
       boundary =
         ((event.event === "GATE_REJECTED" || sensorFixes.has(event)) &&
-          !(unitScopedRejections && auditBlockField(event.block, "Unit"))) ||
+          !(unitScopedRejections && rejectionUnits(event, sensorFixes) !== null)) ||
         (event.event === "STAGE_STARTED" &&
           !unitMajor && !unitFloored?.has(event) &&
           !auditBlockField(event.block, "Workflow")?.startsWith(
@@ -20686,6 +21280,7 @@ export function reviewAttemptAccounting(
   } = {},
 ): ReviewAttemptAccounting {
   const { sensorFixes } = attemptView;
+  const kept = keptReviewRejections(attemptView.allEvents, stage.slug);
   const events = sortAttemptEvents(
     attemptView.allEvents.filter(
       (row) =>
@@ -20812,6 +21407,7 @@ export function reviewAttemptAccounting(
       boltSlug = null;
       continue;
     }
+    if (kept.has(entry)) continue;
     if (entry.event === "GATE_REJECTED" || sensorFixes.has(entry)) {
       const gateStages = (
         auditBlockField(entry.block, "Gate Stages") ??
@@ -20821,14 +21417,14 @@ export function reviewAttemptAccounting(
         .split(",")
         .map((value) => value.trim());
       if (!gateStages.includes(stage.slug)) continue;
-      const rejectedUnit = auditBlockField(entry.block, "Unit");
-      // A rejection with no Unit is a stage-wide Request Changes: outside team
-      // or checkpoint ownership it starts a new attempt for every Unit.
+      const rejectedUnits = rejectionUnits(entry, sensorFixes);
+      // A rejection that names no Unit is a stage-wide Request Changes: outside
+      // team or checkpoint ownership it starts a new attempt for every Unit.
       if (
-        unitScopedRejections && unit !== undefined && rejectedUnit !== unit &&
-        (teamOwnership || rejectedUnit !== null)
+        unitScopedRejections && unit !== undefined && !rejectedUnits?.has(unit) &&
+        (teamOwnership || rejectedUnits !== null)
       ) continue;
-      if (unitScopedRejections && unit === undefined && rejectedUnit !== null) continue;
+      if (unitScopedRejections && unit === undefined && rejectedUnits !== null) continue;
       const tied = tiedAcrossShards(i);
       ambiguity = tied
         ? `cross-shard gate boundary tie at ${entry.timestamp}`
@@ -21484,6 +22080,46 @@ export function candidateReviewCoverageProjection(
   return ready;
 }
 
+// A person's Request Changes that changed nothing of the stage: the stage is
+// revising from it (a stage-level change request, not a fresh attempt, not
+// backfilled), no review was asked or recorded for the stage after it, and the
+// review it was made on still covers the documents and source byte for byte
+// (a verdict with nothing stale, pending or changed). The gate then comes back
+// with that review as it stands; returns the rejection and the receipts that
+// see past it. A change Guard Policy kept after the review is not told apart
+// from one made after the rejection: either keeps the attempt the rejection
+// began.
+export function unchangedChangeRequest(
+  projectDir: string,
+  stateContent: string,
+  stage: Parameters<typeof freshReviewReceipts>[2],
+  reviewClass: ReviewClass,
+): { rejection: AuditShardEvent; receipts: FreshReviewReceipts } | null {
+  if (!stage.reviewer || reviewClass === "none") return null;
+  if (parseCheckboxes(stateContent).find((entry) => entry.slug === stage.slug)?.state !== "revising") return null;
+  const window = reviewAttemptWindow(projectDir, stateContent, stage);
+  const rejection = window.events[window.floorIdx];
+  if (
+    rejection?.event !== "GATE_REJECTED" ||
+    auditBlockField(rejection.block, "Stage") !== stage.slug ||
+    auditBlockField(rejection.block, "Unit") !== null ||
+    auditBlockField(rejection.block, "Recovered") !== null ||
+    rejectionIsFreshAttempt(rejection.block)
+  ) return null;
+  if (window.events.slice(window.floorIdx + 1).some((row) =>
+    (row.event === "REVIEW_REQUESTED" || row.event === "REVIEW_COMPLETED") &&
+    auditBlockField(row.block, "Stage") === stage.slug
+  )) return null;
+  const receipts = freshReviewReceipts(projectDir, stateContent, stage, {
+    reviewClass,
+    attemptWindow: reviewAttemptWindow(projectDir, stateContent, stage, window.allEvents, rejection),
+  });
+  const reviewed = receipts.stageVerdict !== null || receipts.unitVerdicts.size > 0;
+  const unchanged = !receipts.stageStale && receipts.unitStale.size === 0 && !receipts.sourceStale &&
+    receipts.stagePending === null && receipts.unitPending.size === 0 && receipts.acceptedChanges.length === 0;
+  return reviewed && unchanged ? { rejection, receipts } : null;
+}
+
 export function freshReviewReceipts(
   projectDir: string,
   stateContent: string,
@@ -21786,25 +22422,30 @@ export function freshReviewReceipts(
     ) {
       continue;
     }
-    // A Unit's Fix findings pick at a blocking gate check starts that Unit's
-    // new attempt the way its Request Changes does.
+    // A Fix findings pick at a blocking gate check starts a new attempt for the
+    // Units it names the way their Request Changes does.
     if (unitScopedRejections && (e.event === "GATE_REJECTED" || sensorFixes.has(e))) {
-      const rejectedUnit = auditBlockField(e.block, "Unit");
-      if (!rejectedUnit || !gateStagesFromBlock(e.block).includes(stage.slug)) {
+      const rejectedUnits = rejectionUnits(e, sensorFixes);
+      if (rejectedUnits === null || !gateStagesFromBlock(e.block).includes(stage.slug)) {
         continue;
       }
-      if (unitVerdicts.delete(rejectedUnit)) {
-        unitStale.add(rejectedUnit);
-        unitStaleProgress.set(rejectedUnit, {
-          nextIteration: (unitIterations.get(rejectedUnit) ?? 0) + 1,
-          recoverySpent: unitReceiptRecovery.get(rejectedUnit) ?? false,
-        });
-      }
-      unitIterations.delete(rejectedUnit);
-      unitReceiptRecovery.delete(rejectedUnit);
-      unitPending.delete(rejectedUnit);
-      for (const [key, request] of pendingRequests) {
-        if (request.unit === rejectedUnit) pendingRequests.delete(key);
+      for (const rejectedUnit of rejectedUnits) {
+        if (unitVerdicts.delete(rejectedUnit)) {
+          unitStale.add(rejectedUnit);
+          // The new attempt's review is its first pass, where its budget starts
+          // again (reviewAttemptAccounting), so the re-review named is one the
+          // review log takes.
+          unitStaleProgress.set(rejectedUnit, {
+            nextIteration: 1,
+            recoverySpent: unitReceiptRecovery.get(rejectedUnit) ?? false,
+          });
+        }
+        unitIterations.delete(rejectedUnit);
+        unitReceiptRecovery.delete(rejectedUnit);
+        unitPending.delete(rejectedUnit);
+        for (const [key, request] of pendingRequests) {
+          if (request.unit === rejectedUnit) pendingRequests.delete(key);
+        }
       }
       continue;
     }
@@ -22781,10 +23422,10 @@ export function recordedCheckoutAt(
   return checkouts.find((entry) => comparablePath(entry.real) === at) ?? null;
 }
 
-// A label for a newly recorded checkout: its folder's name made repo-name
-// shaped, with a number added when another recorded checkout has it.
+// A label for a newly recorded checkout: its folder's name as a repo name
+// (folderRepoName), with a number added when another recorded checkout has it.
 export function sourceCheckoutLabelFor(real: string, checkouts: readonly RecordedSourceCheckout[]): string {
-  const base = basename(real).replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "") || "checkout";
+  const base = folderRepoName(basename(real)) || "checkout";
   const taken = new Set(checkouts.map((entry) => entry.label));
   if (!taken.has(base)) return base;
   for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
@@ -25419,6 +26060,16 @@ function gitHeadOid(worktreeDir: string): string | null {
     : null;
 }
 
+// The file names the source walk counts as code by name alone: a symlinked
+// external tree keeps only these, and the snapshot always takes them.
+const SOURCE_FILE_EXTENSION =
+  /\.(?:astro|c|cc|cmake|cpp|cs|css|dart|erl|ex|exs|go|gql|graphql|h|hcl|hpp|hrl|html|java|js|jsx|json|kt|kts|lua|m|mm|php|proto|ps1|psd1|psm1|py|r|rb|rs|scala|sh|sol|sql|svelte|swift|tf|tfvars|toml|ts|tsx|vue|xml|ya?ml|zig)$/i;
+const SOURCE_FILE_BASENAME =
+  /^(?:BUILD|CMakeLists\.txt|Dockerfile(?:\..+)?|Gemfile|Justfile|Makefile|Procfile|Tiltfile|WORKSPACE)$/i;
+export function isSourceFileName(name: string): boolean {
+  return SOURCE_FILE_EXTENSION.test(name) || SOURCE_FILE_BASENAME.test(name);
+}
+
 function filesystemSourceIdentity(
   root: string,
   carriesWorkspaceShell: boolean,
@@ -25448,10 +26099,8 @@ function filesystemSourceIdentity(
   const maxBytes = 4 * 1024 * 1024 * 1024;
   const sourceOnlyMaxFiles = 10_000;
   const sourceOnlyMaxBytes = 64 * 1024 * 1024;
-  const sourceExtension =
-    /\.(?:astro|c|cc|cmake|cpp|cs|css|dart|erl|ex|exs|go|gql|graphql|h|hcl|hpp|hrl|html|java|js|jsx|json|kt|kts|lua|m|mm|php|proto|ps1|psd1|psm1|py|r|rb|rs|scala|sh|sol|sql|svelte|swift|tf|tfvars|toml|ts|tsx|vue|xml|ya?ml|zig)$/i;
-  const sourceBasename =
-    /^(?:BUILD|CMakeLists\.txt|Dockerfile(?:\..+)?|Gemfile|Justfile|Makefile|Procfile|Tiltfile|WORKSPACE)$/i;
+  const sourceExtension = SOURCE_FILE_EXTENSION;
+  const sourceBasename = SOURCE_FILE_BASENAME;
   const lines: string[] = [];
   // The raw form of a file line, by its index in `lines`, where line endings made it differ.
   const rawLines = new Map<number, string>();
@@ -27270,7 +27919,7 @@ function symlinkedParentComponent(
   return null;
 }
 
-function sourcePathIsRegistered(
+export function sourcePathIsRegistered(
   sourceRepoDir: string,
   carriesWorkspaceShell: boolean,
   path: string,
@@ -27406,36 +28055,85 @@ function registryExcludesSourcePath(
     ![...registry.paths].some((entry) => under(entry) || entry.startsWith(`${path}/`));
 }
 
+// The root whose .aidlc-source-paths.json reaches a source key, as the walk
+// reads it, and the key's path within that root: a recorded repo's folder (no
+// workspace shell there), a recorded checkout's own folder (its files are keyed
+// `<label>@checkout/<path>` with no repo, and walked with the shell rule on), or
+// the project root. `shown` is how a line names the root ("" for the project
+// root). The recorded checkouts are read once, on the first key that needs them.
+function sourceKeyRegistryRoots(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): (key: string) => { root: string; path: string; carriesWorkspaceShell: boolean; shown: string } | null {
+  let checkouts: readonly RecordedSourceCheckout[] | null = null;
+  return (key) => {
+    const parsed = splitSourcePathKey(key);
+    if (parsed === null) return null;
+    if (parsed.repo !== "") {
+      return { root: repoDir(projectDir, parsed.repo), path: parsed.path, carriesWorkspaceShell: false, shown: parsed.repo };
+    }
+    const atRoot = { root: projectDir, path: parsed.path, carriesWorkspaceShell: true, shown: "" };
+    if (!namesSourceCheckout(parsed.path)) return atRoot;
+    checkouts ??= readRecordedSourceCheckouts(projectDir, intent, space);
+    const named = recordedCheckoutOfListingPath(parsed.path, checkouts);
+    if (named === null) return atRoot;
+    return { root: named.checkout.real, path: named.rest, carriesWorkspaceShell: true, shown: named.checkout.path.replace(/[\\/]+$/, "") };
+  };
+}
+
+/**
+ * The `.aidlc-source-paths.json` that reaches each of `keys`, as a line names
+ * it: the project root's, a recorded repo's or a recorded checkout's own.
+ */
+export function sourceKeyRegistryFiles(
+  projectDir: string,
+  keys: readonly string[],
+  intent?: string,
+  space?: string,
+): string[] {
+  const reach = sourceKeyRegistryRoots(projectDir, intent, space);
+  const files = new Set<string>();
+  for (const key of keys) {
+    const shown = reach(key)?.shown;
+    if (shown === undefined) continue;
+    const separator = shown.includes("\\") && !shown.includes("/") ? "\\" : "/";
+    files.add(shown === "" ? SOURCE_FINGERPRINT_REGISTRY : `${inertPath(shown)}${separator}${SOURCE_FINGERPRINT_REGISTRY}`);
+  }
+  return [...files].sort();
+}
+
 /**
  * The source keys (`<repo>\0<path>`) among `keys` that the `exclude` list of
- * that repo root's `.aidlc-source-paths.json` now leaves out of the walk: the
- * path itself or anything under it, unless a registered `paths` entry names it
- * or lies under it (a registered path always wins, as in the walk). The match
- * is by path alone, whatever the entry's mode, so a nested repository's own
- * entry (mode 160000) excluded after the stage started is left out like a
- * file. Each repo root reads its own registry, as the walk does. A registry
- * that cannot be read leaves every key counted.
+ * the `.aidlc-source-paths.json` reaching them (sourceKeyRegistryRoots) now
+ * leaves out of the walk: the path itself or anything under it, unless a
+ * registered `paths` entry names it or lies under it (a registered path always
+ * wins, as in the walk). The match is by path alone, whatever the entry's mode,
+ * so a nested repository's own entry (mode 160000) excluded after the stage
+ * started is left out like a file. Each root reads its own registry, as the
+ * walk does. A registry that cannot be read leaves every key counted.
  */
 export function registryExcludedSourceKeys(
   projectDir: string,
   keys: readonly string[],
+  intent?: string,
+  space?: string,
 ): Set<string> {
   const excluded = new Set<string>();
   if (keys.length === 0) return excluded;
+  const reachOf = sourceKeyRegistryRoots(projectDir, intent, space);
   const registries = new Map<string, SourceFingerprintRegistry | null>();
   for (const key of keys) {
-    const parsed = splitSourcePathKey(key);
-    if (parsed === null) continue;
-    const root = parsed.repo === "" ? projectDir : repoDir(projectDir, parsed.repo);
-    if (!registries.has(root)) {
-      // The lone root or the roof carries the workspace shell; a sibling does not.
+    const reach = reachOf(key);
+    if (reach === null) continue;
+    if (!registries.has(reach.root)) {
       const failure = lastSourceFailure;
-      registries.set(root, sourceFingerprintRegistry(root, parsed.repo === ""));
+      registries.set(reach.root, sourceFingerprintRegistry(reach.root, reach.carriesWorkspaceShell));
       lastSourceFailure = failure;
     }
-    const registry = registries.get(root);
+    const registry = registries.get(reach.root);
     if (!registry) continue;
-    if (registryExcludesSourcePath(registry, parsed.path)) excluded.add(key);
+    if (registryExcludesSourcePath(registry, reach.path)) excluded.add(key);
   }
   return excluded;
 }
@@ -28654,7 +29352,7 @@ export function sourceListingChangedPaths(
   return renderSourcePathKeys(sourceListingChangedKeys(before, after));
 }
 
-function sourceListingChangedKeys(
+export function sourceListingChangedKeys(
   before: ReadonlyMap<string, string>,
   after: ReadonlyMap<string, string>,
 ): Set<string> {
@@ -28781,6 +29479,49 @@ export function currentStageSourceBaseline(
     readStageBaseline(projectDir, stageSlug, field, intent, space),
     allEvents,
     fieldEvent,
+    intent,
+    space,
+  );
+}
+
+// The project type a state field or the person's word names; null for anything else.
+export function declaredProjectType(value: string | undefined): "Greenfield" | "Brownfield" | null {
+  const word = value?.trim().toLowerCase();
+  if (word === "greenfield") return "Greenfield";
+  if (word === "brownfield") return "Brownfield";
+  return null;
+}
+
+// What the project held when this work started: the Source Baseline its
+// WORKFLOW_STARTED row kept (a jump's is a later moment, never this one), with
+// the repos joined since, as a stage's own baseline has them.
+export function workStartSourceBaseline(
+  projectDir: string,
+  stageSlug: string,
+  intent?: string,
+  space?: string,
+  auditRows?: readonly AuditShardEvent[],
+): SourceBaselineResult {
+  const allEvents = auditRows ?? readAuditShardEvents(projectDir, intent, space);
+  const started = allEvents
+    .filter((row) =>
+      row.event === "WORKFLOW_STARTED" && !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")
+    )
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+  const event = started.at(-1);
+  const field = event === undefined ? null : auditBlockField(event.block, "Source Baseline");
+  if (event === undefined || field === null) return { state: "legacy" };
+  if (field === UNBINDABLE_FINGERPRINT) return { state: "unbindable" };
+  return withRepoBaselineAdditions(
+    projectDir,
+    stageSlug,
+    readStageBaseline(projectDir, stageSlug, field, intent, space),
+    allEvents,
+    event,
     intent,
     space,
   );
@@ -30533,6 +31274,25 @@ export function personRepliedSinceGateShown(
   projectDir: string,
   gate: { stage: string; unit?: string },
 ): boolean | null {
+  return turnSinceGateShown(projectDir, gate, isReplyTurn);
+}
+
+// Whether the person sent a command to AIDLC after the stage's gate was first
+// shown in this attempt (a turn marked `Reply: command`): a decision refused for
+// want of a reply after the gate says so. Null as personRepliedSinceGateShown.
+export function personCommandedSinceGateShown(
+  projectDir: string,
+  gate: { stage: string; unit?: string },
+): boolean | null {
+  return turnSinceGateShown(projectDir, gate, (row) =>
+    row.event === "HUMAN_TURN" && auditBlockField(row.block, "Reply") === COMMAND_TURN_REPLY);
+}
+
+function turnSinceGateShown(
+  projectDir: string,
+  gate: { stage: string; unit?: string },
+  which: (row: { event: string; block: string }) => boolean,
+): boolean | null {
   let content: string;
   try {
     content = readAppendOnlyFileNoFollowOrThrow(auditFilePath(projectDir), "audit shard").toString("utf-8");
@@ -30542,14 +31302,14 @@ export function personRepliedSinceGateShown(
   const from = gatePresentationStart(content, gate, { firstShowing: true });
   if (from === null) return null;
   return auditShardBlocks(content.slice(from))
-    .some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+    .some((block) => which({ event: auditBlockField(block, "Event") ?? "", block }));
 }
 
 // The person's rows on this clone's own shard, in the order they were written.
 // Shards are per clone and committed, and a concatenated read lists them in
 // filename order, which is not causal order (see AuditShardEvent); the person's
 // turns in this chat are written here, so one shard orders them exactly.
-function ownShardRows(projectDir: string): { mine: AuditShardEvent[]; others: AuditShardEvent[] } {
+export function ownShardRows(projectDir: string): { mine: AuditShardEvent[]; others: AuditShardEvent[] } {
   const own = projectRelativePath(projectDir, auditFilePath(projectDir));
   const rows = readAuditShardEvents(projectDir);
   return {
@@ -30642,7 +31402,15 @@ export function stageStartFloorRefusal(
 // start (stageReplyFloor), in the order they came. A reply an answer on record
 // already names (its Message Id or Message Ids) was said for that question and
 // is left to it, unless it is their latest, which may answer this one too: an
-// answer spends no reply, but its words are not this decision's. `words` is their words as the message record
+// answer spends no reply, but its words are not this decision's. With
+// `asked`, an answer's own question row on this clone's shard, their latest is
+// that question's too only when the question came before it there: one reply
+// answers every question asked before it, never one the agent logged after it
+// had answered another (a live opencode run recorded the person's "postgres"
+// as their answer to a question they were never shown). A question box the
+// person answered for several questions (its message's picker) answers the
+// questions the agent logs after it too: they were the box's. A row of another
+// shard is not ordered against these turns, so it keeps none. `words` is their words as the message record
 // keeps them, joined by line breaks, left out when one of those messages is no
 // longer readable or was cut (the words kept would not be everything they
 // said); `messageId` names the latest; `replies` lists every one with its time,
@@ -30689,20 +31457,32 @@ const chatOf = (row: AuditShardEvent): string => auditBlockField(row.block, "Ses
 // something else, in a chat that never had this gate put to them, and taking
 // it would guess whose approval it was. A reply the hook recorded with no chat
 // stands too, as do a chat that cannot be named or resolved and a record that
-// cannot be read, which leave the bound to the checks around it.
-export function unshownGateReplyStands(projectDir: string, stage: string): boolean {
+// cannot be read, which leave the bound to the checks around it. With `shown`
+// (what the gate shows), a reply sent by the time it was last written did not
+// see it and stands for nothing, in any chat (answeredBeforeShownStep's rule).
+export function unshownGateReplyStands(projectDir: string, stage: string, shown?: ShownWriting): boolean {
   try {
     const session = resolveInvokingSessionId(projectDir);
-    if (session === null) return true;
+    const writtenAt = shown === undefined ? null : shownLastWrittenAt(projectDir, shown);
+    if (session === null && writtenAt === null) return true;
+    const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+    const sentAt = (row: AuditShardEvent): string => {
+      const id = auditBlockField(row.block, "Message Id");
+      return (id === null ? undefined : readMessage(projectDir, id)?.at) ?? row.timestamp;
+    };
     const { mine, others } = ownShardRows(projectDir);
     return unspentStageTurns(mine, others, stage).unspent.some((row) =>
-      isReplyTurn(row) && (chatOf(row) === "" || chatOf(row) === session));
+      isReplyTurn(row) &&
+      (session === null || chatOf(row) === "" || chatOf(row) === session) &&
+      (writtenAt === null || sentAt(row) > writtenAt));
   } catch {
     return true;
   }
 }
 
-export function personsGateReply(projectDir: string, session: string | null, stage: string): GateReply {
+export function personsGateReply(
+  projectDir: string, session: string | null, stage: string, asked?: AuditShardEvent,
+): GateReply {
   const none: GateReply = { words: null, messageId: null, replies: [], elsewhere: [] };
   try {
     const { mine, others } = ownShardRows(projectDir);
@@ -30722,9 +31502,16 @@ export function personsGateReply(projectDir: string, session: string | null, sta
       const ids = [auditBlockField(row.block, "Message Id"), ...(auditBlockField(row.block, "Message Ids") ?? "").split(",")];
       for (const id of ids) if (id) answered.add(id);
     }
-    turns = turns.filter((row, at) =>
-      at === turns.length - 1 || !answered.has(auditBlockField(row.block, "Message Id") ?? ""));
     const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+    const severalPicks = (row: AuditShardEvent): boolean => {
+      const id = auditBlockField(row.block, "Message Id");
+      const picks = id === null ? [] : readMessage(projectDir, id)?.picker?.filter((entry) => entry.reply !== null) ?? [];
+      return picks.length > 1;
+    };
+    const latestAnswers = (row: AuditShardEvent): boolean =>
+      asked === undefined || severalPicks(row) || (asked.shard === row.shard && asked.pos < row.pos);
+    turns = turns.filter((row, at) =>
+      (at === turns.length - 1 && latestAnswers(row)) || !answered.has(auditBlockField(row.block, "Message Id") ?? ""));
     const elsewhere = held.map((row) => {
       const id = auditBlockField(row.block, "Message Id") as string;
       return { id, at: readMessage(projectDir, id)?.at ?? row.timestamp };
@@ -33213,32 +34000,6 @@ export function humanTurnMintAllowed(): boolean {
   return process.env.AIDLC_UNATTENDED !== "1";
 }
 
-// A decision of the person's is open in the work: the current stage waits at
-// its approval gate (a team-owned Unit at its own gate too), or has a question
-// the agent logged that is not answered yet, or the engine's code plan question
-// is open, or a question that needs this chat's own reply (a checkpoint, the
-// verification command, a Construction policy question). Never under
-// autonomous Construction or an unattended run, where nobody is answering. A
-// record that cannot be read says none is open.
-export function personDecisionPending(projectDir: string, session: string): boolean {
-  try {
-    if (!humanTurnMintAllowed()) return false;
-    const content = readStateFile(projectDir);
-    if (isAutonomousMode(content)) return false;
-    const stage = getField(content, "Current Stage")?.trim() ?? "";
-    const box = stage === "" ? undefined : parseCheckboxes(content).find((row) => row.slug === stage)?.state;
-    if (box === "awaiting-approval") return true;
-    const unit = getField(content, "Active Unit")?.trim() || undefined;
-    const team = stage === "" ? undefined : teamUnitGateStatus(projectDir, content, stage, unit);
-    if (team?.resolved === true && team.status === "awaiting-approval") return true;
-    if (box === "in-progress" && openPendingDecision(projectDir, stage, "STAGE_STARTED") !== null) return true;
-    if (planApprovalAskIsOpen(projectDir)) return true;
-    return session !== "" && readProtectedQuestion(projectDir, session) !== null;
-  } catch {
-    return false;
-  }
-}
-
 // The same hard signal `next`'s stop reads, for the current workflow: a stage
 // or gate event and no heartbeat at all, with no link on the way to the
 // status files. Anything unreadable proves nothing.
@@ -33773,9 +34534,8 @@ export function lowerFenceRemedy(fence: SwitchableGuardFence, projectDir?: strin
     op: "lower-fence",
     action:
       `Turn the ${fence} check off for this piece of work: run the command with \`--message '${MESSAGE_SLOT}'\` ` +
-      `added${projectDir === undefined ? MESSAGE_FILL : messageFill(projectDir)}. After the command succeeds, tell the person in one ` +
-      "line that it is off for this piece of work, comes back on for the next one, and that they can ask you " +
-      "to turn it back on; then retry what was refused.",
+      `added${projectDir === undefined ? MESSAGE_FILL : messageFill(projectDir)}. After the command succeeds, retry what was ` +
+      "refused.",
     ...guardOperation({ kind: "lower-fence", fence }),
     requiresHuman: true,
     executableNow: true,
@@ -33787,9 +34547,7 @@ export function lowerFenceSentence(fence: SwitchableGuardFence): string {
   const setter = renderGuardOperation({ kind: "lower-fence", fence }, { harnessDir: harnessDir() });
   return (
     `If the person meant to do this now, offer to turn the ${fence} check off for this piece of work. When ` +
-    `they say so, run \`${setter} --message '${MESSAGE_SLOT}'\` yourself${MESSAGE_FILL} (their yes), and ` +
-    "tell them in one line that it is off for this piece of work, comes back on for the next one, and that " +
-    "they can ask you to turn it back on."
+    `they say so, run \`${setter} --message '${MESSAGE_SLOT}'\` yourself${MESSAGE_FILL} (their yes).`
   );
 }
 
@@ -34034,14 +34792,51 @@ export function requestChangesReportArgs(
   ];
 }
 
-// The same report, rendered for this checkout, from the record's own state.
+// The Unit whose step a Request Changes sends back on its own. In a solo walk
+// one Unit at a time, a refusal that names a Unit at a block stage is about
+// that Unit's step: its change goes through the Unit reopen, and every other
+// Unit keeps its finished work. A Unit with its step on this stage still open
+// is not sent back: in progress, the reopen would route the step it is already
+// on, and set aside or paused, it would be picked up where it stopped, so the
+// refusal would come again. It keeps the step's own ways on, as does a refusal
+// that names no Unit. The state names the Unit in progress; the step ledger
+// (unitOpenCheckpoints) also names one set aside or paused.
+function requestChangesUnit(
+  input: Pick<GuardRefusalInput, "stateContent" | "stage" | "unit" | "teamGate" | "projectDir">,
+): string | null {
+  if (!input.unit) return null;
+  const walk = soloUnitMajorRefusal(input);
+  if (walk === null || walk.unit !== input.unit) return null;
+  if (unitStepInProgress(input) !== null) return null;
+  if (input.projectDir !== undefined &&
+    unitOpenCheckpoints(input.projectDir, input.stage).some((open) => open.unit === input.unit)) {
+    return null;
+  }
+  return input.unit;
+}
+
+// The step that sends back one Unit's step as the person's change, with their
+// words: the reopen `next` prints for it pauses any other Unit's open step.
+function unitChangeCommand(stage: string, unit: string): string {
+  return renderEngineInvocation(
+    { route: "orchestrate", args: ["next", "--stage", stage, "--unit", unit, "--change"] },
+    { harnessDir: harnessDir() },
+  );
+}
+
+// The same Request Changes step, rendered for this checkout, from the record's
+// own state.
 export function requestChangesReportCommand(projectDir: string, stage: string, unit: string | undefined): string {
   let teamGate: GuardRefusalInput["teamGate"];
+  let stateContent: string | null = null;
   try {
-    teamGate = unit ? teamUnitGateStatus(projectDir, readStateFile(projectDir), stage, unit) : undefined;
+    stateContent = readStateFile(projectDir);
+    teamGate = unit ? teamUnitGateStatus(projectDir, stateContent, stage, unit) : undefined;
   } catch {
     teamGate = undefined;
   }
+  const own = stateContent === null ? null : requestChangesUnit({ stateContent, stage, unit, teamGate, projectDir });
+  if (own !== null) return unitChangeCommand(stage, own);
   return renderEngineInvocation(
     { route: "orchestrate", args: requestChangesReportArgs(stage, unit, teamGate) },
     { harnessDir: harnessDir() },
@@ -34169,6 +34964,26 @@ function lifecycleResetRemedies(
     return [{ ...restart, action: restart.action + cost("jump") }];
   }
   if (state === "in-progress" || state === "awaiting-approval") {
+    // A change to one Unit's step in a solo walk sends back that step only.
+    const own = requestChangesUnit(input);
+    if (own !== null) {
+      const change =
+        `run \`${unitChangeCommand(input.stage, own)}\` and do what it prints: it sends back "${input.stage}" ` +
+        `for unit "${own}" only, with their words as the change, and every other unit keeps its finished work`;
+      return [
+        {
+          op: "request-changes",
+          action: input.humanAuthority.unattended
+            ? "Halt unattended execution and ask a human what should change. " +
+              `Unset AIDLC_UNATTENDED, ask "What should change?" for stage "${input.stage}" for unit ` +
+              `"${own}", and end the turn. Only after the human answers, ${change}.`
+            : `When the person already said what should change in "${input.stage}" for unit "${own}", ` +
+              `${change}. Otherwise ask "What should change?" and end the turn, then ${change}.`,
+          requiresHuman: true,
+          executableNow: true,
+        },
+      ];
+    }
     const unitContext =
       input.teamGate?.resolved === true && input.unit
         ? ` for Unit "${input.unit}"`
@@ -34324,8 +35139,9 @@ function unaskedQuestionsFile(input: GuardRefusalInput): string | null {
   return toPosix(relative(input.projectDir, path));
 }
 
-// Pure: reads nothing from disk. The same input always yields the same refusal,
-// which is what lets the enforcing tool and the router agree.
+// Given projectDir, it also reads the Unit step ledger (requestChangesUnit). The
+// same input on the same record always yields the same refusal, which is what
+// lets the enforcing tool and the router agree.
 export function evaluateGuardRefusal(
   input: GuardRefusalInput,
 ): GuardRefusal {
@@ -34686,6 +35502,8 @@ export function evaluateGuardRefusal(
     sourceUnbindable: input.attempt.sourceCoverage === "unbindable",
     everyUnit: soloUnitMajorRefusal(input) !== null,
   };
+  // Request Changes about one Unit's step throws away nothing of the others.
+  const unitChange = requestChangesUnit(input) !== null;
   return {
     code: input.code,
     blockedAction: input.blockedAction,
@@ -34696,7 +35514,8 @@ export function evaluateGuardRefusal(
     userMessage: input.userMessage,
     remedies: remedies.map((remedy) => {
       const interaction = remedyInteraction(remedy);
-      const words = interaction === "external-work" ? null : GUARD_REMEDY_WORDING_BY_OP[remedy.op]?.(wording);
+      const context = remedy.op === "request-changes" && unitChange ? { ...wording, everyUnit: false } : wording;
+      const words = interaction === "external-work" ? null : GUARD_REMEDY_WORDING_BY_OP[remedy.op]?.(context);
       return { ...(words ? { op: remedy.op, ...words } : {}), ...remedy, interaction };
     }),
   };
@@ -41203,6 +42022,16 @@ export function isScopedReviewCopy(name: string): boolean {
   return SCOPED_REVIEW_COPY_RE.test(basename(name).replace(/\.md$/, ""));
 }
 
+/** The open request a reviewer copy's agent name runs for, or undefined for a
+ *  name that is no copy's or whose request is closed: the copy is that
+ *  request's reviewer under another name, when it is sent and when it finishes. */
+export function reviewCopyRequest(
+  open: ReadonlyArray<OpenReviewRequest>,
+  agent: string,
+): OpenReviewRequest | undefined {
+  return isScopedReviewCopy(agent) ? open.find((request) => scopedReviewCopyName(request.requestId) === agent) : undefined;
+}
+
 export function isAidlcAgentFile(path: string): boolean {
   return aidlcAgentClaim(path) !== null;
 }
@@ -42137,6 +42966,16 @@ export function nextInScopeStage(
   return null;
 }
 
+// The plan a scope gives this work, stage by stage: its own grid, where a new
+// project skips Reverse Engineering. The scope change writes it as each stage's
+// plan suffix, and `next` reads it for a stage change typed with the switch.
+export function scopeGridOnProject(def: { stages: Record<string, string> }, stateContent: string): Record<string, string> {
+  const grid = { ...def.stages };
+  const greenfield = (getField(stateContent, "Project Type") || "Greenfield").toLowerCase() === "greenfield";
+  if (greenfield && grid["reverse-engineering"] === "EXECUTE") grid["reverse-engineering"] = "SKIP";
+  return grid;
+}
+
 // The stage a scope change to `scope` starts on FINISHED work: the first stage
 // after the cursor that the scope runs and that is not already done or skipped
 // (with the greenfield reverse-engineering adjustment the plan grid applies).
@@ -42184,15 +43023,32 @@ export function effectivePlanAction(
 }
 
 // The stages the plan runs after Initialization, in run order: every one that
-// finished, and every one not skipped that the plan executes. Status, the
-// progress line and each stage's start line count from this one list.
-export function plannedStages(stateContent: string, scope: string): StageEntry[] {
+// finished, and every one not skipped that the plan executes, less each one the
+// work has passed without starting (a plan change put it behind the cursor, and
+// it never runs unless the person goes back to it). A stage `next` goes back to
+// stays (stagesOwedBehindCursor, read for `work`, the piece of work the record
+// is; with none, nothing behind the cursor counts). A plan switch's line and its
+// audit row, status, the progress line and each stage's start line count from
+// this one list.
+export function plannedStages(
+  stateContent: string,
+  scope: string,
+  work?: { projectDir: string; intent?: string; space?: string } | null,
+): StageEntry[] {
   const boxes = parseCheckboxes(stateContent);
   const stateOf = (slug: string) => boxes.find((c) => c.slug === slug)?.state;
   const runs = (slug: string) =>
     stateOf(slug) === "completed" ||
     (stateOf(slug) !== "skipped" && effectivePlanAction(slug, scope, stateContent) === "EXECUTE");
-  return loadStageGraph().filter((stage) => stage.phase !== "initialization" && runs(stage.slug));
+  let goesBackTo: Set<string> | null = null;
+  const owed = (slug: string): boolean => {
+    goesBackTo ??= new Set(work ? stagesOwedBehindCursor(stateContent, work.projectDir, work.intent, work.space) : []);
+    return goesBackTo.has(slug);
+  };
+  const passedOver = (slug: string) =>
+    (stateOf(slug) ?? "pending") === "pending" && cursorPastStage(stateContent, slug) && !owed(slug);
+  return loadStageGraph().filter((stage) =>
+    stage.phase !== "initialization" && runs(stage.slug) && !passedOver(stage.slug));
 }
 
 // --- Plans composed for one piece of work ---
@@ -42353,44 +43209,78 @@ export function reverseEngineeringOwedBehindCursor(content: string, workRecordDi
     !constructionHasStarted(content, workRecordDir);
 }
 
-// The stages on the plan that its scope skips and that the work has just
-// passed over: behind the current stage and never started, with nothing after
-// them started but the current stage, which an approval or a jump only just
-// entered (in progress, and nothing of it in the work's record: its own folder,
-// `<phase>/<slug>`, and each Unit's, `<phase>/<unit>/<slug>`, hold no file; the
-// stages before it wrote theirs elsewhere). Reverse Engineering behind the
-// cursor has its own rule (reverseEngineeringOwedBehindCursor).
+// The stages on the plan that the work has just passed over: behind the
+// current stage and not started, with nothing after them started but the
+// current stage, which an approval or a jump only just entered (in progress,
+// and nothing of it in the work's record: its own folder, `<phase>/<slug>`, and
+// each Unit's, `<phase>/<unit>/<slug>`, hold no file; the stages before it
+// wrote theirs elsewhere). Which of them an add put back is the callers' to
+// say (addReachesPassedOver, addedStagesPassedOver). Reverse Engineering
+// behind the cursor has its own rule (reverseEngineeringOwedBehindCursor).
 function stagesPassedOverJustNow(content: string, workRecordDir: string | null | undefined): string[] {
   const scope = getField(content, "Scope")?.trim() ?? "";
-  const def = loadScopeMapping()[scope];
-  if (!def || !workRecordDir) return [];
-  const grid: Record<string, "EXECUTE" | "SKIP"> = {};
-  for (const [slug, action] of Object.entries(def.stages)) grid[slug] = action === "EXECUTE" ? "EXECUTE" : "SKIP";
-  const added = planChangesBetween(grid, Object.fromEntries(parseStateStageSuffixes(content))).add
-    .filter((slug) => slug !== "reverse-engineering");
-  if (added.length === 0) return [];
+  if (!loadScopeMapping()[scope] || !workRecordDir) return [];
   const current = getField(content, "Current Stage")?.trim() ?? "";
   const graph = loadStageGraph();
   const now = graph.findIndex((stage) => stage.slug === current);
   const boxes = new Map(parseCheckboxes(content).map((c) => [c.slug, c.state]));
   if (now < 0 || boxes.get(current) !== "in-progress") return [];
+  const passed = graph.slice(0, now)
+    .filter((stage, at) => stage.slug !== "reverse-engineering" &&
+      graph.slice(at).every((later) => later.slug === current || (boxes.get(later.slug) ?? "pending") === "pending") &&
+      effectivePlanAction(stage.slug, scope, content) === "EXECUTE")
+    .map((stage) => stage.slug);
+  if (passed.length === 0) return [];
   const entered = graph[now];
   const phaseDir = join(workRecordDir, entered.phase);
   const holdsItsWork = (dir: string): boolean => holdsAnyFile(join(dir, entered.slug));
   if (holdsItsWork(phaseDir) || (existsSync(phaseDir) && readdirSync(phaseDir, { withFileTypes: true })
     .some((entry) => entry.isDirectory() && holdsItsWork(join(phaseDir, entry.name))))) return [];
-  return added.filter((slug) => {
-    const at = graph.findIndex((stage) => stage.slug === slug);
-    return at >= 0 && at < now && graph.slice(at).every((stage) =>
-      stage.slug === current || (boxes.get(stage.slug) ?? "pending") === "pending");
-  });
+  return passed;
 }
 
-// Whether an add of `slug` puts on the plan a stage the work has just passed
-// over (stagesPassedOverJustNow): recompose takes such an add, and the step
-// that names it carries on into the stage.
-export function addReachesPassedOver(content: string, slug: string, workRecordDir: string | null | undefined): boolean {
-  return stagesPassedOverJustNow(setStageSuffix(content, slug, "EXECUTE"), workRecordDir).includes(slug);
+// A stage added to the running plan: on the plan, and, when the work skipped
+// it where it stood ([S]), not started again, so the work reaches it, the way
+// a project-type change puts Reverse Engineering back. Recompose writes it, and
+// the checks of whether `next` still reaches the stage read the add this way.
+export function stageAddedBack(content: string, slug: string): string {
+  const added = setStageSuffix(content, slug, "EXECUTE");
+  return parseCheckboxes(added).some((c) => c.slug === slug && c.state === "skipped")
+    ? setCheckbox(added, slug, "pending")
+    : added;
+}
+
+// A stage the work skipped where it stood: marked skipped behind the current
+// stage, which the work went on to; going back to it starts it again, for
+// every Unit too. One marked skipped ahead of the current stage is not: a Unit
+// walk marks a later step so once every Unit skipped it, while Current Stage
+// stays on the walk's first step, and its Units' skips, not its mark, say who
+// owes it.
+export function stageSkippedWhereItStood(content: string, slug: string): boolean {
+  const graph = loadStageGraph();
+  const at = graph.findIndex((stage) => stage.slug === slug);
+  const now = graph.findIndex((stage) => stage.slug === getField(content, "Current Stage")?.trim());
+  return at >= 0 && at < now && parseCheckboxes(content).some((c) => c.slug === slug && c.state === "skipped");
+}
+
+// Whether an add of `slug` puts back a stage the work has just passed over
+// (stagesPassedOverJustNow): one its scope skips, or one the work skipped where
+// it stood. A stage the scope runs that the work passed another way (behind
+// the cursor after a scope change) stays as it is. It is read with every stage
+// the same add puts back (`together`), so stages skipped one after another come
+// back together. Recompose takes such an add, and the step that names it
+// carries on into the stage.
+export function addReachesPassedOver(
+  content: string,
+  slug: string,
+  workRecordDir: string | null | undefined,
+  together: readonly string[] = [],
+): boolean {
+  const scopeRuns = loadScopeMapping()[getField(content, "Scope")?.trim() ?? ""]?.stages[slug] === "EXECUTE";
+  const skippedWhereItStood = parseCheckboxes(content).some((c) => c.slug === slug && c.state === "skipped");
+  if (scopeRuns && !skippedWhereItStood) return false;
+  const added = [...new Set([slug, ...together])].reduce((state, each) => stageAddedBack(state, each), content);
+  return stagesPassedOverJustNow(added, workRecordDir).includes(slug);
 }
 
 // The stages the person put back on the plan after the work had just passed
@@ -42399,8 +43289,8 @@ export function addReachesPassedOver(content: string, slug: string, workRecordDi
 // writes for an add addReachesPassedOver lets through). `next` goes back to
 // the first, as the work would have gone on to it had the add come before the
 // approval, and the jump it names is the engine's own move. A stage on the plan
-// behind the cursor with no such add (a plan whose rows say so from the start)
-// stays as it is.
+// behind the cursor with no such add (a plan whose rows say so from the start,
+// a scope change's) stays as it is.
 export function addedStagesPassedOver(content: string, projectDir: string, intent?: string, space?: string): string[] {
   const passed = stagesPassedOverJustNow(content, recordDir(projectDir, intent, space));
   if (passed.length === 0) return [];
@@ -42417,6 +43307,17 @@ export function addedStagesPassedOver(content: string, projectDir: string, inten
   return passed.filter((slug) => addedSince.has(slug));
 }
 
+// The stages on the plan the work has passed and not run that `next` goes back
+// to, in the order it goes: Reverse Engineering owed behind the cursor, then
+// each stage the person added after the work had just passed over it. The
+// stage count keeps them (plannedStages); owedJumpBack goes back to the first.
+export function stagesOwedBehindCursor(content: string, projectDir: string, intent?: string, space?: string): string[] {
+  return [
+    ...(reverseEngineeringOwedBehindCursor(content, recordDir(projectDir, intent, space)) ? ["reverse-engineering"] : []),
+    ...addedStagesPassedOver(content, projectDir, intent, space),
+  ];
+}
+
 // The move `next` names to go back to a stage on the plan the work has passed
 // and not run: Reverse Engineering owed behind the cursor runs with a redo,
 // which leaves the finished stages alone and returns to the current stage; a
@@ -42430,11 +43331,9 @@ export function owedJumpBack(
   intent?: string,
   space?: string,
 ): { target: string; direction: "redo" | "backward" } | null {
-  if (reverseEngineeringOwedBehindCursor(content, recordDir(projectDir, intent, space))) {
-    return { target: "reverse-engineering", direction: "redo" };
-  }
-  const passed = addedStagesPassedOver(content, projectDir, intent, space)[0];
-  return passed === undefined ? null : { target: passed, direction: "backward" };
+  const [target] = stagesOwedBehindCursor(content, projectDir, intent, space);
+  if (target === undefined) return null;
+  return { target, direction: target === "reverse-engineering" ? "redo" : "backward" };
 }
 
 // A per-unit stage runs per Unit only once Units exist, and otherwise uses one
@@ -44607,9 +45506,13 @@ export function guardSwitchRefusal(
   // The setter carries a lowering out on the message the person asked in
   // (--message). With a message of theirs on record that it can stand on, the
   // refusal leads with that retry, naming ids and times and never their words.
-  const { requestMessageStep } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  const { planApprovalOffStands, planApprovalOffWaitsStep, requestMessageStep } =
+    require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  const planApproval = !("check" in wanted) && wanted.key === "plan-approval";
   const step = (otherwise: string): string =>
-    projectDir === undefined || !humanTurnMintAllowed() ? otherwise : requestMessageStep(projectDir, otherwise, true);
+    projectDir === undefined || !humanTurnMintAllowed()
+      ? otherwise
+      : requestMessageStep(projectDir, otherwise, planApproval ? "plan-approval-off" : "setting");
   // A terminal their own tool runs (Copilot in VS Code, Kiro IDE, Cursor): the
   // person is working in its chat, so the one line they read says to ask there.
   // Their tool is named as they know it, with no environment variable in sight.
@@ -44633,7 +45536,12 @@ export function guardSwitchRefusal(
   // Lowering a check is the person's call: the setter carries it out on the
   // message they asked in, so this refusal means the command named none (or
   // an unattended driver is running).
-  const wait = ownTerminal ? "" : ` ${step(`Run it with --message ${MESSAGE_SLOT}, the message they asked in, when they ask for it.`)}`;
+  // While the code plan question waits, only a message since it was shown can
+  // turn plan approval off (planApprovalOffStands): the plan question is the way on.
+  const waitsForPlan = planApproval && projectDir !== undefined && !planApprovalOffStands(projectDir, null);
+  const wait = ownTerminal
+    ? ""
+    : ` ${step(waitsForPlan ? planApprovalOffWaitsStep() : `Run it with --message ${MESSAGE_SLOT}, the message they asked in, when they ask for it.`)}`;
   if ("check" in wanted) return `Turning the ${wanted.check} check off is the person's call.${wait}${hint}`;
   if (wanted.key === "plan-approval") {
     return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call.${wait}${hint}`;
@@ -45193,12 +46101,18 @@ export function engineErrorRelayText(message: string): string {
   return `${ENGINE_ERROR_RELAY_LABEL}\n> ${message}`;
 }
 
-/** The relay line for `harness`, or null where no channel would show it. */
+/**
+ * The relay line for `harness`, or null where no channel would show it. On
+ * opencode it carries no note: the plugin hands a line's note to the model, and
+ * the toast is gone in seconds (and never drawn headless), so the opencode skill
+ * prints the error itself and must not read that the person was shown it.
+ */
 export function engineErrorRelayLine(
   message: string,
   harness: string = runtimeHarnessName(),
 ): string | null {
   if (!ENGINE_ERROR_RELAY_HARNESSES.has(harness)) return null;
+  if (harness === "opencode") return `${JSON.stringify({ systemMessage: engineErrorRelayText(message) })}\n`;
   return `${JSON.stringify({
     systemMessage: engineErrorRelayText(message),
     hookSpecificOutput: {
@@ -45206,6 +46120,114 @@ export function engineErrorRelayLine(
       additionalContext: ENGINE_ERROR_RELAY_NOTE,
     },
   })}\n`;
+}
+
+/**
+ * Harnesses whose Bash PostToolUse hook hands the model a note the person does
+ * not see: Claude Code reads `additionalContext` as hook context and Codex as a
+ * developer message, and neither draws it; the opencode plugin puts it in the
+ * tool result the model reads, while its panel draws the command's own output
+ * (`metadata.output`). Measured with a probe hook on Claude Code 2.1.310, Codex
+ * 0.164.0 and opencode 1.19.4. Kiro CLI keeps the order in the setter's own
+ * output by decision, as Copilot, Cursor and Kiro IDE do.
+ */
+export const SAY_ONCE_NOTE_HARNESSES: ReadonlySet<string> = new Set(["claude", "codex", "opencode"]);
+
+/** What the setter leaves for the chat's next shell call: the order with its lines, and the chat's newest messages then. */
+export interface SayOnceNote {
+  say: string;
+  newest: ChatNewest;
+}
+
+/** A chat's newest messages: when the latest was sent, and every message sent then. */
+interface ChatNewest {
+  at: string;
+  ids: string[];
+}
+
+function chatNewest(projectDir: string, sessionId: string | null): ChatNewest | null {
+  const { listMessages } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  const chats = listMessages(projectDir).filter((message) => message.session === sessionId);
+  if (chats.length === 0) return null;
+  const at = chats[chats.length - 1].at;
+  return { at, ids: chats.filter((message) => message.at === at).map((message) => message.id) };
+}
+
+function sayOnceNotePath(projectDir: string, sessionId: string | null): string {
+  const recordPath = sessionId === null ? "" : sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.say-once` : "";
+}
+
+/**
+ * Leave `say` for this chat's next shell call hook, where the harness hands the
+ * model a note; true when it is left, and the setter then prints its lines
+ * alone. It stands on the chat's newest messages now, whichever message the
+ * setting stood on, which may be an earlier one. False on any doubt, and the
+ * order stays in the output.
+ */
+export function leaveSayOnceNote(
+  projectDir: string,
+  sessionId: string | null,
+  say: string,
+  harness: string = runtimeHarnessName(),
+): boolean {
+  if (!SAY_ONCE_NOTE_HARNESSES.has(harness)) return false;
+  const path = sayOnceNotePath(projectDir, sessionId);
+  if (!path) return false;
+  try {
+    const newest = chatNewest(projectDir, sessionId);
+    if (newest === null) return false;
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    const note: SayOnceNote = { say, newest };
+    writeFileAtomic(path, `${JSON.stringify(note)}\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The PostToolUse line that hands this chat's note to the model, taken once by
+ * the chat's next shell call (the setter's own, as a rule; the note carries the
+ * lines, so another call that ends first hands over the same words), or null.
+ * A note the chat has a newer message than is dropped: the person has written
+ * again since, and the line is never said late.
+ */
+export function sayOnceNoteLine(
+  projectDir: string,
+  sessionId: string | undefined,
+  harness: string = runtimeHarnessName(),
+): string | null {
+  if (!SAY_ONCE_NOTE_HARNESSES.has(harness)) return null;
+  const valid = validSessionId(sessionId);
+  // The setter's chat: a Codex helper thread's id maps to its root, as resolveChat maps it.
+  const chat = valid === null ? null : helperSessionRoot(projectDir, valid) ?? valid;
+  const path = sayOnceNotePath(projectDir, chat);
+  if (!path || !existsSync(path)) return null;
+  // Taken by a rename, so two deliveries of one call cannot both hand it over.
+  const taken = `${path}.${process.pid}`;
+  try {
+    renameSync(path, taken);
+  } catch {
+    return null;
+  }
+  let note: Partial<SayOnceNote> | null = null;
+  try {
+    note = JSON.parse(readFileSync(taken, "utf-8")) as Partial<SayOnceNote>;
+  } catch {
+    /* unreadable: dropped */
+  }
+  try {
+    unlinkSync(taken);
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+  if (typeof note?.say !== "string" || note.say === "") return null;
+  const then = note.newest;
+  const now = chatNewest(projectDir, chat);
+  if (now === null || typeof then?.at !== "string" || !Array.isArray(then.ids)) return null;
+  if (now.at !== then.at || now.ids.some((id) => !then.ids.includes(id))) return null;
+  return `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: note.say } })}\n`;
 }
 
 /**
@@ -45222,10 +46244,12 @@ export function hookContextLine(event: "SessionStart" | "UserPromptSubmit", cont
   })}\n`;
 }
 
-/** Hand an engine `error` directive's exact message to the human where possible. */
-export function writeEngineErrorRelay(message: string): void {
+/** Hand an engine `error` directive's exact message to the human where possible; true when a line was written. */
+export function writeEngineErrorRelay(message: string): boolean {
   const line = engineErrorRelayLine(message);
-  if (line !== null) process.stdout.write(line);
+  if (line === null) return false;
+  process.stdout.write(line);
+  return true;
 }
 
 /**

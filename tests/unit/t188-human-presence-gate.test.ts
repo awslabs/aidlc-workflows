@@ -2230,9 +2230,11 @@ describe("t188: a late-logged question takes the reply that answered it", () => 
   // beside it; the same move at the next stage was refused, so the outcome hung
   // on whether an earlier answer had already used the turn. Which question a
   // reply answers is the agent's reading: any reply no decision has used yet
-  // backs an answer, the same way every time, and the row names it.
+  // backs an answer, the same way every time. The row names it, except for a
+  // question logged after another answer already named it: that link is the
+  // agent's to make (--message), never the engine's guess.
   describe("an answer takes any reply no decision has used yet, logged before or after it", () => {
-    test("a plain answer on a reply older than its question records on it, at the next question too", () => {
+    test("a plain answer on a reply older than its question records on it, and the next question records too", () => {
       const slug = field(proj, "Current Stage");
       const id = reply("done. Moving forward - don't ask me any questions.", CHAT, 30);
       expect(log(["decision", "--stage", slug, "--decision", "Anything to add for next time?"], inChat).rc).toBe(0);
@@ -2241,7 +2243,7 @@ describe("t188: a late-logged question takes the reply that answered it", () => 
       expect(log(["decision", "--stage", slug, "--decision", "And for the next stage?"], inChat).rc).toBe(0);
       const again = log(["answer", "--stage", slug, "--details", "Nothing to add"], inChat);
       expect(again.rc, again.out).toBe(0);
-      expect(rows("QUESTION_ANSWERED").map((row) => fieldOf(row, "Message Id"))).toEqual([id, id]);
+      expect(rows("QUESTION_ANSWERED").map((row) => fieldOf(row, "Message Id"))).toEqual([id, null]);
     });
 
     test("a reply after the question records as before", () => {

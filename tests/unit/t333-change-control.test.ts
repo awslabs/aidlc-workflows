@@ -175,6 +175,16 @@ function lastMessageId(proj: string, intent?: string, space?: string): string {
   return id as string;
 }
 
+// A typed prompt on the work that applies nothing: the hook hands the agent at
+// most the id of the message it kept (never its words), so a setting the agent
+// runs for it can name that message.
+function appliedNothing(out: string, proj: string): void {
+  if (out === "") return;
+  const id = lastMessageId(proj);
+  expect((JSON.parse(out) as { hookSpecificOutput?: { additionalContext?: string } }).hookSpecificOutput?.additionalContext)
+    .toBe(`This message of the person's is on record as ${id}: a decision you record from it can name it with --message ${id}.`);
+}
+
 function utilityError(stderr: string): string {
   const parsed: unknown = JSON.parse(stderr);
   if (
@@ -2393,7 +2403,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     const { proj, state } = project("enterprise");
     const before = readFileSync(state, "utf-8");
     const ledger = mutationRows(proj);
-    expect(recordHumanPrompt(proj, prompt)).toBe("");
+    appliedNothing(recordHumanPrompt(proj, prompt), proj);
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
   });
@@ -2421,7 +2431,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     // changes nothing.
     const before = readFileSync(state, "utf-8");
     const ledger = mutationRows(proj);
-    expect(recordHumanPrompt(proj, "Guard policy off.")).toBe("");
+    appliedNothing(recordHumanPrompt(proj, "Guard policy off."), proj);
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
     const lowered = run(
@@ -2461,7 +2471,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
   ])("a policy prompt is recorded and applies nothing until the agent runs the setter: $prompt", ({ prompt, value }) => {
     const { proj, state } = project("enterprise");
     const before = readFileSync(state, "utf-8");
-    expect(recordHumanPrompt(proj, prompt)).toBe("");
+    appliedNothing(recordHumanPrompt(proj, prompt), proj);
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(guardPolicyRows(proj)).toHaveLength(0);
     // Typed, the line is theirs; in plain words, the agent names their message.

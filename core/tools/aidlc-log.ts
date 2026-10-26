@@ -152,6 +152,7 @@ import {
   recordAcceptedChanges,
   governedChangeControl,
   guardPolicyAcceptsChanges,
+  ownShardRows,
   readAuditShardEvents,
   backgroundAgentOutSince,
   isRequestTurn,
@@ -1891,8 +1892,9 @@ function handleAnswer(args: string[]): void {
       }
       error(errorMessage(e));
     }
-    // Request Changes names the exact report, so the agent never guesses its
-    // flags: a solo walk reports the stage, a team-owned Unit gate its Unit.
+    // Request Changes names the exact step, so the agent never guesses its
+    // flags: a solo walk reports the stage, or sends back the one Unit's step the
+    // refusal named (requestChangesReportCommand), a team-owned Unit gate its Unit.
     const report = picked.op === "request-changes"
       ? `run \`${requestChangesReportCommand(pd, picked.stage, picked.unit)}\`: their messages go on the record ` +
         "as what should change."
@@ -2516,13 +2518,17 @@ function handleAnswer(args: string[]): void {
     // in them, as they do at a gate: the message named, or every reply of
     // theirs in this chat that no decision has used yet (personsGateReply).
     // Which question a reply answers is the agent's reading, so a question
-    // logged after the reply that answers it records on that reply.
+    // logged after the reply that answers it records on that reply, unless
+    // another answer already names it: the question's own row says which, the
+    // latest on this clone's shard, where the reply turns are read (a
+    // teammate's shard can sort after it and hold an older one).
+    const ownQuestion = decisionRowsInScope(ownShardRows(pd).mine, flags.stage, flags.unit).at(-1);
     if (named !== null) {
       fields["Message Id"] = named.id;
       const namedWords = named.words === null ? null : personsWordsText(named.words);
       if (namedWords && !isNonAnswer(namedWords)) fields["Person Reply"] = namedWords;
     } else if (instruction === undefined && !autonomousDecision) {
-      const reply = personsGateReply(pd, invokingChat(pd), flags.stage);
+      const reply = personsGateReply(pd, invokingChat(pd), flags.stage, ownQuestion);
       if (reply.words) fields["Person Reply"] = reply.words;
       if (reply.messageId) fields["Message Id"] = reply.messageId;
       Object.assign(fields, windowMessageIds(reply));
@@ -4565,9 +4571,10 @@ function handleReview(args: string[]): void {
       // nothing. No completion of the reviewer since the request (its row,
       // with the digest for this review file; another agent's row is not it)
       // is evidence only where noReviewerFinishedSinceReview says so (on Claude
-      // Code, outside a worktree, with no background agent sent since): there
-      // the row says no reviewer had finished, said once here, and at the gate
-      // under strict.
+      // Code; elsewhere when every helper sent since the request came back and
+      // none was the reviewer; outside a worktree, with no background agent
+      // sent since): there the row says no reviewer had finished, said once
+      // here, and at the gate under strict.
       // The fallback records none of the file, so none of this applies to it.
       if (body !== null && !incompleteFallback && requestBinding.requestId !== null) {
         const events = readAuditShardEvents(pd, intent, space);

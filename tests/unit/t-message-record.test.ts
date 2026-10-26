@@ -470,6 +470,37 @@ describe("the human-turn hook keeps one record of each message", () => {
     });
   }
 
+  // Codex's box lets the person move past a question and submit with it
+  // unanswered; that question comes back as an empty list (captured on Codex
+  // CLI 0.164.0). The box was dropped whole, so the answer the agent logged
+  // next carried only the message before it as their reply.
+  test("codex: a box with one question left blank keeps the pick, and the answer logged next carries it", () => {
+    const proj = withWork();
+    say(proj, "carry on with the requirements", "codex");
+    const language = "Which language should the CLI use?";
+    const style = "Which test style?";
+    const log = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+    const chat = { AIDLC_SESSION_OVERRIDE: SESSION, AIDLC_SESSION_OVERRIDE_SOURCE: undefined };
+    run(proj, [log, "decision", "--stage", "requirements-analysis", "--decision", language, "--options", "TypeScript,Python",
+      "--project-dir", proj], "", chat);
+    const tree = hostTree(proj, "codex");
+    writeSessionPidEntry(proj, process.pid, SESSION);
+    run(proj, [join(proj, tree, "hooks", "aidlc-codex-adapter.ts"), "record-human-turn"], JSON.stringify({
+      hook_event_name: "PostToolUse", tool_name: "request_user_input", session_id: SESSION, turn_id: "t2", cwd: proj,
+      tool_input: { questions: [
+        { header: "Language", id: "language", question: language, options: [{ label: "TypeScript", description: "Node" }, { label: "Python", description: "CPython" }] },
+        { header: "Tests", id: "style", question: style, options: [{ label: "Unit only", description: "Fast" }, { label: "Unit and e2e", description: "Slower" }] },
+      ] },
+      tool_response: JSON.stringify({ answers: { language: { answers: ["TypeScript"] }, style: { answers: [] } } }),
+    }), { ...UNSET, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined });
+    const box = records(proj).find((record) => record.source === "picker");
+    expect(box?.picker).toEqual([{ question: language, reply: "TypeScript" }, { question: style, reply: null }]);
+    expect(box?.words).toBe("TypeScript");
+    run(proj, [log, "answer", "--stage", "requirements-analysis", "--details", "TypeScript", "--project-dir", proj], "", chat);
+    const [answered] = readAuditShardEvents(proj).filter((row) => row.event === "QUESTION_ANSWERED");
+    expect(auditBlockField(answered.block, "Person Reply")).toContain("TypeScript");
+  });
+
   test("a box that came back with nothing picked writes no record", () => {
     const proj = withWork();
     pickMany(proj, ["Keep which notes?", "Anything to add?"], {});

@@ -367,7 +367,15 @@ function heldByLaterProcess(pid: number, recorded: unknown, ownerPath: string): 
 }
 
 function clearStaleLock(lockPath: string): void {
-  const directory = pathExists(lockPath) && lstatSync(lockPath).isDirectory();
+  // The lock can go at any moment, since its holder may not share the local
+  // gate (a release from before it): one look here, and a lock gone by the
+  // owner read below is free for the caller's next attempt.
+  let directory = false;
+  try {
+    directory = lstatSync(lockPath).isDirectory();
+  } catch {
+    // Read below as a file lock, as an absent one is.
+  }
   const ownerPath = directory ? join(lockPath, "owner.json") : lockPath;
   // Null: a directory lock with no owner.json at all.
   let raw: string | null;
@@ -379,7 +387,7 @@ function clearStaleLock(lockPath: string): void {
     raw = readFileSync(ownerPath, "utf-8");
   } catch (error) {
     const absent = (error as NodeJS.ErrnoException).code === "ENOENT";
-    if (!directory && absent) return;
+    if (absent && (!directory || !pathExists(lockPath))) return;
     if (!absent || !unstampedPastGrace(lockPath)) {
       throw new Error(`cannot verify transaction lock ${lockPath}`);
     }

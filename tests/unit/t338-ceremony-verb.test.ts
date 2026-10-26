@@ -502,8 +502,9 @@ describe("t338 atomic per-intent settings", () => {
     expect(printed.kind).toBe("print");
     const command = printed.message.match(/`[^`]*\b(engine config set [^`]+)`/);
     expect(command).not.toBeNull();
+    // Guard Policy off turns checks off, so the step asks the setter for its lines alone.
     expect(command![1].split(/\s+/)).toEqual([
-      "engine", "config", "set", "guard-policy", "off", "--sensors", "off",
+      "engine", "config", "set", "guard-policy", "off", "--sensors", "off", "--verbatim",
     ]);
     expect(printed.message).not.toContain("change-control");
     expect(readFileSync(state, "utf-8")).toBe(before);

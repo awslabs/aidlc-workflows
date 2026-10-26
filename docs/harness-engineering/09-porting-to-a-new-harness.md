@@ -165,7 +165,12 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   hears it in one line. Declare it only after a live check shows the row lands
   first: on a host that writes it later or not at all, the person would be told
   no reviewer finished a review one did. Only Claude Code declares it
-  (`CLAUDE_CODE_SESSION_ID`).
+  (`CLAUDE_CODE_SESSION_ID`). Every other host gets the same mark from the
+  dispatch record instead: an adapter whose dispatches reach the
+  `deliver-stage-rules` hook writes it there, and one that runs no dispatch
+  hook forwards `hook_event_name: "SubagentStart"` with the helper's
+  `agent_type` to `log-subagent` once it lets the helper go. Without either,
+  the host never marks.
 - `statusLine` (optional) - only for a host with a status line AI-DLC can show
   its progress in, in that host's own shape (Claude Code: `{ type, command }`;
   Codex: `{ items }`). It is emitted into `tools/data/harness.json`, never into a

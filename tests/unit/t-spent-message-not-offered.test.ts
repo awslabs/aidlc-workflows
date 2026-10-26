@@ -193,7 +193,10 @@ describe("while the code plan question waits, the message an earlier approval wa
     expect(auditBlockField(row, "Person Reply")).toBe("skip plan approval for this work");
   });
 
-  test("a message from before the question that no decision has followed is still offered", () => {
+  // Plan approval off stands only on a message since the waiting question
+  // (Arden's call, planApprovalOffStands), so one from before it is not
+  // offered either, decision or none.
+  test("a message from before the question that no decision has followed is not offered for plan approval off", () => {
     const proj = bugfixAtRequirements();
     const approve = said(proj, "Approve");
     tick();
@@ -203,10 +206,10 @@ describe("while the code plan question waits, the message an earlier approval wa
     planQuestionShown(proj);
     const refused = planApprovalOff(proj);
     expect(refused.rc).not.toBe(0);
-    expect(refused.out).toContain(`If their message ${asked} (sent `);
+    expect(refused.out).not.toContain(asked);
     expect(refused.out).not.toContain(approve);
-    expect(planApprovalOff(proj, asked).rc).toBe(0);
-    expect(stateField(proj, "Plan Approval")).toBe("off (set by you)");
+    expect(planApprovalOff(proj, asked).rc).not.toBe(0);
+    expect(stateField(proj, "Plan Approval")).toBe("on (from scope bugfix)");
   });
 });
 

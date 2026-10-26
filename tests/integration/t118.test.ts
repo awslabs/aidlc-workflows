@@ -596,6 +596,22 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
 
+  test("SP4j: a jump back to a stage the plan skips gets the question `next --stage` asks, never 'Jump accepted' first", () => {
+    // A bugfix plan at Requirements Analysis: it leaves out Intent Capture,
+    // behind the current stage, and User Stories, ahead of it.
+    const p = projWithState("state-mid-inception.md");
+    const before = readFileSync(statePath(p), "utf-8");
+    const report = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
+    const asked = nextDirective(p, ["--stage", "intent-capture"]);
+    expect(personLine(asked.message)).toContain("Do you want me to run it on its own now");
+    expect(report("--choice", "jump", "--target", "intent-capture")).toEqual(asked);
+    // A skipped stage ahead goes back on the plan through `next --stage`, so that jump is accepted.
+    expect(report("--choice", "jump", "--target", "user-stories").message)
+      .toContain("Jump accepted. Run `next --stage user-stories`");
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
+  });
+
   test("SP4f: a redo, jump, or fresh request at an open gate is that request, never a rejection", () => {
     const p = projWithState("state-mid-ideation.md");
     run(ORCHESTRATE, [

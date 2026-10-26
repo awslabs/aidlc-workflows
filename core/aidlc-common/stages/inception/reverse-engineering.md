@@ -120,6 +120,9 @@ read-only check:
 - **STALE / UNVERIFIED / UNKNOWN_SCOPE** - the store's knowledge is out of
   date, unverifiable, or predates scope tracking. Present the rescan question
   below WITHOUT the reuse option.
+- **SCANNED** - this run already scanned the repo and published the store: ask
+  nothing and record nothing for it; when no repo is left to scan, go on to
+  Step 4.
 
 Reuse question (CURRENT + coverage fits the intent) - fold the tool's output
 (store intent, analyzed paths) into the prompt so the human decides on
@@ -280,7 +283,7 @@ Developer writes the structured scan results following the Developer Code Scan
 Template in `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`:
 
 - Unrecorded project-root repo (no repo is registered, and `codekb-path`
-  prints the project folder's own name):
+  prints the name it gives the project folder):
   `<record>/inception/reverse-engineering/developer-scan.md`, also when you
   pass that name as `--repo`, so a rescan replaces the earlier handoff
 - Registered repo (including an exactly-one repo set):

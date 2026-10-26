@@ -629,10 +629,8 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     const id = /--request ([0-9a-f]{8})/.exec(String(read.message))?.[1];
     expect(id).toBeDefined();
     const ask = directiveOf(runNext(proj, ["--request", id!]).out);
-    const confirm = String(ask.confirm_command);
-    const next = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
-    expect(next.kind).toBe("ask");
-    expect(next.ask_type).toBe("new-work-routing");
+    expect(ask.kind).toBe("ask");
+    expect(ask.ask_type).toBe("new-work-routing");
   });
 
   // Settings typed with a new description beside other work go with the work
@@ -759,8 +757,9 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     const command = (label: string): string[] =>
       (new RegExp(`"${label}": \`[^\`]*? next ([^\`]+)\``).exec(named)?.[1] ?? "").split(" ");
     const kept = directiveOf(runNext(proj, command("Part of the active work")).out);
+    // Guard Policy relaxed lowers checks, so the step asks the setter for its lines alone.
     expect(String(kept.message)).toContain(
-      `config set depth minimal --guard-policy relaxed --message '${MESSAGE_SLOT}'\` to update the configuration${MESSAGE_FILL}`,
+      `config set depth minimal --guard-policy relaxed --message '${MESSAGE_SLOT}' --verbatim\` to update the configuration${MESSAGE_FILL}`,
     );
     // The separate-work choice reaches the plan question, then the creation.
     const separate = createdThrough(directiveOf(runNext(proj, command("Separate new piece of work")).out));

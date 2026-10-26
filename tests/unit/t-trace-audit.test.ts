@@ -80,6 +80,7 @@ function nightly(): string {
     "## Sensor Failed\n**Timestamp**: 2026-10-20T21:05:00Z\n**Event**: SENSOR_FAILED\n**Sensor ID**: required-sections\n**Stage slug**: requirements-analysis\n**Findings count**: 2\n",
     "## Sensor Passed\n**Timestamp**: 2026-10-20T21:05:01Z\n**Event**: SENSOR_PASSED\n**Sensor ID**: linter\n**Stage slug**: code-generation\n**Note**: tool-unavailable\n",
     "## Sensor Passed\n**Timestamp**: 2026-10-20T21:05:02Z\n**Event**: SENSOR_PASSED\n**Sensor ID**: traceability\n**Stage slug**: code-generation\n",
+    "## Sensor Could Not Run\n**Timestamp**: 2026-10-20T21:05:03Z\n**Event**: SENSOR_COULD_NOT_RUN\n**Sensor ID**: type-check\n**Stage slug**: build-and-test\n**Note**: script-error: exit-1\n",
     "## Blocked\n**Timestamp**: 2026-10-20T21:06:00Z\n**Event**: REVIEW_FREEZE_BLOCKED\n**Stage**: requirements-analysis\n**Reason**: a reviewer is reading\n",
     "## Error\n**Timestamp**: 2026-10-20T21:07:00Z\n**Event**: ERROR_LOGGED\n**Stage**: requirements-analysis\n**Tool**: aidlc-state\n**Command**: advance\n**Error**: lock timeout\n",
     "## Change Accepted\n**Timestamp**: 2026-10-20T21:08:00Z\n**Event**: CHANGE_ACCEPTED\n**Stage**: requirements-analysis\n**Details**: plan source drift\n",
@@ -146,12 +147,13 @@ describe("the extractor reads a nightly's live legs, the passing ones too", () =
     ]);
   });
 
-  test("sensor findings and noted passes come from the audit rows, by sensor and stage", () => {
+  test("sensor findings, checks that could not run and noted passes come from the audit rows, by sensor and stage", () => {
     const sensor = rowsOf(nightly()).filter((r) => r.cls === "sensor").map((r) => `${r.event} ${r.stage} ${r.detail}`);
     // A pass with no note is no row: only what a person or a triage would want to know.
     expect(sensor).toEqual([
       "SENSOR_FAILED requirements-analysis required-sections: 2 findings",
       "SENSOR_PASSED code-generation linter: tool-unavailable",
+      "SENSOR_COULD_NOT_RUN build-and-test type-check: could not run (script-error: exit-1)",
     ]);
   });
 

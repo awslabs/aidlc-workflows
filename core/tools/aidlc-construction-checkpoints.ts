@@ -19,6 +19,8 @@ import {
   constructionSkeletonOn,
   auditBlockField,
   authorizedVerificationCommand,
+  markPersonLinesHeard,
+  addPendingPersonLines,
   verificationCommandRecovery,
   type VerificationCommand,
   claimAttemptFields,
@@ -106,6 +108,7 @@ import {
   rawFingerprintForm,
   committedTextSha256,
 } from "./aidlc-lib.ts";
+import { unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
 import type { ApprovalDecider } from "./aidlc-review-brief.ts";
 
 
@@ -118,6 +121,13 @@ export type ApprovalFindingDispositions = (
   stages: readonly string[],
   units: readonly string[],
   decider: ApprovalDecider,
+) => Record<string, string>;
+
+// The fields a Request Changes row records for the review findings the person
+// rejected or reopened, from the same writer.
+export type RejectedFindingDispositions = (
+  stages: readonly string[],
+  units: readonly string[],
 ) => Record<string, string>;
 
 export function constructionCheckpointKind(
@@ -213,6 +223,9 @@ export interface ConstructionCheckpoint {
   /** From ask: what the person left out of this Unit's build, said once just
    *  before the question. */
   left_out?: string;
+  /** From ask: the files the person brought that this build changed or
+   *  deleted, with the way back, said once just before the question. */
+  changed_files?: string;
   /** From ask: the one check offered when a stage's review passes are spent
    *  and its reviewed work changed after the last review, said with
    *  `left_out` just before the question. */
@@ -1671,9 +1684,18 @@ export function askConstructionCheckpoint(
       .map((slug) => join(current.root, "construction", unit, slug, "traceability.json")));
     const offer = current.result.stages.map((slug) => findStageBySlug(slug))
       .map((stage) => stage ? reviewCheckOffer(projectDir, stage, unit) : null).find((found) => found !== null) ?? null;
+    const changedFiles = current.result.stages.includes("code-generation")
+      ? unheardBroughtFilesLine(projectDir, readStateFile(projectDir), session, true)
+      : null;
+    // With their reply already in, the question is not shown: the line about
+    // their files rides the next step the agent speaks from instead.
+    const carried = changedFiles !== null && earlier !== null &&
+      addPendingPersonLines(projectDir, session, [changedFiles.line]);
+    if (changedFiles !== null && (earlier === null || carried)) markPersonLinesHeard(projectDir, session, [changedFiles.key]);
     const result = {
       ...current.result,
       ...(leftOut === null ? {} : { left_out: leftOut }),
+      ...(changedFiles === null || carried ? {} : { changed_files: changedFiles.line }),
       ...(offer === null ? {} : { check_offer: offer.offer }),
     };
     if (earlier === null) return result;
@@ -1806,6 +1828,7 @@ export function rejectConstructionCheckpoint(
   givenReason: string,
   session = "",
   message?: string,
+  rejectedFindings?: RejectedFindingDispositions,
 ): ConstructionCheckpoint {
   // The conductor read the person's reply as a change request. What they said
   // to change is the reason: the conductor's --reason when given, otherwise the
@@ -1828,11 +1851,13 @@ export function rejectConstructionCheckpoint(
     if (current.root !== rechecked.root || current.result.fingerprint !== rechecked.result.fingerprint) {
       throw new Error("Construction checkpoint evidence changed before rejection.");
     }
+    const gate = gateFields(projectDir, rechecked.result, rechecked.state);
     appendAuditEntryUnlocked("GATE_REJECTED", {
-      ...gateFields(projectDir, rechecked.result, rechecked.state),
+      ...gate,
       Session: session,
       "User Input": userInput, Feedback: reason, Reason: reason,
       ...protectedResponseFields(response),
+      ...rejectedFindings?.(gate["Gate Stages"].split(", ").filter(Boolean), [unit]),
     }, projectDir);
     consumeProtectedQuestion(projectDir, session);
     return resolveConstructionCheckpoint(projectDir, unit, kind);

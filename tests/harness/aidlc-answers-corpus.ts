@@ -80,12 +80,11 @@ export const QUESTIONS = [...new Set(ANSWERS.map((item) => item.question))];
 /** Questions with no fixture: their items are reported as skipped with this reason. */
 export const NO_FIXTURE: Partial<Record<Question, string>> = {};
 /** Questions the agent asks in chat whose live drive takes only the replies typed with `/aidlc`, as the whole exchange.
- * The verification command: a fresh chat's bare `/aidlc` does not show it again; it comes back at its own checkpoint
- * step, which the fixture does not reach (openQuestionAgainDirective in aidlc-orchestrate.ts shows only a question with
- * no step of its own). A stage question and learnings: a bare `/aidlc` does show them again, but the drive cannot judge
- * the agent's words after a chat reply yet (it stops one tool call after the answer is recorded, and counts the stage's
- * next question as a second one). */
-export const ASKED_IN_CHAT: ReadonlySet<Question> = new Set(["verification-command", "stage-question", "learnings"]);
+ * A stage question and learnings: a bare `/aidlc` does show them again, but the drive cannot judge the agent's words
+ * after a chat reply yet (it stops one tool call after the answer is recorded, and counts the stage's next question as
+ * a second one). The verification command is not here: a fresh chat's bare `/aidlc` shows it again
+ * (openQuestionAgainDirective in aidlc-orchestrate.ts), so every reply to it is driven. */
+export const ASKED_IN_CHAT: ReadonlySet<Question> = new Set(["stage-question", "learnings"]);
 /** Questions a live drive cannot set up. Guard recovery's fixture writes the ask marker by hand, and the engine asks it
  * from the guard's own refusal record. The unit check reads its replies. */
 export const NOT_LIVE: ReadonlySet<Question> = new Set(["guard-recovery"]);

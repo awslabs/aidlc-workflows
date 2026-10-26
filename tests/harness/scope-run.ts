@@ -1269,15 +1269,19 @@ export class AgentStandIn {
       return;
     }
     if (cp.ready !== true) {
-      // The protocol's repair for stale review evidence is one recovery review
-      // at the next pass; anything else, or a second time, is the engine's.
+      // The protocol's repair for stale review evidence is one recovery review,
+      // at the pass the checkpoint's re-review names (else the next one);
+      // anything else, or a second time, is the engine's.
       const errors = (cp.errors as string[] | undefined) ?? [];
       const said = JSON.stringify({ error: `Construction checkpoint is not ready: ${errors.join(" ")}` });
       const stale = errors.filter((e) => /review evidence/.test(e)).map((e) => e.split(":")[0]);
       const repair = `${unit} ${errors.join(" ")}`;
       if (stale.length === 0 || this.repaired.has(repair)) this.refused(`the ${unit} checkpoint`, said);
       this.repaired.add(repair);
-      for (const reviewed of stale) this.reviewAgain(reviewed, unit);
+      const named = cp.rereview as { stage?: string; iteration?: number } | null | undefined;
+      for (const reviewed of stale) {
+        this.reviewAgain(reviewed, unit, false, named?.stage === reviewed ? named.iteration : undefined);
+      }
       return;
     }
     if (cp.verified !== true) {
@@ -1428,14 +1432,14 @@ export class AgentStandIn {
   }
 
   /**
-   * Another review pass after the last one: the repair a stale receipt asks
-   * for, or a second look the person asked for (`personAsked`, which the
-   * request says as the skill's row does).
+   * Another review pass after the last one, or at the pass the engine names:
+   * the repair a stale receipt asks for, or a second look the person asked for
+   * (`personAsked`, which the request says as the skill's row does).
    */
-  reviewAgain(stage: string, unit: string | null, personAsked = false): void {
+  reviewAgain(stage: string, unit: string | null, personAsked = false, iteration?: number): void {
     const last = this.reviews.get(`${stage} ${unit ?? ""}`);
     if (!last) this.fail(`${stage} needs a fresh review, but it was never reviewed`);
-    this.reviewPass(stage, unit, last.reviewer, last.iteration + 1, personAsked);
+    this.reviewPass(stage, unit, last.reviewer, iteration ?? last.iteration + 1, personAsked);
   }
 
   private reviewPass(stage: string, unit: string | null, reviewer: string, iteration: number, personAsked = false): void {

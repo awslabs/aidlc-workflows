@@ -39,6 +39,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Statusline not appearing | It shows only once you turn it on: `/aidlc --statusline on` (Claude Code and Codex). Then run `aidlc doctor`; for a copy install, verify `bun` is on PATH |
 | Subagent timed out | Run `/aidlc` to retry or run the stage inline |
 | `A program is watching the project folder (most likely a dev server or a test watcher still running)` (Windows) | A program that watches every folder of the project, such as a dev server (Vite) or a test watcher left running, keeps AI-DLC from moving the lock folder of its work record, so each step waits about 10 seconds. Stop that program (stopping `npm run dev` may stop only `npm` and leave the server running: close it from Task Manager or with `taskkill /T /PID <pid>`), and the next step goes on as normal. When the assistant, or an agent it sent, started that program in the conversation (to check the app, say), it stops it and the work goes on: you see this line only when neither started one, or the stop did not free the folder. With Guard Policy strict the build's writes are refused until it stops. |
+| Windows: git says `Filename too long` for a file under `aidlc/`, or a review or questions file cannot be written | The project folder is too deep: without long paths turned on, Windows tools and Git refuse paths over 260 characters, and AI-DLC's records sit deep under the project folder. `aidlc config` says so in one line, and `aidlc doctor` shows a `Project folder` row with how deep the folder is and how much the records add. Move the project to a shorter folder (for example `C:\src\<name>`), or turn long paths on: as an administrator, run `New-ItemProperty -Path HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force` in PowerShell, then run `git config --global core.longpaths true`. AI-DLC reads these two settings and says nothing when both are on; it never changes them, your folder or your git settings. Copilot CLI asks before every read of a path over 260 characters (`copilot -p` refuses it), whatever these two settings say, so with Copilot CLI only a shorter folder takes those questions away, and the line is said either way. |
 | Workflow stuck or misbehaving, need help | Run `/aidlc --doctor --export` and share the produced `.tar.gz` (redacted; no work product) |
 | A Bolt attempt was set aside | Ask the assistant to invoke the saved abort result's `restore_operation` with its exact argv; hints are display-only. Evidence-only attempts have no saved files to restore. See [getting the files back](#a-bolt-attempt-was-set-aside-getting-the-files-back) |
 
@@ -617,15 +618,16 @@ the one that fits: the Unit that made the change lists the path and is
 reviewed once more; a change nobody meant is undone; a path that
 is not source (a tool's cache written inside the repo, a build output, a nested
 repository that is not this project's code) is left out of the source checks by
-naming it under `exclude` in `.aidlc-source-paths.json` (the file in that repo's
-own folder for a recorded repo). The exclude works at once, with no further
-review; remove the line to put the path back. A path the project's `.gitignore`
-already ignores is never counted, and neither is a file another open piece of
-work in this folder lists in its own Units' source manifests (a second chat
-building its own work here), or anything under a folder it lists: that is the
-other work's change, and its own checks cover it. Archiving a piece of work you
-will not finish (`/aidlc intent archive <name>`) ends its claims. Under Guard
-Policy relaxed or off the change is kept and said once instead.
+naming it under `exclude` in `.aidlc-source-paths.json` (the file in its own
+folder for a recorded repo or a recorded checkout). The exclude works at once,
+with no further review; remove the line to put the path back. A path the
+project's `.gitignore` already ignores is never counted, and neither is a file
+another open piece of work in this folder lists in its own Units' source
+manifests (a second chat building its own work here), or anything under a folder
+it lists: that is the other work's change, and its own checks cover it.
+Archiving a piece of work you will not finish (`/aidlc intent archive <name>`)
+ends its claims. Under Guard Policy relaxed or off the change is kept and said
+once instead.
 
 On a plan with no Units the same change answers with "the project source
 changed after <reviewer> reviewed it" (or, once the one recovery review is used,

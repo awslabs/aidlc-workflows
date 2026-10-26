@@ -523,6 +523,38 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
     },
   );
 
+  // The one approval records a later stage's open findings too, and a fix asked
+  // reaches only the first stage's, so the brief names what Approve accepts
+  // only when no stage approved with it has open findings of its own.
+  test("3d: the brief's line names what Approve accepts only while the stages approved with it have none open", () => {
+    const brief = (proj: string): string => {
+      const r = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-review-brief.ts"), "review", "--stage", "functional-design",
+        "--why", "first", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: engineEnv(),
+      });
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+      return r.stdout;
+    };
+    const both = seedBuiltProject({ checkpoints: "disabled" }, [
+      ["functional-design", "alpha"],
+      ["nfr-requirements", "alpha"],
+    ]);
+    logReviewReady(both, "functional-design", "alpha", "An empty cart is not covered");
+    logReviewReady(both, "nfr-requirements", "alpha", "No rate limit is said");
+    openFirstGate(both);
+    const shared = brief(both);
+    expect(shared).not.toContain("Approve accepts");
+    expect(shared).toContain("- **Approve** - continue with the open findings accepted.");
+
+    const first = seedBuiltProject({ checkpoints: "disabled" }, [["functional-design", "alpha"]]);
+    logReviewReady(first, "functional-design", "alpha", "An empty cart is not covered");
+    openFirstGate(first);
+    expect(brief(first)).toContain(
+      "Approve accepts the open review finding R-01 (An empty cart is not covered) as risk; you can also approve and " +
+        "ask for it to be fixed, or reject it as not applying, saying why.",
+    );
+  });
+
   test("4: a change request approves nothing", () => {
     const proj = seedBuiltProject({ checkpoints: "disabled" });
     openFirstGate(proj);

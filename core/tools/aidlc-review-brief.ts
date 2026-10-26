@@ -19,7 +19,9 @@ import {
   constructionCheckpointsApply,
   errorMessage,
   extractMarkdownSection,
+  approvesTogetherStages,
   findStageBySlug,
+  isAutonomousConstructionGate,
   isTeamUnitOwnership,
   isUnreadableFindingsTableFinding,
   pairedReviewCompletions,
@@ -1472,6 +1474,26 @@ export function approvalDispositionField(
   decider: ApprovalDecider,
   fixRequested: readonly string[] = [],
 ): string | undefined {
+  return serializeReviewFindingDispositions(
+    approvalDecisions(projectDir, stages, units, decider, fixRequested).map(({ disposition }) => disposition),
+  );
+}
+
+// One finding's disposition, with the finding and its Unit, so the gate can
+// say which findings Approve accepts in the words the review used.
+interface ApprovalDecision {
+  disposition: ReviewFindingDisposition;
+  finding: ReviewFinding;
+  unit: string | undefined;
+}
+
+function approvalDecisions(
+  projectDir: string,
+  stages: ReviewDispositionStages,
+  units: string | readonly string[] | undefined,
+  decider: ApprovalDecider,
+  fixRequested: readonly string[],
+): ApprovalDecision[] {
   const scopes: ReadonlyArray<string | undefined> = units === undefined
     ? [undefined]
     : typeof units === "string"
@@ -1485,7 +1507,7 @@ export function approvalDispositionField(
   };
   const reviewed = reviewedContexts(projectDir, stages, scopes);
   const fixKeys = fixRequestedKeys(reviewed, fixRequested, decider);
-  const dispositions = reviewed.flatMap(({ stage, context }) => {
+  return reviewed.flatMap(({ stage, context }) => {
     const open = context.findings.filter((finding) =>
       finding.status === "New" || finding.status === "Unresolved"
     );
@@ -1499,7 +1521,7 @@ export function approvalDispositionField(
         reviewedBefore(projectDir, stage, context, own.row)
       ? own.decider
       : decider;
-    return open.flatMap((finding): ReviewFindingDisposition[] => {
+    return open.flatMap((finding): ApprovalDecision[] => {
       if (
         own?.recorded?.some((recorded) =>
           recorded.artifact === finding.artifact &&
@@ -1509,7 +1531,7 @@ export function approvalDispositionField(
       ) {
         return [];
       }
-      return [{
+      const disposition: ReviewFindingDisposition = {
         artifact: finding.artifact,
         id: finding.id,
         fingerprint: finding.fingerprint,
@@ -1524,10 +1546,65 @@ export function approvalDispositionField(
         ...(context.reviewRecord
           ? { reviewed_record: context.reviewRecord }
           : {}),
-      }];
+      };
+      return [{ disposition, finding, unit: context.unit }];
     });
   });
-  return serializeReviewFindingDispositions(dispositions);
+}
+
+// What a finding says, short enough to sit beside its id in one line; its
+// full text is in the findings above the line.
+const FINDING_GIST_MAX = 80;
+function findingGist(text: string): string {
+  const plain = text.replace(/\s+/g, " ").trim().replace(/[.\s]+$/, "");
+  if (plain.length <= FINDING_GIST_MAX) return plain;
+  const cut = plain.slice(0, FINDING_GIST_MAX - 3);
+  const word = cut.lastIndexOf(" ");
+  return `${(word > 0 ? cut.slice(0, word) : cut).replace(/[\s,;:]+$/, "")}...`;
+}
+
+// The other ways to decide an open finding, in plain words the person answers
+// in their own (no exact words to type): a fix asked as they approve is
+// --fix-finding on the approval, and a rejection is --reject-finding on a
+// change request, whose gate comes back with the review as it stands when
+// nothing else changed (unchangedChangeRequest). A rejection carries their
+// reason, so it asks for one. `{it}` is the finding, or one of them.
+const DECIDE_ONE_WAYS = ["approve and ask for {it} to be fixed", "reject {it} as not applying, saying why"] as const;
+
+// The #2099 line: the open findings a person's Approve at this stage's gate
+// records as `Accepted risk` (the builder approve writes through, so a finding
+// it records as `Changed after review` is not named), and DECIDE_ONE_WAYS.
+// Each Unit's review numbers from R-01, so when the findings named span Units
+// each is labelled with its Unit. Null when none is named, when Construction
+// approves the gate on its own, or when a stage the one approval covers after
+// this one (approvesTogetherStages) has open findings it accepts too: a fix
+// asked reaches only this stage's, so the line could not name all it accepts.
+function approveAcceptsLine(projectDir: string, stage: ReviewFingerprintStage): string | null {
+  const acceptedRisk = (of: ReviewFingerprintStage): ApprovalDecision[] =>
+    approvalDecisions(projectDir, of, undefined, "person", [])
+      .filter(({ disposition }) => disposition.status === "Accepted risk");
+  try {
+    const state = readFileSync(stateFilePath(projectDir), "utf-8");
+    if (isAutonomousConstructionGate(state, stage, projectDir)) return null;
+    const followers = (approvesTogetherStages(state, stage.slug) ?? []).slice(1);
+    if (followers.some((slug) => {
+      const follower = findStageBySlug(slug);
+      return follower !== undefined && follower.reviewer !== undefined && acceptedRisk(follower).length > 0;
+    })) return null;
+  } catch {
+    // No state to read: nothing is approving on its own or with this stage.
+  }
+  const accepted = acceptedRisk(stage);
+  if (accepted.length === 0) return null;
+  const byUnit = new Set(accepted.map(({ unit }) => unit)).size > 1;
+  const label = ({ finding, unit }: ApprovalDecision): string =>
+    byUnit && unit !== undefined ? `${unit} ${finding.id}` : finding.id;
+  const named = accepted.map((decision) => `${label(decision)} (${findingGist(decision.finding.finding)})`);
+  const one = named.length === 1;
+  const list = one ? named[0] : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
+  const ways = DECIDE_ONE_WAYS.map((way) => way.replace("{it}", one ? "it" : "one"));
+  const also = ways.length === 1 ? ways[0] : `${ways.slice(0, -1).join(", ")}, or ${ways.at(-1)}`;
+  return `Approve accepts the open review finding${one ? "" : "s"} ${list} as risk; you can also ${also}.`;
 }
 
 // The flags that name a gate's findings. A fix asked for carries no reason:
@@ -1633,7 +1710,7 @@ export function rejectedFindingDispositionField(
   projectDir: string,
   stages: ReviewDispositionStages,
   specs: string[],
-  unit?: string,
+  units?: string | readonly string[],
   reopenSpecs: string[] = [],
 ): string | undefined {
   if (specs.length === 0 && reopenSpecs.length === 0) return undefined;
@@ -1647,7 +1724,8 @@ export function rejectedFindingDispositionField(
         `the ${stageList.length === 1 ? "stage" : "gate"} has no reviewer.`,
     );
   }
-  const findings = gateFindings(reviewedContexts(projectDir, stageList, [unit]));
+  const scopes = units === undefined || typeof units === "string" ? [units] : units;
+  const findings = gateFindings(reviewedContexts(projectDir, stageList, scopes));
   const rejected = specs.map((raw) => selectGateFinding(findings, raw, "reject"));
   const reopened = reopenSpecs.map((raw) => selectGateFinding(findings, raw, "reopen"));
   const duplicate = (finding: { artifact: string; id: string }): never => {
@@ -2437,11 +2515,16 @@ export function renderReviewBrief(
     }
   }
   // Approve says what it records: the open findings accepted, and those on
-  // work changed after its review as that change.
+  // work changed after its review as that change. At the stage's gate the line
+  // after the findings names the ones it accepts, so the option does not say it
+  // again. A Unit's own approval keeps the option as it was: its checkpoint's
+  // command takes no finding flag, and a team Unit gate's approval covers the
+  // stages its own rhythm names.
+  const acceptsLine = contextUnit === undefined ? approveAcceptsLine(projectDir, stage) : null;
   const openChanged = contexts.flatMap((context) =>
     context.findings.filter(findingIsOpen).map((finding) => context.changedAfterReview?.includes(finding.id) === true)
   );
-  const accepted = openChanged.includes(false);
+  const accepted = openChanged.includes(false) && acceptsLine === null;
   const changed = openChanged.includes(true);
   const approve = accepted && changed
     ? "continue with the open findings accepted and the work as changed after review."
@@ -2449,10 +2532,13 @@ export function renderReviewBrief(
       ? "continue with the open findings accepted."
       : changed
         ? "continue with the work as changed after review."
-        : "continue; no findings are open.";
+        : acceptsLine !== null
+          ? "continue."
+          : "continue; no findings are open.";
   lines.push(
     "",
     renderFindingsContext(contexts),
+    ...(acceptsLine === null ? [] : ["", acceptsLine]),
     "",
     "**Decision options:**",
     `- **Approve** - ${approve}`,

@@ -43,8 +43,10 @@ import {
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   BLOCKING_SENSOR_OVERRIDE_DECISION,
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
+  blockingSensorPicks,
   codekbDir,
   codekbRepoName,
+  readAuditShardEvents,
   setField,
   setGuardPolicyLine,
 } from "../../core/tools/aidlc-lib.ts";
@@ -618,6 +620,84 @@ describe("t311 gate-bound sensor enforcement", () => {
     expect(gate(fixFirst, overrideArgs()).out).toContain("no fresh authorization receipt");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Another question for the stage logged after the check's own takes its open
+  // place; an answer naming one of the check's labels still answers the check's
+  // question, after a person's turn, so a Fix findings answer there is a pick
+  // too. One reply recorded for both questions (stage-protocol.md's
+  // `Q1: ...; Q2: ...`) is read the same way, by the first label its parts
+  // name. An answer by number reads only the open question's own options, and
+  // the look-back stops at the stage's last boundary.
+  test("an Override after a second question for the stage still authorizes", () => {
+    const ask = (fixture: Fixture, decision: string, options: string) =>
+      appendAuditEvent(fixture.project, "DECISION_RECORDED", { Stage: "probe", Decision: decision, Options: options });
+    const askCheck = (fixture: Fixture) =>
+      ask(fixture, BLOCKING_SENSOR_OVERRIDE_DECISION, BLOCKING_SENSOR_OVERRIDE_OPTIONS.join(","));
+    const askOther = (fixture: Fixture) =>
+      ask(fixture, "Override only the traceability finding, or every finding?", "Only traceability,Every finding");
+    const turn = (fixture: Fixture) => appendAuditEvent(fixture.project, "HUMAN_TURN");
+    const answer = (fixture: Fixture, details: string) =>
+      appendAuditEvent(fixture.project, "QUESTION_ANSWERED", { Stage: "probe", Details: details });
+    const shapes: Array<(fixture: Fixture) => void> = [
+      (f) => {
+        askCheck(f); askOther(f); turn(f);
+        answer(f, BLOCKING_SENSOR_OVERRIDE_CHOICE);
+      },
+      (f) => {
+        askCheck(f); turn(f); askOther(f); turn(f);
+        answer(f, "Every finding"); answer(f, BLOCKING_SENSOR_OVERRIDE_CHOICE);
+      },
+      (f) => {
+        askCheck(f); askOther(f); turn(f);
+        answer(f, "Every finding"); answer(f, BLOCKING_SENSOR_OVERRIDE_CHOICE);
+      },
+    ];
+    for (const shape of shapes) {
+      const fixture = setupFixture("blocking");
+      shape(fixture);
+      const overridden = gate(fixture, overrideArgs());
+      expect(overridden.status, overridden.out).toBe(0);
+    }
+
+    const byNumber = setupFixture("blocking");
+    askCheck(byNumber); askOther(byNumber); turn(byNumber);
+    answer(byNumber, "2");
+    expect(gate(byNumber, overrideArgs()).out).toContain("no fresh authorization receipt");
+
+    const fixAfter = setupFixture("blocking");
+    askCheck(fixAfter); askOther(fixAfter); turn(fixAfter);
+    answer(fixAfter, "Fix findings");
+    expect([...blockingSensorPicks(readAuditShardEvents(fixAfter.project), "probe").values()]).toEqual(["Fix findings"]);
+
+    const combined = setupFixture("blocking");
+    askCheck(combined); askOther(combined); turn(combined);
+    answer(combined, `Q1: ${BLOCKING_SENSOR_OVERRIDE_CHOICE}; Q2: Every finding`);
+    const accepted = gate(combined, overrideArgs());
+    expect(accepted.status, accepted.out).toBe(0);
+    const picksFor = (details: string, checkFirst = true): string[] => {
+      const fixture = setupFixture("blocking");
+      if (checkFirst) {
+        askCheck(fixture); askOther(fixture);
+      } else {
+        askOther(fixture); askCheck(fixture);
+      }
+      turn(fixture);
+      answer(fixture, details);
+      return [...blockingSensorPicks(readAuditShardEvents(fixture.project), "probe").values()];
+    };
+    expect(picksFor("Q1: Fix findings; Q2: Every finding")).toEqual(["Fix findings"]);
+    expect(picksFor(`Q1: Fix findings; Q2: ${BLOCKING_SENSOR_OVERRIDE_CHOICE}`)).toEqual(["Fix findings"]);
+    expect(picksFor(`Fix findings; ${BLOCKING_SENSOR_OVERRIDE_CHOICE}`, false)).toEqual(["Fix findings"]);
+    expect(picksFor(`Q1: Every finding; Q2: ${BLOCKING_SENSOR_OVERRIDE_CHOICE}`, false))
+      .toEqual([BLOCKING_SENSOR_OVERRIDE_CHOICE]);
+
+    const beforeBoundary = setupFixture("blocking");
+    askCheck(beforeBoundary); askOther(beforeBoundary);
+    appendAuditEvent(beforeBoundary.project, "STAGE_STARTED", { Stage: "probe" });
+    turn(beforeBoundary);
+    answer(beforeBoundary, BLOCKING_SENSOR_OVERRIDE_CHOICE);
+    expect(gate(beforeBoundary, overrideArgs()).out).toContain("no fresh authorization receipt");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("blocking dispatch exits, malformed verdicts, and dispatcher timeouts fail closed", () => {
     for (const mode of ["exit-2", "malformed", "timeout"] as const) {
       const fixture = setupFixture("blocking");
@@ -631,6 +711,31 @@ describe("t311 gate-bound sensor enforcement", () => {
       expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain(
         "- [-] probe",
       );
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A check whose script crashed checked nothing: it is recorded as could not
+  // run, never as a pass. A blocking one still needs a verified pass, so the
+  // gate stops as it always has and names why; an advisory one stops nothing.
+  test("a check whose script crashes is recorded as could not run; blocking stops the gate, advisory does not", () => {
+    for (const severity of ["blocking", "advisory"] as const) {
+      const fixture = setupFixture(severity);
+      writeFileSync(join(fixture.scripts, "aidlc-sensor-gate-probe.ts"), 'process.stderr.write("boom\\n");\nprocess.exit(1);\n', "utf-8");
+      const result = gate(fixture);
+      const trail = audit(fixture.project);
+      expect(eventCount(trail, "SENSOR_COULD_NOT_RUN"), trail).toBe(2);
+      expect(eventCount(trail, "SENSOR_PASSED")).toBe(0);
+      expect(eventCount(trail, "SENSOR_FAILED")).toBe(0);
+      expect(trail).toContain("**Note**: script-error: exit-1");
+      if (severity === "blocking") {
+        expect(result.status, result.out).toBe(1);
+        expect(result.out).toContain("Blocking gate sensor evaluation did not pass");
+        expect(result.out).toContain("could not run (script-error: exit-1)");
+        expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain("- [-] probe");
+      } else {
+        expect(result.status, result.out).toBe(0);
+        expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain("- [?] probe");
+      }
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

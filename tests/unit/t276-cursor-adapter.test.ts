@@ -793,6 +793,21 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(shard).toContain("HUMAN_TURN");
   });
 
+  test("6b: a Task let through is on record as sent, before its completion closes it", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    seedAuditFile(proj);
+    clearLedger(proj);
+    const completed = () => readAuditShardEvents(proj).filter((row) => row.event === "SUBAGENT_COMPLETED").length;
+    const before = completed();
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseTask", proj)));
+    const sent = readAuditShardEvents(proj).filter((row) => row.event === "SUBAGENT_DISPATCHED");
+    expect(sent).toHaveLength(1);
+    const sentAgent = (PAYLOADS.preToolUseTask.tool_input as { subagent_type: string }).subagent_type;
+    expect(sent[0].block).toContain(`**Agent Type**: ${sentAgent}`);
+    expect(completed()).toBe(before);
+  });
+
   test("7: a delegated conversation cannot spawn a nested Task or overwrite the parent ledger", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");

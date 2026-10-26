@@ -864,6 +864,7 @@ function legRows(leg: TraceLeg, gapMs: number): TraceRow[] {
   for (const a of leg.audit) {
     const stage = a.fields["Stage slug"] ?? a.fields.Stage ?? "";
     if (a.event === "SENSOR_FAILED") add("sensor", stage, a.event, `${a.fields["Sensor ID"] ?? "?"}: ${a.fields["Findings count"] ?? "?"} findings`, a.src);
+    else if (a.event === "SENSOR_COULD_NOT_RUN") add("sensor", stage, a.event, `${a.fields["Sensor ID"] ?? "?"}: could not run (${a.fields.Note ?? "?"})`, a.src);
     else if (a.event === "SENSOR_PASSED" && a.fields.Note) add("sensor", stage, a.event, `${a.fields["Sensor ID"] ?? "?"}: ${a.fields.Note}`, a.src);
   }
   // refusal

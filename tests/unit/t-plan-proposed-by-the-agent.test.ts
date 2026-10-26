@@ -98,12 +98,13 @@ function expectEveryPlan(message: string): void {
 }
 
 /**
- * The creation the plan question's yes names, run as the agent runs it (where
- * work exists but none is selected, the yes meets the question of which piece
- * this is first; it is a separate new piece): the new work exists and is selected.
+ * The creation the question's yes names, run as the agent runs it: the plan
+ * question's yes, or, where work exists but none is selected, the question of
+ * which piece this is, answered as a separate new piece. The new work exists
+ * and is selected.
  */
 function createFromConfirm(proj: string, ask: Directive, env: NodeJS.ProcessEnv = { ...process.env }): string {
-  let created = next(CLAUDE_TOOLS, proj, answerArgs(ask.confirm_command), env);
+  let created = next(CLAUDE_TOOLS, proj, answerArgs(ask.confirm_command ?? ask.new_intent_command), env);
   if (created.kind === "ask" && created.new_intent_command !== undefined) created = next(CLAUDE_TOOLS, proj, answerArgs(created.new_intent_command), env);
   expect(created.kind, JSON.stringify(created).slice(0, 300)).toBe("print");
   const id = REQUEST.exec(String(created.message))![1];
@@ -418,27 +419,102 @@ describe("t-plan-proposed-by-the-agent: finished work and new work beside active
   });
 });
 
+// Every tool asks which work the request belongs to first, naming the plan the
+// agent proposed, so the person answers one question; before, every tool but
+// Kiro asked for the plan first and which work only after the yes.
 describe("t-plan-proposed-by-the-agent: work here but none selected", () => {
   for (const [harness, tools] of [["claude", CLAUDE_TOOLS], ["kiro", KIRO_TOOLS]] as const) {
-    test(`${harness}: the none-selected reading, the agent's plan, then one question, within three calls`, () => {
+    test(`${harness}: the none-selected reading, the agent's plan, then one question naming it, within three calls`, () => {
       proj = cloneWithWork(tools);
       const chain = follow(tools, proj, ["fix the login"], "bugfix");
       const note = JSON.stringify(chain.last).slice(0, 400);
       expect(chain.last.kind, note).toBe("ask");
       expect(chain.calls).toBeLessThanOrEqual(3);
-      if (harness === "kiro") {
-        // Kiro's routing harness asks which work it belongs to first, naming the plan.
-        expect(chain.last.ask_type, note).toBe("new-work-routing");
-        expect(chain.last.proposed_scope).toBe("bugfix");
-        const option = `as "bugfix" work (${creationSize(tools, proj, chain.last.new_intent_command)}) without changing it`;
-        expect(String(chain.last.question)).toContain(option);
-        expect(chain.last.choices?.[1]?.detail).toContain(option);
-      } else {
-        expect(chain.last.ask_type, note).toBe("scope-confirm");
-        expect(chain.last.proposed_scope).toBe("bugfix");
+      expect(chain.last.ask_type, note).toBe("new-work-routing");
+      expect(chain.last.proposed_scope).toBe("bugfix");
+      const option = `as "bugfix" work (${creationSize(tools, proj, chain.last.new_intent_command)}) without changing it`;
+      expect(String(chain.last.question)).toContain(option);
+      expect(chain.last.choices?.[1]?.detail).toContain(option);
+    });
+
+    // With no plan proposed, the separate-work answer reaches the new work's
+    // plan step; once that work exists, the words' own request answered again
+    // (the agent re-running the reading step's command) carries on with it, so
+    // nothing asks where work already built belongs.
+    test(`${harness}: no plan proposed: the separate-work answer reaches the plan step, the work starts once, and the request answered again carries on with it`, () => {
+      proj = cloneWithWork(tools);
+      const read = next(tools, proj, ["fix the login"]);
+      const root = REQUEST.exec(String(read.message))![1];
+      const ask = next(tools, proj, ["--request", root]);
+      expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
+      const step = next(tools, proj, answerArgs(ask.new_intent_command));
+      expect(String(step.message), JSON.stringify(step).slice(0, 300)).toContain(PROPOSAL);
+      const plan = next(tools, proj, ["--propose", "bugfix", "--request", REQUEST.exec(String(step.message))![1]]);
+      expect(plan.ask_type, JSON.stringify(plan).slice(0, 300)).toBe("scope-confirm");
+      const creation = next(tools, proj, answerArgs(plan.confirm_command));
+      const id = /intent create --scope bugfix --request ([0-9a-f]{8})/.exec(String(creation.message))?.[1];
+      expect(id, JSON.stringify(creation).slice(0, 300)).toBeDefined();
+      const made = spawnSync(process.execPath, [join(tools, "aidlc-utility.ts"), "intent-create", "--scope", "bugfix", "--request", id!, "--label", "login-fix", "--project-dir", proj], {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+      });
+      expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+      for (const args of [["--request", root], ["--request", root, "--propose", "bugfix"]]) {
+        const again = next(tools, proj, args);
+        expect(again.kind, JSON.stringify(again).slice(0, 300)).toBe("print");
+        expect(String(again.message)).toContain("Already started");
       }
+      expect(readdirSync(join(proj, "aidlc", "spaces", "default", "intents")).filter((name) => /^\d{6}-/.test(name))).toHaveLength(3);
     });
   }
+
+  // Words that skip the reading step (a setting typed with them, or the
+  // delimiter's re-run of words that answer nothing) reach the plan step first
+  // where finished work is here, so its way back is named before any question.
+  for (const [harness, tools, args] of [
+    ["claude", CLAUDE_TOOLS, ["--depth", "minimal", "go back to code generation on the finished work"]],
+    ["claude", CLAUDE_TOOLS, ["--", "go back to code generation on the finished work"]],
+    ["kiro", KIRO_TOOLS, ["--depth", "minimal", "go back to code generation on the finished work"]],
+  ] as const) {
+    test(`${harness}: finished work beside unfinished work, words with no reading step (${args[0]}): the plan step names the finished work and the way back`, () => {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, COMPLETED);
+      const r = spawnSync(process.execPath, [join(tools, "aidlc-utility.ts"), "intent-create", "--scope", "bugfix", "--label", "auth", "--project-dir", proj], {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env },
+      });
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+      rmSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), { force: true });
+      const step = next(tools, proj, [...args]);
+      expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
+      expect(String(step.message)).toContain("is finished, and it is not selected in this chat.");
+      expect(String(step.message)).toContain("next --stage <stage slug>`");
+      expect(String(step.message)).toContain(PROPOSAL);
+    });
+  }
+
+  // Finished work beside unfinished work, none selected: the words may ask to go
+  // back to a stage of the finished work, and the reading step, which the agent
+  // reads before any question, says so with the command that selects it.
+  test("finished work beside unfinished work: the reading step names the finished work and the way back to a stage", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    const r = spawnSync(process.execPath, [join(CLAUDE_TOOLS, "aidlc-utility.ts"), "intent-create", "--scope", "bugfix", "--label", "auth", "--project-dir", proj], {
+      cwd: proj,
+      encoding: "utf-8",
+      env: { ...process.env },
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    rmSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), { force: true });
+    const read = next(CLAUDE_TOOLS, proj, ["go back to code generation on the finished work"]);
+    expect(read.kind, JSON.stringify(read).slice(0, 300)).toBe("print");
+    const message = String(read.message);
+    expect(message).toStartWith("Work is in progress here (");
+    expect(message).toContain("is finished, and it is not selected in this chat.");
+    expect(message).toContain("next --stage <stage slug>`");
+  });
 
   test("kiro: without a proposed plan the pick question says the plan comes next", () => {
     proj = cloneWithWork(KIRO_TOOLS);
@@ -664,7 +740,8 @@ describe("t-plan-proposed-by-the-agent: creation retires the request's whole cha
     // the person gets the question of which work to pick up.
     const step = next(CLAUDE_TOOLS, proj, first as string[], chat);
     const setter = /Run `bun \.claude\/tools\/aidlc\.ts ([^`]+)`/.exec(String(step.message))?.[1];
-    expect(setter, JSON.stringify(step).slice(0, 300)).toBe("engine config set guard.review-freeze off");
+    // A check turned off: the step asks the setter for its lines alone, as it prints them verbatim.
+    expect(setter, JSON.stringify(step).slice(0, 300)).toBe("engine config set guard.review-freeze off --verbatim");
     const kept = spawnSync(process.execPath, [join(CLAUDE_TOOLS, "aidlc.ts"), ...(setter as string).split(" ")], {
       cwd: proj,
       encoding: "utf-8",
@@ -675,11 +752,13 @@ describe("t-plan-proposed-by-the-agent: creation retires the request's whole cha
     const bare = next(CLAUDE_TOOLS, proj, [], chat);
     expect(bare.ask_type, JSON.stringify(bare).slice(0, 300)).toBe("intent-pick");
     expect(String(bare.question ?? ""), JSON.stringify(bare).slice(0, 300)).not.toContain("fix the login");
-    // Work exists but none is selected here: the reading print, the agent's plan, the plan question.
+    // Work exists but none is selected here: the reading print, the agent's plan,
+    // and the question of which work it belongs to, naming the plan.
     const offer = follow(CLAUDE_TOOLS, proj, ["add", "a", "CSV", "export"], "feature", chat).last;
-    expect(offer.ask_type, JSON.stringify(offer).slice(0, 300)).toBe("scope-confirm");
-    // The person goes ahead with the plan.
-    reply(proj, "1", OTHER_CHAT);
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 300)).toBe("new-work-routing");
+    expect(offer.proposed_scope).toBe("feature");
+    // The person says it is separate new work, on that plan.
+    reply(proj, "2", OTHER_CHAT);
     createFromConfirm(proj, offer, chat);
     const record = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim();
     const state = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", record, "aidlc-state.md"), "utf-8");
@@ -725,5 +804,74 @@ describe("t-plan-proposed-by-the-agent: the which-work question hands out no pla
     const named = next(KIRO_TOOLS, proj, ["--request", id, "--propose", "bugfix"]);
     expect(named.ask_type, JSON.stringify(named).slice(0, 300)).toBe("new-work-routing");
     expect(named.scope_commands?.map((row) => row.scope).sort()).toEqual([...validScopes()].sort());
+  });
+});
+
+// A person who answers the which-work question in their own words with another
+// plan than the one it named ("separate, but use the classic plan") gets that
+// plan: the step that reads their reply names each other plan's command, the
+// rows the question itself carries. Before, it named the proposed plan's alone,
+// so the plan they named was dropped or their words were spent as a new request.
+describe("t-plan-proposed-by-the-agent: a reply naming another plan at the which-work question has that plan's command", () => {
+  const WORDS = "Separate work, but use the classic plan";
+  const OTHER_PLAN = '"Separate new piece of work" on another plan they name';
+  const asked = (tools: string, project: string, plan: string[]): Directive => {
+    const read = next(tools, project, ["fix the logout bug"]);
+    const id = REQUEST.exec(String(read.message))![1];
+    const open = next(tools, project, ["--request", id, ...plan]);
+    expect(open.ask_type, JSON.stringify(open).slice(0, 300)).toBe("new-work-routing");
+    return open;
+  };
+
+  test.each([
+    ["claude code, work in progress", CLAUDE_TOOLS, activeProject],
+    ["kiro, work here and none selected", KIRO_TOOLS, () => cloneWithWork(KIRO_TOOLS)],
+  ])("%s: the step names the classic plan's command, which starts the work on classic", (_where, tools, make) => {
+    proj = make();
+    const open = asked(tools, proj, ["--propose", "bugfix"]);
+    const classic = open.scope_commands!.find((row) => row.scope === "classic")!.command;
+    const step = String(next(tools, proj, [WORDS]).message);
+    expect(step).toContain("has not answered the question about where their words belong");
+    // The proposed plan's command stays first under its own answer.
+    expect(step).toContain(`"Separate new piece of work": \`${open.new_intent_command}\``);
+    const others = step.slice(step.indexOf(OTHER_PLAN));
+    expect(step.indexOf(OTHER_PLAN), step).toBeGreaterThan(step.indexOf(`"Separate new piece of work": `));
+    expect(others).toContain(`\`${classic}\``);
+    for (const row of open.scope_commands!.filter((entry) => entry.scope !== "bugfix")) expect(others).toContain(`\`${row.command}\``);
+    const started = next(tools, proj, answerArgs(classic));
+    expect(started.kind, JSON.stringify(started).slice(0, 300)).toBe("print");
+    expect(String(started.message)).toContain("--scope classic");
+  });
+
+  // A plan typed with the request asks the question at once, with what was
+  // typed: a setting kept for the new work rides every plan's command, a change
+  // to the typed plan's stages that plan's alone, as the question's own rows.
+  test.each([
+    ["kiro, work here and none selected, a setting and a skip typed", KIRO_TOOLS, () => cloneWithWork(KIRO_TOOLS),
+      ["--scope", "bugfix", "--learnings", "on", "--skip", "reverse-engineering", "fix the logout bug"], "bugfix"],
+    ["claude code, work in progress, another plan typed", CLAUDE_TOOLS, activeProject, ["--scope", "classic", "fix the logout bug"], "classic"],
+  ])("%s: each other plan's command in the step is the question's own row", (_where, tools, make, typed, plan) => {
+    proj = make();
+    const open = next(tools, proj, typed);
+    expect(open.ask_type, JSON.stringify(open).slice(0, 300)).toBe("new-work-routing");
+    expect(open.proposed_scope).toBe(plan);
+    const step = String(next(tools, proj, [WORDS]).message);
+    expect(step).toContain(`"Separate new piece of work": \`${open.new_intent_command}\``);
+    const others = step.slice(step.indexOf(OTHER_PLAN));
+    const named = [...others.slice(0, others.search(/; "|\. If they are asking/)).matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+    expect(named).toEqual(open.scope_commands!.filter((row) => row.scope !== plan).map((row) => row.command));
+    if (typed.includes("--skip")) {
+      for (const command of named) expect(command).toContain("--learnings on");
+      for (const command of named) expect(command).not.toContain("--skip");
+    }
+  });
+
+  test("claude code, work in progress, no plan proposed: the step names no plan's command beside the plan step", () => {
+    proj = activeProject();
+    const open = asked(CLAUDE_TOOLS, proj, []);
+    const step = String(next(CLAUDE_TOOLS, proj, [WORDS]).message);
+    expect(step).toContain(`"Separate new piece of work": \`${open.new_intent_command}\``);
+    expect(step).not.toContain(OTHER_PLAN);
+    expect(step).not.toContain("--new-intent --scope");
   });
 });

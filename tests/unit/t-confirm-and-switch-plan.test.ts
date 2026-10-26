@@ -163,6 +163,26 @@ describe("t-confirm-and-switch-plan: a confirmed summary's documents are written
     expect(message).toContain("stakeholder-map.md");
   });
 
+  // After a go-back the person confirms the summary again and keeps the documents as they are: the Keep records
+  // them under this confirmation, so the switch has nothing to write first (the summary guard reads the Keep the
+  // same way).
+  test("after a go-back, the summary confirmed again and Keep, the switch has nothing to write first", async () => {
+    const proj = await pocAtSummary(true);
+    await writeDocuments(proj, "Due dates, overdue first.");
+    await say(proj, "/aidlc --stage intent-capture", "claude");
+    const back = await next(proj, ["--stage", "intent-capture"]);
+    for (const command of named(String(back.directive?.message ?? ""), /aidlc-jump\.ts execute/)) await runNamed(proj, command);
+    expect((await next(proj, [])).directive?.stage).toBe("intent-capture");
+    const questions = writeQuestions(proj, "A");
+    await confirmSummary(proj, questions, "1");
+    const kept = await exec([process.execPath, join(AIDLC_SRC, "tools", "aidlc-state.ts"), "reuse-artifact", "intent-capture",
+      "--decision", "keep", "--artifacts", "intent-statement.md,stakeholder-map.md", "--project-dir", proj], { cwd: proj, env: env(proj) });
+    expect(kept.status, `${kept.stdout}${kept.stderr}`).toBe(0);
+    await say(proj, "can you switch this to the express plan?", "claude");
+    const message = await switchStep(proj, "express");
+    expect(message).not.toContain("The person confirmed");
+  });
+
   test("a switch to a plan that runs the stage keeps today's step", async () => {
     const proj = await pocAtSummary(true);
     const message = await switchStep(proj, "mvp");

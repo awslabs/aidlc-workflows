@@ -44,7 +44,7 @@ afterAll(() => {
 
 const state = (proj: string): string => readFileSync(stateFilePath(proj), "utf-8");
 const box = (proj: string, slug: string): string =>
-  new RegExp(`^- \\[(.)\\] ${slug} — (EXECUTE|SKIP)`, "m").exec(state(proj))?.slice(1).join(" ") ?? "";
+  new RegExp(`^- \\[(.)\\] ${slug} \u2014 (EXECUTE|SKIP)`, "m").exec(state(proj))?.slice(1).join(" ") ?? "";
 const events = (proj: string): string[] => readAuditShardEvents(proj).map((entry) => entry.event);
 
 /** A command a step names (`bun .claude/tools/<tool>.ts ...`), run from the shipped tree on this project. */
@@ -150,15 +150,35 @@ describe("t-approve-and-switch-plan: an approval typed with a plan switch at an 
   });
 
   // Practices Discovery's approval waits for the practices to be saved (practices-promote), so a bare approval
-  // report there is refused in engine words: the switch names no answer step and ends the turn, as before.
-  test("at Practices Discovery's gate, whose approval waits for the saved practices, the switch names no gate report", async () => {
+  // report there is refused in engine words: an approval typed with a switch or a skip waits for the person's next
+  // message. A change request needs no saving, so it is handed over and recorded at once (Arden's pick).
+  const REQUEST_CHANGES = '--result rejected --user-input "Request Changes"';
+  test("at Practices Discovery's gate the switch hands over a change request at once, and names no approval report", async () => {
     const proj = await atGate("feature", "practices-discovery");
-    await say(proj, "Approve, and switch to mvp", "claude");
+    await say(proj, "the practices list needs ruff instead of black, and switch to mvp", "claude");
     const step = await next(proj, ["--scope", "mvp"]);
     const message = String(step.directive?.message ?? "");
-    expect(message).toContain("to change scope, then print its output verbatim and stop.");
+    expect(message).toContain(`report --stage practices-discovery ${REQUEST_CHANGES}`);
     expect(message).not.toContain("--result approved");
     expect(turnEndIsOpen(proj)).toBe(true);
+    await ran(proj, named(message, /engine scope change --scope mvp/)[0]);
+    await ran(proj, named(message, /--result rejected/)[0]);
+    expect(getField(state(proj), "Scope")).toBe("mvp");
+    expect(box(proj, "practices-discovery")).toBe("R EXECUTE");
+  });
+
+  test("a skip typed at Practices Discovery's gate hands over a change request at once, and names no approval report", async () => {
+    const proj = await atGate("feature", "practices-discovery");
+    await say(proj, "the practices list needs ruff instead of black, and skip user stories", "claude");
+    const step = await next(proj, ["--skip", "user-stories"]);
+    const message = String(step.directive?.message ?? "");
+    expect(message).toContain("engine recompose --skip user-stories");
+    expect(message).toContain(`report --stage practices-discovery ${REQUEST_CHANGES}`);
+    expect(message).not.toContain("--result approved");
+    expect(turnEndIsOpen(proj)).toBe(true);
+    for (const command of named(message, /engine recompose --skip|--result rejected/)) await ran(proj, command);
+    expect(box(proj, "user-stories")).toBe("  SKIP");
+    expect(box(proj, "practices-discovery")).toBe("R EXECUTE");
   });
 
   test("a switch to a plan that does not run the waiting stage skips it with its own line and names no gate report", async () => {

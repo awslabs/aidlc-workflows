@@ -34,6 +34,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import * as guardSwitch from "../../dist/claude/.claude/tools/aidlc-guard-switch.ts";
 import { listMessages } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 setDefaultTimeout(120_000);
@@ -374,6 +375,16 @@ describe("a setting typed before any work exists is kept by the engine", () => {
     expect(withWork.directive?.kind, withWork.out).toBe("print");
     expect(String(withWork.directive?.message)).toContain("config set plan-approval off");
     expect(getField(state(open), "Plan Approval")).toBe("on (set by you)");
+  });
+
+  // Copilot CLI's session-start hook can land after the prompt hook's row.
+  test("Copilot-shaped: the chat's SESSION_STARTED after a flags-only line, with work open, still gets the setter named", () => {
+    const open = openWork();
+    reply(open, "/aidlc --plan-approval off");
+    appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: SESSION }, open);
+    const withWork = next(open, []);
+    expect(withWork.directive?.kind, withWork.out).toBe("print");
+    expect(String(withWork.directive?.message)).toContain("config set plan-approval off");
   });
 });
 

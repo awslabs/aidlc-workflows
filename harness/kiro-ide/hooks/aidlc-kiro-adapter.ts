@@ -2377,6 +2377,14 @@ if (target === NOTE_CALL) {
       const path = isAbsolute(rawPath) ? rawPath : resolve(projectDir, rawPath);
       writePendingCall(projectDir, { kind: "write", at: Date.now(), session, tool, path, before: fileSnapshot(path) });
     }
+  } else if (isKiroDelegationTool(toolName) && toolName !== "subagent_response") {
+    // The record that each helper was sent, which its completion closes: Kiro IDE
+    // runs no dispatch hook of AI-DLC's, so one is forwarded per delegate, once
+    // the guard card let the call through.
+    const targets = kiroDelegationTargets(toolName, toolArgs);
+    for (const t of targets.length > 0 ? targets : [{ agent: "" }]) {
+      runCore("aidlc-log-subagent.ts", { hook_event_name: "SubagentStart", session_id: session, agent_type: t.agent });
+    }
   }
   return 0;
 }

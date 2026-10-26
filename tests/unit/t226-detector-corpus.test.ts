@@ -1292,8 +1292,11 @@ describe("detector corpus", () => {
     ]) {
       const command = `${engine} orchestrate next ${typed}`;
       const setter = `${engine} ${named}`;
-      expect(isEngineToolCall("Bash", { command }, step(`${setter} --message '${MESSAGE_SLOT}'`, fill, verb)), command).toBe(false);
+      // A check turned off by config set: the step asks the setter for its lines alone.
+      const verbatim = named.startsWith("config set") ? " --verbatim" : "";
+      expect(isEngineToolCall("Bash", { command }, step(`${setter} --message '${MESSAGE_SLOT}'${verbatim}`, fill, verb)), command).toBe(false);
       for (const other of [
+        ...(verbatim ? [step(`${setter} --message '${MESSAGE_SLOT}'`, fill, verb)] : []),
         step(`${setter} --message 0a1b2c3d`, fill, verb),
         step(`${setter} --message`, fill, verb),
         step(`${setter} --message '${MESSAGE_SLOT}'`, "", verb),

@@ -11,8 +11,9 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { readReviewArtifactContexts } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
 import {
   approveSwarmCheckpoint,
   rejectSwarmCheckpoint,
@@ -323,6 +324,44 @@ function gates(pd: string, event = "GATE_APPROVED") {
   return readAuditShardEvents(pd).filter((row) => row.event === event && auditBlockField(row.block, "Checkpoint") === "swarm-batch");
 }
 
+// One advisory review of alpha's Code Generation through the logger, as a
+// real run records it, leaving one Major finding open: R-01.
+function openFinding(pd: string): void {
+  const path = seededStateFile(pd);
+  writeFileSync(path, readFileSync(path, "utf-8").replace("- **Review Override**: none", "- **Review Override**: advisory"));
+  const definition = findStageBySlug(STAGE)!;
+  const reviewer = definition.reviewer!;
+  const args = ["review", "--stage", STAGE, "--reviewer", reviewer, "--unit", "alpha", "--iteration", "1"];
+  const requested = tool(pd, "log", args);
+  expect(requested.code, requested.out).toBe(0);
+  const request = JSON.parse(requested.stdout.trim().split(/\r?\n/).at(-1)!) as { reviewFile: string };
+  const artifact = relative(pd, join(seededRecordDir(pd), "construction", "alpha", STAGE,
+    artifactFilename(definition.review_artifact ?? definition.produces![0]))).replaceAll("\\", "/");
+  mkdirSync(dirname(join(pd, request.reviewFile)), { recursive: true });
+  writeFileSync(join(pd, request.reviewFile), [
+    "**Verdict:** NOT-READY", `**Reviewer:** ${reviewer}`, "**Iteration:** 1", "", "### Findings", "",
+    "**Prior findings**", "", "| ID | Now | Severity | Note |", "|---|---|---|---|", "",
+    "**New findings**", "", "| Severity | Location | Finding | Required action |", "|---|---|---|---|",
+    `| Major | ${artifact} > retry | Retry is not covered. | Cover it. |`, "",
+  ].join("\n"));
+  const recorded = tool(pd, "log", [...args, "--verdict", "NOT-READY"]);
+  expect(recorded.code, recorded.out).toBe(0);
+}
+
+function dispositionsOf(row: { block: string }) {
+  const field = auditBlockField(row.block, "Review Finding Dispositions");
+  return field === null
+    ? null
+    : (JSON.parse(field) as { dispositions: Array<{ id: string; status: string }> }).dispositions
+      .map(({ id, status }) => ({ id, status }));
+}
+
+function alphaFindings(pd: string) {
+  return readReviewArtifactContexts(pd, findStageBySlug(STAGE)!, "alpha")
+    .flatMap((context) => context.findings)
+    .map(({ id, status }) => ({ id, status }));
+}
+
 describe("t343 completed swarm batch checkpoints", () => {
   test("check and finalize refuse a missing or substituted authorized command before execution", () => {
     const pd = fixture(false, [], false);
@@ -435,6 +474,53 @@ describe("t343 completed swarm batch checkpoints", () => {
     const [row] = gates(pd);
     expect(auditBlockField(row.block, "Review Finding Dispositions")).toBe(recorded);
     expect(auditBlockField(row.block, autonomous ? "Autonomous" : "User Input")).toBe(autonomous ? "true" : "Approve");
+  });
+
+  // The person names a finding as they decide the batch, and the conductor
+  // passes it to the command it runs: a fix asked for is no decision, so the
+  // next review re-checks the finding.
+  test("approving a batch and asking a finding fixed records Fix requested, and the finding stays open", () => {
+    const pd = fixture();
+    openFinding(pd);
+    converge(pd);
+    human(pd, "Approve, but get R-01 fixed");
+    const approved = tool(pd, "bolt", ["swarm-checkpoint", "--action", "approve", "--batch", "1", "--units", BATCH.join(","),
+      "--session", "t343-checkpoint", "--user-input", "Approve", "--fix-finding", "R-01"]);
+    expect(approved.code, approved.out).toBe(0);
+    expect(gates(pd).map(dispositionsOf)).toEqual([[{ id: "R-01", status: "Fix requested" }]]);
+    expect(alphaFindings(pd)).toEqual([{ id: "R-01", status: "New" }]);
+  });
+
+  test("a misspelled finding flag on a batch is refused with no row, and the retry approves with no new question", () => {
+    const pd = fixture();
+    openFinding(pd);
+    converge(pd);
+    human(pd, "Approve, but get R-01 fixed");
+    const approve = (flag: string) => tool(pd, "bolt", ["swarm-checkpoint", "--action", "approve", "--batch", "1",
+      "--units", BATCH.join(","), "--session", "t343-checkpoint", "--user-input", "Approve", flag, "R-01"]);
+    const refused = approve("--fix-findng");
+    expect(refused.code, refused.out).toBe(1);
+    expect(JSON.parse(refused.out).error).toStartWith('swarm-checkpoint does not accept "--fix-findng". It accepts --batch, ');
+    expect(gates(pd)).toEqual([]);
+    const retried = approve("--fix-finding");
+    expect(retried.code, retried.out).toBe(0);
+    expect(gates(pd).map(dispositionsOf)).toEqual([[{ id: "R-01", status: "Fix requested" }]]);
+  });
+
+  // One decision for the batch, so each Unit's row carries it.
+  test("Request Changes on a batch that rejects a finding records the rejection on each Unit's row", () => {
+    const pd = fixture();
+    openFinding(pd);
+    converge(pd);
+    human(pd, "Request Changes: R-01 does not apply, retry is out of scope; rename the handler");
+    const rejected = tool(pd, "bolt", ["swarm-checkpoint", "--action", "reject", "--batch", "1", "--units", BATCH.join(","),
+      "--session", "t343-checkpoint", "--user-input", "Request Changes", "--reason", "rename the handler",
+      "--reject-finding", "R-01=retry is out of scope"]);
+    expect(rejected.code, rejected.out).toBe(0);
+    const rows = gates(pd, "GATE_REJECTED");
+    expect(rows.map((row) => auditBlockField(row.block, "Unit"))).toEqual(BATCH);
+    expect(rows.map(dispositionsOf)).toEqual(BATCH.map(() => [{ id: "R-01", status: "Rejected: retry is out of scope" }]));
+    expect(alphaFindings(pd)).toEqual([{ id: "R-01", status: "Rejected: retry is out of scope" }]);
   });
 
   test("a passing caller check cannot replace the failing authorized command", () => {

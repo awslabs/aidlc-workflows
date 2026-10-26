@@ -377,11 +377,10 @@ describe("t-carry-on-continues-the-work: work here but none selected in this cha
       expect(goOn.calls).toBe(2);
       const request = follow(tools, proj, ["fix the login"], "request");
       expect(request.last.kind, JSON.stringify(request.last).slice(0, 300)).toBe("ask");
-      expect(request.last.ask_type).toBe(harness === "kiro" ? ROUTING_QUESTION : "scope-confirm");
+      expect(request.last.ask_type).toBe(ROUTING_QUESTION);
       expect(String(request.last.question)).toContain("fix the login");
-      // Kiro asks which work it belongs to at once; the others take the plan
-      // proposal step first, then the plan the agent proposes, then the question.
-      expect(request.calls).toBe(harness === "kiro" ? 2 : 3);
+      // Every tool asks which work it belongs to at once, naming the plan the agent proposed.
+      expect(request.calls).toBe(2);
     });
 
     // A fresh clone with one piece of work: `/aidlc --resume` picks it up and
