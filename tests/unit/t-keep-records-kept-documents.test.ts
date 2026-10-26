@@ -206,6 +206,9 @@ class Work {
       AIDLC_PROJECT_DIR: this.dir,
       AIDLC_UNATTENDED: "0",
       AIDLC_COMPILED_EXECUTABLE: "",
+      // The stage's checks before its review (completionChecksStep) are not
+      // this file's subject, and its documents are not written for them.
+      AIDLC_DISABLE_SENSORS: "1",
     };
     for (const key of HOST_ENV) delete this.env[key];
     for (const args of [
