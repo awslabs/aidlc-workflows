@@ -130,7 +130,6 @@ import {
 } from "./aidlc-question-store.ts";
 import {
   latestMessage, listMessages, messageBeforeJoining, noReplySince, personTurnStands, readMessage, standingPersonTurn,
-  type StoredMessage,
 } from "./aidlc-message-store.ts";
 import { aidlcEntryWords, APPROVAL_GATE_CHOICES, protectedChoices } from "./aidlc-reply-reader.ts";
 import {
@@ -3965,19 +3964,18 @@ function openQuestionAnswer(
 // was asked, with its choices, which a chat that never saw it asked needs, and
 // a command for each: the question's own answer command, or `next --request`
 // with the person's words, kept as `requestId`, which asks where that work
-// belongs. `before`: their message from before this chat joined the work
-// (messageBeforeJoining), named on the answer, its words kept as `log answer`
-// keeps a named message's.
+// belongs. `before`: the id of their message from before this chat joined the
+// work (messageBeforeJoining), named on the answer; its proof takes only a
+// message that carries their words, which `log answer` keeps beside it.
 function openQuestionReplyDirective(
   { stage, block, alone }: { stage: string; block: string; alone: boolean },
   requestId: string,
   { replies, wordsKept }: ReturnType<typeof chatReplies>,
   stateContent: string,
-  before: StoredMessage | null = null,
+  before: string | null = null,
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
-  const kept = before === null ? wordsKept : before.words !== null && !isNonAnswer(personsWordsText(before.words));
-  const answer = openQuestionAnswer(stage, block, kept, alone, stateContent, before?.id);
+  const answer = openQuestionAnswer(stage, block, wordsKept || before !== null, alone, stateContent, before ?? undefined);
   const decision = auditBlockField(block, "Decision");
   const choices = questionOptions(block);
   const asked = decision
