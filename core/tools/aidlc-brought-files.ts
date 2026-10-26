@@ -177,6 +177,7 @@ function markedPart(path: string, text: string, marker: string): { block: string
 // build (git's copy of it). With no copy, which part changed cannot be told,
 // and the file is named.
 function writtenByInstall(projectDir: string, record: InstallRecord, file: BroughtFile): boolean {
+  if (!record.whole.has(file.path) && !record.parts.has(file.path)) return false;
   let bytes: Buffer;
   try {
     bytes = readFileSync(join(projectDir, file.path));
@@ -332,7 +333,8 @@ export function broughtFilesLine(ordered: readonly ChangedFile[]): string {
  * The line for the question that approves the build, unless this chat already
  * heard it in this build attempt (the engine's say-once record; `key` is what
  * the caller marks once the person is shown it, and names the attempt and the
- * files, so git is asked only when the line will be said). With Unit
+ * files, so git is asked for each file's way back only when the line will be
+ * said). With Unit
  * checkpoints, each Unit's checkpoint approves the build and the stage gate the
  * engine settles after them does not say it.
  */
