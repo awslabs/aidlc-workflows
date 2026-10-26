@@ -1,4 +1,5 @@
-// UserPromptSubmit hook: record a HUMAN_TURN event (human-presence gate).
+// UserPromptSubmit and question-box PostToolUse hook: record a HUMAN_TURN event
+// (human-presence gate).
 //
 // On every real human prompt, append a HUMAN_TURN event to the active intent's
 // audit shard (the state machine's own append-only ledger). The approval /
@@ -523,7 +524,7 @@ async function helpRelay(typedPrompt: string, projectDir: string, sessionId: str
 async function run(input: string): Promise<number> {
   const notes: string[] = [];
   const forThePerson: Array<() => void> = [];
-  const handover: { help: string | null } = { help: null };
+  const handover: Handover = { help: null, event: "UserPromptSubmit" };
   try {
     return await respond(input, notes, forThePerson, handover);
   } finally {
@@ -537,15 +538,23 @@ async function run(input: string): Promise<number> {
     if (handover.help !== null && [...notes, handover.help].join("\n").length <= PROMPT_CONTEXT_MAX_CHARS) {
       notes.push(handover.help);
     }
-    if (notes.length > 0) process.stdout.write(hookContextLine("UserPromptSubmit", notes.join("\n")));
+    if (notes.length > 0) process.stdout.write(hookContextLine(handover.event, notes.join("\n")));
   }
+}
+
+// What respond hands run besides the notes: the help line, and the event the
+// host fired. A host takes a hook's context only under the event it fired (a
+// box answer's line named UserPromptSubmit is dropped on Claude Code).
+interface Handover {
+  help: string | null;
+  event: "UserPromptSubmit" | "PostToolUse";
 }
 
 async function respond(
   input: string,
   notes: string[],
   forThePerson: Array<() => void>,
-  handover: { help: string | null },
+  handover: Handover,
 ): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -645,6 +654,7 @@ try {
       // `severalPicks` keep reading `tool_response`/`toolResponse`: in the raw
       // Codex box a note the person added is a second answer beside their
       // pick, which is still one pick.
+      handover.event = "PostToolUse";
       const pickerResult = parsed.picker_reply ?? parsed.tool_response ?? parsed.toolResponse;
       pickerUnanswered = emptyPickerResult(pickerResult);
       picked = pickerUnanswered ? [] : pickedLabels(parsed.tool_response ?? parsed.toolResponse);
@@ -943,11 +953,12 @@ try {
         // Authority bookkeeping remains fail-open for the human's turn.
       }
       // On the work, the agent learns the id of the message it can name with
-      // --message, never its words: a reply, or a check the person asks in
-      // chat to change with nothing waiting on them (without the id, every
-      // such request met the setter's refusal first). The setter's proof of
-      // the message still decides.
-      if (promptSubmitted && messageId && !notAReply && !contextMayReachPerson) {
+      // --message, never its words: a reply typed or given in a question box,
+      // or a check the person asks in chat to change with nothing waiting on
+      // them (without the id, every such request met the setter's refusal
+      // first, and a setting asked in a box answer was recorded on the message
+      // typed before it). The setter's proof of the message still decides.
+      if ((promptSubmitted || pickerQuestion !== undefined) && messageId && !notAReply && !contextMayReachPerson) {
         notes.push(`This message of the person's is on record as ${messageId}: a decision you record from it can ` +
           `name it with --message ${messageId}.`);
       }

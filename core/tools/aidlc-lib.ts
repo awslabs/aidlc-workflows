@@ -46330,7 +46330,7 @@ export function sayOnceNoteLine(
  * including an older one still installed in a project, reads the top-level key
  * and rewraps it for its own host. So the line carries both, with the same text.
  */
-export function hookContextLine(event: "SessionStart" | "UserPromptSubmit", context: string): string {
+export function hookContextLine(event: "SessionStart" | "UserPromptSubmit" | "PostToolUse", context: string): string {
   return `${JSON.stringify({
     additionalContext: context,
     hookSpecificOutput: { hookEventName: event, additionalContext: context },
