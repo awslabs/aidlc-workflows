@@ -6,8 +6,7 @@
 // Uses the native worktree/approval fixture pattern from t344; no live agent.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   approvePlan, CHECK, cleanupCheckpointFixtures, completeOld, fixture, git, prepare, reject,
@@ -75,30 +74,6 @@ describe("prepare names what keeps the approved source from being committed", ()
       git(sub, [...IDENTITY, "commit", "-qm", "move"]);
     }, true);
     expect(message).toContain("vendor/sub/lib.ts differs from the last commit (modified) in the nested repository vendor/sub");
-  });
-
-  test("a file git ignores is named as ignored, not as uncommitted", () => {
-    const message = refusal((repo) => {
-      writeFileSync(join(repo, ".gitignore"), ".env\n");
-      git(repo, ["add", ".gitignore"]);
-      git(repo, [...IDENTITY, "commit", "-qm", "ignore .env"]);
-      writeFileSync(join(repo, ".env"), "SECRET=1\n");
-    });
-    expect(message).toContain(".env is ignored by git, so a commit leaves it out");
-    expect(message).not.toContain(".env is not committed");
-    expect(message).not.toContain("nested repository");
-  });
-
-  test.skipIf(process.platform === "win32")("a committed link to a file outside the repository is named as such", () => {
-    const outside = mkdtempSync(join(tmpdir(), "t-uncommitted-link-"));
-    writeFileSync(join(outside, "ext.ts"), "export const ext = 1;\n");
-    const message = refusal((repo) => {
-      symlinkSync(join(outside, "ext.ts"), join(repo, "src", "ext.ts"));
-      git(repo, ["add", "src/ext.ts"]);
-      git(repo, [...IDENTITY, "commit", "-qm", "link outside"]);
-    });
-    expect(message).toContain("src/ext.ts links outside the repository, so a commit cannot carry what it points to");
-    expect(message).not.toContain("@target");
   });
 
   test("in a workspace of several repositories the path names its repository", () => {

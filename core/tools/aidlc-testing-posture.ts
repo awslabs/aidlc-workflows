@@ -4943,9 +4943,7 @@ const SOURCE_DIFFERENCE_LIMIT = 3;
  * Names the first paths by which the selected repository's HEAD fails to
  * reproduce the approved source, and the nested repository one sits in, so the
  * refusal says what to commit and where. Both arguments are serialized source
- * listings; returns "" when none can be told apart. A path git ignores, and a
- * link to a file outside the repository, cannot be committed, so they are
- * named as such instead of as uncommitted.
+ * listings; returns "" when none can be told apart.
  */
 function describeSourceDifferences(
   repoCwd: string,
@@ -4956,14 +4954,11 @@ function describeSourceDifferences(
   const committed = parseSourceListing(committedBytes);
   const expected = parseSourceListing(expectedBytes);
   if (!committed || !expected) return "";
-  const differing = new Map<string, "new" | "deleted" | "modified" | "link">();
+  const differing = new Map<string, "new" | "deleted" | "modified">();
   for (const key of new Set([...committed.keys(), ...expected.keys()])) {
     const path = splitSourcePathKey(key)?.path;
     if (path === undefined) continue;
-    // The live walk names what a link outside the root leads to `<link>@target`; a commit never has it.
-    const link = /^(.*?)@target(\/|$)/.exec(path);
-    if (link) differing.set(link[1], "link");
-    else if (!committed.has(key)) differing.set(path, "new");
+    if (!committed.has(key)) differing.set(path, "new");
     else if (!expected.has(key)) differing.set(path, "deleted");
     else if (committed.get(key) !== expected.get(key)) differing.set(path, "modified");
   }
@@ -4975,25 +4970,16 @@ function describeSourceDifferences(
     }
     return null;
   };
+  const prefix = repoName === null ? "" : `${repoName}/`;
   let nestedShown = false;
   const shown = sorted.slice(0, SOURCE_DIFFERENCE_LIMIT).map(([path, kind]) => {
     const nested = nestedRepoOf(path);
-    const shownPath = `${repoName === null ? "" : `${repoName}/`}${path}`;
-    if (kind === "link") return `${shownPath} links outside the repository, so a commit cannot carry what it points to`;
-    const where = nested === null ? "" : ` in the nested repository ${repoName === null ? "" : `${repoName}/`}${nested}`;
-    if (kind === "deleted" || kind === "modified") {
-      nestedShown ||= nested !== null;
-      return kind === "deleted"
-        ? `${shownPath} is deleted but still committed${where}`
-        : `${shownPath} differs from the last commit (modified)${where}`;
-    }
-    const owner = nested === null ? repoCwd : join(repoCwd, ...nested.split("/"));
-    const ignored = spawnSync("git", ["check-ignore", "-q", "--no-index", "--", nested === null ? path : path.slice(nested.length + 1)], {
-      cwd: owner, timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
-    }).status === 0;
-    if (ignored) return `${shownPath} is ignored by git, so a commit leaves it out`;
     nestedShown ||= nested !== null;
-    return `${shownPath} is not committed (new or untracked)${where}`;
+    const where = nested === null ? "" : ` in the nested repository ${prefix}${nested}`;
+    const what = kind === "new" ? "is not committed (new or untracked)"
+      : kind === "deleted" ? "is deleted but still committed"
+        : "differs from the last commit (modified)";
+    return `${prefix}${path} ${what}${where}`;
   });
   if (shown.length === 0) return "";
   const more = sorted.length - shown.length;
