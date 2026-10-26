@@ -297,14 +297,6 @@ function decisionsOfStories(specContent: string, stories: Set<string> | null): S
   return decisions;
 }
 
-// A spec or packaging Unit has no screen to build an experience decision in.
-// Any other Unit may (a full-stack service renders screens, a library may hold
-// the components), so it owes its stories' decisions and marks one it does not
-// build N/A with its reason.
-function buildsExperience(kind: string | undefined): boolean {
-  return kind !== "spec" && kind !== "packaging";
-}
-
 // Whether Functional Design's produces_kinds gives a Unit of this kind the
 // artifact; without a readable stage graph, it does.
 function designWrites(kind: string | undefined, artifact: string): boolean {
@@ -327,18 +319,26 @@ function storyOfDecision(ux: string): string {
   return `US${group}.${story}`;
 }
 
-// The stories the story map gives only to Units with no screen: no Unit owes
-// their decisions, so the final gate does not either.
-function storiesWithoutScreen(projectDir: string, docsDir: string): Set<string> {
-  const none = new Set<string>();
-  const storyMap = join(docsDir, "inception", "units-generation", "unit-of-work-story-map.md");
-  const dag = resolveBoltDag(projectDir);
-  if (dag.state !== "ok" || !existsSync(storyMap)) return none;
-  const unitIds = unitIdMap(join(docsDir, "inception", "units-generation", "unit-of-work.md"), dag.units);
-  for (const [story, units] of storyAssignments(storyMap, dag.units, unitIds, [ID_PATTERNS.US]).assignments) {
-    if (units.size > 0 && [...units].every((unit) => !buildsExperience(dag.unitKinds?.get(unit)))) none.add(story);
+// A decision is defined where its ID opens a table row or list item. Two
+// decisions under one ID would be traced as one, and a decision whose story
+// stories.md lacks belongs to no Unit: both are fixed at Refined Mockups.
+function experienceProblems(specContent: string, decisions: Set<string>, storiesContent: string | null): string[] {
+  const defined = new Map<string, number>();
+  for (const line of specContent.split(/\r?\n/)) {
+    const id = /^\s*(?:[-*+]\s+|\|\s*)(UX\d+\.\d+\.\d+)\b/.exec(line)?.[1];
+    if (id) defined.set(id, (defined.get(id) ?? 0) + 1);
   }
-  return none;
+  const stories = storiesContent === null ? null : extractIds(storiesContent, [ID_PATTERNS.US]);
+  const problems: string[] = [];
+  for (const id of decisions) {
+    if ((defined.get(id) ?? 0) > 1) {
+      problems.push(`interaction-spec.md defines ${id} more than once; give each experience decision its own ID at Refined Mockups`);
+    }
+    if (stories && !stories.has(storyOfDecision(id))) {
+      problems.push(`interaction-spec.md's ${id} names story ${storyOfDecision(id)}, which stories.md does not have`);
+    }
+  }
+  return problems;
 }
 
 function addExperienceDecisions(result: UpstreamResolution, docsDir: string, stories: Set<string> | null): void {
@@ -346,7 +346,9 @@ function addExperienceDecisions(result: UpstreamResolution, docsDir: string, sto
   if (!existsSync(interactionSpec)) return;
   const read = readText(interactionSpec);
   if (read.content === null) return;
-  for (const id of decisionsOfStories(read.content, stories)) result.ids.add(id);
+  const decisions = decisionsOfStories(read.content, stories);
+  for (const id of decisions) result.ids.add(id);
+  result.reasons.push(...experienceProblems(read.content, decisions, null));
 }
 
 function idsFromFile(path: string, patterns: RegExp[], label: string): { ids: Set<string>; reason?: string } {
@@ -707,8 +709,9 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string, 
   if (stage === "code-generation") {
     // The experience decisions this run owes follow its stories: a Unit's own
     // stories through the story map, every story otherwise. Without stories a
-    // Unit has no story to own a decision through, so it owes none, and nor
-    // does a Unit with no screen.
+    // Unit has no story to own a decision through, so it owes none. A Unit
+    // that does not build one of them, such as a schema Unit sharing a story,
+    // marks it N/A with its reason.
     let decisionStories: Set<string> | null | undefined;
     if (existsSync(stories)) {
       if (unit && existsSync(storyMap)) {
@@ -735,9 +738,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string, 
       addRequirements(result, ["functional", "non-functional"], declared);
       decisionStories = null;
     }
-    if (decisionStories !== undefined && buildsExperience(resolvedUnit.context.kind)) {
-      addExperienceDecisions(result, docsDir, decisionStories);
-    }
+    if (decisionStories !== undefined) addExperienceDecisions(result, docsDir, decisionStories);
     for (const id of detailedNfrIds(constructionDir(docsDir, unit, "nfr-requirements"), NFR_REQUIREMENT_FILES) ?? []) {
       result.ids.add(id);
     }
@@ -1028,8 +1029,9 @@ function finalCoverage(projectDir: string): FinalCoverage {
     const read = readText(interactionSpec);
     if (read.reason) reasons.push(read.reason);
     if (read.content !== null) {
-      const noScreen = storiesWithoutScreen(projectDir, docsDir);
-      experience.push(...[...extractIds(read.content, [ID_PATTERNS.UX])].filter((id) => !noScreen.has(storyOfDecision(id))));
+      const decisions = extractIds(read.content, [ID_PATTERNS.UX]);
+      experience.push(...decisions);
+      reasons.push(...experienceProblems(read.content, decisions, storyContent));
     }
   }
   // Without a record requirements.md's reasons are not said, as in addRequirements.

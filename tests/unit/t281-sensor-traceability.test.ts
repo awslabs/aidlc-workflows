@@ -764,13 +764,31 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     });
   }
 
-  test("code-generation asks a spec or packaging Unit for no experience decision", () => {
+  test("code-generation owes a spec Unit its stories' decisions, such as an API's error shape", () => {
     const proj = project();
     seedExperience(proj);
-    write(proj, "inception/refined-mockups/interaction-spec.md", "# Interaction Spec\n\n- UX1.1.1 Sign in on one page [Q2]\n");
+    write(proj, "inception/refined-mockups/interaction-spec.md", "# Interaction Spec\n\n- UX1.1.1 A failed sign-in returns one error object per field [Q2]\n");
     kindUnits(proj, "spec", "packaging");
     const out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2"]));
-    expect(out.result.pass, out.result.reason).toBe(true);
+    expect(out.result.missing_from_upstream_ids).toEqual(["UX1.1.1"]);
+  });
+
+  test("code-generation refuses two decisions under one ID", () => {
+    const proj = project();
+    seedExperience(proj);
+    write(proj, "inception/refined-mockups/interaction-spec.md", [
+      "# Interaction Spec",
+      "",
+      "| ID | Decision |",
+      "|---|---|",
+      "| UX1.1.1 | Sign in on one page [Q2] |",
+      "| UX1.1.1 | A failed sign-in keeps the email [Q4] |",
+      "",
+      "The sign-in page realises UX1.1.1.",
+    ].join("\n"));
+    const out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1"]));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.reason).toContain("interaction-spec.md defines UX1.1.1 more than once");
   });
 
   test("functional-design owes a Unit that writes frontend-components.md the decisions of its stories, cited there", () => {
@@ -1885,7 +1903,7 @@ describe("t281 Build and Test: every requirement and criterion is built", () => 
     expect(row(out, "UX1.2.1")).toEqual({ id: "UX1.2.1", covered: true, built_in: ["u2-profile: src/profile/reset.ts"] });
   });
 
-  test("does not report a decision whose stories only a spec or packaging Unit has", () => {
+  test("reports a decision a spec Unit builds, and one naming a story stories.md lacks", () => {
     const proj = project();
     const tables = seedStoryPath(proj, { status: "OK", target: "src/profile/reset.ts" });
     write(proj, "inception/refined-mockups/interaction-spec.md", [
@@ -1910,9 +1928,27 @@ describe("t281 Build and Test: every requirement and criterion is built", () => 
     auth.coverage.push({ id: "UX1.1.1", status: "OK", target: "src/auth/login.ts" });
     writeFileSync(tables.auth, JSON.stringify(auth));
 
-    const out = runFinal(proj);
+    let out = runFinal(proj);
+    expect(out.uncovered).toEqual(["UX1.2.1"]);
+
+    const profile = JSON.parse(readFileSync(tables.profile, "utf-8"));
+    profile.upstream_ids.push("UX1.2.1");
+    profile.coverage.push({ id: "UX1.2.1", status: "OK", target: "src/profile/reset.ts" });
+    writeFileSync(tables.profile, JSON.stringify(profile));
+    out = runFinal(proj);
     expect(out.pass, out.reason).toBe(true);
-    expect(row(out, "UX1.2.1")).toBeUndefined();
+    expect(row(out, "UX1.2.1")).toEqual({ id: "UX1.2.1", covered: true, built_in: ["u2-profile: src/profile/reset.ts"] });
+
+    write(proj, "inception/refined-mockups/interaction-spec.md", [
+      "# Interaction Spec",
+      "",
+      "- UX1.1.1 Sign in on one page, not a wizard [Q2]",
+      "- UX1.2.1 The reset link opens the reset form directly [Q5]",
+      "- UX9.9.1 A decision for a story nobody wrote [assumption]",
+    ].join("\n"));
+    out = runFinal(proj);
+    expect(out.pass).toBe(false);
+    expect(out.reason).toContain("interaction-spec.md's UX9.9.1 names story US9.9, which stories.md does not have");
   });
 
   test("without stories (security-patch shape), FR leaves are built by their own rows and NFR1 through NFR1.1", () => {
