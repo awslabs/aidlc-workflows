@@ -31,6 +31,7 @@ const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const GUARD = join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const CHAT = "01995000-7a11-7000-8000-00000000e7e7";
 const ASKED = "approve, and turn plan approval off for the rest of this work";
 // The fixture profile's presence bypass would let a command lower a check: only the person's message can here.
@@ -190,6 +191,35 @@ describe.each(["off", "strict"] as const)("Guard Policy %s: a setting asked besi
     expect(stateField(proj, "Learnings")).toBe("off (set by you)");
   });
 
+  test("approve the plan, and turn learnings off: the plan answer first, then the setter on that message", () => {
+    const proj = bugfixAtRequirements(policy);
+    approve(proj, said(proj, "Approve"));
+    expect(["run-stage", "load-steering"]).toContain(next(proj).kind ?? "");
+    planWritten(proj);
+    expect(next(proj)).toEqual({ kind: "ask", ask_type: "plan-approval" });
+    const asked = said(proj, "approve the plan, and turn learnings off");
+    const answer = run(proj, LOG, ["answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan"]);
+    expect(answer.rc, answer.out).toBe(0);
+    const recorded = rows(proj, "PLAN_APPROVAL_RECORDED").at(-1);
+    expect(recorded === undefined ? null : auditBlockField(recorded.block, "Message Id")).toBe(asked);
+    const off = setter(proj, ["learnings", "off", "--message", asked]);
+    expect(off.rc, off.out).toBe(0);
+    expect(stateField(proj, "Learnings")).toBe("off (set by you)");
+  });
+
+  test("once the next gate is open, the Approve that passed the one before stands for no setting", () => {
+    const proj = bugfixAtRequirements(policy);
+    const approval = said(proj, "Approve");
+    approve(proj, approval);
+    const opened = run(proj, STATE, ["gate-start", "code-generation"], GATE_SETUP);
+    expect(opened.rc, opened.out).toBe(0);
+    expect(rows(proj, "STAGE_AWAITING_APPROVAL").length).toBeGreaterThan(1);
+    const off = setter(proj, ["learnings", "off", "--message", approval]);
+    expect(off.rc).not.toBe(0);
+    expect(off.out).not.toContain(approval);
+    expect(stateField(proj, "Learnings")).not.toContain("off");
+  });
+
   // The live shape the rule for every setting was made for: the agent went on
   // with the work, a guard refused it, and it turned a setting off on the Approve.
   test("after a guard refused the agent, the Approve stands for no setting, and the step is one it can take", () => {
@@ -201,7 +231,7 @@ describe.each(["off", "strict"] as const)("Guard Policy %s: a setting asked besi
     const off = setter(proj, ["plan-approval", "off", "--message", approval]);
     expect(off.rc).not.toBe(0);
     expect(off.out).not.toContain(approval);
-    expect(off.out).toContain("It stays on; carry on with the work.");
+    expect(off.out).toContain("It stays on; go on with the open step.");
     expect(stateField(proj, "Plan Approval")).toBe("on (from scope bugfix)");
     expect(rows(proj, "CEREMONY_SET")).toHaveLength(0);
   });

@@ -152,7 +152,7 @@ describe.each(POLICIES)("Guard Policy %s: a message that gave an approval or a d
     const named = setter(proj, ["--summary-confirmation", "off", "--message", id]);
     expect(named.status).not.toBe(0);
     expect(named.out).not.toContain(id);
-    expect(named.out).toContain("It stays on; carry on with the work.");
+    expect(named.out).toContain("It stays on; go on with the open step.");
     expect(named.out).not.toContain("because you said");
     expect(getField(stateOf(proj), "Summary Confirmation")).toBe(before);
   });

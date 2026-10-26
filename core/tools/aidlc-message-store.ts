@@ -611,7 +611,7 @@ function messageReach(
 function settingOnDecidedMessage(lowers: boolean): string {
   return "Cannot record this setting on that message: it already gave an approval or another decision, so it " +
     (lowers
-      ? "does not also turn a check off. It stays on; carry on with the work."
+      ? "does not also turn a check off. It stays on; go on with the open step."
       : "does not also stand for a setting. If their words asked for it, run the same command with no --message.");
 }
 
@@ -631,10 +631,11 @@ const GUARD_REFUSALS: Record<GuardRefusalEvent, true> = {
 // (settingsBesideDecision): live Copilot CLI and Kiro CLI runs recorded
 // "approve, and turn plan approval off" as the approval first, then lost the
 // setting. The reply is over, and its Approve stands for no setting
-// (messageReach), once the person has sent another message in that chat, a
-// later decision is on record, a guard has refused the agent, or the next
-// gate or the code plan question is up. Ids, the engine's own rows and their
-// places only, never words.
+// (messageReach), once the person has sent another message on this work (in
+// any chat: a resume is one), a later decision is on record (the run's own
+// approval included, which names no message), a guard has refused the agent,
+// or the next gate or the code plan question is up. Ids, the engine's own rows
+// and their places only, never words.
 function answeringItsApproval(pd: string, rows: readonly AuditShardEvent[], message: StoredMessage): boolean {
   let approval: AuditShardEvent | null = null;
   for (const row of rows) {
@@ -648,8 +649,7 @@ function answeringItsApproval(pd: string, rows: readonly AuditShardEvent[], mess
   const since = approval;
   const turn = rows.find((row) => row.event === "HUMAN_TURN" && auditBlockField(row.block, "Message Id") === message.id);
   const over = rows.some((row) =>
-    (row.event === "HUMAN_TURN" && auditBlockField(row.block, "Session") === message.session &&
-      auditBlockField(row.block, "Message Id") !== message.id &&
+    (row.event === "HUMAN_TURN" && auditBlockField(row.block, "Message Id") !== message.id &&
       (turn === undefined ? row.timestamp > message.at : rowAfter(row, turn, true))) ||
     ((Object.hasOwn(GUARD_REFUSALS, row.event) || row.event === "STAGE_AWAITING_APPROVAL") && rowAfter(row, since, true))
   );
