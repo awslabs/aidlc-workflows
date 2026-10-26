@@ -46324,8 +46324,8 @@ export function sayOnceNoteLine(
 }
 
 /**
- * The one line a SessionStart or UserPromptSubmit hook prints to hand the
- * agent context. Claude Code reads it only from hookSpecificOutput and drops a
+ * The one line a SessionStart, UserPromptSubmit or question-box PostToolUse
+ * hook prints to hand the agent context. Claude Code reads it only from hookSpecificOutput and drops a
  * top-level additionalContext without a word; every other harness's adapter,
  * including an older one still installed in a project, reads the top-level key
  * and rewraps it for its own host. So the line carries both, with the same text.
