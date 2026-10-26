@@ -2692,6 +2692,38 @@ function resolveSwarmSelection(projectDir: string, flags: Record<string, string>
   return ambient;
 }
 
+export function unbackedGitlinkWarnings(repoCwd: string): string[] {
+  const record = (args: string[]) => spawnSync("git", ["-C", repoCwd, ...args], {
+    encoding: "utf-8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const listed = record(["ls-files", "-s", "-z"]);
+  if (listed.status !== 0) return [];
+  const gitlinks = new Set<string>();
+  for (const entry of listed.stdout.split("\0")) {
+    if (!entry.startsWith("160000 ")) continue;
+    const tab = entry.indexOf("\t");
+    if (tab === -1) continue;
+    gitlinks.add(entry.slice(tab + 1).replace(/\\/g, "/"));
+  }
+  if (gitlinks.size === 0) return [];
+  const modules = record(["config", "-f", ".gitmodules", "--get-regexp", "^submodule\\..*\\.path$"]);
+  const declared = new Set<string>();
+  if (modules.status === 0) {
+    for (const line of modules.stdout.split("\n")) {
+      const value = line.slice(line.indexOf(" ") + 1).trim();
+      if (value) declared.add(value.replace(/\\/g, "/"));
+    }
+  }
+  return [...gitlinks]
+    .filter((path) => !declared.has(path))
+    .sort()
+    .map((path) =>
+      `${path} is a nested repository recorded without a .gitmodules entry: the Bolt worktree will hold ` +
+      "an empty folder there, and files a worker writes inside are not staged by git. " +
+      "Initialize it as a submodule, or remove the gitlink, before prepare.");
+}
+
 function handlePrepare(rest: string[]): void {
   const { flags } = parseArgs(rest);
   const projectDir = resolveProjectDir(flags["project-dir"]);
@@ -2783,6 +2815,7 @@ function handlePrepare(rest: string[]): void {
 
   // The Units land on the branch checked out here, whatever base they fork
   // from; a detached checkout names none.
+  const nestedRepoWarnings = unbackedGitlinkWarnings(repoCwd);
   const checkedOut = currentBranch(repoCwd);
   const landingBranch = checkedOut === "HEAD" ? null : checkedOut;
   const base = flags.base ?? checkedOut;
@@ -3174,6 +3207,7 @@ function handlePrepare(rest: string[]): void {
         concurrency: Number(concurrency),
         units: prepared,
         ...(swarmChangeNotices.length > 0 ? { change_notices: swarmChangeNotices } : {}),
+        ...(nestedRepoWarnings.length > 0 ? { warnings: nestedRepoWarnings } : {}),
       },
       null,
       2
