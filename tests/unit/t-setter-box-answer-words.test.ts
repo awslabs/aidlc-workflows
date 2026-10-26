@@ -18,7 +18,10 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { auditBlockField, readAuditShardEvents, writeSessionPidEntry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  auditBlockField, personsWordsText, readAuditShardEvents, writeSessionPidEntry,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   type AnswersItem, PICKER_HARNESSES, buildQuestion, env, exec, pick, recordByAgent, say,
 } from "../harness/aidlc-answers-corpus.ts";
@@ -111,6 +114,17 @@ describe("t-setter-box-answer-words: a setting asked in a box answer is recorded
     const row = lastRow(proj, "GUARD_POLICY_SET")!;
     expect(auditBlockField(row.block, "Person Reply")).toContain("turn the guard policy off, its only docs");
     expect(auditBlockField(row.block, "Message Id")).toBe(boxId);
+  });
+
+  test("claude: a long answer typed in the box keeps its words whole, as a typed message does", async () => {
+    const proj = await gateOpen();
+    const long = `turn the guard policy off, ${"its only docs. ".repeat(220)}`.trim();
+    expect(long.length).toBeGreaterThan(3000);
+    const box = await pick(proj, boxAnswer(long), "claude");
+    const boxId = namedId(box.stdout) as string;
+    expect(boxId, box.stdout).toBe(latestId(proj));
+    const words = readMessage(proj, boxId)?.words;
+    expect(words === null || words === undefined ? null : personsWordsText(words)).toBe(long);
   });
 
   test("claude: every setter that takes --message stands on the box answer's id", async () => {

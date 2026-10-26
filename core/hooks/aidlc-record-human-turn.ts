@@ -748,8 +748,10 @@ try {
       // A box's words are every reply it carried, one per question in the order
       // shown, each whole: several questions answered, or one answered with a
       // pick and the note Codex keeps beside it. Its first value alone was
-      // kept as their reply to each question the box asked.
-      const picks = picker?.entries.flatMap(({ reply }) => (reply === null ? [] : [reply])) ?? [];
+      // kept as their reply to each question the box asked. Read at the words'
+      // own cap, so a long answer keeps what a typed message would.
+      const replies = promptSubmitted ? null : pickerReplies(input, MESSAGE_TEXT_MAX_CHARS);
+      const picks = replies?.entries.flatMap(({ reply }) => (reply === null ? [] : [reply])) ?? [];
       const said = picks.length > 0 ? picks.join("\n") : parsed.words;
       const words = said !== null && said.length > MESSAGE_TEXT_MAX_CHARS
         ? said.slice(0, MESSAGE_TEXT_MAX_CHARS)
