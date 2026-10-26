@@ -982,7 +982,13 @@ This stage has a **two-part structure**: planning followed by generation.
    mocking/stubbing guidance, and test data management. Every run command MUST
    be scoped to this unit using exact test file paths or an exact unit filter.
    A bare project-wide command such as `npm test` is not acceptable because
-   Build and Test executes every unit's commands.
+   Build and Test executes every unit's commands. A coverage floor set for the
+   whole project is measured by Build and Test on the full suite, not by these
+   commands (on one Unit's tests a runner's threshold can fail on source other
+   Units' tests cover); the file names the floor, and the floor's threshold in
+   the project's coverage configuration is never changed to make a Unit's run
+   pass. A coverage target set for the Unit or one
+   of its paths gets its own Unit-scoped check.
 
    The plan opens with a short `## Summary` (Builds, Touches, Tests lines) that
    the engine shows the person when it asks for approval.
@@ -1346,7 +1352,7 @@ with the aidlc-devsecops-agent providing security testing expertise.
    `<record>/construction/build-and-test/build-and-test-summary.md`:
    - Overall build status and prerequisites
    - Test type inventory (which test types were generated)
-   - Coverage expectations per unit
+   - Coverage expectations for the project and each Unit
    - A Target Verification Matrix with Target ID, Source, Expected, Actual,
      Evidence, Owning Stage, and Verdict
    - Applicable targets begin `Pending`; `N/A` is valid only when the
@@ -1368,6 +1374,17 @@ with the aidlc-devsecops-agent providing security testing expertise.
        commands, and run each distinct command once. Commands should be
        unit-scoped; if a file contains a project-wide command, run it once,
        never once per unit. Report per-unit pass/fail without double counting.
+       When a coverage floor is set for the whole project, the project's
+       full-suite coverage command runs once with its own coverage
+       configuration, and that run is the evidence for every project-wide
+       floor row in the Target Verification Matrix. A unit-scoped command, from
+       a new or an already-approved file, whose output shows all its selected
+       tests passed and the project-wide floor's threshold (one for all
+       measured source, even when the runner checks it file by file) as the
+       only cause of its non-zero exit counts as passed, with its exit and the reason recorded in
+       test-results.md; any other non-zero exit (including a threshold set for
+       one path or Unit) is a failure. A target set for one Unit needs its own
+       Unit-scoped evidence.
     c. **Integration tests** (if applicable): Run integration test commands.
        Capture results.
     d. **Other applicable checks**: Run every applicable command from

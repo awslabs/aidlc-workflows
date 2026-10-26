@@ -246,6 +246,61 @@ describe("t290 code-generation coverage requires per-unit test instructions", ()
     expect(buildAndTest).toContain("run that command\n   once, never N");
   });
 
+  // A project-wide coverage floor applied to one Unit's tests can fail on
+  // source other Units' tests cover with every test passing (a live 3-Unit
+  // Bun run looped back from Build and Test on a 100 % full suite).
+  test("stage prose judges a project-wide coverage floor on the full suite, not a Unit run", () => {
+    const stage = (slug: string) =>
+      readFileSync(
+        join(REPO_ROOT, "core", "aidlc-common", "stages", "construction", `${slug}.md`),
+        "utf-8",
+      ).replace(/\s+/g, " ");
+    const codeGeneration = stage("code-generation");
+    const buildAndTest = stage("build-and-test");
+
+    expect(codeGeneration).toContain(
+      "A Unit-scoped run does not judge it: on one Unit's tests a runner's coverage threshold can fail on " +
+        "source that other Units' tests cover, with every selected test passing.",
+    );
+    expect(codeGeneration).toContain("Never change that threshold to make a Unit's run pass");
+    expect(codeGeneration).toContain(
+      "A coverage target set for this Unit or one of its paths still gets its own Unit-scoped check.",
+    );
+    expect(buildAndTest).toContain(
+      "When a coverage floor is set for the whole project (by the Testing Contract, a team rule, or a threshold in " +
+        "the project's coverage configuration for all measured source), run the project's full-suite coverage " +
+        "command once on the assembled project with its own coverage configuration",
+    );
+    expect(buildAndTest).toContain(
+      "That run, never a unit-scoped one, is the Evidence for every project-wide coverage-floor row in the " +
+        "Target Verification Matrix.",
+    );
+    expect(buildAndTest).toContain(
+      "A unit-scoped command whose output shows all of its selected tests passed and the threshold of a floor " +
+        "set for the whole project (one that applies to all measured source, even when the runner checks it " +
+        "file by file) as the only cause of its non-zero exit counts as passed, from a new or an already-approved " +
+        "instructions file",
+    );
+    expect(buildAndTest).toContain(
+      "Any other non-zero exit (a failed or errored test, a threshold set for one path or Unit), or output that " +
+        "does not show both, is a failed command.",
+    );
+    expect(buildAndTest).toContain(
+      "A coverage target set for one Unit needs its own check on that Unit's scope and its own evidence; a " +
+        "passing full-suite run does not make it `Met`.",
+    );
+    // The guide keeps the coverage command out of the Unit's test
+    // instructions, which Build and Test runs per Unit.
+    const guide = readFileSync(
+      join(REPO_ROOT, "core", "knowledge", "aidlc-developer-agent", "code-generation-guide.md"),
+      "utf-8",
+    ).replace(/\s+/g, " ");
+    expect(guide).toContain(
+      "Record the selected provider and rationale in the test instructions, and the coverage command you ran, " +
+        "its observed effect and the report location with the verification results.",
+    );
+  });
+
   test("Express stage-level test instructions execute and traceability joins the final gate", () => {
     const proj = createTestProject();
     tempDirs.push(proj);
