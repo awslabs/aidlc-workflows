@@ -208,8 +208,8 @@ Unit's code, the Units it depends on, and the project as it stands.
 
 Start the plan with a short `## Summary` section of three lines. The engine
 shows them to the person when it asks for approval. When the unit implements
-`UX` experience decisions, add a fourth line naming them, so the person sees the
-approved experience the plan carries:
+`UX` experience decisions, end the summary with an `Experience:` line naming
+them, so the person sees the approved experience the plan carries:
 
 ```
 ## Summary
