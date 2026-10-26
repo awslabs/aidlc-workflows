@@ -803,7 +803,7 @@ function verifyTargets(
         // An experience decision is designed in a component, not a rule: its
         // target is frontend-components.md, which must cite its ID.
         if (extractIds(entry.id, [ID_PATTERNS.UX]).size > 0) {
-          const problem = experienceTargetProblem(components, unit, entry.id, entry.target);
+          const problem = experienceTargetProblem(components, [projectDir, docsDir], entry.id, entry.target);
           if (problem) invalidTargets.push(`${entry.id}: ${problem}`);
           continue;
         }
@@ -834,10 +834,12 @@ function verifyTargets(
 
 // Why a Functional Design `OK` row for an experience decision does not point at
 // a frontend-components.md that cites it.
-function experienceTargetProblem(components: string, unit: string, id: string, rawTarget: string | undefined): string | null {
+// The target names the file beside the table, or resolves to it from the
+// project or the record.
+function experienceTargetProblem(components: string, roots: string[], id: string, rawTarget: string | undefined): string | null {
   const target = normalizePath(rawTarget?.trim() ?? "");
-  const own = unit ? `construction/${unit}/functional-design/frontend-components.md` : "";
-  if (target !== "frontend-components.md" && !(own && (target === own || target.endsWith(`/${own}`)))) {
+  const own = resolve(components);
+  if (target !== "frontend-components.md" && !roots.some((root) => resolve(root, target) === own)) {
     return "target must be this Unit's frontend-components.md";
   }
   const read = readText(components);

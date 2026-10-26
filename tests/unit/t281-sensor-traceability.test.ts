@@ -795,8 +795,12 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     expect(out.result.invalid_targets).toContain("UX1.1.1: target must be this Unit's frontend-components.md");
 
     write(proj, "construction/u1-auth/functional-design/frontend-components.md", "# Components\n\nOne page (UX1.1.1).\n");
-    out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target: "bogus/frontend-components.md" }]));
-    expect(out.result.invalid_targets).toContain("UX1.1.1: target must be this Unit's frontend-components.md");
+    for (const target of ["bogus/frontend-components.md", "bogus/construction/u1-auth/functional-design/frontend-components.md", "construction/u2-profile/functional-design/frontend-components.md"]) {
+      out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target }]));
+      expect(out.result.invalid_targets, target).toContain("UX1.1.1: target must be this Unit's frontend-components.md");
+    }
+    out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target: "construction/u1-auth/functional-design/frontend-components.md" }]));
+    expect(out.result.pass, out.result.reason).toBe(true);
 
     write(proj, "construction/u1-auth/functional-design/frontend-components.md", "# Components\n\n## LoginForm\n");
     out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target: "frontend-components.md" }]));
