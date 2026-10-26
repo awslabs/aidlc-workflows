@@ -916,6 +916,27 @@ function answersSummaryQuestion(
   return latest.includes("checkpoint") ? "checkpoint" : latest.includes("plain") ? "plain" : null;
 }
 
+// After a Request changes the summary is shown again, revised, and its question
+// is recorded before that showing, as the first one was (stage-protocol-summary.md).
+// A chat that picked the summary up in a new chat never loaded the stage's
+// rules, so the receipt of the step before it names that record while the
+// summary's latest row is the change request (pendingSummaryDecision). Null
+// otherwise.
+function revisedSummaryNote(pd: string, stage: string, unit: string | undefined, workflow: string | undefined): string | null {
+  const receipt = ownShardRows(pd).mine.findLast((row) => row.event === "SUMMARY_CONFIRMATION_RECORDED" &&
+    auditBlockField(row.block, "Stage") === stage &&
+    auditBlockField(row.block, "Checkpoint") === SUMMARY_CONFIRMATION_CHECKPOINT &&
+    (auditBlockField(row.block, "Unit") ?? undefined) === unit &&
+    (auditBlockField(row.block, "Workflow") ?? undefined) === workflow);
+  const questionsFile = receipt === undefined ? null : auditBlockField(receipt.block, "Questions File");
+  if (questionsFile === null || !pendingSummaryDecision(pd, stage, unit, workflow, questionsFile).changeRequested) {
+    return null;
+  }
+  const { decision } = summaryConfirmationCommands({ stage, unit, questionsFile, single: workflow !== undefined });
+  return `When you show the revised summary, first set its \`[Answer]:\` line in ${questionsFile} back to blank and ` +
+    `record its question with \`${decision}\`; then show it with its choices and end the turn.`;
+}
+
 // A summary confirmation recorded without its checkpoint flags is an ordinary
 // question the gate never counts, so the stage would refuse for good with
 // SUMMARY_RECEIPT_MISSING. When the call is plainly the summary (its two
@@ -1486,7 +1507,7 @@ function pendingSummaryDecision(
   unit: string | undefined,
   workflow: string | undefined,
   questionsFile: string,
-): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string } {
+): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string; changeRequested?: boolean } {
   const rows = readAuditShardEvents(pd);
   const entries = rows.filter((entry) => {
     // A turn that was only a command to AIDLC is no reply to the summary.
@@ -1579,7 +1600,10 @@ function pendingSummaryDecision(
     };
   }
   if (!latestKinds.has("DECISION_RECORDED")) {
-    return { pending: false, humanAfterDecision: false };
+    // The latest is a receipt: after a change request the summary is shown again, revised.
+    const changeRequested = latestActions.every((entry) =>
+      auditBlockField(entry.block, "Details") === SUMMARY_CONFIRMATION_CHOICES[1]);
+    return { pending: false, humanAfterDecision: false, ...(changeRequested ? { changeRequested } : {}) };
   }
 
   // Whether a reply turn of the person's came after the question's record: the
@@ -2403,6 +2427,8 @@ function handleAnswer(args: string[]): void {
       const whatAnswer = `${aidlcDispatcherInvocation("log answer")} --stage ${quoteCommandArgument(flags.stage)}` +
         `${flags.unit ? ` --unit ${quoteCommandArgument(flags.unit)}` : ""}${workflow !== undefined ? " --single" : ""} ` +
         `--details ${quoteCommandArgument("<their words>")}`;
+      // What to change is known, so the agent revises now.
+      const revised = summaryFeedback !== null ? revisedSummaryNote(pd, flags.stage, flags.unit, workflow) : null;
       console.log(
         JSON.stringify({
           emitted: "SUMMARY_CONFIRMATION_RECORDED",
@@ -2418,7 +2444,7 @@ function handleAnswer(args: string[]): void {
                   ? `when they reply, record what they said with \`${whatAnswer}\`.`
                   : "their next reply is what should change."),
             }
-            : {}),
+            : revised !== null ? { agent_note: revised } : {}),
         }),
       );
       return;
@@ -2666,6 +2692,8 @@ function handleAnswer(args: string[]): void {
     const asksForNote = fromBox ?? (picksAddANote(flags.details) && question !== undefined &&
       isLearningsNoteDecision(question.block));
     if (asksForNote) rowEndsTurn = true;
+    // What should change, or a follow-up, after a Request changes at the summary.
+    const revised = asksForNote ? null : revisedSummaryNote(pd, flags.stage, flags.unit, workflow);
     console.log(
       JSON.stringify({
         emitted: "QUESTION_ANSWERED",
@@ -2676,7 +2704,7 @@ function handleAnswer(args: string[]): void {
               "not ask for it again. Otherwise ask what the note should say. End the turn at the question you ask " +
               "next; their next reply answers it.",
           }
-          : {}),
+          : revised !== null ? { agent_note: revised } : {}),
       })
     );
   });
