@@ -48,7 +48,9 @@ opens, on the tables as they are then:
    `interaction-spec.md` records for its stories, unless the Unit is a `spec`
    or `packaging` Unit; Functional Design owes them when the Unit's kind gives
    it `frontend-components.md`, and an `OK` row there must target the Unit's
-   own file, which must cite the ID. Without `interaction-spec.md` neither owes
+   own file, which must cite the ID. Any Functional Design row may target that
+   file the same way, and a `ui` Unit, which writes no `rules.md`, is not asked
+   for one. Without `interaction-spec.md` neither owes
    any.
 6. Derives functional-design orphans from `rules.md` rather than
    trusting only the self-reported `reverse` array.

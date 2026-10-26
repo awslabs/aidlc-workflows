@@ -783,18 +783,18 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
       "- UX1.1.1 Sign in on one page, not a wizard [Q2]",
       "- UX1.2.1 The reset link opens the reset form directly [Q5]",
     ].join("\n"));
-    write(proj, "construction/u1-auth/functional-design/rules.md", "# Rules\n\n- BR1.1 Credentials must match\n");
+    // A ui Unit writes no rules.md: its criteria are designed in components too.
     const criteria = [
-      { id: "AC1.1.1", status: "OK", target: "BR1.1" },
-      { id: "AC1.1.2", status: "OK", target: "BR1.1" },
+      { id: "AC1.1.1", status: "OK", target: "frontend-components.md" },
+      { id: "AC1.1.2", status: "OK", target: "frontend-components.md" },
     ];
     let out = run(proj, "functional-design", designTable(proj, "u1-auth", criteria));
     expect(out.result.missing_from_upstream_ids).toEqual(["UX1.1.1"]);
 
-    out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target: "BR1.1" }]));
+    out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target: "construction/u1-auth/functional-design/rules.md" }]));
     expect(out.result.invalid_targets).toContain("UX1.1.1: target must be this Unit's frontend-components.md");
 
-    write(proj, "construction/u1-auth/functional-design/frontend-components.md", "# Components\n\nOne page (UX1.1.1).\n");
+    write(proj, "construction/u1-auth/functional-design/frontend-components.md", "# Components\n\nOne page (UX1.1.1), AC1.1.1, AC1.1.2.\n");
     for (const target of ["bogus/frontend-components.md", "bogus/construction/u1-auth/functional-design/frontend-components.md", "construction/u2-profile/functional-design/frontend-components.md"]) {
       out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target }]));
       expect(out.result.invalid_targets, target).toContain("UX1.1.1: target must be this Unit's frontend-components.md");
@@ -802,11 +802,11 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target: "construction/u1-auth/functional-design/frontend-components.md" }]));
     expect(out.result.pass, out.result.reason).toBe(true);
 
-    write(proj, "construction/u1-auth/functional-design/frontend-components.md", "# Components\n\n## LoginForm\n");
+    write(proj, "construction/u1-auth/functional-design/frontend-components.md", "# Components\n\n## LoginForm\n\nAccepts valid credentials (AC1.1.1) and rejects invalid ones (AC1.1.2).\n");
     out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target: "frontend-components.md" }]));
     expect(out.result.invalid_targets).toContain("UX1.1.1: frontend-components.md does not cite UX1.1.1");
 
-    write(proj, "construction/u1-auth/functional-design/frontend-components.md", "# Components\n\n## LoginForm\n\nOne page, not a wizard (UX1.1.1).\n");
+    write(proj, "construction/u1-auth/functional-design/frontend-components.md", "# Components\n\n## LoginForm\n\nOne page, not a wizard (UX1.1.1); AC1.1.1, AC1.1.2.\n");
     out = run(proj, "functional-design", designTable(proj, "u1-auth", [...criteria, { id: "UX1.1.1", status: "OK", target: "frontend-components.md" }]));
     expect(out.result.pass, out.result.reason).toBe(true);
   });

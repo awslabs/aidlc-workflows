@@ -436,7 +436,7 @@ feasibility input.
 | rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
 | entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
 | frontend-components.md   | (CONDITIONAL) Component hierarchy, props/state, interaction flows, form validation, API integration |
-| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), plus, for a Unit that writes frontend-components.md, the `UX` decisions of its stories; each `OK` to `BRx.y` rules in rules.md (a `UX` decision to frontend-components.md, which must cite it), `N/A` or `Deferred` with its reason, or `GAP` |
+| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), plus, for a Unit that writes frontend-components.md, the `UX` decisions of its stories; each `OK` to `BRx.y` rules in rules.md or to the Unit's frontend-components.md, which must cite the ID (always for a `UX` decision, and for a `ui` Unit, which has no rules.md), `N/A` or `Deferred` with its reason, or `GAP` |
 
 Which files a Unit gets follows its kind: a `ui` Unit gets no entities.md or
 rules.md, only a `ui` Unit gets frontend-components.md, and a `packaging`

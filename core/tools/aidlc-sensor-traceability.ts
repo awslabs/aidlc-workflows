@@ -303,16 +303,21 @@ function buildsExperience(kind: string | undefined): boolean {
   return kind !== "spec" && kind !== "packaging";
 }
 
-// Functional Design designs a decision in frontend-components.md, so a Unit
-// owes it there exactly when the stage's produces_kinds gives it that file.
-// Without a readable stage graph the Unit owes it and may mark it N/A.
-function designsExperience(context: UnitContext): boolean {
+// Whether Functional Design's produces_kinds gives a Unit of this kind the
+// artifact; without a readable stage graph, it does.
+function designWrites(kind: string | undefined, artifact: string): boolean {
   try {
     const stage = loadStageGraph().find((candidate) => candidate.slug === "functional-design");
-    return filterProducesByKind(stage?.produces_kinds, ["frontend-components"], context.kind ?? null).length > 0;
+    return filterProducesByKind(stage?.produces_kinds, [artifact], kind ?? null).length > 0;
   } catch {
     return true;
   }
+}
+
+// Functional Design designs a decision in frontend-components.md, so a Unit
+// owes it there exactly when it writes that file; otherwise it may mark it N/A.
+function designsExperience(context: UnitContext): boolean {
+  return designWrites(context.kind, "frontend-components");
 }
 
 function storyOfDecision(ux: string): string {
@@ -795,14 +800,19 @@ function verifyTargets(
     const unit = upstream.unitContext?.unitName ?? extractUnitName(outputPath);
     if (unit !== null) {
       const brPath = join(constructionDir(docsDir, unit, "functional-design"), "rules.md");
-      const rules = idsFromFile(brPath, [ID_PATTERNS.BR], "rules.md");
+      // A ui Unit writes no rules.md; one it has anyway is still checked.
+      const rules = designWrites(upstream.unitContext?.kind, "rules") || existsSync(brPath)
+        ? idsFromFile(brPath, [ID_PATTERNS.BR], "rules.md")
+        : { ids: new Set<string>() };
       if (rules.reason) reasons.push(rules.reason);
       const targeted = new Set<string>();
       const components = join(constructionDir(docsDir, unit, "functional-design"), "frontend-components.md");
       for (const entry of okEntries) {
-        // An experience decision is designed in a component, not a rule: its
-        // target is frontend-components.md, which must cite its ID.
-        if (extractIds(entry.id, [ID_PATTERNS.UX]).size > 0) {
+        // An experience decision is designed in a component, not a rule, and so
+        // may any ID a component realises: the target is frontend-components.md,
+        // which must cite the ID.
+        const target = normalizePath(entry.target?.trim() ?? "");
+        if (extractIds(entry.id, [ID_PATTERNS.UX]).size > 0 || /(^|\/)frontend-components\.md$/.test(target)) {
           const problem = experienceTargetProblem(components, [projectDir, docsDir], entry.id, entry.target);
           if (problem) invalidTargets.push(`${entry.id}: ${problem}`);
           continue;
@@ -844,7 +854,7 @@ function experienceTargetProblem(components: string, roots: string[], id: string
   }
   const read = readText(components);
   if (read.content === null) return read.reason ?? `cannot read ${components}`;
-  return extractIds(read.content, [ID_PATTERNS.UX]).has(id) ? null : `frontend-components.md does not cite ${id}`;
+  return extractIds(read.content, Object.values(ID_PATTERNS)).has(id) ? null : `frontend-components.md does not cite ${id}`;
 }
 
 // Why a Code Generation `OK` target is not one existing workspace-relative file.

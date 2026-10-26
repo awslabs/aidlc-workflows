@@ -151,8 +151,9 @@ A requirement with sub-requirements is traced through its `FR{n}.{m}` IDs and
 needs no row of its own.
 
 Set each ID's `coverage` row: `OK` with a `target` naming one or more
-`BRx.y` IDs that exist in `rules.md` (for a `UX` decision, `frontend-components.md`,
-which must cite its ID); `N/A` with the reason as its `target`
+`BRx.y` IDs that exist in `rules.md`, or `frontend-components.md` for an ID a
+component realises (always for a `UX` decision, and for a `ui` Unit, which writes
+no `rules.md`), which must cite the ID; `N/A` with the reason as its `target`
 (for example `delivered by u2-profile`); `Deferred` with the later stage that
 covers it as its `target`; or `GAP` while this design does not cover it. Use
 the optional `reverse` array to explain rules that intentionally have no
