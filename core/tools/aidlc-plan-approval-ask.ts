@@ -101,6 +101,7 @@ import {
   stepNextCommand,
   testingContractDefectMessage,
   usableTestingContract,
+  type CodeGenerationApprovalUse,
   type CodeGenerationIssuance,
   type PlanApprovalPickerQuestion,
 } from "./aidlc-testing-posture.ts";
@@ -898,8 +899,9 @@ function targetState(
   record: PlanApprovalAskRecord | null,
   issued: CodeGenerationIssuance,
   planApprovalOff = false,
+  use: CodeGenerationApprovalUse = "build",
 ): TargetState {
-  const approval = evaluateCodeGenerationApproval(projectDir, { unit }, issued);
+  const approval = evaluateCodeGenerationApproval(projectDir, { unit }, issued, use);
   let targetId: string | null = null;
   try {
     targetId = codeGenerationTargetId({ unit });
@@ -1005,7 +1007,11 @@ function routedPlanApproval(projectDir: string, directive: Directive): Directive
   // The plans asked about are the ones this directive builds, whatever the
   // engine said last (the question, a pause, or a directive a compacted chat
   // must re-read).
-  const states = units.map((unit) => targetState(projectDir, unit, intentId, record, directive, planApprovalOff));
+  // A Unit that owes only its completion receipt was built and reviewed: its
+  // plan is read as the completion reads it.
+  const use: CodeGenerationApprovalUse =
+    directive.kind === "run-stage" && directive.unit_record_step !== undefined ? "completion" : "build";
+  const states = units.map((unit) => targetState(projectDir, unit, intentId, record, directive, planApprovalOff, use));
   if (states.every((state) => state.kind === "approved")) {
     // Under a lowered Guard Policy an approved plan that changed still builds;
     // the person hears what changed and is asked whether to go back to it, or,

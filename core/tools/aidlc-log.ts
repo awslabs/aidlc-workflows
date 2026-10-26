@@ -302,6 +302,8 @@ import {
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
   recordPlanApprovalLegacyRecoveryAnswer,
+  REVIEW_TESTING_CONTRACT_FIELD,
+  reviewedTestingContract,
 } from "./aidlc-testing-posture.js";
 import { aidlcDispatcherInvocation, aidlcEngineCommand, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import {
@@ -5128,6 +5130,11 @@ function handleReview(args: string[]): void {
       }
       fields["Review Record"] = slot.recordRelative;
       fields["Review Record Digest"] = reviewRecordDigest(serialized);
+      // The build this verdict covers was finished under the Testing Contract
+      // in force now; the completion reads it to tell a practice kept at the
+      // gate from a contract that moved while the build ran.
+      const reviewedContract = flags.stage === "code-generation" ? reviewedTestingContract(pd) : null;
+      if (reviewedContract !== null) fields[REVIEW_TESTING_CONTRACT_FIELD] = reviewedContract;
       recordPath = slot.recordRelative;
       emitAudit(pd, "REVIEW_COMPLETED", fields, intent, space);
       // The draft was the reviewer's input; the record now holds it. The

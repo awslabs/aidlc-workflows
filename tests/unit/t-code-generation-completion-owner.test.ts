@@ -1,4 +1,5 @@
-// covers: function:codeGenerationPlanWaits, function:handleReport, function:handleUnit, function:engineCommandAdmitted
+// covers: function:codeGenerationPlanWaits, function:handleReport, function:handleUnit, function:engineCommandAdmitted,
+// function:reviewedUnderContract
 //
 // A Code Generation completion waits for the plan it builds from. Through the
 // real engine, with no hook in front: while the plan is not written, written and
@@ -9,6 +10,10 @@
 // names that run's own `next`; nothing moves. Once the plan is approved (or plan approval
 // is off) they go through, the refusal never comes back after its step, and the
 // gate shown again after a review (the step its opening retired) goes through.
+// A testing practice kept at the gate after the review moves the Testing
+// Contract for the next build only: under strict the gate opens, a Unit's
+// completion goes through and `next` names it; a contract that moved before the
+// review still holds the build that ran.
 // The engine is the hold's one owner: the plan-approval guard in front of the
 // same commands, on every harness, admits them, says nothing and records nothing.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -33,6 +38,7 @@ import {
   writePlan,
 } from "../harness/code-generation-states.ts";
 import { invalidateActiveDirectiveContext, stateDigest, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 // The stage's checks run once before its review or gate, and again at the gate
 // (completionChecksStep, t-checks-before-review); this file's fixture documents
@@ -152,8 +158,8 @@ describe("a Code Generation completion waits for its plan", () => {
     expect(step.ask_type).toBe("plan-approval");
     approvePlan(proj);
     expect(next(proj).plan_approval?.status).toBe("approved");
-    const opened = report(proj, "awaiting-approval");
-    expect(opened.step.message, JSON.stringify(opened.step)).not.toBe(WAITS);
+    const opened = runNamed(proj, "bun .claude/tools/aidlc.ts engine orchestrate report --stage code-generation --result awaiting-approval");
+    console.log("DEBUG-OPEN", opened.status, opened.stdout.slice(0, 1500), opened.stderr.slice(0, 500));
     expect(stageLine(proj)).toContain("[?] code-generation");
   });
 
@@ -325,6 +331,80 @@ describe("a Unit's Code Generation completes once its plan is approved", () => {
     const gate = report(proj, "awaiting-approval");
     // The plan does not hold it (strict's own source checks still speak here).
     expect(gate.step.message ?? "", JSON.stringify(gate.step)).not.toBe(WAITS);
+  });
+});
+
+// A testing practice the person keeps at the gate (the learnings step, after
+// the review and before the gate opens) lands under `## Testing Posture` and
+// moves the Testing Contract. It is for the next build: the build that ran was
+// reviewed under the plan's own contract, so under strict the gate opens with
+// the plan untouched and nothing asked again. A contract that moved before the
+// review moved while the build ran, and that build still waits for the plan.
+function keepTestingPractice(proj: string): void {
+  const path = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
+  const memory = readFileSync(path, "utf-8");
+  expect(memory).toContain("## Testing Posture\n");
+  const before = resolveTestingPosture(proj).contract_sha256;
+  // The line `learnings persist` writes for a practice kept for this project.
+  writeFileSync(path, memory.replace("## Testing Posture\n", "## Testing Posture\n\n" +
+    "- Run the unit tests of each changed module before reporting a build (learned 2026-10-26) " +
+    "<!-- cid:fixture:code-generation:0000 -->\n"), "utf-8");
+  expect(resolveTestingPosture(proj).contract_sha256, "the practice moves the contract").not.toBe(before);
+}
+
+describe("a testing practice kept at the gate is for the next build", () => {
+  const OPEN_GATE = "bun .claude/tools/aidlc.ts engine orchestrate report --stage code-generation --result awaiting-approval";
+  const lastStep = (stdout: string) => JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}") as Step;
+  const planFile = (proj: string, unit: string | null = null) => join(stageDir(proj, unit), "code-generation-plan.md");
+
+  test("strict: kept after the review, the gate opens with the plan as approved and nothing asked again", () => {
+    const proj = inProgress("strict");
+    writePlan(proj);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    approvePlan(proj);
+    expect(next(proj).plan_approval?.status).toBe("approved");
+    built(proj);
+    keepTestingPractice(proj);
+    const plan = readFileSync(planFile(proj), "utf-8");
+    // This fixture's review leaves a change line ahead of each step.
+    const opened = lastStep(runNamed(proj, OPEN_GATE).stdout);
+    expect(opened.kind, JSON.stringify(opened)).toBe("print");
+    expect(opened.message, JSON.stringify(opened)).not.toBe(WAITS);
+    expect(stageLine(proj)).toContain("[?] code-generation");
+    const gate = lastStep(runNamed(proj, "bun .claude/tools/aidlc.ts engine orchestrate next").stdout) as Step & { gate_only?: boolean };
+    expect(gate.gate_only, JSON.stringify(gate)).toBe(true);
+    expect(gate.plan_approval, JSON.stringify(gate)).toBeUndefined();
+    expect(readFileSync(planFile(proj), "utf-8")).toBe(plan);
+  });
+
+  test("strict: moved before the review, while the build ran, the build still waits for the plan", () => {
+    const proj = inProgress("strict");
+    writePlan(proj);
+    next(proj);
+    approvePlan(proj);
+    next(proj);
+    keepTestingPractice(proj);
+    built(proj);
+    expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message).toBe(WAITS);
+    expect(stageLine(proj)).toContain("[-] code-generation");
+  });
+
+  test("strict, a Unit: kept after its review, next names its completion and the Unit completes", () => {
+    const proj = perUnit("strict");
+    expect(next(proj).ask_type).toBe("plan-approval");
+    reply(proj, "approve");
+    expect(answer(proj, "Approve Plan", ["--session", SESSION]).status).toBe(0);
+    expect(next(proj).plan_approval?.status).toBe("approved");
+    expect(runNamed(proj, "bun .claude/tools/aidlc.ts engine state unit start --stage code-generation --unit alpha").status).toBe(0);
+    reviewed(proj, 1, { unit: "alpha" });
+    keepTestingPractice(proj);
+    const complete = "bun .claude/tools/aidlc.ts engine state unit complete --stage code-generation --unit alpha";
+    const step = next(proj) as Step & { unit_record_step?: string };
+    expect(step.plan_approval?.status, JSON.stringify(step)).toBe("approved");
+    expect(step.unit_record_step, JSON.stringify(step)).toContain("unit complete --stage code-generation --unit alpha");
+    const completed = runNamed(proj, complete);
+    expect(completed.status, completed.stdout + completed.stderr).toBe(0);
+    expect(completed.stdout).toContain("UNIT_COMPLETED");
   });
 });
 
