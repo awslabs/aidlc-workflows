@@ -327,7 +327,6 @@ export function repoNameProblem(name: string): string | null {
   return null;
 }
 
-
 // The refusal of a typed name that cannot be a repo's, after its flag or field.
 export function repoNameRefusal(what: string, name: string): string {
   return `${what} "${name}": its name ${repoNameProblem(name) ?? "cannot be a repo's"}.`;

@@ -1826,8 +1826,6 @@ repoChangeWords
 repoCwdOrThrow
 repoDir
 repoIsWorkspace
-repoNameProblem
-repoNameRefusal
 repoScopeAsked
 repoScopePassedOver
 reportResult
@@ -2019,8 +2017,6 @@ shellCommandText
 shellToolResponseText
 shippedRulesSubdir
 shownLastWrittenAt
-siblingGitFolders
-siblingReposLeftOut
 singleGitMetadataLine
 singleRunRequest
 singleRunRequestDigest
