@@ -297,8 +297,10 @@ function decisionsOfStories(specContent: string, stories: Set<string> | null): S
   return decisions;
 }
 
-// A spec or packaging Unit has no screen to build an experience decision in;
-// every other Unit, untagged included, builds the decisions of its stories.
+// A spec or packaging Unit has no screen to build an experience decision in.
+// Any other Unit may (a full-stack service renders screens, a library may hold
+// the components), so it owes its stories' decisions and marks one it does not
+// build N/A with its reason.
 function buildsExperience(kind: string | undefined): boolean {
   return kind !== "spec" && kind !== "packaging";
 }

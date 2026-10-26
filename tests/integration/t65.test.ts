@@ -213,6 +213,13 @@ beforeAll(() => {
       }
     }
   }
+  // An artifact only some stage may write is still that stage's.
+  for (const p of parsed) {
+    if (!Array.isArray(p.obj.optional_produces)) continue;
+    for (const a of p.obj.optional_produces as string[]) {
+      if (!artifactToProducer.has(a)) artifactToProducer.set(a, { slug: p.slug, phase: p.phase });
+    }
+  }
   const crossPhaseGaps: Aggregate["crossPhaseGaps"] = [];
   for (const p of parsed) {
     if (!Array.isArray(p.obj.consumes)) continue;
