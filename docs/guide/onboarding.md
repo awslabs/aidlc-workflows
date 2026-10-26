@@ -97,16 +97,16 @@ see [When something looks stuck](#when-something-looks-stuck).
 
 ### 3. Scope controls how much runs — pick a small one first
 
-A full `feature` runs all 33 stages. That is the right amount of ceremony for a
+A full `feature` runs all 30 stages after setup. That is the right amount of ceremony for a
 production feature and far too much for your first look. **Scope** (also called a
 *workflow profile*) is how you dial the ceremony up or down:
 
 | You want to... | Use | Stages |
 |---|---|---|
-| See the whole thing end to end, fast | `express` | 10 / 33 |
-| Fix one known bug | `bugfix` | 9 / 33 |
-| Test if an idea is even feasible | `poc` | 8 / 33 |
-| Build a real production feature | `feature` | 33 / 33 |
+| See the whole thing end to end, fast | `express` | 7 / 30 |
+| Fix one known bug | `bugfix` | 6 / 30 |
+| Test if an idea is even feasible | `poc` | 5 / 30 |
+| Build a real production feature | `feature` | 30 / 30 |
 
 Start small. A `poc` or `express` run teaches you the loop in minutes without
 drowning you in gates. See [Workflow Profiles](workflow-profiles.md) for the full

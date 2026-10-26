@@ -393,37 +393,17 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         ).length;
         expect(gateApproved).toBeGreaterThanOrEqual(1);
 
-        // --- learnings-before-gate ordering (guards the §13 turn binding) ------
-        // The last QUESTION_ANSWERED (the learnings "anything to add?" answer)
-        // must precede the last STAGE_AWAITING_APPROVAL: the ritual is its own
-        // logged turn BEFORE the gate opens. Mirrors the kiro bugfix-scope pin;
-        // without it a gate-before-learnings regression passes this test.
-        const questionAnsweredAt = auditMd.lastIndexOf(
-          "**Event**: QUESTION_ANSWERED",
-        );
-        const gateOpenedAt = auditMd.lastIndexOf(
-          "**Event**: STAGE_AWAITING_APPROVAL",
-        );
-        expect(questionAnsweredAt).toBeGreaterThan(-1);
-        expect(gateOpenedAt).toBeGreaterThan(questionAnsweredAt);
-        // Interview answers also emit QUESTION_ANSWERED, so the ordering pin
-        // alone passes when the ritual is skipped outright. The ANSWER's
-        // Details is free conductor paraphrase (live-observed: "Keep: probe
-        // vague bugfix briefs" - no pinned token survives), but the ritual's
-        // DECISION row is deterministic: §13 mandates the structured question
-        // ship the verbatim "Nothing to add" / "Add a note" labels in its
-        // --options. Pin the ritual on that row, then require an answer row
-        // after it and before the gate - the §3 logging pair, wording-free.
-        const learningsDecisionAt = auditMd.search(
+        // --- no learnings question with nothing corrected ----------------------
+        // The person picked the defaults and corrected nothing, so the learnings
+        // step asks nothing and the gate follows the summary: no decision row
+        // of the learnings question kind and none of the old "Anything to add?"
+        // shape, before the gate or after it.
+        expect(auditMd).not.toMatch(/\*\*Question Kind\*\*: learnings-note/);
+        expect(auditMd).not.toMatch(
           /\*\*Event\*\*: DECISION_RECORDED\n(?:\*\*[^\n]+\n)*?\*\*Options\*\*: [^\n]*Nothing to add[^\n]*Add a note/,
         );
-        expect(learningsDecisionAt).toBeGreaterThan(-1);
-        const learningsAnswerAt = auditMd.indexOf(
-          "**Event**: QUESTION_ANSWERED",
-          learningsDecisionAt,
-        );
-        expect(learningsAnswerAt).toBeGreaterThan(learningsDecisionAt);
-        expect(gateOpenedAt).toBeGreaterThan(learningsAnswerAt);
+        const gateOpenedAt = auditMd.lastIndexOf("**Event**: STAGE_AWAITING_APPROVAL");
+        expect(gateOpenedAt).toBeGreaterThan(-1);
 
         // --- the answer-mode question was the person's ------------------------
         // The request leaves how to answer the questions open, so the stage must

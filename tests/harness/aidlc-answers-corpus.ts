@@ -11,14 +11,15 @@ import { join } from "node:path";
 import corpus from "../fixtures/aidlc-answers/corpus.json";
 import { AIDLC_SRC, FIXTURES_DIR, REPO_ROOT, createOrchestrationTestProject, proposalFollowUp, recordArtifactWriteViaHook, seedBoltDag, seedBoltDagBatches, seededRecordDir, seededStateFile } from "./fixtures.ts";
 import {
-  LOG, ORCHESTRATE, SESSION, UTILITY, buildState, env, exec, messageRecord, next, say,
+  LOG, ORCHESTRATE, SESSION, UTILITY, buildState, env, exec, messageRecord, next, reviewedStage, say,
   type Directive, type Exec, type Harness, type StoredRecord,
 } from "./aidlc-input-corpus.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   artifactFilename, auditBlockField, authorizedVerificationCommand, currentSwarmSourceMergeChain, findStageBySlug,
-  gitCommitSourceListing, latestMainWorkflowStageRunFloorForProject, latestPersonTurn, listIntents, personsGateWords,
-  personsLatestGatePick, readActiveDirectiveMarker, readAuditShardEvents, readProtectedResponse, readUnitSourceManifest,
+  gitCommitSourceListing, latestMainWorkflowStageRunFloorForProject, listIntents, personsGateReply, personsWordsText,
+  readActiveDirectiveMarker, readAuditShardEvents, readProtectedResponse, readUnitSourceManifest,
   reviewArtifactFingerprint, serializeSourceListing, sourceListingSha256, stateDigest, unitSourceFingerprint,
   workspaceSourceFingerprint, workspaceSourceListing, writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
   writeSessionPidEntry,
@@ -41,7 +42,7 @@ export interface EngineExpectation {
   recorded: string;
   /** The typed text that must be kept verbatim (null for a non-answer, which keeps nothing as a reply). */
   words: string | null;
-  /** `recorded`: an exact pick on record; `reading-step`: the question's own print carrying the words (an /aidlc
+  /** `recorded`: a box pick on record; `reading-step`: the question's own print carrying the words (an /aidlc
    * line); `none`: plain chat, nothing to run; `command`: the ask's own command. */
   step: "recorded" | "reading-step" | "none" | "command";
   no_ask: boolean;
@@ -78,15 +79,15 @@ export const ANSWERS = corpus as AnswersItem[];
 export const QUESTIONS = [...new Set(ANSWERS.map((item) => item.question))];
 /** Questions with no fixture: their items are reported as skipped with this reason. */
 export const NO_FIXTURE: Partial<Record<Question, string>> = {};
-/** Questions the agent asks in chat. A fresh chat's bare `/aidlc` does not show them again: the engine hands an open
- * chat question back only with the person's words (openQuestionReplyDirective in aidlc-orchestrate.ts). So a live
- * drive, a fresh chat, can meet only their replies typed with `/aidlc`, as the whole exchange. */
+/** Questions the agent asks in chat whose live drive takes only the replies typed with `/aidlc`, as the whole exchange.
+ * A stage question and learnings: a bare `/aidlc` does show them again, but the drive cannot judge the agent's words
+ * after a chat reply yet (it stops one tool call after the answer is recorded, and counts the stage's next question as
+ * a second one). The verification command is not here: a fresh chat's bare `/aidlc` shows it again
+ * (openQuestionAgainDirective in aidlc-orchestrate.ts), so every reply to it is driven. */
 export const ASKED_IN_CHAT: ReadonlySet<Question> = new Set(["stage-question", "learnings"]);
-/** Questions a live drive cannot set up. A verification command or Construction policy answer is recorded only from
- * the chat that asked it (`log answer` matches the question's Session), and a live drive is a new chat. Guard
- * recovery's fixture writes the ask marker by hand, and the engine asks it from the guard's own refusal record. The
- * unit check reads their replies. */
-export const NOT_LIVE: ReadonlySet<Question> = new Set(["verification-command", "construction-policy", "guard-recovery"]);
+/** Questions a live drive cannot set up. Guard recovery's fixture writes the ask marker by hand, and the engine asks it
+ * from the guard's own refusal record. The unit check reads its replies. */
+export const NOT_LIVE: ReadonlySet<Question> = new Set(["guard-recovery"]);
 /** Whether a live drive can meet this reply the way a person would. */
 export const liveReply = (item: AnswersItem): boolean =>
   !NOT_LIVE.has(item.question) && (!ASKED_IN_CHAT.has(item.question) || item.via === "aidlc");
@@ -363,10 +364,9 @@ export async function buildQuestion(proj: string, question: Question): Promise<v
       return;
     }
     case "stage-gate-sensor-failure":
-      // The report refused on a blocking sensor, so the gate is NOT open (stage-protocol.md, Part 0: Enter the approval gate): the stage still runs
-      // and the agent asks the two-option question.
-      workOpen(proj);
-      writeStageFiles(proj, false);
+      // The stage reviewed as a run leaves it, then the report refused on a blocking sensor, so the gate is NOT open
+      // (stage-protocol.md, Part 0: Enter the approval gate): the stage still runs and the agent asks the two-option question.
+      await reviewedStage(proj);
       return askInChat(proj, "Blocking gate sensor failure", "Fix findings,Override blocking sensors");
     case "code-plan":
       return buildState(proj, "plan-question-open");
@@ -381,13 +381,17 @@ export async function buildQuestion(proj: string, question: Question): Promise<v
       await tool(proj, BOLT, [...verify, "--action", "ask", "--session", SESSION]);
       return;
     }
+    // Both asked inside the current stage, after its start, as a run asks them.
     case "verification-command":
       constructionFixture(proj);
-      await tool(proj, LOG, ["decision", "--stage", "code-generation", "--checkpoint", "verification-command", "--command", "npm test", "--session", SESSION,
+      appendAuditEntry("STAGE_STARTED", { Stage: "functional-design" }, proj);
+      writeFileSync(join(seededRecordDir(proj), "verification-command.txt"), "npm test", "utf-8");
+      await tool(proj, LOG, ["decision", "--stage", "functional-design", "--checkpoint", "verification-command", "--command-file", "verification-command.txt", "--session", SESSION,
         "--decision", "Use this command to verify each completed Unit?", "--options", "Approve,Request Changes"]);
       return;
     case "construction-policy":
       constructionFixture(proj);
+      appendAuditEntry("STAGE_STARTED", { Stage: "functional-design" }, proj);
       await tool(proj, LOG, ["decision", "--stage", "functional-design", "--checkpoint", "construction-policy", "--field", "Construction Execution", "--value", "swarm",
         "--session", SESSION, "--decision", "Switch Construction to build the Units in parallel (swarm)?", "--options", "Approve,Request Changes"]);
       return;
@@ -607,26 +611,50 @@ export async function pick(proj: string, item: AnswersItem, harness: Harness): P
 // --- what the tools recorded -------------------------------------------------------------------------------------------
 
 export interface Recorded { choice: string; words: string | null }
+
+/**
+ * The latest turn's words as its message record keeps them, unless the turn only commanded AIDLC or answered another
+ * engine question; else the labels the person picked in a question box, in the order shown.
+ */
+function latestTurnWords(proj: string): string | null {
+  const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  if (turn === undefined) return null;
+  const aside = auditBlockField(turn.block, "Reply") !== null || auditBlockField(turn.block, "Open Question") !== null;
+  const id = auditBlockField(turn.block, "Message Id");
+  const message = id === null ? null : readMessage(proj, id);
+  if (!aside && message?.words) return personsWordsText(message.words);
+  let picked: unknown = [];
+  try {
+    picked = JSON.parse(auditBlockField(turn.block, "Picked") ?? "[]");
+  } catch {
+    picked = [];
+  }
+  const labels = Array.isArray(picked) ? picked.filter((label): label is string => typeof label === "string" && label.trim() !== "") : [];
+  return labels.length > 0 ? labels.join(", ") : null;
+}
 /** The choice a tool recorded from the reply alone (`none` when nothing is recorded) and the words it kept. */
 export function recorded(proj: string, item: AnswersItem): Recorded {
   // The person's words as the record keeps them: the latest turn's words, else the message record's text (a picker
   // reply and a reply to an engine question are kept there, marked as a command turn).
-  const turn = latestPersonTurn(proj)?.words ?? messageRecord(proj, typedPrompt(item))?.text ?? null;
+  const turn = latestTurnWords(proj) ?? messageRecord(proj, typedPrompt(item))?.text ?? null;
   switch (item.question) {
     case "stage-gate":
     case "stage-gate-accept-as-is": {
-      const gate = { stage: STAGE };
-      const pickLabel = personsLatestGatePick(proj, SESSION, gate, item.question === "stage-gate-accept-as-is");
-      return { choice: pickLabel ?? "none", words: personsGateWords(proj, SESSION, gate) };
+      // Only the agent's report records a gate's choice: the row it wrote, if any.
+      const decided = readAuditShardEvents(proj).filter((row) =>
+        (row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED") && auditBlockField(row.block, "Stage") === STAGE).at(-1);
+      const choice = decided === undefined ? "none"
+        : decided.event === "GATE_REJECTED" ? "Request Changes" : auditBlockField(decided.block, "User Input") ?? "none";
+      return { choice, words: personsGateReply(proj, SESSION, STAGE).words };
     }
     case "code-plan":
     case "code-plan-grouped": {
-      const open = openPlanApprovalQuestion(proj, item.input);
+      const open = openPlanApprovalQuestion(proj);
       if (open === null) return { choice: "unknown", words: turn };
       if (open.editing) return { choice: "I'll edit the files", words: turn };
       if (!open.answered) return { choice: "none", words: turn };
       const approve = item.question === "code-plan-grouped" ? "Approve all" : "Approve Plan";
-      return { choice: open.picked === "approve" ? approve : open.picked === "request-changes" ? "Request Changes" : open.picked === "edit" ? "I'll edit the files" : "answered", words: turn };
+      return { choice: open.recorded === "approve" ? approve : open.recorded === "request-changes" ? "Request Changes" : open.recorded === "edit" ? "I'll edit the files" : "answered", words: turn };
     }
     case "unit-checkpoint":
     case "batch-checkpoint":
@@ -710,7 +738,7 @@ export async function recordByAgent(proj: string, item: AnswersItem, choice: str
       return { event: approved ? "GATE_APPROVED" : "GATE_REJECTED", exec: result };
     }
     case "verification-command":
-      return emitted(await log(["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "npm test", "--session", SESSION, "--details", choice]), "QUESTION_ANSWERED");
+      return emitted(await log(["--stage", "functional-design", "--checkpoint", "verification-command", "--command", "npm test", "--session", SESSION, "--details", choice]), "QUESTION_ANSWERED");
     case "construction-policy":
       return emitted(await log(["--stage", "functional-design", "--checkpoint", "construction-policy", "--field", "Construction Execution", "--value", "swarm", "--session", SESSION, "--details", choice]), "QUESTION_ANSWERED");
     case "summary-confirmation": {

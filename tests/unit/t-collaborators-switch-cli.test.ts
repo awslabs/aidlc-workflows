@@ -172,7 +172,7 @@ describe("t-collaborators-cli an isolated Reverse Engineering run finishes on it
     const proj = isolatedProject("bugfix", "- **Collaborators**: on (set by you)");
     const run = runNext(proj, ["--stage", RE_STAGE, "--single"]);
     expect(run.kind, JSON.stringify(run)).toBe("run-stage");
-    expect(run.pipeline).toEqual({ links: [LEAD], completed: [] });
+    expect(run.pipeline).toEqual({ links: [LEAD], completed: [], record: [expect.objectContaining({ link: LEAD })] });
     const lead = recordLink(proj, LEAD);
     expect(lead.rc, lead.out).toBe(0);
     writeCodekb(proj);
@@ -184,7 +184,7 @@ describe("t-collaborators-cli an isolated Reverse Engineering run finishes on it
     const proj = isolatedProject("enterprise", "- **Collaborators**: off (set by you)");
     const run = runNext(proj, ["--stage", RE_STAGE, "--single"]);
     expect(run.kind, JSON.stringify(run)).toBe("run-stage");
-    expect(run.pipeline).toEqual({ links: [LEAD, FINAL], completed: [] });
+    expect(run.pipeline).toEqual({ links: [LEAD, FINAL], completed: [], record: [expect.objectContaining({ link: LEAD }), expect.objectContaining({ link: FINAL })] });
     const lead = recordLink(proj, LEAD);
     expect(lead.rc, lead.out).toBe(0);
     const architect = recordLink(proj, FINAL);
@@ -285,10 +285,10 @@ describe("t-collaborators-cli a mid-stage switch never reuses a receipt that no 
     expect(scan.rc, scan.out).toBe(0);
     setCollaborators(proj, "off");
     const resumed = runNext(proj, []);
-    expect(resumed.pipeline).toEqual({ links: [LEAD], completed: [] });
+    expect(resumed.pipeline).toEqual({ links: [LEAD], completed: [], record: [expect.objectContaining({ link: LEAD })] });
     const full = recordLink(proj, LEAD, false);
     expect(full.rc, full.out).toBe(0);
-    expect(runNext(proj, []).pipeline).toEqual({ links: [LEAD], completed: [LEAD] });
+    expect(runNext(proj, []).pipeline).toEqual({ links: [LEAD], completed: [LEAD], record: [] });
   });
 
   test("off to on after the developer's full run: only the architect is left", () => {
@@ -296,7 +296,7 @@ describe("t-collaborators-cli a mid-stage switch never reuses a receipt that no 
     const full = recordLink(proj, LEAD, false);
     expect(full.rc, full.out).toBe(0);
     setCollaborators(proj, "on");
-    expect(runNext(proj, []).pipeline).toEqual({ links: [LEAD, FINAL], completed: [LEAD] });
+    expect(runNext(proj, []).pipeline).toEqual({ links: [LEAD, FINAL], completed: [LEAD], record: [expect.objectContaining({ link: FINAL })] });
     const architect = recordLink(proj, FINAL, false);
     expect(architect.rc, architect.out).toBe(0);
   });

@@ -17,8 +17,11 @@ import {
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
+  resolveWorkflowSelection,
+  sessionRecordPath,
   SPACE_NAME_REGEX,
   sessionsDir,
+  validSessionId,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.ts";
 import { resolveAidlcSettings } from "./aidlc-settings.ts";
@@ -89,6 +92,14 @@ export interface StoredQuestion {
    * the routing question answers it, so the work starts once.
    */
   approvedRequest?: string;
+  /** The person's message the words came in, by its record's id; a question derived from another keeps that one's. */
+  messageId?: string;
+  /**
+   * For a plan question for new work (a root `front` or `compose` question, or one derived from a routing question
+   * the person answered with new work): the chat that asked it, so the agent's writes in that chat before the person
+   * picks a plan are kept (aidlc-before-pick.ts) while it is open.
+   */
+  asker?: string;
   createdAt: string;
 }
 
@@ -168,7 +179,9 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
     (question.approvedRequest === undefined ||
       (typeof question.approvedRequest === "string" && QUESTION_ID.test(question.approvedRequest))) &&
     (question.answeredBy === undefined ||
-      (typeof question.answeredBy === "string" && QUESTION_ID.test(question.answeredBy)))
+      (typeof question.answeredBy === "string" && QUESTION_ID.test(question.answeredBy))) &&
+    (question.messageId === undefined || (typeof question.messageId === "string" && QUESTION_ID.test(question.messageId))) &&
+    (question.asker === undefined || (typeof question.asker === "string" && validSessionId(question.asker) === question.asker))
   ) {
     return question as StoredQuestion;
   }
@@ -263,34 +276,6 @@ export function pruneExpiredQuestions(projectDir: string): void {
 }
 
 /**
- * Whether `next` has already read these words for this chat: a routing question
- * holding exactly this text, saved at or after `sinceIso` (the time of the
- * message that carried them). The reading step over work nobody has selected
- * saves one, so the bare `next` the agent runs after that step is not read as
- * the same line again.
- */
-export function wordsAlreadyRead(projectDir: string, text: string, sinceIso: string): boolean {
-  let names: string[];
-  try {
-    names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
-  } catch {
-    return false;
-  }
-  const since = Date.parse(sinceIso);
-  for (const name of names) {
-    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
-    if (!QUESTION_ID.test(id)) continue;
-    const question = readStoredQuestion(projectDir, id);
-    if (question?.answeredBy !== undefined) continue;
-    if (question === null || question.origin !== "routing" || question.text !== text) continue;
-    const at = Date.parse(question.createdAt);
-    // The question is saved after the message that led to it, never before.
-    if (Number.isNaN(since) || (!Number.isNaN(at) && at >= since)) return true;
-  }
-  return false;
-}
-
-/**
  * The new-work question asked most recently, when it was asked within `withinMs`:
  * the request a reply at the compose gate or the scope confirmation is about.
  * A `compose` entry counts, so a reply at its gate answers that composition.
@@ -339,6 +324,20 @@ export function latestQuestion(projectDir: string): StoredQuestion | null {
   if (latest === null) return null;
   const { question } = latest;
   return question.origin === "compose" ? readComposeEntry(projectDir, question.id) : readQuestion(projectDir, question.id);
+}
+
+/** The open questions kept from the person's message `messageId` (unanswered, unexpired), oldest first. */
+export function questionsFromMessage(projectDir: string, messageId: string): StoredQuestion[] {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
+  } catch {
+    return [];
+  }
+  return names
+    .map((name) => (name.endsWith(".json") ? readQuestion(projectDir, name.slice(0, -".json".length)) : null))
+    .filter((question): question is StoredQuestion => question?.messageId === messageId)
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
 }
 
 /**
@@ -414,11 +413,20 @@ export function saveQuestion(
   stateSha256?: string,
   settings?: QuestionSettings,
   approvedRequest?: string,
+  messageId?: string,
 ): StoredQuestion {
   pruneExpiredQuestions(projectDir);
   // A question derived from another keeps that one's root, never the parent, so
-  // a chain of asks stays one hop from where the person's words were said.
-  const root = composedFrom ? readStoredQuestion(projectDir, composedFrom)?.composedFrom ?? composedFrom : undefined;
+  // a chain of asks stays one hop from where the person's words were said, and
+  // the message they came in.
+  const parent = composedFrom ? readStoredQuestion(projectDir, composedFrom) : null;
+  const root = composedFrom ? parent?.composedFrom ?? composedFrom : undefined;
+  const carried = parent?.messageId ?? messageId;
+  // A routing question stays open when its answer goes on with existing work, so it opens no window; the plan
+  // question its new-work answer leads to does.
+  const opensWindow = (origin === "front" || origin === "compose") &&
+    (!root || readStoredQuestion(projectDir, root)?.origin === "routing");
+  const asker = opensWindow ? validSessionId(askingChat(projectDir) ?? undefined) : null;
   const question: StoredQuestion = {
     id: mintQuestionId(projectDir),
     text,
@@ -430,10 +438,71 @@ export function saveQuestion(
     ...(stateSha256 ? { stateSha256 } : {}),
     ...(settings && (settings.newWork.length > 0 || settings.existingWork.length > 0) ? { settings } : {}),
     ...(approvedRequest && QUESTION_ID.test(approvedRequest) ? { approvedRequest } : {}),
+    ...(carried && QUESTION_ID.test(carried) ? { messageId: carried } : {}),
+    ...(asker ? { asker } : {}),
     createdAt: new Date().toISOString(),
   };
   writeRecordFileNoFollow(projectDir, questionRel(projectDir, question.id), `${JSON.stringify(question)}\n`);
+  // Which question is this chat's open plan question, read on every write the agent makes: one small file, so the
+  // guard reads one question and never scans the store. A later plan question beside it (the same routing root)
+  // keeps the window it opened.
+  const open = asker ? openPlanQuestion(projectDir, asker) : null;
+  if (asker && !(open !== null && root !== undefined && open.composedFrom === root)) {
+    try {
+      writeRecordFileNoFollow(projectDir, relative(projectDir, `${sessionRecordPath(projectDir, asker)}.plan-question`), `${question.id}\n`);
+    } catch {
+      // Unkept: the agent's writes before this pick go unnamed, never misnamed.
+    }
+  }
   return question;
+}
+
+// The chat this engine process runs in, read without binding it.
+function askingChat(projectDir: string): string | null {
+  try {
+    return resolveWorkflowSelection(projectDir, { bind: false }).sessionId;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * This chat's plan question for new work while it is open: asked by this chat, not yet answered by work it started
+ * (`retireRequest`), not expired (`pruneExpiredQuestions`). Null otherwise.
+ */
+export function openPlanQuestion(projectDir: string, chat: string): StoredQuestion | null {
+  const path = sessionRecordPath(projectDir, chat);
+  if (!path) return null;
+  let id: string;
+  try {
+    id = readRegularFileNoFollowOrThrow(
+      recordFileTargetOrThrow(projectDir, relative(projectDir, `${path}.plan-question`)), "plan question", 64,
+    ).toString("utf-8").trim();
+  } catch {
+    return null;
+  }
+  const question = readStoredQuestion(projectDir, id);
+  if (question === null || question.asker !== chat || question.answeredBy !== undefined) return null;
+  const days = retentionDays(projectDir);
+  if (days !== null && Date.parse(question.createdAt) < Date.now() - days * DAY_MS) return null;
+  return question;
+}
+
+/**
+ * The plan question window question `id` closes when its answer starts work: the chat that asked it and the root of
+ * its chain. Null when no chat asked it as a plan question for new work.
+ */
+export function planQuestionWindow(projectDir: string, id: string): { chat: string; chain: string } | null {
+  const question = readStoredQuestion(projectDir, id);
+  if (question === null) return null;
+  const chain = question.composedFrom ?? question.id;
+  const chat = (question.composedFrom ? readStoredQuestion(projectDir, chain)?.asker : undefined) ?? question.asker;
+  return chat ? { chat, chain } : null;
+}
+
+/** Whether question `id` is `chain`'s root or one derived from it. */
+export function inQuestionChain(projectDir: string, id: string, chain: string): boolean {
+  return id === chain || readStoredQuestion(projectDir, id)?.composedFrom === chain;
 }
 
 /** Remove a question's copy once it is spent; a missing file is already gone. */

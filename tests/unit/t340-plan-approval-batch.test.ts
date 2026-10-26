@@ -238,16 +238,20 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     expect(readPlanApprovalResponse(f.project, SESSION)).toBeNull();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("no receipt without the actual offered response in this session", () => {
+  test("no receipt without the person's reply in this session; their words here back the agent's choice", () => {
     const f = fixture();
     expect(log(f, "decision").code).toBe(0);
-    human(f.project, "Approve Plan"); // A single-plan choice is not the offered group choice.
     human(f.project, "Approve Plans", "another-session");
     answers(f);
     const answer = log(f, "answer");
     expect(answer.code).not.toBe(0);
     expect(answer.stderr).toContain("requires the person's reply to this prompt, in this session");
     expect(receiptFiles(f.project)).toHaveLength(0);
+    // Their own words for the group choice: the agent reads them and records it.
+    human(f.project, "Approve Plan");
+    const recorded = log(f, "answer");
+    expect(recorded.code, recorded.stderr).toBe(0);
+    expect(receiptFiles(f.project)).toHaveLength(2);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("same reviewed batch, reordered manifest and reissued directive keep the response", () => {
@@ -467,7 +471,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     expect(receiptFiles(f.project).map((file) =>
       readFileSync(join(sessionsDir(f.project), "plan-approval", file), "utf-8"),
     )).toEqual(previous);
-    expect(readPlanApprovalResponse(f.project, SESSION)!.choice).toBe("Request Changes");
+    expect(readPlanApprovalResponse(f.project, SESSION)!.words).toBe("Request Changes");
     const retry = log(f, "answer", ["--details", "Request Changes"]);
     expect(retry.code, retry.stderr).toBe(0);
     expect(receiptFiles(f.project)).toHaveLength(0);

@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -31,6 +32,7 @@ import {
   pluginBuildLockPath,
   readPluginTargets,
 } from "../../dist/claude/.claude/tools/aidlc-plugin-emit.ts";
+import { asShippedBuild } from "../harness/plugin-host-names.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -60,6 +62,9 @@ const scratch = mkdtempSync(join(tmpdir(), "aidlc-t315-"));
 const copiedTools = join(scratch, "runtime", "tools");
 const buildTool = join(copiedTools, "aidlc-plugin-build.ts");
 const PROJECTION_MARKER = ".aidlc-plugin-projection.json";
+// A 0500 folder refuses only a process its mode bits bind: Windows ignores
+// them for folders, and root ignores them everywhere.
+const FOLDER_MODES_BIND = process.platform !== "win32" && process.getuid?.() !== 0;
 
 cpSync(SOURCE_TOOLS, copiedTools, { recursive: true });
 
@@ -93,7 +98,21 @@ function copyPlugin(label: string): string {
   return root;
 }
 
-function minimalPlugin(name: string): string {
+function withTmpdir<T>(temp: string, action: () => T): T {
+  const previous = process.env.TMPDIR;
+  process.env.TMPDIR = temp;
+  try {
+    return action();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.TMPDIR;
+    } else {
+      process.env.TMPDIR = previous;
+    }
+  }
+}
+
+function minimalPlugin(name: string, aidlc: Record<string, unknown> = {}): string {
   const root = join(scratch, "minimal-plugins", name);
   mkdirSync(join(root, ".aidlc-plugin"), { recursive: true });
   writeFileSync(
@@ -105,7 +124,7 @@ function minimalPlugin(name: string): string {
         description: "Minimal plugin",
         author: { name: "Fixture" },
         dependencies: ["core"],
-        aidlc: { contributes: { tools: "tools/" } },
+        aidlc: { ...aidlc, contributes: { tools: "tools/" } },
       },
       null,
       2,
@@ -138,8 +157,12 @@ function treeFiles(root: string): Map<string, Buffer> {
   return out;
 }
 
-function treeDiff(expected: string, actual: string): string[] {
-  const expectedFiles = treeFiles(expected);
+function treeDiff(
+  expected: string,
+  actual: string,
+  shape: (files: Map<string, Buffer>) => Map<string, Buffer> = (files) => files,
+): string[] {
+  const expectedFiles = shape(treeFiles(expected));
   const actualFiles = treeFiles(actual);
   const names = new Set([...expectedFiles.keys(), ...actualFiles.keys()]);
   const differences: string[] = [];
@@ -154,7 +177,7 @@ function treeDiff(expected: string, actual: string): string[] {
 }
 
 describe("t315 standalone plugin builder", () => {
-  test("copied tools build byte-identical test-pro projections for every harness", () => {
+  test("copied tools build test-pro byte for byte as the packager does, under its own names", () => {
     expect(HARNESSES).toEqual(EXPECTED_HARNESSES);
     const pluginRoot = copyPlugin("all-harnesses");
     for (const harness of HARNESSES) {
@@ -165,10 +188,47 @@ describe("t315 standalone plugin builder", () => {
       expect(Object.keys(json)).toEqual(["valid", "errors", "warnings"]);
       expect(json.valid).toBe(true);
       expect(
-        treeDiff(join(EXPECTED_ROOT, harness), outDir),
+        treeDiff(join(EXPECTED_ROOT, harness), outDir, asShippedBuild(harness)),
         harness,
       ).toEqual([]);
     }
+  });
+
+  test("a plugin someone else builds carries the names its author chose", () => {
+    const root = minimalPlugin("acme-standards");
+    const named = minimalPlugin("acme-rules", { marketplace: "acme-aidlc-plugins" });
+    const catalogue = (outDir: string, dir: string) =>
+      JSON.parse(readFileSync(join(outDir, dir, "marketplace.json"), "utf-8")) as {
+        name: string;
+        plugins: Array<{ name: string }>;
+      };
+    const hostName = (outDir: string, dir: string) =>
+      (JSON.parse(readFileSync(join(outDir, dir, "plugin.json"), "utf-8")) as { name: string }).name;
+
+    const claude = join(scratch, "third-party", "claude");
+    expect(run([root, "claude", claude, "--json"]).status).toBe(0);
+    expect(hostName(claude, ".claude-plugin")).toBe("acme-standards");
+    expect(catalogue(claude, ".claude-plugin").name).toBe("acme-standards");
+    expect(catalogue(claude, ".claude-plugin").plugins.map((entry) => entry.name)).toEqual(["acme-standards"]);
+
+    const codex = join(scratch, "third-party", "codex");
+    expect(run([named, "codex", codex, "--json"]).status).toBe(0);
+    expect(hostName(codex, ".codex-plugin")).toBe("acme-rules");
+    expect(catalogue(codex, join(".agents", "plugins")).name).toBe("acme-aidlc-plugins");
+    expect(catalogue(codex, join(".agents", "plugins")).plugins.map((entry) => entry.name)).toEqual(["acme-rules"]);
+
+    // On Kiro the whole plugin sits in its own folder, so a second plugin
+    // dropped into the same project never lands on the first.
+    const kiro = join(scratch, "third-party", "kiro-ide");
+    expect(run([root, "kiro-ide", kiro, "--json"]).status).toBe(0);
+    const folder = join(".kiro", "aidlc-plugins", "acme-standards");
+    expect(hostName(kiro, join(folder, ".kiro-plugin"))).toBe("acme-standards");
+    expect(existsSync(join(kiro, folder, ".aidlc-plugin", "plugin.json"))).toBe(true);
+    expect(existsSync(join(kiro, folder, "hooks", "compose.ts"))).toBe(true);
+    expect(existsSync(join(kiro, folder, "tools", "acme-standards-tool.ts"))).toBe(true);
+    expect(readdirSync(kiro).sort()).toEqual([".aidlc-plugin-projection.json", ".kiro"]);
+    expect(readdirSync(join(kiro, ".kiro")).sort()).toEqual(["aidlc-plugins", "hooks"]);
+    expect(readdirSync(join(kiro, ".kiro", "hooks"))).toEqual(["aidlc-acme-standards-compose.json"]);
   });
 
   test("default output is <plugin-root>/dist/<harness>", () => {
@@ -179,6 +239,7 @@ describe("t315 standalone plugin builder", () => {
       treeDiff(
         join(EXPECTED_ROOT, "claude"),
         join(pluginRoot, "dist", "claude"),
+        asShippedBuild("claude"),
       ),
     ).toEqual([]);
   });
@@ -423,6 +484,133 @@ describe("t315 standalone plugin builder", () => {
     }
   });
 
+  test.skipIf(!FOLDER_MODES_BIND)("another user's lock folder in a shared temp folder does not hold up a build", () => {
+    const pluginRoot = copyPlugin("shared-temp-lock-folder");
+    const outDir = join(scratch, "shared-temp-output");
+    const temp = join(scratch, "shared-temp");
+    // The folder all users' builds share in older releases, made first by
+    // another user: this user cannot write it.
+    const sharedFolder = join(temp, "aidlc-plugin-build-locks");
+    mkdirSync(sharedFolder, { recursive: true });
+    chmodSync(sharedFolder, 0o500);
+    const target = readPluginTargets(
+      join(SOURCE_TOOLS, "data", "plugin-targets.json"),
+    ).claude;
+    try {
+      withTmpdir(temp, () =>
+        buildPluginProjection({
+          pluginRoot,
+          target,
+          outDir,
+          templateHooksDir: join(
+            SOURCE_TOOLS,
+            "data",
+            "plugin-hooks-template",
+          ),
+          lockTimeoutMs: 25,
+        })
+      );
+      expect(existsSync(outDir)).toBe(true);
+    } finally {
+      chmodSync(sharedFolder, 0o700);
+    }
+  });
+
+  test.skipIf(!FOLDER_MODES_BIND)("a lock folder this user cannot write stops the build by name, not as a busy lock", () => {
+    const pluginRoot = copyPlugin("unwritable-lock-folder");
+    const outDir = join(scratch, "unwritable-lock-folder-output");
+    const temp = join(scratch, "unwritable-lock-temp");
+    const lockFolder = withTmpdir(temp, () => dirname(pluginBuildLockPath(outDir)));
+    mkdirSync(lockFolder, { recursive: true });
+    chmodSync(lockFolder, 0o500);
+    const target = readPluginTargets(
+      join(SOURCE_TOOLS, "data", "plugin-targets.json"),
+    ).claude;
+    let refusal: unknown;
+    try {
+      withTmpdir(temp, () =>
+        buildPluginProjection({
+          pluginRoot,
+          target,
+          outDir,
+          templateHooksDir: join(
+            SOURCE_TOOLS,
+            "data",
+            "plugin-hooks-template",
+          ),
+          lockTimeoutMs: 25,
+        })
+      );
+    } catch (error) {
+      refusal = error;
+    } finally {
+      chmodSync(lockFolder, 0o700);
+    }
+    expect(refusal).toMatchObject({
+      name: "PluginBuildLockFolderError",
+      message: `cannot write the plugin build lock folder "${lockFolder}" (EACCES)`,
+      fix: "Set TMPDIR to a folder you own, then run the command again.",
+    });
+    expect(existsSync(outDir)).toBe(false);
+  });
+
+  test.skipIf(!FOLDER_MODES_BIND)("plugin build prints the lock folder it cannot write, and the TMPDIR fix as its Fix line", () => {
+    const pluginRoot = copyPlugin("unwritable-lock-folder-cli");
+    const outDir = join(scratch, "unwritable-lock-folder-cli-output");
+    const temp = join(scratch, "unwritable-lock-cli-temp");
+    const lockFolder = withTmpdir(temp, () => dirname(pluginBuildLockPath(outDir)));
+    mkdirSync(lockFolder, { recursive: true });
+    chmodSync(lockFolder, 0o500);
+    try {
+      const result = withTmpdir(temp, () =>
+        run([pluginRoot, "claude", outDir, "--json"])
+      );
+      expect(result.status, result.stderr).toBe(1);
+      const parsed = JSON.parse(result.stdout) as {
+        errors: Array<{ rule: string; message: string; fix: string }>;
+      };
+      expect(parsed.errors).toContainEqual(
+        expect.objectContaining({
+          rule: "build-output",
+          message: `cannot write the plugin build lock folder "${lockFolder}" (EACCES)`,
+          fix: "Set TMPDIR to a folder you own, then run the command again.",
+        }),
+      );
+      expect(existsSync(outDir)).toBe(false);
+    } finally {
+      chmodSync(lockFolder, 0o700);
+    }
+  });
+
+  test.skipIf(!FOLDER_MODES_BIND)("plugin build prints the TMPDIR fix when its lock folder cannot be created", () => {
+    const pluginRoot = copyPlugin("uncreatable-lock-folder-cli");
+    const outDir = join(scratch, "uncreatable-lock-folder-cli-output");
+    const temp = join(scratch, "uncreatable-lock-cli-temp");
+    const lockFolder = withTmpdir(temp, () => dirname(pluginBuildLockPath(outDir)));
+    mkdirSync(temp, { recursive: true });
+    chmodSync(temp, 0o500);
+    try {
+      const result = withTmpdir(temp, () =>
+        run([pluginRoot, "claude", outDir, "--json"])
+      );
+      expect(result.status, result.stderr).toBe(1);
+      const parsed = JSON.parse(result.stdout) as {
+        errors: Array<{ rule: string; message: string; fix: string }>;
+      };
+      expect(parsed.errors).toContainEqual(
+        expect.objectContaining({
+          rule: "build-output",
+          message: `cannot write the plugin build lock folder "${lockFolder}" (EACCES)`,
+          fix: "Set TMPDIR to a folder you own, then run the command again.",
+        }),
+      );
+      expect(existsSync(lockFolder)).toBe(false);
+      expect(existsSync(outDir)).toBe(false);
+    } finally {
+      chmodSync(temp, 0o700);
+    }
+  });
+
   test("custom output under a symlinked environmental ancestor remains valid", () => {
     const pluginRoot = copyPlugin("symlinked-environment-custom");
     const realEnvironment = join(scratch, "real-environment");
@@ -438,7 +626,7 @@ describe("t315 standalone plugin builder", () => {
     const result = run([pluginRoot, "claude", outDir, "--json"]);
     expect(result.status, result.stderr).toBe(0);
     expect(
-      treeDiff(join(EXPECTED_ROOT, "claude"), outDir),
+      treeDiff(join(EXPECTED_ROOT, "claude"), outDir, asShippedBuild("claude")),
     ).toEqual([]);
   });
 
@@ -460,7 +648,7 @@ describe("t315 standalone plugin builder", () => {
     const outDir = join(scratch, "vendored-output");
     const result = run([pluginRoot, "claude", outDir, "--json"]);
     expect(result.status, result.stderr).toBe(0);
-    expect(treeDiff(join(EXPECTED_ROOT, "claude"), outDir)).toEqual([]);
+    expect(treeDiff(join(EXPECTED_ROOT, "claude"), outDir, asShippedBuild("claude"))).toEqual([]);
   });
 
   test("validation errors refuse the build with exit 1", () => {
@@ -478,6 +666,57 @@ describe("t315 standalone plugin builder", () => {
       "manifest-missing",
     );
     expect(existsSync(outDir)).toBe(false);
+  });
+
+  test("a plugin that orders after another plugin's stage without declaring it does not build, and says the one step", () => {
+    const pluginRoot = join(scratch, "undeclared-plugin", "beta");
+    const created = spawnSync(process.execPath, [join(copiedTools, "aidlc-plugin-create.ts"), "beta", pluginRoot], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    });
+    expect(created.status, created.stderr).toBe(0);
+    const stagePath = join(pluginRoot, "stages", "construction", "beta-example-stage.md");
+    writeFileSync(
+      stagePath,
+      readFileSync(stagePath, "utf-8").replace("requires_stage: []", "requires_stage:\n  - zeta-example-stage"),
+      "utf-8",
+    );
+    const outDir = join(scratch, "undeclared-plugin-output");
+    const result = run([pluginRoot, "claude", outDir]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Plugin build: FAILED");
+    expect(result.stderr).toContain(
+      `ERROR stages/construction/beta-example-stage.md [base-reference]: requires_stage "zeta-example-stage" is not a core stage or one of beta's own`,
+    );
+    expect(result.stderr).toContain('Fix: If another plugin ships it, add that plugin to dependencies next to "core"');
+    expect(existsSync(outDir)).toBe(false);
+  });
+
+  test("a team plugin whose stage leads with its base's agent builds, saying once that the agent is not checked", () => {
+    const pluginRoot = join(scratch, "team-plugin", "alpha");
+    const created = spawnSync(process.execPath, [join(copiedTools, "aidlc-plugin-create.ts"), "alpha", pluginRoot], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    });
+    expect(created.status, created.stderr).toBe(0);
+    const manifestPath = join(pluginRoot, ".aidlc-plugin", "plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+    manifest.dependencies = ["core", "zeta@^0.1.0"];
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+    const stagePath = join(pluginRoot, "stages", "construction", "alpha-example-stage.md");
+    writeFileSync(
+      stagePath,
+      readFileSync(stagePath, "utf-8").replace("lead_agent: alpha-example-agent", "lead_agent: zeta-example-agent"),
+      "utf-8",
+    );
+    const outDir = join(scratch, "team-plugin-output");
+    const result = run([pluginRoot, "claude", outDir]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Plugin build: COMPLETE");
+    expect(result.stdout).toContain(
+      'WARNING stages/construction/alpha-example-stage.md [base-reference]: agent "zeta-example-agent" is not checked: it would come from zeta, the base this plugin builds on',
+    );
+    expect(existsSync(join(outDir, "stages", "construction", "alpha-example-stage.md"))).toBe(true);
   });
 
   test("non-canonical contribution paths refuse BUILD before output creation", () => {

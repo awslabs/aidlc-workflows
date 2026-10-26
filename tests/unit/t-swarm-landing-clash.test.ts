@@ -6,12 +6,14 @@
 // combine exactly those files there while the batch is out, the same merge
 // says the clash again until they are combined, and then it lands and the
 // batch goes on. Nothing else in the main checkout opens up. In a workspace of
-// several repositories the same holds in the Unit's own repository. A landing that git
+// several repositories the same holds in the Unit's own repository. A landing
+// the person's pre-commit hook refused is fixed the same way: the agent may
+// write the files it staged there, and the same merge lands it. A landing that git
 // does not start because a file it changes holds changes not committed in the
 // main checkout (an AI-DLC update to .gitignore) names the file and the step.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -112,7 +114,7 @@ describe("a parallel landing that clashes with a Unit already landed", () => {
     // beta's own file is staged in the same landing but merged cleanly; alpha's landed file is not beta's.
     const staged = guard(pd, "Write", write(join(pd, "src", "beta.ts")));
     expect(staged.code).toBe(2);
-    expect(staged.err).toContain("invoke-swarm");
+    expect(staged.err).toContain("the main checkout changes only by their landings");
     expect(guard(pd, "Write", write(join(pd, "src", "alpha.ts"))).code).toBe(2);
     // Once the landing is dropped there is nothing to combine.
     git(pd, ["reset", "--merge"]);
@@ -135,6 +137,8 @@ describe("a parallel landing that clashes with a Unit already landed", () => {
     git(pd, ["add", "src/shared.ts"]);
     // A second look at its own combination after `git add` is still the agent's to write.
     expect(guard(pd, "Write", write(join(pd, "src", "shared.ts"))).code).toBe(0);
+    // Nothing is unmerged now, but beta's cleanly merged file is still not the clash's: it waits.
+    expect(guard(pd, "Write", write(join(pd, "src", "beta.ts"))).code).toBe(2);
     const landed = land(pd, "beta");
     expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
     expect((JSON.parse(landed.out) as { notices?: string[] }).notices)
@@ -195,6 +199,61 @@ describe("a parallel landing that clashes with a Unit already landed", () => {
     expect(merged.exitCode).not.toBe(0);
     expect(unmerged(pd)).toBe("src/alpha.ts");
     expect(guard(pd, "Write", write(join(pd, "src", "alpha.ts"))).code).toBe(2);
+  });
+});
+
+describe("a parallel landing the person's git hook refused", () => {
+  const LOGGED = "export const alpha = 2;\nconsole.log('debug');\n";
+  const FIXED = "export const alpha = 2;\n";
+
+  function refuseConsoleLog(pd: string): void {
+    const dir = join(pd, ".git", "hooks");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "pre-commit");
+    writeFileSync(path, [
+      "#!/bin/sh",
+      "if git diff --cached -- src/alpha.ts | grep -q 'console.log'; then",
+      "  echo 'lint: src/alpha.ts has a console.log' >&2",
+      "  exit 1",
+      "fi",
+      "",
+    ].join("\n"));
+    chmodSync(path, 0o755);
+  }
+
+  test("a landing the person's pre-commit hook refused: the staged file it names is the agent's to fix in the main checkout, and nothing else there", () => {
+    const pd = fixture(["alpha"]);
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    writeFileSync(join(wt(pd, "alpha"), "src", "alpha.ts"), LOGGED);
+    const checked = swarm(pd, ["check", "alpha"]);
+    expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
+    reviewRevisedSource(pd, "alpha");
+    const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha"]);
+    expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
+    refuseConsoleLog(pd);
+    const refused = land(pd, "alpha");
+    expect(refused.code).toBe(1);
+    expect(JSON.parse(refused.out)).toMatchObject({ status: "commit-refused", staged: ["src/alpha.ts"] });
+    expect(unmerged(pd)).toBe("");
+    const alpha = join(pd, "src", "alpha.ts");
+    expect(guard(pd, "Edit", { file_path: alpha, old_string: "console.log('debug');\n", new_string: "" }).code).toBe(0);
+    expect(guard(pd, "Write", { file_path: alpha, content: FIXED }).code).toBe(0);
+    // A file the landing did not stage still waits for the batch.
+    expect(guard(pd, "Write", { file_path: join(pd, "README.md"), content: "seed, fixed\n" }).code).toBe(2);
+    // Dropped, the landing has nothing to fix; staged again, the hook refuses it again.
+    git(pd, ["reset", "--merge"]);
+    expect(guard(pd, "Write", { file_path: alpha, content: FIXED }).code).toBe(2);
+    expect((JSON.parse(land(pd, "alpha").out) as { status: string }).status).toBe("commit-refused");
+    writeFileSync(alpha, FIXED);
+    git(pd, ["add", "src/alpha.ts"]);
+    const landed = land(pd, "alpha");
+    expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
+    expect((JSON.parse(landed.out) as { notices?: string[] }).notices)
+      .toEqual(["Landed Unit alpha with 1 file changed since your hook refused it: src/alpha.ts."]);
+    expect(readFileSync(alpha, "utf-8")).toBe(FIXED);
+    // The landing is done: the main checkout's files wait for the batch again.
+    expect(guard(pd, "Write", { file_path: alpha, content: FIXED }).code).toBe(2);
   });
 });
 

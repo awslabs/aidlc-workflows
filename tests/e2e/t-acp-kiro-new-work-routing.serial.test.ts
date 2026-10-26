@@ -82,6 +82,7 @@ interface RoutingDirective {
   response_route: "next";
   numbered_prose_question: string;
   new_work_description: string;
+  new_intent_command: string;
   available_intents?: string[];
 }
 
@@ -165,6 +166,8 @@ describe("t-acp-kiro-new-work-routing (live engine-ask authority)", () => {
         expect(first.toolCalls.slice(askIndex + 1)).toEqual([]);
         const directive = routingDirective(first.toolCalls, askIndex);
         expectExactCompletedRendering(first.assistantText, directive);
+        const questionId = directive.new_intent_command.match(/--request (\S+)/)?.[1] ?? "";
+        expect(questionId).not.toBe("");
 
         const other = await driveKiroAcp({
           projectDir: project,
@@ -190,12 +193,25 @@ describe("t-acp-kiro-new-work-routing (live engine-ask authority)", () => {
         expect(alternative.stopReason).toBe("end_turn");
         const invocations = alternative.toolCalls.map(decodeKiroOrchestrateInvocation);
         expect(invocations.some((invocation) => invocation?.verb === "report")).toBe(false);
-        const nextCalls = invocations.filter((invocation) =>
-          invocation?.verb === "next"
+        const nextArgs = invocations.flatMap((invocation) =>
+          invocation?.verb === "next" ? [invocation.args] : []
         );
-        // person-facing: the person's alternative reaches the engine once, word for word; a second next would act on it twice.
-        expect(nextCalls).toHaveLength(1);
-        expect(nextCalls[0]?.args.join(" ")).toBe(ALTERNATIVE);
+        // The words a next carries: what follows `--` (where the engine's own commands put them), or the whole line
+        // when it has no flag (a flagged next without `--` is an answer or a request id).
+        const words = nextArgs.map((args) =>
+          args.includes("--")
+            ? args.slice(args.indexOf("--") + 1)
+            : args.some((arg) => arg.startsWith("-")) ? [] : args
+        );
+        // The person's alternative reaches the engine word for word on the first next that carries words.
+        expect(words.find((carried) => carried.length > 0)?.join(" ")).toBe(ALTERNATIVE);
+        // The engine's reply leaves the reading to the agent: an answer goes to the question the person was asked;
+        // any other reading gets the engine's routing ask about the alternative.
+        const answers = nextArgs.filter((args) =>
+          args.some((arg) => arg === "--continue" || arg === "--new-intent" || arg === "compose")
+        );
+        for (const args of answers) expect(args[args.indexOf("--request") + 1]).toBe(questionId);
+        if (answers.length > 0) return;
         const alternativeAskIndex = engineAskIndex(
           alternative.toolCalls,
           `"new_work_description":"${ALTERNATIVE}"`,

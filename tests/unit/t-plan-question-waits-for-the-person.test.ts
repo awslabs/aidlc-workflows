@@ -7,10 +7,13 @@
 // same turn, and the engine started the bugfix plan with no reply from the
 // person. A reply typed in the chat, a pick in a question box, or the agent's
 // own proposal step are unchanged; the guard's switch and the person's own
-// terminal lift the check, as at a stage gate.
+// terminal lift the check, as at a stage gate. A message the host's prompt hook
+// never saw (Copilot CLI's PowerShell check timed out on a Windows runner) leaves
+// nothing on record while AI-DLC's other hooks run: the plan still waits then.
 
 import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { recordPreWorkflowHeartbeat } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -27,6 +30,7 @@ import {
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const TOOLS = join(AIDLC_SRC, "tools");
+const GUARD = join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts");
 const SESSION = "plan-question-chat-1";
 const OTHER = "plan-question-chat-2";
 const REQUEST = /--request ([0-9a-f]{8})/;
@@ -67,10 +71,56 @@ const picked = (proj: string, session: string, label: string): void => hook(proj
     tool_response: { answers: { "Which plan?": label } },
   });
 
+/** AI-DLC's PreToolUse guard, as the host runs it before the agent's engine command. */
+function guardRuns(proj: string, session: string, args: string[], env: NodeJS.ProcessEnv): void {
+  const r = spawnSync(process.execPath, [GUARD], {
+    cwd: proj, env, encoding: "utf-8",
+    input: JSON.stringify({
+      hook_event_name: "PreToolUse", session_id: session, cwd: proj, tool_name: "Bash",
+      tool_input: { command: `bun .claude/tools/aidlc-orchestrate.ts next ${args.join(" ")}` },
+    }),
+  });
+  expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+}
+
+/** The agent's engine command, with the host's hooks running for it. */
+function agent(proj: string, session: string, args: string[], env = chatEnv(proj, session)): Directive {
+  guardRuns(proj, session, args, env);
+  return next(proj, args, env);
+}
+
+/** Every heartbeat file under the project's AI-DLC folder. */
+function heartbeats(dir: string, found: string[] = []): string[] {
+  if (!existsSync(dir)) return found;
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) heartbeats(path, found);
+    else if (name.endsWith(".last")) found.push(path);
+  }
+  return found;
+}
+
+/** A day later: the message store has pruned, and every heartbeat is that old. */
+function aDayLater(proj: string): void {
+  rmSync(join(proj, "aidlc", ".aidlc-sessions", "messages"), { recursive: true, force: true });
+  const old = new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  for (const path of heartbeats(join(proj, "aidlc"))) writeFileSync(path, old);
+}
+
 /** The `next` arguments of a command the engine handed out. */
 function answerArgs(command: unknown): string[] {
   const text = String(command);
   return text.slice(text.indexOf(" next ") + 6).split(" ");
+}
+
+/** The person's line reached no prompt hook; the agent's proposal step and the plan question, hooks running for each. */
+function planQuestionUnseen(proj: string, session: string, args: string[] = ["--", LINE.replace(/^\/aidlc /, "")]): Directive {
+  const proposal = agent(proj, session, args);
+  const id = REQUEST.exec(String(proposal.message))?.[1];
+  expect(id, String(proposal.message).slice(0, 300)).toBeDefined();
+  const ask = agent(proj, session, ["--propose", "bugfix", "--request", id!]);
+  expect(ask.kind, JSON.stringify(ask).slice(0, 300)).toBe("ask");
+  return ask;
 }
 
 /** The person's first line, the agent's proposal step, and the plan question it returns. */
@@ -212,7 +262,74 @@ describe("t-plan-question-waits-for-the-person", () => {
     expect(noReplySince(proj, SESSION, asked(10_500))).toBe(false);
   });
 
-  test("with the presence check switched off, or no message on record at all, the answer runs as before", () => {
+  test("a line the host's prompt hook never saw, while AI-DLC's other hooks run: the plan still waits for the person", () => {
+    proj = fresh();
+    const ask = planQuestionUnseen(proj, SESSION);
+    const d = agent(proj, SESSION, answerArgs(ask.confirm_command));
+    expect(waits(d), JSON.stringify(d).slice(0, 500)).toBe(true);
+    // Their reply, which the prompt hook does see, starts the plan they picked.
+    typed(proj, SESSION, "1");
+    expect(startsWork(agent(proj, SESSION, answerArgs(ask.confirm_command)))).toBe(true);
+  });
+
+  test("the same, answered in a new chat: the reply there starts the plan", () => {
+    proj = fresh();
+    const ask = planQuestionUnseen(proj, SESSION);
+    typed(proj, OTHER, "1");
+    expect(startsWork(agent(proj, OTHER, answerArgs(ask.confirm_command)))).toBe(true);
+  });
+
+  test("a first line that names the plan starts it with no plan question, even with nothing on record", () => {
+    proj = fresh();
+    expect(startsWork(agent(proj, SESSION, ["--scope", "bugfix", "--", LINE.replace(/^\/aidlc /, "")]))).toBe(true);
+  });
+
+  test("nothing on record while the hooks are not running now, or for an unattended driver: the answer runs as before", () => {
+    proj = fresh();
+    // Hooks that last ran a day ago: the hooks-off and doctor steps own that.
+    recordPreWorkflowHeartbeat(proj, "plan-approval-guard");
+    aDayLater(proj);
+    const env = chatEnv(proj, SESSION);
+    const proposal = next(proj, ["--", LINE.replace(/^\/aidlc /, "")], env);
+    const ask = next(proj, ["--propose", "bugfix", "--request", REQUEST.exec(String(proposal.message))![1]], env);
+    expect(startsWork(next(proj, answerArgs(ask.confirm_command), env))).toBe(true);
+    // An unattended driver's prompts are never kept, and its hooks do run.
+    const unattended = fresh();
+    try {
+      const driver = { ...chatEnv(unattended, SESSION), AIDLC_UNATTENDED: "1" };
+      const proposed = agent(unattended, SESSION, ["--", LINE.replace(/^\/aidlc /, "")], driver);
+      const offer = agent(unattended, SESSION, ["--propose", "bugfix", "--request", REQUEST.exec(String(proposed.message))![1]], driver);
+      expect(startsWork(agent(unattended, SESSION, answerArgs(offer.confirm_command), driver))).toBe(true);
+    } finally {
+      cleanupTestProject(unattended);
+    }
+  });
+
+  test("earlier work parked in the project, a day later, a new chat's line the prompt hook never saw: the plan waits", () => {
+    proj = fresh();
+    const ask = planQuestion(proj, chatEnv(proj, SESSION));
+    typed(proj, SESSION, "1");
+    const go = agent(proj, SESSION, answerArgs(ask.confirm_command));
+    const create = /intent create (.*?)`/.exec(String(go.message))?.[1];
+    expect(create, String(go.message).slice(0, 300)).toBeDefined();
+    const made = spawnSync(process.execPath, [
+      join(TOOLS, "aidlc.ts"), "engine", "intent", "create", ...create!.replace('"<2-3 word kebab essence>"', "first-fix").split(" "),
+    ], { cwd: proj, env: chatEnv(proj, SESSION), encoding: "utf-8" });
+    expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+    const parked = spawnSync(process.execPath, [join(TOOLS, "aidlc-orchestrate.ts"), "park", "--project-dir", proj], {
+      cwd: proj, env: chatEnv(proj, SESSION), encoding: "utf-8",
+    });
+    expect(parked.status, `${parked.stdout}${parked.stderr}`).toBe(0);
+    aDayLater(proj);
+    // The guard beats in the parked work's record now, where the engine reads.
+    const second = planQuestionUnseen(proj, OTHER, ["--new-intent", "--", "fix the farewell: it says bye"]);
+    const d = agent(proj, OTHER, answerArgs(second.confirm_command));
+    expect(waits(d), JSON.stringify(d).slice(0, 500)).toBe(true);
+    typed(proj, OTHER, "1");
+    expect(startsWork(agent(proj, OTHER, answerArgs(second.confirm_command)))).toBe(true);
+  });
+
+  test("with the presence check switched off, or a prompt hook that ran but kept no message, the answer runs as before", () => {
     proj = fresh();
     const env = chatEnv(proj, SESSION);
     const ask = planQuestion(proj, env);

@@ -6,8 +6,9 @@
 // person could have the new approach checked (#1189). When the passes are
 // spent and the reviewed files changed after the last review, the approval
 // offers one check, in the engine's words; the person's answer is read as
-// usual, and a review they ask for runs past the passes (#1852). Nothing is
-// refused and the approval stays as it is.
+// usual, and a review they ask for runs past the passes (#1852), named by the
+// message they asked in (--person-asked --message <id>). Nothing is refused and
+// the approval stays as it is.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -24,9 +25,14 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
-  artifactFilename, auditBlockField, findStageBySlug, latestMainWorkflowStageRunFloorForProject, readAuditShardEvents,
-  reviewArtifactFingerprint,
+  artifactFilename, auditBlockField, findStageBySlug, latestMainWorkflowStageRunFloorForProject, MESSAGE_FILL,
+  readAuditShardEvents, reviewArtifactFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -99,10 +105,10 @@ function reviewArgs(slug: string, unit: string, iteration: number): string[] {
 }
 
 // One review through the logger, as a run records it: the request, the
-// reviewer's file, the verdict. A `finding` makes it NOT-READY; `asked` is a
-// review the person asked for (--person-asked).
-function review(p: string, slug: string, iteration: number, finding?: string, unit = "alpha", asked = false) {
-  const args = [...reviewArgs(slug, unit, iteration), ...(asked ? ["--person-asked"] : [])];
+// reviewer's file, the verdict. A `finding` makes it NOT-READY; `asked` names
+// the message the person asked for the review in (--person-asked --message).
+function review(p: string, slug: string, iteration: number, finding?: string, unit = "alpha", asked?: string) {
+  const args = [...reviewArgs(slug, unit, iteration), ...(asked ? ["--person-asked", "--message", asked] : [])];
   const request = json(tool(p, "log", args)) as { reviewFile: string };
   const verdict = finding === undefined ? "READY" : "NOT-READY";
   mkdirSync(dirname(join(p, request.reviewFile)), { recursive: true });
@@ -149,7 +155,9 @@ function editDocument(p: string, slug: string, unit: string, words: string) {
   appendAuditEntry("ARTIFACT_UPDATED", { File: relative(p, document).replaceAll("\\", "/"), Stage: slug, Unit: unit }, p);
 }
 
-function humanTurn(p: string, prompt: string) {
+// The person types `prompt`; the shipped human-turn hook keeps it. Returns the
+// id of the message it kept.
+function humanTurn(p: string, prompt: string): string {
   const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p };
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   const result = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
@@ -157,7 +165,15 @@ function humanTurn(p: string, prompt: string) {
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
   });
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  const turn = readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
 }
+
+// The engine's times are to the second: a message asking for a review comes
+// after the review last requested only from the next second on.
+const tick = () => Bun.sleepSync(1100);
 
 function recordCommand(p: string) {
   const script = join(seededRecordDir(p), "check.cjs");
@@ -228,8 +244,9 @@ describe("t-approval-offers-a-check", () => {
     const p = fixture();
     build(p, ["src/alpha.ts", "src/alpha.ts"], changedApproach(p));
     expect(toTheQuestion(p).asked.check_offer).toBe(OFFER);
-    humanTurn(p, "Yes, have the new approach checked before I decide");
-    review(p, "code-generation", 3, undefined, "alpha", true);
+    tick();
+    const yes = humanTurn(p, "Yes, have the new approach checked before I decide");
+    review(p, "code-generation", 3, undefined, "alpha", yes);
     const again = toTheQuestion(p, false);
     // The question says the re-check's verdict ("alpha's code changed after its review, so it was re-checked: ready").
     expect(again.asked.rechecked).toEqual({ verdict: "READY", approved_before: false, changed: "code" });
@@ -239,25 +256,30 @@ describe("t-approval-offers-a-check", () => {
 
   // The check ran (the one recovery), the work changed again, and the offer
   // comes back: the person's yes is what runs the next check, and the agent
-  // says so with --person-asked.
+  // says so with --person-asked, naming the message of that yes.
   test("the offer again after its check ran: a yes runs the next check with the flag, and without it the agent is told to pass it", () => {
     const p = fixture();
     build(p, ["src/alpha.ts", "src/alpha.ts"], changedApproach(p));
     expect(toTheQuestion(p).asked.check_offer).toBe(OFFER);
-    humanTurn(p, "yes");
-    review(p, "code-generation", 3, "src/alpha.ts", "alpha", true);
+    tick();
+    const yes = humanTurn(p, "yes");
+    review(p, "code-generation", 3, "src/alpha.ts", "alpha", yes);
     writeFileSync(join(p, "src", "alpha.ts"), "export const alpha = 3; // another approach\n");
     expect(toTheQuestion(p, false).asked.check_offer).toBe(OFFER);
-    humanTurn(p, "yes, check it again");
+    tick();
+    const again = humanTurn(p, "yes, check it again");
     // Sent without the flag and at a pass that is not the next one: one step
-    // names both (a spent recovery refuses it here, not the pass count).
+    // names both (a spent recovery refuses it here, not the pass count), and
+    // the message ids the agent can name.
     const unflagged = tool(p, "log", reviewArgs("code-generation", "alpha", 5));
     expect(unflagged.status).not.toBe(0);
     expect(unflagged.out).toContain(
-      "If the person asked for this review, run the same command again with --person-asked --iteration 4.",
+      `If the person asked for this review, run the same command again with --person-asked --message <id> --iteration 4${MESSAGE_FILL} (`,
     );
+    expect(unflagged.out).toContain(`${again}, sent `);
+    expect(unflagged.out).not.toContain("yes, check it again");
     expect(unflagged.out).not.toContain("guard-recovery");
-    review(p, "code-generation", 4, undefined, "alpha", true);
+    review(p, "code-generation", 4, undefined, "alpha", again);
     const asked = readAuditShardEvents(p).filter((row) => row.event === "REVIEW_REQUESTED").at(-1)!;
     expect(auditBlockField(asked.block, "Iteration")).toBe("4");
     expect(auditBlockField(asked.block, "Person Asked")).toBe("true");

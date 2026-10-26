@@ -586,10 +586,13 @@ describe("t27 aidlc-utility doctor", () => {
     expect(r.status).not.toBe(0);
   });
 
-  test("59: doctor reports AWS_AIDLC_DEFAULT_SCOPE unset", () => {
+  // In a terminal doctor cannot see the value Claude Code passes from .claude/settings.json, so "unset" would be false
+  // there; with nothing to check, it says nothing.
+  test("59: doctor says nothing about AWS_AIDLC_DEFAULT_SCOPE when no default is set where it can see one", () => {
     const p = bareProj();
     const r = util(["doctor", "--verbose"], p); // env stripped of the var by util()
-    expect(r.stdout).toContain("AWS_AIDLC_DEFAULT_SCOPE (unset");
+    expect(r.stdout).toContain("Plugin selection"); // the verbose list ran past where the row was
+    expect(r.stdout).not.toContain("AWS_AIDLC_DEFAULT_SCOPE");
   });
 
   test("60: doctor reports AWS_AIDLC_DEFAULT_SCOPE=classic as valid", () => {
@@ -709,6 +712,14 @@ describe("t27 aidlc-utility scope-change", () => {
 
   test("16: scope-change poc->mvp updates Scope field to mvp", () => {
     const p = pocStateAuditProj();
+    // poc's own stages, as creation writes them on a new project: switching
+    // back gives the same plan, so the reply offers it.
+    const poc = (require("../../dist/claude/.claude/tools/data/scope-grid.json") as Record<string, { stages: Record<string, string> }>).poc.stages;
+    writeFileSync(statePath(p), readFileSync(statePath(p), "utf-8").replace(
+      /^(- \[.\] )([a-z0-9-]+) \u2014 (?:EXECUTE|SKIP)$/gm,
+      (_line, box: string, slug: string) =>
+        `${box}${slug} \u2014 ${poc[slug] === "EXECUTE" && slug !== "reverse-engineering" ? "EXECUTE" : "SKIP"}`,
+    ));
     const result = util(["scope-change", "--scope", "mvp"], p);
     expect(result.stdout).toContain("Switched to mvp (the set of stages this work runs): ");
     expect(result.stdout).toContain("You can switch back to poc any time.");
@@ -820,6 +831,8 @@ describe("t27 aidlc-utility scope-change", () => {
       );
       sedReplaceInFile(statePath(p), "- [x] market-research", `- ${marker} market-research`);
       sedReplaceInFile(statePath(p), "- [-] feasibility", "- [ ] feasibility");
+      // A new project's plan, as creation writes it, runs no Reverse Engineering.
+      sedReplaceInFile(statePath(p), "- [ ] reverse-engineering \u2014 EXECUTE", "- [ ] reverse-engineering \u2014 SKIP");
       sedReplaceInFile(statePath(p), "**Current Stage**: feasibility", "**Current Stage**: market-research");
       return p;
     };

@@ -14,7 +14,7 @@
 //
 // * Project root resolution: walk up from --file-path to nearest
 //   tsconfig.json. If absent → exit 1 with stderr "no-tsconfig-found".
-//   The dispatcher's branch e reclassifies non-zero/non-127 to PASSED
+//   The dispatcher's branch e records non-zero/non-127 as COULD_NOT_RUN
 //   with Note=script-error: exit-1.
 //
 // * Why --project (not bare-file): `bunx tsc --noEmit foo.ts` ignores
@@ -66,7 +66,7 @@
 //   1   no tsconfig.json found or execution incomplete (dispatcher branch e)
 //   <n> tsc exited non-zero with ZERO parsed diagnostics (config-load failure
 //       e.g. TS18003) — propagate tsc's code so the dispatcher's branch e
-//       records PASSED Note=script-error: exit-<n> instead of a false clean PASS
+//       records COULD_NOT_RUN Note=script-error: exit-<n> instead of a false clean PASS
 //   127 tsc unresolvable
 
 import { spawnSync } from "node:child_process";
@@ -328,8 +328,8 @@ export function main(argv: string[]): void {
 	// were found", which carries no (line,col) so PRIMARY_RE matches nothing).
 	// Emitting pass:true here would be a FALSE clean PASS: a broken tsconfig would
 	// silently report green. Instead we propagate tsc's exit code so the dispatcher's
-	// branch e reclassifies it as PASSED Note=script-error: exit-<n> (advisory, not
-	// a real type pass). We gate on allErrors (the WHOLE-project parse), NOT the
+	// branch e records it as COULD_NOT_RUN Note=script-error: exit-<n> (advisory,
+	// not a real type pass). We gate on allErrors (the WHOLE-project parse), NOT the
 	// post-filtered `errors`: a non-zero exit with diagnostics elsewhere in the
 	// project but none for --file-path is a genuine type-error run whose errors fall
 	// outside the target — that must stay a per-file clean PASS (the documented

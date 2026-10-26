@@ -14,11 +14,15 @@ review_class: advisory
 produces:
   - requirements
   - requirements-analysis-questions
+optional_produces:
+  - traceability
 consumes:
   - artifact: intent-statement
     required: false
+    cited: true
   - artifact: scope-document
     required: false
+    cited: true
   - artifact: business-overview
     required: false
     conditional_on: brownfield
@@ -30,9 +34,6 @@ consumes:
     conditional_on: brownfield
   - artifact: team-practices
     required: false
-cites:
-  - intent-statement
-  - scope-document
 requires_stage:
   - approval-handoff
   - reverse-engineering
@@ -52,7 +53,7 @@ scopes:
   - workshop
   - express
 inputs: RE artifacts (if brownfield), authoritative project description (project-description utility)
-outputs: requirements.md, requirements-analysis-questions.md (under this stage's record dir, engine-resolved)
+outputs: requirements.md, requirements-analysis-questions.md, traceability.json (Step 10: an `ids` list with one entry per FR and NFR ID, spelled exactly as requirements.md spells it, each with `kind` functional or non-functional and, for a sub-requirement, `of` its requirement) (under this stage's record dir, engine-resolved)
 ---
 
 # Requirements Analysis
@@ -164,7 +165,7 @@ know.
 
 PROACTIVE: Always generate clarifying questions unless requirements are exceptionally clear and complete across all six dimensions.
 
-Create `<record>/inception/requirements-analysis/requirements-analysis-questions.md` using the [Answer]: tag format from stage-protocol.md. Include context-appropriate questions with A-E options. Every ordinary clarifying question MUST end with `X. Other (please specify)` as the final option; the later Consolidated Summary Confirmation is the unlettered exception. Leave all [Answer]: tags blank.
+Create `<record>/inception/requirements-analysis/requirements-analysis-questions.md` using the [Answer]: tag format from stage-protocol.md. Include context-appropriate questions with {{OPTION_LETTERS}} options. Every ordinary clarifying question MUST end with `X. Other (please specify)` as the final option; the later Consolidated Summary Confirmation is the unlettered exception. Leave all [Answer]: tags blank.
 
 Then follow the unified question flow from stage-protocol.md section 3: offer the user a choice between guided (interactive) and self-guided (file edit) modes. In either case, ensure all answers are written to the file before proceeding.
 
@@ -239,6 +240,24 @@ Create `<record>/inception/requirements-analysis/requirements.md` containing:
 These IDs are permanent traceability keys. Downstream stages must preserve
 them exactly rather than renumbering or replacing them with prose references.
 
+Record them in `<record>/inception/requirements-analysis/traceability.json`:
+every ID `requirements.md` defines, spelled exactly as it spells them (a
+team's own form stays as it is), with its `kind`, and for a
+sub-requirement the requirement it belongs to in `of`. Later stages trace from
+this list, so an ID left out of it is left out of their tables. The reviewer
+checks the list against `requirements.md`.
+
+```json
+{
+  "stage": "requirements-analysis",
+  "ids": [
+    { "id": "FR1", "kind": "functional" },
+    { "id": "FR1.1", "kind": "functional", "of": "FR1" },
+    { "id": "NFR1", "kind": "non-functional" }
+  ]
+}
+```
+
 Keep review lifecycle content in the separate review file returned by the
 review request. A newly generated `requirements.md` must not contain a
 `## Review` section, a pending-review placeholder, or a reviewer verdict.
@@ -266,22 +285,25 @@ options:
     description: Continue to [next stage]
   - label: Request Changes
     description: Provide revision feedback
-  - label: Add User Stories
-    description: Include User Stories stage (currently skipped)
+  - label: Approve, and add User Stories next
+    description: Include the User Stories stage (currently skipped) and start it now
 ```
 Render `[next stage]` verbatim from the `next_stage` field of the reply that
 opened the gate, else the run-stage directive's (per the stage-protocol.md
 approval-gate binding), or `Complete workflow` when it is null. Never guess the
 next stage name.
-If "Add User Stories" is selected, run
-`{{INVOKE}} engine recompose --add user-stories`
-before re-entering the approval flow.
+If they pick "Approve, and add User Stories next", run
+`{{INVOKE}} engine orchestrate next --add user-stories` and follow its step,
+which names the report that records their approval; User Stories runs next.
+If they only ask to add User Stories, run the same `next --add user-stories`,
+say in one line that it is on the plan, and ask once whether they approve the
+requirements as they are or want anything changed.
 
 IF User Stories is NOT set to SKIP: use standard 2-option approval (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `<record>/inception/requirements-analysis/`.
+This stage's outputs are markdown artefacts under `<record>/inception/requirements-analysis/`, plus its `traceability.json` record of the IDs.
 
 Imports: `required-sections`, `upstream-coverage`.
 
@@ -291,6 +313,6 @@ Upstream targets: `intent-statement`, `scope-document`, `business-overview`, `ar
 
 When `directive.protocol_modules` lists `learnings`, follow
 `stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
-working and run the ritual before the approval gate, applying its bootstrap,
-`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
-skip both the diary and the ritual.
+working, and take the learnings step before the approval gate; that module says
+when it asks the person anything. When the module is absent, skip both the diary
+and the step.

@@ -17,7 +17,7 @@ import {
   setDefaultTimeout,
   test,
 } from "bun:test";
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -345,5 +345,46 @@ describe("t291 stale review receipt recovery", () => {
     expect(restarted.status).toBe(0);
     expect(restarted.stdout).toContain('"emitted":"REVIEW_REQUESTED"');
     expect(restarted.stdout).not.toContain('"recovery"');
+  });
+
+  // The carry-on way past a spent recovery is a Unit's: a stage's own review
+  // whose Guard Policy is lowered mid-stage keeps the way on it had under strict.
+  test("a stage-level review the agent starts under off after a spent recovery keeps the strict way on", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    seedAidlcMemory(proj);
+    seedStateFile(proj, "state-mid-inception.md");
+    const artifact = writeRequirements(proj, "reviewed requirements\n");
+    const review = [
+      "review",
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+    ];
+
+    expect(run(LOG_TOOL, [...review, "--iteration", "1"], proj).status).toBe(0);
+    appendReview(artifact, 1);
+    expect(run(LOG_TOOL, [...review, "--iteration", "1", "--verdict", "READY"], proj).status).toBe(0);
+
+    writeRequirements(proj, "changed before recovery\n");
+    recordArtifactUpdate(proj, artifact);
+    const recovery = run(LOG_TOOL, [...review, "--iteration", "2"], proj);
+    expect(recovery.status, recovery.out).toBe(0);
+    expect(recovery.stdout).toContain('"recovery":"stale-receipt"');
+    appendReview(artifact, 2);
+    expect(run(LOG_TOOL, [...review, "--iteration", "2", "--verdict", "READY"], proj).status).toBe(0);
+
+    writeRequirements(proj, "changed after recovery\n");
+    recordArtifactUpdate(proj, artifact);
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    const strict = readFileSync(statePath, "utf-8");
+    const off = strict.replace("- **Change Control**: strict (from scope bugfix)", "- **Guard Policy**: off (set by you)");
+    expect(off).not.toBe(strict);
+    writeFileSync(statePath, off, "utf-8");
+
+    const own = run(LOG_TOOL, [...review, "--iteration", "3"], proj);
+    expect(own.status).not.toBe(0);
+    expect(own.out).not.toContain("the change is accepted");
+    expect(own.out).toContain("Request Changes");
+    expect(own.out).toContain("REVIEW_RECOVERY_ALREADY_REQUESTED");
   });
 });

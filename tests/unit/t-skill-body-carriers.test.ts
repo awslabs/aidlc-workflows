@@ -41,7 +41,7 @@ const KEPT = [
   "## The Forwarding Loop",
   "**When AI-DLC carries on by itself.**",
   '--result approved --user-input "Approve"',
-  "`Nothing to add` / `Add a note`",
+  "`Yes, for this project` / `Yes, for the team` / `No`",
   "never park, report, or otherwise touch the active work",
   "stage-protocol-recovery.md",
   "stage-protocol-governance.md",
@@ -54,13 +54,13 @@ describe("t-skill-body-carriers: the /aidlc skill keeps what only it carries", (
   test("the engine's own notes carry the cut step branches", () => {
     expect(stageValidityNote("aidlc", "requirements-analysis")).toContain("word for word");
     expect(stageValidityNote("aidlc", "requirements-analysis")).toContain("never say who made it");
-    expect(CHANGE_NOTICES_NOTE).toContain("once, word for word");
+    expect(CHANGE_NOTICES_NOTE).toContain("once, as written");
     expect(planApprovalQuestionNote("aidlc", "aidlc-log")).toContain("--checkpoint plan-approval");
     expect(unresolvedGateNote("aidlc")).toContain("--skeleton-stance");
     expect(unitStepNote("aidlc")).toContain("has no gate of its own");
     // The configuration print and the parked step say their own steps.
     expect(ORCHESTRATE).toContain("Never invent values, regions, or plugin names");
-    expect(ORCHESTRATE).toContain("Pausing here with everything saved.");
+    expect(ORCHESTRATE).toContain("with everything saved. Pick it back up any time here, or with ");
   });
 
   test.each(HARNESS_MATRIX.map((harness) => [harness.name, harness] as const))(

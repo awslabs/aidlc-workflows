@@ -118,7 +118,7 @@ test("the answer is the separate-work option wherever the agent puts it", () => 
     question,
     options: [
       { label: "Part of the active work", description: "Continue the current workflow" },
-      { label: "Separate new piece of work", description: "Yes, set it up alongside the current one as \"classic\" work without changing it" },
+      { label: "Separate new piece of work", description: "Set it up alongside the current one as \"classic\" work (14 stages, 14 approval gates, 5 stages repeat per unit of work in Construction) without changing it" },
       { label: "Reshape the active work", description: "Change how the remaining plan is shaped" },
     ],
   }];

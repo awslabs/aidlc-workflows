@@ -3,9 +3,6 @@
 // (and not in SessionStart source=compact) ensures a single, timestamped record
 // of compaction — fired at the real compaction moment, with full state-file
 // context available.
-//
-// Also writes <record>/.aidlc-engine/recovery.md as a breadcrumb for the orchestrator
-// to detect compaction-related state corruption on the next turn.
 import { existsSync, readFileSync } from "node:fs";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
@@ -22,7 +19,6 @@ import {
   resolveProjectDirFromHook,
   stateFilePath,
   validSessionId,
-  writeEngineFileNoFollow,
 } from "../tools/aidlc-lib.ts";
 import { clearRulesDelivered } from "../tools/aidlc-rules-held.ts";
 
@@ -39,7 +35,7 @@ export async function run(input: string): Promise<number> {
   // whatever workflow it works on.
   if (typeof payloadSession === "string") clearRulesDelivered(projectDir, payloadSession);
   // A compaction in a conversation that has not joined the selected workflow
-  // leaves that workflow's heartbeat, breadcrumb and ledger alone.
+  // leaves that workflow's heartbeat and ledger alone.
   const workflow = enterHookWorkflow(projectDir, payloadSession);
   try {
     if (hookStandsOutside(workflow)) return 0;
@@ -76,25 +72,7 @@ if (missing.length > 0) {
   console.error(`WARNING: aidlc-state.md missing sections: ${missing.join(", ")}`);
 }
 
-const stateStatus = missing.length > 0
-  ? `INVALID — missing sections: ${missing.join(", ")}`
-  : "valid (all required sections present)";
-
-// Write recovery breadcrumb so the orchestrator can detect compaction-related state corruption.
-// It lives under the record's engine folder and is never written through a link planted
-// there; a breadcrumb that cannot be kept never fails the compaction.
 const currentStage = getField(content, "Current Stage") ?? "";
-const timestamp = isoTimestamp();
-try {
-  writeEngineFileNoFollow(
-    projectDir,
-    "recovery.md",
-    `# AIDLC Recovery Breadcrumb\n**Last validated**: ${timestamp}\n**Current stage**: ${currentStage}\n**State file**: ${stateStatus}\n`,
-  );
-} catch {
-  // Best-effort: the heartbeat above and the audit row below still tell the story.
-}
-
 const auditFile = auditFilePath(projectDir);
 if (existsSync(auditFile)) {
   try {
@@ -108,7 +86,7 @@ if (existsSync(auditFile)) {
     );
   } catch (e) {
     recordHookDrop(projectDir, "validate-state", errorMessage(e));
-    // Non-fatal — recovery breadcrumb is the primary signal.
+    // Non-fatal: the heartbeat above still records that the hook ran.
   }
 }
 return 0;

@@ -1936,7 +1936,7 @@
         "settings": [],
         "no_ask": true,
         "names": [
-          "recorded"
+          "record the choice they made"
         ]
       },
       "end": {
@@ -1961,7 +1961,7 @@
         "settings": [],
         "no_ask": true,
         "names": [
-          "recorded"
+          "record the choice they made"
         ]
       },
       "end": {
@@ -1985,7 +1985,7 @@
         "settings": [],
         "no_ask": true,
         "names": [
-          "recorded"
+          "record the choice they made"
         ]
       },
       "end": {
@@ -3756,8 +3756,7 @@
       }
     },
     "unsure": true,
-    "ambiguous": true,
-    "after": "pending"
+    "ambiguous": true
   },
   {
     "id": "sl12-f",
@@ -4051,14 +4050,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "error",
           "print"
         ],
         "words": null,
         "settings": [],
         "no_ask": true,
         "names": [
-          "describing what to build"
+          "Tell me what to build"
         ]
       },
       "end": {
@@ -4147,7 +4145,6 @@
     "expected": {
       "engine": {
         "kinds": [
-          "error",
           "print"
         ],
         "words": null,
@@ -6128,11 +6125,10 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print",
-          "ask"
+          "print"
         ],
         "names": [
-          "add rate limiting"
+          "next --request "
         ]
       },
       "end": {
@@ -6140,8 +6136,7 @@
         "work": "same"
       }
     },
-    "source": "FORMS.md C5",
-    "after": "pending"
+    "source": "FORMS.md C5"
   },
   {
     "id": "C6a-w",
@@ -6152,13 +6147,14 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "run-stage",
+          "load-steering"
         ],
         "words": null,
         "settings": [],
         "no_ask": true,
         "names": [
-          "jump"
+          "requirements-analysis"
         ]
       },
       "end": {
@@ -7074,7 +7070,7 @@
         ],
         "no_ask": true,
         "names": [
-          "recorded"
+          "record the choice they made"
         ]
       },
       "end": {
@@ -7488,8 +7484,7 @@
         "settings": [],
         "no_ask": true,
         "names": [
-          "intent create",
-          "--scope bugfix"
+          "--new-intent --scope bugfix"
         ]
       },
       "end": {
@@ -7539,7 +7534,7 @@
         "settings": [],
         "no_ask": true,
         "names": [
-          "intent create"
+          "--new-intent"
         ]
       },
       "end": {
@@ -7579,23 +7574,21 @@
     "category": "routing-question-open",
     "input": "yes",
     "state": "routing-question-open",
-    "meaning": "the person means: the yes-led option of the routing question (a separate new piece of work alongside); the agent knows which question",
+    "meaning": "the person means: ambiguous: yes answers none of the routing question's three options; the agent asks once which one they meant",
     "expected": {
       "engine": {
         "kinds": [
           "print"
         ],
         "words": "yes",
-        "settings": [],
-        "no_ask": true
+        "settings": []
       },
       "end": {
-        "asks": 0,
-        "work": {
-          "words": "fix the login"
-        }
+        "asks": 1,
+        "work": "same"
       }
-    }
+    },
+    "ambiguous": true
   },
   {
     "id": "rq07-q",
@@ -8491,14 +8484,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "error",
           "print"
         ],
         "words": null,
         "settings": [],
         "no_ask": true,
         "names": [
-          "describing what to build"
+          "Tell me what to build"
         ]
       },
       "end": {
@@ -11443,7 +11435,7 @@
     "category": "routing-question-open",
     "input": "yes",
     "state": "routing-question-open",
-    "meaning": "the person means: the yes-led option of the routing question (a separate new piece of work alongside); the agent knows which question (said in plain chat, no /aidlc)",
+    "meaning": "the person means: ambiguous: yes answers none of the routing question's three options; the agent asks once which one they meant (said in plain chat, no /aidlc)",
     "expected": {
       "engine": {
         "kinds": [
@@ -11456,11 +11448,10 @@
       },
       "end": {
         "asks": 1,
-        "work": {
-          "words": "fix the login"
-        }
+        "work": "same"
       }
     },
+    "ambiguous": true,
     "entry": "",
     "argv": {
       "posix": []
@@ -13169,12 +13160,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "run-stage",
+          "load-steering"
         ],
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-jump.ts execute --target reverse-engineering --direction backward --scope bugfix"
+          "reverse-engineering"
         ],
         "no_ask": true
       },
@@ -13221,12 +13213,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "run-stage",
+          "load-steering"
         ],
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-jump.ts execute --target requirements-analysis --direction redo --scope bugfix"
+          "requirements-analysis"
         ],
         "no_ask": true
       },
@@ -13247,12 +13240,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "run-stage",
+          "load-steering"
         ],
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-jump.ts execute --target requirements-analysis --direction redo --scope bugfix"
+          "requirements-analysis"
         ],
         "no_ask": true
       },
@@ -14149,12 +14143,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "run-stage",
+          "load-steering"
         ],
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-jump.ts execute --target deployment-pipeline --direction forward --scope bugfix"
+          "deployment-pipeline"
         ],
         "no_ask": true
       },
@@ -14198,12 +14193,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "run-stage",
+          "load-steering"
         ],
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-jump.ts execute --target code-generation --direction forward --scope bugfix"
+          "code-generation"
         ],
         "no_ask": true
       },
@@ -14273,12 +14269,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "run-stage",
+          "load-steering"
         ],
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-jump.ts execute --target requirements-analysis --direction redo --scope bugfix"
+          "requirements-analysis"
         ],
         "no_ask": true
       },
@@ -15077,7 +15074,7 @@
     "state": "work-open",
     "meaning": "the person means: the open work also touches the sibling repo auth",
     "source": "docs/guide/12-cli-commands.md:39 (+2 more) (+1 more sources)",
-    "documented": "\"Add a sibling repo to the active piece of work, until Units Generation is approved\"; at 371 the person says so \"and the agent runs `/aidlc intent add-repo <name>` for you\"",
+    "documented": "\"Add a sibling repo to the active piece of work at any stage, cloning it first when it is not here yet\"; the person says so \"and it runs it for you\"",
     "expected": {
       "engine": {
         "kinds": [
@@ -16725,9 +16722,7 @@
         "asks": 0,
         "work": "same"
       }
-    },
-    "after": "pending",
-    "documented_differs": "print: Run `bun .claude/tools/aidlc.ts engine scope change --scope enterprise` to change scope, then print its output verbatim and stop."
+    }
   },
   {
     "id": "doc-129-f",
@@ -18378,12 +18373,13 @@
     "expected": {
       "engine": {
         "kinds": [
-          "print"
+          "run-stage",
+          "load-steering"
         ],
         "words": null,
         "settings": [],
         "names": [
-          "aidlc-jump.ts execute --target code-generation --direction forward --scope bugfix"
+          "code-generation"
         ],
         "no_ask": true
       },
@@ -18610,7 +18606,7 @@
     "expected": {
       "engine": {
         "kinds": [
-          "error"
+          "print"
         ],
         "words": null,
         "settings": []

@@ -18,9 +18,11 @@ import { basename, join } from "node:path";
 import {
   AUDIT_TRAIL_REFUSAL,
   RUNTIME_INTEGRITY_REFUSAL,
+  refuseRuntimeIntegrityViolation,
   runtimeIntegrityViolationKind,
   violatesRuntimeIntegrity,
 } from "../../dist/claude/.claude/hooks/runtime-integrity.ts";
+import { shellHomes } from "../../dist/claude/.claude/hooks/review-freeze-command.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -130,6 +132,36 @@ describe("t349 audit trail guard: file-write tools", () => {
     expect(kind("Read", { file_path: SHARD })).toBeNull();
     expect(kind("Grep", { pattern: "GATE_APPROVED", path: AUDIT })).toBeNull();
     expect(kind("Glob", { pattern: `${AUDIT}/*.md` })).toBeNull();
+  });
+
+  test("a refusal names the path that matched, for a guarded write and for content that reaches hooks", () => {
+    const captured = (input: Record<string, unknown>): string => {
+      const original = process.stderr.write;
+      let out = "";
+      process.stderr.write = ((chunk: unknown) => {
+        out += String(chunk);
+        return true;
+      }) as typeof process.stderr.write;
+      try {
+        expect(refuseRuntimeIntegrityViolation({
+          hook_event_name: "PreToolUse",
+          cwd: CWD,
+          ...input,
+        } as never)).toBe(true);
+      } finally {
+        process.stderr.write = original;
+      }
+      return out;
+    };
+    expect(captured({ tool_name: "Write", tool_input: { file_path: "aidlc/.aidlc-sessions/foo.json" } }))
+      .toContain("Matched: aidlc/.aidlc-sessions/foo.json.");
+    expect(captured({
+      tool_name: "Write",
+      tool_input: {
+        file_path: "infra/aws/deploy.sh",
+        content: "printf x > .claude/hooks/aidlc-write-audit-log.ts\n",
+      },
+    })).toContain("Matched: .claude/hooks/aidlc-write-audit-log.ts.");
   });
 
   test("runtime records still classify as runtime, ahead of the audit class", () => {
@@ -242,6 +274,91 @@ describe("t349 audit trail guard: shell commands", () => {
     ]) {
       expect(bash(command), command).toBe("audit");
     }
+  });
+
+  test("the project's own folders and an audit command are not the audit trail", () => {
+    // A project under a folder named audit, a project named for audits, and a
+    // dependency audit, each with a write the parser cannot place.
+    const underAudit = "/work/audit/proj";
+    for (const [command, cwd] of [
+      [`cd ${underAudit} && npm test > "$TEST_LOG"`, underAudit],
+      [`npm test > ${underAudit}/build/test-$(date +%s).log`, underAudit],
+      [`cd ${underAudit} && npm test > ${underAudit}/build/test-$(date +%s).log`, `${underAudit}/src`],
+      [`cd /work/audit-service && npm test > "$(mktemp)"`, "/work/audit-service"],
+      [`npm audit --json > "$REPORT"`, CWD],
+      [`npm audit --json > npm-audit-$(date +%F).json`, CWD],
+      [`npm audit --json > "$AUDIT/report.json"`, CWD],
+      [`AUDIT=$(mktemp -d); npm audit --json > "$AUDIT/report.json"`, CWD],
+      [`cd C:\\work\\audit\\proj && npm test > "$TEST_LOG"`, "C:\\work\\audit\\proj"],
+      [`echo x > C:/work/audit/proj/build/$(date +%s).log`, "C:\\work\\audit\\proj"],
+      [`npm test > "${underAudit}/build/$(date +%s).log"`, underAudit],
+      [`npm test > '${underAudit}/build/'$(date +%s).log`, underAudit],
+    ]) {
+      expect(bash(command, cwd), command).toBeNull();
+    }
+    // The trail itself stays refused from there, and a folder is cut only
+    // where a word starts: `/audit` inside `$R/audit/` or `"$R"/audit` is not it.
+    for (const [command, cwd] of [
+      [`cd ${underAudit} && echo x >> "$R/audit/host.md"`, underAudit],
+      [`echo x >> ${underAudit}/${AUDIT}/$(hostname).md`, underAudit],
+      [`npm audit --json > ${RECORD}/audit/$(date +%s).md`, underAudit],
+      [`P=$R/aud""it/host.md; printf forged >> "$P"`, underAudit],
+      [`cd "$R/audit" && echo x >> "$F"`, underAudit],
+      [`echo x >> $R/audit/host.md`, "/audit/proj"],
+      [`cd /audit/proj && echo x >> "$R/audit/host.md"`, "/audit/proj"],
+      [`cd "$R"/audit && echo x >> "$F"`, "/audit/proj"],
+      [`echo x >> "$R"\\audit\\host.md`, "/audit/proj"],
+      ["echo x >> C:\\work\\audit\\proj\\aidlc\\spaces\\default\\intents\\260925-login\\audit\\host.md", "C:\\work\\audit\\proj"],
+    ]) {
+      expect(bash(command, cwd), command).toBe("audit");
+    }
+  });
+
+  test("the project's own folders spelled from the home folder are not the audit trail either", () => {
+    // The home folder the hook reads, the one shellHomes says `~` and $HOME name.
+    const proj = join(shellHomes(false)[0], "audit", "proj");
+    for (const command of [
+      "npm test > ~/audit/proj/build/test-$(date +%s).log",
+      "npm test > ~\\audit\\proj\\build\\test-$(date +%s).log",
+      "npm test > $HOME/audit/proj/build/test-$(date +%s).log",
+      `npm test > \${HOME}/audit/proj/build/test-$(date +%s).log`,
+      'cd ~/audit/proj && npm test > "$TEST_LOG"',
+    ]) {
+      expect(bash(command, proj), command).toBeNull();
+    }
+    for (const command of [
+      `echo x >> ~/audit/proj/${AUDIT}/$(hostname).md`,
+      `echo x >> $HOME/audit/proj/${AUDIT}/$(hostname).md`,
+    ]) {
+      expect(bash(command, proj), command).toBe("audit");
+    }
+  });
+
+  test("a PowerShell write into the audit folder by a computed name stays refused", () => {
+    const command = 'Set-Location C:\\proj\\aidlc\\spaces\\default\\intents\\260925-login\\audit; ' +
+      'Add-Content -Path "$(Get-Date -Format yyyyMMdd).md" -Value x';
+    for (const shell of [undefined, "powershell"]) {
+      expect(runtimeIntegrityViolationKind({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command },
+        cwd: "C:\\proj",
+        ...(shell ? { aidlc_shell: shell } : {}),
+      } as never), shell ?? "posix").toBe("audit");
+    }
+    expect(bash("cd C:\\proj\\aidlc\\spaces\\default\\intents\\260925-login\\audit && echo x >> $(hostname).md", "C:\\proj"))
+      .toBe("audit");
+    expect(bash("cd C:\\proj\\aidlc\\spaces\\default\\intents\\260925-login && cd audit && echo x >> $(hostname).md", "C:\\proj"))
+      .toBe("audit");
+    // A Windows path into the workspace that names no audit folder keeps the shared policy, as before.
+    expect(runtimeIntegrityViolationKind({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: 'Copy-Item C:\\proj\\aidlc\\spaces\\default\\memory\\team.md "$env:TEMP\\team.md"' },
+      cwd: "C:\\proj",
+      aidlc_shell: "powershell",
+    } as never)).toBeNull();
+    expect(bash('cd C:\\proj\\aidlc\\spaces\\default\\intents\\260925-login && echo y > "$OUT"', "C:\\proj")).toBeNull();
   });
 
   test("an unrelated directory named intents is not the AIDLC workspace", () => {

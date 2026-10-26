@@ -16,7 +16,8 @@
 //      first, and the person's pick records it;
 //   2. every remedy that runs a command waits for the person's pick, so each
 //      Unit-receipt question the engine builds passes the directive check
-//      (the team gate's, and finishing a Unit's step with the review it has).
+//      (the team gate's, and finishing a Unit's step with the review it has,
+//      which the agent first takes as its own step with no command).
 //
 // SOURCE UNDER TEST (dist/claude/.claude/tools/): aidlc-orchestrate.ts next,
 // aidlc-state.ts unit complete, aidlc-lib.ts evaluateGuardRefusal, through the
@@ -40,6 +41,7 @@ import {
 import {
   artifactFilename,
   consumeSharedDirectiveAsk,
+  recordGuardRecoveryChoice,
   evaluateGuardRefusal,
   guardRecoveryAskForRefusal,
   unitCompletedReceipts,
@@ -50,6 +52,11 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 resetAidlcEnv();
@@ -173,8 +180,9 @@ describe("a Unit done without its receipts is offered recording them", () => {
       operation: { kind: "record-unit-completion", stage: SLUG, unit: "alpha" },
     });
 
-    // The person picks it, as the human-turn hook records their reply.
+    // The person picks it; the hook keeps their reply, and the agent records the remedy it read.
     expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
+    expect(recordGuardRecoveryChoice(proj, "record-unit-completion", false).op).toBe("record-unit-completion");
     const env = engineEnv();
     delete env.AIDLC_SKIP_ARTIFACT_GUARD;
     const done = spawnSync(
@@ -237,8 +245,12 @@ describe("a Unit done without its receipts is offered recording them", () => {
       },
       humanAuthority: { freshTurn: false, unattended: false },
     });
+    // Mid-step, finishing with the review it has is first the agent's own step
+    // (no command, no pick); the same way on with its command follows.
+    expect(midStep.remedies[0]?.op).toBe("finish-unit-step");
+    expect(midStep.remedies[0]?.interaction).toBe("external-work");
     for (const [label, refusal] of [["team gate", teamGate], ["mid-step", midStep]] as const) {
-      expect(refusal.remedies[0]?.op, label).toBe("record-unit-completion");
+      expect(refusal.remedies.find((remedy) => remedy.operation)?.op, label).toBe("record-unit-completion");
       const ask = guardRecoveryAskForRefusal(refusal);
       expect(ask, label).not.toBeNull();
       const checked = validateDirective(ask);

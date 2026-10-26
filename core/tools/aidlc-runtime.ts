@@ -66,7 +66,7 @@ interface MemoryBreakdown {
 interface SensorFiring {
   id: string;
   fire_id: string; // 8-hex correlator emitted by the sensor dispatcher on every row
-  result: "passed" | "failed" | "budget-override" | "incomplete"; // 4-state: the dispatcher's three terminals + the orphan "incomplete"
+  result: "passed" | "failed" | "could-not-run" | "budget-override" | "incomplete"; // 5-state: the dispatcher's four terminals + the orphan "incomplete"
   ts: string; // FIRED row's timestamp
   detail_path?: string;
 }
@@ -571,6 +571,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   const firedRows = findAllEvents(audit, "SENSOR_FIRED");
   const passedRows = findAllEvents(audit, "SENSOR_PASSED");
   const failedRows = findAllEvents(audit, "SENSOR_FAILED");
+  const couldNotRunRows = findAllEvents(audit, "SENSOR_COULD_NOT_RUN");
   const budgetRows = findAllEvents(audit, "SENSOR_BUDGET_OVERRIDE");
   const ruleLearnedRows = findAllEvents(audit, "RULE_LEARNED");
   const sensorProposedRows = findAllEvents(audit, "SENSOR_PROPOSED");
@@ -578,7 +579,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   // Map fire_id → terminal row. Duplicate fire_id across two terminals →
   // latest-ts wins (log to stderr). The literal terminal result is carried
   // alongside so the per-stage pairing reads it without re-deriving.
-  type TerminalKind = "passed" | "failed" | "budget-override";
+  type TerminalKind = "passed" | "failed" | "could-not-run" | "budget-override";
   const terminalByFireId = new Map<
     string,
     { kind: TerminalKind; ts: string; detail_path?: string }
@@ -612,6 +613,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   };
   recordTerminal(passedRows, "passed");
   recordTerminal(failedRows, "failed");
+  recordTerminal(couldNotRunRows, "could-not-run");
   recordTerminal(budgetRows, "budget-override");
 
   // baseline_ts = MAX timestamp across all audit rows in this compile.
@@ -620,7 +622,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   for (const ev of findAllEvents(audit, "STAGE_STARTED")) {
     if (ev.timestamp > baselineTs) baselineTs = ev.timestamp;
   }
-  for (const rows of [firedRows, passedRows, failedRows, budgetRows]) {
+  for (const rows of [firedRows, passedRows, failedRows, couldNotRunRows, budgetRows]) {
     for (const ev of rows) {
       if (ev.timestamp > baselineTs) baselineTs = ev.timestamp;
     }
@@ -916,6 +918,7 @@ interface RuntimeSummary {
     total: number;
     passed: number;
     failed: number;
+    could_not_run: number;
     budget_override: number;
     incomplete: number;
   };
@@ -963,6 +966,7 @@ function summarize(projectDir: string): RuntimeSummary | null {
     total: 0,
     passed: 0,
     failed: 0,
+    could_not_run: 0,
     budget_override: 0,
     incomplete: 0,
   };
@@ -1010,6 +1014,7 @@ function summarize(projectDir: string): RuntimeSummary | null {
         sensors.total++;
         if (f.result === "passed") sensors.passed++;
         else if (f.result === "failed") sensors.failed++;
+        else if (f.result === "could-not-run") sensors.could_not_run++;
         else if (f.result === "budget-override") sensors.budget_override++;
         else sensors.incomplete++;
       }
@@ -1096,6 +1101,7 @@ Sensors
   Fired:            ${s.sensors.total}
   Passed:           ${s.sensors.passed}
   Failed:           ${s.sensors.failed}
+  Could not run:    ${s.sensors.could_not_run}
   Budget-override:  ${s.sensors.budget_override}
   Incomplete:       ${s.sensors.incomplete}
 

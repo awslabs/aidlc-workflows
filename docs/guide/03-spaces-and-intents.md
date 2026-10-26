@@ -108,6 +108,10 @@ intent owns a row in the space's `intents.json` registry — `{uuid, slug, dirNa
 scope, repos, status}` — and a **record dir** holding that run's state, audit
 trail, and artifacts. The `uuid` (a UUIDv7) is the canonical, collision-proof
 identity; `dirName` records the human-readable record-dir name verbatim.
+A hand edit that leaves a trailing comma, a comment or a BOM still reads as every
+row. A list nothing can read is never written over: the next new piece of work
+keeps its bytes as `intents.json.unreadable-<UTC time>` beside the new list, and
+you are told once.
 
 The row's `status` is the intent's lifecycle: `in-flight` from creation,
 `complete` once the last in-scope gate closes, or `archived` when you retire
@@ -150,15 +154,16 @@ before starting a second intent alongside the first:
  > 1. Part of the active work
       Continue the current workflow
    2. Separate new piece of work
-      Yes, set it up alongside the current one without changing it; you pick its plan next
+      Set it up alongside the current one as "bugfix" work (6 stages, 6 approval gates) without changing it
    3. Reshape the active work
       Change how the remaining plan is shaped
    4. Type something.
    5. Chat about this
 ```
 
-- Choose **2** and you pick the new work's plan next (here the agent proposed
-  `bugfix`); then AI-DLC creates a second intent beside the first. In that run
+- Choose **2** and AI-DLC creates a second intent beside the first, on the plan
+  that option names, with its size (here the agent proposed `bugfix`). When the
+  option names no plan, you pick the new work's plan next. In that run
   the agent said: "I've set up the export timeout fix as a separate piece of
   work using the bug-fix plan, and it's waiting at Requirements Analysis. Your
   inventory API work is unchanged at the feasibility stage." The first intent's
@@ -187,8 +192,12 @@ spent on a plan you did not choose.
 So does a scope that differs from the active intent's, typed with a
 description (`/aidlc --scope express "add a health endpoint"`), with new work
 first: choose **1** and the description starts new express work, the active
-intent kept as it is, or **2** and the active intent changes to express. A
-scope with no description changes the active intent's scope without asking.
+intent kept as it is, or **2** and the active intent changes to express.
+`--scope` with no description (`/aidlc --scope express`) changes the active
+intent's scope without asking. Another plan's name typed alone
+(`/aidlc workshop`) may mean new work on that plan or the active intent moved
+to it: the assistant reads which you meant and asks you once when it cannot
+tell, and new work on it asks what the work is for before anything starts.
 
 AI-DLC never creates a second intent without asking. If a prompt is genuinely a
 follow-up to the current work — answering a gate, correcting a requirement — it
@@ -322,8 +331,8 @@ creation times, and parent PIDs identify the owning session within the same
 select a session.
 Shared-process harnesses still cannot distinguish chats that use one process,
 including Kiro IDE multi-chat. In multi-session opencode the shell commands carry
-their chat (item 2), but a file write's audit row and sensors, and the to-do
-list sync, still go by the process. Children of payload-bearing hooks follow
+their chat (item 2), and so do a file write's audit row and sensors and the to-do
+list sync. Children of payload-bearing hooks follow
 the payload session; tools without that parent still fall back to the shared
 cursors when ancestry is unavailable unless the harness process has a valid
 `AIDLC_SESSION_OVERRIDE`.
@@ -511,6 +520,17 @@ of the workspace root that has its own `.git`) and records the set in the intent
 `intents.json` row. During Construction, each git operation is then anchored to
 the right repo automatically.
 
+Each repo is recorded by its folder's name as you gave it: a space, an accent,
+an apostrophe or another letter works (`my lib`, `C# lib`, a name with an accent). A few
+characters break something AI-DLC relies on, so a folder whose name has one is
+left out of the work, and the first step says which folder and why: `<` `>`
+`:` `"` `|` `?` `*` (Windows cannot hold them in a folder name), `&` `^` `%`
+(AI-DLC's commands on Windows), `(` `)` `[` `]` `{` `}` `;` `$` and a backtick
+(AI-DLC's commands on Cursor), a comma (it separates repo names), an apostrophe
+together with `!` (no one quoting reads both alike in PowerShell and Git Bash on
+Windows), a name that is `-` or starts with `--`, ends with `@checkout`, or starts
+or ends with a space.
+
 ```
 my-project/
 ├── aidlc/          # AI-DLC's records
@@ -542,12 +562,21 @@ records that expected set so it can be reproduced with one command:
 `org` supplies the default clone host (a repo with no `url` clones from
 `git@github.com:<org>/<name>.git`; set `url` on an entry to override). `branch`
 selects the checkout for a new clone and is an advisory expectation for a repo
-already on disk; omit it to use the repo's own default. Repo names must be safe
-single path segments, matching the runtime's immediate-child discovery model. The
+already on disk; omit it to use the repo's own default. A repo name is the name
+of one folder directly in the workspace, with the characters a discovered folder
+may have (above). The
 [CLI Commands](12-cli-commands.md#aidlc-workspace-sync-clone-and-reconcile-the-declared-repo-set)
 guide documents the `aidlc-workspace-sync` tool that reads this file to clone
 missing repos, keep the gitignore block current, and generate a VSCode
 multi-root workspace.
+
+[`/aidlc intent add-repo <name>`](12-cli-commands.md#aidlc-intent-add-repo-name-add-a-sibling-repo-to-work-already-under-way)
+writes this file too. A repo that work needs but nobody cloned here is cloned
+from its entry; a repo with no entry is cloned from `org` (or the address you
+give) and gets one, with the file's comments and layout kept. With no `repos.json` yet, a hosted
+`--url` (a host, an owner and a name) creates one whose `org` is that owner, so
+commit it to share the list with your team. An address written here never keeps
+its credentials.
 
 The manifest is a convenience, not a second source of truth. **Disk wins at
 runtime**: intent creation still auto-discovers whatever siblings are actually
@@ -575,10 +604,11 @@ and machines.
 | Output-format overrides (`memory/templates/`) | Shared | Per space. Not copied into a new space | Copy the files |
 | Agents you add (in the harness folder) | Shared | Shared by every space | Copy the files |
 | Repo list (`repos.json`) | One per workspace | One per workspace | Per project |
-| Model and flag policy | Shared | Shared | Set once in the machine settings file and applied to every project on the machine. A project's own `aidlc.settings.json` overrides it value by value, except bypasses, which add up across the files ([the hierarchy](18-install-and-lifecycle.md)). Model and effort policy does not apply on Kiro IDE, Cursor, and GitHub Copilot, where every agent uses the model you pick in the tool. |
+| Model and flag policy | Shared | Shared | Set once in the machine settings file and applied to every project on the machine. A project's own `aidlc.settings.json` overrides it value by value, except bypasses, which add up across the files ([the hierarchy](18-install-and-lifecycle.md)). Model and effort policy does not apply on Cursor and GitHub Copilot, where every agent uses the model you pick in the tool. On Kiro IDE only one agent's own model and effort apply; a preset or group effort does not. |
 | Kiro CLI's session model, and the effort a preset sets | Shared | Shared | Saved in your personal Kiro settings, so every Kiro CLI project uses them. Changes to agent or group policy do not do this |
 | Update, offline, mirror, and CA-bundle settings | Shared | Shared | Machine-only. A project file cannot set them |
 | Kiro IDE's Workflows switch and, on Windows, its default terminal | Shared | Shared | Kept in Kiro's user settings, outside the project. Setup asks once (`aidlc config --yes` takes the recommended answer), and `aidlc config trust` changes them on request. They apply to every project you open in that IDE |
+| Kiro CLI's Workflows switch | Shared | Shared | Kept in your own Kiro CLI settings, outside the project. In a Kiro IDE project, setup asks once, with an answer kept apart from Kiro IDE's (`aidlc config --yes` takes the recommended answer), and `aidlc config trust --kiro-cli-workflows off|on --yes` changes it on request. It applies to every project you run Kiro CLI in |
 | The AI-DLC release itself | Shared | Shared | A native project with no pinned release (`.aidlc-version`) runs the release the machine has active, so `aidlc update` changes it for every such project (its own files catch up at its next `aidlc config`). A copied project runs its own copied release |
 
 Apart from those machine-wide settings, IDE choices, and the active release, nothing in
@@ -621,6 +651,12 @@ Everything else under a space — `memory/**`, `knowledge/**`, `codekb/**`,
 `intents.json`, each record's `aidlc-state.md`, `audit/` shards, and artifacts — is
 committed. The rule of thumb: **cursors and runtime scratch are local; the shared
 work is committed.**
+
+When a pull, a rebase or a stash pop leaves git's conflict in a record's
+`aidlc-state.md` (two clones advanced the same work), the next step carries on
+from your own side and writes the record back without git's markers. It says
+once where the other side stands and the git command that takes it instead; git
+shows the file as conflicted until you add it.
 
 `knowledge/documents/` and `knowledge/documentkb/` are both committed, but they are
 owned by different parties and that difference is the whole design. `documents/`

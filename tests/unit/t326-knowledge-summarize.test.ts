@@ -121,6 +121,22 @@ describe("t326 summarize: through the public dispatcher", () => {
     expect(row.summary_state).toBe("generated");
   });
 
+  // Windows PowerShell 5.1 writes UTF-8 with a byte order mark; the summary is
+  // stored as the agent wrote it, without an invisible mark ahead of it (#2452).
+  test("a summary text file written with a byte order mark is stored without it", () => {
+    const p = scratchProject();
+    doc(p, "policy.md", "the policy body\n");
+    const onboarded = knowledge(p, ["onboard", join(documentsDir(p, SPACE), "policy.md")]);
+    expect(onboarded.status, onboarded.err).toBe(0);
+    const { id, sha256 } = (JSON.parse(onboarded.out).indexed as { id: string; sha256: string }[])[0];
+    const textFile = join(p, "summary-in.txt");
+    writeFileSync(textFile, "﻿This policy governs access — and audit.\r\n");
+    const summarized = knowledge(p, ["summarize", id, "--text-file", textFile, "--source-revision", sha256]);
+    expect(summarized.status, summarized.err).toBe(0);
+    const shown = JSON.parse(knowledge(p, ["show", id]).out);
+    expect(shown.summary_text.startsWith("This policy governs access — and audit.")).toBe(true);
+  });
+
   test("list/show frame hostile LLM-authored tags in JSON and human output", () => {
     const p = scratchProject();
     doc(p, "hostile.md", "body\n");

@@ -10,7 +10,7 @@
 // Mechanism: function - recorded request shapes and Codex JSON events, no model.
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { claudePromptProblems, codexSandboxProblems } from "../harness/stock-permissions.ts";
+import { claudePromptProblems, codexSandboxProblems, opencodePermissionProblems } from "../harness/stock-permissions.ts";
 
 const PROJECT = process.platform === "win32" ? "C:\\work\\shop" : "/work/shop";
 const bash = (command: string) => ({ toolName: "Bash", input: { command } });
@@ -93,5 +93,29 @@ describe("Codex in its shipped workspace-write sandbox", () => {
     expect(codexSandboxProblems(refused)).toEqual({ problems: [], listed: ["/bin/bash -lc 'touch /etc/x' (touch: cannot touch '/etc/x': Read-only file system)"] });
     expect(codexSandboxProblems(event("/bin/bash -lc 'bun .codex/tools/aidlc.ts engine next'", "ok", 0))).toEqual({ problems: [], listed: [] });
     expect(codexSandboxProblems("Codex's final message, not JSON\n")).toEqual({ problems: [], listed: [] });
+  });
+});
+
+describe("opencode on the shipped permission table", () => {
+  const tool = (tool: string, input: Record<string, unknown>, status: string, error = "") =>
+    JSON.stringify({ type: "tool_use", part: { type: "tool", tool, state: { status, input, ...(error ? { error } : { output: "ok" }) } } });
+  const REJECTED = "The user rejected permission to use this specific tool call.";
+
+  test("a call opencode refused that names AI-DLC's own files is a problem; another refusal is listed", () => {
+    const stdout = [
+      tool("bash", { command: "bun .aidlc/tools/aidlc.ts engine orchestrate next" }, "error", REJECTED),
+      tool("edit", { filePath: "/work/proj/.aidlc/hooks/aidlc-x.ts" }, "error", REJECTED),
+      tool("bash", { command: "rm -r ./scratch-dir" }, "error", REJECTED),
+      tool("bash", { command: "bun .aidlc/tools/aidlc.ts engine orchestrate next" }, "completed"),
+      tool("bash", { command: "bun .aidlc/tools/aidlc.ts engine orchestrate report" }, "error", "exit 1"),
+      "not json",
+    ].join("\n");
+    expect(opencodePermissionProblems(stdout)).toEqual({
+      problems: [
+        "opencode refused AI-DLC's own call on the shipped permissions: bash \"bun .aidlc/tools/aidlc.ts engine orchestrate next\"",
+        "opencode refused AI-DLC's own call on the shipped permissions: edit \"/work/proj/.aidlc/hooks/aidlc-x.ts\"",
+      ],
+      listed: ["bash \"rm -r ./scratch-dir\""],
+    });
   });
 });

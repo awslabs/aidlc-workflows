@@ -90,14 +90,16 @@ the GitHub Release in this repository with `GITHUB_TOKEN`, and verifies the
 uploaded asset inventory. Never rebuild, repackage, or substitute the
 candidate.
 
-Stable releases start from pushed version tags in `.github/workflows/release.yml`.
-Before tagging, merge the release-preparation PR and confirm its required branch
-checks, then run the Kiro CLI release journey on the commit to be tagged and post
-its one-line result as a comment on that PR ([Testing](09-testing.md); Kiro needs
-a signed-in identity, so it has no hosted lane). Stable publication validates the
-exact tag source and release assets and
-requires a passing Full Suite for the tagged commit: `release.yml` reuses a
-passing `full-suite-result` or calls `full-suite.yml` itself.
+Stable releases promote the source commit of a selected published preview.
+Run `promote-release.yml` on `main` with a preview tag, stable version, release
+notes and, optionally, the contributor list, or with no inputs to list available previews. The prepared tag contains
+one child commit with version metadata and pinned publication controls;
+`release.yml` validates that relationship and builds the stable artifacts.
+It runs packaging and native/installer/lifecycle/upgrade checks without repeating
+CI or Full Suite. Preview results and failures remain on the preview's release
+page, the promotion record keeps its warning lines, and the stable page links
+that preview. After publication, a metadata-only branch and PR link record the version on current
+`main`. See [the release steps](../../DEVELOPERS.md#4-promote-a-preview-to-production).
 The isolated `.github/workflows/preview-release.yml` workflow schedules or
 manually dispatches preview builds from `main`, gates them through contract
 checks and release-asset validation, runs native obligations and the bounded live suite (deterministic tiers remain in PR/merge CI),
@@ -128,6 +130,20 @@ dependency, a hand-rolled block scanner, or a reference-definition grammar.
 do not fold that security boundary into the block adapter. See
 [Markdown structure](01-architecture.md#markdown-structure) for how the adapter
 recovers source lines from the renderer.
+
+## Where new tool code goes
+
+`core/tools/aidlc-lib.ts` takes no new code: a new function, type or constant
+goes in its area's module under `core/tools/` (an existing `aidlc-<area>.ts`, or
+a new one), never in `aidlc-lib.ts`. Code moves out of it one area at a time,
+byte for byte, and stays importable from it through one `export ... from` line,
+so nothing that imports `aidlc-lib.ts` changes; a module split out of it never
+imports `aidlc-lib.ts`. `tests/unit/t-aidlc-lib-only-shrinks.test.ts` fails on a
+name `aidlc-lib.ts` declares that is not on
+`tests/fixtures/aidlc-lib-declarations.txt`, and on a module it imports that
+imports it back (the ones that did before this rule are listed in the test); a
+move deletes its names from that list and lowers the file's size cap in
+`biome.json`, and neither is ever raised.
 
 ## Testing
 
@@ -242,9 +258,10 @@ The intent-configuration handlers share a single mutation path:
 | `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `collaborators`, or one of the four `guard.<fence>` keys; the retired key `change-control` resolves to `guard-policy` |
 | `aidlc engine config list [--json]` | `config-list` | Read all thirteen settings in that order; Guard Policy, fence, and ceremony values include effective sources |
 | `aidlc engine config set <key> <value> [--key value ...]` | `config-change --<key> <value> ...` | Apply all supplied setting flags in one transaction; every key uses this route |
-| `aidlc engine scope change --scope <name> [--key value ...] [--person-words '<their words>']` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same twelve settings in the same transaction, including when the requested scope is already current |
+| `aidlc engine scope change --scope <name> [--key value ...] [--message <id>]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same twelve settings in the same transaction, including when the requested scope is already current |
 
-`config-change` accepts only the twelve setting flags plus `--intent`, `--space`,
+`config-change` accepts only the twelve setting flags plus `--message` (and the
+`--person-words` forms from before it, which prove nothing), `--intent`, `--space`,
 and `--project-dir`, and requires at least one setting. Reject unknown flags by
 name and validate all values before any mutation. A shared utility applier
 returns candidate content, `AuditEntryInput[]`, and output lines in canonical
@@ -262,7 +279,8 @@ Memory continues to control the effective value.
 Preserve state and event contracts: `review adversarial` stores an empty
 `Review Override`; explicit Guard Policy and ceremony values use `(set by you)`
 when `settingTheirs` finds the person behind them (a typed switch, their own
-terminal, or `--person-words` equal to a reply of theirs on record) and
+terminal, or the message of theirs the agent names with `--message <id>`, once
+`proveMessage` proves it) and
 `(set by a command)` otherwise, while inherited scope defaults retain scope provenance. A
 scope change preserves explicit overrides and absent legacy Guard
 Policy/ceremony rows. Only real stored field or source changes produce setting

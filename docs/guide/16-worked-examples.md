@@ -323,8 +323,9 @@ also open `<record>/verification-command.txt`. The canonical command must be a
 nonblank single line of at most 1024 characters. Control characters and
 display-spoofing characters (Unicode format characters, including zero-width and
 bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
-You choose **Approve**; only after recording that exact answer in the same session
-does the typed setter authorize this command for the intent's checkpoints.
+You choose **Approve** (in that chat, or in a new one while it is the newest
+question asked); only after recording that exact answer does the typed setter
+authorize this command for the intent's checkpoints.
 
 > Progress: 16 of 30 stages done. Next: Functional Design.
 
@@ -351,6 +352,12 @@ recorded command through verification:
 aidlc engine bolt checkpoint --action verify --unit "notification-core" --kind skeleton
 ```
 
+For a longer project check, add `--timeout-ms 3600000` to `--action verify`
+(one hour). The default is 30 minutes; the value must be a positive integer
+of at most 2,147,483,647 milliseconds. A timeout retires the owned process
+group/tree and records a failed verification, reporting incomplete cleanup if
+it cannot confirm termination. See the [timeout contract](../reference/12-state-machine.md#construction-checkpoint-verification-timeout).
+
 Only after `verify` reports `verified: true` and the current checkpoint has
 `ready: true` does the conductor open its session-bound approval question:
 
@@ -361,10 +368,11 @@ aidlc engine bolt checkpoint --action ask --unit "notification-core" --kind skel
 It presents "Verified with `bun run verify:notifications` (exit 0). Approve this
 completed notification-core?" with **Approve** / **Request Changes** and waits.
 The code span shows the full recorded command, not a summary. You choose
-**Approve**; only that exact reply in that session, to this checkpoint question,
-authorizes approval. An unrelated reply, another session's reply, or a reply to
-a different question does not. The conductor records your actual choice in the
-same session, never passing `--user-input` you did not choose:
+**Approve**; only that exact reply to this checkpoint question authorizes
+approval, in that chat or in a new one while it is the newest question asked.
+An unrelated reply, the agent's own words, or a reply to a different question
+does not. The conductor records your actual choice in the chat you answered in,
+never passing `--user-input` you did not choose:
 
 ```bash
 aidlc engine bolt checkpoint --action approve --unit "notification-core" --kind skeleton --user-input 'Approve'

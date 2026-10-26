@@ -10,14 +10,17 @@
 // passes after finalize (release-merge must not stale its directive marker), and a
 // second finalize reports the merged-back Unit converged instead of looping on
 // "already merged". Nothing is asked twice; a changed plan still asks as today.
+// A plan approved again that cannot reach the kept build always names setting the
+// work aside, and landing the work as it is only where that runs: the same merge
+// again for work that already converged, or work its own check lets go on.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { auditBlockField, boltSlugForUnit, readAuditShardEvents, recordDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codeGenerationRecordDir } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
-  approvePlan, cleanupCheckpointFixtures, fixture, git, nextDirective, prepare, publish, recordCommand, reviewRevisedSource,
+  approvePlan, CHECK, cleanupCheckpointFixtures, fixture, git, nextDirective, prepare, publish, recordCommand, reviewRevisedSource,
   runCheckpointTool, swarm, wt, writeUnitSource,
 } from "../harness/swarm-checkpoint.ts";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -248,5 +251,68 @@ describe("a re-approved plan that cannot reach the kept worktree", () => {
     expect(again.out).not.toContain("Re-present and approve the plan");
     expect(existsSync(wt(pd, "beta"))).toBe(true);
     expect(readFileSync(join(wt(pd, "beta"), "src", "beta.ts"), "utf-8")).toBe(before);
+    // Its work converged before the plan was approved again, so keeping it is the
+    // same landing run again, through the clash's own step.
+    expect((JSON.parse(land(pd, "beta").out) as { status: string }).status).toBe("conflict");
+    writeFileSync(join(pd, "src", "shared.ts"), "export const shared = 23;\n");
+    git(pd, ["add", "src/shared.ts"]);
+    const landed = land(pd, "beta");
+    expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
+    expect(readFileSync(join(pd, "src", "beta.ts"), "utf-8")).toBe(before);
+  });
+
+  test("a build with work of its own and its plan approved again mid-build: the line names only the way that works, since landing the work as it is goes through the check that refuses", () => {
+    const pd = fixture(["alpha", "beta"]);
+    const prepared = prepare(pd, ["alpha", "beta"]);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    writeUnitSource(pd, "beta", 5);
+    approvePlan(pd, "beta", "revised");
+    const again = prepare(pd, ["beta"]);
+    expect(again.code).toBe(2);
+    const row = (JSON.parse(again.out) as Prepared).units.find((entry) => entry.unit === "beta")!;
+    expect(row).toMatchObject({ ok: false, retained: true, worktree_path: wt(pd, "beta") });
+    expect(row.error).toContain("The build and its work are kept");
+    expect(row.error).toContain("set this Unit's current work aside (abort and discard it) and run prepare again.");
+    expect(row.error).not.toContain("land it as it is");
+    const checked = swarm(pd, ["check", "beta"]);
+    expect(checked.code).toBe(1);
+    expect(checked.out).toContain("this build still holds the earlier plan");
+    reviewRevisedSource(pd, "beta");
+    const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "beta", "--claimed", "beta"]);
+    expect(finalized.code).not.toBe(0);
+    expect(JSON.parse(finalized.out).units[0]).toMatchObject({ unit: "beta", status: "failed" });
+    expect(land(pd, "beta").code).not.toBe(0);
+    expect(readFileSync(join(pd, "src", "beta.ts"), "utf-8")).toBe("export const beta = 1;\n");
+    // The way it names builds the plan the person approved.
+    const aborted = runCheckpointTool(pd, "tools/aidlc-bolt.ts", [
+      "abort", "--name", "beta", "--slug", boltSlugForUnit("beta"), "--reason", "set aside for the plan approved again", "--discard", "--project-dir", pd,
+    ]);
+    expect(aborted.code, `${aborted.out}\n${aborted.err}`).toBe(0);
+    const rebuilt = prepare(pd, ["beta"]);
+    expect(rebuilt.code, `${rebuilt.out}\n${rebuilt.err}`).toBe(0);
+    expect(readFileSync(join(codeGenerationRecordDir(wt(pd, "beta"), "beta"), "code-generation-plan.md"), "utf-8")).toContain("# revised plan for beta");
+    const rechecked = swarm(pd, ["check", "beta"]);
+    expect(rechecked.code, `${rechecked.out}\n${rechecked.err}`).toBe(0);
+  });
+
+  test("Guard Policy off and the plan edited after its approval: the build's own check lets its work go on, so the line keeps that way and the work lands", () => {
+    const pd = fixture(["alpha", "beta"], CHECK, false, null, "off");
+    const prepared = prepare(pd, ["alpha", "beta"]);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    writeUnitSource(pd, "beta", 5);
+    appendFileSync(join(codeGenerationRecordDir(pd, "beta"), "code-generation-plan.md"), "\n## Scope change\n\nA paragraph added after the approval.\n");
+    const again = prepare(pd, ["beta"]);
+    expect(again.code).toBe(2);
+    const row = (JSON.parse(again.out) as Prepared).units.find((entry) => entry.unit === "beta")!;
+    expect(row).toMatchObject({ ok: false, retained: true, worktree_path: wt(pd, "beta") });
+    expect(row.error).toContain("land it as it is");
+    const checked = swarm(pd, ["check", "beta"]);
+    expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
+    reviewRevisedSource(pd, "beta");
+    const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "beta", "--claimed", "beta"]);
+    expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
+    const landed = land(pd, "beta");
+    expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
+    expect(readFileSync(join(pd, "src", "beta.ts"), "utf-8")).toBe("export const beta = 5;\n");
   });
 });

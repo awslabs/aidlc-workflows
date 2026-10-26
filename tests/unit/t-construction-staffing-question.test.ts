@@ -37,7 +37,6 @@ resetAidlcEnv();
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
-const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 const STAGE_FILE = join(import.meta.dir, "..", "..", "core", "aidlc-common", "stages", "inception", "delivery-planning.md");
 
 const ENV: NodeJS.ProcessEnv = {
@@ -57,8 +56,8 @@ const CHAT = chat("01995000-7a11-7000-8000-000000001395");
 const QUESTION = "Inception is done, and the plan has 2 Units. Who builds them?";
 const DEFAULT_LINE = "This session builds the 2 Units one after another. To have several teams each own a Unit " +
   "instead, say so before the first Unit is built.";
-const APPROVALS_LINE = "Each team builds its Unit start to finish and approves it after every stage. To approve " +
-  "once at the end of each Unit instead, say so before the first Unit is built.";
+const APPROVALS_LINE = "Each team will approve its Unit after every stage. Do you want them to approve once at the " +
+  "end of each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
 const REPOS_LINE = "This work spans 2 repos, so this session builds its 2 Units: teams each owning a Unit is " +
   "not available yet for work across repos.";
 
@@ -263,14 +262,11 @@ describe("who builds the Units is asked once as Inception ends", () => {
 
   test("a jump into Construction with nobody asked meets the same one question", () => {
     const proj = project({ at: "after-units" });
+    // The `next` that makes the jump returns the step it lands on: the question,
+    // with the jump's own line.
     const jump = next(proj, ["--stage", "code-generation"]);
-    const command = /`(bun \S*aidlc-jump\.ts execute [^`]+)`/.exec(String(jump.message))?.[1];
-    expect(command, JSON.stringify(jump)).toBeDefined();
-    const args = command!.replace(/^bun \S*aidlc-jump\.ts /, "").split(" ");
-    const ran = spawnSync(BUN, [JUMP, ...args, "--project-dir", proj], {
-      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: ENV,
-    });
-    expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
+    expect(isStaffingAsk(jump), JSON.stringify(jump)).toBe(true);
+    expect(jump.change_notices).toContain("Moved to Code Generation. You can go back to Units Generation any time.");
     expect(isStaffingAsk(next(proj))).toBe(true);
   });
 
@@ -369,7 +365,7 @@ describe("who builds the Units is asked once as Inception ends", () => {
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
     const ran = runState(proj, ["set-unit-ownership", "team"], env);
     expect(ran.rc).not.toBe(0);
-    expect(ran.out).toContain("No message from the person since the last decision");
+    expect(ran.out).toContain("No message of the person's that asks to change");
     expect(state(proj)).toBe(before);
     expect(events(proj, "CONSTRUCTION_POLICY_SET")).toEqual([]);
     expect(events(proj, "UNIT_OWNERSHIP_SET")).toEqual([]);

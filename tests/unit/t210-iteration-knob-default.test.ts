@@ -50,12 +50,18 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seedBoltDagBatches,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -242,6 +248,7 @@ function directiveFor(
 ): Directive {
   const proj = seedProject({ iteration });
   seedBoltDag(proj, ["alpha", "beta"]);
+  seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
   cover(proj);
   return runNext(proj);
 }

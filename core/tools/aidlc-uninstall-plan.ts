@@ -4,6 +4,7 @@ import {
   lstatSync,
   readFileSync,
   readdirSync,
+  type Stats,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -14,12 +15,16 @@ import {
   binRoot,
   canonicalPolicyPath,
   commandPath,
+  type InstalledRuntimeIntegrity,
   installRoot,
+  PLUGIN_CATALOGUE_RECORD,
+  pluginCatalogueRoot,
   versionsRoot,
   windowsPosixCommandPath,
   windowsPosixLauncherBodyIsOwned,
 } from "./aidlc-install-paths.ts";
 import { transactionState } from "./aidlc-transaction.ts";
+import { FIRST_PARTY_MARKETPLACE } from "./aidlc-plugin-emit.ts";
 
 export type UninstallPlan = {
   files: Array<{ path: string; expected: string }>;
@@ -141,6 +146,14 @@ function releasePluginFolder(tree: string, plugin: string, harness: string): boo
   }
 }
 
+// A file is still what an ownership row recorded: a regular file with the
+// recorded bytes and mode (either one left out is not checked).
+function ownedFile(path: string, stat: Stats, row: { sha256?: string; mode?: number }): boolean {
+  return stat.isFile() &&
+    (row.sha256 === undefined || sha256File(path) === row.sha256) &&
+    (row.mode === undefined || (stat.mode & 0o777) === row.mode);
+}
+
 type Inventory = {
   schemaVersion: 1;
   version: string;
@@ -187,9 +200,15 @@ function readInventory(
   if (inventory.schemaVersion !== 1 || inventory.version !== version || !Array.isArray(inventory.files)) {
     throw new Error(`invalid installed file inventory for ${version}`);
   }
+  checkInventoryRows(inventory.files, field === "installedFiles" ? root : join(root, "runtime"), version);
+  return { inventory, path, expected };
+}
+
+// Every row of an ownership inventory names one distinct safe path under
+// fileRoot, with a mode and a sha256; throws at the first that does not.
+function checkInventoryRows(rows: Inventory["files"], fileRoot: string, version: string): void {
   const seen = new Set<string>();
-  const fileRoot = field === "installedFiles" ? root : join(root, "runtime");
-  for (const row of inventory.files) {
+  for (const row of rows) {
     if (
       !row || typeof row.path !== "string" || !Number.isInteger(row.mode) ||
       row.mode < 0 || row.mode > 0o777 ||
@@ -200,7 +219,71 @@ function readInventory(
     if (seen.has(key)) throw new Error(`duplicate installed file entry for ${version}`);
     seen.add(key);
   }
-  return { inventory, path, expected };
+}
+
+// Unowned paths are named by whoever wrote them, and an agent may read this
+// output. Show each JSON-escaped and bounded, as doctor does for repository
+// names, so a name carrying newlines or instruction-shaped text stays data.
+const LISTED_UNOWNED_PATHS = 20;
+const UNOWNED_PATH_CHARS = 240;
+
+export function untrustedPathList(paths: readonly string[]): string[] {
+  const shown = paths.slice(0, LISTED_UNOWNED_PATHS).map((path) =>
+    JSON.stringify(path.length > UNOWNED_PATH_CHARS ? `${path.slice(0, UNOWNED_PATH_CHARS)}...` : path)
+  );
+  const more = paths.length - shown.length;
+  return more > 0 ? [...shown, `(and ${more} more)`] : shown;
+}
+
+// The record the last plugin catalogue refresh wrote; null when there is none,
+// or a row is not a valid inventory row.
+export function readPluginCatalogueRecord(): InstalledRuntimeIntegrity | null {
+  const root = resolve(installRoot());
+  const catalogue = resolve(pluginCatalogueRoot());
+  try {
+    const path = join(catalogue, PLUGIN_CATALOGUE_RECORD);
+    const bytes = noLinks(path, root) && realDirectory(catalogue) ? smallRegularFile(path) : null;
+    const record = bytes && JSON.parse(bytes.toString("utf-8")) as InstalledRuntimeIntegrity | null;
+    if (
+      record?.schemaVersion !== 1 || typeof record.version !== "string" ||
+      !VERSION_ID.test(record.version) || !Array.isArray(record.files)
+    ) return null;
+    checkInventoryRows(record.files, catalogue, record.version);
+    return record;
+  } catch {
+    return null;
+  }
+}
+
+// What in the plugin catalogue is AI-DLC's: each recorded file that still
+// matches, and the record. Anything else there stays, and a catalogue without
+// a record is kept whole. Uninstall and the catalogue refresh both ask this.
+export function pluginCatalogueOwnership(): UninstallPlan {
+  const root = resolve(installRoot());
+  const catalogue = resolve(pluginCatalogueRoot());
+  const owned: UninstallPlan = { files: [], directories: [], preserved: [] };
+  if (!existsWithoutFollowing(catalogue)) return owned;
+  const record = readPluginCatalogueRecord();
+  if (!record || !noLinks(catalogue, root) || !realDirectory(catalogue)) {
+    owned.preserved.push(catalogue);
+    return owned;
+  }
+  const rows = new Map(record.files.map((row) => [inventoryPath(catalogue, row.path), row]));
+  const recordPath = join(catalogue, PLUGIN_CATALOGUE_RECORD);
+  const visit = (directory: string): void => {
+    owned.directories.push(directory);
+    for (const name of readdirSync(directory)) {
+      const path = join(directory, name);
+      const stat = lstatSync(path);
+      const row = rows.get(path);
+      if (stat.isDirectory()) visit(path);
+      else if (path === recordPath && ownedFile(path, stat, {})) owned.files.push({ path, expected: sha256File(path) });
+      else if (row && ownedFile(path, stat, row)) owned.files.push({ path, expected: row.sha256 });
+      else owned.preserved.push(path);
+    }
+  };
+  visit(catalogue);
+  return owned;
 }
 
 export function buildUninstallPlan(purge: boolean): UninstallPlan {
@@ -222,10 +305,7 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
       return;
     }
     if (!existsWithoutFollowing(path)) return;
-    const stat = lstatSync(path);
-    if (!stat.isFile() ||
-      (expected !== undefined && sha256File(path) !== expected) ||
-      (mode !== undefined && (stat.mode & 0o777) !== mode)) {
+    if (!ownedFile(path, lstatSync(path), { sha256: expected, mode })) {
       preserved.add(path);
       return;
     }
@@ -266,6 +346,38 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
         else if (stat.isFile()) addFile(path);
       }
     };
+    // The one catalogue the release's plugins share sits in dot folders beside
+    // them; a catalogue whose every entry is one of the release's own marked
+    // folders goes with the version, and any other file there stays.
+    const releaseCatalogue = (path: string): boolean => {
+      try {
+        const bytes = smallRegularFile(path);
+        const catalogue = bytes && JSON.parse(bytes.toString("utf-8")) as { name?: unknown; plugins?: unknown } | null;
+        if (!catalogue || catalogue.name !== FIRST_PARTY_MARKETPLACE) return false;
+        const entries = catalogue.plugins;
+        return Array.isArray(entries) && entries.length > 0 && entries.every((entry) => {
+          const source = (entry as { source?: unknown } | null)?.source;
+          const match = typeof source === "string" ? /^\.\/([^/]+)\/([^/]+)$/.exec(source) : null;
+          return !!match && RELEASE_NAME.test(match[1]) && RELEASE_NAME.test(match[2]) &&
+            realDirectory(join(plugins, match[1], match[2])) &&
+            releasePluginFolder(join(plugins, match[1], match[2]), match[1], match[2]);
+        });
+      } catch {
+        return false;
+      }
+    };
+    const addCatalogues = (directory: string): void => {
+      for (const name of readdirSync(directory)) {
+        const path = join(directory, name);
+        const stat = lstatSync(path);
+        if (stat.isDirectory()) addCatalogues(path);
+        else if (stat.isFile() && name === "marketplace.json" && releaseCatalogue(path)) addFile(path);
+      }
+    };
+    for (const folder of readdirSync(plugins)) {
+      const catalogueRoot = join(plugins, folder);
+      if (folder.startsWith(".") && noLinks(catalogueRoot, root) && realDirectory(catalogueRoot)) addCatalogues(catalogueRoot);
+    }
     for (const plugin of readdirSync(plugins)) {
       const pluginRoot = join(plugins, plugin);
       if (!RELEASE_NAME.test(plugin) || !realDirectory(pluginRoot)) continue;
@@ -346,9 +458,17 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
     }
   }
 
+  const catalogue = pluginCatalogueOwnership();
+  for (const { path, expected } of catalogue.files) {
+    files.set(path, expected);
+    addParents(path);
+  }
+  for (const directory of catalogue.directories) directories.add(directory);
+  for (const path of catalogue.preserved) preserved.add(path);
+
   const known = [
     "active-version", "active-executable", "rollback-version", "aidlc-shim.ps1", "windows-path.json",
-    ...(purge ? ["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal"] : []),
+    ...(purge ? ["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-cli-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal"] : []),
   ];
   for (const name of known) addFile(join(root, ...name.split("/")));
   for (const [shell, name] of Object.entries({
@@ -410,7 +530,7 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
     }
   }
   directories.add(root);
-  const keptSettings = new Set(["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal"]);
+  const keptSettings = new Set(["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-cli-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal"]);
   for (const directory of directories) {
     if (within(directory, versions)) continue;
     if (!noLinks(directory, root)) {
@@ -428,7 +548,9 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
   const priority = (path: string): number =>
     path === command || dirname(path) === root
       ? 3
-      : ["aidlc", "aidlc.exe", "version.json", "installed-files.json"].includes(basename(path)) ? 2 : 0;
+      : ["aidlc", "aidlc.exe", "version.json", "installed-files.json", PLUGIN_CATALOGUE_RECORD].includes(basename(path))
+      ? 2
+      : 0;
   return {
     files: [...files].map(([path, expected]) => ({ path, expected }))
       .sort((a, b) => priority(a.path) - priority(b.path) || a.path.localeCompare(b.path)),

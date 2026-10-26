@@ -63,6 +63,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
+  agentFileText,
   assertNoSymlinkInChainOrThrow,
   toPosix,
   auditBlockField,
@@ -4339,7 +4340,7 @@ export function main(argv: string[]): void {
           ? values["--tags"].split(",")
           : undefined;
         const out = summarizeDocument(
-          pd, space, positional[0], textBuf.toString("utf-8"), values["--source-revision"], tags,
+          pd, space, positional[0], agentFileText(textBuf), values["--source-revision"], tags,
         );
         if (json) emitJson(out as unknown as Record<string, unknown>);
         else {

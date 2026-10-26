@@ -1,14 +1,16 @@
-// covers: function:hookStandsOutside, function:hookOutsideGate, function:enterHookWorkflow, function:selectedRecordIsFinished, hook:aidlc-record-human-turn, hook:aidlc-plan-approval-guard, hook:aidlc-session-end
+// covers: function:hookStandsOutside, function:hookOutsideGate, function:enterHookWorkflow, function:selectedRecordIsFinished, function:isolatedRunIsOpen, hook:aidlc-record-human-turn, hook:aidlc-plan-approval-guard, hook:aidlc-session-end
 //
 // A conversation that finished its work stays on that record, and a later
 // prompt is not part of it: the hooks that ask whether the conversation has
 // joined the work leave the finished record alone. Asking after it (status),
 // retiring it (archive), and bringing it back (unarchive) still do what the
-// person asked.
+// person asked. A stage the person runs on its own there (`--single`) is live
+// work until it completes: its replies count, as on running work.
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
 import {
   createIntent,
   enterHookWorkflow,
@@ -262,5 +264,79 @@ describe("finished work is not joined for a later prompt", () => {
     const again = util(["status", "--intent", record]);
     expect(again.status, again.stderr).toBe(0);
     expect(again.stdout).toMatch(/Status:\s+Completed/);
+  });
+});
+
+// Seen on Windows Server with Claude Code: after express finished in a team
+// clone, the person typed the agent's own suggestion `/aidlc --stage
+// deployment-pipeline --single` and answered its questions; none of the four
+// replies was recorded, so every answer was refused as "no new human reply".
+describe("a stage run on its own on finished work is live until it completes", () => {
+  const STAGE = "deployment-pipeline";
+  const isolated = (record: string, event: "STAGE_STARTED" | "STAGE_COMPLETED"): void => {
+    appendAuditEntry(event, event === "STAGE_STARTED"
+      ? { Stage: STAGE, Agent: "aidlc-pipeline-deploy-agent", Workflow: `single-stage:${STAGE}`, Scope: "express" }
+      : { Stage: STAGE, Details: `Single-stage run of ${STAGE} completed`, Workflow: `single-stage:${STAGE}` },
+    proj, record, "default");
+  };
+
+  test.each(["Completed", "Archived"] as const)("a reply in the run, started on %s work, is recorded", (status) => {
+    const { record, statePath } = seed(status);
+    isolated(record, "STAGE_STARTED");
+    const workflow = joined();
+    try {
+      expect(hookStandsOutside(workflow)).toBe(false);
+    } finally {
+      workflow.restore();
+    }
+    const stateBefore = readFileSync(statePath, "utf-8");
+    const turn = laterPrompt();
+    expect(turn.status, turn.stderr).toBe(0);
+    expect(readAllAuditShards(proj, record, "default")).toContain("**Event**: HUMAN_TURN");
+    expect(readFileSync(statePath, "utf-8")).toBe(stateBefore);
+  });
+
+  test("once the run completes, a later prompt leaves the finished record alone again", () => {
+    const { record } = seed("Completed");
+    isolated(record, "STAGE_STARTED");
+    isolated(record, "STAGE_COMPLETED");
+    const workflow = joined();
+    try {
+      expect(hookStandsOutside(workflow)).toBe(true);
+    } finally {
+      workflow.restore();
+    }
+    const before = readAllAuditShards(proj, record, "default");
+    const turn = laterPrompt();
+    expect(turn.status, turn.stderr).toBe(0);
+    expect(readAllAuditShards(proj, record, "default")).toBe(before);
+  });
+
+  for (const hook of passiveEvents) {
+    test(`${hook.event} is recorded while the run is open on Completed work`, () => {
+      const { record } = seed("Completed");
+      isolated(record, "STAGE_STARTED");
+      const result = passiveHook(hook.name, hook.payload, hook.env);
+      expect(result.status, result.stderr).toBe(0);
+      expect(readAllAuditShards(proj, record, "default")).toContain(`**Event**: ${hook.event}`);
+    });
+  }
+
+  test("a run open on another record does not make this finished one live", () => {
+    const { record } = seed("Completed");
+    const other = createIntent(proj, "another piece of work", "default", "feature");
+    isolated(other.dirName, "STAGE_STARTED");
+    setActiveIntentCursor(proj, record, "default");
+    const workflow = joined();
+    try {
+      expect(workflow.selection?.intent).toBe(record);
+      expect(hookStandsOutside(workflow)).toBe(true);
+    } finally {
+      workflow.restore();
+    }
+    const before = readAllAuditShards(proj, record, "default");
+    const turn = laterPrompt();
+    expect(turn.status, turn.stderr).toBe(0);
+    expect(readAllAuditShards(proj, record, "default")).toBe(before);
   });
 });

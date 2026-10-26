@@ -38,6 +38,7 @@ import {
   discoverProjectHarnesses,
 } from "./aidlc-runtime-paths.ts";
 import { installRoot, windowsGitBashLauncherState } from "./aidlc-install-paths.ts";
+import { deepFolder } from "./aidlc-folder-depth.ts";
 import { versionChannel } from "./aidlc-channel.ts";
 import {
   configureColor,
@@ -54,13 +55,14 @@ import {
   isModelHarness,
   modelPolicyDoctorIssues,
   modelPolicyIsEmpty,
+  presetsChangeNothing,
   sessionModelsDetail,
-  sessionSetsAgentModels,
   type ModelHarness,
 } from "./aidlc-model-policy.ts";
 import {
   flagsDoctorCheck,
   frameworkFilesDoctorCheck,
+  kiroCliWorkflowsDoctorCheck,
   kiroIdeWorkflowsDoctorCheck,
   kiroIdeTerminalDoctorCheck,
   providerDoctorCheck,
@@ -148,12 +150,24 @@ function windowsGitBashLauncherCheck(): DoctorCheck | null {
   };
 }
 
+// A Windows project folder too deep for AI-DLC's records: advisory, as config
+// says it; moving the folder is the person's call. Every harness installed in
+// the project counts, since one that refuses a long path on its own keeps it.
+function projectFolderDepthCheck(projectDir: string): DoctorCheck | null {
+  const deep = deepFolder(projectDir, process.platform, undefined, {
+    harnesses: discoverProjectHarnesses(projectDir).map((harness) => harness.distribution),
+  });
+  return deep && { pass: false, severity: "warn", label: `Project folder: ${deep.facts}`, fix: deep.fix };
+}
+
 export async function doctorUpdateState(
   flags: Record<string, string>,
   interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY),
 ): Promise<UpdateState> {
   const explicit = flags["check-updates"] === "true";
-  const mayRefresh = interactive &&
+  // An export is a report someone asked for, often run by a script or an agent
+  // with no terminal, and it is passed on: it refreshes an old check too.
+  const mayRefresh = (interactive || "export" in flags) &&
     flags.json !== "true" &&
     flags.quiet !== "true";
   let update = cachedUpdateState();
@@ -181,8 +195,9 @@ export function updateCheck(state: UpdateState): DoctorCheck {
   const running = versionChannel(state.currentVersion);
   const otherChannel = state.state === "behind" && running !== state.channel;
   // A machine that has never checked is not behind: doctor refreshes the cache
-  // only in a terminal, so the first doctor from a chat tool would otherwise
-  // warn on every fresh install. The row passes and names the check.
+  // only in a terminal or for --export, so the first doctor from a chat tool
+  // would otherwise warn on every fresh install. The row passes and names the
+  // check.
   const neverChecked = state.state === "absent";
   return {
     pass: state.state === "current" || neverChecked,
@@ -211,11 +226,16 @@ function pluginCheck(projectDir: string, verbose: boolean): DoctorCheck {
   const detail = verbose && statuses.length > 0
     ? ` - ${statuses.map((status) => `${status.key ?? "host"}:${status.state}`).join(", ")}`
     : "";
+  // A paused plugin is the person's own choice: information, never a fix.
+  const paused = statuses
+    .filter((status) => status.state === "paused")
+    .map((status) => `; ${status.key} ${status.message}`)
+    .join("");
   if (attention.length > 0) {
     return {
       pass: false,
       severity: "warn",
-      label: `Plugins: ${attention.length} need attention${detail}`,
+      label: `Plugins: ${attention.length} need attention${paused}${detail}`,
       fix: attention.map((status) => status.message).join("; "),
     };
   }
@@ -223,28 +243,28 @@ function pluginCheck(projectDir: string, verbose: boolean): DoctorCheck {
     return {
       pass: false,
       severity: "warn",
-      label: `Plugins: ${drift.length} require sync${detail}`,
-      fix: "run `aidlc config`",
+      label: `Plugins: ${drift.length} require sync${paused}${detail}`,
+      fix: `run \`${aidlcInvocation()} engine plugin sync\``,
     };
   }
   if (inventory.capability !== "full-inventory") {
     // No host plugin list to compare against: report what this project has.
     // A warning here could never be cleared by anything the person does.
-    const composed = statuses.map((status) =>
+    const composed = statuses.filter((status) => status.state !== "paused").map((status) =>
       [status.key, status.composedVersion].filter(Boolean).join(" ")
     );
     return {
       pass: true,
       label: composed.length === 0
         ? "Plugins: none in this project"
-        : `Plugins: ${composed.join(", ")} in this project (no host plugin list to compare versions with)${detail}`,
+        : `Plugins: ${composed.join(", ")} in this project (no host plugin list to compare versions with)${paused}${detail}`,
     };
   }
   return {
     pass: true,
     label: statuses.length === 0
       ? "Plugins: no AIDLC plugins installed"
-      : `Plugins: composed state is current${detail}`,
+      : `Plugins: composed state is current${paused}${detail}`,
   };
 }
 
@@ -299,7 +319,7 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
   const installed = harnesses
     .map((harness) => harness.distribution)
     .filter((distribution): distribution is ModelHarness => isModelHarness(distribution));
-  const sessionSet = installed.filter((distribution) => sessionSetsAgentModels(distribution));
+  const sessionSet = installed.filter((distribution) => presetsChangeNothing(distribution));
   if (sessionSet.length > 0) {
     const others = installed.filter((distribution) => !sessionSet.includes(distribution));
     const policyFor = (distribution: ModelHarness) =>
@@ -361,7 +381,7 @@ function humanReport(
   const frameworkPattern =
     /^(?:Agent filename|Scope filename|Cycle detection|Orphan stage|Uncompiled stage|Enabled stage compile coverage|Scope validation|Schema validation|Graph references|Keyword overlap|Rule drift|Paired sensor coverage|Stage graph|Scope grid|Sensor |Required sections|Upstream coverage|Traceability|Linter|Type check)/i;
   const machinePattern =
-    /^(?:Update:|Windows uninstall|Windows launcher|Runtime hook PATH|Harness CLI|Installed runtime|Command pointer|Rollback target|Project pin registry|Transaction staging|Transaction recovery|Settings global)/i;
+    /^(?:Update:|Windows uninstall|Windows launcher|Runtime hook PATH|Harness CLI|Installed runtime|Command pointer|Rollback target|Plugin marketplace|Project pin registry|Transaction staging|Transaction recovery|Settings global)/i;
   const machine = report.checks.filter((check) => machinePattern.test(check.label));
   const framework = report.checks.filter((check) => frameworkPattern.test(check.label));
   const project = report.checks.filter((check) =>
@@ -604,11 +624,15 @@ export async function main(argv: string[]): Promise<void> {
   checks.push(...await kiroSessionDoctorChecks(projectDir));
   const kiroWorkflows = kiroIdeWorkflowsDoctorCheck(projectDir, harnessDir());
   if (kiroWorkflows) checks.push(kiroWorkflows);
+  const kiroCliWorkflows = kiroCliWorkflowsDoctorCheck(projectDir, harnessDir());
+  if (kiroCliWorkflows) checks.push(kiroCliWorkflows);
   const kiroTerminal = kiroIdeTerminalDoctorCheck(projectDir, harnessDir());
   if (kiroTerminal) checks.push(kiroTerminal);
   checks.push(flagsDoctorCheck(projectDir, harnessDir(), switchesOffLines(projectDir, process.env, "command")));
   checks.push(providerDoctorCheck(projectDir, harnessDir()));
   checks.push(workspaceSiblingDoctorCheck(projectDir, harnessDir()));
+  const folderDepth = projectFolderDepthCheck(projectDir);
+  if (folderDepth) checks.push(folderDepth);
   checks.push(frameworkFilesDoctorCheck(projectDir, harnessDir()));
   const requestCap = vscodeRequestCapDoctorCheck(projectDir, harnessDir());
   if (requestCap) checks.push(requestCap);

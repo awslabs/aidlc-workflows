@@ -198,12 +198,34 @@ describe("t205 optional_produces frontmatter", () => {
       expect(infra?.optional_produces).toBeUndefined();
     });
 
-    test("functional-design is the only stage carrying optional_produces", () => {
+    test("the strategy-dependent test instructions are optional on build-and-test", () => {
+      const buildAndTest = loadGraph().find((s) => s.slug === "build-and-test");
+      expect(buildAndTest).toBeDefined();
+      expect(buildAndTest?.optional_produces).toEqual([
+        "integration-test-instructions",
+        "performance-test-instructions",
+        "security-test-instructions",
+      ]);
+      for (const name of buildAndTest?.optional_produces ?? []) {
+        expect(buildAndTest?.produces).not.toContain(name);
+        expect(producersOf(name).map((stage) => stage.slug)).toEqual(["build-and-test"]);
+      }
+    });
+
+    // functional-design's frontend-components is written only for a UI Unit;
+    // build-and-test's test instructions only at the strategy that calls for
+    // them; requirements-analysis's traceability record is optional so a run
+    // with no record (work begun before it existed) still reviews and approves.
+    test("functional-design, build-and-test and requirements-analysis are the stages carrying optional_produces", () => {
       const carriers = loadGraph()
         .filter((s) => s.optional_produces !== undefined)
-        .map((s) => s.slug)
+        .map((s) => `${s.slug}:${s.optional_produces?.join(",")}`)
         .sort();
-      expect(carriers).toEqual(["functional-design"]);
+      expect(carriers).toEqual([
+        "build-and-test:integration-test-instructions,performance-test-instructions,security-test-instructions",
+        "functional-design:frontend-components",
+        "requirements-analysis:traceability",
+      ]);
     });
   });
 

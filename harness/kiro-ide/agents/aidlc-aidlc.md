@@ -54,6 +54,7 @@ permissions:
         - "aidlc-quality-agent"
         - "aidlc-pipeline-deploy-agent"
         - "aidlc-operations-agent"
+        - "aidlc-scoped-review-*"
     - capability: filesystem
       effect: allow
       match:
