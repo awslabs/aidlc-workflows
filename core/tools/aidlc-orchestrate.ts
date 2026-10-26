@@ -9844,7 +9844,9 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 // a live run on opencode passed "la página de la panadería" as "la pagina de la
 // panaderia". Under the same rules for which line is theirs, the engine's own
 // parse of that line says which of its words are the request: all of them on a
-// line that routes on the plan the agent's call routes on; on a line whose first
+// line that routes on the plan the agent's call routes on, or on no plan at all
+// (#2401: on Kiro IDE the agent read a plan from "I want to build "Northwind
+// Mini Bank", ..." and passed its own rewording under it); on a line whose first
 // word is also a plan's name, all of them when the agent routes on no plan and
 // the rest after that word when it routes on that plan. Any other reading keeps
 // the agent's words, and so does a line with a flag `next` does not take (a
@@ -9869,7 +9871,7 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
     const words = personsWordsText(message.words);
     const step = own.readingStep;
     if (step === undefined) {
-      if (message.route.scope === plan) flags.intent = words;
+      if (message.route.scope === plan || message.route.scope === null) flags.intent = words;
     } else if (step.kind === "plan-word") {
       if (plan === null) flags.intent = words;
       else if (plan === step.scope) flags.intent = words.slice(step.scope.length).trim();
