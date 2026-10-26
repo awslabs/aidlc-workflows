@@ -228,7 +228,8 @@ import {
   clearActiveDirectiveMarker,
   codeGenerationIsTheStep,
   codekbRepoName,
-  siblingReposLeftOut,
+  discoverSiblingRepos,
+  repoNameProblem,
   currentUnitLifecycleMode,
   constructionSkeletonOn,
   constructionCheckpointGaps,
@@ -6820,8 +6821,8 @@ function createPrintDirective(
   }
   // A repo folder whose name cannot be a repo's is not part of the work, said
   // once, with why.
-  for (const { name, problem } of siblingReposLeftOut(projectDir)) {
-    directive.narration += ` The folder "${name}" is not part of this work: its name ${problem}.`;
+  for (const name of discoverSiblingRepos(projectDir, true)) {
+    directive.narration += ` The folder "${name}" is not part of this work: its name ${repoNameProblem(name)}.`;
   }
   if (routedGuardPolicyNote) directive.narration += ` ${routedGuardPolicyNote}`;
   // Beside other work the chat still holds that work's conversation: the

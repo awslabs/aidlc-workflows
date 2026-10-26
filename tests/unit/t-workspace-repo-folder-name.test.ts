@@ -1,4 +1,4 @@
-// covers: function:repoNameProblem, function:isValidRepoName, function:repoNameRefusal, function:discoverSiblingRepos, function:siblingReposLeftOut, function:quoteCommandArgument, function:readsAlikeInDoubleQuotes, function:codeGenerationPlanNamedPaths, function:resolveConstructionRepo, cli:aidlc-utility(intent-create), cli:aidlc-utility(intent set-repos), subcommand:aidlc-utility:codekb-path, subcommand:aidlc-utility:codekb-snapshot, subcommand:aidlc-utility:codekb-publish, subcommand:aidlc-utility:codekb-scope-diff
+// covers: function:repoNameProblem, function:isValidRepoName, function:repoNameRefusal, function:discoverSiblingRepos, function:quoteCommandArgument, function:readsAlikeInDoubleQuotes, function:codeGenerationPlanNamedPaths, function:resolveConstructionRepo, cli:aidlc-utility(intent-create), cli:aidlc-utility(intent set-repos), subcommand:aidlc-utility:codekb-path, subcommand:aidlc-utility:codekb-snapshot, subcommand:aidlc-utility:codekb-publish, subcommand:aidlc-utility:codekb-scope-diff
 //
 // A workspace keeps several repos side by side, and each repo is the folder the
 // person named, as they named it: a space, an accent, an apostrophe or another
@@ -32,7 +32,6 @@ import {
   repoNameProblem,
   resolveConstructionRepo,
   serializeSourceListing,
-  siblingReposLeftOut,
   sourcePathKey,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { quoteCommandArgument } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
@@ -256,7 +255,7 @@ describe("a repo folder whose name AI-DLC cannot hold", () => {
   test("is not part of the work, and the first step says which folder and why, once", () => {
     const proj = workspace("R&D", "api");
     expect(discoverSiblingRepos(proj)).toEqual(["api"]);
-    expect(siblingReposLeftOut(proj)).toEqual([{ name: "R&D", problem: 'has "&", which breaks AI-DLC\'s commands on Windows' }]);
+    expect(discoverSiblingRepos(proj, true)).toEqual(["R&D"]);
     const env = {
       ...process.env,
       AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-0000000004a1",

@@ -26,8 +26,10 @@ import {
   runtimeHarnessDir,
   runtimeHarnessName,
   SPACE_NAME_REGEX,
+  repoNameProblem,
+  repoNameRefusal,
 } from "./aidlc-runtime-paths.ts";
-export { entrySkillInvocation, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
+export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing } from "./aidlc-command.ts";
 import {
   type EngineInvocation,
@@ -23385,54 +23387,11 @@ export function legacyParkedRefPrefix(slug: string): string {
 
 // The shape of a name the engine coins itself (folderRepoName): letters,
 // digits, ".", "_" and "-", starting with a letter or digit. A repo folder's own
-// name is read as the person named it (repoNameProblem).
+// name is read as the person named it (repoNameProblem, in aidlc-runtime-paths.ts).
 export const REPO_NAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-// A repo is named by its folder directly in the workspace, as the person named
-// it, so a name resolves only to an immediate child of the workspace and never
-// escapes it. A name is left out only where it breaks something named here, in
-// words that finish "its name ...": why a typed name is refused and a folder
-// found on disk is left out of the work. Null when the name can be a repo's.
-export function repoNameProblem(name: string): string | null {
-  if (name === "" || name === "." || name === ".." || /[/\\\0]/.test(name)) {
-    return 'is not one folder\'s name (no "/" or "\\", not "." or "..")';
-  }
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: finding them is the point
-  if (/[\u0001-\u001f\u007f\u2028\u2029]/.test(name)) return "has a control character, which AI-DLC's records cannot keep";
-  if (name.trim() !== name) return "starts or ends with a space, which AI-DLC's records cannot keep";
-  // A teammate's clone on Windows could not check out the records named after it.
-  const windows = /[<>:"|?*]/.exec(name);
-  if (windows) return `has "${windows[0]}", which a folder name on Windows cannot have`;
-  // A native Windows install runs every AI-DLC command through aidlc.cmd, whose
-  // cmd.exe reads these again, however the command quotes them.
-  const cmd = /[&^%]/.exec(name);
-  if (cmd) return `has "${cmd[0]}", which breaks AI-DLC's commands on Windows`;
-  // Cursor's adapter stops a delegated agent's own AI-DLC command holding
-  // these, quoted or not (runsAdmittedAidlcCommand).
-  const cursor = /[()[\]{};$`]/.exec(name);
-  if (cursor) return `has "${cursor[0]}", which stops AI-DLC's commands on Cursor`;
-  if (name.includes(",")) return 'has ",", which AI-DLC puts between repo names';
-  if (name === "-") return 'is "-", which AI-DLC\'s records use for no repo';
-  if (name.startsWith("--")) return 'starts with "--", which AI-DLC\'s commands read as an option';
-  if (name.endsWith("@checkout")) return 'ends with "@checkout", which names a checkout AI-DLC records';
-  // On Windows the agent's shell is PowerShell or Git Bash, and only double
-  // quotes read an apostrophe alike in both (quoteCommandArgument); these end
-  // or act inside them.
-  const apostrophe = /['\u2018-\u201b]/.exec(name);
-  const alongside = /[!\u201c-\u201e]/.exec(name);
-  if (apostrophe && alongside) {
-    return `has "${apostrophe[0]}" with "${alongside[0]}", which AI-DLC cannot quote one way for both PowerShell and Git Bash on Windows`;
-  }
-  return null;
-}
 
 export function isValidRepoName(name: string): boolean {
   return repoNameProblem(name) === null;
-}
-
-// The refusal of a typed name that cannot be a repo's, after its flag or field.
-export function repoNameRefusal(what: string, name: string): string {
-  return `${what} "${name}": its name ${repoNameProblem(name) ?? "cannot be a repo's"}.`;
 }
 
 // The on-disk dir for a sibling repo: an immediate child of the workspace root.
@@ -29833,11 +29792,13 @@ export function isWorkspaceRepoDir(projectDir: string, name: string): boolean {
   }
 }
 
-// The immediate children of the workspace root holding a `.git`, following
-// directory symlinks but excluding workspace internal dirs and the harness
-// engine dir, by folder name. Sorted + deduped; [] when the workspace root is
-// unreadable.
-function siblingGitFolders(projectDir: string): string[] {
+// Auto-discover the code repos that are immediate children of the workspace root:
+// any child directory holding a `.git`, following directory symlinks but excluding
+// workspace internal dirs and the harness engine dir. Sorted + deduped. Returns [] when the workspace root is
+// unreadable or holds no sibling repos (the legacy single-repo / fresh-greenfield
+// case: the caller records no repos row and the lone repo is inferred later). A
+// folder whose name cannot be a repo's is not one; `leftOut` lists those instead.
+export function discoverSiblingRepos(projectDir: string, leftOut = false): string[] {
   const found: string[] = [];
   let entries: string[];
   try {
@@ -29850,28 +29811,12 @@ function siblingGitFolders(projectDir: string): string[] {
     if (isHarnessDirName(name)) continue; // .claude / .kiro / .codex
     const dir = join(projectDir, name);
     try {
-      if (statSync(dir).isDirectory() && isGitRepoDir(dir)) found.push(name);
+      if (statSync(dir).isDirectory() && isGitRepoDir(dir) && isValidRepoName(name) !== leftOut) found.push(name);
     } catch {
       // Ignore unreadable entries and dangling directory symlinks.
     }
   }
   return [...new Set(found)].sort();
-}
-
-// Auto-discover the code repos that are immediate children of the workspace
-// root, each by the name of its folder. Returns [] when there are none (the
-// legacy single-repo / fresh-greenfield case: the caller records no repos row
-// and the lone repo is inferred later). A folder whose name cannot be a repo's
-// is not one (siblingReposLeftOut says which and why).
-export function discoverSiblingRepos(projectDir: string): string[] {
-  return siblingGitFolders(projectDir).filter(isValidRepoName);
-}
-
-export function siblingReposLeftOut(projectDir: string): Array<{ name: string; problem: string }> {
-  return siblingGitFolders(projectDir).flatMap((name) => {
-    const problem = repoNameProblem(name);
-    return problem === null ? [] : [{ name, problem }];
-  });
 }
 
 // Resolve the repo set for a new intent at creation: an explicit `--repos a,b` set
