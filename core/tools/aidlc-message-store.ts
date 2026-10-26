@@ -69,7 +69,7 @@ export interface StoredMessage {
   picker: Array<{ question: string; reply: PersonsWords | null }> | null;
   /**
    * The person's own words: the text after the entry word and after any flags. Null for a command with no words. A
-   * question box answered for several questions keeps every pick, one per line in the order shown.
+   * question box keeps every reply it carried, one per question in the order shown, a pick with its note included.
    */
   words: PersonsWords | null;
   /** The settings typed as flags, as the config setter names them ("depth" "minimal", "guard.review-freeze" "off"). */
