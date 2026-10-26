@@ -217,7 +217,7 @@ describe.each(["off", "strict"] as const)("Guard Policy %s: a setting asked besi
     const off = setter(proj, ["learnings", "off", "--message", approval]);
     expect(off.rc).not.toBe(0);
     expect(off.out).not.toContain(approval);
-    expect(stateField(proj, "Learnings")).not.toContain("off");
+    expect(rows(proj, "CEREMONY_SET")).toHaveLength(0);
   });
 
   // The live shape the rule for every setting was made for: the agent went on
