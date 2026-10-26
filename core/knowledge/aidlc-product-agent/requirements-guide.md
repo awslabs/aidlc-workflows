@@ -79,7 +79,7 @@ For every system, verify coverage of:
 ```
 | Req ID | Description | Priority | Status | Design Ref | Unit Ref | Test Ref |
 |--------|-------------|----------|--------|------------|----------|----------|
-| FR-001 | [summary]   | Must     | Approved | AD-003   | U-007    | TC-012   |
+| FR1    | [summary]   | Must     | Approved | AD-003   | U7       | TC-012   |
 ```
 
 Every cell should be filled. Empty cells indicate gaps:

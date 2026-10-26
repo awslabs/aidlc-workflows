@@ -110,6 +110,7 @@ Based on the approved plan, generate 4 artifacts in `<record>/inception/units-ge
 
 **unit-of-work-dependency.md:**
 - Dependency DAG between units (directed edges: "A depends on B"). Must be cycle-free.
+  A Unit depends on every Unit whose code its own code or tests need to build or pass. Units with no edge between them may be built at the same time, each in its own copy of the project with none of the others' work in it, so each Unit's code and tests must pass with its own code, the Units it depends on, and the project as it stands.
 - Integration points between units (APIs, shared data, events)
 - Parallel development opportunities (sets of units with no dependency between them — multiple valid topological orderings exist)
 - When skeleton-on applies, identify the first resolved DAG Unit as the integrated slice and explain how it can run before later Units. A marker only in `bolt-plan.md` cannot change the runtime DAG order.
@@ -135,10 +136,11 @@ NOTE: This artifact describes topology only. It does NOT pick a single "recommen
 - Implementation order within each unit
 - Coverage verification: every enumerated ID assigned, every unit has rows
 
-Create `<record>/inception/units-generation/traceability.json`. When
-`stories.md` exists, enumerate every `USx.y`; otherwise enumerate every `FR`,
-a requirement with sub-requirements through its `FR{n}.{m}` IDs.
-Each `OK` target is one Unit ID or construction directory that also appears on
+Create `<record>/inception/units-generation/traceability.json` by running
+`{{INVOKE}} engine sensor-traceability --stage units-generation --output-path <that path> --write-upstream`:
+when `stories.md` exists it lists every `USx.y`, otherwise every `FR`
+Requirements Analysis recorded, a requirement with sub-requirements through its `FR{n}.{m}` IDs,
+each with a `GAP` row. Set each row's `status` and `target`: each `OK` target is one Unit ID or construction directory that also appears on
 that ID's row in `unit-of-work-story-map.md`:
 
 ```json
@@ -183,6 +185,6 @@ Unit.
 
 When `directive.protocol_modules` lists `learnings`, follow
 `stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
-working and run the ritual before the approval gate, applying its bootstrap,
-`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
-skip both the diary and the ritual.
+working, and take the learnings step before the approval gate; that module says
+when it asks the person anything. When the module is absent, skip both the diary
+and the step.

@@ -1420,7 +1420,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(result.status).toBe(0);
     const printed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
     expect(printed.kind).toBe("print");
-    expect(printed.message).toBe('Recorded awaiting-approval for "requirements-analysis".');
+    expect(printed.message).toStartWith('Recorded awaiting-approval for "requirements-analysis".');
     expect(typeof printed.next_stage).toBe("string");
     expect(String(printed.narration)).toMatch(
       /^Requirements Analysis is ready for your review\. (It produced .+, in|Its output goes in) aidlc\//,
@@ -1670,16 +1670,17 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     // nothing on screen until the person types "carry on".
     expect(result.out).toContain('"agent_work":true');
     expect(turnEndIsOpen(p)).toBe(false);
-    // The Stop hook hands the work back instead of letting the agent go quiet:
-    // Claude Code's Stop through the dispatcher, and Codex's through its adapter
-    // (the same core hook). Its probe runs the project's own tree.
+    // Where nobody attends, the Stop hook hands the work back instead of letting
+    // the agent go quiet: Claude Code's Stop through the dispatcher, and Codex's
+    // through its adapter (the same core hook). In an attended run the turn ends
+    // there. Its probe runs the project's own tree.
     for (const tree of ["claude", "codex"] as const) {
       const dir = tree === "claude" ? ".claude" : ".codex";
       if (!existsSync(join(p, dir))) cpSync(join(REPO_ROOT, "dist", tree, dir), join(p, dir), { recursive: true });
     }
     // Each stop is its own turn's event (Codex replays a byte-identical delivery).
     let stops = 0;
-    const stop = (tree: "claude" | "codex") => spawnSync(BUN, tree === "claude"
+    const stop = (tree: "claude" | "codex", unattended: "0" | "1") => spawnSync(BUN, tree === "claude"
       ? [join(TOOLS_DIR, "aidlc.ts"), "engine", "hook", "continue-workflow"]
       : [join(p, ".codex", "hooks", "aidlc-codex-adapter.ts"), "continue-workflow"], {
       cwd: p,
@@ -1693,6 +1694,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
         CODEX_THREAD_ID: undefined,
         CODEX_SESSION_ID: undefined,
         AIDLC_STOP_HOOK_PROBE: undefined,
+        AIDLC_UNATTENDED: unattended,
       },
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
@@ -1706,7 +1708,9 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       // Each tree is one agent's stop: the hook's no-progress block count is
       // per project, so the second tree starts it afresh.
       rmSync(join(seededRecordDir(p), ".aidlc-engine", "stop-hook", "block-count.json"), { force: true });
-      const handedBack = stop(tree);
+      const attended = stop(tree, "0");
+      expect(attended.stdout.trim(), `${tree}: ${attended.stderr}\n${traces()}`).toBe("");
+      const handedBack = stop(tree, "1");
       expect(handedBack.stdout, `${tree}: ${handedBack.stderr}\n${traces()}`).toContain('"decision":"block"');
     }
     expect(result.out).toContain("Request review iteration 1 against the current artifact");
@@ -1734,7 +1738,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     // A question for the person ends the turn, and the Stop hook lets it.
     expect(turnEndIsOpen(p)).toBe(true);
     for (const tree of ["claude", "codex"] as const) {
-      const atQuestion = stop(tree);
+      const atQuestion = stop(tree, "1");
       expect(atQuestion.status, `${tree}: ${atQuestion.stderr}`).toBe(0);
       expect(atQuestion.stdout, `${tree}: ${traces()}`).not.toContain('"decision":"block"');
     }
@@ -2260,7 +2264,8 @@ describe("t115 the gate and a skip say what the plan does next", () => {
     expect(lastDirective(skipped.stdout).narration).toBeUndefined();
     const next = runOrchestrateNext(ORCH_TOOL, p, [], { env: { ...process.env, ...chat } });
     expect(next.directive?.kind, next.out).toBe("run-stage");
-    expect(String(next.directive?.narration)).toMatch(/^Feasibility[^.]* does not apply here, so I skipped it\. /);
-    expect(String(next.directive?.narration)).not.toContain("approve every gate");
+    const told = ((next.directive?.change_notices ?? []) as string[]).join(" ");
+    expect(told).toMatch(/^Feasibility[^.]* does not apply here, so I skipped it\.$/);
+    expect(`${told} ${next.directive?.narration ?? ""}`).not.toContain("approve every gate");
   });
 });

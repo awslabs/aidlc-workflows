@@ -1,4 +1,4 @@
-// covers: function:routeCodeGenerationPlanApproval, function:codeGenerationExecutionAllowed, function:evaluateCodeGenerationApproval, hook:aidlc-plan-approval-guard
+// covers: function:routeCodeGenerationPlanApproval, function:codeGenerationExecutionAllowed, function:evaluateCodeGenerationApproval, function:rejectionIsFreshAttempt, function:rejectionAtRunFloor, hook:aidlc-plan-approval-guard
 //
 // A change the person asks for at the Code Generation gate is not a reason to
 // ask them to approve the plan again. They say "rename the test file"; the
@@ -33,6 +33,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { readAuditShardEvents, rejectionIsFreshAttempt } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 setDefaultTimeout(120_000);
@@ -157,6 +158,20 @@ function reply(proj: string, prompt: string): void {
   expect(result.status, result.stderr).toBe(0);
 }
 
+// The agent's record of the choice it read from the person's reply.
+function agentRecords(proj: string, choice: string): void {
+  const result = spawnSync(BUN, [
+    join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+    "--details", choice, "--project-dir", proj,
+  ], {
+    cwd: proj,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+}
+
 /** The person's own Request Changes at the gate: the row `report --result rejected` writes. */
 function rejectedAtGate(proj: string, feedback: string, unit: string | null = null): void {
   appendAuditEntry("GATE_REJECTED", {
@@ -258,6 +273,7 @@ function approved(proj: string, unit: string | null = null): void {
   expect(ask.kind, JSON.stringify(ask)).toBe("ask");
   expect(ask.ask_type).toBe("plan-approval");
   reply(proj, "1");
+  agentRecords(proj, "Approve Plan");
   expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
   expect(next(proj).plan_approval).toEqual({ status: "approved" });
 }
@@ -383,24 +399,53 @@ describe("one Unit's own change request and its reopen", () => {
     expect(handed.code, handed.stderr).toBe(0);
   });
 
-  // A jump back from Build and Test reopens this Unit's Code Generation. That is
-  // a fresh attempt, not a change to the built result, so its plan comes back
-  // for approval even under off: the engine asks for the rewritten plan.
+  // A jump back from Build and Test, or a Redo, reopens this Unit's Code
+  // Generation. That is a fresh attempt, not a change to the built result, so
+  // its plan comes back for approval even under off. The person asked for no
+  // change, so the plan is asked about as it stands: never sent back for a
+  // revision nobody asked for, which an unchanged plan could never clear.
+  // Neither a jump nor a Redo inherits approval from the previous attempt.
+  test("a reopen or a Redo is a fresh attempt; a change request is not", () => {
+    const row = (reopen?: string): string =>
+      `**Event**: GATE_REJECTED\n**Stage**: code-generation\n${reopen ? `**Reopen**: ${reopen}\n` : ""}**Feedback**: x\n`;
+    expect(rejectionIsFreshAttempt(row("jump"))).toBe(true);
+    expect(rejectionIsFreshAttempt(row("redo"))).toBe(true);
+    expect(rejectionIsFreshAttempt(row("change"))).toBe(false);
+    expect(rejectionIsFreshAttempt(row())).toBe(false);
+  });
   for (const how of ["jump", "redo"] as const) {
     test(`off: a one-Unit reopen (${how}) brings the plan question back`, () => {
       const proj = unitProject("off", UNIT);
       approved(proj, UNIT);
       reopened(proj, UNIT, how);
-      // The reopened step writes its plan again, as any fresh attempt does.
-      const reopen = next(proj);
-      expect(reopen.kind, JSON.stringify(reopen)).toBe("run-stage");
-      expect(reopen.plan_approval?.status).toBe("revise");
-      writePlan(proj, "- [ ] Step 2: a different approach\n", UNIT);
       const asked = next(proj);
       expect(asked.kind, JSON.stringify(asked)).toBe("ask");
       expect(asked.ask_type).toBe("plan-approval");
+      expect(asked.plan_approval?.status, JSON.stringify(asked)).not.toBe("revise");
     });
   }
+
+  test("a change request after a jump in the same second still revises the plan", () => {
+    const proj = unitProject("strict", UNIT);
+    approved(proj, UNIT);
+    reopened(proj, UNIT, "jump");
+    changedAtLateQuestion(proj, UNIT, "add a null check please");
+    const rows = readAuditShardEvents(proj).filter((row) => row.event === "GATE_REJECTED").slice(-2);
+    expect(rows).toHaveLength(2);
+    expect(rows[0].shard).toBe(rows[1].shard);
+    let text = readFileSync(rows[0].shard, "utf-8");
+    for (const row of rows) {
+      text = text.replace(row.block, row.block.replace(
+        /\*\*Timestamp\*\*:[^\n]*/, `**Timestamp**: ${rows[1].timestamp}`,
+      ));
+    }
+    writeFileSync(rows[0].shard, text);
+    const revise = next(proj);
+    expect(revise.plan_approval, JSON.stringify(revise)).toEqual({
+      status: "revise", feedback: "add a null check please",
+    });
+  });
+
   // A change asked for at a late question reopens this Unit's earlier stages for
   // exactly that change. Their approval of the plan still stands under a lowered
   // fence; strict asks once, as it does for any other change request.

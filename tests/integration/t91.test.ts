@@ -167,6 +167,22 @@ function makeProject(): string {
     join(proj, ".claude", "tools", "aidlc-runtime-budget.ts"),
   );
   copyFileSync(
+    join(SRC_TOOLS, "aidlc-lock-line.ts"),
+    join(proj, ".claude", "tools", "aidlc-lock-line.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-review-manifest.ts"),
+    join(proj, ".claude", "tools", "aidlc-review-manifest.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-command.ts"),
+    join(proj, ".claude", "tools", "aidlc-command.ts"),
+  );
+  copyFileSync(
+    join(SRC_TOOLS, "aidlc-color.ts"),
+    join(proj, ".claude", "tools", "aidlc-color.ts"),
+  );
+  copyFileSync(
     join(SRC_TOOLS, "aidlc-guard-fences.ts"),
     join(proj, ".claude", "tools", "aidlc-guard-fences.ts"),
   );

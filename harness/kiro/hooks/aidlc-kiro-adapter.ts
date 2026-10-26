@@ -62,12 +62,15 @@ import {
   kiroTurnOrigin,
   isAidlcAgentFile,
   leadingOrchestratorVerb,
+  noteKiroCliSteerRecorded,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
   stateFilePath,
   stripOrchestratorLauncherOptions,
+  unrecordedKiroCliSteers,
 } from "../tools/aidlc-lib.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
+import { SAY_ONCE_BEFORE_THEY_REPLY } from "../tools/aidlc-directive.ts";
 import { ACTIVE_MEMORY_DIR, refreshActiveMemory } from "../tools/aidlc-includes.ts";
 import { aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 
@@ -75,6 +78,9 @@ const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // The agent-v1 hook's default max_output_size is 10 KiB, independently of
 // the shell tool's larger response budget. Count the complete UTF-8 packet.
 const PROMPT_HOOK_MAX_BYTES = 10 * 1024;
+// A shell command that runs one of AI-DLC's own tools: the `aidlc` dispatcher,
+// or a `.kiro/tools/aidlc*.ts` file.
+const AIDLC_COMMAND = /(?:^|[\s"'`;&|(])(?:aidlc|[^\s"'`;&|()]*[\\/]tools[\\/]aidlc[\w.-]*\.ts)(?=$|[\s"'`;&|)])/;
 
 interface KiroHookInput {
   hook_event_name?: string;
@@ -545,27 +551,35 @@ const PRE_DISPATCH_FLAGS = new Set([
 // question's numbered rendering (the engine's, with its Other line) or an
 // error's message. The warning said once per chat is left to the agent's rule,
 // and a question that is the agent's own work is no question for the person.
+// On a step the turn goes on from, its notices keep the step's own order (said
+// before the person replies), so the hand-over never says one twice.
 function personLead(step: unknown): string | null {
   if (step === null || typeof step !== "object" || Array.isArray(step)) return null;
   const d = step as Record<string, unknown>;
   const lines: string[] = [];
-  const push = (value: unknown): void => {
-    if (typeof value === "string" && value.trim().length > 0) lines.push(value.trim());
+  const notices: string[] = [];
+  const push = (value: unknown, into = lines): void => {
+    if (typeof value === "string" && value.trim().length > 0) into.push(value.trim());
   };
   push(d.narration);
-  if (Array.isArray(d.change_notices)) for (const notice of d.change_notices) push(notice);
+  if (Array.isArray(d.change_notices)) for (const notice of d.change_notices) push(notice, notices);
   if (d.kind === "ask" && d.agent_work !== true) {
+    lines.push(...notices);
     push(typeof d.numbered_prose_question === "string" ? d.numbered_prose_question : d.question);
     if (lines.length === 0) return null;
     return "Say this to the person word for word, then end your turn (the step below is for when they reply):\n\n" +
       lines.join("\n\n");
   }
   if (d.kind === "error") {
+    lines.push(...notices);
     push(d.message);
     return lines.length === 0 ? null : `Say this to the person word for word, then stop:\n\n${lines.join("\n\n")}`;
   }
-  if (lines.length === 0) return null;
-  return `Say this to the person first, word for word, with nothing in front of it:\n\n${lines.join("\n\n")}`;
+  const lead = lines.length === 0
+    ? []
+    : [`Say this to the person first, word for word, with nothing in front of it:\n\n${lines.join("\n\n")}`];
+  if (notices.length > 0) lead.push(`Say this to the person ${SAY_ONCE_BEFORE_THEY_REPLY}:\n\n${notices.join("\n\n")}`);
+  return lead.length === 0 ? null : lead.join("\n\n");
 }
 
 function shouldPreDispatchNext(args: string[], cwd: string): boolean {
@@ -927,6 +941,9 @@ if (target === "state-transition-guard") {
   if (canonicalTool(tool) !== "Bash") process.exit(0);
   const command = String(kiro.tool_input?.command ?? "");
   const registeredAgent = extraArgs[0] ?? "";
+  // The first shell hook of the chat's own agent, so the guards and the
+  // AI-DLC command after it read the person's message as theirs.
+  if (!registeredAgent) recordMessagesTypedWhileWorking(command);
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const hookCommand = executable
     ? [executable, "engine", "hook", "state-transition-guard"]
@@ -997,6 +1014,7 @@ if (target === "plan-approval-guard") {
       tool_name: "Bash",
       tool_input: { command: (ti.command as string) ?? "" },
       cwd: projectDir,
+      ...shellReading(tool),
     };
   } else if (canonical === "Write" || canonical === "Edit" || tool === "delete_file") {
     const paths = inputPaths(ti);
@@ -1132,6 +1150,7 @@ if (target === "review-freeze") {
         tool_name: shell ? "Bash" : canonical === "Write" ? "Write" : "Edit",
         tool_input: coreInput,
         cwd: projectDir,
+        ...(shell ? shellReading(tool) : {}),
       }),
       "utf-8",
     ),
@@ -1246,6 +1265,15 @@ function canonicalTool(
   // did not recognise failed open there instead of being guarded.
   if (name === "shell" || name === "execute_bash" || name === "execute_pwsh") return "Bash";
   return name;
+}
+
+// The shell a Bash call ran in, for the readers that take it: `execute_pwsh`
+// runs PowerShell, as the Kiro IDE adapter marks it, and on Windows Kiro CLI
+// runs its shell tool in PowerShell under every name the call carries.
+function shellReading(name: string): { aidlc_shell?: "powershell" } {
+  return canonicalTool(name) === "Bash" && (name === "execute_pwsh" || process.platform === "win32")
+    ? { aidlc_shell: "powershell" }
+    : {};
 }
 
 type Forward = {
@@ -1414,6 +1442,28 @@ function runCore(hookFile: string, input: Record<string, unknown>): { stdout: st
     ),
     code: r.exitCode ?? 0,
   };
+}
+
+// A message the person typed while the agent worked reaches no prompt hook on
+// Kiro CLI (unrecordedKiroCliSteers), so before one of AI-DLC's commands runs
+// it is recorded as their turn, in their words, each message once. What the
+// core hook prints stays here: Kiro reads this hook's stdout.
+function recordMessagesTypedWhileWorking(command: string): void {
+  const session = validSessionId(kiro.session_id?.trim());
+  if (!session || !AIDLC_COMMAND.test(command)) return;
+  try {
+    for (const steer of unrecordedKiroCliSteers(projectDir, session)) {
+      const turn = runCore("aidlc-record-human-turn.ts", {
+        hook_event_name: "UserPromptSubmit",
+        session_id: session,
+        prompt: steer.words,
+        origin: { kind: "person", source: "record" },
+        relays_terminal_output: true,
+      });
+      if (turn.code !== 0) return;
+      noteKiroCliSteerRecorded(projectDir, session, steer.id);
+    }
+  } catch { /* an unreadable record or runtime folder records nothing */ }
 }
 
 const fwd = buildForward();

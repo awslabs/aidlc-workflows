@@ -8,8 +8,10 @@ Each piece of work keeps two committed records that together provide full tracea
 
 Each intent has its own state file at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/aidlc-state.md` (under the intent's record dir) — the single source of truth for that intent's workflow progress. The engine reads the active intent's state file on every session start to determine what has been completed, what is in progress, and what comes next.
 
-The exact initial description is stored beside it in
-`project-description.json` as one JSON string. `aidlc-state.md` names that
+The initial description is stored beside it in
+`project-description.json` as one JSON string, exactly as typed except that
+anything shaped like a key, token or password is masked (see
+[Keys and passwords you type](#keys-and-passwords-you-type)). `aidlc-state.md` names that
 committed source and keeps only a safe single-line
 `Project` preview, so multiline user input cannot introduce additional state
 fields. Pre-2.6.115 records without the source marker continue to use the
@@ -71,21 +73,26 @@ Here is part of one, from a Claude Code run on the `mvp` plan just after Intent 
 ```
 
 If `Guard Policy` and the retired `Change Control` both appear with different
-policy words, strict applies and status shows `strict (from conflicting state lines)`;
-memory-held strict still takes precedence. If both agree, the `Guard Policy`
-line is used. Any write of the policy line removes the retired line, leaving one
-setting. Until a conflict is resolved, `next` carries this notice, without
-changing the state file:
+policy words, status shows `strict (from conflicting state lines)` until the next
+`next`, which keeps one and writes it as the only line: the one the audit trail
+shows was set last, else the one you set, else the scope's own, else the stricter
+(a `GUARD_POLICY_SET` row with `Source: command` and a `Settled` field records it).
+It says nothing when it kept your own last choice, and once otherwise, for example:
 
-> This work has two settings for how closely AI-DLC checks changes, and they disagree, so AI-DLC checks everything for now. Do you want it to keep checking everything, carry on with a note when something you approved changes, or also skip some of its own checks? I'll ask again until you choose.
+> This work had two settings for how closely AI-DLC checks changes, and they disagreed. The record does not say which was set last, so AI-DLC keeps the stricter one: it checks everything. You can change it any time.
+
+Memory-held strict still takes precedence and leaves both lines as they are. If
+both agree, the `Guard Policy` line is used. Any write of the policy line removes
+the retired line, leaving one setting.
 
 `Construction Verification Command` records the project check reused at every
 Unit/batch checkpoint. A matching current-workflow human approval receipt is
 required before `state set-construction-verification-command` writes the field;
 the field alone never authorizes execution, and generic `state set` refuses it.
-The human's **Approve** / **Request Changes** reply must come from the
-invoking SessionStart session. Only **Approve** authorizes the receipt; an
-unrelated reply, **Request Changes**, or a reply from another session does not.
+The human's **Approve** / **Request Changes** reply counts in the chat that
+asked or in a new one while it is the newest question asked. Only **Approve**
+authorizes the receipt; an unrelated reply, **Request Changes**, or a reply to
+another question does not.
 See the [recorded-command flow](12-cli-commands.md#construction-verification-command-record-human-authorization).
 
 ### Six-state checkboxes
@@ -151,15 +158,15 @@ means. The write guard is a guardrail, not a security boundary. See
 [Audit Trail Rules](../reference/04-stage-protocol.md#audit-trail-rules) for
 the owning commands and the read-only query contract.
 
-### 119-event taxonomy
+### 126-event taxonomy
 
-Events are organized into 25 categories:
+Events are organized into 26 categories:
 
 | Category | Count | Events |
 |----------|------:|--------|
-| **Workflow Lifecycle** | 7 | `WORKFLOW_STARTED`, `WORKFLOW_COMPLETED`, `WORKFLOW_PARKED`, `WORKFLOW_UNPARKED`, `WORKFLOW_ARCHIVED`, `WORKFLOW_UNARCHIVED`, `INTENT_REPOS_CHANGED` |
+| **Workflow Lifecycle** | 8 | `WORKFLOW_STARTED`, `WORKFLOW_COMPLETED`, `WORKFLOW_PARKED`, `WORKFLOW_UNPARKED`, `WORKFLOW_ARCHIVED`, `WORKFLOW_UNARCHIVED`, `INTENT_REPOS_CHANGED`, `INTENT_CHECKOUTS_CHANGED` |
 | **Phase Lifecycle** | 4 | `PHASE_STARTED`, `PHASE_COMPLETED`, `PHASE_VERIFIED`, `PHASE_SKIPPED` |
-| **Stage Lifecycle** | 7 | `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `STAGE_REVISING`, `STAGE_COMPLETED`, `STAGE_SKIPPED`, `STAGE_JUMPED`, `STAGE_DEFINITION_CHANGED` |
+| **Stage Lifecycle** | 9 | `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `STAGE_REVISING`, `STAGE_COMPLETED`, `STAGE_SKIPPED`, `STAGE_JUMPED`, `STAGE_DEFINITION_CHANGED`, `STAGE_OUTPUT_AMENDED` (a stage's own document changed after you approved it and before your next message), `SOURCE_WORK_NOT_FOUND` (Code Generation found no new code where it looked, and what it did: told the agent, put the question to you, or stood aside under Guard Policy off) |
 | **Session** | 6 | `SESSION_STARTED`, `SESSION_RESUMED`, `SESSION_COMPACTED`, `SESSION_ENDED`, `HUMAN_TURN` (hook-emitted), `HOST_TURN` (hook-emitted, advisory: a prompt the host made for the agent, never a person's turn) |
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` |
 | **Navigation** | 9 | `SCOPE_CHANGED`, `SCOPE_DETECTED`, `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `RECOMPOSED`, `WORKSPACE_RECLASSIFIED`, `SCOPE_SAVED`, `PLUGIN_SELECTION_CHANGED` |
@@ -168,9 +175,10 @@ Events are organized into 25 categories:
 | **Interaction** | 17 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `QUESTION_REPLIED`, `QUESTION_UNANSWERED`, `REQUEST_ROUTED`, `SUMMARY_CONFIRMATION_RECORDED`, `VERIFICATION_COMMAND_RECORDED`, `CONSTRUCTION_POLICY_RECORDED`, `CHECKPOINT_VERIFICATION_RECORDED`, `PLAN_APPROVAL_RECORDED`, `PLAN_APPROVAL_SKIPPED`, `PLAN_APPROVAL_OVERRIDDEN`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED` |
 | **Unit Configuration and Lifecycle** | 9 | `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `CONSTRUCTION_POLICY_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, `UNIT_MERGED` |
 | **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED` (write-audit-log hook), `ARTIFACT_REUSED` |
-| **Subagent** | 3 | `SUBAGENT_COMPLETED` (log-subagent hook), `SUBAGENT_PROMPT_UNMATCHED` (Copilot adapter, advisory), `REVIEW_VERDICT_DICTATED` (no longer written; earlier releases' plan-approval-guard hook. The reviewer's own `**Verdict Dictated:**` line now rides `REVIEW_COMPLETED`) |
+| **Subagent** | 4 | `SUBAGENT_DISPATCHED` (deliver-stage-rules hook, or log-subagent for Cursor and Kiro IDE), `SUBAGENT_COMPLETED` (log-subagent hook), `SUBAGENT_PROMPT_UNMATCHED` (Copilot adapter, advisory), `REVIEW_VERDICT_DICTATED` (no longer written; earlier releases' plan-approval-guard hook. The reviewer's own `**Verdict Dictated:**` line now rides `REVIEW_COMPLETED`) |
 | **Reviewer Enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED` (reviewer-scope hook), `REVIEW_FREEZE_BLOCKED` (review-freeze hook) |
 | **Plan Approval** | 2 | `PLAN_APPROVAL_BLOCKED`, `GUARD_DISABLED` (plan-approval-guard hook, or a fence you switched off for this piece of work) |
+| **Guard Refusals** | 2 | `STATE_TRANSITION_BLOCKED` (state-transition guard refused a delegated agent's lifecycle or routing command), `STAGE_RULES_BLOCKED` (stage rules refused for size, or a required rule file could not be read); each carries `Guard`, `Reason`, and the `Target`/`Session` it refused, one row per refusal |
 | **Documents** | 3 | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` — space-level shard even when intent-scoped |
 | **Utility** | 1 | `HEALTH_CHECKED` |
 | **Error/Recovery** | 3 | `ERROR_LOGGED`, `RECOVERY_COMPLETED`, `COORDINATION_STOOD_ASIDE` |
@@ -178,7 +186,7 @@ Events are organized into 25 categories:
 | **Worktree** | 7 | `WORKTREE_CREATED`, `WORKTREE_MERGED`, `WORKTREE_DISCARDED`, `STATE_FORKED`, `STATE_MERGED`, `AUDIT_FORKED`, `AUDIT_MERGED` |
 | **Practices** | 4 | `PRACTICES_DISCOVERED`, `PRACTICES_AFFIRMED`, `PRACTICES_OVERRIDE`, `PRACTICES_SECTION_EMPTY` |
 | **Merge Dispatch** | 3 | `MERGE_DISPATCH_INVOKED`, `MERGE_DISPATCH_RETURNED`, `MERGE_DISPATCH_FALLBACK` |
-| **Sensors** | 5 | `SENSOR_FIRED`, `SENSOR_PASSED`, `SENSOR_FAILED`, `SENSOR_BUDGET_OVERRIDE`, `GUARDRAIL_LOADED` |
+| **Sensors** | 6 | `SENSOR_FIRED`, `SENSOR_PASSED`, `SENSOR_FAILED`, `SENSOR_COULD_NOT_RUN`, `SENSOR_BUDGET_OVERRIDE`, `GUARDRAIL_LOADED` |
 | **Learning Loop** | 3 | `MEMORY_EMPTY`, `RULE_LEARNED`, `SENSOR_PROPOSED` |
 | **Swarm** | 7 | `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `SWARM_UNIT_FAILED`, `SWARM_BATON_RETURNED`, `SWARM_COMPLETED`, `SWARM_DEGRADED` |
 | **Commit Provenance** | 1 | `SOURCE_COMMITTED` (`aidlc attest anchor`, or the opt-in session-start sweep — enrichment only; `resolve` never reads it) |
@@ -189,7 +197,7 @@ Events are organized into 25 categories:
 - **Every file the agent writes or edits with its file tools** in the intent's record dir or the space's `codekb/` (except the `audit/` shards themselves) is logged by the write-audit-log hook; a file written by a shell command is not
 - **Every approval gate decision** (approve, request changes, accept-as-is) is logged
 - **Every question answer** you provide is recorded
-- **Every subagent completion** is logged by the log-subagent hook
+- **Every subagent completion** is logged by the log-subagent hook, and every helper sent is logged when it is sent
 - **Every error and recovery** is logged
 
 ### How to read the audit log
@@ -226,6 +234,26 @@ for paired earlier questions and answers. One reply pairs with every question
 logged for the menu it answered. Open questions and the rare ambiguous answer
 (no question before it, or writers tied at one second) are reported apart.
 Neither command changes files or takes a lock.
+
+### Keys and passwords you type
+
+The state file, `project-description.json` and the audit shards are committed
+with your work, so AI-DLC masks anything shaped like a key, token or password
+before it writes them: a vendor token (GitHub, GitLab, Slack, Stripe, OpenAI,
+Anthropic, Google, npm, Hugging Face, an AWS access key), a private key block,
+a JWT or `Bearer` token, the password in an address
+(`postgres://app:[masked]@db`), and a value set after a secret's name
+(`password=`, `DB_PASSWORD=`, `GITHUB_TOKEN:`) when the value has a letter and
+a digit or symbol in it (after a password's name, words joined by `-`, `.` or
+`_` count too). A reference such as `$DB_PASSWORD` stays, and so does a
+placeholder such as `your-api-key-here`. The rest of your words stay as you typed them, for
+example `**Person Reply**: Approve, the deploy key is [masked]`. Your whole
+message stays only in `aidlc/.aidlc-sessions/`, which AI-DLC's `.gitignore`
+block keeps out of commits. When your message held one, AI-DLC says so once in
+the chat: the chat itself still received it, so change the key where it was
+issued if it is real. Masking goes by shape only, so a secret written another
+way (`my password is hunter2`) is kept as typed, and the doctor bundle masks
+the same shapes and more.
 
 ### Audit event flow
 
@@ -279,8 +307,10 @@ and is reviewed once more, a change nobody meant is undone, or a path that is
 not source is excluded there. Under relaxed or
 off, an uncovered change is kept: completion records it once as
 `CHANGE_ACCEPTED` and names the files in one line ("These files changed outside
-any unit's work in Code Generation: ... Kept them."), and a stage-entry baseline
-that is missing on this machine skips the check with one line.
+any unit's work in Code Generation: ... Kept them."). A stage-entry baseline
+that is missing on this machine (a fresh clone) skips the check with one line
+under every Guard Policy; one that is here and does not match still blocks
+completion under strict.
 
 The workspace-global `Source Fingerprint` is normally the outer post-review
 mutation boundary. One narrow reconciliation makes the documented “revert”

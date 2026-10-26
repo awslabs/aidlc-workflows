@@ -43,6 +43,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
 import {
   asksForHelp,
   boltAbortedFields,
@@ -51,12 +52,11 @@ import {
   emitError,
   errorMessage,
   claimAttemptFields,
+  findStageBySlug,
   getField,
   holdsAuditLock,
-  commandTurnHint,
   humanPresenceGuardDisabled,
   keepActiveDirectiveOverAutonomyWrite,
-  personSpokeSinceGate,
   readAuditShardEvents,
   recordHookDrop,
   unattendedHumanPresenceHint,
@@ -93,8 +93,13 @@ import {
   rejectConstructionCheckpoint,
   resolveConstructionCheckpoint,
   verifyConstructionCheckpoint,
+  type ApprovalFindingDispositions,
   type ConstructionCheckpointKind,
+  type RejectedFindingDispositions,
 } from "./aidlc-construction-checkpoints.ts";
+import {
+  approvalDispositionField, rejectedFindingDispositionField, REVIEW_FINDING_DISPOSITIONS_FIELD,
+} from "./aidlc-review-brief.ts";
 import {
   askSwarmCheckpoint,
   approveSwarmCheckpoint,
@@ -246,6 +251,18 @@ function parseFlags(args: string[]): Record<string, string> {
     i++;
   }
   return flags;
+}
+
+// Every value of a flag given once per item, in order; parseFlags, which runs
+// first and checks each flag has a value, keeps only the last.
+function flagValues(args: string[], name: string): string[] {
+  const values: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (!args[i].startsWith("--")) continue;
+    if (args[i] === `--${name}`) values.push(args[i + 1]);
+    i++;
+  }
+  return values;
 }
 
 function latestWorktreeCreationFields(
@@ -1234,22 +1251,26 @@ function handleSetAutonomy(args: string[]): void {
       );
     }
     // Human-presence guard on ESCALATION only. Switching to autonomous is the
-    // human's ladder-prompt grant and consumes that turn through the emitted
-    // AUTONOMY_MODE_SET row. De-escalation restores gates without presence.
-    // The approval given in the same message ("approve the plan, and run on
-    // its own from here") leaves the rest of it standing, as for the switches.
-    if (
-      flags.mode === "autonomous" &&
-      !humanPresenceGuardDisabled() &&
-      !personSpokeSinceGate(pd, { replies: true, outlivesApproval: true })
-    ) {
-      error(
-        "Refusing to switch Construction to autonomous: no reply from the person is on record since " +
-          "the last gate resolution, and autonomous mode is granted only by their answer to the ladder " +
-          "prompt (it waives every later gate, so the grant itself needs their reply). Run it after " +
-          "they choose it. Do not log the ladder choice via aidlc-log answer; the choice is recorded " +
-          `by set-autonomy itself.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
-      );
+    // person's grant: the agent names the message they chose it in (--message),
+    // proved, and the AUTONOMY_MODE_SET row uses it up. De-escalation restores
+    // gates without presence. The approval given in the same message ("approve
+    // the plan, and run on its own from here") leaves the rest of it standing,
+    // as for the switches.
+    let grantedBy: string | undefined;
+    if (flags.mode === "autonomous" && !humanPresenceGuardDisabled()) {
+      if (flags.message !== undefined) {
+        const proof = proveMessage(pd, flags.message, "request", { request: true });
+        if ("refusal" in proof) error(proof.refusal);
+        grantedBy = proof.message.id;
+      } else {
+        error(
+          "Refusing to switch Construction to autonomous: it waives every later gate, so it is granted only by the " +
+            "person's answer to the ladder prompt, named with --message <id>. " +
+            requestMessageStep(pd, "Run it with --message <id> after they choose it.") +
+            " Do not log the ladder choice via aidlc-log answer; the choice is recorded by set-autonomy itself." +
+            unattendedHumanPresenceHint(pd),
+        );
+      }
     }
 
     // Validate state-file shape before the audit-first mutation.
@@ -1279,6 +1300,7 @@ function handleSetAutonomy(args: string[]): void {
     try {
       emitAudit(pd, "AUTONOMY_MODE_SET", {
         Mode: flags.mode,
+        ...(grantedBy !== undefined ? { "Message Id": grantedBy } : {}),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -1327,18 +1349,68 @@ function checkpointSession(pd: string, flagged: string | undefined, required: bo
 const CHECKPOINT_KINDS: readonly ConstructionCheckpointKind[] = ["unit", "skeleton"];
 const CHECKPOINT_ACTIONS: readonly string[] = ["status", "ask", "verify", "approve", "reject"];
 const SWARM_CHECKPOINT_ACTIONS: readonly string[] = ["status", "ask", "approve", "reject"];
+const FINDING_FLAGS_USAGE = "--fix-finding <review-artifact>#R-NN (approve), --reject-finding and --reopen-finding " +
+  "<review-artifact>#R-NN=<the person's reason> (reject), once per finding";
+const CHECKPOINT_FLAGS: readonly string[] = [
+  "unit", "kind", "action", "session", "user-input", "reason", "message", "timeout-ms", "over-unfinished-review",
+  "fix-finding", "reject-finding", "reopen-finding",
+];
+const SWARM_CHECKPOINT_FLAGS: readonly string[] = [
+  "batch", "units", "action", "session", "user-input", "reason", "message", "fix-finding", "reject-finding", "reopen-finding",
+];
 
-function handleCheckpoint(args: string[]): void {
+// A flag a checkpoint does not take is refused before anything is recorded:
+// dropped, a misspelled --fix-finding would record the finding as Accepted
+// risk, and the corrected retry still takes the person's reply.
+function refuseUnknownFlags(command: string, flags: Record<string, string>, accepted: readonly string[]): void {
+  const unknown = Object.keys(flags).find((name) => !accepted.includes(name));
+  if (unknown !== undefined) {
+    error(`${command} does not accept "--${unknown}". It accepts ${accepted.map((name) => `--${name}`).join(", ")}.`);
+  }
+}
+
+// A checkpoint's approval records the open review findings of the stages and
+// Units it covers, through the review ledger's writer: `Fix requested` for each
+// one the person asked to have fixed (--fix-finding), as at a stage's gate.
+function checkpointFindingDispositions(pd: string, args: string[]): ApprovalFindingDispositions {
+  const fix = flagValues(args, "fix-finding");
+  return (stages, units, decider): Record<string, string> => {
+    const field = approvalDispositionField(
+      pd, stages.flatMap((slug) => findStageBySlug(slug) ?? []), units, decider, fix,
+    );
+    return field === undefined ? {} : { [REVIEW_FINDING_DISPOSITIONS_FIELD]: field };
+  };
+}
+
+// A checkpoint's Request Changes records the findings the person rejected
+// (--reject-finding) or said are not fixed (--reopen-finding), as at a stage's gate.
+function checkpointRejectedFindings(pd: string, args: string[]): RejectedFindingDispositions {
+  const rejected = flagValues(args, "reject-finding");
+  const reopened = flagValues(args, "reopen-finding");
+  return (stages, units): Record<string, string> => {
+    const field = rejectedFindingDispositionField(
+      pd, stages.flatMap((slug) => findStageBySlug(slug) ?? []), rejected, units, reopened,
+    );
+    return field === undefined ? {} : { [REVIEW_FINDING_DISPOSITIONS_FIELD]: field };
+  };
+}
+
+async function handleCheckpoint(args: string[]): Promise<void> {
   // The person said to approve the Unit as it is over a review that did not
   // finish; verify reads it, and the engine checks their words are on record.
   const overUnfinishedReview = args.includes("--over-unfinished-review");
-  const flags = parseFlags(args.filter((arg) => arg !== "--over-unfinished-review"));
+  const flagArgs = args.filter((arg) => arg !== "--over-unfinished-review");
+  const flags = parseFlags(flagArgs);
   if (overUnfinishedReview && flags.action !== "verify") {
     error("checkpoint --over-unfinished-review goes with --action verify.");
+  }
+  if (flags["timeout-ms"] !== undefined && flags.action !== "verify") {
+    error("checkpoint --timeout-ms goes with --action verify.");
   }
   if (flags["check-cmd"] !== undefined) {
     error("checkpoint no longer accepts --check-cmd. " + verificationCommandRecovery() + " Run checkpoint --action verify without --check-cmd.");
   }
+  refuseUnknownFlags("checkpoint", flags, CHECKPOINT_FLAGS);
   if (!flags.unit) error("checkpoint requires --unit <name>");
   const kind = flags.kind ?? "unit";
   const checkpointKind = CHECKPOINT_KINDS.find((known) => known === kind);
@@ -1355,18 +1427,23 @@ function handleCheckpoint(args: string[]): void {
       result = askConstructionCheckpoint(pd, flags.unit, checkpointKind, checkpointSession(pd, flags.session, true));
       break;
     case "verify":
-      result = verifyConstructionCheckpoint(
-        pd, flags.unit, checkpointKind, { overUnfinishedReview },
+      result = await verifyConstructionCheckpoint(
+        pd, flags.unit, checkpointKind, {
+          overUnfinishedReview, message: flags.message,
+          timeoutMs: flags["timeout-ms"] === undefined ? undefined : Number(flags["timeout-ms"]),
+        },
       );
       break;
     case "approve":
       result = approveConstructionCheckpoint(
         pd, flags.unit, checkpointKind, flags["user-input"], checkpointSession(pd, flags.session, flags["user-input"] !== undefined),
+        checkpointFindingDispositions(pd, flagArgs), flags.message,
       );
       break;
     case "reject":
       result = rejectConstructionCheckpoint(
         pd, flags.unit, checkpointKind, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true),
+        flags.message, checkpointRejectedFindings(pd, flagArgs),
       );
       break;
     default:
@@ -1378,6 +1455,7 @@ function handleCheckpoint(args: string[]): void {
 
 function handleSwarmCheckpoint(args: string[]): void {
   const flags = parseFlags(args);
+  refuseUnknownFlags("swarm-checkpoint", flags, SWARM_CHECKPOINT_FLAGS);
   const batch = Number(flags.batch);
   if (!Number.isSafeInteger(batch) || batch < 1) error("swarm-checkpoint requires --batch <positive integer>");
   const units = (flags.units ?? "").split(",").map((unit) => unit.trim()).filter(Boolean);
@@ -1394,10 +1472,14 @@ function handleSwarmCheckpoint(args: string[]): void {
     case "approve":
       result = approveSwarmCheckpoint(
         pd, batch, units, flags["user-input"], checkpointSession(pd, flags.session, flags["user-input"] !== undefined),
+        checkpointFindingDispositions(pd, args), flags.message,
       );
       break;
     case "reject":
-      result = rejectSwarmCheckpoint(pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true));
+      result = rejectSwarmCheckpoint(
+        pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true), flags.message,
+        checkpointRejectedFindings(pd, args),
+      );
       break;
     default:
       error(`swarm-checkpoint --action must be one of: ${SWARM_CHECKPOINT_ACTIONS.join(", ")}`);
@@ -1448,13 +1530,17 @@ function boltUsage(subcommand: string | undefined): string {
     checkpoint: [
       `${invoke("checkpoint")} --unit <name> [--action ${CHECKPOINT_ACTIONS.join("|")}]`,
       "  The Unit's Construction checkpoint. Required: --unit. --action defaults to status.",
-      `  --kind: ${CHECKPOINT_KINDS.join(", ")} (default unit). --over-unfinished-review goes with --action verify.`,
-      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject)",
+      `  --kind: ${CHECKPOINT_KINDS.join(", ")} (default unit). --over-unfinished-review and --timeout-ms <milliseconds> go with --action verify.`,
+      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject),",
+      "  --message <id> (approve, reject: the person's message the choice was read from)",
+      `  ${FINDING_FLAGS_USAGE}`,
     ],
     "swarm-checkpoint": [
       `${invoke("swarm-checkpoint")} --batch <n> --units <unit,unit> [--action ${SWARM_CHECKPOINT_ACTIONS.join("|")}]`,
       "  A swarm batch's checkpoint. Required: --batch, --units. --action defaults to status.",
-      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject)",
+      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject),",
+      "  --message <id> (approve, reject: the person's message the choice was read from)",
+      `  ${FINDING_FLAGS_USAGE}`,
     ],
     "dispatch-event": [
       `${invoke("dispatch-event")} --event ${DISPATCH_EVENTS.join("|")} --slug <kebab-slug>`,
@@ -1473,7 +1559,7 @@ function boltUsage(subcommand: string | undefined): string {
 
 let projectDir: string | undefined;
 
-export function main(argv: string[]): void {
+export async function main(argv: string[]): Promise<void> {
   const rawArgs = argv;
 
   const filteredArgs: string[] = [];
@@ -1508,7 +1594,7 @@ export function main(argv: string[]): void {
         handleSetAutonomy(filteredArgs.slice(1));
         break;
       case "checkpoint":
-        handleCheckpoint(filteredArgs.slice(1));
+        await handleCheckpoint(filteredArgs.slice(1));
         break;
       case "swarm-checkpoint":
         handleSwarmCheckpoint(filteredArgs.slice(1));
@@ -1586,5 +1672,5 @@ function failJson(
 }
 
 if (import.meta.main) {
-  main(process.argv.slice(2));
+  await main(process.argv.slice(2));
 }

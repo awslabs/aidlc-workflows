@@ -229,6 +229,10 @@ export interface AcpDriveOptions {
    *  turn-boundary edge). The tool's output is already captured when the cancel
    *  fires; stopReason will reflect the cancellation. */
   stopAfterToolTitle?: RegExp;
+  /** The same stop, for the first tool whose captured output matches: the
+   *  boundary when the tool is named by what it returns (a `next` that hands
+   *  back a given stage's step) rather than by its display-truncated title. */
+  stopAfterToolOutput?: RegExp;
 }
 
 interface Pending {
@@ -562,6 +566,7 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
     timeoutMs,
     reusedSession: opts.session !== undefined,
     stopAfterToolTitle: opts.stopAfterToolTitle?.source,
+    stopAfterToolOutput: opts.stopAfterToolOutput?.source,
   });
 
   const toolCalls: AcpToolCall[] = [];
@@ -622,9 +627,8 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
       // contract surface is in hand; waiting for status:"completed" raced the
       // cancel against the content update.
       if (
-        opts.stopAfterToolTitle &&
         tc.output.length > 0 &&
-        opts.stopAfterToolTitle.test(tc.title) &&
+        (opts.stopAfterToolTitle?.test(tc.title) || opts.stopAfterToolOutput?.test(tc.output.join(""))) &&
         !cancelled
       ) {
         cancelled = true;

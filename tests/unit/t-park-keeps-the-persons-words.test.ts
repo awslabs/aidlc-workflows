@@ -15,7 +15,8 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -34,12 +35,13 @@ import {
 import {
   auditBlockField,
   humanTurnState,
-  personSpokeSinceGate,
   readAuditShardEvents,
   SUMMARY_CONFIRMATION_CHECKPOINT,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { personTurnStands } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
+import { kiroCliPrompt, kiroCliRecord, kiroCliToolResults, kiroCliToolUse } from "../harness/kiro-cli-record.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -117,7 +119,7 @@ function rowOrder(proj: string): string {
     .map((row) => `${row.event} ${row.timestamp} ${row.shard.split("/").pop()}:${row.pos}` +
       (row.event === "HUMAN_TURN" ? ` Reply=${auditBlockField(row.block, "Reply") ?? "-"}` : ""));
   const read = `humanTurnState=${humanTurnState(proj, { replies: true })} ` +
-    `personSpokeSinceGate=${personSpokeSinceGate(proj, { replies: true, outlivesApproval: true })}`;
+    `personTurnStands=${personTurnStands(proj, "request", { replies: true })}`;
   return [read, ...rows].join("\n");
 }
 
@@ -190,6 +192,19 @@ describe("the park row keeps the words that stopped the work", () => {
     expect(parkedWords(proj)).toBe("let's stop for today");
   });
 
+  // Everything they said since the last decision is the stop's context: the
+  // row keeps every reply in this chat, whole, and names the latest message.
+  test("two replies and then the stop: the park row keeps both and names the latest message", () => {
+    says(proj, "the export can wait");
+    says(proj, "let's stop for today");
+    const r = state(proj, ["park", "--person-asked"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(parkedWords(proj)).toBe("the export can wait\\nlet's stop for today");
+    const turn = events(proj, "HUMAN_TURN").at(-1)!;
+    expect(auditBlockField(events(proj, "WORKFLOW_PARKED")[0].block, "Message Id"))
+      .toBe(auditBlockField(turn.block, "Message Id"));
+  });
+
   // The agent's own park after a reply that asked for something else: the
   // words were no stop, so the step that resumes there never says they were.
   test("the agent's own park after the person's reply keeps none of their words", () => {
@@ -240,15 +255,30 @@ describe("the park row keeps the words that stopped the work", () => {
 
   // Stale words: a reply one of the engine's own questions already used up
   // (here the summary confirmation) stands behind nothing later.
-  test("an older reply the summary checkpoint used, then a park: the row carries no words", () => {
+  // One message backs one decision and a stop beside it ("looks correct, and
+  // stop here for today"); a second decision on record after it uses it up.
+  test("an older reply two decisions used, then a park: the row carries no words", () => {
     state(proj, ["gate-start", STAGE]);
     says(proj, "looks correct, and rename the handler");
-    appendAuditEntry("QUESTION_ANSWERED", {
+    // The row the summary confirmation writes: a decision.
+    appendAuditEntry("SUMMARY_CONFIRMATION_RECORDED", {
+      Stage: STAGE, Checkpoint: SUMMARY_CONFIRMATION_CHECKPOINT, Details: "Looks correct",
+    }, proj);
+    appendAuditEntry("GATE_APPROVED", { Stage: STAGE, "User Input": "Approve" }, proj);
+    const r = state(proj, ["park", "--person-asked"]);
+    expect(r.rc, r.out).toBe(0);
+    expect(parkedWords(proj), rowOrder(proj)).toBeNull();
+  });
+
+  test("a reply the summary confirmation used and that asked to stop keeps its words", () => {
+    state(proj, ["gate-start", STAGE]);
+    says(proj, "looks correct, and stop here for today");
+    appendAuditEntry("SUMMARY_CONFIRMATION_RECORDED", {
       Stage: STAGE, Checkpoint: SUMMARY_CONFIRMATION_CHECKPOINT, Details: "Looks correct",
     }, proj);
     const r = state(proj, ["park", "--person-asked"]);
     expect(r.rc, r.out).toBe(0);
-    expect(parkedWords(proj), rowOrder(proj)).toBeNull();
+    expect(parkedWords(proj), rowOrder(proj)).toBe("looks correct, and stop here for today");
   });
 
   // The answer they gave the agent's own question in that same message leaves
@@ -260,6 +290,81 @@ describe("the park row keeps the words that stopped the work", () => {
     const r = state(proj, ["park", "--person-asked"]);
     expect(r.rc, r.out).toBe(0);
     expect(parkedWords(proj), rowOrder(proj)).toBe("B, and let's stop here for today");
+  });
+});
+
+// On Kiro CLI a stop typed while the agent works runs no prompt hook (measured
+// live, kiro-cli 2.34.0); the park row then named the message that opened the
+// turn as the stop's words. Kiro's own record keeps the stop, and the agent's
+// park command records it as the person's turn first.
+describe("Kiro CLI: a stop typed while the agent works is on the park row", () => {
+  let proj: string;
+  let home: string;
+  const KIRO = join(AIDLC_SRC, "..", "..", "kiro", ".kiro");
+  const OPENING = "/aidlc carry on with the greeter fix";
+  const STOP = "stop for today";
+  const PARK = "bun .kiro/tools/aidlc.ts engine orchestrate park --person-asked";
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createOrchestrationTestProject();
+    seedStage(proj);
+    cpSync(KIRO, join(proj, ".kiro"), { recursive: true });
+    home = mkdtempSync(join(tmpdir(), "t-park-kiro-home-"));
+  });
+  afterEach(() => {
+    cleanupTestProject(proj);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const kiroEnv = () => ({ ...env(SESSION), HOME: home, USERPROFILE: home, CLAUDE_PROJECT_DIR: proj, KIRO_SESSION_ID: SESSION });
+  function adapter(target: string, payload: Record<string, unknown>): void {
+    const r = spawnSync(BUN, [join(proj, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target], {
+      cwd: proj,
+      input: JSON.stringify({ cwd: proj, session_id: SESSION, ...payload }),
+      env: kiroEnv(),
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+  }
+  // The turn: their opening message through Kiro's prompt hook, the agent at
+  // work, the stop typed meanwhile, then the agent's park command.
+  function stopWhileWorking(): { rc: number; out: string } {
+    adapter("verb-intercept", { hook_event_name: "userPromptSubmit", prompt: OPENING });
+    kiroCliRecord(home, SESSION, [
+      kiroCliPrompt(OPENING),
+      kiroCliToolUse("bun .kiro/tools/aidlc.ts engine orchestrate next"),
+      kiroCliToolResults("{}\n", [{ words: STOP, id: "steer-38709d069533421ba76b49c54116cb78" }]),
+    ]);
+    adapter("state-transition-guard", { hook_event_name: "preToolUse", tool_name: "shell", tool_input: { command: PARK } });
+    const r = spawnSync(BUN, [join(proj, ".kiro", "tools", "aidlc-state.ts"), "park", "--person-asked", "--project-dir", proj], {
+      cwd: proj,
+      env: { ...kiroEnv(), AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  }
+
+  test("the park row carries the stop and names its message, not the message that opened the turn", () => {
+    const r = stopWhileWorking();
+    expect(r.rc, r.out).toBe(0);
+    expect(parkedWords(proj), rowOrder(proj)).toContain(STOP);
+    const turn = events(proj, "HUMAN_TURN").at(-1)!;
+    expect(auditBlockField(events(proj, "WORKFLOW_PARKED")[0].block, "Message Id"))
+      .toBe(auditBlockField(turn.block, "Message Id"));
+  });
+
+  test("under autonomous Construction the stop is theirs on record, with no line that a reply was missed", () => {
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8").replace(
+      "- **Change Control**: strict (from scope feature)",
+      "- **Change Control**: strict (from scope feature)\n- **Construction Autonomy Mode**: autonomous",
+    ));
+    const r = stopWhileWorking();
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).not.toContain("this host can miss one");
+    expect(parkedWords(proj), rowOrder(proj)).toContain(STOP);
   });
 });
 

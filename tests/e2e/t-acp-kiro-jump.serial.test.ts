@@ -3,21 +3,22 @@
 // t-acp-kiro-jump.serial.test.ts — Kiro ACP port of the t25 backward-jump
 // contract: from a mid-INCEPTION seeded state, `/aidlc --phase ideation`
 // resolves to a BACKWARD jump targeting intent-capture (first in-scope
-// ideation stage for scope=feature), the jump tool's stdout carries the
-// known-answer JSON fields, and the audit's STAGE_JUMPED block lands with
-// Target/Direction lines — all asserted on verbatim tool output + disk,
-// never prose. stopAfterToolTitle cancels the turn once the jump executes
-// (the run-then-continue print arm would otherwise replay the target stage
-// inside the same turn — the ACP turn-boundary edge).
+// ideation stage for scope=feature), made by the person's `next` itself, which
+// returns Intent Capture's step in that one call (no tool call runs the jump
+// tool), and the audit's STAGE_JUMPED block lands with Target/Direction lines,
+// all asserted on verbatim tool output + disk, never prose.
+// stopAfterToolOutput cancels the turn once that step comes back (the agent
+// would otherwise run the target stage inside the same turn, the ACP
+// turn-boundary edge).
 //
 // Known-answer literals share provenance with t25 (jump.ts,
-// audit.ts): target/direction/target_phase stdout JSON and the
-// audit block's **Target**/**Direction** lines.
+// audit.ts): the state's Current Stage and the audit block's
+// **Target**/**Direction** lines.
 //
 // FLAKE CLASS: t26-class LLM-tier routing flake — same as the Claude twins
 // (t26 is documented flaky in docs/reference/09-testing.md's class). The
 // conductor occasionally takes a non-jump path on a jump prompt; the engine's
-// print directive and the jump tool are deterministic (probe-verified live),
+// jump and the step it returns are deterministic (probe-verified live),
 // so a red here is re-run-in-isolation before being treated as a regression.
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -51,8 +52,8 @@ function remainingWorkMs(): number {
 
 
 const TARGET_STAGE = "intent-capture";
-const JUMP_TARGET_JSON = `"target":"${TARGET_STAGE}"`;
-const JUMP_DIRECTION_JSON = '"direction":"backward"';
+// The step the person's `next` returns once it made the jump.
+const TARGET_STEP = new RegExp(`"stage":"${TARGET_STAGE}"`);
 const AUDIT_TARGET_LINE = `**Target**: ${TARGET_STAGE}`;
 const AUDIT_DIRECTION_LINE = "**Direction**: BACKWARD";
 
@@ -85,18 +86,16 @@ describe("t-acp-kiro-jump (backward phase jump over ACP; t26-class flake policy 
           projectDir: proj,
           prompt: "/aidlc --phase ideation",
           timeoutMs: remainingWorkMs(),
-          stopAfterToolTitle: /aidlc-jump\.ts/,
+          stopAfterToolOutput: TARGET_STEP,
         });
 
         expect(r.toolCallIssues).toEqual([]);
-        // The jump tool ran and its verbatim stdout carries the known-answer
-        // resolution fields. Match the stable title stem — titles are
-        // display-truncated (probe-verified), so 'execute' may be cut.
-        const jumpCall = r.toolCalls.find((t) => t.title.includes("aidlc-jump.ts"));
-        expect(jumpCall).toBeDefined();
-        const out = jumpCall!.output.join("");
-        expect(out).toContain(JUMP_TARGET_JSON);
-        expect(out).toContain(JUMP_DIRECTION_JSON);
+        // One engine call: an AI-DLC command returned Intent Capture's step, and
+        // no tool call ran the jump tool itself. Titles are display-truncated
+        // (probe-verified), so the stable stems are matched.
+        expect(r.toolCalls.filter((t) => t.title.includes("aidlc-jump"))).toEqual([]);
+        const step = r.toolCalls.find((t) => TARGET_STEP.test(t.output.join("")));
+        expect(step?.title).toContain("aidlc");
 
         // Disk: the STAGE_JUMPED audit block landed with the immutable
         // Target/Direction lines (tool-owned emission).

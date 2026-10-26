@@ -5,13 +5,28 @@
 // settings only (its scope is "application"), so the switch covers every
 // project on the computer: AI-DLC turns it off only when the person says yes,
 // and keeps their answer once per machine so no project asks again.
+//
+// Kiro CLI, the other host of this row, has a switch of its own,
+// `chat.enableWorkflows` in the person's own Kiro CLI settings: on its v3 engine
+// it takes both sub-agent tools away from the aidlc agent (measured on Kiro CLI
+// 2.31.1 and 2.32.0; 2.23.1, older than this row's oldest checked build, kept
+// them). Its interactive chat reads only that personal value, so a project file
+// cannot turn it off either. It gets the same
+// question, kept as an answer of its own: an answer about Kiro IDE says nothing
+// about Kiro CLI.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { insertJsoncSetting, jsoncRootMembers, jsoncSettingValue, replaceJsoncSetting } from "./aidlc-distribution.ts";
 import { installRoot } from "./aidlc-install-paths.ts";
-import { setByDotenvFile } from "./aidlc-kiro-session.ts";
+import {
+  kiroCliPath,
+  kiroPersonalSettingsPath,
+  readKiroPersonalSettings,
+  setByDotenvFile,
+  writeKiroPersonalSetting,
+} from "./aidlc-kiro-session.ts";
 import { writeFileAtomic } from "./aidlc-lib.ts";
 
 export const KIRO_WORKFLOWS_SETTING = "kiroAgent.workflows.enabled";
@@ -145,6 +160,15 @@ export function kiroWorkflowsQuestionDue(env: NodeJS.ProcessEnv = process.env): 
   return readKiroIdeWorkflows(env).enabled && readKiroWorkflowsAnswer() === null;
 }
 
+// Both once-only asks open with this: a first message that already says what
+// to do with Workflows is the answer. Which Kiro's switch it means is the Kiro
+// skill's Workflows note, its one reader.
+const ALREADY_ANSWERED =
+  "if the person's message already asks to turn this Kiro's Workflows feature off or to keep it on (the Kiro " +
+  "skill's Workflows note says which Kiro a request means), that is their answer and you do not ask: do what it " +
+  "asks as that note says (keeping a switch on runs its setter with `on --yes`, so the answer is kept) and tell " +
+  "them what it prints. ";
+
 const RELOAD_STEP =
   "If Kiro is open, run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS) " +
   "so open chats pick it up.";
@@ -161,6 +185,10 @@ export function kiroWorkflowsOffLine(): string {
 
 export function kiroWorkflowsOnLine(): string {
   return `Turned Kiro's Workflows feature back on (a Kiro setting for all your projects). ${RELOAD_STEP}`;
+}
+
+export function kiroWorkflowsAlreadyOffLine(): string {
+  return "Kiro's Workflows feature is already off; nothing changed.";
 }
 
 export function kiroWorkflowsKeptLine(invoke: string): string {
@@ -248,9 +276,144 @@ export function kiroIdeWorkflowsAsk(invoke: string, env: NodeJS.ProcessEnv = pro
     // Not asked rather than asked in every chat.
     return "";
   }
-  return "ASK ONCE: after you answer the person's message, ask them this in their language: " +
+  return "ASK ONCE: " + ALREADY_ANSWERED + "Otherwise, after you answer their message, ask them this in their language: " +
     "\"Kiro's Workflows feature is on, and it stops AI-DLC's reviews and helpers from running in this chat. " +
     "Do you want me to turn Workflows off? It is a Kiro setting for all your projects; you can turn it back on " +
     `any time." On yes, run \`${invoke} config trust --kiro-workflows off --yes\` and tell them what it prints. ` +
+    "On no, leave it. Do not ask again.";
+}
+
+export const KIRO_CLI_WORKFLOWS_SETTING = "chat.enableWorkflows";
+export const KIRO_CLI_WORKFLOWS_ISSUE_ID = "kiro-cli-workflows-on";
+export const KIRO_CLI_WORKFLOWS_ANSWER_FILE = "kiro-cli-workflows";
+// Read on a chat's start and by doctor, so a Kiro that hangs costs seconds, not
+// the 30 a model write may take; Kiro answers in about a tenth of a second.
+const KIRO_CLI_READ_TIMEOUT_MS = 5_000;
+
+export type KiroCliWorkflows = {
+  /** Where Kiro keeps the person's own Kiro CLI settings, for display. */
+  settingsPath: string;
+  /** Kiro's own test: the value is exactly true. */
+  enabled: boolean;
+};
+
+/**
+ * Kiro CLI's Workflows switch in the person's own Kiro CLI settings, read
+ * through Kiro in an empty folder so no project file joins in. null when there
+ * is no Kiro CLI here or it did not answer: not checked, never read as off.
+ */
+export function readKiroCliWorkflows(env: NodeJS.ProcessEnv = process.env): KiroCliWorkflows | null {
+  const cli = kiroCliPath(env);
+  if (!cli) return null;
+  let values: Record<string, unknown> | null;
+  try {
+    values = readKiroPersonalSettings(cli, env, KIRO_CLI_READ_TIMEOUT_MS);
+  } catch {
+    // Whatever stops the read leaves the switch not checked, never off.
+    return null;
+  }
+  if (!values) return null;
+  return { settingsPath: kiroPersonalSettingsPath(env), enabled: values[KIRO_CLI_WORKFLOWS_SETTING] === true };
+}
+
+/** Set Kiro CLI's Workflows switch through Kiro's own `kiro-cli settings`. */
+export function setKiroCliWorkflows(
+  enabled: boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): { settingsPath: string; changed: boolean } {
+  const cli = kiroCliPath(env);
+  const state = readKiroCliWorkflows(env);
+  if (!cli || !state) throw new Error("Kiro CLI did not answer here, so its Workflows feature was not changed");
+  if (state.enabled === enabled) return { settingsPath: state.settingsPath, changed: false };
+  let saved = false;
+  try {
+    saved = writeKiroPersonalSetting(cli, KIRO_CLI_WORKFLOWS_SETTING, JSON.stringify(enabled), env);
+  } catch {
+    // Whatever stops the write is reported as not saved, with the same step.
+  }
+  if (!saved) {
+    throw new Error(
+      `Kiro CLI did not save the change, so its Workflows feature was not turned ${enabled ? "on" : "off"}. ` +
+        `In Kiro CLI, open /settings and turn Workflows ${enabled ? "on" : "off"} instead.`,
+    );
+  }
+  return { settingsPath: state.settingsPath, changed: true };
+}
+
+export function kiroCliWorkflowsAnswerPath(): string {
+  return join(installRoot(), KIRO_CLI_WORKFLOWS_ANSWER_FILE);
+}
+
+export function readKiroCliWorkflowsAnswer(): KiroWorkflowsAnswer | null {
+  try {
+    const value = readFileSync(kiroCliWorkflowsAnswerPath(), "utf-8").trim();
+    return (ANSWERS as readonly string[]).includes(value) ? value as KiroWorkflowsAnswer : null;
+  } catch {
+    return null;
+  }
+}
+
+export function recordKiroCliWorkflowsAnswer(answer: KiroWorkflowsAnswer): void {
+  const path = kiroCliWorkflowsAnswerPath();
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileAtomic(path, `${answer}\n`);
+}
+
+/** Kiro CLI's Workflows is on and the person was never asked about it on this machine. */
+export function kiroCliWorkflowsQuestionDue(env: NodeJS.ProcessEnv = process.env): boolean {
+  return readKiroCliWorkflowsAnswer() === null && readKiroCliWorkflows(env)?.enabled === true;
+}
+
+const KIRO_CLI_RESTART_STEP = "Quit Kiro CLI and start `kiro-cli` again so your chats pick it up.";
+
+export const KIRO_CLI_WORKFLOWS_QUESTION =
+  "Kiro CLI's Workflows feature is on. It stops AI-DLC's reviews and helpers from running in your Kiro CLI " +
+  "chats. Turn it off? It is a Kiro CLI setting for all your projects, and you can turn it back on any time.";
+
+export function kiroCliWorkflowsOffLine(): string {
+  return "Turned Kiro CLI's Workflows feature off, so AI-DLC's reviews and helpers run in your Kiro CLI chats. It " +
+    `is a Kiro CLI setting for all your projects. ${KIRO_CLI_RESTART_STEP} You can turn it back on any time.`;
+}
+
+export function kiroCliWorkflowsOnLine(): string {
+  return `Turned Kiro CLI's Workflows feature back on (a Kiro CLI setting for all your projects). ${KIRO_CLI_RESTART_STEP}`;
+}
+
+export function kiroCliWorkflowsAlreadyOffLine(): string {
+  return "Kiro CLI's Workflows feature is already off; nothing changed.";
+}
+
+export function kiroCliWorkflowsKeptLine(invoke: string): string {
+  return "Kept Kiro CLI's Workflows feature on; AI-DLC will not ask again. To turn it off later: " +
+    `\`${invoke} config trust --kiro-cli-workflows off\`.`;
+}
+
+export function kiroCliWorkflowsIssueMessage(): string {
+  return "Kiro CLI's Workflows feature is on, so AI-DLC's reviews and helpers do not run in your Kiro CLI chats " +
+    "(Kiro CLI takes away the tool AI-DLC hands them to)";
+}
+
+export function kiroCliWorkflowsFix(invoke: string): string {
+  return `ask the agent to turn Kiro CLI Workflows off, or run \`${invoke} config trust --kiro-cli-workflows off\` ` +
+    "(a Kiro CLI setting for all your projects); then quit Kiro CLI and start `kiro-cli` again";
+}
+
+/**
+ * The one chat line a Kiro CLI chat gives the agent while Kiro CLI's Workflows
+ * is on and the person was never asked about it on this machine, or "". A Kiro
+ * IDE chat gets Kiro IDE's question instead (kiroIdeWorkflowsAsk).
+ */
+export function kiroCliWorkflowsAsk(invoke: string, env: NodeJS.ProcessEnv = process.env): string {
+  if (insideKiroIde(env) || !kiroCliWorkflowsQuestionDue(env)) return "";
+  try {
+    recordKiroCliWorkflowsAnswer("asked");
+  } catch {
+    // Not asked rather than asked in every chat.
+    return "";
+  }
+  return "ASK ONCE: " + ALREADY_ANSWERED + "Otherwise, after you answer their message, ask them this in their language: " +
+    "\"Kiro CLI's Workflows feature is on, and it stops AI-DLC's reviews and helpers from running in this chat. " +
+    "Do you want me to turn Workflows off? It is a Kiro CLI setting for all your projects; you can turn it back on " +
+    `any time." On yes, run \`${invoke} config trust --kiro-cli-workflows off --yes\` and tell them what it prints. ` +
     "On no, leave it. Do not ask again.";
 }

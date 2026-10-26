@@ -112,8 +112,8 @@ with a fresh timestamp.
 
 | # | Check |
 |---|-------|
-| 1 | At the approval gate, call `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. When `ceremony.sensors` is `on`, gate-bound sensors run once per existing deliverable (`upstream-coverage` and `claim-sources` once per output folder) before the transaction when a person will answer the gate (a gate the engine approves itself under Construction autonomy runs only its blocking sensors). A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
-| 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `aidlc engine log decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc engine log answer`. A question logged after the person already replied takes that reply with `--message <id>` (the refusal names the id); the person is never asked again. |
+| 1 | At the approval gate, call `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. When `ceremony.sensors` is `on` and no review was asked for in this attempt, the report first runs the advisory gate checks once and, when one reports findings, returns the agent's step with the same report instead of opening the gate. Then, gate-bound sensors run once per existing deliverable (`upstream-coverage` and `claim-sources` once per output folder; at Reverse Engineering, `required-sections` and `upstream-coverage` once for the stage over every repository's files) before the transaction when a person will answer the gate (a gate the engine approves itself under Construction autonomy runs only its blocking sensors). A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
+| 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `aidlc engine log decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc engine log answer`. A question logged after the person already replied takes that reply (any reply of theirs in this chat that no decision has used yet); `--message <id>` names one sent while another engine question was open. The person is never asked again. |
 | 3 | After an approval-gate response, call `aidlc engine orchestrate report --stage <slug> --result approved --user-input "Approve"` for approval or `aidlc engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"` for request-changes, passing the choice they made by its label (the engine keeps their own words as the feedback; add `--reason '<what they asked to change>'` only to say more). Never call the log tool's `decision` or `answer` verb for the gate. After revision work, report `--result revised` before re-presenting it. |
 | 4 | Record the choice the person made, read from their reply; the human-turn hook keeps their exact words with it. Never choose for them or paraphrase their words in an answer or note; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
@@ -163,22 +163,32 @@ plan change made during the stage is in it), else the run-stage directive's
 (computed at emit time), or `Complete workflow` when `next_stage` is null. The
 conductor never guesses the next stage.
 
-The conductor reads the person's reply and records the choice they made by its
-label: `--user-input "Approve"`, `"Request Changes"`, or `"Accept as-is"` when that
-choice is available. The engine never reads meaning into the reply
-(`core/tools/aidlc-reply-reader.ts` keeps only the exact parts: a reply with no
-words in it, the `(Recommended)` decoration, and the offered labels; a word such as
-"Cancelled" is the person's reply like any other). It requires a
-human turn since the gate was shown and records the person's exact words, kept by
-the human-turn hook for that chat, on `GATE_APPROVED` as `Person Reply` and on
-`GATE_REJECTED` as the feedback. Those words are kept per chat. When the engine
+The conductor reads the person's reply, in any words, against what it showed
+them, and reports the choice it read: `--user-input "Approve"`,
+`"Request Changes"`, `"Accept as-is"` when that choice is available, or the
+option it offered ("Approve, and add User Stories next"). The engine records
+that choice on `GATE_APPROVED` as it was passed and never reads meaning into it
+or into the person's reply; a word such as "Cancelled" is the person's reply like
+any other. It requires a reply turn of the person's since the last decision and
+since the stage started (the request that started the work answers nothing the
+stage made), after the gate was first shown unless the conductor names the
+message it read the choice from (`report --message <id>`: an approval given at
+the learnings question just before the gate; the refusal and the step for
+their reply at an open gate list the ids). A message sent by the time the
+outputs the gate shows were last written on this clone (every output of each
+stage it approves, optional ones included, the questions file aside) is no
+approval of them: it is neither listed nor taken. It records the person's words: every
+reply of theirs in that chat since then, except one an answer on record already
+names unless it is the latest, as the message record keeps them, on
+`GATE_APPROVED` as `Person Reply` and on `GATE_REJECTED` as the feedback, with
+`Message Id` naming the latest and `Message Ids` every one of them, oldest
+first, when there are several, or the named message alone. A message too long to
+keep whole leaves the words off and keeps the `Message Id`. When the engine
 cannot tell which chat ran the command (an agent shell no host names it in), the
-row instead carries `Message Id`, naming the message the hook kept for their
-latest reply after the gate was shown, so the record says where their words are
-rather than nothing about the person. It is never a copy the agent typed, and it
-is left out when more than one chat has replied since the gate was shown. An
-approval with an instruction ("looks fine but rename the handler") is recorded as
-**Approve**, and the conductor then does what they asked. An approval that also asks to stop for now is reported with `--park`,
+row carries only the `Message Id` of the one chat that replied, never a copy of
+their words, and nothing when more than one chat has replied. An approval with an
+instruction ("looks fine but rename the handler") is recorded as the approval
+the conductor reported, and the conductor then does what they asked. An approval that also asks to stop for now is reported with `--park`,
 and the engine parks the workflow, so `report` answers `parked`.
 
 When a report names no choice, the refusal says what to do: with the person's
@@ -188,15 +198,10 @@ is the open one, it names that question's answer command instead of the gate. It
 does not report a lifecycle transition, record a decision, or consume the gate
 turn for that reply.
 
-**No Emergent Behavior Rule:** Construction and Operation stages (phases 3-4)
-must always use this 2-option format. They must never introduce additional
-navigation options. Two sanctioned carve-outs exist: the revision escape
-hatch (below) and the Build-and-Test failure loop-back in the loop-back
-protocol module (`aidlc-common/protocols/stage-protocol-loopback.md`,
-"Build-and-Test failure loop-back" -- the bounded 3.6 to 3.5 repair loop with
-its impact-estimated halt-and-ask question).
-
-The loop-back reopens Code Generation for the Unit(s) the diagnosis names;
+**Build-and-Test failure loop-back:** the loop-back protocol module
+(`aidlc-common/protocols/stage-protocol-loopback.md`, "Build-and-Test failure
+loop-back") holds the bounded 3.6 to 3.5 repair loop with its
+impact-estimated halt-and-ask question. The loop-back reopens Code Generation for the Unit(s) the diagnosis names;
 every other Unit keeps its finished work, reviews and approvals, and only a
 cause that spans every Unit reopens it for all of them. It has two
 deterministic re-entry routes. If Construction checkpoints are off and Code
@@ -216,38 +221,45 @@ generation. The Loop-Back Log
 records the plan delta. The gated "Retry with fix" answer authorizes the jump, not
 the plan content.
 
-### Conditional 3rd Option
+### Conditional Approve-and-Add Option
 
-Ideation and Inception stages (phases 1-2) may conditionally include a third
-option when a previously skipped stage could be added back:
+Ideation and Inception stages (phases 1-2) may offer to add a previously
+skipped stage together with the approval, as one answer:
 
 ```
-{ label: "Add [Skipped Stage]", description: "Include [stage] which was skipped" }
+{ label: "Approve, and add [Skipped Stage] next", description: "Include [stage], which was skipped, and start it now" }
 ```
 
-This is the only circumstance for a 3rd option in phases 1-2. The label must
-reference the specific skipped stage.
+The label names the specific skipped stage. On that pick the conductor runs
+`next --add <slug>` and follows its step, which names the report that records
+the approval; a request to add the stage with no approval in it is the same
+`next --add`, said in one line, with the gate kept open and asked once more.
 
 ### Revision Escape Hatch
 
-After 3 "Request Changes" cycles on the same stage, the 4th and subsequent
-approval gates add a third option:
+The engine counts the person's "Request Changes" at a stage's gate (one
+Unit's, at a Unit gate) from the audit trail and puts the count on the reply
+that shows the gate (`report --result awaiting-approval` or `revised`):
+`revision_cycle`, with `accept_as_is: "offered"` from the third request on and
+`accept_as_is: "next-revision"` at the second. The conductor reads both from
+that reply and never counts in the chat, so the count holds across a park.
+With `accept_as_is: "offered"`, the gate adds a third option:
 
 ```
 { label: "Accept as-is", description: "Archive current version and move on" }
 ```
 
-The question text changes to include the cycle count:
+The question text changes to include the cycle count, `[N]` from
+`revision_cycle`:
 `"[Stage Name] -- this is revision cycle [N]. How would you like to proceed?"`
 
 **When "Accept as-is" is selected:** report it as the gate's approval
 (`report --stage <slug> --result approved --user-input "Accept as-is"`); the
-engine records the choice and completes the stage. This overrides the
-No Emergent Behavior Rule for Construction stages only when the threshold is
-reached.
+engine records the choice and completes the stage.
 
-**Pre-activation notice:** After the 2nd cycle, include: "After one more
-revision, an 'Accept as-is' option will become available."
+**Pre-activation notice:** When the reply carries
+`accept_as_is: "next-revision"`, include: "After one more revision, an
+'Accept as-is' option will become available."
 
 ### Approval Gate Flow
 
@@ -336,9 +348,11 @@ Structured bullet-point summary of what was produced:
   | requirements.md | 6 FR groups (18 sub-requirements), 4 NFRs |
   | requirements-analysis-questions.md | 5 questions, all answered |
   ```
-- **First completion of a session** must include:
-  `**Project depth**: [Minimal/Standard/Comprehensive]: how much detail I write into each document.`
-  `**Test strategy**: [Minimal/Standard/Comprehensive]: how many tests I write.`
+- **First completion of a session** must include, with the levels the run-stage carries as `depth` and
+  `test_strategy` (the workflow's, which the engine reads from the state; a line whose level the step does
+  not carry is left out):
+  `**Project depth**: [depth]: how much detail I write into each document.`
+  `**Test strategy**: [test_strategy]: how many tests I write.`
   `Ask me to change either one at any approval gate.`
 
 ### Part 3: Review + Approval
@@ -393,7 +407,8 @@ follow-up instead of reopening the whole question.
 ### Tri-Mode System
 
 **Step 1: Create the questions file** in the appropriate `<record>/`
-directory using `[Answer]:` tag format with options A-E. Every ordinary
+directory using `[Answer]:` tag format with options A-E (A-D on Claude Code:
+the letters come from the harness manifest's `questionOptions`). Every ordinary
 question must end with `X. Other (please specify)`. The dedicated Consolidated
 Summary Confirmation is the sole exception: its **Looks correct / Request
 changes** options are unlettered. All `[Answer]:` tags start blank.
@@ -405,7 +420,9 @@ heading names the trade whose decision it is after its number
 (`## Q3. [Developer] ...`), and each trade's questions sit together unless a
 question depends on another's answer. The trade alone never skips or
 delegates a question. An existing file is never reordered or renumbered; a
-follow-up takes the next unused number.
+follow-up takes the next unused number. When the agent asks one of these
+questions, its trade goes in front of the question text, so the person sees it
+in the chat or the picker too.
 
 When the stage's `<slug>-questions.md` already exists with its questions (an
 `[Answer]:` tag, filled in or still blank), the run-stage directive carries
@@ -416,15 +433,24 @@ them when none is answered yet, then an unanswered summary confirmation, then
 the stage's next step), never creating it again, writing new questions over it,
 or asking an answered question again (#1873). A redo the person asked for
 (`artifact_reuse`, which drops the field, or Redo from scratch) starts afresh.
+After a jump back or a restart, which starts a new attempt that confirms the
+summary again, the engine clears the file's summary `[Answer]:` when its only
+confirmation is from an earlier attempt and the summary has not been asked in
+this one (`clearEarlierAttemptSummaryAnswer`, before the step is emitted, never
+under the Stop hook's probe), so the conductor asks it once; every other answer
+is kept as written. A Keep at Artifact Re-use after that confirmation records the kept
+documents under it (`reuse-artifact`), so they need no save to descend from it.
 
-**Step 2: How the person answers.** The run-stage directive carries
-`answer_mode` (`mode`, `ask`, `reused_from`, `notice`) and, beside it, the
-instruction the conductor follows, `answer_mode_note` (`answerModeNote` in
-`aidlc-directive.ts`). The first stage with questions in a piece of work asks;
+**Step 2: How the person answers.** The engine resolves the stage's answer
+mode (`resolveStageAnswerMode`: `mode`, `ask`, `reused_from`, `notice`), and the
+run-stage directive carries only the instruction the conductor follows, made
+from it: `answer_mode_note` (`answerModeNote` in `aidlc-directive.ts`).
+`withAgentNotes` leaves the mode itself out of the step, because an agent handed
+it read its fields aloud ("answer_mode.ask: true"). The first stage with questions in a piece of work asks;
 the engine then reuses the latest recorded answer to the mode question
 (`latestRecordedAnswerMode`, the same DECISION_RECORDED / QUESTION_ANSWERED
 pairing the Stop hook reads). The note makes the branch the protocol used to
-make on the field: with `ask: true` it carries the question ("I've created [N]
+make on the mode: with `ask: true` it carries the question ("I've created [N]
 questions at [the questions file]. How would you like to answer them?"), the
 three choices with their descriptions (Guide me, I'll edit the file, Chat), the
 exact `log decision` and `log answer` commands for this stage, and the notice to
@@ -446,8 +472,9 @@ from the person's reply in whatever words they used; the engine reads only that
 label or its number), and the person changes the mode by saying so. A reused
 mode opens no decision, so `hasPendingDecision` and the gate-answer pairing are
 unchanged. The protocol's Step 2 keeps only what is the conductor's reading: a
-request that already said how to answer is recorded with `--on-instruction`,
-and an unclear reply gets one short follow-up.
+request that already said how to answer is recorded with `--on-instruction
+--message <id>`, naming the message that said it, and an unclear reply gets one
+short follow-up.
 
 #### Guide Me (Interactive Mode)
 
@@ -455,7 +482,8 @@ and an unclear reply gets one short follow-up.
   harness's: on Claude Code `AskUserQuestion` takes at most 4 questions per call
   and 4 options per question; Codex's question tool takes 1-3 questions and 2-3
   options. See each harness's `question-rendering.md`.
-- Questions with more options than one call holds: split across calls.
+- A question from the questions file with more options than one call holds:
+  asked once as a numbered list in one message, never split across calls.
   User must see every option. File retains full option set.
 - Built-in "Other" takes an answer in the user's own words as their answer,
   or opens a discussion when they ask about the question. Tell user before
@@ -465,9 +493,11 @@ and an unclear reply gets one short follow-up.
   talk it through."
 - After each batch, IMMEDIATELY write answers to the questions file
 - A resumed stage whose questions file still has a blank answer carries
-  `kept_replies` on its `run-stage`: what the person replied that no answer
-  holds yet, in order, after the stage's answers already on record. Record
-  those answers first; never ask them again
+  `kept_replies` on its `run-stage`: every reply of the person's since the
+  stage started that no decision has used yet, in order, beside the stage's
+  questions and answers on record, unpaired. The agent reads which reply
+  answers which question and records what is not on record yet first; never
+  ask them again
 - A stage resumed where the work was parked carries `parked_reply` on its
   `run-stage`: what the person said when they stopped the work there (the
   `WORKFLOW_PARKED` row keeps their words), with one note. Read it before
@@ -480,7 +510,7 @@ and an unclear reply gets one short follow-up.
   `aidlc-review-brief.ts summary --stage <slug> --questions-file <path>` before
   the structured **Looks correct** / **Request changes** confirmation. The
   deterministic brief names the stage, questions file, generated artifacts,
-  why the decision is required now, and the exact effect of both choices. Do
+  and the exact effect of both choices. Do
   not ask for confirmation as bare prose. Before presenting it, append or reset a dedicated
   **Consolidated Summary Confirmation** entry in the stage questions file with
   both options and a blank `[Answer]:`. Record the prompt with
@@ -489,9 +519,8 @@ and an unclear reply gets one short follow-up.
   record it with the matching `aidlc-log.ts answer` command (`--details "Looks
   correct"`, or `--details 'Request changes: <what they asked to change>'`). The
   receipt binds the human turn to the exact questions-file digest and keeps
-  their words. A reply that came before the prompt was recorded still counts,
-  and the receipt output's `say` line tells the person once what was recorded
-  for which question. On **Request
+  their words. A reply that came before the prompt was recorded counts when the
+  agent names it with `--message <id>`. On **Request
   changes**, ask **"What should change?"** only when they did not say, and stop
   again before editing any answer. After feedback and revision, reset the confirmation to
   blank before re-prompting. A reply that picks neither choice gets the one
@@ -525,7 +554,7 @@ proceed with partial answers. The file is the authoritative record.
 |-----------|-------|-------|
 | Questions per call | Max 4 | 1-3 |
 | Options per question per call | Max 4 | 2-3 |
-| More options than one call holds | Split across calls | Split across calls |
+| More options than one call holds | One numbered list in chat | One numbered list in chat |
 
 ### Answer Analysis
 
@@ -544,7 +573,7 @@ proceeding. **When in doubt, ask.**
 | Condition | Action |
 |-----------|--------|
 | Blank or underscore-only `[Answer]:` | List unanswered, ask user to complete |
-| Answer not matching options (A-E, X) and not clear free-text | Ask user to clarify |
+| Answer not matching options (A-E or A-D, X) and not clear free-text | Ask user to clarify |
 | Ambiguous ("maybe B", "either A or C") | Ask user to commit to single choice |
 
 **Contradiction detection** -- cross-check full answer set for:
@@ -568,23 +597,31 @@ ask targeted follow-up. Do NOT proceed until resolved.
 - When the user leaves a choice to the agent ("up to you", "whatever you think
   is best", or "choose the recommended answers" for this stage), the agent
   decides: it picks the option that best fits what they have said and records
-  it with `log answer --on-instruction '<their words>'` (single-quoted, like
-  every piece of the person's text on a command line), so the record shows
-  the agent chose it as they asked. The tool keeps the words only when
-  something the person said holds them, case, spacing and punctuation aside
-  (`holdsQuote` and `personsSaidWords` in `aidlc-message-store.ts`, the same
-  check the live drives' person-turn check makes): a message the human-turn
-  hook kept, a question box's reply, or the request that started the work.
-  Otherwise it tells the agent to quote their words or show the questions and
-  wait. Where the record lacks some of what they said (a host that passed no
-  words, a message too long to keep whole, a message older than the store
-  keeps, no hook), the choice is recorded as before. The agent then says one
-  line: "You left <the question> to me, so I chose <the choice>. Say if you
+  it with `log answer --on-instruction --message <id>`, naming the message
+  that left the choice to it, so the record shows the agent chose it, reading
+  that message. The engine proves that message (it exists, came through this chat,
+  and no decision after it has used it up, other than the one it gave itself)
+  and keeps their whole words with the answer as `Person Reply`. Words written
+  after the flag are the agent's own (`Conductor Summary`) and claim nothing;
+  no quote is compared. With no message named (by the flag, or by the question
+  it answers when that question was logged naming one), the answer is recorded
+  as the agent's own, with no claim that the person left it. The agent then
+  says one line: "You left <the question> to me, so I chose <the choice>. Say if you
   want something else."
   (for several questions, "You left <Stage>'s <N> questions to me, so I chose
   the recommended answers: ... Say if you want any of them changed."), and
   once per piece of work: "Approvals are still yours: I'll stop at each stage
   for you to approve." A checkpoint or an approval is never left to the agent.
+  Outside an isolated `--single` run, a message that leaves the questions to the
+  agent and also says not to ask anything waives the summary confirmation and
+  the learnings step for the piece of work: the agent runs `config set
+  summary-confirmation off --learnings off --message <id>` on that message,
+  says in one line that both are off and either can be turned back on, and
+  generates. With learnings off the work keeps no stage diary and asks nothing
+  about what to keep for next time, and while both stay off as the person's the
+  work's own switch lines ask nothing either (no "whole project instead?"
+  offer). An isolated run reads only its own scope's summary setting, so it
+  still asks when its scope asks.
 
 ### Plan and Question File Location
 
@@ -866,9 +903,8 @@ If a stage needs re-run (changes requested after approval):
 ### Compaction Recovery
 
 `PreCompact` hook validates `aidlc-state.md` structure before compaction
-(informational-only, cannot block). Writes `.aidlc-engine/recovery.md` breadcrumb
-with last validated state (stage, timestamp). On resume, the conductor compares
-breadcrumb with state file to detect compaction-related corruption.
+(informational-only, cannot block) and records `SESSION_COMPACTED` (stage, state
+validity) in the audit trail.
 
 ### Corrupted State File Recovery
 
@@ -1182,6 +1218,14 @@ is read this way: a file with a NUL byte, a lone CR, or more than one control
 byte in 128 printable ones is binary to Git and fingerprinted as it is, so a
 lone CR in it is a change. Source files are read a chunk at a time.
 
+**Optional outputs.** A declared output that is not there is a `missing`
+entry in the review fingerprint, optional or not. A receipt recorded before
+the stage declared an optional output has no entry for it, so while that
+output is still missing the receipt matches the same documents (over LF or
+raw line endings; `reviewManifestForms` in `aidlc-review-manifest.ts`). An
+optional output that appears, changes or goes away after the review is still
+a change.
+
 Reviewed outputs remain frozen. If `review_artifact` explicitly names a
 questions artifact, it remains fully byte-bound and frozen, including its
 confirmation answer; stages without `summary_confirmation` have no question
@@ -1219,7 +1263,11 @@ change. See
    as a refused completion. It returns `reviewed_at` too, the UTC time this
    review is dated: the dispatch brief carries it as `Date for this review:`
    and the reviewer writes its `**Date:**` line from the brief, so no reviewer
-   runs a command of its own for the time. The directive's `review_artifact` field
+   runs a command of its own for the time. On a stage that builds in the
+   workspace, when another open piece of work in this checkout claims files in
+   its Units' source manifests, its `agent_note` gives the line the brief
+   carries word for word: those files are that work's, not this work's to
+   review (the same set `other_work_note` names to the build). The directive's `review_artifact` field
    names the required Markdown output the review is about: the record is
    keyed to it, the gate names it, and finding selectors address it; output
    ordering and plugin additions cannot change it, and nothing writes to it
@@ -1246,9 +1294,10 @@ change. See
    ranked by severity for the human at the gate, with no repair loop behind
    them. Either way the reviewer reads the definition, Q&A, and artifacts, runs
    any listed validation tools, and writes exactly ONE file: its review, at the
-   `reviewFile` path. The review contains one matching Verdict, Reviewer, and
-   Iteration line, a Prior findings report for open rows it re-checked, a New
-   findings report without IDs or statuses, and no second H2 section. The
+   `reviewFile` path. The review contains one matching Verdict and Reviewer
+   line and one Iteration line (the request's round is the one recorded), a
+   Prior findings report for open rows it re-checked, a New findings report
+   without IDs or statuses, and no second H2 section. The
    reviewer never writes a person's decision or repeats fixed findings. It
    writes nothing else, in particular not the artifact it reviews. The request
    binds reviewed output bytes and workspace source before dispatch; retry cannot
@@ -1281,7 +1330,16 @@ change. See
    <first|revision|stale>` renders the exact stage, ordinary-language outcome,
    review artifact(s), the engine-owned findings list, decision effects, and
    concrete upstream/downstream invalidation paths (`reviewer_max_iterations`
-   is 1, engine-enforced). The final gate of a per-Unit stage renders every Unit
+   is 1, engine-enforced). At a stage's gate, one line after the findings names
+   the open findings Approve records as `Accepted risk`, each with the start of
+   its text (and its Unit when they span Units), and says, in plain words, that
+   the person can instead approve and ask for one to be fixed (`--fix-finding`)
+   or reject one as not applying, with their reason (`--reject-finding` on a
+   Request Changes, whose gate comes back with the review as it stands when
+   nothing else changed); the Approve option then does not say it again. The ids come from the builder
+   `GATE_APPROVED` writes through. A Unit's own approval (`--unit`, below), and
+   a gate whose one approval also covers later stages with open findings of
+   their own, show no such line. The final gate of a per-Unit stage renders every Unit
    covered by that single approval. A Unit's own approval (its Construction
    checkpoint or team Unit gate) passes `--unit "<unit>"` and shows only that
    Unit's review; reviewer dispatch context is always Unit-filtered.
@@ -1352,8 +1410,16 @@ severity increase into a new finding, and keeps unmentioned open rows marked
 not re-checked. A fixed finding reported as still applying is open again, or
 back to the decision made before it was fixed. A Redo row resets the list of
 each Unit whose artifacts it names, or every Unit when it names none. `GATE_APPROVED` atomically records `Accepted risk` for each
-current open finding. A Request Changes report records `Rejected: <reason>`
-only for explicit
+current open finding the person approved, `Approved autonomously` for one
+Construction approved on its own, or `Changed after review` for one whose
+reviewed work changed after that review with no finished review since. One
+the approval names with `--fix-finding <review-artifact>#R-NN` (the person
+asked for it to be fixed) records `Fix requested` instead. All but
+`Accepted risk` are no decision, so the finding stays open and the next review
+re-checks it. A Unit's checkpoint and a swarm batch's approval record their
+Units' findings, and a stage's approval nobody gave records none that a Unit's
+own approval recorded. A Request Changes report, or a checkpoint's
+`--action reject`, records `Rejected: <reason>` only for explicit
 `--reject-finding <review-artifact>#R-NN=<exact human reason>` values. It uses
 `--reopen-finding <review-artifact>#R-NN=<exact human reason>` when the person
 disagrees that a `Resolved (reviewer)` finding is fixed. The artifact may be
@@ -1418,19 +1484,23 @@ Ritual handles this, not a separate guardrail-emission flow.
 
 *(Conditional module: `stage-protocol-learnings.md`, Section 13; the base protocol keeps a loading stub.)*
 
-When `directive.protocol_modules` lists `learnings`, the ritual runs between the completion message and the approval gate. Bootstrap stages keep only a diary; isolated `single: true` runs keep no diary or ritual; per-unit `gate: false` iterations defer the ritual to the final stage gate, except team-owned unit-major gates run it at each emitted Unit gate. Gate revisions never rerun it. With the module absent, keep no diary, surface no candidates, ask no learning question, and go directly to the approval gate. The enabled ritual is:
+When `directive.protocol_modules` lists `learnings`, the step sits between the completion message and the approval gate, and asks the person something only when they corrected the agent in that stage (asked for changes at its gate, or corrected it in their own words) in a way that would hold next time; with no correction it asks nothing and the gate follows the completion message. Bootstrap stages keep only a diary; isolated `single: true` runs keep no diary or step; per-unit `gate: false` iterations defer the step to the final stage gate, except team-owned unit-major gates run it at each emitted Unit gate. After a Request Changes, the change asked for is asked about before the revised gate. With the module absent, keep no diary, ask no learning question, and go directly to the approval gate. The enabled step is:
 
 1. **Diary**: the agent maintains a per-stage `memory.md` (Interpretations /
    Deviations / Tradeoffs / Open questions) as it works. A Unit's turn tags its
-   entries `[unit <name>]` after the timestamp, so a Unit's checkpoint surfaces
-   that Unit's entries and the untagged ones.
-2. **Surface**: `aidlc-learnings.ts surface --slug <slug>` reads the diary and
-   emits structured candidates — the LLM does not re-parse or classify.
-3. **Confirm**: the conductor renders the candidates; the user picks which to
-   keep and, for free-text additions, picks the heading that derives the
-   destination. The always-present "Anything to add?" channel renders at least
-   `Nothing to add` and `Add a note`; one-option structured questions are
-   invalid on Claude Code and Codex.
+   entries `[unit <name>]` after the timestamp. The diary is the stage's
+   record; nothing in it is offered to the person.
+2. **Surface**: `aidlc-learnings.ts surface --slug <slug> --correction
+   '<their change>'` (or `--correction-file`) prints, for each correction the agent read in the
+   person's words, the question "You asked me to <it>. Keep that for next
+   time?" with `Yes, for this project`, `Yes, for the team` and `No`; with no
+   correction it prints none.
+3. **Confirm**: the conductor asks each printed question; the person's pick
+   is the only thing asked, and the conductor routes the practice line to its
+   heading. Its `log decision` carries `--question-kind learnings-note`, so the
+   question is known by that field, never by its wording (a question recorded
+   before the field existed is known by its options). A note the person asked
+   to keep is kept with no question, and said in one line with where it went.
 4. **Admission check**: each kept learning is checked against `org.md`'s
    matching section; a contradiction is surfaced to revise / skip / escalate.
 5. **Persist**: `aidlc-learnings.ts persist` writes each confirmed learning as a practice to

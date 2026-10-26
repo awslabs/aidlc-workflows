@@ -15,15 +15,18 @@
 // Codex nor Kiro contributes a render-half orientation leg; both are logic-half only.
 // `codex exec` is a one-shot, non-interactive spawn
 // (stdio:["ignore",…] — no stdin), so it CANNOT answer a mid-run question; each
-// journey beat is therefore a separate single-shot spawn invoking one
-// deterministic /aidlc verb whose result we read off disk.
+// journey beat is therefore a separate spawn whose result we read off disk, and
+// a question the engine asks is answered by the person's next spawn in the same
+// session (`codex exec resume`).
 //
 // The journey beats mirror the SDK + ACP legs (repos captured by sibling
 // auto-discovery on the auto-create path - see the SDK leg's DRIFT NOTE):
 //   1. `/aidlc "build auth across both repos"` → auto-create A spanning both repos.
 //   2. (cheaper variant) reverse-engineering writes per-repo codekb — no swarm.
-//   3. `/aidlc intent-create …` → a 2nd isolated intent; A untouched.
-//   4. `/aidlc space-create teamB` → `/aidlc space teamB` → create one there; no leak.
+//   3. `/aidlc --scope poc "<desc>"` with A active -> the engine asks where it
+//      goes; the person replies in the same session that it is separate -> a 2nd
+//      isolated intent; A untouched.
+//   4. `/aidlc space-create teamB` -> `/aidlc space teamB` -> ask for one there; no leak.
 //   5. `/aidlc space default` → A still resumable.
 //
 // LIVE GATE: requires AIDLC_CODEX_EXEC_LIVE=1 + a codex >= 0.145.0 binary
@@ -35,7 +38,8 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { codexBedrockConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
+import { codexBedrockConfig, codexHeadlessArgs, codexToolResults, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
+import { lastEngineStep } from "../harness/golden-journey.ts";
 import { codexExecDiagnostic, type CodexExecution, codexExecTimeout, codexPersonTurn, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 import { createCodexWorkspaceFailureCapture, turnEvidence } from "../harness/codex-turn-evidence.ts";
 import {
@@ -72,18 +76,8 @@ const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
 // aidlc-lib.ts), so the SPACE DIR + cursor + registry key are "teamb".
 const TEAM_B_SLUG = "teamb";
 
-/** Prompt the conductor to run the deterministic intent-create UTILITY directly
- *  (not route via `next`). A bare `/aidlc intent-create …` is parsed as freeform
- *  and fed to `next`; with intent A active the engine advances/scope-changes A
- *  instead of creating (a verified SDK failure rewrote A's Scope). Naming the
- *  exact .codex/tools command hits the mints-unconditionally handler. */
-function intentCreationToolPrompt(scope: string, args: string): string {
-  return (
-    `Run this exact command with the shell and then stop — do NOT run \`next\`, ` +
-    `do NOT advance or scope-change the currently active intent: ` +
-    `bun .codex/tools/aidlc.ts engine intent create --scope ${scope} --arguments ${JSON.stringify(args)}`
-  );
-}
+/** What the person replies when the engine asks where the new work goes. */
+const SEPARATE = "It is a separate new piece of work";
 
 function codexVersionOk(): boolean {
   const r = completedStartupProbe(spawnSync(CODEX_BIN, ["--version"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" }));
@@ -161,8 +155,9 @@ function execCodex(
   home: string,
   prompt: string,
   timeoutMs: number = TEST_TIMEOUT_MS,
+  sessionId?: string,
 ): CodexExecution & { stdout: string } {
-  const argv = ["exec", "--json", prompt];
+  const argv = sessionId ? ["exec", "resume", "--json", sessionId, prompt] : ["exec", "--json", prompt];
   const commandArgs = codexHeadlessArgs(...argv);
   const turn = codexPersonTurn(proj, prompt);
   const r = spawnSync(CODEX_BIN, commandArgs, {
@@ -177,6 +172,31 @@ function execCodex(
   const result = { rc: r.status ?? -1, stdout: r.stdout ?? "", out, signal: r.signal, error: r.error?.message };
   recordCodexExec("workspace", proj, [CODEX_BIN, ...commandArgs], result, turn);
   return result;
+}
+
+/**
+ * The person asks for new poc work in their own words. When the turn ends at
+ * the engine's question of where it goes, nothing is created yet and they reply
+ * that it is separate; when a turn then ends at the plan question, they take its
+ * first choice. Each reply is sent once, in the same session. Returns the last
+ * turn, the one that created the work.
+ */
+function askForNewWork(root: string, home: string, words: string, space: string): CodexExecution & { stdout: string } {
+  const before = readIntentRegistry(root, space);
+  let turn = execCodex(root, home, `Use the $aidlc skill to run: /aidlc --scope poc "${words}"`);
+  expect(turn.rc, codexExecDiagnostic(turn)).toBe(0);
+  const session = turnEvidence(turn.stdout).sessionId;
+  if (lastEngineStep(codexToolResults(turn.stdout))?.ask_type === "new-work-routing") {
+    expect(readIntentRegistry(root, space), "work was created before the person said where it goes").toEqual(before);
+    turn = execCodex(root, home, SEPARATE, TEST_TIMEOUT_MS, session);
+    expect(turn.rc, codexExecDiagnostic(turn)).toBe(0);
+  }
+  const plan = lastEngineStep(codexToolResults(turn.stdout));
+  if (plan?.ask_type === "scope-confirm") {
+    const first = (plan.choices as Array<{ label: string }>)[0].label;
+    turn = execCodex(root, home, first, TEST_TIMEOUT_MS, session);
+  }
+  return turn;
 }
 
 // The engine resolves the per-repo codekb store to the SPACE-LEVEL sibling of
@@ -276,14 +296,15 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         expect(workflowStartedCount(recordADir)).toBe(1);
 
         // --- Step 3: a SECOND isolated intent alongside A --------------------
-        // Name the intent-create tool directly (mints unconditionally) so the
-        // conductor does not route via `next` and advance/scope-change A.
+        // Asked for in the person's words (askForNewWork). The separate-work
+        // route carries on into the new work's first stage, so the beat may end
+        // past its creation.
         const beforeSecond = readIntentRegistry(root, "default");
         expect(beforeSecond).toHaveLength(1);
-        const r3 = execCodex(root, home, intentCreationToolPrompt("poc", "build a standalone metrics dashboard"));
+        const r3 = askForNewWork(root, home, "build a standalone metrics dashboard", "default");
         expectCliSuccess(r3, /\bengine\s+intent\s+create\b/, () =>
           expectCreatedIntent(root, beforeSecond, {
-            space: "default", scope: "poc", project: "build a standalone metrics dashboard", stopAfterCreate: true,
+            space: "default", scope: "poc", project: "build a standalone metrics dashboard", stopAfterCreate: false,
           }));
         // A's workflow state untouched + B's creation did not bleed into A's shard.
         expect(readFileSync(join(recordADir, "aidlc-state.md"), "utf-8")).toBe(stateABefore);
@@ -314,10 +335,10 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         expect(teamBBefore).toHaveLength(0);
         const defaultBeforeTeamB = readIntentRegistry(root, "default");
         expect(defaultBeforeTeamB).toHaveLength(2);
-        const r4c = execCodex(root, home, intentCreationToolPrompt("poc", "teamB onboarding flow"));
+        const r4c = askForNewWork(root, home, "teamB onboarding flow", TEAM_B_SLUG);
         const { dir: teamBRecordDir, state: teamBState } = expectCliSuccess(r4c, /\bengine\s+intent\s+create\b/, () =>
           expectCreatedIntent(root, teamBBefore, {
-            space: TEAM_B_SLUG, scope: "poc", project: "teamB onboarding flow", stopAfterCreate: true,
+            space: TEAM_B_SLUG, scope: "poc", project: "teamB onboarding flow", stopAfterCreate: false,
           }));
         expect(readIntentRegistry(root, "default")).toEqual(defaultBeforeTeamB);
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(true);

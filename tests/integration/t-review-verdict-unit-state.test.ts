@@ -126,6 +126,9 @@ class UnitReview {
     for (const key of Object.keys(this.env)) {
       if (/^AIDLC_(?:SKIP|DISABLE|ALLOW_DIRECT)_/.test(key)) this.env[key] = "0";
     }
+    // The stage's checks before the review (completionChecksStep, advisory, no
+    // guard) are not this file's subject, and its documents are not written for them.
+    this.env.AIDLC_DISABLE_SENSORS = "1";
     for (const key of [
       "AIDLC_SKIP_ARTIFACT_GUARD",
       "AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD",
@@ -377,7 +380,19 @@ describe("OMP F1: terminal review refusal respects the team Unit gate", () => {
         // aidlc-log wraps the multiline refusal in its JSON error envelope.
         const error = JSON.parse(refused.stderr.trim().split("\n").at(-1)!) as Json;
         expect(typeof error.error, refused.stderr).toBe("string");
-        const ask = guardRecoveryAskFromRefusalText(error.error as string);
+        const firstAsk = guardRecoveryAskFromRefusalText(error.error as string);
+        // Questions never asked are the agent's own step the first time; the
+        // same refusal again puts the ways on to the person.
+        const ask = scenario.name === "missing questions"
+          ? (() => {
+            expect(firstAsk?.agent_work, refused.stderr).toBe(true);
+            expect(firstAsk!.remedies.map((remedy) => remedy.op)).toEqual(["ask-stage-questions"]);
+            const again = p.tool("log", [...p.reviewArgs(), "--verdict", verdict]);
+            expect(again.code, again.stdout + again.stderr).not.toBe(0);
+            const repeated = JSON.parse(again.stderr.trim().split("\n").at(-1)!) as Json;
+            return guardRecoveryAskFromRefusalText(repeated.error as string);
+          })()
+          : firstAsk;
         expect(ask, refused.stderr).not.toBeNull();
         expect(ask!.reason_codes).toContain(scenario.code);
         expect(ask).toMatchObject({

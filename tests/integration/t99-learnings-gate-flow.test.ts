@@ -23,11 +23,11 @@
 //
 // Source under test:
 //   dist/claude/.claude/tools/aidlc-learnings.ts
-//     surface  — JSON {schema_version, stage_slug, phase,
-//                        memory_entries_total, candidates[], parked_open_questions[]}.
-//                        Candidate carries {id "c<n>", source_heading,
-//                        ts, summary, context, default_scope:"project"};
-//                        Open-questions entries are parked, not candidates.
+//     surface  - JSON {schema_version, stage_slug, phase,
+//                        memory_entries_total, candidates[], parked_open_questions[],
+//                        questions[]}. A candidate is a correction the agent
+//                        passed with --correction: {id "c<n>", correction,
+//                        default_scope:"project"}; the diary is counted, never offered.
 //     persist  — one withAuditLock body (decide-inside-lock). Appends a
 //                        practice line under the orchestrator-routed heading
 //                        in {project,team}.md (aidlc/spaces/<space>/memory/ via
@@ -132,8 +132,8 @@ interface CliResult {
   stderr: string;
 }
 
-function surface(pd: string, slug = "user-stories"): CliResult {
-  const r = spawnSync(BUN, [LEARNINGS_TS, "surface", "--slug", slug, "--project-dir", pd], {
+function surface(pd: string, slug = "user-stories", ...extra: string[]): CliResult {
+  const r = spawnSync(BUN, [LEARNINGS_TS, "surface", "--slug", slug, ...extra, "--project-dir", pd], {
     encoding: "utf-8",
   });
   return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
@@ -186,13 +186,15 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
   // ===========================================================================
   // Case 1 — surface mixed → persist project + team learnings + 2 audit rows.
   // ===========================================================================
-  test("Case 1: surface emits 3 candidates (I/D/T) + 1 parked open question [.sh 1]", () => {
+  test("Case 1: surface counts the diary (I/D/T + 1 parked open question) and offers none of it [.sh 1]", () => {
     const pd = mkproj();
     seedMemoryMixed(pd);
     const r = surface(pd);
     expect(r.status).toBe(0);
     const j = JSON.parse(r.stdout);
-    expect(j.candidates.length).toBe(3);
+    expect(j.memory_entries_total).toBe(4);
+    expect(j.candidates).toEqual([]);
+    expect(j.questions).toEqual([]);
     expect(j.parked_open_questions.length).toBe(1);
     // The fixture memory_path carries the per-intent record dir, so the phase
     // must be the real one, not a prefix segment like "spaces".
@@ -519,19 +521,18 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
 
   // ===========================================================================
   // Glue — label → candidate_id → selection-record mapping. The surface JSON
-  // must expose {id, summary, source_heading, default_scope} so two
-  // implementers can't build incompatible AUQ glue.
+  // must expose {id, correction, default_scope} so two implementers can't
+  // build incompatible question glue.
   // ===========================================================================
-  test("Glue: candidate carries {id, summary, source_heading, default_scope} [.sh 15]", () => {
+  const CORRECTION = "keep each story to one screen";
+  const corrected = (pd: string) => JSON.parse(surface(pd, "user-stories", "--correction", CORRECTION).stdout).candidates[0];
+
+  test("Glue: candidate carries {id, correction, default_scope} [.sh 15]", () => {
     const pd = mkproj();
     seedMemoryMixed(pd);
-    const r = surface(pd);
-    expect(r.status).toBe(0);
-    const j = JSON.parse(r.stdout);
-    const c = j.candidates[0];
-    expect(typeof c.id).toBe("string");
-    expect(typeof c.summary).toBe("string");
-    expect(c.source_heading).toBe("Interpretations");
+    const c = corrected(pd);
+    expect(c.id).toBe("c1");
+    expect(c.correction).toBe(CORRECTION);
     expect(c.default_scope).toBe("project");
   }, TIMEOUT);
 
@@ -556,47 +557,47 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
   test("Glue: a selection keyed by surface's own `id` persists", () => {
     const pd = mkproj();
     seedMemoryMixed(pd);
-    const candidate = JSON.parse(surface(pd).stdout).candidates[0];
-    const sel = keyedSelection(pd, { id: candidate.id }, candidate.summary);
+    const candidate = corrected(pd);
+    const sel = keyedSelection(pd, { id: candidate.id }, candidate.correction);
     const r = persist(pd, sel);
     expect(r.status, r.stderr).toBe(0);
-    expect(readFileSync(projectPractices(pd), "utf-8")).toContain(candidate.summary);
+    expect(readFileSync(projectPractices(pd), "utf-8")).toContain(candidate.correction);
     expect(readAudit(pd)).toContain(`**Candidate-ID**: ${candidate.id}`);
   }, TIMEOUT);
 
   test("Glue: a selection carrying `candidate_id` and `id` with the same value persists", () => {
     const pd = mkproj();
     seedMemoryMixed(pd);
-    const candidate = JSON.parse(surface(pd).stdout).candidates[0];
-    const sel = keyedSelection(pd, { candidate_id: candidate.id, id: candidate.id }, candidate.summary);
+    const candidate = corrected(pd);
+    const sel = keyedSelection(pd, { candidate_id: candidate.id, id: candidate.id }, candidate.correction);
     const r = persist(pd, sel);
     expect(r.status, r.stderr).toBe(0);
     expect(ruleLearnedRows(pd)).toBe(1);
-    expect(readFileSync(projectPractices(pd), "utf-8")).toContain(candidate.summary);
+    expect(readFileSync(projectPractices(pd), "utf-8")).toContain(candidate.correction);
   }, TIMEOUT);
 
   test("Glue: a selection whose `candidate_id` and `id` differ fails, names both, and writes nothing", () => {
     const pd = mkproj();
     seedMemoryMixed(pd);
-    const candidate = JSON.parse(surface(pd).stdout).candidates[0];
-    const sel = keyedSelection(pd, { candidate_id: candidate.id, id: "c99" }, candidate.summary);
+    const candidate = corrected(pd);
+    const sel = keyedSelection(pd, { candidate_id: candidate.id, id: "c99" }, candidate.correction);
     const r = persist(pd, sel);
     expect(r.status).toBe(1);
     expect(r.stderr).toContain(`candidate_id "${candidate.id}" and id "c99"`);
     expect(ruleLearnedRows(pd)).toBe(0);
-    expect(countLines(projectPractices(pd), candidate.summary)).toBe(0);
+    expect(countLines(projectPractices(pd), candidate.correction)).toBe(0);
   }, TIMEOUT);
 
   test("Glue: a selection carrying neither `candidate_id` nor `id` fails and writes nothing", () => {
     const pd = mkproj();
     seedMemoryMixed(pd);
-    const candidate = JSON.parse(surface(pd).stdout).candidates[0];
-    const sel = keyedSelection(pd, {}, candidate.summary);
+    const candidate = corrected(pd);
+    const sel = keyedSelection(pd, {}, candidate.correction);
     const r = persist(pd, sel);
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("selection missing candidate_id");
     expect(ruleLearnedRows(pd)).toBe(0);
-    expect(countLines(projectPractices(pd), candidate.summary)).toBe(0);
+    expect(countLines(projectPractices(pd), candidate.correction)).toBe(0);
   }, TIMEOUT);
 
 });

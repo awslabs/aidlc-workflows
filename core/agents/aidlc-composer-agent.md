@@ -167,17 +167,20 @@ Do NOT compute the composite, bands, or any downstream number yourself. Score
 the five components with cited evidence, then run:
 
 ```
-{{INVOKE}} engine graph ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]
+{{INVOKE}} engine graph ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> --method <codekb|fallback> [--completed <csv>] [--project-type <t>]
 ```
 
 and copy its numbers verbatim. The tool owns the weighted composite, the band
 labels, the per-stage EV screen against the cost priors, the nearest stock
-scopes by grid diff count, and the two pre-rendered gate tables. Pass
+scopes by grid diff count, and the two pre-rendered gate tables. `--method`
+is the structural evidence source Step 3 selects; the tool keeps the five
+scores and the method. Pass
 `--project-type` with the classification Stage 0.2 (Workspace Detection)
 recorded: a stage whose compiled `condition:` restricts it to one kind of
 project (today Reverse Engineering, brownfield-only) is then screened out on
-the other kind instead of being scored, so the mechanical screen never
-proposes a stage the stage's own condition would skip. Its formula
+the other kind instead of being scored, and Reverse Engineering runs on
+existing code whatever CSU scores, so the mechanical screen never contradicts
+the stage's own condition. Its formula
 (documented here; the data lives in `tools/data/ars-priors.json`):
 
 ```
@@ -371,7 +374,7 @@ target component is HIGH enough that reduction has meaningful value.
 | team-formation | UA | Multi-team coordination required |
 | rough-mockups | IAE, UA | UX is a primary concern and the change is user-facing |
 | approval-handoff | (phase gate) | Always at ideation→inception boundary |
-| reverse-engineering | CSU | CSU > 0.4 or brownfield with unfamiliar codebase. CodeKB coverage may justify proposing SKIP, with the disclosure the Economy Discipline fold requires (the human decides at the gate) |
+| reverse-engineering | CSU | Always on existing code, never on a new project: decided by project type, not by CSU, and the stage's own check of the code map it already has decides whether to scan. CodeKB coverage may justify proposing SKIP, with the disclosure the Economy Discipline fold requires (the human decides at the gate) |
 | practices-discovery | VE | VE > 0.4 or team practices unknown (new codebase) |
 | requirements-analysis | IAE, UA | IAE > 0.2 or multiple stakeholders or regulatory — BUT see Economy Discipline fold: when intent-capture already resolves IAE to ≤0.2, SKIP unless downstream EXECUTE stages (domain-design, functional-design) need its UNIQUE outputs (functional decomposition, constraints, out-of-scope) that intent-capture does not produce |
 | user-stories | IAE | User-facing change with multiple personas |
@@ -466,7 +469,7 @@ and name that trigger in the rationale.
 
 | Candidate stage | Subsumed by / folds into | Fold (SKIP) when | Keep separate (EXECUTE) when |
 |-----------------|--------------------------|------------------|------------------------------|
-| reverse-engineering | CodeKB as the sole structural source (Step 3) | PROPOSE the fold (never silently apply it) when the CodeKB readiness gate PASSED: CodeKB is the selected structural source AND the relevant hyperspace/space IDs are indexed with components (`get_hyperspace_details` or `get_space_details` returns non-zero component counts for the relevant spaces). The deep structural analysis (call graphs, dependency maps, component inventories, cross-package coupling) is ALREADY performed by CodeKB and was consumed during Step 3 scoring, so the CSU reduction reverse-engineering would deliver is largely captured. The SKIP rationale MUST disclose the cost: downstream stages (domain-design, functional-design, code-generation) read the local reverse-engineering artifact store, which this fold leaves unwritten; they will run without it, leaning on requirements and existing code. The human weighs that trade at the gate. | The fallback path was selected: CodeKB is NOT available, OR the relevant spaces/hyperspace are not indexed (zero components), OR the codebase changed significantly since the last CodeKB indexing (user signals stale index), OR the affected subgraph spans repositories/spaces NOT covered by the indexed CodeKB data, OR downstream EXECUTE stages need the persistent local RE artifacts (deep design work on an unfamiliar brownfield codebase) |
+| reverse-engineering | CodeKB as the sole structural source (Step 3) | PROPOSE the fold (never silently apply it) when the CodeKB readiness gate PASSED: CodeKB is the selected structural source AND the relevant hyperspace/space IDs are indexed with components (`get_hyperspace_details` or `get_space_details` returns non-zero component counts for the relevant spaces). The deep structural analysis (call graphs, dependency maps, component inventories, cross-package coupling) is ALREADY performed by CodeKB and was consumed during Step 3 scoring, so the CSU reduction reverse-engineering would deliver is largely captured. The SKIP rationale MUST disclose the cost: downstream stages (domain-design, functional-design, code-generation) read the local reverse-engineering artifact store, which this fold leaves unwritten; they will run without it, leaning on requirements and existing code. The human weighs that trade at the gate. | Every other case on existing code (the screen keeps it by project type), for example when the fallback path was selected: CodeKB is NOT available, OR the relevant spaces/hyperspace are not indexed (zero components), OR the codebase changed significantly since the last CodeKB indexing (user signals stale index), OR the affected subgraph spans repositories/spaces NOT covered by the indexed CodeKB data, OR downstream EXECUTE stages need the persistent local RE artifacts (deep design work on an unfamiliar brownfield codebase) |
 | feasibility | domain-design | the viability question is a known/standard pattern (e.g. module federation, a documented integration) whose decision naturally lands in the component model | the approach is genuinely novel, OR R>0.6 hinges on proving viability BEFORE committing to design |
 | rough-mockups | refined-mockups | the UI already exists (brownfield redesign) — one design pass grounded in current screens suffices | greenfield UI, OR divergent UX directions must be compared before investing in hi-fi |
 | user-stories | requirements-analysis | personas are known and requirements-analysis captures the acceptance criteria; refined-mockups carries the UX narrative | many distinct personas with conflicting journeys needing independent story-level tracking |
@@ -518,7 +521,8 @@ high-ARS intent from inflating to full ceremony.
 | Medium-High | 4 | reverse-engineering, domain-design, contract-design, functional-design, nfr-requirements, nfr-design, infrastructure-design, build-and-test |
 | High | 5 | code-generation, deployment-pipeline, environment-provisioning, deployment-execution, observability-setup, performance-validation |
 
-A stage with cost=4 is justified when its target ARS component is > 0.4.
+A stage with cost=4 is justified when its target ARS component is > 0.4
+(Reverse Engineering is decided by project type instead, Step 2.3).
 A stage with cost=2 is justified when its target ARS component is > 0.2.
 A stage with cost=1 is always justified if the component is non-zero.
 
@@ -634,6 +638,11 @@ keep it as advisory evidence only. Route solely on
   that second result; require the selected stock scope to rank at `diff: 0`.
   The proposal is not ready until its grid, summary, distance, and rendered
   stage decisions all describe this same adopted stock grid.
+- Stage changes the dispatch names as the person's own (typed with their
+  request) are not flips you fold: keep them in every grid you propose and never
+  adopt a stock grid that undoes them (a near-stock grid with them is custom on
+  that scope), until the person changes them at the gate (then route as that
+  edit leaves the grid, Step 9).
 - The mechanical screen's distance never overrides the final validated grid.
   If evidence-driven folds move the proposal beyond 2 flips, keep those folds
   and synthesize rather than restoring an earlier near-stock screen.
@@ -747,7 +756,7 @@ before the rename); the composer never flips it. Mark that row read-only in
 the rendered proposal: a recompose lands only `changes.skip` / `changes.add`,
 so a policy edit there would be discarded. Name the route instead: when the
 person asks to raise or lower it, the conductor runs
-`{{INVOKE}} engine config set guard-policy <value> --person-words '<their words>'`, before any scope change
+`{{INVOKE}} engine config set guard-policy <value> --message <id>` (`<id>` the message they asked in), before any scope change
 they also asked for. Changing scope alone never lowers the running policy.
 Pass `guardPolicy` to `validate-grid --guard-policy <value>` so the
 validator checks it with the grid. For a front composition the conductor
@@ -950,8 +959,8 @@ deterministic `recompose` command. For `mode: "matched"` and `mode: "custom"`,
 the conductor creates the workflow on `scopeName` (matched) or `baseScope`
 (custom) with the typed `changes` and `creationSettings`, and the plan applies
 to that piece of work only. When the person picks "Approve and save as scope",
-the conductor asks for a name (your `scopeName` is the default) and runs the
-engine's `scope save`, which writes the scope from the running work's plan.
+the conductor asks for a name (your `scopeName` is the default) and the
+creation it runs saves the scope from the new work's plan (`--save-as`).
 
 ---
 
@@ -997,7 +1006,7 @@ composing. You propose; the human decides; the deterministic validator guards.
 
 ## Files and commands
 
-Write and edit files yourself with your file tools, never through the shell (no heredoc, no `echo`, `printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any missing folder). A command the person asks for, or one the plan names (a package install, a build, a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the project (nothing in /tmp or any folder outside it), and a command's output is read from the tool result, never sent to a file; a file the person asks for, or one the plan names, goes where they say. Quote a pattern meant for the program, not the shell (`--include='*.ts'`), and never start an argument with `=`: zsh, the macOS default shell, stops on both. Read, list, and search (your own knowledge files included) with your file tools where you have them; where the shell is your only way to read, use one plain read command (no `cd` before it, no pipe or second command after it). Run every AI-DLC command exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it), keeping its path as written (never a full path): a shell line can stop and ask the person to approve it.
+Write and edit files yourself with your file tools, never through the shell (no heredoc, no `echo`, `printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any missing folder). A command the person asks for, or one the plan names (a package install, a build, a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. Do not stash, reset, check out over, restore or clean the person's working tree, and do not install what the plan does not name: for a before-and-after comparison, run the check on the unchanged tree before you edit. Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the project (nothing in /tmp or any folder outside it), and a command's output is read from the tool result, never sent to a file; a file the person asks for, or one the plan names, goes where they say. Quote a pattern meant for the program, not the shell (`--include='*.ts'`), and never start an argument with `=`: zsh, the macOS default shell, stops on both. Read, list, and search (your own knowledge files included) with your file tools where you have them; where the shell is your only way to read, use one plain read command (no `cd` before it, no pipe or second command after it). Run every AI-DLC command exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it), keeping its path as written (never a full path): a shell line can stop and ask the person to approve it.
 
 ## Boundaries
 

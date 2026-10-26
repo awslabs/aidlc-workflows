@@ -1,4 +1,4 @@
-// covers: file:tests/harness/tui-drive.ts, file:tests/harness/kiro-ide-driver.ts
+// covers: file:tests/harness/kiro-ide-driver.ts
 // Synthetic children and loopback sockets only: no Claude, tmux, or IDE launch.
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -29,10 +29,6 @@ import {
   type KiroIdeHandle,
   type KiroIdeLaunchRuntime,
 } from "../harness/kiro-ide-driver.ts";
-import {
-  acceptTuiFixturePermissionMode, claudeModelUpgradeNavigation, claudePermissionNavigation,
-  preseedClaudeOnboarding, TUI_TEST_FIXTURE_MARKER,
-} from "../harness/tui-drive.ts";
 
 const scratchDirs: string[] = [];
 
@@ -54,124 +50,6 @@ afterEach(() => {
 function json(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, "utf8"));
 }
-
-describe("Claude onboarding profile isolation", () => {
-  test("permission-mode acceptance follows the painted choice in owned fixtures", async () => {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), "aidlc-tui-")));
-    scratchDirs.push(dir);
-    writeFileSync(join(dir, TUI_TEST_FIXTURE_MARKER), JSON.stringify({ cwd: dir, ownerPid: process.pid }));
-    const no = "WARNING: Bypass Permissions mode\n❯ No, exit\n  Yes, I accept";
-    const yes = "WARNING: Bypass Permissions mode\n  No, exit\n❯ Yes, I accept";
-    expect(claudePermissionNavigation(no)).toBe("Down");
-    expect(claudePermissionNavigation(yes)).toBe("Enter");
-    expect(claudePermissionNavigation("Bypass Permissions mode\n❯ 1. No, exit\n2. Yes, I accept")).toBe("Down");
-    expect(claudePermissionNavigation("bypass permissions on\n❯ No, exit\nYes, I accept")).toBeNull();
-    let current = no;
-    let now = 0;
-    const keys: string[] = [];
-    const backend = {
-      fixtureCwd: () => dir,
-      capture: () => current,
-      send: (_session: string, key: string, _literal: boolean, noEnter: boolean) => {
-        expect(noEnter).toBe(true);
-        keys.push(key);
-        if (key === "Down") current = yes;
-        else expect(current).toBe(yes);
-      },
-    };
-    expect(await acceptTuiFixturePermissionMode(backend, "fixture", no, {
-      now: () => now, sleep: async (ms) => { now += ms; },
-    })).toBe(true);
-    expect(keys).toEqual(["Down", "Enter"]);
-    expect(await acceptTuiFixturePermissionMode({ ...backend, fixtureCwd: () => null }, "fixture", no)).toBe(false);
-  });
-
-  test("model-upgrade navigation selects No and refuses ambiguous or ordinary workflow output", () => {
-    const offer = [
-      "Newer Opus model available", "Currently pinned: Opus 4.8", "Latest available: Opus 5",
-      "Update settings to use Opus 5? Claude Code will restart to apply.",
-    ].join("\n");
-    expect(claudeModelUpgradeNavigation(`${offer}\n❯ 1. Yes\n  2. No`)).toBe("Down");
-    expect(claudeModelUpgradeNavigation(`${offer}\n  1. No\n❯ 2. Yes`)).toBe("Up");
-    expect(claudeModelUpgradeNavigation(`${offer}\n  1. Yes\n❯ 2. No`)).toBe("Enter");
-    expect(claudeModelUpgradeNavigation(`${offer}\n  1. Yes\n  2. No`)).toBeNull();
-    expect(claudeModelUpgradeNavigation(`${offer}\n❯ 1. Yes\n❯ 2. No`)).toBeNull();
-    expect(claudeModelUpgradeNavigation(`${offer}\n❯ 1. Yes\n  2. No\n[AIDLC] stage`)).toBeNull();
-    expect(claudeModelUpgradeNavigation("Approve this workflow?\n❯ 1. Yes\n  2. No")).toBeNull();
-  });
-
-  test("first-run preparation can preserve the interactive project trust dialog", () => {
-    const dir = scratch();
-    const profile = join(dir, "profile");
-    const home = join(dir, "untouched-home");
-    preseedClaudeOnboarding("/fixture", { CLAUDE_CONFIG_DIR: profile }, home, false);
-    expect(json(join(profile, ".claude.json"))).toEqual({ hasCompletedOnboarding: true });
-    expect(existsSync(home)).toBe(false);
-  });
-
-  test("separate explicit profiles preserve their own settings and never write the host home", () => {
-    const dir = scratch();
-    const home = join(dir, "host");
-    const first = join(dir, "worker-1", "claude");
-    const second = join(dir, "worker-2", "claude");
-    mkdirSync(home);
-    mkdirSync(first, { recursive: true });
-    const hostBytes = '{"hostOnly":true}\n';
-    writeFileSync(join(home, ".claude.json"), hostBytes);
-    writeFileSync(join(first, ".claude.json"), JSON.stringify({
-      theme: "dark",
-      projects: { "C:/existing": { hasTrustDialogAccepted: false, keep: true } },
-    }));
-    const env = Object.freeze({ CLAUDE_CONFIG_DIR: first, HOME: home, USERPROFILE: home });
-    preseedClaudeOnboarding("C:\\fixture-one", env, home);
-    preseedClaudeOnboarding("C:\\fixture-two", { CLAUDE_CONFIG_DIR: second }, home);
-    preseedClaudeOnboarding("C:\\existing", env, home);
-
-    expect(json(join(first, ".claude.json"))).toEqual({
-      theme: "dark",
-      hasCompletedOnboarding: true,
-      projects: {
-        "C:/existing": { hasTrustDialogAccepted: false, keep: true },
-        "C:/fixture-one": { hasTrustDialogAccepted: true },
-      },
-    });
-    expect(json(join(second, ".claude.json"))).toEqual({
-      hasCompletedOnboarding: true,
-      projects: { "C:/fixture-two": { hasTrustDialogAccepted: true } },
-    });
-    expect(readFileSync(join(home, ".claude.json"), "utf8")).toBe(hostBytes);
-    expect(readdirSync(home)).toEqual([".claude.json"]);
-    expect(env.HOME).toBe(home);
-    expect(env.USERPROFILE).toBe(home);
-  });
-
-  test("an explicit profile neither creates a home nor falls back to it on write failure", () => {
-    const dir = scratch();
-    const home = join(dir, "absent-home");
-    const profile = join(dir, "config");
-    preseedClaudeOnboarding("project", { CLAUDE_CONFIG_DIR: profile }, home);
-    expect(existsSync(join(profile, ".claude.json"))).toBe(true);
-    expect(existsSync(home)).toBe(false);
-
-    const blocked = join(dir, "not-a-directory");
-    writeFileSync(blocked, "untouched");
-    preseedClaudeOnboarding("project", { CLAUDE_CONFIG_DIR: blocked }, home);
-    expect(readFileSync(blocked, "utf8")).toBe("untouched");
-    expect(existsSync(home)).toBe(false);
-  });
-
-  test("without an override the legacy home-level config is still seeded additively", () => {
-    const home = scratch();
-    writeFileSync(join(home, ".claude.json"), '{"theme":"light"}');
-    preseedClaudeOnboarding("C:\\legacy", {}, home);
-    expect(json(join(home, ".claude.json"))).toEqual({
-      theme: "light",
-      hasCompletedOnboarding: true,
-      projects: { "C:/legacy": { hasTrustDialogAccepted: true } },
-    });
-    expect(existsSync(join(home, ".claude"))).toBe(false);
-  });
-});
 
 /** No process is spawned. A real socket models Electron's continuous ownership
  *  of port 0; the emitted endpoint travels through the same stderr interface. */

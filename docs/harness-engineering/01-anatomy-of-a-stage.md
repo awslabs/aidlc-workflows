@@ -28,8 +28,8 @@ The frontmatter is a flat block of YAML keys. Some are mechanical — `slug`, `p
 | Field | What it decides | The judgment call |
 |-------|-----------------|-------------------|
 | `requires_stage` | Dependency and ordering edges | Does this stage genuinely consume another's output, or just need to run after it? |
-| `consumes` | The artifacts this stage reads | Per artifact: is it `required`, and is it `conditional_on` brownfield/greenfield? |
-| `cites` | Which optional inputs the output must cite when they exist | Is there an optional input that, whenever it is there, the output builds on? The `upstream-coverage` check then asks for its citation. |
+| `consumes` | The artifacts this stage reads | Per artifact: is it `required`, is it `conditional_on` brownfield/greenfield, and is it `cited`? |
+| `consumes[].cited` | Which optional inputs the output must cite when they exist | Is there an optional input that, whenever it is there, the output builds on? Mark it `cited: true`; the `upstream-coverage` check then asks for its citation. |
 | `produces` | The artifacts this stage writes | These are the forward edges other stages discover. |
 | `lead_agent` / `support_agents` | Who runs the stage | One persona owns it; supporters add perspective. |
 | `mode` | Communication topology | `inline` (voices in the conductor's context), `subagent` (hub-and-spoke dispatch), `pipeline` (chain), or `mob` (mesh in bounded rounds). |
@@ -54,7 +54,7 @@ Below the frontmatter, the body has three compartments, always in this order: `#
 
 - **`## Steps`** is the imperative prose the agent follows — load personas, read prior context, create the questions file, generate the artifacts, present the approval gate. This is where the stage's domain work lives, and it's the compartment you'll edit most when you change *what a stage does* without touching the graph.
 - **`## Sensors`** gives a compact local summary: where outputs land, an `Imports:` line that mirrors the frontmatter `sensors:` list, and an `Upstream targets:` line that mirrors `consumes:` when `upstream-coverage` is imported. Keep stage-specific exceptions here, such as an intentionally omitted sensor or ownership of a structured output. Shared behavior lives in `stage-protocol-sensors.md`; Sensors are covered in full in [Sensors](06-sensors.md).
-- **`## Learn`** points to the conditional learning-loop contract in `stage-protocol-learnings.md` §13. Only when `directive.protocol_modules` lists `learnings`, maintain the four-heading diary at `directive.memory_path` while working, then surface and persist confirmed learnings before a human gate. The module owns the bootstrap, isolated-run, per-unit, and gate-revision exemptions. When absent, keep no diary and skip the ritual. Workflow-time learning never rewrites the stage body.
+- **`## Learn`** points to the conditional learning-loop contract in `stage-protocol-learnings.md` section 13. Only when `directive.protocol_modules` lists `learnings`, maintain the four-heading diary at `directive.memory_path` while working, then take the learnings step before a human gate: it asks the person something only after they corrected the agent in the stage, and persists what they keep. The module owns when it asks, and the bootstrap, isolated-run and per-unit exemptions. When absent, keep no diary and skip the step. Workflow-time learning never rewrites the stage body.
 
 The three compartments are fixed so that a stage's sensor bindings and its learning-loop pointer always have a place of their own, and adding one never restructures the body. The full body model and what each compartment may contain is in [Three-compartment body model](../reference/15-stage-definition.md#three-compartment-body-model).
 

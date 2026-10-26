@@ -485,10 +485,15 @@ function expectConfiguredProject(
         expect.objectContaining({ id: "bedrock-model-access", status: "done" }),
       ]),
     }));
-    expect(nativeSettings.env).toEqual(expect.objectContaining({
-      CLAUDE_CODE_USE_BEDROCK: "1",
-      AWS_REGION: "us-east-2",
-    }));
+    // The answer is the person's own (#2712): their git-ignored file, never
+    // the shared settings.json, and the shared record keeps no profile.
+    expect(harness.providers).not.toHaveProperty("profile");
+    expect(nativeSettings.env?.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(project, ".claude", "settings.local.json"), "utf-8")).env)
+      .toEqual(expect.objectContaining({
+        CLAUDE_CODE_USE_BEDROCK: "1",
+        AWS_REGION: "us-east-2",
+      }));
   }
   expect(readFileSync(join(project, ".claude", "agents", "aidlc-product-lead-agent.md"), "utf-8"))
     .toContain("effort: medium");
@@ -1388,7 +1393,7 @@ describe("t299 first-run setup wizard", () => {
       "  Set up AI-DLC for Kiro with recommended defaults?",
       "",
       "    1. Yes, use recommended defaults   all plugins, no provider settings; model access comes with Kiro",
-      underRecommended("Records no model preset: every agent uses your Kiro session's model and effort."),
+      underRecommended("Records no model preset: every agent uses your Kiro session's model and effort unless a model or effort is set for that agent."),
       "    2. No, customize step by step      harness, provider, preset, plugins, MCP, record layer",
       "    3. Exit, nothing written",
       "",
@@ -1410,7 +1415,9 @@ describe("t299 first-run setup wizard", () => {
       underRecommended("with Kiro"),
       underRecommended("Records no model preset: every"),
       underRecommended("agent uses your Kiro session's"),
-      underRecommended("model and effort."),
+      underRecommended("model and effort unless a"),
+      underRecommended("model or effort is set for"),
+      underRecommended("that agent."),
       "    2. No, customize step by step      harness, provider, preset,",
       underRecommended("plugins, MCP, record layer"),
       "    3. Exit, nothing written",
@@ -1491,7 +1498,8 @@ describe("t299 first-run setup wizard", () => {
     }
     return installed;
   };
-  // `config --harness <name> --yes`, then the walk: Fix the sections? yes.
+  // `config --harness <name>`, then the walk: Fix the sections? yes. (Under
+  // --yes the walk asks nothing.)
   // Kiro IDE's walk offers only the PATH fix; Kiro CLI's opens its session
   // model and preset menu, kept as it is. Answers come through the scripted
   // seam, not stdin.
@@ -1516,7 +1524,7 @@ describe("t299 first-run setup wizard", () => {
     runWizard("", {
       ...kiroIdeTerminal({ ...setupMachine, ...env, AIDLC_TEST_CONFIG_INPUT: `${answers.join("\n")}\n` }),
       aidlc: false,
-      configArgs: ["--from", join(RUNTIME, harness), "--harness", harness, "--mcp", "none", "--yes"],
+      configArgs: ["--from", join(RUNTIME, harness), "--harness", harness, "--mcp", "none"],
       ...(project ? { project } : {}),
     });
   const setupScreens = (env: NodeJS.ProcessEnv = {}) => {
@@ -1651,7 +1659,7 @@ describe("t299 first-run setup wizard", () => {
       expect(run.status, run.stdout + run.stderr).toBe(0);
     }
     expect(complete.stdout).toMatch(
-      /\n {2}Writing project files \.\.\. done {2}\(\.kiro\/ and aidlc\/, \d+ files\)\n {2}Model preset \.\.\. not needed {2}\(every agent uses your Kiro session's model and effort\)\n/,
+      /\n {2}Writing project files \.\.\. done {2}\(\.kiro\/ and aidlc\/, \d+ files\)\n {2}Model preset \.\.\. not needed {2}\(every agent uses your Kiro session's model and effort unless a model or effort is set for that agent\)\n/,
     );
     expect(complete.stdout).toContain([
       "    Hooks run outside your interactive shell PATH, and aidlc is not available there.",
@@ -1672,7 +1680,7 @@ describe("t299 first-run setup wizard", () => {
     // the session instead of asking for a policy, and the walk never offers it.
     expect(check.stdout).toContain([
       "    [ok]     Harnesses   kiro-ide recorded",
-      "    [ok]     Models      every agent uses your Kiro session's model and effort",
+      "    [ok]     Models      every agent uses your Kiro session's model and effort unless a model or effort is set for that agent",
       "    [needs]  Runtime     aidlc is absent from the non-interactive hook PATH",
     ].join("\n"));
     expect(check.stdout).toContain([
@@ -1704,7 +1712,7 @@ describe("t299 first-run setup wizard", () => {
     // Kiro CLI's walk opens its session model and preset menu.
     expect(walks["harness-kiro"].stdout).toContain("Models [Enter keep everything, 1 session model, 2 preset]:");
     expect(walks["models-preset"].stdout).toContain([
-      "Recorded in: nothing; every agent uses your Kiro session's model and effort",
+      "Recorded in: nothing; every agent uses your Kiro session's model and effort unless a model or effort is set for that agent",
       "Full per-agent list: bun .kiro/tools/aidlc.ts config models --show --json",
       "Pins bind in both directions, and shipped tiers never raise an agent above the session.",
       "Models [Enter keep everything, 1 preset, 2 group efforts, 3 set each one myself]: Presets:",
@@ -1797,7 +1805,7 @@ describe("t299 first-run setup wizard", () => {
       `\n  fix: ${new TransactionFilesystemError("", "", "", null).remediation}\n  Nothing written.\n`,
     );
     expect(conflict.stdout).toMatch(
-      /\n {2}fix: to keep your version, move \S+ somewhere else and run the same command again; .*--force\. `(?:aidlc|bun) \S.* --dry-run --verbose` lists every change first\.\n {2}No setup changes were kept\.\n/,
+      /\n {2}fix: to keep your version, move \S+ somewhere else and run the same command again; .*--force\.\n {2}No setup changes were kept\.\n/,
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1809,10 +1817,6 @@ describe("t299 first-run setup wizard", () => {
         expect(narrow[stop].status, `${stop}: ${narrow[stop].stdout}${narrow[stop].stderr}`).toBe(1);
         expectWrappedLike(narrow[stop], wide[stop], width, stop);
       }
-      // The conflict's fix names the dry-run command, checked whole above.
-      expect(commandsIn(sameRun(wide.conflict)).some((command) =>
-        command.endsWith("--dry-run --verbose`")
-      )).toBe(true);
       // The storage fix continues under its own text, after "fix: ".
       const fixLines = screenLines(narrow.lock.stdout);
       const fix = fixLines.findIndex((line) => line.startsWith("  fix: "));
@@ -1962,7 +1966,7 @@ describe("t299 first-run setup wizard", () => {
     expect(output).toContain(".claude/agents/aidlc-developer-agent.md");
     expect(output).toContain("locally modified or unowned");
     expect(output).toMatch(/fix:/i);
-    expect(output).toContain("--dry-run --verbose");
+    expect(output).toContain("run it again with --force.");
     expect(output).not.toContain('"schemaVersion"');
     expect(output).not.toContain('"actions"');
     expect(treeSnapshot(result.project)).toEqual(before);
@@ -2409,6 +2413,10 @@ describe("t299 first-run guidance helpers", () => {
       // notRunInWorkflow needs a guard heartbeat before each engine command;
       // only Copilot pins one.
       expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunInWorkflow"), harness).toBe(copilot);
+      // The line for a chat started in a folder inside the project needs the
+      // host's own record of where the chat started: Claude Code's and Codex's.
+      expect(Object.hasOwn(shipped.hookActivation ?? {}, "startedInsideProject"), harness)
+        .toBe(harness === "claude" || harness === "codex");
     }
   });
 

@@ -27,15 +27,20 @@ import {
   collectPluginStatus,
   comparePluginState,
   discoverPluginInventory,
+  fragmentProseHash,
   main as pluginMain,
   normalizeInstalledPlugin,
   pluginSourceHash,
+  recordedContributionGaps,
   renderPluginStatuses,
+  stripRecordedAdds,
+  supersededLines,
   syncPlugins,
   type CompositionStamp,
   type InstalledPlugin,
   type PluginInventory,
   type ProjectEvidence,
+  type StageContribRecord,
 } from "../../core/tools/aidlc-plugin.ts";
 import { committedTextBytes } from "../../core/tools/aidlc-lib.ts";
 import { aidlcInvocation } from "../../core/tools/aidlc-runtime-paths.ts";
@@ -45,6 +50,8 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const FIXTURES = join(REPO_ROOT, "tests", "fixtures", "plugin-inventory");
 const TEST_PRO = join(REPO_ROOT, "dist", "plugins", "test-pro", "claude");
+// The shipped test-pro's version, from its own manifest, so a version bump needs no edit here.
+const TEST_PRO_VERSION = (JSON.parse(readFileSync(join(REPO_ROOT, "plugins", "test-pro", ".aidlc-plugin", "plugin.json"), "utf-8")) as { version: string }).version;
 const ORIGINAL_ENV = { ...process.env };
 const TEMP: string[] = [];
 
@@ -115,6 +122,8 @@ function installed(
     manifestPath: `/plugins/${key}/.claude-plugin/plugin.json`,
     enabled,
     sourceHash,
+    base: null,
+    baseProblem: null,
   };
 }
 
@@ -126,6 +135,7 @@ function evidence(
     stamps: new Map(stamps.map((value) => [value.name, value])),
     legacy: new Set(legacy),
     ownership: new Map(),
+    held: new Map(),
   };
 }
 
@@ -141,7 +151,11 @@ function inventory(
   };
 }
 
-function withClaudeFixture(root: string, version = "0.1.0"): void {
+// The host's record carries the version the installed copy's own manifest says, as Claude Code's does.
+function withClaudeFixture(
+  root: string,
+  version = (JSON.parse(readFileSync(join(root, ".claude-plugin", "plugin.json"), "utf-8")) as { version: string }).version,
+): void {
   const fixtureDir = temp("aidlc-claude-inventory-");
   const registry = readFileSync(join(FIXTURES, "claude-installed-plugins.json"), "utf-8")
     .replace("{{PLUGIN_ROOT}}", root.replaceAll("\\", "\\\\"))
@@ -587,6 +601,12 @@ describe("t242 pure status comparator", () => {
       version: "version-differs",
     });
     expect(rows.find((row) => row.key === "version")?.message).toContain("upgrade");
+    // Config composes no plugin; each state a sync clears names the sync.
+    const lines = renderPluginStatuses(rows).split("\n");
+    for (const key of ["legacy", "new", "source", "version"]) {
+      expect(lines.find((line) => line.startsWith(`${key} `)), key)
+        .toEndWith(`run: ${aidlcInvocation()} engine plugin sync`);
+    }
   });
 
   test("default rendering exposes only the three actions and verbose keeps taxonomy", () => {
@@ -607,7 +627,8 @@ describe("t242 pure status comparator", () => {
     );
     const rendered = renderPluginStatuses(rows);
     expect(rendered).toContain("current");
-    expect(rendered).toContain("run: aidlc config");
+    expect(rendered).toContain(`run: ${aidlcInvocation()} engine plugin sync`);
+    expect(rendered).not.toContain("aidlc config");
     expect(rendered).toContain("needs attention: invalid manifest");
     expect(rendered).not.toContain("[source-changed]");
     expect(renderPluginStatuses(rows, true)).toContain("[source-changed]");
@@ -645,6 +666,73 @@ describe("t242 pure status comparator", () => {
   });
 });
 
+// Sync composes a plugin again only when one of its recorded additions is gone.
+// A fragment nested inside its own plugin's fragment is gone; prose that quotes
+// the marker syntax, or names another plugin's marker, is the plugin's text.
+describe("t242 recorded additions", () => {
+  const fragment = (plugin: string, order: number, prose: string): { block: string; hash: string } => {
+    const hash = fragmentProseHash(prose);
+    return {
+      block: `<!-- plugin:${plugin}:after-step:8:${order}:${hash} -->\n${prose}\n<!-- /plugin:${plugin}:after-step:8:${order}:${hash} -->`,
+      hash,
+    };
+  };
+
+  test("prose that quotes another plugin's fragment marker is in place", () => {
+    const prose = "### Step 8a (acme): markers\n\nCompose wraps each block in `<!-- plugin:other:after-step:8:100:0badc0de -->` and `<!-- /plugin:other:after-step:8:100:0badc0de -->`.";
+    const { block, hash } = fragment("acme", 100, prose);
+    const gaps = recordedContributionGaps({}, `### Step 8: Summary\n\n${block}\n`, "acme", {
+      fragments: [{ anchor: "after-step:8", order: 100, hash }],
+    });
+    expect(gaps).toEqual({ missing: [], gone: false });
+  });
+
+  test("a fragment nested inside its own plugin's fragment is gone", () => {
+    const inner = fragment("acme", 110, "### Step 8b (acme): inner");
+    const outer = fragment("acme", 100, "### Step 8a (acme): outer");
+    const [open, ...rest] = outer.block.split("\n");
+    const nested = [open, inner.block, ...rest].join("\n");
+    const gaps = recordedContributionGaps({}, `### Step 8: Summary\n\n${nested}\n`, "acme", {
+      fragments: [
+        { anchor: "after-step:8", order: 100, hash: outer.hash },
+        { anchor: "after-step:8", order: 110, hash: inner.hash },
+      ],
+    });
+    expect(gaps.gone).toBe(true);
+    expect(gaps.missing).toEqual([`fragments=[after-step:8@100:${outer.hash}]`]);
+  });
+
+  test("the one strip takes out what compose wrote and leaves a line the stage already had", () => {
+    // Turning a plugin off, removing or updating it, and the config refresh all strip through it.
+    const stage = (lists: string) => `---\nslug: build-and-test\n${lists}---\n\nBody.\n`;
+    const cases: Array<[string, StageContribRecord, string, string]> = [
+      ["one recorded value", { sensors: ["coverage-threshold"] },
+        "sensors:\n  - required-sections\n  - coverage-threshold\n", "sensors:\n  - required-sections\n"],
+      ["the last value leaves an empty list", { produces: ["x-doc"] }, "produces:\n  - x-doc\n", "produces: []\n"],
+      ["a quoted line beside the plugin's stays", { sensors: ["coverage-threshold"] },
+        "sensors:\n  - \"coverage-threshold\"\n  - coverage-threshold\n", "sensors:\n  - \"coverage-threshold\"\n"],
+      ["a single-quoted line beside the plugin's stays", { produces: ["x-doc"] },
+        "produces:\n  - 'x-doc'\n  - x-doc\n", "produces:\n  - 'x-doc'\n"],
+      ["a value written twice keeps one", { requires_stage: ["nfr-design"] },
+        "requires_stage:\n  - nfr-design\n  - nfr-design\n", "requires_stage:\n  - nfr-design\n"],
+      ["a recorded value with its quotes takes out that line", { produces: ["\"x-doc\""] },
+        "produces:\n  - a-doc\n  - \"x-doc\"\n", "produces:\n  - a-doc\n"],
+      ["required sections recorded bare take out one quoted line each", { required_sections: ["Branch Coverage"] },
+        "required_sections:\n  - \"Branch Coverage\"\n  - \"Branch Coverage\"\n", "required_sections:\n  - \"Branch Coverage\"\n"],
+      ["a required_sections field compose created goes", { required_sections: ["Branch Coverage"], required_sections_created: true },
+        "required_sections:\n  - \"Branch Coverage\"\n", ""],
+      ["consumes recorded as objects or legacy strings", { consumes: [{ artifact: "p-doc", required: false }, "q-doc"] },
+        "consumes:\n  - artifact: a-doc\n    required: true\n  - artifact: p-doc\n    required: false\n  - artifact: q-doc\n    required: false\n    conditional_on: brownfield\n",
+        "consumes:\n  - artifact: a-doc\n    required: true\n"],
+      ["a consumes entry with no artifact is skipped", { consumes: [null as unknown as string, "p-doc"] },
+        "consumes:\n  - artifact: p-doc\n    required: false\n", "consumes: []\n"],
+    ];
+    for (const [name, record, before, after] of cases) {
+      expect(stripRecordedAdds(stage(before), record), name).toBe(stage(after));
+    }
+  });
+});
+
 describe("t242 transactional sync and ownership-safe prune", () => {
   function installedProject(): string {
     const project = temp("aidlc-plugin-project-");
@@ -662,7 +750,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(JSON.parse(readFileSync(stampPath, "utf-8"))).toEqual({
       schemaVersion: 1,
       name: "test-pro",
-      version: "0.1.0",
+      version: TEST_PRO_VERSION,
       sourceHash: pluginSourceHash(TEST_PRO),
     });
     expect(collectPluginStatus(project, ".claude").statuses).toEqual([
@@ -729,7 +817,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       pass: false,
       severity: "warn",
       label: "Plugins: 1 require sync",
-      fix: "run `aidlc config`",
+      fix: "run `bun .claude/tools/aidlc.ts engine plugin sync`",
     }));
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -771,7 +859,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(pluginRows()).toEqual([
       expect.objectContaining({
         pass: true,
-        label: "Plugins: test-pro 0.1.0 in this project (no host plugin list to compare versions with)",
+        label: `Plugins: test-pro ${TEST_PRO_VERSION} in this project (no host plugin list to compare versions with)`,
       }),
     ]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -842,7 +930,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(readdirSync(project).some((entry) => entry.startsWith(".aidlc-txn-"))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("sync rejects content whose plugin owner differs from the host manifest key", async () => {
+  test("sync rejects content whose plugin owner differs from the plugin's own name", async () => {
     const project = installedProject();
     const root = temp("aidlc-plugin-identity-");
     cpSync(TEST_PRO, root, { recursive: true });
@@ -850,6 +938,9 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       join(root, ".claude-plugin", "plugin.json"),
       `${JSON.stringify({ name: "aidlc-renamed", version: "0.1.0" }, null, 2)}\n`,
     );
+    // The plugin's own manifest is what names it, whatever the host calls it.
+    const own = join(root, ".aidlc-plugin", "plugin.json");
+    writeFileSync(own, `${JSON.stringify({ ...JSON.parse(readFileSync(own, "utf-8")), name: "renamed" }, null, 2)}\n`);
     withClaudeFixture(root);
 
     await expect(syncPlugins(project, [], ".claude"))
@@ -902,7 +993,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     writeFileSync(
       process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string,
       readFileSync(process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string, "utf-8")
-        .replaceAll('"version": "0.1.0"', '"version": "0.2.0"'),
+        .replaceAll(`"version": "${TEST_PRO_VERSION}"`, '"version": "0.2.0"'),
     );
 
     await syncPlugins(project, [], ".claude");
@@ -963,7 +1054,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     writeFileSync(
       process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string,
       readFileSync(process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string, "utf-8")
-        .replaceAll('"version": "0.1.0"', '"version": "0.2.0"'),
+        .replaceAll(`"version": "${TEST_PRO_VERSION}"`, '"version": "0.2.0"'),
     );
     await syncPlugins(project, [], ".claude");
     const target = join(project, ".claude", "aidlc-common", "stages", "construction", "test-pro-integration.md");
@@ -1371,6 +1462,121 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(pruned).not.toContain("test-pro-test-harness-design");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // test-pro ships no adds.scopes: a copy whose build-and-test contribution puts
+  // that core stage in test-pro's own scope.
+  const SCOPE_ADD = "adds:\n  scopes:\n    - test-pro-validation\n";
+  function testProAddingItsScope(): string {
+    const root = temp("aidlc-plugin-adds-scopes-");
+    cpSync(TEST_PRO, root, { recursive: true });
+    const contribution = join(root, "contributions", "construction", "build-and-test.md");
+    const source = readFileSync(contribution, "utf-8");
+    expect(source).toContain("adds:\n");
+    writeFileSync(contribution, source.replace("adds:\n", SCOPE_ADD));
+    return root;
+  }
+  function stageScopes(path: string): string[] {
+    const block = readFileSync(path, "utf-8").match(/^scopes:\n((?: {2}- .+\n)*)/m)?.[1] ?? "";
+    return [...block.matchAll(/^ {2}- (.+)$/gm)].map((entry) => entry[1].trim());
+  }
+
+  test("removing a plugin that put a core stage in its scope leaves the stage as shipped, so the next config goes through (#1247)", async () => {
+    // Compose records adds.scopes in the sidecar. If prune leaves the scope in the
+    // stage, the next config finds a core stage it did not install and stops on it
+    // as a local edit the person never made.
+    const project = temp("aidlc-plugin-scopes-refresh-");
+    mkdirSync(join(project, ".git"));
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: project };
+    for (const key of ["AIDLC_STAGE_GRAPH", "AIDLC_SCOPE_GRID", "AIDLC_SCOPES_DIR", "AIDLC_STAGES_DIR"]) delete env[key];
+    const config = (...extra: string[]) => spawnSync(process.execPath, [
+      join(REPO_ROOT, "core", "tools", "aidlc-init.ts"),
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(REPO_ROOT, "dist-release", "claude"),
+      ...extra,
+    ], {
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
+      cwd: project,
+      encoding: "utf-8",
+      env,
+    });
+    const installed = config("--harness", "claude");
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    const stage = join(project, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md");
+    const shipped = readFileSync(stage, "utf-8");
+
+    withClaudeFixture(testProAddingItsScope());
+    await syncPlugins(project, [], ".claude");
+    expect(stageScopes(stage)).toContain("test-pro-validation");
+
+    // The step doctor names once the plugin is uninstalled in the host.
+    writeFileSync(
+      process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string,
+      "{\"version\":2,\"plugins\":{}}\n",
+    );
+    const result = await syncPlugins(project, ["--prune-missing", "--yes"], ".claude");
+    expect(result.pruned).toEqual(["test-pro"]);
+
+    const refreshed = config();
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(readFileSync(stage, "utf-8")).toBe(shipped);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a plugin update that stops adding its scope takes it back out of the core stage", async () => {
+    const project = installedProject();
+    const stage = join(project, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md");
+    const shippedScopes = stageScopes(stage);
+    const root = testProAddingItsScope();
+    withClaudeFixture(root);
+    await syncPlugins(project, [], ".claude");
+    expect(stageScopes(stage)).toEqual([...shippedScopes, "test-pro-validation"]);
+
+    const contribution = join(root, "contributions", "construction", "build-and-test.md");
+    writeFileSync(contribution, readFileSync(contribution, "utf-8").replace(SCOPE_ADD, "adds:\n"));
+    writeFileSync(
+      join(root, ".claude-plugin", "plugin.json"),
+      `${JSON.stringify({ name: "aidlc-test-pro", version: "0.2.0" }, null, 2)}\n`,
+    );
+    writeFileSync(
+      process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string,
+      readFileSync(process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string, "utf-8")
+        .replaceAll(`"version": "${TEST_PRO_VERSION}"`, '"version": "0.2.0"'),
+    );
+    const result = await syncPlugins(project, [], ".claude");
+    expect(result.synced).toEqual(["test-pro"]);
+
+    expect(stageScopes(stage)).toEqual(shippedScopes);
+    const sidecar = JSON.parse(readFileSync(
+      join(project, ".claude", "tools", "data", "plugin-contrib-test-pro.json"),
+      "utf-8",
+    )) as Record<string, { scopes?: string[] }>;
+    expect(sidecar["build-and-test"]?.scopes).toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("removing a plugin keeps a line the stage had that matches one the plugin added", async () => {
+    // test-pro adds the edge to nfr-design; the team's own edge, quoted, sits
+    // beside it. The sidecar records only the line compose wrote.
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+    await syncPlugins(project, [], ".claude");
+    const stage = join(project, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md");
+    const composed = readFileSync(stage, "utf-8");
+    expect(composed).toContain("  - nfr-design\n");
+    writeFileSync(stage, composed.replace("  - nfr-design\n", "  - \"nfr-design\"\n  - nfr-design\n"));
+
+    writeFileSync(
+      process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string,
+      "{\"version\":2,\"plugins\":{}}\n",
+    );
+    const result = await syncPlugins(project, ["--prune-missing", "--yes"], ".claude");
+    expect(result.pruned).toEqual(["test-pro"]);
+
+    const pruned = readFileSync(stage, "utf-8");
+    expect(pruned).toContain("  - \"nfr-design\"\n");
+    expect(pruned).not.toContain("  - nfr-design\n");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("prune refuses a locally modified owned file without deleting it", async () => {
     const project = installedProject();
     withClaudeFixture(TEST_PRO);
@@ -1425,5 +1631,214 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     announcePrune(["--prune-missing"], [], { isTTY: false }, quiet);
     expect(quiet.read()).toBeNull();
     quiet.destroy();
+  });
+});
+
+// A plugin someone else builds shows in the host under its own name, so AI-DLC
+// knows its plugins by the plugin's own manifest each build carries; a build
+// from before that (any release's) is still known by its aidlc-<name> name.
+describe("t242 an AI-DLC plugin is known by its own manifest", () => {
+  function ownNamedRoot(harness: "claude" | "codex" | "kiro", name = "acme-standards"): string {
+    const root = pluginRoot(harness);
+    const manifestDir = harness === "claude" ? ".claude-plugin" : harness === "codex" ? ".codex-plugin" : ".kiro-plugin";
+    writeFileSync(join(root, manifestDir, "plugin.json"), `${JSON.stringify({ name, version: "0.1.0" })}\n`);
+    mkdirSync(join(root, ".aidlc-plugin"), { recursive: true });
+    writeFileSync(join(root, ".aidlc-plugin", "plugin.json"), `${JSON.stringify({ name, version: "0.1.0" })}\n`);
+    return root;
+  }
+
+  function otherVendorRoot(harness: "claude" | "codex"): string {
+    const root = temp("aidlc-other-vendor-");
+    const manifestDir = harness === "claude" ? ".claude-plugin" : ".codex-plugin";
+    mkdirSync(join(root, manifestDir), { recursive: true });
+    writeFileSync(join(root, manifestDir, "plugin.json"), `${JSON.stringify({ name: "other-tool", version: "1.0.0" })}\n`);
+    return root;
+  }
+
+  test("the plugin's own manifest names it, whatever the host calls it", () => {
+    const own = ownNamedRoot("claude");
+    expect(normalizeInstalledPlugin(own, "claude")).toEqual(expect.objectContaining({
+      key: "acme-standards",
+      hostName: "acme-standards",
+    }));
+    const ours = ownNamedRoot("claude", "test-pro");
+    writeFileSync(join(ours, ".claude-plugin", "plugin.json"), `${JSON.stringify({ name: "aidlc-test-pro", version: "0.1.0" })}\n`);
+    expect(normalizeInstalledPlugin(ours, "claude")).toEqual(expect.objectContaining({
+      key: "test-pro",
+      hostName: "aidlc-test-pro",
+    }));
+    // A build from before the plugin's own manifest travelled with it.
+    expect(normalizeInstalledPlugin(pluginRoot(), "claude")).toEqual(expect.objectContaining({ key: "test-pro" }));
+  });
+
+  test("Claude lists a plugin under its author's names and leaves other vendors' entries alone", () => {
+    const own = ownNamedRoot("claude");
+    const legacy = pluginRoot();
+    const other = otherVendorRoot("claude");
+    const fixtureDir = temp("aidlc-claude-inventory-");
+    const record = (installPath: string) => [{ scope: "user", installPath, version: "0.1.0" }];
+    writeFileSync(join(fixtureDir, "installed.json"), `${JSON.stringify({
+      version: 2,
+      plugins: {
+        "acme-standards@acme-aidlc-plugins": record(own),
+        "aidlc-test-pro@aidlc-plugins": record(legacy),
+        "other-tool@other": [{ scope: "user", installPath: other, version: "1.0.0" }],
+        "broken-tool@other": [],
+        "pathless-tool@other": [{ scope: "user", version: "1.0.0" }],
+      },
+    })}\n`);
+    writeFileSync(join(fixtureDir, "settings.json"), "{}\n");
+    process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY = join(fixtureDir, "installed.json");
+    process.env.AIDLC_CLAUDE_SETTINGS = join(fixtureDir, "settings.json");
+    process.env.AIDLC_HARNESS_DIR = ".claude";
+    const result = discoverPluginInventory(".claude");
+    expect(result.invalid).toEqual([]);
+    expect(result.installed.map((plugin) => [plugin.key, plugin.hostName])).toEqual([
+      ["acme-standards", "acme-standards"],
+      ["test-pro", "aidlc-test-pro"],
+    ]);
+  });
+
+  test("Codex lists a plugin under its author's names and leaves other vendors' entries alone", () => {
+    const codexHome = temp("aidlc-codex-home-");
+    const cache = (marketplace: string, plugin: string, source: string): void => {
+      const installed = join(codexHome, "plugins", "cache", marketplace, plugin, "0.1.0");
+      mkdirSync(join(installed, ".."), { recursive: true });
+      cpSync(source, installed, { recursive: true });
+    };
+    cache("acme-aidlc-plugins", "acme-standards", ownNamedRoot("codex"));
+    cache("other", "other-tool", otherVendorRoot("codex"));
+    writeFileSync(join(codexHome, "config.toml"), [
+      '[plugins."acme-standards@acme-aidlc-plugins"]', "enabled = true",
+      '[plugins."other-tool@other"]', "enabled = true",
+      '[plugins."missing-tool@other"]', "enabled = true",
+      "",
+    ].join("\n"));
+    process.env.AIDLC_CODEX_HOME = codexHome;
+    process.env.AIDLC_HARNESS_DIR = ".codex";
+    const result = discoverPluginInventory(".codex");
+    expect(result.invalid).toEqual([]);
+    expect(result.installed.map((plugin) => [plugin.key, plugin.hostName])).toEqual([
+      ["acme-standards", "acme-standards"],
+    ]);
+  });
+
+  test("a hook's own root named by its author is the plugin it composes", () => {
+    process.env.AIDLC_PLUGIN_ROOT = ownNamedRoot("kiro");
+    expect(discoverPluginInventory(".kiro")).toEqual(expect.objectContaining({
+      capability: "current-root-only",
+      installed: [expect.objectContaining({ key: "acme-standards", hostName: "acme-standards" })],
+      invalid: [],
+    }));
+  });
+});
+
+// A plugin someone else rebuilt under its own name, installed beside its old
+// aidlc-<name> copy: AI-DLC uses the rebuilt one, says once which old copy to
+// remove with the host's own command, and composes every plugin as usual.
+describe("t242 a rebuilt plugin installed beside its old copy", () => {
+  function claudeProject(): string {
+    const project = temp("aidlc-plugin-twice-");
+    cpSync(join(REPO_ROOT, "dist", "claude"), project, { recursive: true });
+    return project;
+  }
+
+  // The old aidlc-<name> copy, as 2.11.0 built it (before the plugin's own
+  // manifest travelled with it) or as the 2.11.1 previews built it (with it).
+  function oldCopy(harness: "claude" | "codex", withOwnManifest: boolean): string {
+    const root = temp("aidlc-plugin-old-copy-");
+    cpSync(join(REPO_ROOT, "dist", "plugins", "test-pro", harness), root, { recursive: true });
+    if (!withOwnManifest) rmSync(join(root, ".aidlc-plugin"), { recursive: true, force: true });
+    expect(existsSync(join(root, ".aidlc-plugin", "plugin.json"))).toBe(withOwnManifest);
+    return root;
+  }
+
+  // Rebuilt by its author with this release: its own name, its own manifest.
+  function rebuiltCopy(harness: "claude" | "codex"): string {
+    const root = temp("aidlc-plugin-rebuilt-");
+    cpSync(join(REPO_ROOT, "dist", "plugins", "test-pro", harness), root, { recursive: true });
+    const manifestDir = harness === "claude" ? ".claude-plugin" : ".codex-plugin";
+    const host = join(root, manifestDir, "plugin.json");
+    writeFileSync(host, `${JSON.stringify({ ...JSON.parse(readFileSync(host, "utf-8")), name: "test-pro" }, null, 2)}\n`);
+    return root;
+  }
+
+  function claudeRegistry(entries: Record<string, string>): void {
+    const fixtureDir = temp("aidlc-claude-twice-");
+    writeFileSync(join(fixtureDir, "installed.json"), JSON.stringify({
+      version: 2,
+      plugins: Object.fromEntries(Object.entries(entries).map(([id, root]) => [id, [{ scope: "user", installPath: root, version: TEST_PRO_VERSION }]])),
+    }));
+    writeFileSync(join(fixtureDir, "settings.json"), "{}\n");
+    process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY = join(fixtureDir, "installed.json");
+    process.env.AIDLC_CLAUDE_SETTINGS = join(fixtureDir, "settings.json");
+    process.env.AIDLC_HARNESS_DIR = ".claude";
+  }
+
+  for (const { shape, withOwnManifest } of [
+    { shape: "", withOwnManifest: false },
+    { shape: " (an old copy a 2.11.1 preview built, with its own manifest)", withOwnManifest: true },
+  ]) {
+    test(`Claude Code: sync composes the rebuilt copy and names the old one to remove${shape}`, async () => {
+      const project = claudeProject();
+      const rebuilt = rebuiltCopy("claude");
+      claudeRegistry({ "aidlc-test-pro@aidlc-plugins": oldCopy("claude", withOwnManifest), "test-pro@test-pro": rebuilt });
+      const result = await syncPlugins(project, [], ".claude");
+      expect(result.synced).toEqual(["test-pro"]);
+      expect(result.superseded).toEqual([
+        "test-pro is installed twice; AI-DLC uses the rebuilt one. Remove the old copy: /plugin uninstall aidlc-test-pro@aidlc-plugins",
+      ]);
+      const stamp = JSON.parse(readFileSync(join(project, ".claude", "tools", "data", "plugin-compose-test-pro.json"), "utf-8"));
+      expect(stamp.sourceHash).toBe(pluginSourceHash(rebuilt));
+      expect(collectPluginStatus(project, ".claude").statuses).toEqual([
+        expect.objectContaining({
+          key: "test-pro",
+          action: "attention",
+          message: "installed twice; AI-DLC uses the rebuilt one. Remove the old copy: /plugin uninstall aidlc-test-pro@aidlc-plugins",
+        }),
+      ]);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`Codex: the host list keeps the rebuilt copy and names the old one to remove${shape}`, () => {
+      const codexHome = temp("aidlc-codex-twice-");
+      const cache = (marketplace: string, plugin: string, source: string): void => {
+        const installed = join(codexHome, "plugins", "cache", marketplace, plugin, TEST_PRO_VERSION);
+        mkdirSync(join(installed, ".."), { recursive: true });
+        cpSync(source, installed, { recursive: true });
+      };
+      cache("aidlc-plugins", "aidlc-test-pro", oldCopy("codex", withOwnManifest));
+      cache("test-pro", "test-pro", rebuiltCopy("codex"));
+      writeFileSync(join(codexHome, "config.toml"), [
+        '[plugins."aidlc-test-pro@aidlc-plugins"]', "enabled = true",
+        '[plugins."test-pro@test-pro"]', "enabled = true", "",
+      ].join("\n"));
+      process.env.AIDLC_CODEX_HOME = codexHome;
+      process.env.AIDLC_HARNESS_DIR = ".codex";
+      const inventory = discoverPluginInventory(".codex");
+      expect(inventory.invalid).toEqual([]);
+      expect(inventory.installed.map((plugin) => [plugin.key, plugin.hostName])).toEqual([["test-pro", "test-pro"]]);
+      expect(supersededLines(inventory)).toEqual([
+        "test-pro is installed twice; AI-DLC uses the rebuilt one. Remove the old copy: codex plugin remove aidlc-test-pro@aidlc-plugins",
+      ]);
+    });
+
+    test(`the old copy's own session-start hook leaves the composing to the rebuilt one${shape}`, async () => {
+      const project = claudeProject();
+      const old = oldCopy("claude", withOwnManifest);
+      claudeRegistry({ "aidlc-test-pro@aidlc-plugins": old, "test-pro@test-pro": rebuiltCopy("claude") });
+      process.env.CLAUDE_PLUGIN_ROOT = old;
+      const result = await syncPlugins(project, [], ".claude");
+      expect(result.synced).toEqual([]);
+      expect(existsSync(join(project, ".claude", "tools", "data", "plugin-compose-test-pro.json"))).toBe(false);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  test("two rebuilt copies of one plugin are still ambiguous, as before", () => {
+    claudeRegistry({ "test-pro@one": rebuiltCopy("claude"), "test-pro@two": rebuiltCopy("claude") });
+    const inventory = discoverPluginInventory(".claude");
+    expect(inventory.installed).toEqual([]);
+    expect(inventory.invalid.map((item) => item.message)).toEqual([
+      'installed plugin identity "test-pro" is ambiguous across 2 manifests',
+    ]);
   });
 });

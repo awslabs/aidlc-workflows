@@ -334,6 +334,13 @@ export function swarmUnitTestCommand(unit: string): string {
   return aidlcDispatcherInvocation(`swarm check ${quoteCommandArgument(unit)} --show-output`);
 }
 
+// The command that runs one check by hand, in the sensor tool's usage and each
+// check script's: the dispatcher hands the script the stage's templates and
+// inputs and records the result, which the script run bare does not.
+export function sensorFireUsage(id = "<id>"): string {
+  return aidlcDispatcherInvocation(`sensor fire ${id} --stage <slug> --output-path <path>`);
+}
+
 export function aidlcToolInvocation(
   route: string,
   sourceTool?: string,
@@ -487,12 +494,15 @@ export function runtimeHarnessName(
   return "claude";
 }
 
-// The tools that hide a Stop-hook block's reason from the person: Kiro CLI
-// shows none of it, opencode hands it to the agent as a hidden synthetic part,
-// and Kiro IDE (whose tree Kiro CLI v3 also runs) drops Stop output. There the
-// agent says the carrying-on line itself.
-export function hidesStopNote(harnessName: string): boolean {
-  return harnessName === "kiro" || harnessName === "kiro-ide" || harnessName === "opencode";
+/**
+ * Pin the harness a command names (`--harness-dir`) for this process and the
+ * tools it loads: a compiled aidlc has already pinned the first one installed
+ * here, which in a project with Claude Code beside it is .claude.
+ */
+export function pinNamedHarness(projectDir: string, harnessDir: string): void {
+  process.env.AIDLC_HARNESS_DIR = harnessDir;
+  delete process.env.AIDLC_HARNESS_NAME;
+  process.env.AIDLC_HARNESS_NAME = runtimeHarnessName(projectDir, harnessDir);
 }
 
 function distributionFor(harnessDir: string, projectDir = runtimeProjectDir()): string {

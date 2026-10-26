@@ -40,6 +40,15 @@ export function versionRoot(version: string): string {
   return join(versionsRoot(), requireVersion(version));
 }
 
+// AI-DLC's own plugin catalogue keeps this one path across releases, so a
+// person adds it to Claude Code or Codex once. Its record lists the files the
+// last refresh wrote, which is what makes them AI-DLC's.
+export function pluginCatalogueRoot(): string {
+  return join(installRoot(), "plugins");
+}
+
+export const PLUGIN_CATALOGUE_RECORD = ".aidlc-catalogue.json";
+
 export function lexicalBinRoot(): string {
   const explicit = process.env.AIDLC_BIN_DIR?.trim();
   if (explicit) return isAbsolute(explicit) ? explicit : resolve(process.cwd(), explicit);

@@ -3,7 +3,9 @@
 // IDE 1.2.37). Its switch, `kiroAgent.workflows.enabled`, lives only in Kiro's
 // user settings, so it covers every project: AI-DLC turns it off when the person
 // says yes (setup, `config --yes`, a chat), keeps their answer once per machine,
-// and never touches any other byte of their settings file.
+// and never touches any other byte of their settings file. Kiro CLI, the row's
+// other host, has its own switch (`chat.enableWorkflows`, measured on Kiro CLI
+// 2.31.1 and 2.32.0) with the same question and an answer of its own.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -35,7 +37,7 @@ const HOST_ENV = [
   "CODEX_THREAD_ID", "CODEX_SESSION_ID", "AIDLC_SESSION_OVERRIDE", "AIDLC_SESSION_OVERRIDE_SOURCE",
   "AIDLC_PROJECT_DIR", "AIDLC_HARNESS_NAME", "AIDLC_HARNESS_DIR", "AIDLC_RUNTIME_ROOT",
   "AIDLC_RUNTIME_HARNESS_ROOT", "AIDLC_COMPILED_EXECUTABLE", "VSCODE_CODE_CACHE_PATH",
-  "AIDLC_TEST_KIRO_IDE_SETTINGS", "AIDLC_TEST_CONFIG_DETECTION_JSON",
+  "AIDLC_TEST_KIRO_IDE_SETTINGS", "AIDLC_TEST_CONFIG_DETECTION_JSON", "AIDLC_TEST_KIRO_SESSION_JSON", "KIRO_HOME",
 ];
 
 const temporary: string[] = [];
@@ -68,6 +70,9 @@ function machine(settings?: string): { env: Record<string, string>; settingsPath
       AIDLC_INSTALL_ROOT: join(root, "aidlc"),
       AIDLC_BIN_DIR: join(root, "aidlc", "bin"),
       AIDLC_TEST_KIRO_IDE_SETTINGS: settingsPath,
+      // The runner sets it too; named here so a plain `bun test` of this file
+      // never reaches the person's own kiro-cli and Kiro CLI settings.
+      AIDLC_TEST_NAME: "t-kiro-ide-workflows",
     },
   };
 }
@@ -267,6 +272,8 @@ describe("the chat asks once", () => {
       expect(line).toContain("Kiro's Workflows feature is on, and it stops AI-DLC's reviews and helpers from running in this chat.");
       expect(line).toContain("Do you want me to turn Workflows off? It is a Kiro setting for all your projects");
       expect(line).toContain("run `bun .kiro/tools/aidlc.ts config trust --kiro-workflows off --yes`");
+      // A first message that already asks to turn it off or on is the answer, never asked again.
+      expect(line).toStartWith("ASK ONCE: if the person's message already asks to turn this Kiro's Workflows feature off or to keep it on (the Kiro skill's Workflows note says which Kiro a request means), that is their answer and you do not ask: do what it asks as that note says (keeping a switch on runs its setter with `on --yes`, so the answer is kept) and tell them what it prints. Otherwise, after you answer their message, ask them");
       expect(readKiroWorkflowsAnswer()).toBe("asked");
       expect(kiroIdeWorkflowsAsk("bun .kiro/tools/aidlc.ts", process.env)).toBe("");
     });
@@ -441,12 +448,23 @@ describe("config trust and doctor", () => {
     const off = runInit(["config", "trust", "--project-dir", project, "--kiro-workflows", "off", "--yes"], project, m.env);
     expect(off.status, off.out).toBe(0);
     expect(off.out).toContain("Turned Kiro's Workflows feature off");
+    const offAgain = runInit(["config", "trust", "--project-dir", project, "--kiro-workflows", "off", "--yes"], project, m.env);
+    expect(offAgain.status, offAgain.out).toBe(0);
+    expect(offAgain.out).toContain("Kiro's Workflows feature is already off; nothing changed.");
     expect(readKiroIdeWorkflows(m.env).enabled).toBe(false);
     withEnv(m.env, () => expect(readKiroWorkflowsAnswer()).toBe("off"));
 
     const on = runInit(["config", "trust", "--project-dir", project, "--kiro-workflows", "on", "--yes"], project, m.env);
     expect(on.status, on.out).toBe(0);
     expect(on.out).toContain("Turned Kiro's Workflows feature back on");
+    expect(readFileSync(m.settingsPath, "utf-8")).toBe(ON_WITH_COMMENTS);
+    withEnv(m.env, () => expect(readKiroWorkflowsAnswer()).toBe("on"));
+
+    // Keeping it on when it is on changes nothing and keeps the answer, with the way to turn it off later.
+    const kept = runInit(["config", "trust", "--project-dir", project, "--kiro-workflows", "on", "--yes"], project, m.env);
+    expect(kept.status, kept.out).toBe(0);
+    expect(kept.out).toContain("Kept Kiro's Workflows feature on; AI-DLC will not ask again. To turn it off later:");
+    expect(kept.out).not.toContain("Turned Kiro's Workflows feature back on");
     expect(readFileSync(m.settingsPath, "utf-8")).toBe(ON_WITH_COMMENTS);
     withEnv(m.env, () => expect(readKiroWorkflowsAnswer()).toBe("on"));
 
@@ -469,6 +487,12 @@ describe("config trust and doctor", () => {
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain("--kiro-workflows applies to Kiro IDE projects");
     expect(readFileSync(m.settingsPath, "utf-8")).toBe(ON_WITH_COMMENTS);
+    const cli = kiroCli(m, { "chat.enableWorkflows": true });
+    const cliRefused = runInit(["config", "trust", "--project-dir", project, "--kiro-cli-workflows", "off", "--yes"], project, { ...m.env, ...cli.env });
+    expect(cliRefused.status).not.toBe(0);
+    expect(cliRefused.out).toContain("--kiro-cli-workflows applies to Kiro IDE projects");
+    expect(writesIn(cli.writes)).toEqual([]);
+    expect(existsSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-cli-workflows"))).toBe(false);
   });
 });
 
@@ -504,5 +528,180 @@ describe("a Kiro IDE chat's first prompt", () => {
     expect(first).toContain("config trust --kiro-workflows off --yes");
     expect(await prompt()).not.toContain("Workflows");
     expect(existsSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-ide-workflows"))).toBe(true);
+  });
+});
+
+// Kiro CLI's own switch, read and set through `kiro-cli settings` (here the
+// Kiro session seam stands in for Kiro CLI and logs each write).
+function kiroCli(m: ReturnType<typeof machine>, current: Record<string, unknown> | null, failWrite?: string) {
+  const writes = join(m.root, "writes.jsonl");
+  const kiroHome = join(m.root, "kiro-home");
+  return {
+    writes,
+    settingsPath: join(kiroHome, "settings", "cli.json"),
+    env: {
+      AIDLC_TEST_KIRO_SESSION_JSON: JSON.stringify({ current, writes, ...(failWrite ? { failWrite } : {}) }),
+      KIRO_HOME: kiroHome,
+    },
+  };
+}
+
+const writesIn = (path: string): string[][] =>
+  existsSync(path) ? readFileSync(path, "utf-8").trim().split("\n").map((line) => JSON.parse(line) as string[]) : [];
+
+describe("Kiro CLI's own Workflows switch", () => {
+  const CLI_ON = { "chat.enableWorkflows": true };
+
+  test("trust and doctor name it with its own command, and an answer about Kiro IDE does not hide it", () => {
+    const m = machine("{}\n");
+    const { project } = installKiroIde(m.env);
+    const cli = kiroCli(m, CLI_ON);
+    const env = { ...m.env, ...cli.env };
+    withEnv(env, () => {
+      recordKiroWorkflowsAnswer("on");
+      const issue = trustStatus(project, ".kiro", "kiro-ide").issues.find((entry) => entry.id === "kiro-cli-workflows-on");
+      expect(issue?.message).toContain("Kiro CLI's Workflows feature is on, so AI-DLC's reviews and helpers do not run in your Kiro CLI chats");
+      const action = postApplyOutstandingActions(project, ".kiro", "kiro-ide").find((entry) => entry.id === "kiro-cli-workflows-on");
+      expect(action?.command).toMatch(/config trust --kiro-cli-workflows off$/);
+    });
+    const doctor = spawnSync(process.execPath, [join(REPO_ROOT, "core", "tools", "aidlc-doctor.ts"), "--project-dir", project], {
+      cwd: project,
+      env: childEnv(env),
+      encoding: "utf-8",
+    });
+    const said = `${doctor.stdout}${doctor.stderr}`;
+    expect(said).toContain("Kiro CLI Workflows is on, so AI-DLC's reviews and helpers do not run in your Kiro CLI chats");
+    expect(said).toContain("config trust --kiro-cli-workflows off");
+    const show = runInit(["config", "trust", "--project-dir", project, "--show", "--json"], project, env);
+    expect(show.status, show.out).toBe(0);
+    const data = JSON.parse(show.out).data;
+    expect(data.kiroCliWorkflows).toEqual({ enabled: true, settingsPath: cli.settingsPath, answer: null });
+    expect(data.kiroWorkflows).toEqual({ enabled: false, readable: true, settingsPath: m.settingsPath, answer: "on" });
+    const human = runInit(["config", "trust", "--project-dir", project, "--show"], project, env);
+    expect(human.out).toContain(`Kiro CLI Workflows: on (${cli.settingsPath})`);
+    // Off, or no Kiro CLI answering here: nothing to name.
+    withEnv({ ...m.env, ...kiroCli(m, {}).env }, () => {
+      expect(trustStatus(project, ".kiro", "kiro-ide").issues.some((entry) => entry.id === "kiro-cli-workflows-on")).toBe(false);
+    });
+    withEnv({ ...m.env, ...kiroCli(m, null).env }, () => {
+      expect(trustStatus(project, ".kiro", "kiro-ide").kiroCliWorkflows).toBeUndefined();
+    });
+  });
+
+  test("`config --yes` turns it off through Kiro CLI and keeps its own answer; Kiro IDE's is left alone", () => {
+    const m = machine("{}\n");
+    const cli = kiroCli(m, CLI_ON);
+    const setup = installKiroIde({ ...m.env, ...cli.env });
+    expect(writesIn(cli.writes)).toContainEqual(["settings", "chat.enableWorkflows", "false"]);
+    expect(setup.out).toContain("Turned Kiro CLI's Workflows feature off, so AI-DLC's reviews and helpers run in your Kiro CLI chats.");
+    expect(setup.out).toContain("Quit Kiro CLI and start `kiro-cli` again");
+    expect(readFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-cli-workflows"), "utf-8")).toBe("off\n");
+    expect(existsSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-ide-workflows"))).toBe(false);
+    expect(readFileSync(m.settingsPath, "utf-8")).toBe("{}\n");
+  });
+
+  test("`config trust --kiro-cli-workflows on|off` sets it through Kiro CLI, and says so when Kiro CLI does not save it", () => {
+    const m = machine("{}\n");
+    const { project } = installKiroIde(m.env);
+    const off = kiroCli(m, { "chat.enableWorkflows": false });
+    const on = runInit(["config", "trust", "--project-dir", project, "--kiro-cli-workflows", "on", "--yes"], project, { ...m.env, ...off.env });
+    expect(on.status, on.out).toBe(0);
+    expect(on.out).toContain("Turned Kiro CLI's Workflows feature back on");
+    expect(writesIn(off.writes)).toEqual([["settings", "chat.enableWorkflows", "true"]]);
+    expect(readFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-cli-workflows"), "utf-8")).toBe("on\n");
+
+    const keep = kiroCli(m, CLI_ON);
+    const keptWrites = writesIn(keep.writes);
+    const kept = runInit(["config", "trust", "--project-dir", project, "--kiro-cli-workflows", "on", "--yes"], project, { ...m.env, ...keep.env });
+    expect(kept.status, kept.out).toBe(0);
+    expect(kept.out).toContain("Kept Kiro CLI's Workflows feature on; AI-DLC will not ask again. To turn it off later:");
+    expect(kept.out).not.toContain("Turned Kiro CLI's Workflows feature back on");
+    expect(writesIn(keep.writes)).toEqual(keptWrites);
+    expect(readFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-cli-workflows"), "utf-8")).toBe("on\n");
+
+    const alreadyOff = kiroCli(m, { "chat.enableWorkflows": false });
+    const offAgain = runInit(["config", "trust", "--project-dir", project, "--kiro-cli-workflows", "off", "--yes"], project, { ...m.env, ...alreadyOff.env });
+    expect(offAgain.status, offAgain.out).toBe(0);
+    expect(offAgain.out).toContain("Kiro CLI's Workflows feature is already off; nothing changed.");
+    expect(readFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-cli-workflows"), "utf-8")).toBe("off\n");
+
+    // A write Kiro CLI refuses keeps whatever answer was there.
+    writeFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-cli-workflows"), "on\n");
+    const refused = kiroCli(m, CLI_ON, "chat.enableWorkflows");
+    const failed = runInit(["config", "trust", "--project-dir", project, "--kiro-cli-workflows", "off", "--yes"], project, { ...m.env, ...refused.env });
+    expect(failed.status).not.toBe(0);
+    expect(failed.out).toContain("In Kiro CLI, open /settings and turn Workflows off instead.");
+    expect(readFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-cli-workflows"), "utf-8")).toBe("on\n");
+
+    const combined = kiroCli(m, CLI_ON);
+    const before = writesIn(combined.writes);
+    const both = runInit(
+      ["config", "trust", "--project-dir", project, "--kiro-cli-workflows", "off", "--kiro-terminal", "powershell", "--yes"],
+      project,
+      { ...m.env, ...combined.env },
+    );
+    expect(both.status).not.toBe(0);
+    expect(both.out).toContain("--kiro-cli-workflows cannot be combined with --kiro-terminal");
+    expect(writesIn(combined.writes)).toEqual(before);
+
+    const none = runInit(["config", "trust", "--project-dir", project, "--kiro-cli-workflows", "off", "--yes"], project, m.env);
+    expect(none.status).not.toBe(0);
+    expect(none.out).toContain("Kiro CLI did not answer here");
+    expect(readFileSync(m.settingsPath, "utf-8")).toBe("{}\n");
+  });
+
+  test("a trust walk preview (--dry-run) asks neither Workflows question and changes no Kiro setting", () => {
+    const m = machine(ON_WITH_COMMENTS);
+    const { project } = installKiroIde({ ...m.env, AIDLC_TEST_KIRO_IDE_SETTINGS: join(m.root, "none.json") });
+    const cli = kiroCli(m, CLI_ON);
+    const walk = runInit(
+      ["config", "trust", "--project-dir", project, "--harness", "kiro-ide", "--dry-run"],
+      project,
+      { ...m.env, ...cli.env, AIDLC_TEST_CONFIG_TTY: "1", AIDLC_TEST_CONFIG_INPUT: "y\ny\ny\nn\n" },
+    );
+    expect(walk.status, walk.out).toBe(0);
+    expect(walk.out).not.toContain("Turn Workflows off?");
+    expect(walk.out).not.toContain("Turn it off?");
+    expect(readFileSync(m.settingsPath, "utf-8")).toBe(ON_WITH_COMMENTS);
+    expect(writesIn(cli.writes)).toEqual([]);
+    expect(existsSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-ide-workflows"))).toBe(false);
+    expect(existsSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-cli-workflows"))).toBe(false);
+  });
+
+  test("a Kiro CLI chat's first prompt asks once about Kiro CLI's switch; a Kiro IDE chat does not", async () => {
+    const m = machine("{}\n");
+    const cli = kiroCli(m, CLI_ON);
+    const proj = createTestProject();
+    temporary.push(proj);
+    const root = join(REPO_ROOT, "dist", "kiro-ide");
+    cpSync(join(root, ".kiro"), join(proj, ".kiro"), { recursive: true });
+    cpSync(join(root, "aidlc"), join(proj, "aidlc"), { recursive: true });
+    const prompt = async (extra: Record<string, string>): Promise<string> => {
+      const child = Bun.spawn(
+        [process.execPath, join(proj, ".kiro", "tools", "aidlc.ts"), "engine", "adapter", "kiro-ide", "record-human-turn"],
+        {
+          cwd: proj,
+          stdin: new Blob([JSON.stringify({ cwd: proj, hook_event_name: "UserPromptSubmit", session_id: `sess_${randomUUID()}`, prompt: "hello" })]),
+          stdout: "pipe",
+          stderr: "pipe",
+          env: childEnv({ ...m.env, ...cli.env, ...extra }),
+        },
+      );
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect(code, stderr).toBe(0);
+      return stdout;
+    };
+    expect(await prompt({ VSCODE_CODE_CACHE_PATH: join(m.root, "ud", "CachedData", "abc") })).not.toContain("Workflows");
+    const first = await prompt({});
+    expect(first).toContain("Kiro CLI's Workflows feature is on, and it stops AI-DLC's reviews and helpers from running in this chat.");
+    expect(first).toContain("config trust --kiro-cli-workflows off --yes");
+    expect(first).toContain("ASK ONCE: if the person's message already asks to turn this Kiro's Workflows feature off or to keep it on (the Kiro skill's Workflows note says which Kiro a request means), that is their answer and you do not ask: do what it asks as that note says (keeping a switch on runs its setter with `on --yes`, so the answer is kept) and tell them what it prints. Otherwise, after you answer their message, ask them");
+    expect(await prompt({})).not.toContain("Workflows");
+    expect(readFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-cli-workflows"), "utf-8")).toBe("asked\n");
+    expect(existsSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-ide-workflows"))).toBe(false);
   });
 });

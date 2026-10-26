@@ -5,7 +5,7 @@ structured, verifiable software-delivery workflows. One harness-neutral core
 runs natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode,
 and GitHub Copilot.
 
-![version](https://img.shields.io/badge/version-2.11.0-blue)
+![version](https://img.shields.io/badge/version-2.11.1-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 
 The Quick Start below installs the latest stable AI-DLC release.
@@ -121,7 +121,7 @@ audited lifecycle:
 - 11 workflow profiles for features, bug fixes, infrastructure, security,
   proofs of concept, enterprise delivery, and other common work
 - Human approval gates and source-bound review evidence
-- 119-event audit trail plus persistent state, team knowledge, and learned rules
+- 126-event audit trail plus persistent state, team knowledge, and learned rules
 - The same deterministic engine across every supported harness
 
 Start with [Workflow Profiles](docs/guide/workflow-profiles.md) to compare
@@ -140,7 +140,7 @@ for the architecture and methodology.
 | [Getting Started](docs/guide/01-getting-started.md) | Installing, configuring, and running your first workflow |
 | [User Guide](docs/guide/00-introduction.md) | Using workflows, profiles, agents, knowledge, and approval gates |
 | [Harness guides](docs/guide/harnesses/README.md) | Handling provider, trust, and runtime differences |
-| [Install and Lifecycle](docs/guide/18-install-and-lifecycle.md) | Updating, pinning, installing offline, using mirrors, or uninstalling |
+| [Install and Lifecycle](docs/guide/18-install-and-lifecycle.md) | Updating, pinning, installing offline, using mirrors, uninstalling, or removing AI-DLC from a project |
 | [Harness Engineer Guide](docs/harness-engineering/00-overview.md) | Reshaping stages, agents, rules, sensors, and knowledge |
 | [Development and Releases](DEVELOPERS.md) | Taking a PR through AI review, preview testing, and stable publication |
 | [Developer Reference](docs/reference/00-overview.md) | Changing the engine, hooks, packaging, or tests |
@@ -148,7 +148,7 @@ for the architecture and methodology.
 ## Repository Layout
 
 - `core/` - hand-authored, harness-neutral methodology and engine
-- `core/tools/` - 93 aidlc-*.ts engine and authoring tools
+- `core/tools/` - 100 aidlc-*.ts engine and authoring tools
 - `harness/<name>/` - thin, harness-specific manifests and integrations
 - `plugins/<name>/` - optional AIDLC plugins
 - `scripts/` - packaging, binary, installer, and release tooling

@@ -22,6 +22,7 @@ import {
   test,
 } from "bun:test";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -30,6 +31,7 @@ import {
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   auditBlockField,
   findStageBySlug,
@@ -42,11 +44,12 @@ import {
   reviewArtifactEntries,
   reviewRecordDigest,
   serializeReviewRecord,
+  setGuardPolicyLine,
   sourcePathKey,
   writeUnitSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
-  acceptedRiskDispositionField,
+  approvalDispositionField,
   hydrateReviewArtifactContexts,
   parseReviewArtifact,
   readReviewArtifactContexts,
@@ -70,6 +73,17 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+
+// The person's message, kept as the prompt hook keeps it: its id is what a
+// review they asked for names (--person-asked --message <id>).
+function personAsks(proj: string, words: string): string {
+  const kept = saveMessage(proj, {
+    session: null, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text: words, picker: null,
+    words, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+  });
+  appendAuditEntry("HUMAN_TURN", { "Message Id": kept.id }, proj);
+  return kept.id;
+}
 
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -372,6 +386,35 @@ function seedReviewedPerUnitStage(
   return artifact;
 }
 
+// A per-Unit stage's files written once for the stage (no Units Generation),
+// with one review section and one Major finding in its primary artifact.
+function seedReviewedStageLevelFiles(
+  proj: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+): string {
+  const entries = reviewArtifactEntries(proj, stage) ?? [];
+  const primary = entries.find((entry) =>
+    entry.path !== null && entry.required && entry.path.endsWith(".md")
+  );
+  if (primary?.path === null || primary === undefined) {
+    throw new Error(`No reviewable artifact for ${stage.slug}`);
+  }
+  for (const entry of entries) {
+    if (entry.path === null) continue;
+    mkdirSync(dirname(entry.path), { recursive: true });
+    writeFileSync(entry.path, `# ${entry.logicalPath}\n`, "utf-8");
+  }
+  const artifact = relative(proj, primary.path).replaceAll("\\", "/");
+  writeFileSync(
+    primary.path,
+    reviewMarkdown("NOT-READY", [
+      `| R-01 | Major | ${artifact} > section | ${stage.slug} concern | Re-check ${stage.slug} | New |`,
+    ]),
+    "utf-8",
+  );
+  return artifact;
+}
+
 function auditBlock(
   title: string,
   timestamp: string,
@@ -415,6 +458,60 @@ function engineOwnedFindingProject(
     { gate: "start" },
   );
   return project;
+}
+
+// #2208's run: an advisory review with a Critical and a Minor, the conductor's
+// fix to the reviewed file after it, kept under Guard Policy `mode`, and the
+// gate presented again, which records the kept change once.
+function fixedAfterReviewProject(
+  mode: "off" | "relaxed",
+): ReturnType<typeof requirementProject> {
+  const project = requirementProject([]);
+  const statePath = seededStateFile(project.proj);
+  writeFileSync(
+    statePath,
+    setGuardPolicyLine(readFileSync(statePath, "utf-8"), `${mode} (set by you)`),
+    "utf-8",
+  );
+  writeFileSync(project.artifact, "# Requirements\n\nFR-1: a caller can force a post.\n", "utf-8");
+  recordReviewViaRecord(
+    project.proj,
+    reviewReportMarkdown("NOT-READY", [], [
+      `| Critical | ${project.relativeArtifact} > FR-1 | A caller can push a balance below the floor | Remove the caller-settable flag |`,
+      `| Minor | ${project.relativeArtifact} > FR-2 | Wording is vague | Tighten it |`,
+    ]),
+    { verdict: "NOT-READY", gate: "start" },
+  );
+  appendFileSync(project.artifact, "\nThere is no caller-settable flag.\n", "utf-8");
+  appendAuditEntry(
+    "ARTIFACT_UPDATED",
+    {
+      File: project.artifact,
+      Tool: "Edit",
+      Context: "inception > requirements-analysis > requirements.md",
+    },
+    project.proj,
+  );
+  const regate = run(STATE, ["gate-start", "requirements-analysis"], project.proj);
+  expect(regate.status, regate.out).toBe(0);
+  expect(regate.stdout).toContain("changed after the Requirements Analysis review; carrying on.");
+  return project;
+}
+
+function approveGate(proj: string): void {
+  const approved = run(
+    ORCHESTRATE,
+    ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
+    proj,
+  );
+  expect(approved.status, approved.out).toBe(0);
+  expect(readAuditShardEvents(proj).some((row) => row.event === "GATE_APPROVED")).toBe(true);
+}
+
+function recordedDispositions(proj: string, stageSlug: string, unit?: string) {
+  return [...readReviewFindingDispositions(proj, stageSlug, unit).values()]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map(({ id, status, decided_at_severity }) => ({ id, status, decided_at_severity }));
 }
 
 function requestChanges(
@@ -549,6 +646,55 @@ function appendLegacyRecordReview(
   );
 }
 
+// After a compaction an agent that no longer holds the reviewer protocol asks
+// the tool itself: live on Copilot it tried `--help`, a verb-less `--stage`
+// and `--stage=`, each answered "Missing --stage <slug>." or "Expected --flag
+// value", before it found a verb. Help prints each verb's line (#2449's shape)
+// and a missing or unknown verb is named as one, before any flag is read.
+describe("t304 the brief tool answers --help and names its verbs", () => {
+  const VERB_LINES = [
+    "engine review-brief review --stage <slug> --why <first|revision|stale>",
+    "engine review-brief context --stage <slug>",
+    "engine review-brief summary --stage <slug> --questions-file <path>",
+  ];
+
+  test("--help, -h, help and no arguments print every verb's usage and exit 0", () => {
+    const { proj } = requirementProject([]);
+    for (const help of ["--help", "-h", "help"]) {
+      const r = run(REVIEW_BRIEF, [help], proj);
+      expect(r.status, r.out).toBe(0);
+      for (const line of VERB_LINES) expect(r.stdout, help).toContain(line);
+    }
+    const bare = Bun.spawnSync({ cmd: [process.execPath, REVIEW_BRIEF], cwd: proj, env: TEST_ENV, stdout: "pipe", stderr: "pipe" });
+    expect(bare.exitCode, bare.stderr.toString()).toBe(0);
+    for (const line of VERB_LINES) expect(bare.stdout.toString()).toContain(line);
+  });
+
+  test("<verb> --help prints that verb's usage and exits 0", () => {
+    const { proj } = requirementProject([]);
+    for (const [verb, line] of [["review", VERB_LINES[0]], ["context", VERB_LINES[1]], ["summary", VERB_LINES[2]]] as const) {
+      const r = run(REVIEW_BRIEF, [verb, "--help"], proj);
+      expect(r.status, r.out).toBe(0);
+      expect(r.stdout).toContain(line);
+      for (const other of VERB_LINES.filter((l) => l !== line)) expect(r.stdout).not.toContain(other);
+    }
+  });
+
+  test("a flag where the verb goes is answered with the verbs, not a flag error", () => {
+    const { proj } = requirementProject([]);
+    for (const args of [["--stage", "requirements-analysis"], ["--stage=requirements-analysis"]]) {
+      const r = run(REVIEW_BRIEF, args, proj);
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).toContain("Valid: review, context, summary.");
+      expect(r.out).not.toContain("Expected --flag value");
+      expect(r.out).not.toContain("Missing --stage");
+    }
+    const ok = run(REVIEW_BRIEF, ["review", "--stage", "requirements-analysis", "--why", "first"], proj);
+    expect(ok.status, ok.out).toBe(0);
+    expect(ok.stdout).toContain("**Stage:** Requirements Analysis");
+  });
+});
+
 describe("t304 executable review brief scenarios", () => {
   test("a stale brief with nothing changed upstream says no reason line", () => {
     const { proj } = requirementProject([]);
@@ -576,12 +722,50 @@ describe("t304 executable review brief scenarios", () => {
       );
       expect(rendered).not.toContain(`**Review outcome:** ${verdict}`);
       if (verdict === "NOT-READY") expect(rendered).toContain("R-01");
-      // Approve accepts open findings only when there are some.
+      // Approve accepts open findings only when there are some, and the line
+      // after the findings says which.
       expect(rendered).toContain(
         verdict === "READY"
           ? "- **Approve** - continue; no findings are open."
-          : "- **Approve** - continue with the open findings accepted.",
+          : "- **Approve** - continue.\n",
       );
+    }
+  });
+
+  // A review that says the work is ready, with Minor points: the points are
+  // the person's to weigh, not concerns that remain or actions they must take.
+  test("a READY review with only Minor open findings reads ready, with the points to weigh", () => {
+    const stage = findStageBySlug("requirements-analysis")!;
+    const one = renderReviewBrief(requirementProject([ROW_NEW]).proj, stage, "first");
+    expect(one).toContain("**Review outcome:** Ready, with 1 minor point to weigh.");
+    expect(one).not.toContain("Concerns remain");
+    expect(one).toContain("> R-01 Suggested change: Add a delivery date");
+    expect(one).not.toContain("Required action:");
+    expect(one).toContain("Approve accepts the open review finding R-01 (Deadline is missing) as risk;");
+    expect(one).toContain("- **Approve** - continue.\n");
+    const two = renderReviewBrief(
+      requirementProject([ROW_NEW, ROW_NEW_SECOND.replace("| Major |", "| Minor |")]).proj,
+      stage,
+      "first",
+    );
+    expect(two).toContain("**Review outcome:** Ready, with 2 minor points to weigh.");
+  });
+
+  test.each([
+    ["a READY review with a Major finding", [ROW_NEW, ROW_NEW_SECOND], "READY"],
+    ["a NOT-READY review with only a Minor finding", [ROW_NEW], "NOT-READY"],
+  ] as const)("%s keeps the concerns, and its Major or not-ready points stay required", (_, rows, verdict) => {
+    const brief = renderReviewBrief(
+      requirementProject([...rows], verdict).proj,
+      findStageBySlug("requirements-analysis")!,
+      "first",
+    );
+    expect(brief).toContain("**Review outcome:** Concerns remain for your decision.");
+    if (verdict === "READY") {
+      expect(brief).toContain("> R-01 Suggested change: Add a delivery date");
+      expect(brief).toContain("> R-02 Required action: Name the accountable owner");
+    } else {
+      expect(brief).toContain("> R-01 Required action: Add a delivery date");
     }
   });
 
@@ -924,7 +1108,7 @@ describe("t304 executable review brief scenarios", () => {
     expect(context.stdout).not.toContain("Missing: Required action, Status");
     expect(context.stdout).not.toContain("as written");
 
-    expect(JSON.parse(acceptedRiskDispositionField(proj, stage)!).dispositions).toEqual([
+    expect(JSON.parse(approvalDispositionField(proj, stage, undefined, "person")!).dispositions).toEqual([
       expect.objectContaining({ artifact: relativeArtifact, id: "R-00", status: "Accepted risk" }),
     ]);
     expect(
@@ -1048,7 +1232,7 @@ describe("t304 executable review brief scenarios", () => {
     const file = project.relativeArtifact.split("/").at(-1);
     expect(brief).toContain(`| R-01 | Minor | ${file} > FR-1 | New |`);
     expect(brief).toContain("> R-01 Finding: Concern 1");
-    expect(brief).toContain("> R-01 Required action: Fix concern 1");
+    expect(brief).toContain("> R-01 Suggested change: Fix concern 1");
   });
 
   test("the single per-Unit stage gate displays exactly the open findings approval dispositions cover", () => {
@@ -1086,7 +1270,7 @@ describe("t304 executable review brief scenarios", () => {
     }
 
     const stage = findStageBySlug("functional-design")!;
-    const serialized = acceptedRiskDispositionField(proj, stage);
+    const serialized = approvalDispositionField(proj, stage, undefined, "person");
     expect(serialized).toBeString();
     const dispositioned = new Set(
       (
@@ -1143,7 +1327,7 @@ describe("t304 executable review brief scenarios", () => {
       ["unit-a", "unit-b"],
     );
     const stage = findStageBySlug("functional-design")!;
-    const serialized = acceptedRiskDispositionField(proj, stage, "unit-b");
+    const serialized = approvalDispositionField(proj, stage, "unit-b", "person");
     expect(serialized).toBeString();
     expect(
       (
@@ -1217,6 +1401,361 @@ describe("t304 executable review brief scenarios", () => {
       readReviewFindingDispositions(proj, stage.slug),
     );
     expect(hydrated[0].findings[0].status).toBe("Accepted risk");
+  });
+
+  // #2208: the person was told the Critical was fixed and nothing reviewed the
+  // fix. The record says the work changed after the review, never that they
+  // accepted the risk, and nobody decided the findings: the next review re-checks
+  // them. The brief says each finding the way Approve records it, and leaves the
+  // change itself to the line the gate's report already said.
+  test.each(["off", "relaxed"] as const)(
+    "Guard Policy %s: Approve over work changed after its review records Changed after review and the findings stay open",
+    (mode) => {
+      const { proj } = fixedAfterReviewProject(mode);
+      const stage = findStageBySlug("requirements-analysis")!;
+      const brief = renderReviewBrief(proj, stage, "first");
+      expect(brief).toContain("| R-01 | Critical | requirements.md > FR-1 | Changed after review |");
+      expect(brief).toContain("| R-02 | Minor | requirements.md > FR-2 | Changed after review |");
+      expect(brief).not.toContain("| New |");
+      expect(brief).toContain("- **Approve** - continue with the work as changed after review.");
+      expect(brief).not.toContain("open findings accepted");
+      expect(brief).not.toContain("**Changed after review:**");
+      expect(brief).not.toContain("Reviewed content differs");
+      expect(brief).not.toContain("carrying on");
+
+      approveGate(proj);
+      expect(recordedDispositions(proj, "requirements-analysis")).toEqual([
+        { id: "R-01", status: "Changed after review", decided_at_severity: "Critical" },
+        { id: "R-02", status: "Changed after review", decided_at_severity: "Minor" },
+      ]);
+
+      const contexts = readReviewArtifactContexts(proj, stage);
+      expect(contexts[0].findings.map((finding) => finding.status)).toEqual(["New", "New"]);
+      const hydrated = hydrateReviewArtifactContexts(
+        contexts,
+        readReviewFindingDispositions(proj, stage.slug),
+      );
+      expect(hydrated[0].findings.map((finding) => [finding.status, finding.decidedAtSeverity])).toEqual([
+        ["New", undefined],
+        ["New", undefined],
+      ]);
+      const reviewer = renderFindingsContext(contexts, "reviewer");
+      const recheck = reviewer.slice(
+        reviewer.indexOf("**Open findings to re-check**"),
+        reviewer.indexOf("**Decided findings (settled, read-only)**"),
+      );
+      expect(recheck).toContain("| R-01 | Critical |");
+      expect(recheck).toContain("| R-02 | Minor |");
+      expect(reviewer).toContain("_No settled decisions are carried into this review._");
+    },
+  );
+
+  test("a finished review after the change saw it: Approve records Accepted risk", () => {
+    const { proj } = fixedAfterReviewProject("off");
+    const asked = personAsks(proj, "review it again");
+    const again = [
+      "review",
+      "--stage",
+      "requirements-analysis",
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--iteration",
+      "2",
+      "--person-asked",
+      "--message",
+      asked,
+    ];
+    const requested = run(LOG, again, proj);
+    expect(requested.status, requested.out).toBe(0);
+    const draft = join(proj, (JSON.parse(requested.stdout) as { reviewFile: string }).reviewFile);
+    mkdirSync(dirname(draft), { recursive: true });
+    writeFileSync(
+      draft,
+      reviewReportMarkdown(
+        "NOT-READY",
+        [
+          "| R-01 | Still applies | Critical | The flag is still settable |",
+          "| R-02 | Still applies | Minor | Still vague |",
+        ],
+        [],
+        2,
+      ),
+      "utf-8",
+    );
+    const completed = run(LOG, [...again, "--verdict", "NOT-READY"], proj);
+    expect(completed.status, completed.out).toBe(0);
+    const brief = renderReviewBrief(proj, findStageBySlug("requirements-analysis")!, "revision");
+    expect(brief).not.toContain("Changed after review");
+
+    approveGate(proj);
+    expect(recordedDispositions(proj, "requirements-analysis")).toEqual([
+      { id: "R-01", status: "Accepted risk", decided_at_severity: "Critical" },
+      { id: "R-02", status: "Accepted risk", decided_at_severity: "Minor" },
+    ]);
+  });
+
+  // Each Unit is asked about its own work: a change to one Unit's reviewed
+  // files relabels only that Unit's findings, at the stage's gate and at the
+  // Unit's own approval.
+  test("a per-Unit stage records Changed after review only for the Unit whose work changed", () => {
+    const { proj, artifacts } = perUnitReviewProject(
+      "functional-design",
+      ["unit-a", "unit-b"],
+    );
+    appendAuditEntry(
+      "CHANGE_ACCEPTED",
+      {
+        Stage: "functional-design",
+        Unit: "unit-a",
+        Checkpoint: "review-receipt",
+        Changed: artifacts.get("unit-a")!,
+        Details: `${artifacts.get("unit-a")} changed after the unit-a Unit was reviewed; carrying on.`,
+      },
+      proj,
+    );
+    const stage = findStageBySlug("functional-design")!;
+    const unitA = artifacts.get("unit-a")!;
+    const unitB = artifacts.get("unit-b")!;
+    const statuses = (serialized: string | undefined) =>
+      (JSON.parse(serialized!) as { dispositions: Array<{ artifact: string; id: string; status: string }> })
+        .dispositions.map(({ artifact, id, status }) => ({ artifact, id, status }));
+    expect(statuses(approvalDispositionField(proj, stage, undefined, "person"))).toEqual([
+      { artifact: unitA, id: "R-01", status: "Changed after review" },
+      { artifact: unitB, id: "R-02", status: "Accepted risk" },
+    ]);
+    expect(statuses(approvalDispositionField(proj, stage, "unit-a", "person"))).toEqual([
+      { artifact: unitA, id: "R-01", status: "Changed after review" },
+    ]);
+    expect(statuses(approvalDispositionField(proj, stage, "unit-b", "person"))).toEqual([
+      { artifact: unitB, id: "R-02", status: "Accepted risk" },
+    ]);
+    // The stage's gate shows each finding as its approval records it.
+    const brief = renderReviewBrief(proj, stage, "first");
+    expect(brief).toContain("| R-01 | Major | entities.md > section | Changed after review |");
+    expect(brief).toContain("| R-02 | Major | entities.md > section | New |");
+    expect(brief).toContain("- **Approve** - continue with the work as changed after review.");
+  });
+
+  // With no Units Generation a per-Unit stage writes one set of files for the
+  // stage, so its one review is relabelled by any change to them.
+  test("a per-Unit stage with stage-level files records Changed after review for its one review", () => {
+    const { proj } = requirementProject([]);
+    const stage = findStageBySlug("code-generation")!;
+    const artifact = seedReviewedStageLevelFiles(proj, stage);
+    appendAuditEntry(
+      "CHANGE_ACCEPTED",
+      {
+        Stage: "code-generation",
+        Checkpoint: "review-receipt",
+        Changed: artifact,
+        Details: `${artifact} changed after the Code Generation review; carrying on.`,
+      },
+      proj,
+    );
+    const serialized = approvalDispositionField(proj, stage, undefined, "person");
+    expect(
+      (JSON.parse(serialized!) as { dispositions: Array<{ id: string; status: string }> })
+        .dispositions.map(({ id, status }) => ({ id, status })),
+    ).toEqual([{ id: "R-01", status: "Changed after review" }]);
+  });
+
+  // #2208 part 2: a stage's approval nobody gave (Construction run on its own,
+  // or the bookkeeping row after every Unit's checkpoint) leaves each Unit's
+  // findings to that Unit's own approval, and never says the person accepted
+  // what nobody saw.
+  const statusesOf = (serialized: string | undefined) =>
+    serialized === undefined
+      ? []
+      : (JSON.parse(serialized) as { dispositions: Array<{ artifact: string; id: string; status: string }> })
+        .dispositions.map(({ artifact, id, status }) => ({ artifact, id, status }));
+  const unitApproval = (proj: string, fields: Record<string, string>) =>
+    appendAuditEntry(
+      "GATE_APPROVED",
+      {
+        Stage: "code-generation",
+        "Gate Scope": "unit-end",
+        "Gate Stages": "functional-design, code-generation",
+        ...fields,
+      },
+      proj,
+    );
+
+  test("a stage approval nobody gave records nothing for a finding the Unit's approval recorded, and Approved autonomously for one it did not", () => {
+    const { proj, artifacts } = perUnitReviewProject("functional-design", ["unit-a", "unit-b"]);
+    const stage = findStageBySlug("functional-design")!;
+    const unitA = artifacts.get("unit-a")!;
+    const unitB = artifacts.get("unit-b")!;
+    expect(statusesOf(approvalDispositionField(proj, stage, undefined, "nobody"))).toEqual([
+      { artifact: unitA, id: "R-01", status: "Approved autonomously" },
+      { artifact: unitB, id: "R-02", status: "Approved autonomously" },
+    ]);
+
+    // unit-a was approved on its own with R-01 as it is now; unit-b's approval
+    // came before R-02 was raised and recorded another finding.
+    unitApproval(proj, {
+      Unit: "unit-a",
+      Autonomous: "true",
+      [REVIEW_FINDING_DISPOSITIONS_FIELD]: approvalDispositionField(proj, stage, "unit-a", "nobody")!,
+    });
+    const earlier = JSON.parse(approvalDispositionField(proj, stage, "unit-b", "person")!);
+    earlier.dispositions[0].id = "R-09";
+    unitApproval(proj, {
+      Unit: "unit-b",
+      "User Input": "Approve",
+      [REVIEW_FINDING_DISPOSITIONS_FIELD]: JSON.stringify(earlier),
+    });
+    expect(statusesOf(approvalDispositionField(proj, stage, undefined, "nobody"))).toEqual([
+      { artifact: unitB, id: "R-02", status: "Approved autonomously" },
+    ]);
+
+    // Approved autonomously is no decision: R-01 stays open, so the person's
+    // own approval of the stage, which shows it, records it as theirs.
+    const contexts = readReviewArtifactContexts(proj, stage, "unit-a");
+    expect(contexts[0].findings.map((finding) => finding.status)).toEqual(["New"]);
+    const hydrated = hydrateReviewArtifactContexts(
+      contexts,
+      readReviewFindingDispositions(proj, stage.slug, "unit-a"),
+    );
+    expect(hydrated[0].findings.map((finding) => [finding.status, finding.decidedAtSeverity])).toEqual([
+      ["New", undefined],
+    ]);
+    expect(statusesOf(approvalDispositionField(proj, stage, undefined, "person"))).toEqual([
+      { artifact: unitA, id: "R-01", status: "Accepted risk" },
+      { artifact: unitB, id: "R-02", status: "Accepted risk" },
+    ]);
+  });
+
+  // An AI-DLC update between Units: a Unit approved before it has a row that
+  // records no findings. That row decides them as it says; a stage's own
+  // earlier approval is no Unit's approval.
+  test("a Unit's approval an earlier release wrote decides its findings as the row says", () => {
+    const { proj, artifacts } = perUnitReviewProject("functional-design", ["unit-a", "unit-b", "unit-c"]);
+    const stage = findStageBySlug("functional-design")!;
+    appendAuditEntry("GATE_APPROVED", { Stage: "functional-design", "User Input": "Approve" }, proj);
+    unitApproval(proj, { Unit: "unit-a", "User Input": "Approve" });
+    unitApproval(proj, { Unit: "unit-b", Autonomous: "true" });
+    expect(statusesOf(approvalDispositionField(proj, stage, undefined, "nobody"))).toEqual([
+      { artifact: artifacts.get("unit-a")!, id: "R-01", status: "Accepted risk" },
+      { artifact: artifacts.get("unit-b")!, id: "R-02", status: "Approved autonomously" },
+      { artifact: artifacts.get("unit-c")!, id: "R-03", status: "Approved autonomously" },
+    ]);
+  });
+
+  test("a swarm batch's approval is the own approval of the Units it names, and only of them", () => {
+    const { proj, artifacts } = perUnitReviewProject("code-generation", ["unit-a", "unit-b", "unit-c"]);
+    const stage = findStageBySlug("code-generation")!;
+    const batch = (fields: Record<string, string>) =>
+      appendAuditEntry(
+        "GATE_APPROVED",
+        { Checkpoint: "swarm-batch", Stage: "code-generation", "Gate Stages": "code-generation", ...fields },
+        proj,
+      );
+    batch({
+      "Batch number": "1",
+      Units: "unit-c",
+      Autonomous: "true",
+      [REVIEW_FINDING_DISPOSITIONS_FIELD]: approvalDispositionField(proj, stage, ["unit-c"], "nobody")!,
+    });
+    batch({ "Batch number": "2", Units: "unit-a, unit-b", "User Input": "Approve" });
+    expect(statusesOf(approvalDispositionField(proj, stage, ["unit-a", "unit-b"], "person"))).toEqual([
+      { artifact: artifacts.get("unit-a")!, id: "R-01", status: "Accepted risk" },
+      { artifact: artifacts.get("unit-b")!, id: "R-02", status: "Accepted risk" },
+    ]);
+    expect(statusesOf(approvalDispositionField(proj, stage, undefined, "nobody"))).toEqual([
+      { artifact: artifacts.get("unit-a")!, id: "R-01", status: "Accepted risk" },
+      { artifact: artifacts.get("unit-b")!, id: "R-02", status: "Accepted risk" },
+    ]);
+    expect(readReviewArtifactContexts(proj, stage, "unit-c")[0].findings.map((finding) => finding.status))
+      .toEqual(["New"]);
+  });
+
+  // "Approve, but make sure R-03 gets handled": the record says they asked for
+  // a fix, never that they accepted the risk, and the next review re-checks it.
+  test("Approve with --fix-finding records Fix requested for that finding, Accepted risk for the rest, and the next review re-checks it", () => {
+    const project = engineOwnedFindingProject(["Minor", "Minor", "Minor"]);
+    const approved = run(
+      ORCHESTRATE,
+      [
+        "report", "--stage", "requirements-analysis", "--result", "approved",
+        "--user-input", "Approve", "--fix-finding", "R-03",
+      ],
+      project.proj,
+    );
+    expect(approved.status, approved.out).toBe(0);
+    expect(recordedDispositions(project.proj, "requirements-analysis")).toEqual([
+      { id: "R-01", status: "Accepted risk", decided_at_severity: "Minor" },
+      { id: "R-02", status: "Accepted risk", decided_at_severity: "Minor" },
+      { id: "R-03", status: "Fix requested", decided_at_severity: "Minor" },
+    ]);
+
+    const stage = findStageBySlug("requirements-analysis")!;
+    const contexts = readReviewArtifactContexts(project.proj, stage);
+    expect(contexts[0].findings.map((finding) => [finding.id, finding.status])).toEqual([
+      ["R-01", "Accepted risk"],
+      ["R-02", "Accepted risk"],
+      ["R-03", "New"],
+    ]);
+    const hydrated = hydrateReviewArtifactContexts(
+      contexts,
+      readReviewFindingDispositions(project.proj, stage.slug),
+    );
+    expect(hydrated[0].findings.map((finding) => finding.status)).toEqual([
+      "Accepted risk",
+      "Accepted risk",
+      "New",
+    ]);
+    const reviewer = renderFindingsContext(contexts, "reviewer");
+    const settled = reviewer.indexOf("**Decided findings (settled, read-only)**");
+    const recheck = reviewer.slice(reviewer.indexOf("**Open findings to re-check**"), settled);
+    expect(recheck).toContain("| R-03 | Minor |");
+    expect(recheck).not.toContain("| R-01 |");
+    expect(reviewer.slice(settled)).toContain("| R-01 | Minor |");
+    expect(reviewer.slice(settled)).not.toContain("| R-03 |");
+  });
+
+  test("--fix-finding naming no open finding of the gate is refused before anything is recorded, naming the open ones", () => {
+    const project = engineOwnedFindingProject(["Minor", "Major"]);
+    const rel = project.relativeArtifact;
+    const refused = run(
+      STATE,
+      ["approve", "requirements-analysis", "--user-input", "Approve", "--fix-finding", "R-09"],
+      project.proj,
+    );
+    expect(refused.status, refused.out).not.toBe(0);
+    expect(refused.out).toContain(
+      "Cannot ask a fix for R-09: it is not a current review finding for this gate. " +
+        `Current open findings: ${rel}#R-01, ${rel}#R-02.`,
+    );
+    expect(readAuditShardEvents(project.proj).some((row) => row.event === "GATE_APPROVED")).toBe(false);
+    expect(readFileSync(seededStateFile(project.proj), "utf-8")).toMatch(/^- \[\?\] requirements-analysis /m);
+    // An approval nobody gave carries no fix a person asked for.
+    expect(() =>
+      approvalDispositionField(
+        project.proj,
+        findStageBySlug("requirements-analysis")!,
+        undefined,
+        "nobody",
+        ["R-01"],
+      )
+    ).toThrow("--fix-finding");
+  });
+
+  test("Approve with --fix-finding over work changed after its review records Fix requested for that finding and Changed after review for the rest", () => {
+    const { proj } = fixedAfterReviewProject("off");
+    expect(readAuditShardEvents(proj).some((row) => row.event === "CHANGE_ACCEPTED")).toBe(true);
+    const approved = run(
+      ORCHESTRATE,
+      [
+        "report", "--stage", "requirements-analysis", "--result", "approved",
+        "--user-input", "Approve", "--fix-finding", "requirements#R-01",
+      ],
+      proj,
+    );
+    expect(approved.status, approved.out).toBe(0);
+    expect(recordedDispositions(proj, "requirements-analysis")).toEqual([
+      { id: "R-01", status: "Fix requested", decided_at_severity: "Critical" },
+      { id: "R-02", status: "Changed after review", decided_at_severity: "Minor" },
+    ]);
   });
 
   test("Request Changes records only explicitly rejected findings with the exact reason", () => {
@@ -1747,9 +2286,7 @@ describe("t304 executable review brief scenarios", () => {
       expect(rendered, mode).toBe(expected);
       expect(rendered).toContain("**Stage:** Requirements Analysis");
       expect(rendered).toContain("**Confirming:** Consolidated answers in");
-      expect(rendered).toContain(
-        "**Why now:** All stage questions are answered",
-      );
+      expect(rendered).not.toContain("Why now");
       expect(rendered).toContain(
         "**Looks correct** - record this confirmation and generate",
       );
@@ -1758,6 +2295,49 @@ describe("t304 executable review brief scenarios", () => {
       );
       expect(rendered).not.toContain("ungenerated");
     }
+  });
+
+  test("the summary brief names what it will generate, never the questions file the person answered in", () => {
+    const { proj, relativeArtifact, questions } = requirementProject([]);
+    const relativeQuestions = relative(proj, questions).replaceAll("\\", "/");
+    expect(
+      renderSummaryConfirmationBrief(proj, findStageBySlug("requirements-analysis")!, questions),
+    ).toContain(
+      `**Confirming:** Consolidated answers in \`${relativeQuestions}\` before generating \`${relativeArtifact}\`.\n`,
+    );
+
+    const planning = join(seededRecordDir(proj), "inception", "delivery-planning");
+    mkdirSync(planning, { recursive: true });
+    const planningQuestions = join(planning, "delivery-planning-questions.md");
+    writeFileSync(planningQuestions, "# Questions\n", "utf-8");
+    const planningRelative = relative(proj, planning).replaceAll("\\", "/");
+    const generated = renderSummaryConfirmationBrief(proj, findStageBySlug("delivery-planning")!, planningQuestions)
+      .split("before generating ")[1]
+      .split("\n")[0];
+    expect(generated).toBe(
+      `${
+        ["bolt-plan", "team-allocation", "risk-and-sequencing-rationale", "external-dependency-map"]
+          .map((name) => `\`${planningRelative}/${name}.md\``)
+          .join(", ")
+      }.`,
+    );
+  });
+
+  // traceability.json is the agent's coverage record, not a document the
+  // person confirms answers for: the brief names the person's documents only.
+  test("the summary brief leaves the coverage record out of what it will generate", () => {
+    const { proj } = requirementProject([]);
+    const stories = join(seededRecordDir(proj), "inception", "user-stories");
+    mkdirSync(stories, { recursive: true });
+    const storiesQuestions = join(stories, "user-stories-questions.md");
+    writeFileSync(storiesQuestions, "# Questions\n", "utf-8");
+    const storiesRelative = relative(proj, stories).replaceAll("\\", "/");
+    const generated = renderSummaryConfirmationBrief(proj, findStageBySlug("user-stories")!, storiesQuestions)
+      .split("before generating ")[1]
+      .split("\n")[0];
+    expect(generated).toBe(
+      `${["stories", "personas", "user-stories-assessment"].map((name) => `\`${storiesRelative}/${name}.md\``).join(", ")}.`,
+    );
   });
 
   test("the shipped CLI renders the same summary brief", () => {
@@ -2002,7 +2582,7 @@ describe("t304 engine-owned findings experience", () => {
     );
     expect(brief).toContain("| R-01 | Minor |");
     expect(brief).toContain("> R-01 Not re-checked this round");
-    expect(brief).toContain("Concerns remain for your decision");
+    expect(brief).toContain("**Review outcome:** Ready, with 1 minor point to weigh.");
   });
 
   test("The reviewer tries to write a decision: the report is refused and cannot change it", () => {
@@ -2970,6 +3550,47 @@ describe("t304 engine-owned report replay and compatibility", () => {
     ]);
   });
 
+  test("an envelope with Fix requested stays readable by an older release, which keeps every other entry", () => {
+    const project = engineOwnedFindingProject(["Minor", "Major"]);
+    const approved = run(
+      ORCHESTRATE,
+      [
+        "report", "--stage", "requirements-analysis", "--result", "approved",
+        "--user-input", "Approve", "--fix-finding", "R-02",
+      ],
+      project.proj,
+    );
+    expect(approved.status, approved.out).toBe(0);
+    const gate = readAuditShardEvents(project.proj)
+      .findLast((event) => event.event === "GATE_APPROVED")!;
+    const envelope = JSON.parse(
+      auditBlockField(gate.block, REVIEW_FINDING_DISPOSITIONS_FIELD)!,
+    ) as {
+      version: number;
+      dispositions: Array<{ artifact: string; id: string; fingerprint: string; status: string }>;
+    };
+    expect(envelope.version).toBe(1);
+    expect(envelope.dispositions.map((row) => [row.id, row.status])).toEqual([
+      ["R-01", "Accepted risk"],
+      ["R-02", "Fix requested"],
+    ]);
+    // The filter the release before this one applies: it keeps the acceptance
+    // and skips only the value it does not know, so R-02 stays open for it.
+    const olderReader = envelope.dispositions.filter((row) =>
+      typeof row.artifact === "string" &&
+      /^R-[0-9]+$/.test(row.id) &&
+      /^sha256:[0-9a-f]{64}$/.test(row.fingerprint) &&
+      (
+        row.status === "Accepted risk" ||
+        row.status === "Changed after review" ||
+        row.status === "Approved autonomously" ||
+        /^Rejected: \S[\s\S]*$/.test(row.status) ||
+        /^Reopened: \S[\s\S]*$/.test(row.status)
+      )
+    );
+    expect(olderReader.map((row) => row.id)).toEqual(["R-01"]);
+  });
+
   test("--single runs keep today's behavior: the record holds the review's own findings, not the stage list", () => {
     const project = engineOwnedFindingProject(["Minor"]);
     const rel = project.relativeArtifact;
@@ -3637,6 +4258,11 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     expect(reviewerProtocol).toContain("aidlc-review-brief.ts context");
     expect(reviewerProtocol).toContain("aidlc-review-brief.ts review");
     expect(reviewerProtocol).toContain("--reject-finding");
+    expect(reviewerProtocol).toContain('--fix-finding "<review-artifact>#R-');
+    // The stage gate's report and a checkpoint's approve both carry the flag.
+    expect(reviewerProtocol.replace(/\s+/g, " ")).toContain(
+      "to the approval command (the stage gate's `report --result approved`, or a checkpoint's `--action approve`) for each one",
+    );
   });
 
   test("the findings table contract the dispatch passes is the one the logger reads", () => {
@@ -3968,5 +4594,156 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     expect(contexts).toHaveLength(1);
     expect(contexts[0].artifact).toBe(relativeArtifact);
     expect(contexts[0].findings.map((finding) => finding.status)).toEqual(["Resolved"]);
+  });
+});
+
+// #2099, the one line: at a gate with open review findings the brief says, in
+// one line beside the findings, that Approve accepts them as risk and that they
+// can instead approve and ask for one to be fixed (#3115's --fix-finding) or
+// reject one as not applying (--reject-finding on a change request), in plain
+// words. The ids are the findings Approve records as Accepted risk, from
+// the one builder approve writes through, each with its text; the Approve
+// option no longer says it a second time. Nothing at a Unit's own approval,
+// whose command takes no finding flag.
+describe("t304 the gate brief says once what Approve accepts", () => {
+  const STAGE = "requirements-analysis";
+  const lineOf = (brief: string): string[] => brief.split("\n").filter((line) => line.startsWith("Approve accepts"));
+
+  test("three open findings: one line after the findings, naming each with its text, and the Approve option says no more", () => {
+    const project = engineOwnedFindingProject(["Minor", "Minor", "Minor"]);
+    const brief = renderReviewBrief(project.proj, findStageBySlug(STAGE)!, "first");
+    const line =
+      "Approve accepts the open review findings R-01 (Concern 1), R-02 (Concern 2) and R-03 (Concern 3) as risk; " +
+      'you can also approve and ask for one to be fixed, or reject one as not applying, saying why.';
+    expect(lineOf(brief)).toEqual([line]);
+    expect(brief.indexOf(line)).toBeGreaterThan(brief.indexOf("> R-03 Suggested change: Fix concern 3"));
+    expect(brief.indexOf(line)).toBeLessThan(brief.indexOf("**Decision options:**"));
+    expect(brief).toContain("- **Approve** - continue.\n");
+    expect(brief).not.toContain("open findings accepted");
+
+    // The ids are what Approve records, and it records them so.
+    approveGate(project.proj);
+    expect(recordedDispositions(project.proj, STAGE).map(({ id, status }) => `${id}=${status}`)).toEqual([
+      "R-01=Accepted risk",
+      "R-02=Accepted risk",
+      "R-03=Accepted risk",
+    ]);
+  });
+
+  test("one open finding reads in the singular", () => {
+    const project = engineOwnedFindingProject(["Major"]);
+    const brief = renderReviewBrief(project.proj, findStageBySlug(STAGE)!, "first");
+    expect(lineOf(brief)).toEqual([
+      "Approve accepts the open review finding R-01 (Concern 1) as risk; " +
+        'you can also approve and ask for it to be fixed, or reject it as not applying, saying why.',
+    ]);
+  });
+
+  test("no open finding: no line, and the option says none are open", () => {
+    const { proj } = requirementProject([]);
+    const brief = renderReviewBrief(proj, findStageBySlug(STAGE)!, "first");
+    expect(lineOf(brief)).toEqual([]);
+    expect(brief).toContain("- **Approve** - continue; no findings are open.");
+  });
+
+  test("after one is rejected, the revision brief names the ones still open", () => {
+    const project = engineOwnedFindingProject(["Minor", "Minor", "Minor"]);
+    const rejected = requestChanges(project, ["R-01=does not apply"]);
+    expect(rejected.status, rejected.out).toBe(0);
+    const brief = renderReviewBrief(project.proj, findStageBySlug(STAGE)!, "revision");
+    expect(lineOf(brief)).toEqual([
+      "Approve accepts the open review findings R-02 (Concern 2) and R-03 (Concern 3) as risk; " +
+        'you can also approve and ask for one to be fixed, or reject one as not applying, saying why.',
+    ]);
+  });
+
+  test("work changed after its review: a finding Approve records as Changed after review is not named", () => {
+    const { proj } = fixedAfterReviewProject("off");
+    const brief = renderReviewBrief(proj, findStageBySlug(STAGE)!, "first");
+    expect(lineOf(brief)).toEqual([]);
+    expect(brief).toContain("- **Approve** - continue with the work as changed after review.");
+  });
+
+  // The nightly's own finding: its full text stays in the findings above.
+  test("a long finding is cut at a word, so the line stays one line", () => {
+    const project = requirementProject([]);
+    writeFileSync(project.artifact, "# Requirements\n\nFR1.1: save.\n", "utf-8");
+    recordReviewViaRecord(
+      project.proj,
+      reviewReportMarkdown("READY", [], [
+        `| Minor | ${project.relativeArtifact} > FR1.1 | FR1.1 and FR1.2 state behavioral obligations but carry no ` +
+          "explicit pass/fail criterion; the inception guardrail requires every requirement to have one. | Add one |",
+      ]),
+      { gate: "start" },
+    );
+    const brief = renderReviewBrief(project.proj, findStageBySlug(STAGE)!, "first");
+    expect(lineOf(brief)).toEqual([
+      "Approve accepts the open review finding R-01 (FR1.1 and FR1.2 state behavioral obligations but carry no " +
+        'explicit pass/fail...) as risk; you can also approve and ask for it to be fixed, or reject it as not applying, saying why.',
+    ]);
+    expect(brief).toContain("the inception guardrail requires every requirement to have one");
+  });
+
+  // Each Unit's review numbers from R-01, so both Units here carry an R-01.
+  test("a per-Unit stage's final gate labels each finding with its Unit when the findings named span Units", () => {
+    const { proj, artifacts } = perUnitReviewProject("functional-design", ["unit-a", "unit-b"]);
+    const unitB = join(proj, artifacts.get("unit-b")!);
+    writeFileSync(unitB, readFileSync(unitB, "utf-8").replace("| R-02 |", "| R-01 |"), "utf-8");
+    const brief = renderReviewBrief(proj, findStageBySlug("functional-design")!, "first");
+    expect(lineOf(brief)).toEqual([
+      "Approve accepts the open review findings unit-a R-01 (unit-a concern) and unit-b R-01 (unit-b concern) as risk; " +
+        'you can also approve and ask for one to be fixed, or reject one as not applying, saying why.',
+    ]);
+  });
+
+  test("a per-Unit stage names only the Unit whose findings Approve accepts; the changed one keeps its clause", () => {
+    const { proj, artifacts } = perUnitReviewProject("functional-design", ["unit-a", "unit-b"]);
+    appendAuditEntry(
+      "CHANGE_ACCEPTED",
+      {
+        Stage: "functional-design",
+        Unit: "unit-a",
+        Checkpoint: "review-receipt",
+        Changed: artifacts.get("unit-a")!,
+        Details: `${artifacts.get("unit-a")} changed after the unit-a Unit was reviewed; carrying on.`,
+      },
+      proj,
+    );
+    const brief = renderReviewBrief(proj, findStageBySlug("functional-design")!, "first");
+    expect(lineOf(brief)).toEqual([
+      "Approve accepts the open review finding R-02 (unit-b concern) as risk; " +
+        'you can also approve and ask for it to be fixed, or reject it as not applying, saying why.',
+    ]);
+    expect(brief).toContain("- **Approve** - continue with the work as changed after review.");
+  });
+
+  test("a Unit's own approval says nothing new: its checkpoint takes no finding flag", () => {
+    const units = ["u1-note-store", "u2-note-tags"];
+    const { proj } = perUnitReviewProject("code-generation", units);
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(
+        /^(- \*\*Scope\*\*:.*)$/m,
+        "$1\n- **Construction Iteration**: unit-major\n- **Construction Checkpoints**: enabled",
+      ),
+      "utf-8",
+    );
+    const own = renderReviewBrief(proj, findStageBySlug("code-generation")!, "first", "u2-note-tags");
+    expect(lineOf(own)).toEqual([]);
+    expect(own).toContain("- **Approve** - continue with the open findings accepted.");
+  });
+
+  test("the printed brief carries the line, and the brief kept for the gate holds it", () => {
+    const project = engineOwnedFindingProject(["Minor", "Minor"]);
+    const printed = run(REVIEW_BRIEF, ["review", "--stage", STAGE, "--why", "first"], project.proj);
+    expect(printed.status, printed.out).toBe(0);
+    const line =
+      "Approve accepts the open review findings R-01 (Concern 1) and R-02 (Concern 2) as risk; " +
+      'you can also approve and ask for one to be fixed, or reject one as not applying, saying why.';
+    expect(lineOf(printed.stdout)).toEqual([line]);
+    const briefs = join(seededRecordDir(project.proj), ".aidlc-engine", "reviews", STAGE, "stage", "briefs");
+    const { digest } = JSON.parse(readFileSync(join(briefs, "latest.json"), "utf-8")) as { digest: string };
+    expect(readFileSync(join(briefs, `${digest}.md`), "utf-8")).toContain(line);
   });
 });

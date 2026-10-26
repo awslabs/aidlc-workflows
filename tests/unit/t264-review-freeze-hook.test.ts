@@ -1,4 +1,4 @@
-// covers: hook:aidlc-review-freeze, file:hooks/aidlc-kiro-adapter.ts, hook:review-freeze-command, function:freshReviewReceipts, function:producesArtifactFile, function:producesArtifactUnit, audit:REVIEW_FREEZE_BLOCKED, function:guardRefusalHookNote, function:pendingGuardRecoveryAsk
+// covers: hook:aidlc-review-freeze, file:hooks/aidlc-kiro-adapter.ts, hook:review-freeze-command, function:leadingDirectoryChange, function:freshReviewReceipts, function:producesArtifactFile, function:producesArtifactUnit, audit:REVIEW_FREEZE_BLOCKED, function:guardRefusalHookNote, function:pendingGuardRecoveryAsk, function:blockingSensorPicks
 //
 // t264 - the deterministic PreToolUse enforcement of the §12a terminal-receipt
 // ordering (the receipt-invalidation loop's hook half; the prose half is
@@ -14,8 +14,8 @@
 //       DIST tree) - stage-level and per-unit freeze/no-freeze cases;
 //   (b) the SHIPPED hook as a subprocess over a REAL audit ledger written by
 //       the real aidlc-log/audit tools: allow before receipt, block after
-//       READY or terminal advisory NOT-READY, release on GATE_REJECTED, allow for
-//       non-produces paths, fail-open with no ledger, off-switch, and the
+//       READY or terminal advisory NOT-READY, release on GATE_REJECTED and on
+//       a Fix findings pick at a blocking sensor, allow for non-produces paths, fail-open with no ledger, off-switch, and the
 //       REVIEW_FREEZE_BLOCKED audit row on a genuine block;
 //   (c) registration pins per harness: Claude settings.json (third entry in
 //       the shared PreToolUse group), Codex emit wiring + adapter target,
@@ -53,6 +53,7 @@ import { basename, dirname, join, relative, relative as relativePath, resolve } 
 import {
   blockReason,
   judgeFreeze,
+  leadingDirectoryChange,
   REVIEW_FREEZE_FALLBACK_GUIDANCE,
   reviewFreezeRecoveryGuidance,
   shellCommandAltersExecutableResolution,
@@ -60,7 +61,14 @@ import {
   shellCommandInvocations,
   writeTargets,
 } from "../../dist/claude/.claude/hooks/aidlc-review-freeze.ts";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  auditBlockField,
+  MESSAGE_FILL,
+  MESSAGE_SLOT,
+  readAllAuditShards,
+  readAuditShardEvents,
+  setGuardPolicyLine,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { KIRO_HOOK_GROUPS } from "../../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 import {
   cleanupTestProject,
@@ -671,6 +679,65 @@ describe("t264 (a) judgeFreeze decision table", () => {
       .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""))).not.toContain("/p/.kiro/hooks/y.json");
   });
 
+  // The plan-approval guard reads the rest of a line from where its first `cd`
+  // leads only when the shell is certain to be there when the rest runs.
+  test("leadingDirectoryChange follows only a first move it is certain of", () => {
+    const root = createTestProject();
+    tempDirs.push(root);
+    const dir = join(root, "proj");
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(root, "file.txt"), "x\n");
+    const q = (word: string) => `'${word}'`;
+    const move = (command: string, shell: "posix" | "powershell" = "posix") =>
+      leadingDirectoryChange(command, root, shell);
+    for (const [command, shell] of [
+      [`cd ${q(dir)} && aidlc doctor`, "posix"],
+      [`cd -- ${q(dir)}; aidlc doctor`, "posix"],
+      [`cd ${q(dir)}\naidlc doctor`, "posix"],
+      // A drive letter in either case names the same drive.
+      [`cd ${q(dir.replace(/^[A-Z](?=:)/, (drive) => drive.toLowerCase()))} && aidlc doctor`, "posix"],
+      [`Set-Location -LiteralPath ${q(dir)} ; aidlc doctor`, "powershell"],
+      [`sl ${q(dir)} ; aidlc doctor`, "powershell"],
+      [`Push-Location ${q(dir)} ; aidlc doctor`, "powershell"],
+    ] as const) {
+      const followed = move(command, shell);
+      expect(followed?.dir.toLowerCase(), command).toBe(resolve(dir).toLowerCase());
+      expect(followed?.rest.trim(), command).toBe("aidlc doctor");
+    }
+    // Folders the lexer would name but the shell would not enter: bash drops a
+    // backslash-newline inside quotes, and does not split a word at U+00A0.
+    if (process.platform !== "win32") mkdirSync(join(root, "a\nb"));
+    mkdirSync(`${dir}\u00a0`);
+    // A relative or computed folder, one that is missing or a file, a second
+    // operand or an option, a group, a redirect, a join that runs the rest
+    // anyway or elsewhere, a wrapper, POSIX pushd, nothing after the join, and
+    // a line whose continuations or blanks the lexer reads differently.
+    for (const command of [
+      "cd proj && aidlc doctor",
+      `cd ${q(`${dir}/src/..`)} && aidlc doctor`,
+      `cd ${q(join(root, "missing"))}; aidlc doctor`,
+      `cd ${q(join(root, "file.txt"))}; aidlc doctor`,
+      `cd ${q(dir)} ${q(dir)} && aidlc doctor`,
+      `cd -P ${q(dir)} && aidlc doctor`,
+      'cd "$HOME" && aidlc doctor',
+      `cd ${q(`${dir}*`)} && aidlc doctor`,
+      `(cd ${q(dir)} && aidlc doctor)`,
+      `{ cd ${q(dir)}; aidlc doctor; }`,
+      `cd ${q(dir)} 2>/dev/null && aidlc doctor`,
+      `cd ${q(dir)} || aidlc doctor`,
+      `cd ${q(dir)} | aidlc doctor`,
+      `cd ${q(dir)} & aidlc doctor`,
+      `builtin cd ${q(dir)} && aidlc doctor`,
+      `pushd ${q(dir)} && aidlc doctor`,
+      `cd ${q(dir)} && `,
+      `cd ${q(dir)}`,
+      `cd "${join(root, "a\\\nb")}" && aidlc doctor`,
+      `cd ${q(dir)}\u00a0 && aidlc doctor`,
+    ]) {
+      expect(move(command), command).toBeNull();
+    }
+  });
+
   test("writeTargets: a PowerShell command is read as PowerShell (#1639)", () => {
     const targets = (command: string): string[] =>
       writeTargets("Bash", { command }, "/p", "powershell")
@@ -987,6 +1054,35 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     ).toBe(0);
   });
 
+  // The traceability check's write mode writes the table its --output-path
+  // names, a declared output of the stage, so after a terminal receipt it is
+  // frozen like any other write of that table; the check alone only reads it.
+  test("the table the traceability tool starts is a write of its --output-path", () => {
+    const hostPath = (value: string): string => resolve(value);
+    expect(writeTargets("Bash", {
+      command: "bun .claude/tools/aidlc.ts engine sensor-traceability --stage user-stories --output-path aidlc/t/traceability.json --write-upstream",
+    }, "/p")).toEqual([hostPath("/p/aidlc/t/traceability.json")]);
+    expect(writeTargets("Bash", {
+      command: "aidlc engine sensor-traceability --write-upstream --output-path=/a/traceability.json --stage user-stories",
+    })).toEqual([hostPath("/a/traceability.json")]);
+    expect(writeTargets("Bash", {
+      command: "bun run .kiro/tools/aidlc-sensor-traceability.ts --stage user-stories --output-path /a/traceability.json --write-upstream",
+    })).toEqual([hostPath("/a/traceability.json")]);
+    expect(writeTargets("Bash", {
+      command: "bun .claude/tools/aidlc.ts engine sensor-traceability --stage user-stories --output-path /a/traceability.json",
+    })).toEqual([]);
+
+    const p = projBeforeGate();
+    const table = join(dirname(raArtifact(p)), "traceability.json");
+    recordReview(p, "READY");
+    openGate(p);
+    const bash = (command: string) => runHook(p, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: p });
+    const blocked = bash(`bun .claude/tools/aidlc.ts engine sensor-traceability --stage requirements-analysis --output-path ${JSON.stringify(table)} --write-upstream`);
+    expect(blocked.code).toBe(2);
+    expect(blocked.stderr).toContain(table);
+    expect(bash(`bun .claude/tools/aidlc.ts engine sensor-traceability --stage requirements-analysis --output-path ${JSON.stringify(table)}`).code).toBe(0);
+  });
+
   test("shell redirections to produces[] block without false-positive read operands", () => {
     const p = projBeforeGate();
     const file = raArtifact(p);
@@ -1085,6 +1181,55 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     expect(approve.status ?? -1).toBe(0);
     // Stage now [x]: its produces paths are permanent record, not frozen.
     expect(runHook(p, writePayload(raArtifact(p))).code).toBe(0);
+  });
+
+  // The person's pick at the "Blocking gate sensor failure" question, as
+  // stage-protocol-sensors.md has the agent record it.
+  function pickAtBlockingSensor(p: string, details: string): void {
+    logTool(p, [
+      "decision", "--stage", "requirements-analysis", "--decision", "Blocking gate sensor failure",
+      "--options", "Fix findings,Override blocking sensors",
+    ]);
+    personSays(p, "fix them first");
+    logTool(p, ["answer", "--stage", "requirements-analysis", "--details", details]);
+  }
+
+  test("Fix findings at a blocking sensor opens the reviewed document; the gate then needs a fresh review", () => {
+    const p = projBeforeGate();
+    const file = raArtifact(p);
+    recordReview(p, "READY");
+    expect(runHook(p, writePayload(file)).code).toBe(2);
+
+    pickAtBlockingSensor(p, "Fix findings");
+    expect(runHook(p, writePayload(file)).code).toBe(0);
+
+    // The review before the fix no longer covers the document, so the retried
+    // report hands the agent a fresh review, at the first pass again.
+    const retried = spawnSync(
+      BUN,
+      [ORCH_TOOL, "report", "--stage", "requirements-analysis", "--result", "awaiting-approval", "--project-dir", p],
+      {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+      },
+    );
+    const step = JSON.parse((retried.stdout ?? "").trim().split("\n").at(-1) ?? "{}") as Record<string, unknown>;
+    expect(step.agent_work, `${retried.stdout}${retried.stderr}`).toBe(true);
+    expect(opsOf(step)).toEqual(["request-review"]);
+    expect(JSON.stringify(step.remedies)).toContain("--iteration 1");
+    recordReview(p, "READY");
+    openGate(p);
+    expect(runHook(p, writePayload(file)).code).toBe(2);
+  });
+
+  test("a pick recorded as its number reads as the option it names", () => {
+    for (const [details, code] of [["1", 0], ["2", 2]] as const) {
+      const p = projBeforeGate();
+      recordReview(p, "READY");
+      pickAtBlockingSensor(p, details);
+      expect(runHook(p, writePayload(raArtifact(p))).code, details).toBe(code);
+    }
   });
 });
 
@@ -1339,7 +1484,9 @@ describe("t264 (d) Kiro IDE adapter route", () => {
 // The hook says what was refused and names `next`; the question waits in the
 // refusal record and the next `next` asks it once, unless it no longer stands
 // (the stage was approved or sent back, the check was lowered) or another
-// question is already open.
+// question is already open. When no turn of the person's stands behind the
+// write, it was the agent's own, and the first refusal hands the agent its own
+// step instead: leave the document and quote the change at the gate.
 
 const ORCH_TOOL = join(DIST_CLAUDE, "tools", "aidlc-orchestrate.ts");
 
@@ -1387,6 +1534,46 @@ function refusedWrite(p: string): string {
   return refused.stderr;
 }
 
+const PERSON = {
+  AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000000264",
+  AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+  AIDLC_UNATTENDED: "0",
+};
+
+// The person's message, as the human-turn hook records it; returns the id of
+// the message it kept.
+function personSays(p: string, prompt: string): string {
+  const said = spawnSync(BUN, [join(DIST_CLAUDE, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+    cwd: p,
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: PERSON.AIDLC_SESSION_OVERRIDE, prompt }),
+    env: { ...process.env, ...PERSON, CLAUDE_PROJECT_DIR: p, AIDLC_PROJECT_DIR: p },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(said.status, said.stderr).toBe(0);
+  const turn = readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
+}
+
+function logTool(p: string, args: string[]): void {
+  const r = spawnSync(BUN, [LOG_TOOL, ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    env: process.env,
+  });
+  expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+}
+
+// The refused file as the hook prints it is in the platform's own path form (on
+// Windows, backslashes and the project folder as the hook resolved it), so only
+// the sentence around it is compared.
+const sentenceAroundTarget = (stderr: string) => stderr.replace(/review-freeze: "[^"]*"/, 'review-freeze: "<file>"');
+
+const opsOf = (directive: Record<string, unknown>) => (directive.remedies as { op: string }[]).map((remedy) => remedy.op);
+const AFTER_THE_REVIEW = { kind: "print", message: expect.stringContaining("No further review pass follows") };
+
 describe("t264 (d) the refusal names next; next asks the recovery question", () => {
   test("the refusal says what was refused and the step to take, with no JSON line", () => {
     const p = projBeforeGate();
@@ -1398,9 +1585,21 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
     expect(stderr.trim()).toMatch(/ Next: `[^`\n]*orchestrate[^`\n]* next`\.$/);
   });
 
-  test("the next `next` asks the recovery question, once", () => {
+  test("when no turn of the person's stands behind the write, the next `next` hands the agent its own step, once; a repeat asks the person", () => {
     const p = projBeforeGate();
     recordReview(p, "READY");
+    refusedWrite(p);
+    const own = nextDirective(p);
+    expect(own).toMatchObject({
+      kind: "ask",
+      ask_type: "guard-recovery",
+      agent_work: true,
+      stage: "requirements-analysis",
+      reason_codes: ["REVIEW_FREEZE_ACTIVE"],
+    });
+    expect(opsOf(own)).toEqual(["present-findings-at-gate"]);
+    // The review is final, so the step after it is the one its verdict named: on to the gate.
+    expect(nextDirective(p)).toMatchObject(AFTER_THE_REVIEW);
     refusedWrite(p);
     const asked = nextDirective(p);
     expect(asked).toMatchObject({
@@ -1408,12 +1607,55 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
       ask_type: "guard-recovery",
       stage: "requirements-analysis",
       reason_codes: ["REVIEW_FREEZE_ACTIVE"],
+      question: "Requirements Analysis still can't go ahead as things stand: which way would you like to go on?",
     });
-    expect((asked.remedies as { op: string }[]).map((remedy) => remedy.op)).toEqual([
-      "request-changes",
-      "lower-fence",
+    expect(asked.agent_work).toBeUndefined();
+    expect(opsOf(asked)).toEqual(["request-changes", "lower-fence"]);
+    expect(nextDirective(p)).toMatchObject(AFTER_THE_REVIEW);
+  });
+
+  // The person spoke since the last decision, or answered the agent's question
+  // ("apply the reviewer's suggestion?" "yes, add them"): they may have asked for
+  // the edit, so the first refusal is their question, as it always was, and the
+  // sentence the tool shows them is the same either way.
+  test("a write the person may have asked for keeps their question; the refusal reads the same", () => {
+    const silent = projBeforeGate();
+    recordReview(silent, "READY");
+    const sentence = sentenceAroundTarget(refusedWrite(silent));
+    expect(sentence).toContain('review-freeze: "<file>" is this stage\'s output document');
+    const spoke = projBeforeGate();
+    recordReview(spoke, "READY");
+    personSays(spoke, "add the missing FR IDs to the requirements");
+    const answered = projBeforeGate();
+    recordReview(answered, "READY");
+    logTool(answered, [
+      "decision", "--stage", "requirements-analysis",
+      "--decision", "Apply the reviewer's suggestion to the requirements?", "--options", "Yes,No",
     ]);
-    expect(nextDirective(p)).toMatchObject({ kind: "run-stage", stage: "requirements-analysis" });
+    personSays(answered, "yes, add them");
+    logTool(answered, ["answer", "--stage", "requirements-analysis", "--details", "yes, add them"]);
+    for (const [label, p] of [["spoke", spoke], ["answered", answered]] as const) {
+      expect(sentenceAroundTarget(refusedWrite(p)), label).toBe(sentence);
+      const asked = nextDirective(p);
+      expect(asked, label).toMatchObject({
+        kind: "ask",
+        ask_type: "guard-recovery",
+        question: "Requirements Analysis can't go ahead as things stand: which way would you like to go on?",
+      });
+      expect(asked.agent_work, label).toBeUndefined();
+      expect(opsOf(asked), label).toEqual(["request-changes", "lower-fence"]);
+    }
+  });
+
+  test("relaxed and off: the check stands aside and leaves nothing to ask", () => {
+    for (const policy of ["relaxed", "off"]) {
+      const p = projBeforeGate();
+      const statePath = join(seededRecordDir(p), "aidlc-state.md");
+      writeFileSync(statePath, setGuardPolicyLine(readFileSync(statePath, "utf-8"), `${policy} (set by you)`));
+      recordReview(p, "READY");
+      expect(runHook(p, writePayload(raArtifact(p))).code, policy).toBe(0);
+      expect(refusalRecords(p), policy).toEqual([]);
+    }
   });
 
   // A live run picked Request Changes on this question after saying what should
@@ -1423,6 +1665,7 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
   test("the question is not published, so the person's own words carry their Request Changes", () => {
     const p = projBeforeGate();
     recordReview(p, "READY");
+    personSays(p, "the requirements should say an empty name prints hello there");
     refusedWrite(p);
     expect(nextDirective(p)).toMatchObject({ kind: "ask", ask_type: "guard-recovery" });
     const answered = spawnSync(
@@ -1479,38 +1722,26 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
   });
 
   // The person picks "Turn this check off" by its number. The choice tells the
-  // agent to run its command with that reply as their words, so the check is
-  // recorded as theirs.
+  // agent to run its command naming the message that reply came in, so the
+  // check is recorded as theirs.
   test("the turn-it-off choice picked by its number: the check is off, set by you", () => {
     const p = projBeforeGate();
     recordReview(p, "READY");
+    personSays(p, "add the missing FR IDs to the requirements");
     refusedWrite(p);
-    const person = {
-      AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000000264",
-      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
-      AIDLC_UNATTENDED: "0",
-    };
-    const asked = nextDirective(p, person);
+    const asked = nextDirective(p, PERSON);
     const remedies = asked.remedies as { op: string; action: string }[];
     const at = remedies.findIndex((remedy) => remedy.op === "lower-fence");
     expect(at, JSON.stringify(asked)).toBeGreaterThan(-1);
-    expect(remedies[at].action).toContain("--person-words '<their words>'");
+    expect(remedies[at].action).toContain(`\`--message '${MESSAGE_SLOT}'\` added${MESSAGE_FILL}`);
+    expect(remedies[at].action).not.toContain("--person-words");
     const dispatcher = join(DIST_CLAUDE, "tools", "aidlc.ts");
-    const picked = spawnSync(BUN, [dispatcher, "engine", "hook", "record-human-turn"], {
-      cwd: p,
-      input: JSON.stringify({
-        hook_event_name: "UserPromptSubmit", session_id: person.AIDLC_SESSION_OVERRIDE, prompt: String(at + 1),
-      }),
-      env: { ...process.env, ...person, CLAUDE_PROJECT_DIR: p, AIDLC_PROJECT_DIR: p },
-      encoding: "utf-8",
-      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-    });
-    expect(picked.status, picked.stderr).toBe(0);
+    const picked = personSays(p, String(at + 1));
     const off = spawnSync(BUN, [
-      dispatcher, "engine", "config", "set", "guard.review-freeze", "off", "--person-words", String(at + 1), "--project-dir", p,
+      dispatcher, "engine", "config", "set", "guard.review-freeze", "off", "--message", picked, "--project-dir", p,
     ], {
       cwd: p,
-      env: { ...process.env, ...person, CLAUDE_PROJECT_DIR: p },
+      env: { ...process.env, ...PERSON, CLAUDE_PROJECT_DIR: p },
       encoding: "utf-8",
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
@@ -1532,8 +1763,7 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
 
 const HOOK_REFUSAL_NEXT_RULE =
   "A hook refusal that ends with `Next:` and a command names your next step: run that command and act on " +
-  "the directive it returns (after a refused write, the recovery question to put to the person); never retry " +
-  "the refused call.";
+  "the directive it returns; never retry the refused call.";
 
 
 // ---------------------------------------------------------------------------

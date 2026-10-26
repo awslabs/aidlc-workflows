@@ -1,0 +1,582 @@
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, function:resolveArtifactPaths, function:splitConsumesByPresence, function:producedLine, function:commonFolder, function:owedPipelineLinks, function:pipelineLinkWayOn, function:fitPipelineRecord, function:reposNote, function:withinProduceRoots, function:pipelineLinkEvidence, function:gateEstimateSeconds
+//
+// #2874: a workspace of very many sibling repositories. Reverse Engineering
+// writes nine files per repository, and the step used to list each of them,
+// as did every later stage that reads them, the gate's "It produced ..." line
+// and the replies that name the owed link commands. At 190 repositories each
+// of those printed more than the engine sends in one result, so the work
+// stopped before the analysis, one stage after it, at its gate and at a
+// "Request Changes". These cases build that workspace (a `.git` folder and one
+// file per repository) on the packaged Claude tree (the common 28 KiB limit)
+// and the Copilot tree (its declared 19,000 bytes), run the engine as the
+// agent would, and pin every printed result under the limit while the gate
+// still checks every repository's files.
+
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { appendFileSync, cpSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { cleanupTestProject, createTestProject, FIXTURES_DIR, REPO_ROOT, seededStateFile } from "../harness/fixtures.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import {
+  auditBlockField,
+  GATE_NOTE_SECONDS,
+  gateEstimateSeconds,
+  guardPolicyAcceptsChanges,
+  pipelineLinkEvidence,
+  readAuditShardEvents,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { withinProduceRoots } from "../../dist/claude/.claude/tools/aidlc-state.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 4);
+
+const COMMON_LIMIT = 28 * 1024;
+const TREES = [
+  { name: "claude", root: join(REPO_ROOT, "dist", "claude"), dir: ".claude" },
+  { name: "copilot", root: join(REPO_ROOT, "dist", "copilot"), dir: ".aidlc" },
+] as const;
+type Tree = (typeof TREES)[number];
+const RE = "reverse-engineering";
+const LEAD = "aidlc-developer-agent";
+const FINAL = "aidlc-architect-agent";
+const ARTIFACTS = [
+  "business-overview", "architecture", "code-structure", "api-documentation", "component-inventory",
+  "technology-stack", "dependencies", "code-quality-assessment", "reverse-engineering-timestamp",
+];
+const STATE_FIXTURE = readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8");
+const STAGE_LINE = /^- \[[ x-]\] ([a-z0-9-]+) \u2014 EXECUTE$/gm;
+const FIXTURE_STAGES = [...STATE_FIXTURE.matchAll(STAGE_LINE)].map((match) => match[1] ?? "");
+
+const projects: string[] = [];
+afterAll(() => {
+  for (const proj of projects) cleanupTestProject(proj);
+}, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+function limitOf(tree: Tree): number {
+  const data = JSON.parse(readFileSync(join(tree.root, tree.dir, "tools", "data", "harness.json"), "utf-8"));
+  return typeof data.directiveMaxBytes === "number" ? Math.min(data.directiveMaxBytes, COMMON_LIMIT) : COMMON_LIMIT;
+}
+
+const repoNames = (count: number): string[] =>
+  Array.from({ length: count }, (_, index) => `service-${String(index).padStart(3, "0")}`);
+
+interface Shape {
+  repos: number;
+  stage: string;
+  // The stage's checkbox: in progress, or waiting at its gate.
+  mark?: "-" | "?";
+  stores?: boolean;
+  scope?: string;
+  policy?: "strict" | "relaxed" | "off";
+  // The gate's checks, which most of these cases are not about.
+  sensorsOff?: boolean;
+}
+
+// The brownfield feature state with `stage` at `mark`, every earlier stage done,
+// in a workspace whose work records `repos` sibling repositories.
+function workspace(tree: Tree, shape: Shape): { proj: string; repos: string[] } {
+  const proj = createTestProject();
+  projects.push(proj);
+  cpSync(join(tree.root, tree.dir), join(proj, tree.dir), { recursive: true });
+  cpSync(join(tree.root, "aidlc"), join(proj, "aidlc"), { recursive: true });
+  const at = FIXTURE_STAGES.indexOf(shape.stage);
+  const mark = shape.mark ?? "-";
+  let state = STATE_FIXTURE
+    .replace(/^(- \*\*Current Stage\*\*: ).*$/m, `$1${shape.stage}`)
+    .replace(/^(- \*\*In Progress\*\*: ).*$/m, `$1${shape.stage}`)
+    .replace(STAGE_LINE, (line, slug: string) => {
+      const index = FIXTURE_STAGES.indexOf(slug);
+      return line.replace(/^- \[[ x-]\]/, `- [${index < at ? "x" : index === at ? mark : " "}]`);
+    });
+  if (shape.scope) state = state.replace(/^- \*\*Scope\*\*: .*/m, `- **Scope**: ${shape.scope}`);
+  if (shape.sensorsOff) state = state.replace(/^(- \*\*Scope\*\*: .*)$/m, "$1\n- **Sensors**: off (set by you)");
+  if (shape.policy) state = state.replace(/^- \*\*Change Control\*\*: .*/m, `- **Change Control**: ${shape.policy} (set by you)`);
+  writeFileSync(seededStateFile(proj), state, "utf-8");
+  const repos = repoNames(shape.repos);
+  const registry = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+  const rows = JSON.parse(readFileSync(registry, "utf-8"));
+  rows[0].repos = repos;
+  // The person chose to read all of them; the question before that is
+  // t-re-repo-scope's.
+  rows[0].repos_named = true;
+  writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+  for (const repo of repos) {
+    mkdirSync(join(proj, repo, ".git"), { recursive: true });
+    writeFileSync(join(proj, repo, "main.py"), "print('hello')\n");
+    if (shape.stores) {
+      const store = join(proj, "aidlc", "spaces", "default", "codekb", repo);
+      mkdirSync(store, { recursive: true });
+      for (const name of ARTIFACTS) writeFileSync(join(store, `${name}.md`), `# ${name}\n\n## Overview\n\n${repo}\n`);
+    }
+  }
+  return { proj, repos };
+}
+
+// Every link of every repository on record for the current attempt, written
+// the way `aidlc-log.ts link` writes it: the attempt's start, each developer
+// handoff file, then each receipt in chain order.
+function recordEveryLink(proj: string, repos: string[], links: string[]): void {
+  appendAuditEntry("STAGE_STARTED", { Stage: RE, Agent: LEAD }, proj);
+  const record = join(seededStateFile(proj), "..");
+  const handoffs = join(record, "inception", RE);
+  mkdirSync(handoffs, { recursive: true });
+  for (const repo of repos) {
+    const handoff = join(handoffs, `developer-scan-${repo}.md`);
+    const text = "## Developer Code Scan Results\n\n### Scan Coverage\n\n- src/\n\n## Handoff Summary\n\nCurrent attempt.\n";
+    writeFileSync(handoff, text);
+    links.forEach((link, index) => {
+      const fields: Record<string, string> = { Stage: RE, Link: link, Position: `${index + 1}/${links.length}` };
+      if (link === LEAD) {
+        fields["Artifact Path"] = handoff.slice(proj.length + 1).replaceAll("\\", "/");
+        fields["Artifact SHA256"] = `sha256:${createHash("sha256").update(text).digest("hex")}`;
+        fields["Artifact Mtime Ms"] = String(statSync(handoff).mtimeMs);
+      }
+      fields.Repo = repo;
+      appendAuditEntry("PIPELINE_LINK_COMPLETED", fields, proj);
+    });
+  }
+}
+
+type Printed = Record<string, unknown> & { kind?: string };
+
+function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extra };
+  delete env.AWS_AIDLC_DEFAULT_SCOPE;
+  delete env.AIDLC_SKIP_ARTIFACT_GUARD;
+  delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
+  for (const [key, value] of Object.entries(extra)) env[key] = value;
+  return env;
+}
+
+// One engine command as the agent runs it, then every rules part it is handed
+// on to, with every result it printed.
+function engine(tree: Tree, proj: string, args: string[], env: NodeJS.ProcessEnv = childEnv()): { final: Printed; printed: string[] } {
+  const tool = join(proj, tree.dir, "tools", "aidlc-orchestrate.ts");
+  const printed: string[] = [];
+  let argv = args;
+  for (let part = 0; part < 20; part++) {
+    const res = spawnSync(process.execPath, [tool, ...argv, "--project-dir", proj], {
+      cwd: proj,
+      env,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS * 4),
+    });
+    const stdout = (res.stdout ?? "").trim();
+    printed.push(stdout);
+    let directive: Printed;
+    try {
+      directive = JSON.parse(stdout);
+    } catch {
+      throw new Error(`${args.join(" ")} printed no directive (${res.status}): ${stdout.slice(0, 600)} ${res.stderr ?? ""}`);
+    }
+    if (directive.kind !== "load-steering") return { final: directive, printed };
+    argv = ["continue", String(directive.receipt)];
+  }
+  throw new Error("the rules parts did not end");
+}
+
+function expectWithin(tree: Tree, printed: string[]): void {
+  const limit = limitOf(tree);
+  for (const result of printed) {
+    expect(Buffer.byteLength(result, "utf-8"), `${tree.name}: ${result.slice(0, 300)}`).toBeLessThanOrEqual(limit);
+  }
+}
+
+const CODEKB = "aidlc/spaces/default/codekb";
+
+describe("Reverse Engineering in a workspace of 190 repositories", () => {
+  for (const tree of TREES) {
+    test(`${tree.name}: the step starts, naming each file once for every repository`, () => {
+      const { proj } = workspace(tree, { repos: 190, stage: RE });
+      const { final, printed } = engine(tree, proj, ["next"]);
+      expectWithin(tree, printed);
+      expect(final.kind, JSON.stringify(final).slice(0, 600)).toBe("run-stage");
+      expect(final.produces).toEqual(ARTIFACTS.map((name) => `${CODEKB}/{repo}/${name}.md`));
+      expect(String(final.repos_note)).toContain("190");
+      expect(String(final.repos_note)).toContain("aidlc/spaces/default/intents/intents.json");
+      expect(String(final.narration ?? "")).not.toContain("{repo}");
+    });
+
+    test(`${tree.name}: a resume with every link of every repository recorded fits`, () => {
+      const { proj, repos } = workspace(tree, { repos: 190, stage: RE, stores: true, scope: "enterprise" });
+      recordEveryLink(proj, repos, [LEAD, FINAL]);
+      const { final, printed } = engine(tree, proj, ["next"]);
+      expectWithin(tree, printed);
+      expect(final.kind, JSON.stringify(final).slice(0, 600)).toBe("run-stage");
+      const pipeline = final.pipeline as { links: string[]; completed: string[]; record: unknown[]; completed_other_repos?: number };
+      expect(pipeline.links).toEqual([LEAD, FINAL]);
+      expect(pipeline.record).toEqual([]);
+      expect(pipeline.completed).toEqual(repos.slice(0, 9).flatMap((repo) => [`${repo}:${LEAD}`, `${repo}:${FINAL}`]));
+      expect(pipeline.completed_other_repos).toBe(181);
+    });
+
+    test(`${tree.name}: the stages that read the code knowledge base start after it`, () => {
+      for (const stage of ["practices-discovery", "requirements-analysis"]) {
+        const { proj } = workspace(tree, { repos: 190, stage, stores: true });
+        const { final, printed } = engine(tree, proj, ["next"]);
+        expectWithin(tree, printed);
+        expect(final.kind, `${stage}: ${JSON.stringify(final).slice(0, 600)}`).toBe("run-stage");
+        const consumes = final.consumes as string[];
+        expect(consumes).toContain(`${CODEKB}/{repo}/architecture.md`);
+        expect(consumes.filter((path) => path.startsWith(`${CODEKB}/`)).every((path) => path.includes("/{repo}/"))).toBe(true);
+        expect(String(final.repos_note)).toContain("190");
+      }
+    });
+
+    test(`${tree.name}: the gate names the repositories in one line and still checks every repository's files`, () => {
+      const evidenceOff = childEnv({ AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1" });
+      const { proj } = workspace(tree, { repos: 190, stage: RE, stores: true, sensorsOff: true });
+      rmSync(join(proj, CODEKB, "service-100", "architecture.md"));
+      const refused = engine(tree, proj, ["report", "--stage", RE, "--result", "awaiting-approval"], evidenceOff);
+      expectWithin(tree, refused.printed);
+      expect(refused.final.reason_codes, JSON.stringify(refused.final).slice(0, 600)).toEqual(["REQUIRED_ARTIFACTS_MISSING"]);
+      expect(JSON.stringify(refused.final)).toContain("required artifacts are missing (service-100: architecture.md)");
+      writeFileSync(join(proj, CODEKB, "service-100", "architecture.md"), "# architecture\n\n## Overview\n\nback\n");
+      const gate = engine(tree, proj, ["report", "--stage", RE, "--result", "awaiting-approval"], evidenceOff);
+      expectWithin(tree, gate.printed);
+      expect(String(gate.final.narration)).toBe(
+        "Reverse Engineering is ready for your review. It produced the code knowledge base of 190 repositories, " +
+          `9 files each, in ${CODEKB}/, one folder per repository.`,
+      );
+      const shownAgain = engine(tree, proj, ["next"], evidenceOff);
+      expectWithin(tree, shownAgain.printed);
+      expect(shownAgain.final.gate_only).toBe(true);
+      expect(String(shownAgain.final.narration)).toStartWith("Reverse Engineering is ready for your review. It produced the code knowledge base of 190 repositories");
+    });
+
+    // The state tool's floor, reached through `next` at the open gate: its
+    // refusal is the recovery question's way on (54,142 bytes on main).
+    test(`${tree.name}: next at an open gate with links still owed names the first repositories' commands`, () => {
+      const { proj } = workspace(tree, { repos: 190, stage: RE, mark: "?", stores: true, sensorsOff: true });
+      const { final, printed } = engine(tree, proj, ["next"]);
+      expectWithin(tree, printed);
+      expect(final.kind, JSON.stringify(final).slice(0, 600)).toBe("ask");
+      expect(final.reason_codes).toEqual(["PIPELINE_EVIDENCE_MISSING"]);
+      const said = JSON.stringify(final);
+      expect(said).toContain(`service-008:${LEAD}, and the links of 181 other repositories`);
+      expect(said).toContain("--repo service-008");
+      expect(said).not.toContain("--repo service-009");
+      expect(said).toContain("which names the commands for the other 181 repositories, and shows the gate again once every link is in");
+    });
+  }
+});
+
+describe("the owed link commands in a reply", () => {
+  const tree = TREES[1];
+  for (const policy of ["strict", "relaxed", "off"] as const) {
+    test(`Request Changes at a 190-repository gate under Guard Policy ${policy} names the first repositories' commands`, () => {
+      const { proj } = workspace(tree, { repos: 190, stage: RE, mark: "?", stores: true, sensorsOff: true, policy });
+      const { final, printed } = engine(tree, proj, [
+        "report", "--stage", RE, "--result", "rejected", "--user-input", "Request Changes",
+        "--reason", "the payments service needs a deeper scan",
+      ], childEnv({ AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" }));
+      expectWithin(tree, printed);
+      const said = JSON.stringify(final);
+      expect(said).toContain("Recorded rejected");
+      expect(said).toContain("--repo service-000");
+      expect(said).toContain("--repo service-008");
+      expect(said).not.toContain("--repo service-009");
+      expect(said).toContain("which names the commands for the other 181 repositories");
+    });
+  }
+
+  test("the gate refused for missing links names whole repositories, and nine or fewer read as before", () => {
+    const large = workspace(tree, { repos: 190, stage: RE, stores: true, sensorsOff: true });
+    const refused = engine(tree, large.proj, ["report", "--stage", RE, "--result", "awaiting-approval"]);
+    expectWithin(tree, refused.printed);
+    const said = JSON.stringify(refused.final);
+    expect(said).toContain(`service-008:${LEAD}, and the links of 181 other repositories`);
+    expect(said).toContain("which names the commands for the other 181 repositories");
+    expect(said).not.toContain("service-009");
+
+    const small = workspace(tree, { repos: 9, stage: RE, stores: true, sensorsOff: true });
+    const named = JSON.stringify(engine(tree, small.proj, ["report", "--stage", RE, "--result", "awaiting-approval"]).final);
+    expect(named).toContain(`service-008:${LEAD}.`);
+    expect(named).toContain("--repo service-008");
+    expect(named).not.toContain("other repositories");
+  });
+
+  test("an approval with links still owed names the approve retry as the step that names the rest", () => {
+    const { proj } = workspace(tree, { repos: 190, stage: RE, mark: "?", stores: true, sensorsOff: true });
+    const { final, printed } = engine(tree, proj, ["report", "--stage", RE, "--result", "approved", "--user-input", "Approve"],
+      childEnv({ AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" }));
+    expectWithin(tree, printed);
+    const said = JSON.stringify(final);
+    expect(said).toContain("--repo service-008");
+    expect(said).not.toContain("--repo service-009");
+    expect(said).toMatch(/again, which names the commands for the other 181 repositories/);
+  });
+});
+
+// Every gate confirms that each file it checks is inside the stage's produce
+// folders, and a codekb stage has one per repository: comparing each file with
+// every folder took 14 s of a live 190-repository gate on Windows. A file in
+// its own produce folder is now placed at once; a file deeper down, or outside
+// every folder, is decided as before.
+describe("the gate's produce folders at hundreds of repositories", () => {
+  test("each file is placed in its own folder at once, and the containment answers are unchanged", () => {
+    const base = join(REPO_ROOT, "produce-roots");
+    const roots = Array.from({ length: 1000 }, (_, index) => join(base, "codekb", `repo-${index}`));
+    const within = withinProduceRoots(roots);
+    const files = roots.flatMap((root) => ARTIFACTS.map((name) => join(root, `${name}.md`)));
+    const started = performance.now();
+    expect(files.every((file) => within(file))).toBe(true);
+    expect(performance.now() - started).toBeLessThan(1500);
+    expect(within(join(roots[5] ?? "", "nested", "deeper.md"))).toBe(true);
+    expect(within(roots[7] ?? "")).toBe(true);
+    expect(within(join(base, "codekb", "repo-6000", "architecture.md"))).toBe(false);
+    expect(within(join(base, "codekb", "architecture.md"))).toBe(false);
+    expect(within(join(base, "elsewhere", "repo-1", "architecture.md"))).toBe(false);
+  });
+});
+
+// The link check confirms each repository's developer handoff, and it read the
+// Guard Policy (the org, team and project memory, as Markdown) once for every
+// repository: 760 reads at a 190-repository gate, most of its 10 s, and the same
+// at each `next` and link receipt there. It reads it once a check now. Timed
+// against one read on the same box, so a slow or loaded runner moves both sides.
+describe("the link check over hundreds of repositories", () => {
+  test("a longer team.md costs the check one read of it, not one per repository", () => {
+    const { proj, repos } = workspace(TREES[0], { repos: 190, stage: RE, stores: true, scope: "enterprise" });
+    recordEveryLink(proj, repos, [LEAD, FINAL]);
+    const node = { slug: RE, lead_agent: LEAD, support_agents: [FINAL] };
+    const fastest = (run: () => unknown): number => {
+      let best = Number.POSITIVE_INFINITY;
+      for (let round = 0; round < 3; round++) {
+        const started = performance.now();
+        run();
+        best = Math.min(best, performance.now() - started);
+      }
+      return best;
+    };
+    const stock = fastest(() => pipelineLinkEvidence(proj, node));
+    const practice = "- A practice the team affirmed at a retrospective, with the reason it holds and where it applies.\n";
+    appendFileSync(join(proj, "aidlc", "spaces", "default", "memory", "team.md"), `\n## Affirmed Practices\n\n${practice.repeat(600)}`);
+    const read = fastest(() => guardPolicyAcceptsChanges(proj));
+    let evidence = pipelineLinkEvidence(proj, node);
+    const grown = fastest(() => (evidence = pipelineLinkEvidence(proj, node)));
+    expect(evidence.missing).toEqual([]);
+    expect(evidence.completed).toHaveLength(repos.length * 2);
+    expect(grown - stock).toBeLessThan(read * 20);
+  });
+});
+
+// The gate used to fire each check once per file (1,900 fires at 190
+// repositories, seven minutes on Windows); it now reads every repository's
+// files in one fire per check, and a failing file is named with its repository,
+// since every repository's files share their names. The stage has no review,
+// so its first report runs the checks once before the gate (completionChecksStep)
+// and hands what they found to the agent; the report run again opens the gate,
+// which fires them once more.
+describe("the gate's checks over a code knowledge base", () => {
+  const tree = TREES[0];
+  const openGate = (proj: string, env: NodeJS.ProcessEnv, line: string) => {
+    const held = engine(tree, proj, ["report", "--stage", RE, "--result", "awaiting-approval"], env);
+    expect(String(held.final.message), JSON.stringify(held.final).slice(0, 600)).toContain(`Before the approval, this stage's checks ran on its documents. ${line}`);
+    const fires = readAuditShardEvents(proj).filter((row) => row.event === "SENSOR_FIRED").map((row) => auditBlockField(row.block, "Sensor ID"));
+    expect(fires.sort()).toEqual(["required-sections", "upstream-coverage"]);
+    return engine(tree, proj, ["report", "--stage", RE, "--result", "awaiting-approval"], env);
+  };
+  test("each check fires once for the stage, and the failing file is named with its repository", () => {
+    const { proj, repos } = workspace(tree, { repos: 12, stage: RE, stores: true });
+    const templates = join(proj, "aidlc", "spaces", "default", "memory", "templates");
+    mkdirSync(templates, { recursive: true });
+    writeFileSync(join(templates, "dependencies.md"), "# dependencies\n\n## Overview\n\n## Direct\n");
+    for (const repo of repos) {
+      if (repo !== "service-007") appendFileSync(join(proj, CODEKB, repo, "dependencies.md"), "\n## Direct\n\nnone\n");
+    }
+    const line = "The required-sections check reports 1 finding in service-007/dependencies.md.";
+    const gate = openGate(proj, childEnv({ AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1" }), line);
+    expectWithin(tree, gate.printed);
+    const rows = readAuditShardEvents(proj);
+    const fired = rows.filter((row) => row.event === "SENSOR_FIRED").map((row) => auditBlockField(row.block, "Sensor ID"));
+    expect(fired.sort()).toEqual(["required-sections", "required-sections", "upstream-coverage", "upstream-coverage"]);
+    const failed = rows.filter((row) => row.event === "SENSOR_FAILED");
+    expect(failed.map((row) => auditBlockField(row.block, "Failed outputs"))).toEqual(Array(2).fill(`${CODEKB}/service-007/dependencies.md`));
+    expect(String(gate.final.narration)).toContain(line);
+  });
+
+  test("two failing files are named as the first and how many others", () => {
+    const { proj } = workspace(tree, { repos: 12, stage: RE, stores: true });
+    const templates = join(proj, "aidlc", "spaces", "default", "memory", "templates");
+    mkdirSync(templates, { recursive: true });
+    writeFileSync(join(templates, "dependencies.md"), "# dependencies\n\n## Overview\n\n## Direct\n");
+    for (const repo of repoNames(12).slice(2)) appendFileSync(join(proj, CODEKB, repo, "dependencies.md"), "\n## Direct\n\nnone\n");
+    const line = "The required-sections check reports 2 findings in service-000/dependencies.md and 1 other file.";
+    const gate = openGate(proj, childEnv({ AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1" }), line);
+    expect(String(gate.final.narration)).toContain(line);
+  });
+
+  for (const policy of ["relaxed", "off"] as const) {
+    test(`under Guard Policy ${policy} the checks, the line and the refusal are the same`, () => {
+      const { proj } = workspace(tree, { repos: 2, stage: RE, stores: true, policy });
+      const templates = join(proj, "aidlc", "spaces", "default", "memory", "templates");
+      mkdirSync(templates, { recursive: true });
+      writeFileSync(join(templates, "dependencies.md"), "# dependencies\n\n## Overview\n\n## Direct\n");
+      appendFileSync(join(proj, CODEKB, "service-000", "dependencies.md"), "\n## Direct\n\nnone\n");
+      rmSync(join(proj, CODEKB, "service-000", "architecture.md"));
+      const evidenceOff = childEnv({ AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1" });
+      const refused = engine(tree, proj, ["report", "--stage", RE, "--result", "awaiting-approval"], evidenceOff);
+      expect(refused.final.reason_codes, JSON.stringify(refused.final).slice(0, 600)).toEqual(["REQUIRED_ARTIFACTS_MISSING"]);
+      expect(JSON.stringify(refused.final)).toContain("required artifacts are missing (service-000: architecture.md)");
+      writeFileSync(join(proj, CODEKB, "service-000", "architecture.md"), "# architecture\n\n## Overview\n\nback\n");
+      const line = "The required-sections check reports 1 finding in service-001/dependencies.md.";
+      const gate = openGate(proj, evidenceOff, line);
+      const fired = readAuditShardEvents(proj).filter((row) => row.event === "SENSOR_FIRED");
+      expect(fired).toHaveLength(4);
+      expect(String(gate.final.narration)).toContain(line);
+    });
+  }
+});
+
+describe("a workspace of two repositories", () => {
+  const tree = TREES[0];
+  test("the step names both in its note and the gate names both", () => {
+    const { proj } = workspace(tree, { repos: 2, stage: RE, stores: true, sensorsOff: true });
+    const { final } = engine(tree, proj, ["next"]);
+    expect(final.kind).toBe("run-stage");
+    expect(final.produces).toEqual(ARTIFACTS.map((name) => `${CODEKB}/{repo}/${name}.md`));
+    expect(final.repos_note).toBe("Each path with {repo} is one file per repository this work covers: service-000 and service-001.");
+    const gate = engine(tree, proj, ["report", "--stage", RE, "--result", "awaiting-approval"],
+      childEnv({ AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1" }));
+    expect(String(gate.final.narration)).toBe(
+      "Reverse Engineering is ready for your review. It produced the code knowledge base of service-000 and " +
+        `service-001, 9 files each, in ${CODEKB}/, one folder per repository.`,
+    );
+  });
+
+  test("a consumed file one repository lacks is still listed; one no repository has is left out", () => {
+    const { proj } = workspace(tree, { repos: 2, stage: "requirements-analysis", stores: true });
+    rmSync(join(proj, CODEKB, "service-000", "architecture.md"));
+    for (const repo of ["service-000", "service-001"]) rmSync(join(proj, CODEKB, repo, "code-structure.md"));
+    const consumes = engine(tree, proj, ["next"]).final.consumes as string[];
+    expect(consumes).toContain(`${CODEKB}/{repo}/architecture.md`);
+    expect(consumes).toContain(`${CODEKB}/{repo}/business-overview.md`);
+    expect(consumes.some((path) => path.endsWith("code-structure.md"))).toBe(false);
+  });
+});
+
+// Each link receipt of an analysis over ten or more repositories carries how
+// many are done; it asks the agent to say so at each new tenth, never after
+// every repository, and the receipt that completes every chain says how long
+// the gate's report takes when that is long. The status line shows the count.
+describe("the running count of a long analysis", () => {
+  const tree = TREES[0];
+
+  function link(proj: string, repo: string, agent: string): Printed {
+    const args = [join(proj, tree.dir, "tools", "aidlc-log.ts"), "link", "--stage", RE, "--link", agent, "--repo", repo];
+    if (agent === LEAD) {
+      const handoff = join(seededStateFile(proj), "..", "inception", RE, `developer-scan-${repo}.md`);
+      mkdirSync(join(handoff, ".."), { recursive: true });
+      writeFileSync(handoff, "## Developer Code Scan Results\n\n### Scan Coverage\n\n- src/\n\n## Handoff Summary\n\nCurrent attempt.\n");
+      const later = new Date(Date.now() + 1_000);
+      utimesSync(handoff, later, later);
+      args.push("--artifact", handoff.slice(proj.length + 1).replaceAll("\\", "/"));
+    }
+    const res = spawnSync(process.execPath, [...args, "--project-dir", proj], {
+      cwd: proj,
+      env: childEnv(),
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS * 4),
+    });
+    try {
+      return JSON.parse((res.stdout ?? "").trim());
+    } catch {
+      throw new Error(`link ${repo} ${agent} printed no result (${res.status}): ${res.stdout ?? ""} ${res.stderr ?? ""}`);
+    }
+  }
+
+  function statusLine(proj: string): string {
+    const res = spawnSync(process.execPath, [join(proj, tree.dir, "hooks", "aidlc-statusline.ts")], {
+      cwd: proj,
+      env: childEnv(),
+      input: JSON.stringify({ workspace: { project_dir: proj } }),
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return res.stdout ?? "";
+  }
+
+  test("a note at each new tenth, the count on every receipt and on the status line", () => {
+    const { proj, repos } = workspace(tree, { repos: 20, stage: RE, stores: true, scope: "enterprise" });
+    recordEveryLink(proj, repos.slice(0, 1), [LEAD, FINAL]);
+    const said = repos.slice(1, 4).flatMap((repo) => [link(proj, repo, LEAD), link(proj, repo, FINAL)]);
+    expect(said.map((receipt) => receipt.analysed)).toEqual(
+      [1, 2, 2, 3, 3, 4].map((done) => ({ done, total: 20 })),
+    );
+    const note = (done: number): string => `${done} of 20 repositories are analysed: tell the person so, in a few words of your own.`;
+    expect(said.map((receipt) => receipt.analysed_note ?? null)).toEqual([null, note(2), null, null, null, note(4)]);
+    expect(said.some((receipt) => "gate_wait_note" in receipt)).toBe(false);
+    expect(statusLine(proj)).toContain("> Reverse Engineering 4/20");
+  });
+
+  test("a repository set changed mid-analysis shows no old count; the next receipt counts the new set", () => {
+    const { proj, repos } = workspace(tree, { repos: 20, stage: RE, stores: true, scope: "enterprise" });
+    recordEveryLink(proj, repos.slice(0, 1), [LEAD, FINAL]);
+    for (const repo of repos.slice(1, 4)) {
+      link(proj, repo, LEAD);
+      link(proj, repo, FINAL);
+    }
+    expect(statusLine(proj)).toContain("> Reverse Engineering 4/20");
+    const setRepos = (names: string[]): void => {
+      const res = spawnSync(process.execPath, [
+        join(proj, tree.dir, "tools", "aidlc-utility.ts"), "intent", "set-repos", names.join(","), "--project-dir", proj,
+      ], { cwd: proj, env: childEnv(), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      expect(res.status, `${res.stdout}${res.stderr}`).toBe(0);
+    };
+    setRepos(repos.slice(0, 9));
+    expect(statusLine(proj)).not.toMatch(/Reverse Engineering \d/);
+    setRepos(repos.slice(0, 15));
+    expect(statusLine(proj)).not.toMatch(/Reverse Engineering \d/);
+    link(proj, repos[4] ?? "", LEAD);
+    expect(link(proj, repos[4] ?? "", FINAL).analysed).toEqual({ done: 5, total: 15 });
+    expect(statusLine(proj)).toContain("> Reverse Engineering 5/15");
+  });
+
+  test("the receipt that completes 190 repositories says no wait: their gate is short", () => {
+    const { proj, repos } = workspace(tree, { repos: 190, stage: RE, stores: true, scope: "enterprise" });
+    recordEveryLink(proj, repos.slice(0, 189), [LEAD, FINAL]);
+    link(proj, "service-189", LEAD);
+    const last = link(proj, "service-189", FINAL);
+    expect(last.analysed).toEqual({ done: 190, total: 190 });
+    expect(last.analysed_note).toBeUndefined();
+    expect("gate_wait_note" in last).toBe(false);
+    expect(statusLine(proj)).toContain("> Reverse Engineering --");
+  });
+
+  test("the receipt that completes a thousand says once how long the gate's report takes", () => {
+    const { proj, repos } = workspace(tree, { repos: 1000, stage: RE, scope: "enterprise" });
+    recordEveryLink(proj, repos.slice(0, 999), [LEAD, FINAL]);
+    expect("gate_wait_note" in link(proj, "service-999", LEAD)).toBe(false);
+    const last = link(proj, "service-999", FINAL);
+    expect(last.analysed).toEqual({ done: 1000, total: 1000 });
+    expect(last.gate_wait_note).toBe(
+      "Every repository is analysed. The report that opens the approval gate checks the files of all 1000 " +
+        "repositories and takes about 13 seconds: before you run it, tell the person so in one line of your own.",
+    );
+    expect("gate_wait_note" in link(proj, "service-999", FINAL)).toBe(false);
+  });
+
+  test("the wait is said from where the estimate reaches ten seconds", () => {
+    expect(gateEstimateSeconds(190)).toBe(5);
+    expect(gateEstimateSeconds(600)).toBeLessThan(GATE_NOTE_SECONDS);
+    expect(gateEstimateSeconds(601)).toBe(GATE_NOTE_SECONDS);
+  });
+
+  test("a short gate is not said, and under ten repositories a receipt carries no count", () => {
+    const ten = workspace(tree, { repos: 10, stage: RE, stores: true, scope: "enterprise" });
+    recordEveryLink(ten.proj, ten.repos.slice(0, 9), [LEAD, FINAL]);
+    link(ten.proj, "service-009", LEAD);
+    const last = link(ten.proj, "service-009", FINAL);
+    expect(last.analysed).toEqual({ done: 10, total: 10 });
+    expect("gate_wait_note" in last).toBe(false);
+
+    const nine = workspace(tree, { repos: 9, stage: RE, stores: true, scope: "enterprise" });
+    recordEveryLink(nine.proj, [], [LEAD, FINAL]);
+    const receipt = link(nine.proj, "service-000", LEAD);
+    expect("analysed" in receipt || "analysed_note" in receipt).toBe(false);
+    expect(statusLine(nine.proj)).not.toMatch(/Reverse Engineering \d/);
+  });
+});

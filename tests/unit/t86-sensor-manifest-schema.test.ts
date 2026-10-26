@@ -77,6 +77,7 @@ const GATE_SENSORS = new Set([
   "claim-sources",
   "required-sections",
   "upstream-coverage",
+  "traceability",
 ]);
 
 /**

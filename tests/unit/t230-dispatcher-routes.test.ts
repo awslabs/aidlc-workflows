@@ -13,6 +13,7 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -452,10 +453,45 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "intent add-checkout maps through workspace parser with its path",
+      routerArgs: ["engine", "intent", "add-checkout", "no-such-checkout"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "add-checkout", "no-such-checkout"],
+      fixture: true,
+    },
+    {
+      name: "intent remove-checkout maps through workspace parser with its path",
+      routerArgs: ["engine", "intent", "remove-checkout", "no-such-checkout"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "remove-checkout", "no-such-checkout"],
+      fixture: true,
+    },
+    {
       name: "intent remove-repo maps through workspace parser with its name",
       routerArgs: ["engine", "intent", "remove-repo", "no-such-repo"],
       tool: "aidlc-utility.ts",
       toolArgs: ["intent", "remove-repo", "no-such-repo"],
+      fixture: true,
+    },
+    {
+      name: "intent set-repos maps through workspace parser with its names",
+      routerArgs: ["engine", "intent", "set-repos", "repo-a,repo-b"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "set-repos", "repo-a,repo-b"],
+      fixture: true,
+    },
+    {
+      name: "intent add-repo maps through workspace parser with every flag kept",
+      routerArgs: ["engine", "intent", "add-repo", "payments", "--url", "/x/payments.git", "--reason", "a b"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "add-repo", "payments", "--url", "/x/payments.git", "--reason", "a b"],
+      fixture: true,
+    },
+    {
+      name: "intent set-repos --all maps through workspace parser",
+      routerArgs: ["engine", "intent", "set-repos", "--all"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "set-repos", "--all"],
       fixture: true,
     },
     {
@@ -728,6 +764,72 @@ describe("t230 dispatcher route parity", () => {
       expectSameRun(routed, old, item.name);
     });
   }
+
+  // The commands Reverse Engineering's repo question hands the agent, through
+  // the entry it names: the list is recorded exactly, and --all keeps every repo.
+  test("intent set-repos through the dispatcher sets the list, and --all keeps every repo", () => {
+    const projectDir = makeProject();
+    seedStateFile(projectDir, "state-mid-inception.md");
+    const registry = join(projectDir, "aidlc", "spaces", "default", "intents", "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8")) as Array<Record<string, unknown>>;
+    rows[0].repos = ["repo-a", "repo-b", "repo-c"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    for (const repo of ["repo-a", "repo-b", "repo-c"]) mkdirSync(join(projectDir, repo, ".git"), { recursive: true });
+    const recorded = () => JSON.parse(readFileSync(registry, "utf-8"))[0] as { repos: string[]; repos_named?: boolean };
+
+    const all = viaDispatcher(["engine", "intent", "set-repos", "--all"], projectDir);
+    expect(all.exitCode, `${all.stdout}${all.stderr}`).toBe(0);
+    expect(all.stdout.toString().trim()).toBe("This work covers all 3 of its repositories.");
+    expect(recorded()).toMatchObject({ repos: ["repo-a", "repo-b", "repo-c"], repos_named: true });
+
+    const some = viaDispatcher(["engine", "intent", "set-repos", "repo-a,repo-c"], projectDir);
+    expect(some.exitCode, `${some.stdout}${some.stderr}`).toBe(0);
+    expect(some.stdout.toString().trim()).toBe("This work now covers repo-a and repo-c. repo-b can be added back any time.");
+    expect(recorded().repos).toEqual(["repo-a", "repo-c"]);
+  });
+
+  // The person's own address and the agent's quoted reason, through the entry
+  // the agent runs: the clone lands and the words are recorded whole.
+  test("intent add-repo --url through the dispatcher clones the repo and records the quoted reason", () => {
+    const projectDir = makeProject();
+    seedStateFile(projectDir, "state-mid-inception.md");
+    const registry = join(projectDir, "aidlc", "spaces", "default", "intents", "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8")) as Array<Record<string, unknown>>;
+    rows[0].repos = ["repo-a"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    mkdirSync(join(projectDir, "repo-a", ".git"), { recursive: true });
+    const source = mkdtempSync(join(tmpdir(), "aidlc-t230-remote-"));
+    tempProjects.add(source);
+    const gitRun = (cwd: string, args: string[]): void => {
+      const r = spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...args], {
+        cwd,
+        encoding: "utf-8",
+      });
+      if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+    };
+    mkdirSync(join(source, "work"));
+    writeFileSync(join(source, "work", "api.ts"), "export const api = 1;\n");
+    gitRun(join(source, "work"), ["init", "-q"]);
+    gitRun(join(source, "work"), ["add", "-A"]);
+    gitRun(join(source, "work"), ["commit", "-qm", "seed"]);
+    gitRun(source, ["clone", "-q", "--bare", "work", "payments.git"]);
+    const bare = join(source, "payments.git");
+
+    // The packaged tree: recording the new repo's listing reads the stage graph.
+    const added = viaDispatcher(
+      ["engine", "intent", "add-repo", "payments", "--url", bare, "--reason", "the consent API lives there"],
+      projectDir,
+      { AIDLC_DISPATCH_TOOLS_DIR: DIST_TOOLS_DIR },
+    );
+    expect(added.exitCode, `${added.stdout}${added.stderr}`).toBe(0);
+    expect(added.stdout.toString()).toContain(`Cloned payments from ${bare} and added it to this piece of work's repos.`);
+    expect(existsSync(join(projectDir, "payments", "api.ts"))).toBe(true);
+    expect((JSON.parse(readFileSync(registry, "utf-8"))[0] as { repos: string[] }).repos).toEqual(["payments", "repo-a"]);
+    const audit = readdirSync(join(seededRecordDir(projectDir), "audit"))
+      .map((file) => readFileSync(join(seededRecordDir(projectDir), "audit", file), "utf-8"))
+      .join("\n");
+    expect(audit).toContain("**Reason**: the consent API lives there");
+  });
 
   test("space create mutates the same observable tree as space-create", () => {
     const directProject = makeProject();
@@ -1237,6 +1339,39 @@ describe("t230 dispatcher route parity", () => {
     );
     expect(result.exitCode, result.stderr.toString()).toBe(0);
   });
+
+  // Config there would set up a new project in that folder, so the refusal
+  // names the two steps that reach the person's project. Our own options are
+  // read before the person's words, so the flag goes right after the tool, on
+  // the copy channel and natively (Bun under the name aidlc stands in).
+  test("a project-required command from a folder that is not a project names the step that works", () => {
+    const project = makeProject();
+    const outside = mkdtempSync(join(tmpdir(), "aidlc-t230-outside-"));
+    tempProjects.add(outside);
+    const launcherDir = mkdtempSync(join(tmpdir(), "aidlc-t230-launcher-"));
+    tempProjects.add(launcherDir);
+    const launcher = join(launcherDir, process.platform === "win32" ? "aidlc.exe" : "aidlc");
+    try {
+      linkSync(BUN, launcher);
+    } catch {
+      cpSync(BUN, launcher);
+    }
+    const env = { AIDLC_DISPATCH_TOOLS_DIR: DIST_TOOLS_DIR };
+    for (const [tool, after] of [[BUN, "aidlc.ts"], [launcher, "aidlc"]]) {
+      for (const command of [["engine", "plugin", "list"], ["next", "add", "a", "login", "page"]]) {
+        const label = `${after} ${command.join(" ")}`;
+        const refused = run([tool, DISPATCHER, ...command], outside, env);
+        expect(refused.exitCode, label).toBe(1);
+        expect(refused.stderr.toString(), label).toContain(
+          "requires an installed project harness or recognized project directory; " +
+            `run it from the project folder, or add --project-dir <path> right after ${after}\n`,
+        );
+        expect(refused.stderr.toString(), label).not.toContain("aidlc config");
+        const named = run([tool, DISPATCHER, "--project-dir", project, ...command], outside, env);
+        expect(named.exitCode, `${label}: ${named.stderr}`).toBe(0);
+      }
+    }
+  });
 });
 
 describe("t230 version-aware startup", () => {
@@ -1512,6 +1647,36 @@ describe("t230 dispatcher global flag translation", () => {
       .toBe("aidlc: --project-dir may be specified only once\n");
   });
 
+  // A flag `next` takes with no value takes no word, so the word after it is
+  // theirs and a flag of ours after it is one of their words too, on the
+  // request route and on the shortcuts that stand for it.
+  test("a flag of ours after a flag that takes no value and a word of theirs stays where they typed it", () => {
+    for (const words of [
+      ["next", "--new-intent", "fix", "--project-dir", "handling"],
+      ["next", "--resume", "fix", "--verbose", "output"],
+      ["next", "--new-intent", "help", "me", "add", "--project-dir", "handling"],
+    ]) {
+      expect(resolveAction(["engine", "orchestrate", ...words])).toEqual({
+        type: "delegate",
+        tool: "aidlc-orchestrate.ts",
+        args: words,
+      });
+    }
+    for (const shortcut of [["--resume", "fix"], ["--scope", "bugfix", "fix"]]) {
+      expect(resolveAction([...shortcut, "--project-dir", "handling"])).toEqual({
+        type: "delegate",
+        tool: "aidlc-orchestrate.ts",
+        args: ["next", ...shortcut, "--project-dir", "handling"],
+      });
+    }
+    // With no word of theirs on the line the option is still ours.
+    expect(resolveAction(["--resume", "--project-dir", "relative/project"])).toEqual({
+      type: "delegate",
+      tool: "aidlc-orchestrate.ts",
+      args: ["next", "--project-dir", resolve(process.cwd(), "relative/project"), "--resume"],
+    });
+  });
+
   // Every reader of the line takes the same boundary, not just the resolver:
   // the project policy and the delegate's environment read it too, and before
   // this they resolved the person's own word as the folder to work in. Then an
@@ -1591,6 +1756,23 @@ describe("t230 dispatcher global flag translation", () => {
     const version = resolveAction(["version", "--json"]) as { type: string; json?: boolean };
     expect(version.type).toBe("version");
     expect(version.json).toBe(true);
+  });
+
+  // A leading `compose` after `next` is the engine's own verb, as the
+  // orchestrator's launcher reads it, so both take the same folder.
+  test("a folder after `next compose` is ours in front of their words and theirs among them", () => {
+    expect(resolveAction(["engine", "orchestrate", "next", "compose", "--project-dir", "/tmp/example", "--", "their words"]))
+      .toEqual({
+        type: "delegate",
+        tool: "aidlc-orchestrate.ts",
+        args: ["next", "compose", "--project-dir", "/tmp/example", "--", "their words"],
+      });
+    const words = ["next", "compose", "fix", "the", "--project-dir", "handling"];
+    expect(resolveAction(["engine", "orchestrate", ...words])).toEqual({
+      type: "delegate",
+      tool: "aidlc-orchestrate.ts",
+      args: words,
+    });
   });
 
   test("extracts --project-dir before noun/verb parsing and restores it for delegation", () => {
@@ -2402,8 +2584,10 @@ describe("t230 native review-brief dispatch", () => {
         encoding: "utf-8" as const,
         timeout: 20_000,
       };
+      // The block is for a run nobody attends (an attended, gated run ends its
+      // turn), so the native Stop is read there.
       const stopped = spawnSync(executable, ["engine", "hook", "continue-workflow"], {
-        ...options, input: "{}",
+        ...options, env: { ...options.env, AIDLC_UNATTENDED: "1" }, input: "{}",
       });
       expect(stopped.status, `${stopped.stdout}\n${stopped.stderr}`).toBe(0);
       const feedback = JSON.parse(stopped.stdout) as { decision: string; reason: string };

@@ -106,7 +106,7 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
   approving a front composition. In-flight, the row is read-only: a
   recompose lands only stage skips and adds, so the proposal names the route
   (when the person asks to raise or lower it, the conductor runs
-  `{{INVOKE}} engine config set guard-policy <value> --person-words '<their words>'`). Changing scope alone
+  `{{INVOKE}} engine config set guard-policy <value> --message <id>`, `<id>` the message they asked in). Changing scope alone
   never lowers the running policy.
   A memory layer that declares strict wins over any proposal; the
   validator and the intent-create command both refuse a relaxed or off value
@@ -131,7 +131,7 @@ ceremony runs inside them. Every front/report proposal names all six in its
 | `learnings` | `on`, `off` | The stage learnings read/write ritual |
 | `summary_confirmation` | `on`, `off` | The separate "Looks correct" checkpoint before a stage writes its artifacts |
 | `plan_approval` | `on`, `off` | The person's approval of each code plan before it is built; off builds the plan as written with one line naming it |
-| `collaborators` | `on`, `off` | The support agents (collaborators) a stage dispatches; off runs every stage lead-only — no blind spokes, no mob round, and a pipeline's lead becomes its sole and final link |
+| `collaborators` | `on`, `off` | The support agents (collaborators) a stage dispatches; off has the lead of every stage work alone: no blind spokes, no mob round, and a pipeline's lead becomes its only link |
 | `review_cap` | `adversarial`, `advisory`, `none` | `advisory`: each stage review becomes one pass whose findings the human reads at the gate; `none`: no stage reviewer is dispatched in the gated flow |
 
 - A matched proposal starts from its stock scope's values (from its `.md`; a

@@ -11,6 +11,7 @@ import {
 } from "../core/tools/aidlc-channel.ts";
 import {
   digest,
+  readReleaseManifest,
   releaseCopyRuntimeAsset,
   releaseRuntimeAsset,
   ROOT_LIFECYCLE_CAPABILITY,
@@ -58,7 +59,13 @@ function exactKeys(value: JsonRecord, expected: readonly string[], label: string
   const actual = Object.keys(value).sort();
   const wanted = [...expected].sort();
   if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
-    throw new Error(`${label} has unexpected fields: ${actual.join(", ")}`);
+    const missing = wanted.filter((key) => !Object.hasOwn(value, key));
+    const extra = actual.filter((key) => !expected.includes(key));
+    const details = [
+      ...(missing.length ? [`missing: ${missing.join(", ")}`] : []),
+      ...(extra.length ? [`extra: ${extra.join(", ")}`] : []),
+    ];
+    throw new Error(`${label} has unexpected fields (${details.join("; ")})`);
   }
 }
 
@@ -82,9 +89,9 @@ function sameStrings(actual: unknown, expected: readonly string[]): boolean {
     actual.every((value, index) => value === expected[index]);
 }
 
-function verifyCandidate(args: string[]): void {
-  const directory = resolve(requiredOption(args, "--directory"));
-  const tag = requiredOption(args, "--tag");
+// Promotion checks the published preview's manifest before reserving a stable
+// tag. Candidate publication uses the same contract, then verifies real assets.
+export function verifyCandidateManifest(directory: string, tag: string, expectedSourceDigest?: string) {
   const manifestPath = join(directory, "version.json");
   let document: unknown;
   try {
@@ -129,7 +136,6 @@ function verifyCandidate(args: string[]): void {
   ) {
     throw new Error("version.json sourceDigest must be a lowercase 40-hex commit");
   }
-  const expectedSourceDigest = option(args, "--source-digest");
   if (
     expectedSourceDigest !== undefined &&
     rawManifest.sourceDigest !== expectedSourceDigest
@@ -173,7 +179,7 @@ function verifyCandidate(args: string[]): void {
   }
 
   const expectedAssetNames = [...expectedAssets.keys()].sort();
-  const manifest = verifyReleaseDirectory(directory, expectedAssetNames);
+  const manifest = readReleaseManifest(directory);
   if (tag !== `v${manifest.version}`) {
     throw new Error(`release tag ${tag} does not match version.json ${manifest.version}`);
   }
@@ -201,6 +207,15 @@ function verifyCandidate(args: string[]): void {
       throw new Error(`${asset.name}: invalid release matrix metadata`);
     }
   }
+  return manifest;
+}
+
+function verifyCandidate(args: string[]): void {
+  const directory = resolve(requiredOption(args, "--directory"));
+  const tag = requiredOption(args, "--tag");
+  const manifest = verifyCandidateManifest(directory, tag, option(args, "--source-digest"));
+  const assetNames = manifest.assets.map((asset) => asset.name);
+  verifyReleaseDirectory(directory, assetNames);
 
   const bundleName = "aidlc-release.intoto.jsonl";
   const copyRuntimeName = releaseCopyRuntimeAsset(manifest.version);
@@ -252,9 +267,11 @@ function main(): void {
   );
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`verify-release: ${error instanceof Error ? error.message : String(error)}`);
-  process.exit(1);
+if (import.meta.main) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`verify-release: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
 }

@@ -40,6 +40,11 @@ const PERSONA_AGENTS = [
   "aidlc-operations-agent",
 ] as const;
 
+// The Kiro IDE row's tools and MCP lines, without its permissions: on v2 the
+// JSON still decides, and the .md is only its prompt. A plugin's agent has no
+// JSON here, so on v2 it is not dispatched; on v3 these lines are its tools.
+const PERSONA_PROMPT_LINES = [`tools: ["read", "write", "shell"]`, "includeMcpJson: true"];
+
 const manifest: HarnessManifest = {
   name: "kiro",
   productName: "Kiro CLI",
@@ -105,6 +110,15 @@ const manifest: HarnessManifest = {
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
   tierFlavor: "kiro",
   kiroLayout: "agent-v1",
+  // Kiro CLI starts a hook as `"powershell" -Command "<command>"` on Windows and
+  // `/bin/bash -c "<command>"` on Linux (measured on kiro-cli 2.34.0), and it
+  // stops a tool call only on exit 2. Windows PowerShell's -Command hands back
+  // 1 for every native exit code but 0 and 1, so without this no refusal
+  // stopped anything there. `exit $LASTEXITCODE` is PowerShell's own way to
+  // keep the code; in bash the unset variable leaves a plain `exit`, which
+  // keeps the last command's status. tests/unit/t-kiro-hook-exit-code.test.ts
+  // runs a refusal both ways.
+  hookCommandSuffix: "; exit $LASTEXITCODE",
   rootIntegrations: [
     {
       path: ".gitignore",
@@ -219,12 +233,11 @@ const manifest: HarnessManifest = {
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 
-  // The Kiro IDE row's tools and MCP lines, without its permissions: on v2 the
-  // JSON still decides, and the .md is only its prompt.
   frontmatterAdditions: PERSONA_AGENTS.map((agent) => ({
     file: `agents/${agent}.md`,
-    lines: [`tools: ["read", "write", "shell"]`, "includeMcpJson: true"],
+    lines: PERSONA_PROMPT_LINES,
   })),
+  pluginAgentFrontmatter: PERSONA_PROMPT_LINES,
 
   // Neutral root guidance is shared; native setup is loaded through agent resources.
   onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "steering/aidlc-onboarding.md", fills: onboardingFills },

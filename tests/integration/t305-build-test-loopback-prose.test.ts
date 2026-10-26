@@ -16,9 +16,8 @@
 //      Code Generation and Build and Test, including the ledger, engine-routed jump,
 //      settlement paths, swarm path, question variants, and second
 //      autonomous-stop case.
-//   3. dist/claude/.claude/aidlc-common/protocols/stage-protocol.md — the
-//      NO EMERGENT carve-out and both Artifact
-//      Re-use overrides.
+//   3. dist/claude/.claude/aidlc-common/protocols/stage-protocol.md: both
+//      Artifact Re-use overrides.
 //   4. dist/claude/.claude/aidlc-common/protocols/stage-protocol-recovery.md
 //      - the crash-resume bullet (logged-but-not-jumped detection), under
 //      "Session resume".
@@ -186,12 +185,6 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     expect(LOOPBACK_PROTOCOL.startsWith("# Loop-back Protocol Module\n")).toBe(true);
   });
 
-  test("sanctioned-exception sentence on the NO EMERGENT BEHAVIOR RULE paragraph", () => {
-    expect(MAIN_PROTOCOL).toContain(
-      "Two sanctioned carve-outs exist: the revision loop escape hatch (below) and the Build-and-Test failure loop-back in the loop-back protocol module (`aidlc-common/protocols/stage-protocol-loopback.md`).",
-    );
-  });
-
 
   test("ledger paragraph: artifact ledger beats counting STAGE_JUMPED rows", () => {
     expect(LOOPBACK_PROTOCOL).toContain("the count of `### Loop-back N` entries IS the bound (max 3 per intent)");
@@ -217,7 +210,9 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     // by stage it is taken at once, with no question.
     expect(LOOPBACK_PROTOCOL).toContain("Only for a cause that spans every\n   unit, or names none, run `next --stage code-generation` instead");
     expect(LOOPBACK_PROTOCOL).toContain("`unit-major`), one unit cannot be reopened alone: run that\n   `next --stage code-generation` at once, without asking");
-    expect(LOOPBACK_PROTOCOL).toContain("`aidlc-jump.ts execute --target code-generation --direction backward\n   --scope <scope>`");
+    // That `next` makes the stage-wide jump itself and returns the step.
+    expect(LOOPBACK_PROTOCOL).toContain("run `next --stage code-generation` instead: it runs\n   `aidlc-jump.ts execute --target code-generation --direction backward\n   --scope <scope>` itself");
+    expect(LOOPBACK_PROTOCOL).toContain("and returns Code\n   Generation's step.");
     expect(LOOPBACK_PROTOCOL).toContain(
       "Never compose the `reopen` or `execute` call by hand: the engine's print\n   is the validated form.",
     );

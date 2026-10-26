@@ -55,6 +55,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -81,6 +82,11 @@ import {
   sourceBaselineAuditFields,
   summaryConfirmationContentHash,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 const BUN = process.execPath;
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -1900,6 +1906,7 @@ X. Other (please specify)
     // (satisfies layer 1) but NO source code.
     function stageCodeGenDocsOnly(): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
+      guarded(proj, ["checkbox", "units-generation=completed"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-generation-plan.md`);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/unit-test-instructions.md`);
@@ -1964,7 +1971,8 @@ X. Other (please specify)
       const r = guarded(proj, ["approve", "reverse-engineering", "--user-input", "ok"]);
       expect(r.rc).not.toBe(0);
       expect((JSON.parse(r.out) as { error: string }).error).toContain(
-        'Cannot complete "reverse-engineering": none of its declared artifacts exist',
+        `Cannot complete "reverse-engineering": required artifacts are missing (${basename(proj)}: all 9 files). ` +
+          "Write them, then run the same report again.",
       );
     });
 
@@ -1990,7 +1998,26 @@ X. Other (please specify)
       const r = guarded(proj, ["gate-start", "reverse-engineering"]);
       expect(r.rc).not.toBe(0);
       expect((JSON.parse(r.out) as { error: string }).error).toContain(
-        'Cannot present "reverse-engineering" for approval: none of its declared artifacts exist',
+        'Cannot present "reverse-engineering" for approval: required artifacts are missing (repo-b: dependencies.md). ' +
+          "Write them, then run the same report again.",
+      );
+    });
+
+    test("REFUSES many repos naming the first five repositories' missing files, then how many more", () => {
+      const repos = ["repo-a", "repo-b", "repo-c", "repo-d", "repo-e", "repo-f", "repo-g", "repo-h"];
+      rewriteIntentRepos(proj, repos);
+      guarded(proj, ["set", "Current Stage=reverse-engineering"]);
+      guarded(proj, ["checkbox", "reverse-engineering=in-progress"]);
+      writeCodekbSet(proj, "repo-a");
+      for (const repo of repos.slice(1)) writeCodekbSet(proj, repo, "architecture");
+      completePipelineReceipts(proj, repos);
+
+      const r = guarded(proj, ["gate-start", "reverse-engineering"]);
+      expect(r.rc).not.toBe(0);
+      expect((JSON.parse(r.out) as { error: string }).error).toContain(
+        'Cannot present "reverse-engineering" for approval: required artifacts are missing (' +
+          "repo-b: architecture.md; repo-c: architecture.md; repo-d: architecture.md; repo-e: architecture.md; " +
+          "repo-f: architecture.md; and 2 more repositories). Write them, then run the same report again.",
       );
     });
 
@@ -2057,6 +2084,7 @@ X. Other (please specify)
     }
     function stageCodeGenDocsOnly(): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
+      guarded(proj, ["checkbox", "units-generation=completed"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
       appendAuditEntry(
         "STAGE_STARTED",
@@ -2084,8 +2112,10 @@ X. Other (please specify)
 
     // BROWNFIELD: a git repo whose src/ was committed in a PRIOR
     // commit, with a clean tree and only doc changes this session, must REFUSE -
-    // the bare FS check would have wrongly passed on the pre-existing src/.
-    test("REFUSES when src/ is pre-existing (committed earlier) and no new code this session", () => {
+    // the bare FS check would have wrongly passed on the pre-existing src/. The
+    // refusal names the ways forward that keep the check: a source change not
+    // committed yet counts, and the same approve then goes through.
+    test("REFUSES when src/ is pre-existing (committed earlier) and no new code this session, naming the way forward", () => {
       initGitRepo();
       writeWorkspaceFile(proj, "src/legacy/old.ts");
       git(["add", "-A"]);
@@ -2096,27 +2126,9 @@ X. Other (please specify)
       stageCodeGenDocsOnly();
       git(["add", "aidlc"]);
       git(["commit", "-q", "-m", "code-gen planning docs only"]);
-      const r = approveCodeGen();
-      expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("workspace_requires");
-    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
-
-    // The code went in an earlier commit and a docs-only commit landed after
-    // it. The refusal names the ways forward that keep the check: a source
-    // change not committed yet counts, and the same approve then goes through.
-    test("names the way forward when the last commit is docs only, and that step is accepted", () => {
-      initGitRepo();
-      writeWorkspaceFile(proj, "src/legacy/old.ts");
-      git(["add", "-A"]);
-      git(["commit", "-q", "-m", "baseline brownfield code"]);
-      stageCodeGenDocsOnly();
-      writeWorkspaceFile(proj, "src/auth/login.ts");
-      git(["add", "src"]);
-      git(["commit", "-q", "-m", "the code"]);
-      git(["add", "aidlc"]);
-      git(["commit", "-q", "-m", "record docs only"]);
       const refused = approveCodeGen();
       expect(refused.rc).not.toBe(0);
+      expect(refused.out).toContain("workspace_requires");
       expect(refused.out).toContain("a source change not committed yet counts, as does code in the last commit");
       expect(refused.out).toContain("then run the same report again");
       // The way on is the agent's own step: it carries no question for the person.
@@ -2127,9 +2139,27 @@ X. Other (please specify)
       expect(ask?.remedies.map((remedy) => remedy.op)).toEqual(["produce-stage-output"]);
       // The step it names: new source, reviewed again as any change is, and
       // the same approve goes through.
-      writeFileSync(join(proj, "src", "auth", "login.ts"), "export const login = 2;\n");
+      writeWorkspaceFile(proj, "src/auth/login.ts");
       reviewCodeGen(proj, UNIT, 2);
       const approved = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      expect(approved.rc, approved.out).toBe(0);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    // The code went in a commit of its own during this stage and the records
+    // in a later one: the last commit is docs only, and the change since the
+    // stage began is the source work.
+    test("PASSES when this stage's code was committed and the records were committed after it", () => {
+      initGitRepo();
+      writeWorkspaceFile(proj, "src/legacy/old.ts");
+      git(["add", "-A"]);
+      git(["commit", "-q", "-m", "baseline brownfield code"]);
+      stageCodeGenDocsOnly();
+      writeWorkspaceFile(proj, "src/auth/login.ts");
+      git(["add", "src"]);
+      git(["commit", "-q", "-m", "the code"]);
+      git(["add", "aidlc"]);
+      git(["commit", "-q", "-m", "record docs only"]);
+      const approved = approveCodeGen();
       expect(approved.rc, approved.out).toBe(0);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -2218,6 +2248,7 @@ X. Other (please specify)
     }
     function stageCodeGenDocsOnly(): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
+      guarded(proj, ["checkbox", "units-generation=completed"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
       appendAuditEntry(
         "STAGE_STARTED",
@@ -2324,6 +2355,35 @@ X. Other (please specify)
       expect(existsSync(marker)).toBe(false);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+    // The look also reaches checkouts the workspace's git does not track and
+    // the worktrees git lists, and still asks git only where a .git entry is: a
+    // folder shaped like a repo that an archive dropped into an ignored folder,
+    // and a listed worktree whose .git entry is gone, run no git config.
+    for (const where of ["an ignored folder", "a listed worktree whose .git entry is gone"] as const) {
+      test(`does not run git configuration in a repo-shaped folder in ${where}`, () => {
+        initWorkspaceRepo(".worktrees/\n");
+        const marker = join(proj, "fsmonitor-ran");
+        const shaped = join(proj, ".worktrees", "evil");
+        if (where !== "an ignored folder") {
+          git(proj, ["worktree", "add", "-q", shaped, "-b", "evil"]);
+          rmSync(join(shaped, ".git"), { force: true });
+        }
+        mkdirSync(join(shaped, "objects", "info"), { recursive: true });
+        mkdirSync(join(shaped, "refs", "heads"), { recursive: true });
+        writeFileSync(join(shaped, "HEAD"), "ref: refs/heads/main\n");
+        writeFileSync(join(shaped, "objects", "info", "keep"), "");
+        writeFileSync(join(shaped, "refs", "heads", "keep"), "");
+        writeFileSync(
+          join(shaped, "config"),
+          `[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = .\n\tfsmonitor = touch ${marker}; false\n`,
+        );
+        stageCodeGenDocsOnly();
+        commitRecordsOnly();
+        gateAndApprove();
+        expect(existsSync(marker)).toBe(false);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+    }
+
     // Sibling discovery accepts a symlinked child repo, so the probe must too:
     // the link's target has the real .git entry.
     test.skipIf(process.platform === "win32")("PASSES when the recorded child repo is a symlink to a real repo", () => {
@@ -2376,6 +2436,7 @@ X. Other (please specify)
 
     function seedSwarm(converged: string[]): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
+      guarded(proj, ["checkbox", "units-generation=completed"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
       // Autonomy grant: append the field beside Scope (fixture ships without it).
       const statePath = seededStateFile(proj);

@@ -121,7 +121,8 @@ describe("the Unit lifecycle receipts paragraph matches receipt mode", () => {
       const text = readFileSync(tree.path, "utf-8");
       expect(text).not.toContain("workflows that never call the verbs keep today's artifact-driven coverage unchanged");
       expect(text).toContain("the receipt is required from the first Unit, so artifact files alone never settle one");
-      expect(text).toContain("`next` prints the receipt commands instead of the stage body");
+      expect(text).toContain("`next` names the receipt commands instead of repeating the stage body");
+      expect(text).toContain("Code Generation carries them in `unit_record_step`");
     });
   }
 });

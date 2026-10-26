@@ -9,8 +9,7 @@ generated code or an approach chosen at code-generation (not in this stage's
 own test/build scaffolding), the workflow may return to code-generation and
 repair it rather than writing the approach off or dead-ending at the gate.
 The stage's Step 9 failure-escalation ladder decides WHEN this fires; this
-subsection defines HOW. It is a sanctioned exception to the NO EMERGENT
-BEHAVIOR RULE (like the revision escape hatch) and to Critical-checklist
+subsection defines HOW. It is a sanctioned exception to Critical-checklist
 item 5's "complete the current stage before jumping": a failed build-and-test
 run is deliberately left in-flight — its gate is NOT presented and its enabled §13
 learnings ritual DEFERS to the eventual passing run (when the `learnings` module is listed, the stage diary
@@ -53,15 +52,16 @@ impact-estimated fix identified):
    names verbatim before the next unit (an `aidlc-jump.ts reopen --target
    code-generation ... --units <unit>` that reopens that unit and moves
    Current Stage back to Code Generation). Only for a cause that spans every
-   unit, or names none, run `next --stage code-generation` instead: its print
-   names `aidlc-jump.ts execute --target code-generation --direction backward
-   --scope <scope>`, which resets Code Generation and the stages after it for
-   every unit and emits the canonical `STAGE_JUMPED`. When Construction runs
+   unit, or names none, run `next --stage code-generation` instead: it runs
+   `aidlc-jump.ts execute --target code-generation --direction backward
+   --scope <scope>` itself, which resets Code Generation and the stages after
+   it for every unit and emits the canonical `STAGE_JUMPED`, and returns Code
+   Generation's step. When Construction runs
    stage by stage (`Construction Iteration` in aidlc-state.md is not
    `unit-major`), one unit cannot be reopened alone: run that
    `next --stage code-generation` at once, without asking; "Retry with fix"
-   (or the autonomy grant) already chose the repair. Then re-run `next` and
-   continue the forwarding loop.
+   (or the autonomy grant) already chose the repair. After a `reopen`, re-run
+   `next`; then continue the forwarding loop from the step that comes back.
    Never compose the `reopen` or `execute` call by hand: the engine's print
    is the validated form.
 3. On the code-generation re-entry, follow "Re-entry settlement and review"

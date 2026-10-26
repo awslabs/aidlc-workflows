@@ -3,13 +3,17 @@
 // function:reviewInvalidationAttemptView, function:attemptEventAfterFrontier,
 // function:reviewAttemptAccounting, function:worktreeReviewAttemptProjection,
 // function:candidateReviewCoverageProjection, function:evaluateGuardRefusal,
-// function:requestChangesResetIsExecutable, function:guardRefusalStreakView,
+// function:requestChangesResetIsExecutable, function:requestChangesReportArgs,
+// function:requestChangesReportCommand,
+// function:guardRefusalStreakView,
 // function:recordGuardRefusal, function:guardRefusalOutput,
 // function:guardRecoveryAskForRefusal, function:guardTerminalAskForRefusal,
 // function:guardRecoveryAskFromRefusalText, function:guardAttemptState,
 // function:humanAuthorityState,
 // function:normalizeGuardRecoveryText, function:consumeSharedDirectiveAsk,
 // function:guardRecoveryFeedbackStatus, function:guardPreflight,
+// function:sourceWorkNotFound, function:handleIntentCheckouts,
+// function:sameGuardRecoveryRemedy, function:guardRecoveryAskMarkerIsCurrent,
 // directive:guard-recovery
 
 import {
@@ -20,6 +24,7 @@ import {
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -62,9 +67,13 @@ import {
   isTeamUnitOwnership,
   normalizeGuardRecoveryText,
   maximalAttemptEvents,
+  recordGuardRecoveryChoice,
   recordGuardRefusal,
+  readActiveDirectiveMarker,
   readAllAuditShards,
   recoveryGuidance,
+  requestChangesReportArgs,
+  requestChangesReportCommand,
   requestChangesResetIsExecutable,
   reviewInvalidationAttemptView,
   reviewAttemptAccounting,
@@ -86,10 +95,37 @@ import {
   seedAuditFile,
   seedAidlcMemory,
   seedBoltDag,
+  seededAuditShard,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import {
+  buildLayout,
+  checkoutCommand,
+  cleanupLayouts,
+  codeOutOfSight,
+  commitRecords,
+  type EngineStep,
+  isGuardAsk,
+  LAYOUTS,
+  PERSON,
+  personSays,
+  reasonCodes,
+  report,
+  review,
+  setGuardPolicy,
+  shellWorkspace,
+  stageBox,
+  startCodeGeneration,
+  worktreeOf,
+  writeCode,
+} from "../harness/source-work-layouts.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -98,6 +134,14 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
 const STATE_TOOL = join(
   import.meta.dir,
   "../../dist/claude/.claude/tools/aidlc-state.ts",
+);
+const LOG_TOOL = join(
+  import.meta.dir,
+  "../../dist/claude/.claude/tools/aidlc-log.ts",
+);
+const ORCHESTRATE_TOOL = join(
+  import.meta.dir,
+  "../../dist/claude/.claude/tools/aidlc-orchestrate.ts",
 );
 const PACKAGED_HARNESSES = [
   { name: "claude", engineDir: ".claude" },
@@ -321,6 +365,86 @@ describe("bounded guard-remedy liveness", () => {
     ).toBe(false);
   });
 
+  // #1021: the sentence "Only a human Request Changes decision resets the
+  // review attempt" describes one step and names none. In Code Generation the
+  // Request Changes the person is actually shown is the Step 3 Plan Approval
+  // checkpoint, whose QUESTION_ANSWERED is no attempt boundary (the pin in
+  // "the Plan Approval Request Changes the person is shown is no review-attempt
+  // boundary"), so following the sentence at that surface changes nothing. The
+  // decision that does reset the attempt is the rejected report, which the
+  // engine already renders in one place, requestChangesReportCommand, and which
+  // the remedy and the prose guidance both leave unnamed. The step the sentence
+  // describes has to be the step it names.
+  test("#1021: the Request Changes that resets a review attempt is named as its report", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const stage = "code-generation";
+    const report = requestChangesReportCommand(project, stage, undefined);
+    expect(report).toContain("--result rejected");
+    // Both states requestChangesResetIsExecutable admits, so the guidance is
+    // checked exactly where it is printed.
+    for (const marker of ["-", "?"] as const) {
+      const content =
+        `# AI-DLC State\n- **Scope**: enterprise\n- [${marker}] ${stage} — EXECUTE\n`;
+      expect(requestChangesResetIsExecutable(content, stage), marker).toBe(true);
+      const refusal = evaluateGuardRefusal({
+        code: "REVIEW_RECOVERY_EXHAUSTED",
+        blockedAction: "review",
+        stage,
+        projectDir: project,
+        stateContent: content,
+        invariant:
+          "A review attempt can be reset only through a sanctioned boundary.",
+        userMessage: "",
+        attempt: {
+          recovery: "spent",
+          summaryCoverage: "current",
+          reviewCoverage: "stale",
+          sourceCoverage: "stale",
+        },
+        humanAuthority: { freshTurn: false, unattended: false },
+      });
+      const rejection = refusal.remedies.find((remedy) =>
+        remedy.op === "request-changes"
+      );
+      expect(rejection, marker).toBeDefined();
+      // Still action-only: the person's words come before the report is run,
+      // so naming the report must not turn it into an executable command.
+      expect(rejection?.command, marker).toBeUndefined();
+      // The sentence the prose refusals interpolate, and the step the remedy
+      // hands the conductor, both carry the report.
+      expect(recoveryGuidance(project, content, stage), marker).toContain(report);
+      expect(rejection?.action, marker).toContain(report);
+      expect(rejection?.action, marker).toContain(
+        "adding it as a shell-safe `--reason` value",
+      );
+
+      const unattended = evaluateGuardRefusal({
+        code: "REVIEW_RECOVERY_EXHAUSTED",
+        blockedAction: "review",
+        stage,
+        projectDir: project,
+        stateContent: content,
+        invariant:
+          "A review attempt can be reset only through a sanctioned boundary.",
+        userMessage: "",
+        attempt: {
+          recovery: "spent",
+          summaryCoverage: "current",
+          reviewCoverage: "stale",
+          sourceCoverage: "stale",
+        },
+        humanAuthority: { freshTurn: false, unattended: true },
+      });
+      expect(unattended.remedies[0]?.command, marker).toBeUndefined();
+      expect(unattended.remedies[0]?.op, marker).toBe("request-changes");
+      expect(unattended.remedies[0]?.action, marker).toContain(report);
+      expect(unattended.remedies[0]?.action, marker).toContain(
+        "Only after the human answers",
+      );
+    }
+  });
+
   test("guard-recovery validation rejects unresolved or non-packaged commands", () => {
     const base = {
       kind: "ask",
@@ -429,7 +553,9 @@ describe("bounded guard-remedy liveness", () => {
       const directive = JSON.parse(String(run.stdout ?? "").trim()) as {
         kind?: string;
       };
-      expect(["print", "run-stage"]).toContain(directive.kind ?? "");
+      // The restart is made by that `next`, which returns the step (its rules
+      // first, where the harness delivers them in parts).
+      expect(["print", "run-stage", "load-steering"]).toContain(directive.kind ?? "");
     }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -1040,6 +1166,7 @@ describe("open-gate resume liveness", () => {
     );
     if (team) {
       content = content.replace("[?] requirements-analysis", "[x] requirements-analysis")
+        .replace("[ ] units-generation", "[x] units-generation")
         .replace("[ ] functional-design", "[?] functional-design")
         .replace("**Current Stage**: requirements-analysis", "**Current Stage**: functional-design")
         .replace("**Lifecycle Phase**: INCEPTION", "**Lifecycle Phase**: CONSTRUCTION")
@@ -1667,6 +1794,7 @@ describe("AttemptView projections and refusal streaks", () => {
       allEvents: rows,
       events: rows,
       floorIdx: 0,
+      sensorFixes: new Map(),
       mergedBoltUnits: new Set(),
       openBoltUnits: new Set(["alpha"]),
     };
@@ -1698,6 +1826,7 @@ describe("AttemptView projections and refusal streaks", () => {
       allEvents: rows,
       events: rows,
       floorIdx: 0,
+      sensorFixes: new Map(),
       mergedBoltUnits: new Set(),
       openBoltUnits: new Set(),
     };
@@ -1712,6 +1841,64 @@ describe("AttemptView projections and refusal streaks", () => {
     );
     expect(accounting.floor).toContain("GATE_REJECTED");
     expect(accounting.requestCount).toBe(0);
+  });
+
+  // #1021, and the reason its fix belongs in the wording: the Plan Approval
+  // Request Changes a person is shown during a normal Construction walk records
+  // QUESTION_ANSWERED, and an Approve Plan records PLAN_APPROVAL_RECORDED.
+  // Neither is a review-attempt boundary, so neither returns a review pass or
+  // clears a pending request, while the rejected report's GATE_REJECTED does.
+  // Making an interview answer reset review accounting would give up the
+  // property #742 and #750 were closed to establish, so this stays as it is and
+  // the guidance names the report instead. The emission itself is pinned by
+  // t-routing-question-own-marker.
+  test("#1021: the Plan Approval Request Changes the person is shown is no review-attempt boundary", () => {
+    const rows = (boundary: AuditShardEvent | null) => [
+      event("WORKFLOW_STARTED", "2026-08-28T00:00:00Z", {}, "main.md", 0, 0),
+      event("REVIEW_REQUESTED", "2026-08-28T00:00:01Z", {
+        Stage: "code-generation", Reviewer: "reviewer", Unit: "alpha", Iteration: "1",
+      }, "main.md", 0, 1),
+      ...(boundary ? [boundary] : []),
+    ];
+    const accounting = (boundary: AuditShardEvent | null) => {
+      const all = rows(boundary);
+      const view: AttemptView = {
+        allEvents: all,
+        events: all,
+        floorIdx: 0,
+        sensorFixes: new Map(),
+        mergedBoltUnits: new Set(),
+        openBoltUnits: new Set(),
+      };
+      return reviewAttemptAccounting(
+        "",
+        view,
+        state("-"),
+        { slug: "code-generation", for_each: "unit-of-work", workspace_requires: true },
+        "reviewer",
+        "alpha",
+        undefined,
+      );
+    };
+    const planChoice = (name: string, details: string) =>
+      event(name, "2026-08-28T00:00:02Z", {
+        Stage: "code-generation", Checkpoint: "plan-approval", Details: details, Unit: "alpha",
+      }, "main.md", 0, 2);
+    const untouched = accounting(null).floor;
+    expect(untouched).toContain("WORKFLOW_STARTED");
+    for (const [name, details] of [
+      ["QUESTION_ANSWERED", "Request Changes"],
+      ["PLAN_APPROVAL_RECORDED", "Approve Plan"],
+    ] as const) {
+      const after = accounting(planChoice(name, details));
+      expect(after.floor, name).toBe(untouched);
+      expect(after.requestCount, name).toBe(accounting(null).requestCount);
+    }
+    expect(
+      accounting(event("GATE_REJECTED", "2026-08-28T00:00:02Z", {
+        Stage: "code-generation", Feedback: "Change it.",
+      }, "main.md", 0, 2)).floor,
+    ).toContain("GATE_REJECTED");
   });
 
   // A solo unit-major walk hands a Unit's finished step back when its work is
@@ -1739,6 +1926,7 @@ describe("AttemptView projections and refusal streaks", () => {
           allEvents: rows.slice(0, count),
           events: rows.slice(0, count),
           floorIdx: 0,
+          sensorFixes: new Map(),
           mergedBoltUnits: new Set(),
           openBoltUnits: new Set(),
         };
@@ -1869,6 +2057,7 @@ describe("AttemptView projections and refusal streaks", () => {
       allEvents: rows,
       events: rows,
       floorIdx: 2,
+      sensorFixes: new Map(),
       mergedBoltUnits: new Set(),
       openBoltUnits: new Set(),
     };
@@ -2269,6 +2458,74 @@ describe("AttemptView projections and refusal streaks", () => {
     return { first: first.ask, again: again.ask };
   }
 
+  test("outputs written before the stage's questions: the agent asks them first, and a repeat offers to answer them", () => {
+    const sentence = "Cannot start review for \"functional-design\": its question flow has no functional-design-questions.md " +
+      "file. Create and answer the stage questions, then record the consolidated summary checkpoint before generating artifacts.";
+    const attempt = {
+      recovery: "available" as const,
+      summaryCoverage: "missing" as const,
+      reviewCoverage: "missing" as const,
+      sourceCoverage: "current" as const,
+    };
+    const refusal = evaluateGuardRefusal({
+      code: "SUMMARY_QUESTIONS_MISSING",
+      blockedAction: "request-review",
+      stage: "functional-design",
+      unit: "alpha",
+      stateContent: state("-"),
+      invariant: "A stage's outputs stand on the person's confirmed answers.",
+      userMessage: sentence,
+      attempt,
+      humanAuthority: { freshTurn: false, unattended: false },
+    });
+    expect(refusal.remedies[0]).toMatchObject({ op: "ask-stage-questions", requiresHuman: false, interaction: "external-work" });
+    // Whose answers they are is said: the agent asks the person, never answers itself.
+    expect(refusal.remedies[0].action).toStartWith("Ask the person the stage's questions through its question flow");
+    const { first, again } = ownThenTheirs(refusal, attempt);
+    // Nothing goes to the person the first time: the agent asks the stage's questions.
+    expect(first.agent_work).toBe(true);
+    expect(first.remedies.map((remedy) => remedy.op)).toEqual(["ask-stage-questions"]);
+    // A repeat names what really happens: their questions, then the summary of their answers.
+    expect(again.agent_work).toBeUndefined();
+    const answer = again.remedies.find((remedy) => remedy.op === "reconfirm-summary");
+    expect(answer?.label).toBe("Answer its questions");
+    expect(answer?.description).toBe(
+      "I'll ask you the questions for Functional Design for alpha, show you a summary of your answers to confirm, " +
+        "then save its documents again from them.",
+    );
+    expect(answer?.action).toStartWith("Ask the person the stage's questions through its question flow");
+    expect(again.remedies.map((remedy) => remedy.label)).not.toContain("Confirm the summary again");
+  });
+
+  test("the agent's step names a Unit's own questions file, and none when the refusal names no Unit of a planned set", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const planned = [
+      "# AI-DLC State",
+      "- **Scope**: feature",
+      "- **Construction Iteration**: unit-major",
+      "- [x] units-generation \u2014 EXECUTE",
+      "- [-] functional-design \u2014 EXECUTE",
+      "",
+    ].join("\n");
+    const ask = (unit: string | undefined) => evaluateGuardRefusal({
+      code: "SUMMARY_QUESTIONS_MISSING",
+      blockedAction: "complete",
+      stage: "functional-design",
+      ...(unit ? { unit } : {}),
+      projectDir: project,
+      stateContent: planned,
+      invariant: "A stage's outputs stand on the person's confirmed answers.",
+      userMessage: "Refusing to complete \"functional-design\": its question flow has no functional-design-questions.md file.",
+      attempt: { recovery: "available", summaryCoverage: "missing", reviewCoverage: "missing", sourceCoverage: "current" },
+      humanAuthority: { freshTurn: false, unattended: false },
+    }).remedies.find((remedy) => remedy.op === "ask-stage-questions")?.action ?? "";
+    expect(ask("alpha")).toContain("/construction/alpha/functional-design/functional-design-questions.md");
+    // With Units planned the checks read each Unit's file, so a stage-level
+    // file named here would be one nothing reads.
+    expect(ask(undefined)).not.toContain("functional-design-questions.md`");
+  });
+
   test("a missing pipeline handoff is the agent's to dispatch, never a review request", () => {
     const wayOn = "Cannot complete \"reverse-engineering\" because these pipeline handoffs have not been recorded for " +
       "the current run: aidlc-architect-agent. Dispatch the missing pipeline links in their declared order.";
@@ -2337,6 +2594,60 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(again.agent_work).toBeUndefined();
     expect(again.question).toBe("Requirements Analysis still can't go ahead as things stand: which way would you like to go on?");
     expect(again.remedies.map((remedy) => remedy.label)).toEqual(["Decide at approval", "Request Changes"]);
+  });
+
+  // The review freeze refused a write to a document whose review is final, and
+  // no turn of the person's stands behind the write: the change was the agent's
+  // own, so leaving the document and quoting the change at the gate is its step.
+  // A repeat, or a write the person may have asked for, still asks them.
+  test("a write the agent made on its own after a final review is its own step to leave and quote at the gate", () => {
+    const attempt = {
+      recovery: "available" as const,
+      summaryCoverage: "current" as const,
+      reviewCoverage: "current" as const,
+      sourceCoverage: "current" as const,
+    };
+    const freeze = (humanAuthority: GuardRefusalInput["humanAuthority"]) => evaluateGuardRefusal({
+      code: "REVIEW_FREEZE_ACTIVE",
+      blockedAction: "artifact-write:requirements.md",
+      stage: "requirements-analysis",
+      stateContent: "# AI-DLC State\n- **Scope**: enterprise\n- [-] requirements-analysis \u2014 EXECUTE\n",
+      invariant: "A terminal review continues to cover the bytes it certified.",
+      userMessage: "",
+      attempt,
+      humanAuthority,
+      fence: "review-freeze",
+      fenceSwitch: "offer",
+    });
+    const opsOf = (remedies: ReadonlyArray<{ op: string }>): string[] => remedies.map((remedy) => remedy.op);
+    const theirs = ["request-changes", "lower-fence"];
+    const question = "Requirements Analysis still can't go ahead as things stand: which way would you like to go on?";
+    const own = freeze({ freshTurn: false, unattended: false });
+    expect(opsOf(own.remedies)).toEqual(["present-findings-at-gate", ...theirs]);
+    expect(own.remedies[0]).toMatchObject({ requiresHuman: false, executableNow: true, interaction: "external-work" });
+    expect(own.remedies[0].action).toContain("Leave the document as its final review left it");
+    expect(own.remedies[0].action).toContain("quote the change you meant to make at the next approval gate or Unit checkpoint");
+    expect(own.remedies[0].action).toMatch(/Carry on: run `[^`]*orchestrate[^`]* next`\.$/);
+    const { first, again } = ownThenTheirs(own, attempt);
+    expect(first.agent_work).toBe(true);
+    expect(opsOf(first.remedies)).toEqual(["present-findings-at-gate"]);
+    expect(again.agent_work).toBeUndefined();
+    expect(again.question).toBe(question);
+    expect(opsOf(again.remedies)).toEqual(theirs);
+
+    // The person spoke since the last decision: they may have asked for it, so
+    // the first refusal is their question, as before.
+    const asked = freeze({ freshTurn: true, unattended: false });
+    expect(opsOf(asked.remedies)).toEqual(theirs);
+    expect(ownThenTheirs(asked, attempt).first.agent_work).toBeUndefined();
+
+    // Unattended, nobody is there to ask: the first refusal carries on to the
+    // gate the same way, and a repeat halts as it does today.
+    const unattended = ownThenTheirs(freeze({ freshTurn: false, unattended: true }), attempt);
+    expect(unattended.first.agent_work).toBe(true);
+    expect(opsOf(unattended.first.remedies)).toEqual(["present-findings-at-gate"]);
+    expect(unattended.again.agent_work).toBeUndefined();
+    expect(opsOf(unattended.again.remedies)).toEqual(theirs);
   });
 
   // A stage reported before its outputs or its code exist: writing them is the
@@ -2439,6 +2750,165 @@ describe("AttemptView projections and refusal streaks", () => {
       .toEqual(["request-changes"]);
   });
 
+  // #1021 at the process boundary: a write to a reviewed output after its
+  // terminal receipt, then the approve. The refusal the state tool prints tells
+  // the reader that a human Request Changes decision resets the review attempt
+  // and names only the recovery review, so the one step that does reset the
+  // attempt is missing from the message that invokes it. The rejected report
+  // runs from this very state, which is why the gap is wording and not a
+  // missing exit.
+  test("#1021: the stale-review refusal names the report that resets the attempt, and that report runs", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedAidlcMemory(project);
+    seedStateFile(project, "state-mid-inception.md");
+    const slug = "requirements-analysis";
+    const reviewer = "aidlc-product-lead-agent";
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+      AIDLC_SKIP_ARTIFACT_GUARD: "1",
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+      AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+      AIDLC_SKIP_REVIEWER_GATE_GUARD: "0",
+      AIDLC_UNATTENDED: "0",
+    };
+    const run = (
+      tool: string,
+      args: string[],
+      extraEnv: NodeJS.ProcessEnv = {},
+    ) => {
+      const childEnv = { ...env, ...extraEnv };
+      for (const [key, value] of Object.entries(childEnv)) {
+        if (value === undefined) delete childEnv[key];
+      }
+      const result = spawnSync(
+        process.execPath,
+        [tool, ...args, "--project-dir", project],
+        {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          encoding: "utf-8",
+          env: childEnv,
+        },
+      );
+      return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+    };
+    const outputDir = join(seededRecordDir(project), "inception", slug);
+    mkdirSync(outputDir, { recursive: true });
+    for (const name of ["requirements.md", `${slug}-questions.md`]) {
+      writeFileSync(join(outputDir, name), `# ${name}\n`, "utf-8");
+    }
+    const request = ["review", "--stage", slug, "--reviewer", reviewer, "--iteration", "1"];
+    const requested = run(LOG_TOOL, request);
+    expect(requested.status, requested.out).toBe(0);
+    const { reviewFile } = JSON.parse(requested.out) as { reviewFile: string };
+    mkdirSync(dirname(join(project, reviewFile)), { recursive: true });
+    writeFileSync(
+      join(project, reviewFile),
+      `**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`,
+      "utf-8",
+    );
+    expect(run(LOG_TOOL, [...request, "--verdict", "READY"]).status).toBe(0);
+    expect(run(STATE_TOOL, ["gate-start", slug]).status).toBe(0);
+    appendAuditEntry("ARTIFACT_UPDATED", {
+      File: join(outputDir, "requirements.md"),
+      Tool: "Edit",
+      Context: `inception > ${slug} > requirements.md`,
+    }, project);
+
+    const refused = run(STATE_TOOL, ["approve", slug]);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("Request Changes decision resets the review attempt");
+    const report = requestChangesReportCommand(project, slug, undefined);
+    expect(refused.out).toContain(report);
+    expect(refused.out).toContain("adding it as a shell-safe `--reason` value");
+
+    // The unattended refusal carries the same instruction as a Request Changes
+    // remedy. When the person returns and answers it, that exact feedback binds
+    // the report instead of leaving an unset-unattended choice that rejects it.
+    const content = readFileSync(seededStateFile(project), "utf-8");
+    const unattended = evaluateGuardRefusal({
+      code: "REVIEW_RECOVERY_EXHAUSTED",
+      blockedAction: "review",
+      stage: slug,
+      projectDir: project,
+      stateContent: content,
+      invariant:
+        "A review attempt can be reset only through a sanctioned boundary.",
+      userMessage: "",
+      attempt: {
+        recovery: "spent",
+        summaryCoverage: "current",
+        reviewCoverage: "stale",
+        sourceCoverage: "stale",
+      },
+      humanAuthority: { freshTurn: false, unattended: true },
+    });
+    expect(unattended.remedies.map((remedy) => remedy.op)).toEqual([
+      "request-changes",
+    ]);
+    expect(unattended.remedies[0].action).toContain(report);
+    const ask = guardRecoveryAskForRefusal(unattended);
+    expect(ask).not.toBeNull();
+    const remedy = unattended.remedies[0];
+    const activeRemedy: ActiveDirectiveGuardRemedy = {
+      op: remedy.op,
+      ...(remedy.label ? { label: remedy.label } : {}),
+      action: remedy.action,
+      ...(remedy.interaction ? { interaction: remedy.interaction } : {}),
+    };
+    writeActiveDirectiveMarker(project, {
+      ...ask!,
+      remedies: [activeRemedy],
+      state_sha256: stateDigest(content),
+    });
+    const feedback = "split the latency requirement in two";
+    expect(consumeSharedDirectiveAsk(project, feedback)).toBe(true);
+    // The agent records the Request Changes it read, with what should change.
+    recordGuardRecoveryChoice(project, `Request Changes: ${feedback}`, true);
+    const answered = readActiveDirectiveMarker(project, content)!;
+    const markerPath = join(seededRecordDir(project), ".aidlc-engine", "active-directive.json");
+    const legacy = JSON.parse(readFileSync(markerPath, "utf-8"));
+    legacy.remedies[0] = {
+      ...legacy.remedies[0],
+      op: "unset-unattended",
+      label: "Stop working unattended",
+      action:
+        "Halt unattended execution and ask a human what should change. " +
+        `Unset AIDLC_UNATTENDED, ask "What should change?" for stage "${slug}", ` +
+        "and end the turn. Only after the human answers may their exact text be " +
+        "submitted as the Request Changes reason.",
+    };
+    legacy.guard_recovery_response.selected_op = "unset-unattended";
+    writeFileSync(markerPath, `${JSON.stringify(legacy)}\n`);
+
+    const resumed = run(ORCHESTRATE_TOOL, ["next"], {
+      AIDLC_UNATTENDED: undefined,
+    });
+    expect(resumed.status, resumed.out).toBe(0);
+    const resumedDirective = JSON.parse(
+      resumed.out.split("\n").find((line) => line.startsWith("{"))!,
+    );
+    expect(resumedDirective.remedies[0].op).toBe("request-changes");
+    expect(resumedDirective.remedies[0].action).toContain(report);
+    const preserved = readActiveDirectiveMarker(project, content)!;
+    expect(preserved.guard_recovery_response).toEqual(
+      answered.guard_recovery_response,
+    );
+    expect(preserved.delivery).toBe(answered.delivery);
+
+    // Follow the named report with the exact feedback its instruction requires:
+    // it is accepted from the refused state and produces the boundary event.
+    const rejected = run(ORCHESTRATE_TOOL, [
+      ...requestChangesReportArgs(slug, undefined, undefined),
+      "--reason", feedback,
+    ]);
+    expect(rejected.status, rejected.out).toBe(0);
+    const audit = readAllAuditShards(project);
+    expect(audit).toContain("**Event**: GATE_REJECTED");
+    expect(audit).toContain(`**Feedback**: ${feedback}`);
+  });
+
   test("every way on put to the person reads in plain words; the agent's own carry none", () => {
     const humanAuthority = { freshTurn: false, unattended: false };
     const current = {
@@ -2511,6 +2981,10 @@ describe("AttemptView projections and refusal streaks", () => {
         stateContent: walk("in-progress"), attempt: spentBudget,
       },
       { ...base, code: "REQUIRED_ARTIFACTS_MISSING", stateContent: state("-"), attempt: current },
+      {
+        ...base, code: "SUMMARY_QUESTIONS_MISSING", stateContent: state("-"),
+        attempt: { ...current, summaryCoverage: "missing", reviewCoverage: "missing" },
+      },
     ];
     const seen = new Set<string>();
     // The stage protocol's reserved words, the bookkeeping the person has no use
@@ -2621,7 +3095,9 @@ describe("AttemptView projections and refusal streaks", () => {
     );
   });
 
-  test("guard-recovery selections resolve only to an offered remedy", () => {
+  // A typed reply picks nothing at the hook; the agent's record of the remedy
+  // it read resolves only to one the question offered, by op, label or action.
+  test("guard-recovery: a typed reply picks nothing, and the agent's record resolves only to an offered remedy", () => {
     const commonRemedies: ActiveDirectiveGuardRemedy[] = [
       { op: "reconfirm-summary", action: "Present the current summary again" },
       { op: "request-changes", action: "Ask what should change" },
@@ -2629,62 +3105,25 @@ describe("AttemptView projections and refusal streaks", () => {
     const cases: Array<{
       name: string;
       remedies: ActiveDirectiveGuardRemedy[];
-      response: string;
+      details: string;
       selectedOp: GuardRemedyOp | null;
       feedbackStatus: GuardRecoveryFeedbackStatus;
     }> = [
-      {
-        name: "literal op",
-        remedies: commonRemedies,
-        response: "request-changes",
-        selectedOp: "request-changes",
-        feedbackStatus: "awaiting-feedback",
-      },
-      {
-        name: "plain number",
-        remedies: commonRemedies,
-        response: "2",
-        selectedOp: "request-changes",
-        feedbackStatus: "awaiting-feedback",
-      },
-      {
-        name: "number with punctuation",
-        remedies: commonRemedies,
-        response: "2)",
-        selectedOp: "request-changes",
-        feedbackStatus: "awaiting-feedback",
-      },
-      {
-        name: "number with a terminal dot",
-        remedies: commonRemedies,
-        response: "2.",
-        selectedOp: "request-changes",
-        feedbackStatus: "awaiting-feedback",
-      },
-      {
-        name: "unmatched text",
-        remedies: commonRemedies,
-        response: "Do something else",
-        selectedOp: null,
-        feedbackStatus: "other-remedy",
-      },
+      { name: "literal op", remedies: commonRemedies, details: "request-changes", selectedOp: "request-changes", feedbackStatus: "awaiting-feedback" },
+      { name: "op in words", remedies: commonRemedies, details: "request changes", selectedOp: "request-changes", feedbackStatus: "awaiting-feedback" },
+      { name: "the action shown", remedies: commonRemedies, details: "Ask what should change", selectedOp: "request-changes", feedbackStatus: "awaiting-feedback" },
+      { name: "unmatched text", remedies: commonRemedies, details: "Do something else", selectedOp: null, feedbackStatus: "other-remedy" },
       {
         name: "ambiguous duplicate action",
         remedies: [
           { op: "reconfirm-summary" as const, action: "Choose this remedy" },
           { op: "request-changes" as const, action: "Choose this remedy" },
         ],
-        response: "Choose this remedy",
+        details: "Choose this remedy",
         selectedOp: null,
         feedbackStatus: "other-remedy",
       },
-      {
-        name: "terminal ask",
-        remedies: [],
-        response: "Request Changes",
-        selectedOp: null,
-        feedbackStatus: "other-remedy",
-      },
+      { name: "terminal ask", remedies: [], details: "Request Changes", selectedOp: null, feedbackStatus: "other-remedy" },
     ];
 
     for (const scenario of cases) {
@@ -2699,24 +3138,20 @@ describe("AttemptView projections and refusal streaks", () => {
         state_sha256: stateDigest(state),
         remedies: scenario.remedies,
       });
-
-      expect(consumeSharedDirectiveAsk(project, scenario.response), scenario.name).toBe(true);
-      const marker = JSON.parse(
+      const selected = () => (JSON.parse(
         readFileSync(join(seededRecordDir(project), ".aidlc-engine/active-directive.json"), "utf-8"),
-      ) as {
-        guard_recovery_response?: { selected_op?: string | null };
-      };
-      expect(marker.guard_recovery_response?.selected_op, scenario.name).toBe(
-        scenario.selectedOp,
-      );
+      ) as { guard_recovery_response?: { selected_op?: string | null } }).guard_recovery_response?.selected_op ?? null;
+
+      expect(consumeSharedDirectiveAsk(project, "2"), scenario.name).toBe(true);
+      expect(selected(), scenario.name).toBeNull();
+      try {
+        recordGuardRecoveryChoice(project, scenario.details, false);
+      } catch {
+        // Names no offered remedy: nothing is recorded.
+      }
+      expect(selected(), scenario.name).toBe(scenario.selectedOp);
       expect(
-        guardRecoveryFeedbackStatus(
-          project,
-          state,
-          "functional-design",
-          undefined,
-          "anything",
-        ),
+        guardRecoveryFeedbackStatus(project, state, "functional-design", undefined),
         scenario.name,
       ).toBe(scenario.feedbackStatus);
     }
@@ -2747,11 +3182,13 @@ describe("AttemptView projections and refusal streaks", () => {
           { op: "request-changes", action: "Ask what should change" },
         ],
       });
-      const status = (stage: string, unit: string | undefined, feedback = "anything") =>
-        guardRecoveryFeedbackStatus(project, state, stage, unit, feedback);
+      const status = (stage: string, unit: string | undefined) =>
+        guardRecoveryFeedbackStatus(project, state, stage, unit);
       // No selection yet: nothing to bind to.
       expect(status("functional-design", undefined)).toBe("not-applicable");
       expect(consumeSharedDirectiveAsk(project, "Ask what should change")).toBe(true);
+      // The agent records the Request Changes it read.
+      recordGuardRecoveryChoice(project, "request-changes", false);
 
       const stageLevel = status("functional-design", undefined);
       const unitLevel = status("functional-design", "alpha");
@@ -2765,11 +3202,12 @@ describe("AttemptView projections and refusal streaks", () => {
       expect(status("functional-design", "beta")).toBe("not-applicable");
       expect(status("nfr-requirements", undefined)).toBe("not-applicable");
 
-      // The human's separate feedback, then the conductor's exact or altered copy.
+      // The human's separate feedback, which the agent records once more: the ask is ready, and the
+      // rejection takes their words from their messages, whatever text the conductor passes beside them.
       expect(consumeSharedDirectiveAsk(project, "Split the  save-search\nflow")).toBe(true);
+      recordGuardRecoveryChoice(project, "Request Changes: Split the save-search flow", true);
       const bound = ownership === "solo" ? undefined : "alpha";
-      expect(status("functional-design", bound, "Split the save-search flow")).toBe("match");
-      expect(status("functional-design", bound, "Split the save search flow")).toBe("mismatch");
+      expect(status("functional-design", bound)).toBe("ready");
     }
   });
 
@@ -2945,8 +3383,12 @@ describe("unit-major resets name what they throw away", () => {
     ];
     for (const [label, attempt, code] of stuck) {
       const refusal = walkRefusal({ attempt, ...(code ? { code } : {}) });
-      expect(ops(refusal), label).toEqual(["reopen-unit-step"]);
-      const reopen = refusal.remedies[0];
+      // The freeze's first refusal of a write nobody asked for is the agent's
+      // own step first; the person's way is the same.
+      expect(ops(refusal), label).toEqual(
+        code === "REVIEW_FREEZE_ACTIVE" ? ["present-findings-at-gate", "reopen-unit-step"] : ["reopen-unit-step"],
+      );
+      const reopen = refusal.remedies.find((remedy) => remedy.op === "reopen-unit-step")!;
       expect(reopen, label).toMatchObject({
         executableNow: true, requiresHuman: true, interaction: "command",
         operation: { kind: "reopen-unit", stage: "code-generation", unit: "beta" },
@@ -3030,21 +3472,47 @@ describe("unit-major resets name what they throw away", () => {
   test("every stage-wide reset still offered names what it throws away", () => {
     const reopen = 'throws away every unit\'s finished "functional-design" work';
     const dropAll = "throws away the work every unit has finished";
-    for (const [marker, op, cost] of [
-      ["-", "request-changes", reopen],
-      ["?", "request-changes", reopen],
-      ["R", "redo-jump", dropAll],
-      ["x", "restore-or-jump", dropAll],
+    // A refusal that names no Unit: Request Changes is stage-wide.
+    for (const [marker, op, cost, extra] of [
+      ["-", "request-changes", reopen, { unit: undefined }],
+      ["?", "request-changes", reopen, { unit: undefined }],
+      ["R", "redo-jump", dropAll, {}],
+      ["x", "restore-or-jump", dropAll, {}],
     ] as const) {
-      const refusal = unitRefusal(marker);
+      const refusal = unitRefusal(marker, extra);
       const remedy = refusal.remedies.find((candidate) => candidate.op === op);
       expect(remedy, `${marker} ${op}`).toBeDefined();
       expect(remedy?.action, `${marker} ${op}`).toContain(cost);
       expect(refusal.remedies.map((candidate) => candidate.op)).not.toContain("restart-stage");
     }
-    const unattended = unitRefusal("-", { humanAuthority: { freshTurn: false, unattended: true } });
-    expect(unattended.remedies.find((remedy) => remedy.op === "unset-unattended")?.action)
+    const unattended = unitRefusal("-", { unit: undefined, humanAuthority: { freshTurn: false, unattended: true } });
+    expect(unattended.remedies.find((remedy) => remedy.op === "request-changes")?.action)
       .toContain(reopen);
+  });
+
+  test("Request Changes about a named Unit sends back that Unit's step only", () => {
+    const change = "next --stage functional-design --unit beta --change";
+    for (const marker of ["-", "?"] as const) {
+      const remedy = unitRefusal(marker).remedies.find((candidate) => candidate.op === "request-changes");
+      expect(remedy?.action, marker).toContain(change);
+      expect(remedy?.action, marker).toContain("every other unit keeps its finished work");
+      expect(remedy?.action, marker).not.toContain("throws away");
+      expect(remedy?.label).toBe("Request Changes");
+      expect(remedy?.description, marker).not.toContain("throws away");
+      expect(remedy?.interaction).toBe("human-input");
+      expect(remedy?.command).toBeUndefined();
+      expect(remedy?.operation).toBeUndefined();
+    }
+    const unattended = unitRefusal("-", { humanAuthority: { freshTurn: false, unattended: true } });
+    expect(unattended.remedies.find((remedy) => remedy.op === "request-changes")?.action).toContain(change);
+    // The Unit in progress on this step keeps today's stage-wide choice: the
+    // reopen would route the step it is already on.
+    const onTheStep = unitRefusal("-", {
+      stateContent: `${state("-")}- **Active Unit**: beta\n- **Unit Stage**: functional-design\n- **Unit State**: in-progress\n`,
+    });
+    const today = onTheStep.remedies.find((remedy) => remedy.op === "request-changes");
+    expect(today?.action).not.toContain("--change");
+    expect(today?.action).toContain('throws away every unit\'s finished "functional-design" work');
   });
 
   test("stage-major, team, and stage-level refusals keep today's remedies", () => {
@@ -3183,5 +3651,181 @@ describe("the gate a spent review budget offers is a step the walk accepts", () 
     expect(again.agent_work).toBeUndefined();
     expect(again.remedies.map((remedy) => remedy.label))
       .toEqual(["Finish with the review it has", "Do this step again for the Unit", "Request Changes"]);
+  });
+});
+
+// Code Generation's "no source work" check, wherever the code is kept and
+// under each Guard Policy: every refusal at its gate has a way on that leads
+// elsewhere. The agent's own reports reach the approval question within two
+// (one under off), none ends in the terminal "nothing I can safely do", and
+// after the person's Request Changes the redone stage reaches it again the
+// same way. A lost record of the first refusal sends the way on to the
+// person, never back into a loop.
+describe("the source-work check never stops the person", () => {
+  afterEach(() => cleanupLayouts());
+
+  // The agent reports until the approval question is open; how many reports
+  // that took, and every answer it got on the way.
+  function reportUntilGate(proj: string, result: string): { reports: number; steps: EngineStep[] } {
+    const steps: EngineStep[] = [];
+    for (let reports = 1; reports <= 3; reports++) {
+      const step = report(proj, result, PERSON);
+      steps.push(step);
+      if (stageBox(proj) === "?") return { reports, steps };
+    }
+    return { reports: Number.POSITIVE_INFINITY, steps };
+  }
+
+  const policies = ["strict", "relaxed", "off"] as const;
+  for (const layout of LAYOUTS) {
+    for (const policy of policies) {
+      test.skipIf(layout.skip !== undefined && layout.skip !== false)(`${layout.name}, Guard Policy ${policy}`, () => {
+        const { proj } = buildLayout(layout, false);
+        setGuardPolicy(proj, policy, "set by you");
+        const opened = reportUntilGate(proj, "awaiting-approval");
+        expect(opened.reports, opened.steps.map((step) => step.out).join("\n")).toBeLessThanOrEqual(policy === "off" ? 1 : 2);
+        for (const step of opened.steps) expect(step.out).not.toContain("nothing I can safely do");
+      });
+    }
+  }
+
+  for (const policy of policies) {
+    test(`the code out of sight, Guard Policy ${policy}: report 2 opens the gate, and after Request Changes reports 1 and 2 do again`, () => {
+      const { proj } = codeOutOfSight();
+      setGuardPolicy(proj, policy, "set by you");
+      const opened = reportUntilGate(proj, "awaiting-approval");
+      expect(opened.reports, opened.steps.map((step) => step.out).join("\n")).toBe(policy === "off" ? 1 : 2);
+      if (policy !== "off") expect(isGuardAsk(opened.steps[0])).toBe(true);
+      for (const step of opened.steps) expect(step.out).not.toContain("nothing I can safely do");
+      personSays(proj);
+      const rejected = report(proj, "rejected", PERSON, ["--user-input", "Request Changes", "--reason", "write the code here"]);
+      expect(stageBox(proj), rejected.out).toBe("R");
+      writeCode(proj, "export const login = 2;\n");
+      expect(review(proj, false, [], 1).rc).toBe(0);
+      const again = reportUntilGate(proj, "revised");
+      expect(again.reports, again.steps.map((step) => step.out).join("\n")).toBeLessThanOrEqual(2);
+      for (const step of again.steps) expect(step.out).not.toContain("nothing I can safely do");
+    });
+  }
+
+  // The first refusal is recorded in the audit trail itself, not in the
+  // guard-refusals runtime record: losing that record changes nothing.
+  test("the guard-refusals record replaced by a file: the second report still opens the gate", () => {
+    const { proj } = codeOutOfSight();
+    const record = join(seededRecordDir(proj), ".aidlc-engine", "guard-refusals");
+    rmSync(record, { recursive: true, force: true });
+    mkdirSync(dirname(record), { recursive: true });
+    writeFileSync(record, "not a folder\n");
+    const opened = reportUntilGate(proj, "awaiting-approval");
+    expect(opened.reports, opened.steps.map((step) => step.out).join("\n")).toBeLessThanOrEqual(2);
+  });
+
+  // An audit shard this run cannot read could hold the first refusal: the
+  // check reads that as already said, and the question goes to the person.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "an audit shard that cannot be read: the gate opens on the first report",
+    () => {
+      const { proj } = codeOutOfSight();
+      const shard = join(dirname(seededAuditShard(proj)), "other-clone.md");
+      writeFileSync(shard, "## Human Turn\n**Timestamp**: 2026-01-01T00:00:00Z\n**Event**: HUMAN_TURN\n\n---\n");
+      chmodSync(shard, 0o000);
+      try {
+        const opened = reportUntilGate(proj, "awaiting-approval");
+        expect(opened.reports, opened.steps.map((step) => step.out).join("\n")).toBe(1);
+      } finally {
+        chmodSync(shard, 0o644);
+      }
+    },
+  );
+});
+
+// A checkout recorded for the review (`intent add-checkout`) after or while the
+// stage's review stands: the record moves the reviewed source, so under strict
+// the one recovery review rebinds it; under relaxed or off the change is kept.
+// A recorded checkout that vanishes, or one taken out again after the recovery
+// review, still leaves a way on, and never a loop.
+describe("a recorded checkout never stops the person", () => {
+  afterEach(() => cleanupLayouts());
+
+  function harnessCodeReviewed(policy: string): { proj: string; worktree: string } {
+    const proj = shellWorkspace(".claude/worktrees/\n");
+    setGuardPolicy(proj, policy, "set by you");
+    startCodeGeneration(proj, false);
+    commitRecords(proj);
+    const worktree = worktreeOf(proj, join(proj, ".claude", "worktrees", "feature"));
+    writeCode(worktree);
+    expect(review(proj, false, []).rc).toBe(0);
+    return { proj, worktree };
+  }
+
+  // Reports as the conductor makes them, recording the recovery review when a
+  // stale review is refused; how many reports reached the gate, and the codes.
+  function reportsToGate(proj: string, recoveries: number[]): { reports: number; codes: string[]; outs: string[] } {
+    const codes: string[] = [];
+    const outs: string[] = [];
+    for (let reports = 1; reports <= 4; reports++) {
+      const step = report(proj, "awaiting-approval", PERSON);
+      codes.push(...reasonCodes(step));
+      outs.push(step.out);
+      if (stageBox(proj) === "?") return { reports, codes, outs };
+      if (reasonCodes(step).includes("SOURCE_REVIEW_STALE")) {
+        const iteration = 2 + recoveries.length;
+        recoveries.push(iteration);
+        expect(review(proj, false, [], iteration).rc).toBe(0);
+      }
+    }
+    return { reports: Number.POSITIVE_INFINITY, codes, outs };
+  }
+
+  for (const policy of ["strict", "relaxed", "off"] as const) {
+    test(`add-checkout after the review, Guard Policy ${policy}: ${policy === "strict" ? "one recovery review, then the gate" : "the gate, with no refusal"}`, () => {
+      const { proj, worktree } = harnessCodeReviewed(policy);
+      expect(checkoutCommand(proj, "add-checkout", worktree).rc).toBe(0);
+      const recoveries: number[] = [];
+      const opened = reportsToGate(proj, recoveries);
+      expect(opened.reports, opened.outs.join("\n")).toBeLessThanOrEqual(policy === "strict" ? 2 : 1);
+      expect(recoveries).toHaveLength(policy === "strict" ? 1 : 0);
+      for (const out of opened.outs) expect(out).not.toContain("nothing I can safely do");
+    });
+  }
+
+  test("a recorded checkout that vanishes after the review leaves a bounded way to the gate", () => {
+    const proj = shellWorkspace(".claude/worktrees/\n");
+    setGuardPolicy(proj, "strict", "set by you");
+    startCodeGeneration(proj, false);
+    commitRecords(proj);
+    const worktree = worktreeOf(proj, join(proj, ".claude", "worktrees", "feature"));
+    writeCode(worktree);
+    expect(checkoutCommand(proj, "add-checkout", worktree).rc).toBe(0);
+    expect(review(proj, false, []).rc).toBe(0);
+    rmSync(worktree, { recursive: true, force: true });
+    const recoveries: number[] = [];
+    const opened = reportsToGate(proj, recoveries);
+    expect(opened.reports, opened.outs.join("\n")).toBeLessThanOrEqual(4);
+    expect(opened.codes).not.toContain("SOURCE_BOUNDARY_UNBINDABLE");
+    for (const out of opened.outs) expect(out).not.toContain("nothing I can safely do");
+  });
+
+  test("taken out again after the recovery review: the spent recovery is the person's Request Changes to reset", () => {
+    const { proj, worktree } = harnessCodeReviewed("strict");
+    expect(checkoutCommand(proj, "add-checkout", worktree).rc).toBe(0);
+    const recoveries: number[] = [];
+    expect(reportsToGate(proj, recoveries).reports).toBeLessThanOrEqual(2);
+    expect(checkoutCommand(proj, "remove-checkout", worktree).rc).toBe(0);
+    const steps: EngineStep[] = [];
+    for (let reports = 1; reports <= 3 && !steps.some((step) => reasonCodes(step).includes("SOURCE_RECOVERY_SPENT")); reports++) {
+      steps.push(report(proj, "awaiting-approval", PERSON));
+    }
+    const spent = steps.at(-1) as EngineStep;
+    expect(reasonCodes(spent), steps.map((step) => step.out).join("\n")).toContain("SOURCE_RECOVERY_SPENT");
+    expect(JSON.stringify(spent.directive?.choices ?? [])).toContain("Request Changes");
+    personSays(proj);
+    const rejected = report(proj, "rejected", PERSON, ["--user-input", "Request Changes", "--reason", "review it again"]);
+    expect(stageBox(proj), rejected.out).toBe("R");
+    expect(checkoutCommand(proj, "add-checkout", worktree).rc).toBe(0);
+    expect(review(proj, false, [], 1).rc).toBe(0);
+    const again: EngineStep[] = [];
+    for (let reports = 1; reports <= 2 && stageBox(proj) !== "?"; reports++) again.push(report(proj, "revised", PERSON));
+    expect(stageBox(proj), again.map((step) => step.out).join("\n")).toBe("?");
   });
 });

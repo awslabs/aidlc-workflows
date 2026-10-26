@@ -16,22 +16,34 @@ import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { projectInvocationTokens } from "./aidlc-command.ts";
 import {
+  acquireAuditLock,
   committedTextBytes,
   errorMessage,
+  escapeRegex,
+  isPlainObject,
   parseArgs,
+  parseStageFrontmatter,
+  pausedBySelection,
+  PHASES,
+  releaseAuditLock,
   resolveProjectDir,
 } from "./aidlc-lib.ts";
 import { policyPathWithin } from "./aidlc-install-paths.ts";
 import {
   aidlcInvocation,
   compiledExecutable,
+  discoverProjectHarnesses,
   LinkedFolderError,
+  pinNamedHarness,
+  quoteCommandArgument,
   refuseLinkOnTheWay,
   resolveHarnessPath,
   resolveSkillsPath,
   runtimeHarnessDir,
   runtimeHarnessName,
+  runtimeProjectDir,
 } from "./aidlc-runtime-paths.ts";
 import {
   executePlan,
@@ -40,6 +52,14 @@ import {
   type TransactionOperation,
   type TransactionPlan,
 } from "./aidlc-transaction.ts";
+import {
+  hostIdSegment,
+  pluginStageSlugs,
+  readPluginBase,
+  scopeIncludes,
+  type PluginBaseProblem,
+  type PluginDependency,
+} from "./aidlc-plugin-validate.ts";
 
 const SAFE_PLUGIN_KEY = /^[a-z][a-z0-9-]*$/;
 const STRICT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
@@ -63,6 +83,12 @@ export type InstalledPlugin = {
   manifestPath: string;
   enabled: boolean;
   sourceHash: string;
+  // The one base plugin this one builds on, from its own manifest, or why that
+  // manifest cannot say.
+  base: PluginDependency | null;
+  baseProblem: PluginBaseProblem | { kind: "unreadable"; reason: string } | null;
+  // The host's own id for it (name@marketplace), where the host lists plugins.
+  hostId?: string;
 };
 
 export type InvalidInstalledPlugin = {
@@ -77,6 +103,8 @@ export type PluginInventory = {
   source?: string;
   installed: InstalledPlugin[];
   invalid: InvalidInstalledPlugin[];
+  // Old aidlc-<name> copies of a plugin also installed rebuilt under its own name.
+  superseded?: InstalledPlugin[];
 };
 
 export type CompositionStamp = {
@@ -84,6 +112,9 @@ export type CompositionStamp = {
   name: string;
   version: string;
   sourceHash: string;
+  // The base plugin this one builds on. A host with no plugin list reads it
+  // here to keep layering one level deep.
+  base?: string;
 };
 
 export type PluginStatusName =
@@ -95,7 +126,10 @@ export type PluginStatusName =
   | "installed-disabled"
   | "installed-missing"
   | "invalid-installed"
-  | "inventory-unavailable";
+  | "inventory-unavailable"
+  | "dependency-unmet"
+  | "paused"
+  | "installed-twice";
 
 export type PluginStatus = {
   key: string | null;
@@ -118,10 +152,20 @@ type OwnershipRecord = {
   files: OwnershipFile[];
 };
 
+// A plugin sync could not compose on its base, and the line that says why,
+// for plugin list and doctor. The sync that composes the plugin removes it.
+export type HeldRecord = {
+  schemaVersion: 1;
+  name: string;
+  version: string;
+  reason: string;
+};
+
 export type ProjectEvidence = {
   stamps: Map<string, CompositionStamp>;
   legacy: Set<string>;
   ownership: Map<string, OwnershipRecord>;
+  held: Map<string, HeldRecord>;
 };
 
 function absolute(path: string): string {
@@ -203,6 +247,55 @@ function hostManifestDirectory(harness: PluginInventory["harness"]): string {
   return ".opencode-plugin";
 }
 
+// AI-DLC's own name for an installed plugin. A plugin someone else builds shows
+// in the host under its author's name, so the plugin's own manifest, which every
+// build carries beside the host one, says which plugin it is. A build from
+// before that manifest travelled with it named its host package aidlc-<name>.
+function installedPluginKey(root: string, hostName: string, manifestPath: string): string {
+  const own = join(root, ".aidlc-plugin", "plugin.json");
+  if (existsSync(own)) {
+    let name: unknown;
+    try {
+      name = (readJson(own) as { name?: unknown } | null)?.name;
+    } catch {
+      name = undefined;
+    }
+    if (typeof name === "string" && name.trim()) return name.trim();
+    if (!hostName.startsWith("aidlc-")) throw new Error(`${own}: the plugin's own manifest does not name it`);
+  }
+  if (!hostName.startsWith("aidlc-")) {
+    throw new Error(
+      `${manifestPath}: not an AI-DLC plugin: it has no .aidlc-plugin/plugin.json and its name does not start with "aidlc-"`,
+    );
+  }
+  return hostName.slice("aidlc-".length);
+}
+
+// The key an invalid host entry is reported under, when its root still says.
+function installedKeyHint(root: string, hostName: string): string | undefined {
+  try {
+    return installedPluginKey(root, hostName, root);
+  } catch {
+    return hostName.startsWith("aidlc-") ? hostName.slice("aidlc-".length) : undefined;
+  }
+}
+
+// A host lists every vendor's plugins. A plain name is AI-DLC's only through an
+// installed root that carries the plugin's own manifest; every other entry,
+// broken or not, is none of AI-DLC's business.
+function carriesOwnManifest(root: unknown): boolean {
+  return typeof root === "string" && root !== "" &&
+    existsSync(join(root, ".aidlc-plugin", "plugin.json"));
+}
+
+// An old copy of a plugin someone else built is the one its host lists under
+// AI-DLC's name for it, aidlc-<name>: 2.11.0 built it that way without the
+// plugin's own manifest, the 2.11.1 previews with it. A copy rebuilt by its
+// author carries the author's name.
+function hostListsUnderAidlcName(plugin: InstalledPlugin): boolean {
+  return plugin.hostName === `aidlc-${plugin.key}`;
+}
+
 export function normalizeInstalledPlugin(
   root: string,
   harness: PluginInventory["harness"],
@@ -226,10 +319,7 @@ export function normalizeInstalledPlugin(
   const manifest = parsed as Record<string, unknown>;
   const hostName = typeof manifest.name === "string" ? manifest.name.trim() : "";
   const version = typeof manifest.version === "string" ? manifest.version.trim() : "";
-  if (!hostName.startsWith("aidlc-")) {
-    throw new Error(`${manifestPath}: owned plugin name must start with "aidlc-"`);
-  }
-  const key = hostName.slice("aidlc-".length);
+  const key = installedPluginKey(canonicalRoot, hostName, manifestPath);
   if (!SAFE_PLUGIN_KEY.test(key)) {
     throw new Error(`${manifestPath}: plugin key "${key}" is not safe`);
   }
@@ -249,7 +339,23 @@ export function normalizeInstalledPlugin(
     manifestPath,
     enabled,
     sourceHash: pluginSourceHash(canonicalRoot),
+    ...installedBase(canonicalRoot, key),
   };
+}
+
+// A projection built before the plugin's own manifest travelled with it
+// builds on core alone, as every plugin did then.
+function installedBase(root: string, key: string): Pick<InstalledPlugin, "base" | "baseProblem"> {
+  const manifestPath = join(root, ".aidlc-plugin", "plugin.json");
+  if (!existsSync(manifestPath)) return { base: null, baseProblem: null };
+  let manifest: unknown;
+  try {
+    manifest = readJson(manifestPath);
+  } catch {
+    return { base: null, baseProblem: { kind: "unreadable", reason: "not valid JSON" } };
+  }
+  const read = readPluginBase((manifest as { dependencies?: unknown } | null)?.dependencies, key);
+  return "problem" in read ? { base: null, baseProblem: read.problem } : { base: read.base, baseProblem: null };
 }
 
 function currentRoots(): string[] {
@@ -260,8 +366,10 @@ function currentRoots(): string[] {
   ].map((value) => value?.trim() ?? "").filter(Boolean).map(absolute))];
 }
 
-function harnessKind(harnessDir = runtimeHarnessDir()): PluginInventory["harness"] {
-  const declared = process.env.AIDLC_HARNESS_NAME?.trim();
+function harnessKind(harnessDir = runtimeHarnessDir(), projectDir = resolveProjectDir()): PluginInventory["harness"] {
+  // The install's harness.json names it where the folder does not: opencode
+  // and Copilot share .aidlc.
+  const declared = runtimeHarnessName(projectDir, harnessDir);
   if (
     declared === "claude" ||
     declared === "codex" ||
@@ -295,7 +403,7 @@ function invalidFromRoot(
 function deduplicateInventory(
   entries: InstalledPlugin[],
   invalid: InvalidInstalledPlugin[],
-): { installed: InstalledPlugin[]; invalid: InvalidInstalledPlugin[] } {
+): { installed: InstalledPlugin[]; invalid: InvalidInstalledPlugin[]; superseded: InstalledPlugin[] } {
   const byKey = new Map<string, InstalledPlugin[]>();
   for (const entry of entries) {
     const values = byKey.get(entry.key) ?? [];
@@ -303,9 +411,19 @@ function deduplicateInventory(
     byKey.set(entry.key, values);
   }
   const installed: InstalledPlugin[] = [];
+  const superseded: InstalledPlugin[] = [];
   for (const [key, values] of byKey) {
     if (values.length === 1) {
       installed.push(values[0]);
+      continue;
+    }
+    // A plugin rebuilt under its own name beside its old aidlc-<name> copy, as
+    // an update leaves it until the old one is removed: the rebuilt one is used.
+    const old = values.filter(hostListsUnderAidlcName);
+    const rebuilt = values.filter((value) => !hostListsUnderAidlcName(value));
+    if (values.length === 2 && rebuilt.length === 1 && old.length === 1) {
+      installed.push(rebuilt[0]);
+      superseded.push(old[0]);
       continue;
     }
     invalid.push({
@@ -334,7 +452,20 @@ function deduplicateInventory(
   return {
     installed: unique.sort((left, right) => left.key.localeCompare(right.key)),
     invalid: invalid.sort((left, right) => left.message.localeCompare(right.message)),
+    superseded: superseded.sort((left, right) => left.key.localeCompare(right.key)),
   };
+}
+
+// What to tell the person about an old copy of a plugin installed beside its
+// rebuilt one: the host's own command removes it.
+function supersededWords(harness: PluginInventory["harness"], old: InstalledPlugin): string {
+  const id = old.hostId ?? old.hostName;
+  const remove = harness === "codex" ? `codex plugin remove ${id}` : `/plugin uninstall ${id}`;
+  return `installed twice; AI-DLC uses the rebuilt one. Remove the old copy: ${remove}`;
+}
+
+export function supersededLines(inventory: PluginInventory): string[] {
+  return (inventory.superseded ?? []).map((old) => `${old.key} is ${supersededWords(inventory.harness, old)}`);
 }
 
 function currentRootInventory(harness: PluginInventory["harness"]): PluginInventory {
@@ -351,6 +482,7 @@ function currentRootInventory(harness: PluginInventory["harness"]): PluginInvent
     harness,
     installed: normalized.installed,
     invalid: normalized.invalid,
+    superseded: normalized.superseded,
   };
 }
 
@@ -441,15 +573,18 @@ function claudeInventory(projectDir: string): PluginInventory {
   } else {
     for (const [id, rawEntries] of Object.entries(plugins).sort(([a], [b]) => a.localeCompare(b))) {
       const registryName = id.split("@", 1)[0];
-      if (!registryName.startsWith("aidlc-")) continue;
+      const aidlcName = registryName.startsWith("aidlc-");
+      const ownRecord = (raw: unknown): boolean =>
+        aidlcName || carriesOwnManifest((raw as Record<string, unknown> | null)?.installPath);
+      if (!aidlcName && !(Array.isArray(rawEntries) && rawEntries.some(ownRecord))) continue;
       if (!Array.isArray(rawEntries) || rawEntries.length === 0) {
         invalid.push({ paths: [registryPath], message: `Claude plugin "${id}" has no installed records` });
         continue;
       }
       const own = rawEntries.filter((raw) => !elsewhere(raw));
-      const records = own.length > 0 || projectEnabled[id] !== true
+      const records = (own.length > 0 || projectEnabled[id] !== true
         ? own
-        : rawEntries.filter((raw) => (raw as Record<string, unknown>).scope === "project");
+        : rawEntries.filter((raw) => (raw as Record<string, unknown>).scope === "project")).filter(ownRecord);
       for (const rawEntry of records) {
         if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
           invalid.push({ paths: [registryPath], message: `Claude plugin "${id}" has an invalid installed record` });
@@ -463,8 +598,8 @@ function claudeInventory(projectDir: string): PluginInventory {
           continue;
         }
         const normalized = invalidFromRoot(root, "claude", enabledPlugins[id] !== false, version);
-        if ("root" in normalized) installed.push(normalized);
-        else invalid.push({ ...normalized, key: registryName.slice("aidlc-".length) });
+        if ("root" in normalized) installed.push({ ...normalized, hostId: id });
+        else invalid.push({ ...normalized, key: installedKeyHint(root, registryName) });
       }
     }
   }
@@ -475,6 +610,7 @@ function claudeInventory(projectDir: string): PluginInventory {
     source: registryPath,
     installed: normalized.installed,
     invalid: normalized.invalid,
+    superseded: normalized.superseded,
   };
 }
 
@@ -506,20 +642,19 @@ function codexInventory(): PluginInventory {
     const at = id.lastIndexOf("@");
     const pluginName = at > 0 ? id.slice(0, at) : "";
     const marketplace = at > 0 ? id.slice(at + 1) : "";
-    const safeSegment = (value: string): boolean =>
-      /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) && value !== "." && value !== "..";
-    if (!pluginName || !marketplace || !safeSegment(pluginName) ||
-      !safeSegment(marketplace)) {
+    if (!pluginName || !marketplace || !hostIdSegment(pluginName) ||
+      !hostIdSegment(marketplace)) {
       invalid.push({ paths: [configPath], message: `Codex plugin id "${id}" is not name@marketplace` });
       continue;
     }
-    if (!pluginName.startsWith("aidlc-")) continue;
+    const aidlcName = pluginName.startsWith("aidlc-");
     const pluginConfig = rawConfig && typeof rawConfig === "object" && !Array.isArray(rawConfig)
       ? rawConfig as Record<string, unknown>
       : {};
     const enabled = pluginConfig.enabled !== false;
     const cacheRoot = join(codexHome, "plugins", "cache", marketplace, pluginName);
     if (!existsSync(cacheRoot)) {
+      if (!aidlcName) continue;
       invalid.push({
         paths: [cacheRoot],
         message: `Codex plugin "${id}" is configured but its installed cache path is missing`,
@@ -533,6 +668,7 @@ function codexInventory(): PluginInventory {
         lstatSync(path).isDirectory();
     }).sort();
     if (versions.length === 0) {
+      if (!aidlcName) continue;
       invalid.push({ paths: [cacheRoot], message: `Codex plugin "${id}" has no installed tree` });
       continue;
     }
@@ -548,14 +684,15 @@ function codexInventory(): PluginInventory {
         return left < right ? -1 : left > right ? 1 : 0;
       }).at(-1) as string;
     const root = join(cacheRoot, selectedVersion);
+    if (!aidlcName && !carriesOwnManifest(root)) continue;
     const normalized = invalidFromRoot(
       root,
       "codex",
       enabled,
       selectedVersion === "local" ? undefined : selectedVersion,
     );
-    if ("root" in normalized) installed.push(normalized);
-    else invalid.push({ ...normalized, key: pluginName.slice("aidlc-".length) });
+    if ("root" in normalized) installed.push({ ...normalized, hostId: id });
+    else invalid.push({ ...normalized, key: installedKeyHint(root, pluginName) });
   }
   const normalized = deduplicateInventory(installed, invalid);
   return {
@@ -564,6 +701,7 @@ function codexInventory(): PluginInventory {
     source: configPath,
     installed: normalized.installed,
     invalid: normalized.invalid,
+    superseded: normalized.superseded,
   };
 }
 
@@ -571,7 +709,7 @@ export function discoverPluginInventory(
   harnessDir = runtimeHarnessDir(),
   projectDir = resolveProjectDir(),
 ): PluginInventory {
-  const harness = harnessKind(harnessDir);
+  const harness = harnessKind(harnessDir, projectDir);
   if (harness === "claude") return claudeInventory(projectDir);
   if (harness === "codex") return codexInventory();
   return currentRootInventory(harness);
@@ -591,7 +729,8 @@ function parseStamp(path: string): CompositionStamp | null {
       typeof value.version === "string" &&
       STRICT_SEMVER.test(value.version) &&
       typeof value.sourceHash === "string" &&
-      /^sha256:[0-9a-f]{64}$/.test(value.sourceHash)
+      /^sha256:[0-9a-f]{64}$/.test(value.sourceHash) &&
+      (value.base === undefined || (typeof value.base === "string" && SAFE_PLUGIN_KEY.test(value.base)))
     ) {
       return value as CompositionStamp;
     }
@@ -634,8 +773,15 @@ function projectEvidence(projectDir: string, harnessDir: string): ProjectEvidenc
   const stamps = new Map<string, CompositionStamp>();
   const legacy = new Set<string>();
   const ownership = new Map<string, OwnershipRecord>();
-  if (!existsSync(dataDir)) return { stamps, legacy, ownership };
+  const held = new Map<string, HeldRecord>();
+  if (!existsSync(dataDir)) return { stamps, legacy, ownership, held };
   for (const entry of readdirSync(dataDir).sort()) {
+    const heldMatch = entry.match(/^plugin-held-([a-z][a-z0-9-]*)\.json$/);
+    if (heldMatch) {
+      const record = parseHeld(join(dataDir, entry));
+      if (record && record.name === heldMatch[1]) held.set(heldMatch[1], record);
+      continue;
+    }
     let match = entry.match(/^plugin-compose-([a-z][a-z0-9-]*)\.json$/);
     if (match) {
       const stamp = parseStamp(join(dataDir, entry));
@@ -666,7 +812,26 @@ function projectEvidence(projectDir: string, harnessDir: string): ProjectEvidenc
     // A missing or unreadable graph cannot prove legacy composition.
   }
   for (const key of stamps.keys()) legacy.delete(key);
-  return { stamps, legacy, ownership };
+  return { stamps, legacy, ownership, held };
+}
+
+function parseHeld(path: string): HeldRecord | null {
+  try {
+    const value = readJson(path) as Partial<HeldRecord>;
+    if (
+      value.schemaVersion === 1 &&
+      typeof value.name === "string" &&
+      SAFE_PLUGIN_KEY.test(value.name) &&
+      typeof value.version === "string" &&
+      STRICT_SEMVER.test(value.version) &&
+      typeof value.reason === "string"
+    ) {
+      return value as HeldRecord;
+    }
+  } catch {
+    // An unreadable record says nothing; the next sync writes it again.
+  }
+  return null;
 }
 
 function selectedPlugins(projectDir: string, harnessDir: string): Set<string> | null {
@@ -699,6 +864,17 @@ export function comparePluginState(
   selection: Set<string> | null,
 ): PluginStatus[] {
   const rows: PluginStatus[] = [];
+  // The person kept the plugin and left its base off: a plain state, not a
+  // problem.
+  const paused = pausedBySelection(selection, (key) => evidence.stamps.get(key)?.base ?? null);
+  const pausedStatus = (key: string, installedVersion: string | null): PluginStatus => ({
+    key,
+    installedVersion,
+    composedVersion: evidence.stamps.get(key)?.version ?? null,
+    state: "paused",
+    action: "current",
+    message: `paused: needs ${paused.get(key)}, which is off`,
+  });
   for (const invalid of inventory.invalid) {
     rows.push({
       key: invalid.key ?? null,
@@ -711,11 +887,29 @@ export function comparePluginState(
     });
   }
   const installedKeys = new Set<string>();
+  const oldCopies = new Map((inventory.superseded ?? []).map((old) => [old.key, old]));
   for (const plugin of inventory.installed) {
     installedKeys.add(plugin.key);
+    const oldCopy = oldCopies.get(plugin.key);
+    if (oldCopy) {
+      rows.push({
+        key: plugin.key,
+        installedVersion: plugin.version,
+        composedVersion: evidence.stamps.get(plugin.key)?.version ?? null,
+        state: "installed-twice",
+        action: "attention",
+        message: supersededWords(inventory.harness, oldCopy),
+      });
+      continue;
+    }
     const stamp = evidence.stamps.get(plugin.key);
     const enabled = plugin.enabled && (selection === null || selection.has(plugin.key));
-    if (!enabled) {
+    const held = evidence.held.get(plugin.key);
+    if (enabled && paused.has(plugin.key)) {
+      rows.push(pausedStatus(plugin.key, plugin.version));
+    } else if (enabled && held?.version === plugin.version) {
+      rows.push(heldStatus(held, stamp?.version ?? null));
+    } else if (!enabled) {
       rows.push({
         key: plugin.key,
         installedVersion: plugin.version,
@@ -774,8 +968,20 @@ export function comparePluginState(
   // composed plugin the host does not show is reported as not compared:
   // nothing for the person to do, so doctor does not warn about it.
   const provedMissing = inventory.capability === "full-inventory";
+  // Without a host plugin list, the record is the only sign of a plugin sync
+  // could not compose.
+  if (!provedMissing) for (const key of evidence.held.keys()) composedKeys.add(key);
   for (const key of [...composedKeys].sort()) {
     if (installedKeys.has(key) || invalidKeys.has(key)) continue;
+    const held = provedMissing ? undefined : evidence.held.get(key);
+    if (!provedMissing && paused.has(key)) {
+      rows.push(pausedStatus(key, null));
+      continue;
+    }
+    if (held) {
+      rows.push(heldStatus(held, evidence.stamps.get(key)?.version ?? null));
+      continue;
+    }
     rows.push({
       key,
       installedVersion: null,
@@ -792,6 +998,17 @@ export function comparePluginState(
   );
 }
 
+function heldStatus(held: HeldRecord, composedVersion: string | null): PluginStatus {
+  return {
+    key: held.name,
+    installedVersion: held.version,
+    composedVersion,
+    state: "dependency-unmet",
+    action: "attention",
+    message: held.reason,
+  };
+}
+
 export function collectPluginStatus(
   projectDir: string,
   harnessDir = runtimeHarnessDir(projectDir),
@@ -806,9 +1023,9 @@ export function collectPluginStatus(
 }
 
 function humanAction(status: PluginStatus): string {
-  if (status.state === "inventory-unavailable") return status.message;
+  if (status.state === "inventory-unavailable" || status.state === "paused") return status.message;
   if (status.action === "current") return "current";
-  if (status.action === "sync") return "run: aidlc config";
+  if (status.action === "sync") return `run: ${aidlcInvocation()} engine plugin sync`;
   return `needs attention: ${status.message}`;
 }
 
@@ -878,7 +1095,7 @@ function pluginPrimitiveTargets(
 function projectedSourceBytes(source: string, harnessDir: string): Buffer {
   const bytes = readFileSync(source);
   return source.endsWith(".md")
-    ? Buffer.from(bytes.toString("utf-8").replaceAll("{{HARNESS_DIR}}", harnessDir))
+    ? Buffer.from(projectInvocationTokens(bytes.toString("utf-8"), harnessDir))
     : bytes;
 }
 
@@ -944,6 +1161,7 @@ function writeCompositionRecords(
     name: plugin.key,
     version: plugin.version,
     sourceHash: plugin.sourceHash,
+    ...(plugin.base ? { base: plugin.base.name } : {}),
   };
   writeFileSync(
     join(dataDir, `plugin-owned-${plugin.key}.json`),
@@ -1119,37 +1337,6 @@ function assertOwnedPath(projectDir: string, path: string): string {
   return target;
 }
 
-function removeListValues(
-  content: string,
-  field: string,
-  values: ReadonlySet<string>,
-  dropEmptyField: boolean,
-): string {
-  const block = new RegExp(`^${field}:\\n((?:  - .+\\n)*)`, "m");
-  const match = content.match(block);
-  if (!match) return content;
-  const kept = [...match[1].matchAll(/^ {2}- (.+)$/gm)]
-    .map((entry) => entry[1])
-    .filter((value) => {
-      const bare = value.trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
-      return !values.has(bare) && !values.has(value.trim());
-    });
-  const replacement = kept.length > 0
-    ? `${field}:\n${kept.map((value) => `  - ${value}`).join("\n")}\n`
-    : dropEmptyField ? "" : `${field}: []\n`;
-  return content.replace(block, replacement);
-}
-
-function removeConsumes(content: string, artifacts: ReadonlySet<string>): string {
-  const block = /^consumes:\n((?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m;
-  const match = content.match(block);
-  if (!match) return content;
-  const kept = [...match[1].matchAll(/^ {2}- artifact:\s*([\w-]+).*\n(?: {4}(?:required|conditional_on):.*\n)*/gm)]
-    .filter((entry) => !artifacts.has(entry[1]))
-    .map((entry) => entry[0]);
-  return content.replace(block, kept.length > 0 ? `consumes:\n${kept.join("")}` : "consumes: []\n");
-}
-
 // Cuts the sentinel-marked fragment block at [start, end) together with the
 // separator compose inserted with it, and nothing else, so the file's own
 // whitespace survives. Compose wraps the blocks at one insertion point in a
@@ -1201,6 +1388,355 @@ export function tomlFragmentText(raw: string): string {
   return raw.replace(/\\(["\\])/g, "$1");
 }
 
+// --- a plugin's recorded additions -------------------------------------------
+// What compose merged into core stages and personas, as its sidecar
+// (tools/data/plugin-contrib-<key>.json) records it. One check reads it against
+// the files: doctor's Composed plugin surface row names every gap, and sync
+// composes the plugin again when an addition is gone.
+
+export interface ConsumeContribRecord {
+  artifact: string;
+  required: boolean;
+  conditional_on?: string;
+}
+
+export interface StageContribRecord {
+  produces?: string[];
+  sensors?: string[];
+  consumes?: Array<string | ConsumeContribRecord>;
+  scopes?: string[];
+  requires_stage?: string[];
+  required_sections?: string[];
+  required_sections_created?: boolean;
+  fragments?: Array<{ anchor: string; order: number; hash: string }>;
+}
+
+// The one strip of a record's structural adds from a stage's LF text, for a
+// plugin turned off (`stripPluginsTurnedOff()` in aidlc-utility.ts), removed or
+// updated (`pruneContributions`), and the config refresh's test of a composed
+// file (aidlc-init.ts). Fragments carry their own markers, and each caller
+// strips them in its own scope.
+export function stripRecordedAdds(content: string, record: StageContribRecord): string {
+  let value = content;
+  for (const field of ["produces", "sensors", "scopes", "requires_stage"] as const) {
+    const items = record[field];
+    if (items?.length) value = removeRecordedValues(value, field, new Set(items), false);
+  }
+  if (record.consumes?.length) {
+    const artifacts = record.consumes.flatMap((entry) =>
+      typeof entry === "string"
+        ? [entry]
+        : entry && typeof entry.artifact === "string"
+          ? [entry.artifact]
+          : []
+    );
+    value = removeRecordedConsumes(value, new Set(artifacts));
+  }
+  if (record.required_sections?.length) {
+    value = removeRecordedValues(
+      value,
+      "required_sections",
+      new Set(record.required_sections),
+      record.required_sections_created === true,
+    );
+  }
+  return value;
+}
+
+// Remove recorded values from a `field:` block. An emptied block collapses to
+// the inline `field: []` form (the shape compose's merge expanded from); a
+// created-by-compose required_sections field is deleted outright.
+function removeRecordedValues(content: string, field: string, values: ReadonlySet<string>, dropEmptyField: boolean): string {
+  const blockRe = new RegExp(`^${field}:\\n((?:  - .+\\n)*)`, "m");
+  const m = content.match(blockRe);
+  if (!m) return content;
+  const entries = [...m[1].matchAll(/^ {2}- (.+)$/gm)].map((x) => x[1]);
+  const removeIndexes = new Set<number>();
+  const remaining = new Set(values);
+  // Compose renders ordinary structural additions unquoted. Prefer that exact
+  // spelling so a legacy sidecar cannot remove an equivalent quoted membership
+  // that predated the plugin.
+  for (let i = 0; i < entries.length; i++) {
+    if (remaining.delete(entries[i].trim())) removeIndexes.add(i);
+  }
+  // required_sections are rendered quoted while their sidecar values are bare.
+  // Remove at most one canonical match for each recorded addition.
+  for (const value of remaining) {
+    const index = entries.findIndex((entry, i) => {
+      if (removeIndexes.has(i)) return false;
+      const bare = entry.trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
+      return bare === value;
+    });
+    if (index !== -1) removeIndexes.add(index);
+  }
+  const kept = entries.filter((_, i) => !removeIndexes.has(i));
+  const replacement = kept.length > 0
+    ? `${field}:\n${kept.map((v) => `  - ${v}`).join("\n")}\n`
+    : dropEmptyField ? "" : `${field}: []\n`;
+  return content.replace(blockRe, replacement);
+}
+
+function removeRecordedConsumes(content: string, artifacts: ReadonlySet<string>): string {
+  const blockRe = /^consumes:\n((?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m;
+  const m = content.match(blockRe);
+  if (!m) return content;
+  const kept = [...m[1].matchAll(/^ {2}- artifact:\s*([\w-]+).*\n(?: {4}(?:required|conditional_on):.*\n)*/gm)]
+    .filter((entry) => !artifacts.has(entry[1]))
+    .map((entry) => entry[0]);
+  const replacement = kept.length > 0 ? `consumes:\n${kept.join("")}` : "consumes: []\n";
+  return content.replace(blockRe, replacement);
+}
+
+// A recorded target's file, read as compose wrote it (CRLF reads as LF): a stage
+// source, or a persona with the native twins compose keeps in step with it. A
+// twin that is gone or unreadable keeps its entry with null content.
+export interface ContributionSource {
+  path: string;
+  content: string;
+  parsed: Record<string, unknown>;
+  kind: "stage" | "agent";
+  twins?: Array<{ path: string; rel: string; content: string | null; toml: boolean }>;
+}
+
+export function contributionSources(
+  stagesRoot: string,
+  personasRoot: string,
+  projectDir: string,
+  harness: string,
+  harnessDir: string,
+): Map<string, ContributionSource> {
+  const sources = new Map<string, ContributionSource>();
+  if (existsSync(personasRoot)) {
+    for (const file of readdirSync(personasRoot).filter((name) => name.endsWith(".md")).sort()) {
+      const slug = file.replace(/\.md$/, "");
+      try {
+        const twins = personaTwinRels(harness, harnessDir, slug).map((rel) => {
+          const path = join(projectDir, rel);
+          let content: string | null = null;
+          try {
+            content = readFileSync(path, "utf-8").replace(/\r\n/g, "\n");
+          } catch {
+            // Gone or unreadable: the twin is named when a fragment is recorded for it.
+          }
+          return { path, rel, content, toml: rel.endsWith(".toml") };
+        });
+        const path = join(personasRoot, file);
+        sources.set(slug, {
+          path,
+          content: readFileSync(path, "utf-8").replace(/\r\n/g, "\n"),
+          parsed: {},
+          kind: "agent",
+          twins,
+        });
+      } catch {
+        // An unreadable persona surfaces through doctor's agent roster checks.
+      }
+    }
+  }
+  for (const phase of PHASES) {
+    const dir = join(stagesRoot, phase);
+    if (!existsSync(dir)) continue;
+    for (const file of readdirSync(dir).filter((name) => name.endsWith(".md")).sort()) {
+      const path = join(dir, file);
+      try {
+        const content = readFileSync(path, "utf-8").replace(/\r\n/g, "\n");
+        const parsed = parseStageFrontmatter(content) as Record<string, unknown>;
+        const slug = typeof parsed.slug === "string" ? parsed.slug : file.replace(/\.md$/, "");
+        sources.set(slug, { path, content, parsed, kind: "stage" });
+      } catch {
+        // A stage that does not parse surfaces through doctor's compile checks.
+      }
+    }
+  }
+  return sources;
+}
+
+export function fragmentProseHash(content: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < content.length; i++) {
+    hash ^= content.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+// Every recorded addition missing from one file, as doctor names it, and
+// whether one of them is gone: a structural value or a fragment's markers
+// absent, or a fragment holding a marker of its own plugin (a release whose
+// refresh merge nested the blocks that share an anchor). A fragment whose
+// markers are in place but whose text differs is a person's edit: it is
+// missing, but not gone, so on its own it does not make sync compose again.
+// When another addition is gone, the whole-plugin compose rewrites the plugin's
+// fragments, the edited one included, as a plugin update does.
+export function recordedContributionGaps(
+  parsed: Record<string, unknown>,
+  content: string,
+  plugin: string,
+  record: StageContribRecord,
+  // How a fragment's text reads back from this file (a Codex persona twin
+  // holds it escaped inside a TOML string).
+  fragmentText: (raw: string) => string = (raw) => raw,
+): { missing: string[]; gone: boolean } {
+  const missing: string[] = [];
+  let gone = false;
+  for (const field of ["produces", "sensors", "scopes", "requires_stage", "required_sections"] as const) {
+    const recorded = record[field];
+    if (!Array.isArray(recorded) || recorded.length === 0) continue;
+    const present = new Set(
+      (Array.isArray(parsed[field]) ? parsed[field] : [])
+        .filter((value): value is string => typeof value === "string"),
+    );
+    const absent = recorded.filter((value) => !present.has(value));
+    if (absent.length > 0) {
+      missing.push(`${field}=[${absent.join(", ")}]`);
+      gone = true;
+    }
+  }
+
+  if (Array.isArray(record.consumes) && record.consumes.length > 0) {
+    const present = (Array.isArray(parsed.consumes) ? parsed.consumes : [])
+      .flatMap((entry): ConsumeContribRecord[] => {
+        if (
+          !isPlainObject(entry) ||
+          typeof entry.artifact !== "string" ||
+          typeof entry.required !== "boolean"
+        ) {
+          return [];
+        }
+        return [{
+          artifact: entry.artifact,
+          required: entry.required,
+          ...(typeof entry.conditional_on === "string"
+            ? { conditional_on: entry.conditional_on }
+            : {}),
+        }];
+      });
+    const absent = record.consumes.filter((expected) => {
+      if (typeof expected === "string") {
+        return !present.some((entry) => entry.artifact === expected);
+      }
+      return !present.some((entry) =>
+        entry.artifact === expected.artifact &&
+        entry.required === expected.required &&
+        entry.conditional_on === expected.conditional_on
+      );
+    }).map((expected) =>
+      typeof expected === "string"
+        ? expected
+        : `${expected.artifact}(required=${expected.required}${
+          expected.conditional_on ? `, conditional_on=${expected.conditional_on}` : ""
+        })`
+    );
+    if (absent.length > 0) {
+      missing.push(`consumes=[${absent.join(", ")}]`);
+      gone = true;
+    }
+  }
+  if (Array.isArray(record.fragments) && record.fragments.length > 0) {
+    // This plugin's own marker only: prose may quote the syntax or another plugin's marker.
+    const ownMarker = new RegExp(`<!-- /?plugin:${escapeRegex(plugin)}:`);
+    const absent = record.fragments.flatMap((fragment) => {
+      const id = `${fragment.anchor}@${fragment.order}:${fragment.hash}`;
+      const open =
+        `<!-- plugin:${plugin}:${fragment.anchor}:${fragment.order}:${fragment.hash} -->`;
+      const close =
+        `<!-- /plugin:${plugin}:${fragment.anchor}:${fragment.order}:${fragment.hash} -->`;
+      const openIdx = content.indexOf(open);
+      const bodyStart = openIdx + open.length;
+      const closeIdx = openIdx === -1 ? -1 : content.indexOf(close, bodyStart);
+      if (closeIdx === -1) {
+        gone = true;
+        return [id];
+      }
+      const wrapped = content.slice(bodyStart, closeIdx);
+      if (ownMarker.test(wrapped)) {
+        gone = true;
+        return [id];
+      }
+      if (!wrapped.startsWith("\n") || !wrapped.endsWith("\n")) return [id];
+      return fragmentProseHash(fragmentText(wrapped.slice(1, -1))) === fragment.hash ? [] : [id];
+    });
+    if (absent.length > 0) missing.push(`fragments=[${absent.join(", ")}]`);
+  }
+  return { missing, gone };
+}
+
+export function contributionRecordError(value: unknown): string | undefined {
+  if (!isPlainObject(value)) return "expected an object";
+  let hasContribution = false;
+  for (const field of ["produces", "sensors", "scopes", "requires_stage", "required_sections"] as const) {
+    if (!(field in value)) continue;
+    if (!Array.isArray(value[field])) return `${field} must be an array`;
+    if (value[field].some((entry) => typeof entry !== "string" || entry.length === 0)) {
+      return `${field} must contain non-empty strings`;
+    }
+    if (value[field].length > 0) hasContribution = true;
+  }
+  if ("consumes" in value) {
+    if (!Array.isArray(value.consumes)) return "consumes must be an array";
+    for (const [index, consume] of value.consumes.entries()) {
+      if (typeof consume === "string") {
+        if (consume.length === 0) return `consumes[${index}] must be a non-empty string`;
+        continue;
+      }
+      if (!isPlainObject(consume)) {
+        return `consumes[${index}] must be a legacy string or an object`;
+      }
+      if (typeof consume.artifact !== "string" || consume.artifact.length === 0) {
+        return `consumes[${index}].artifact must be a non-empty string`;
+      }
+      if (typeof consume.required !== "boolean") {
+        return `consumes[${index}].required must be a boolean`;
+      }
+      if (
+        "conditional_on" in consume &&
+        consume.conditional_on !== undefined &&
+        consume.conditional_on !== "brownfield" &&
+        consume.conditional_on !== "greenfield"
+      ) {
+        return `consumes[${index}].conditional_on must be brownfield or greenfield`;
+      }
+    }
+    if (value.consumes.length > 0) hasContribution = true;
+  }
+  if (
+    "required_sections_created" in value &&
+    typeof value.required_sections_created !== "boolean"
+  ) {
+    return "required_sections_created must be a boolean";
+  }
+  if ("fragments" in value) {
+    if (!Array.isArray(value.fragments)) return "fragments must be an array";
+    const identities = new Set<string>();
+    for (const [index, fragment] of value.fragments.entries()) {
+      if (!isPlainObject(fragment)) return `fragments[${index}] must be an object`;
+      if (
+        typeof fragment.anchor !== "string" ||
+        !/^\S+$/.test(fragment.anchor)
+      ) {
+        return `fragments[${index}].anchor must be a non-empty token`;
+      }
+      if (
+        typeof fragment.order !== "number" ||
+        !Number.isSafeInteger(fragment.order) ||
+        fragment.order < 0
+      ) {
+        return `fragments[${index}].order must be a non-negative integer`;
+      }
+      if (typeof fragment.hash !== "string" || !/^[0-9a-f]{8}$/.test(fragment.hash)) {
+        return `fragments[${index}].hash must be an 8-character lowercase hex hash`;
+      }
+      const identity = `${fragment.anchor}\0${fragment.order}`;
+      if (identities.has(identity)) {
+        return `fragments contains duplicate identity ${fragment.anchor}@${fragment.order}`;
+      }
+      identities.add(identity);
+    }
+    if (value.fragments.length > 0) hasContribution = true;
+  }
+  return hasContribution ? undefined : "record has no contributions";
+}
+
 // Runs a strip on the text as compose wrote it (LF) and hands it back in the
 // file's own line endings. A Windows checkout (Git's core.autocrlf) turns a
 // composed file to CRLF; stripping it as LF keeps that file's bytes, with no
@@ -1229,16 +1765,7 @@ function removeFragments(content: string, key: string, path: string): string {
 
 function pruneContributions(stagedProject: string, harnessDir: string, key: string): void {
   const sidecar = join(harnessDataDir(stagedProject, harnessDir), `plugin-contrib-${key}.json`);
-  let records: Record<string, {
-    produces?: string[];
-    sensors?: string[];
-    // Compose records consumed artifacts as objects; the shape must match the
-    // compose hook's output or the strip matches nothing. See issue #1247.
-    consumes?: Array<string | { artifact: string; required: boolean; conditional_on?: string }>;
-    requires_stage?: string[];
-    required_sections?: string[];
-    required_sections_created?: boolean;
-  }> = {};
+  let records: Record<string, StageContribRecord> = {};
   if (existsSync(sidecar)) {
     try {
       const parsed = readJson(sidecar);
@@ -1259,28 +1786,8 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
   for (const path of composedFiles) {
     const before = readFileSync(path, "utf-8");
     const after = withFileLineEndings(before, (text) => {
-      let after = text;
       const record = records[basename(path, ".md")];
-      if (record) {
-        if (record.produces?.length) after = removeListValues(after, "produces", new Set(record.produces), false);
-        if (record.sensors?.length) after = removeListValues(after, "sensors", new Set(record.sensors), false);
-        if (record.consumes?.length) {
-          after = removeConsumes(
-            after,
-            new Set(record.consumes.map((entry) => typeof entry === "string" ? entry : entry.artifact)),
-          );
-        }
-        if (record.requires_stage?.length) after = removeListValues(after, "requires_stage", new Set(record.requires_stage), false);
-        if (record.required_sections?.length) {
-          after = removeListValues(
-            after,
-            "required_sections",
-            new Set(record.required_sections),
-            record.required_sections_created === true,
-          );
-        }
-      }
-      return removeFragments(after, key, path);
+      return removeFragments(record ? stripRecordedAdds(text, record) : text, key, path);
     });
     if (after !== before) writeFileSync(path, after);
   }
@@ -1333,6 +1840,7 @@ function replaceOwnedPluginPrimitives(
   harnessDir: string,
   key: string,
   ownership: OwnershipRecord | undefined,
+  syncAgain: string,
 ): Set<string> {
   const ownedPaths = new Set<string>();
   if (!ownership) return ownedPaths;
@@ -1343,8 +1851,7 @@ function replaceOwnedPluginPrimitives(
     if (!lstatSync(target).isFile() || !recordedDigestMatches(target, file.sha256)) {
       throw new Error(
         `cannot sync ${key}: owned path changed since composition: ${file.path}. To keep your ` +
-          `change, move that file somewhere else, then run \`${aidlcInvocation()} engine plugin sync\` ` +
-          `again; it puts the plugin's own version back.`,
+          `change, move that file somewhere else, then run \`${syncAgain}\` again; it puts the plugin's own version back.`,
       );
     }
   }
@@ -1484,17 +1991,68 @@ export function projectDiffPlan(
   return { schemaVersion: 1, root: projectDir, operations };
 }
 
+// An upgrade can write the shipped core stages over the composed ones and keep
+// the plugin's stamp and files (a copy of the new runtime over the project), or
+// nest its fragments (2.11.0's own refresh merge). Only the recorded additions
+// show it, so compose again. A sidecar or target that cannot be read is
+// doctor's to name: composing again would not mend it.
+function recordedAdditionGone(projectDir: string, harnessDir: string, key: string): boolean {
+  const sidecar = join(harnessDataDir(projectDir, harnessDir), `plugin-contrib-${key}.json`);
+  if (!existsSync(sidecar)) return false;
+  let records: unknown;
+  try {
+    records = readJson(sidecar);
+  } catch {
+    return false;
+  }
+  if (!isPlainObject(records)) return false;
+  const harnessRoot = join(projectDir, harnessDir);
+  const sources = contributionSources(
+    join(harnessRoot, "aidlc-common", "stages"),
+    join(harnessRoot, "agents"),
+    projectDir,
+    runtimeHarnessName(projectDir, harnessDir),
+    harnessDir,
+  );
+  return Object.entries(records).some(([target, value]) => {
+    if (contributionRecordError(value) !== undefined) return false;
+    const record = value as StageContribRecord;
+    const source = sources.get(target);
+    if (!source) return false;
+    if (recordedContributionGaps(source.parsed, source.content, key, record).gone) return true;
+    return (source.twins ?? []).some((twin) =>
+      twin.content !== null &&
+      recordedContributionGaps({}, twin.content, key, { fragments: record.fragments }, twin.toml ? tomlFragmentText : undefined)
+        .gone
+    );
+  });
+}
+
 function compositionIsCurrent(
   plugin: InstalledPlugin,
   evidence: ProjectEvidence,
   projectDir: string,
+  harnessDir: string,
+  selection: ReadonlySet<string> | null,
 ): boolean {
   const stamp = evidence.stamps.get(plugin.key);
   if (
     !stamp ||
     stamp.version !== plugin.version ||
-    stamp.sourceHash !== plugin.sourceHash
+    stamp.sourceHash !== plugin.sourceHash ||
+    (stamp.base ?? null) !== (plugin.base?.name ?? null)
   ) return false;
+  // Turning a plugin off strips what it merged into core stages and removes
+  // its record of that, so when it is on again its compose merges it back. A
+  // plugin that is off merges nothing, so it has no record to miss.
+  if (
+    (selection === null || selection.has(plugin.key)) &&
+    regularFiles(join(plugin.root, "contributions")).some((path) => path.endsWith(".md")) &&
+    !existsSync(join(harnessDataDir(projectDir, harnessDir), `plugin-contrib-${plugin.key}.json`))
+  ) return false;
+  if ((selection === null || selection.has(plugin.key)) && recordedAdditionGone(projectDir, harnessDir, plugin.key)) {
+    return false;
+  }
   const ownership = evidence.ownership.get(plugin.key);
   if (!ownership) return false;
   return ownership.files.every((file) => {
@@ -1527,13 +2085,275 @@ export function announcePrune(
   );
 }
 
-export async function syncPlugins(
+// A base not composed in this run: here at a version (installed, or composed
+// in this project), with the base it builds on itself, if any, and its stage
+// slugs when known; missing and why; or turned off for this project, which
+// pauses the plugin built on it.
+export type BaseView =
+  | { kind: "here"; version: string; where: string; base: string | null; stages: ReadonlySet<string> | null }
+  | { kind: "missing"; why: "not-installed" | "host-disabled" | "not-in-project" }
+  | { kind: "off" };
+
+export type HeldPlugin = { plugin: InstalledPlugin; reason: string };
+
+// What a held line needs to know about the host: its name, and which harness
+// this is, for when a waiting plugin composes.
+export type HeldWords = { hostName: string; harnessName: string };
+
+// Claude Code and Codex list the plugins installed in them; no other host does.
+export function hostListsPlugins(harnessName: string): boolean {
+  return harnessName === "claude" || harnessName === "codex";
+}
+
+// The command that composes `key` again, for every line that sends the
+// person to sync. A host that lists its plugins (Claude Code, Codex) finds
+// them itself; elsewhere sync needs the plugin's folder (`root`, when the
+// tool knows it). A tool acts on its own harness folder and the native aidlc
+// on the first one installed here, so where the target `harnessDir` is another
+// it is told which, as the plugin hooks do.
+export function syncCommand(
+  harnessName: string,
+  key: string,
+  root: string | null,
+  harnessDir = runtimeHarnessDir(),
+): string {
+  const invocation = aidlcInvocation();
+  const first = discoverProjectHarnesses(runtimeProjectDir())[0]?.harnessDir;
+  const named = harnessDir !== runtimeHarnessDir() ||
+    (invocation === "aidlc" && first !== undefined && first !== harnessDir);
+  const sync = `${invocation} engine plugin sync${named ? ` --harness-dir ${harnessDir}` : ""}`;
+  if (hostListsPlugins(harnessName)) return sync;
+  return `${sync} --plugin-root ${root === null ? `<${key}'s folder>` : quoteCommandArgument(root)}`;
+}
+
+// The line for a sync with no plugin folder on a host with no plugin list:
+// one command for each plugin composed here. Null where the host lists them.
+export function noPluginListLine(projectDir: string, harnessDir: string): string | null {
+  const harnessName = runtimeHarnessName(projectDir, harnessDir);
+  if (hostListsPlugins(harnessName)) return null;
+  const keys = [...projectEvidence(projectDir, harnessDir).stamps.keys()].sort();
+  const commands = (keys.length > 0 ? keys : ["plugin"]).map((key) => `\`${syncCommand(harnessName, key, null)}\``);
+  return `Nothing synced: this tool keeps no list of your plugins, so name each one's folder: ${commands.join(", ")}.`;
+}
+
+// When a plugin composes next, for every line that says so. Kiro CLI and
+// opencode run no compose hook (opencode reads no hooks.json), so there it is
+// when the person runs sync, after `base` when the plugin waits for one.
+export function nextCompose(
+  harnessName: string,
+  key: string,
+  root: string | null,
+  base?: string,
+  harnessDir?: string,
+): string {
+  if (harnessName !== "kiro" && harnessName !== "opencode") return "at the next session start";
+  return `when you run \`${syncCommand(harnessName, key, root, harnessDir)}\`` +
+    (base === undefined ? "" : ` after ${base} composes`);
+}
+
+type HeldProblem =
+  | { kind: "missing"; base: PluginDependency; why: "not-installed" | "host-disabled" | "not-in-project" }
+  | { kind: "deep"; base: string; baseOfBase: string }
+  | { kind: "range"; base: PluginDependency; version: string; where: string }
+  | { kind: "include"; base: string; version: string; missing: Array<{ scope: string; stages: string[] }> }
+  | Exclude<InstalledPlugin["baseProblem"], null>;
+
+// Every held line is built here: what happened to the plugin, why, and the
+// one step that is the person's.
+function heldLine(
+  plugin: InstalledPlugin,
+  problem: HeldProblem,
+  composedVersion: string | null,
+  words: HeldWords,
+): string {
+  const key = plugin.key;
+  const needs = (base: PluginDependency): string =>
+    base.range === null ? base.name : `${base.name} ${base.range}`;
+  const listed = (items: string[]): string =>
+    items.length < 3 ? items.join(" and ") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+  const it = problem.kind === "include" &&
+      new Set(problem.missing.flatMap(({ stages }) => stages)).size > 1
+    ? "them"
+    : "it";
+  const [why, step] = problem.kind === "missing"
+    ? problem.why === "not-installed"
+      ? [`needs ${needs(problem.base)}, which is not installed`, `Install ${problem.base.name} and ${key} composes at the next session start.`]
+      : problem.why === "host-disabled"
+        ? [`needs ${problem.base.name}, which is disabled in ${words.hostName}`, `Enable ${problem.base.name} there, or disable ${key}.`]
+        : [
+          `needs ${needs(problem.base)}, which this project does not have yet`,
+          `If ${problem.base.name} is installed, ${key} composes ${nextCompose(words.harnessName, key, plugin.root, problem.base.name)}; if not, install ${problem.base.name}.`,
+        ]
+    : problem.kind === "deep"
+      ? [`builds on ${problem.base}, which builds on ${problem.baseOfBase}`, "A plugin can build only on a base that builds on core alone."]
+      : problem.kind === "range"
+        ? [
+          `needs ${needs(problem.base)}, and ${problem.base.name} ${problem.version} is ${problem.where}`,
+          `Install a ${problem.base.name} version in that range, or a version of ${key} made for ${problem.base.name} ${problem.version}.`,
+        ]
+        : problem.kind === "include"
+        ? [
+          `needs ${listed(problem.missing.map(({ scope, stages }) => `${listed(stages)} for its ${scope} scope`))}, which ${problem.base} ${problem.version} does not have`,
+          `Install a version of ${problem.base} that has ${it}, or a version of ${key} made for ${problem.base} ${problem.version}.`,
+        ]
+        : problem.kind === "bases"
+          ? [`names more than one base plugin (${problem.names.join(", ")})`, "A plugin builds on core and at most one base."]
+          : [
+            `has a .aidlc-plugin/plugin.json that cannot be read (${
+              problem.kind === "shape" ? "dependencies must be an array of non-empty strings" : problem.reason
+            })`,
+            "Its author needs to fix that file.",
+          ];
+  if (composedVersion === null) return `${key} is not composed: it ${why}. ${step}`;
+  // The composed scopes are this version's, so they run without what is missing.
+  const without = problem.kind === "include"
+    ? `, so ${listed(problem.missing.map(({ scope }) => scope))} run${problem.missing.length === 1 ? "s" : ""} without ${it}`
+    : "";
+  if (composedVersion === plugin.version) return `${key} stays as composed before, but it ${why}${without}. ${step}`;
+  return `${key} stays at ${composedVersion} as composed before: ${key} ${plugin.version} ${why}. ${step}`;
+}
+
+// The stages a plugin's scopes include that its base does not have, by scope.
+function missingIncludes(
+  plugin: InstalledPlugin,
+  baseStages: ReadonlySet<string>,
+): Array<{ scope: string; stages: string[] }> {
+  return scopeIncludes(plugin.root).flatMap(({ scope, stages }) => {
+    const missing = stages.filter((stage) => !baseStages.has(stage));
+    return missing.length > 0 ? [{ scope, stages: missing }] : [];
+  });
+}
+
+// A composed base's stage slugs, from where its owned stage files are
+// installed (<harness>/aidlc-common/stages/<phase>/<slug>.md).
+function ownedStageSlugs(ownership: OwnershipRecord | undefined): ReadonlySet<string> | null {
+  if (!ownership) return null;
+  return new Set(ownership.files.flatMap((file) => {
+    const match = file.path.match(/(?:^|\/)aidlc-common\/stages\/[^/]+\/([^/]+)\.md$/);
+    return match ? [match[1]] : [];
+  }));
+}
+
+// Layering is shallow on purpose: a plugin builds on core and at most one base
+// plugin, and a base builds on core alone. So the order is the bases, then the
+// plugins built on them, alphabetical within each, as sync always ran. A
+// plugin whose base is missing, outside its range, built on another plugin or
+// without a stage the plugin's scopes include, or whose manifest cannot say,
+// is held with its line and never resolved; one whose base is turned off for
+// this project is paused, and nothing is said.
+export function layerOrder(
+  plugins: InstalledPlugin[],
+  baseView: (name: string) => BaseView,
+  composedVersion: (key: string) => string | null,
+  words: HeldWords,
+): { ordered: InstalledPlugin[]; held: HeldPlugin[]; paused: InstalledPlugin[] } {
+  const sorted = [...plugins].sort((left, right) => left.key.localeCompare(right.key));
+  const inRun = new Map(sorted.map((plugin) => [plugin.key, plugin]));
+  const bases: InstalledPlugin[] = [];
+  const layered: InstalledPlugin[] = [];
+  const held: HeldPlugin[] = [];
+  const paused: InstalledPlugin[] = [];
+  for (const plugin of sorted) {
+    const base = plugin.base;
+    if (plugin.baseProblem === null && base === null) {
+      bases.push(plugin);
+      continue;
+    }
+    let problem: HeldProblem | null = plugin.baseProblem;
+    if (problem === null && base !== null) {
+      const own = inRun.get(base.name);
+      const view: BaseView = own
+        ? {
+          kind: "here",
+          version: own.version,
+          where: "installed",
+          base: own.base?.name ?? null,
+          stages: new Set(pluginStageSlugs(own.root)),
+        }
+        : baseView(base.name);
+      if (view.kind === "off") {
+        paused.push(plugin);
+        continue;
+      }
+      problem = view.kind === "missing"
+        ? { kind: "missing", base, why: view.why }
+        : view.base !== null
+          ? { kind: "deep", base: base.name, baseOfBase: view.base }
+          : base.range !== null && !Bun.semver.satisfies(view.version, base.range)
+            ? { kind: "range", base, version: view.version, where: view.where }
+            : null;
+      if (problem === null && view.kind === "here" && view.stages !== null) {
+        const missing = missingIncludes(plugin, view.stages);
+        if (missing.length > 0) problem = { kind: "include", base: base.name, version: view.version, missing };
+      }
+    }
+    if (problem === null) layered.push(plugin);
+    else held.push({ plugin, reason: heldLine(plugin, problem, composedVersion(plugin.key), words) });
+  }
+  return { ordered: [...bases, ...layered], held, paused };
+}
+
+// A session start runs every installed plugin's sync hook at the same time.
+// Each sync copies the project, composes on the copy, then diffs the copy
+// against the live project; a sync that commits in between makes the next
+// diff undo its work (a lost update) or fail with "source changed after
+// planning". One lock per project, held from the copy to the commit, keeps a
+// sync from planning against a project another sync is about to change.
+// The name sets this lock apart from the workspace and intent locks. It is
+// passed as both intent and space so the lock never reads the active space.
+const SYNC_LOCK_NAME = "plugin-sync";
+
+// The audit lock is per process and not re-entrant, so syncs started from one
+// process wait for each other here before they contend for it across processes.
+const SYNC_QUEUE = new Map<string, Promise<unknown>>();
+
+export function syncPlugins(
   projectDir: string,
   argv: string[],
   harnessDir = runtimeHarnessDir(projectDir),
+): ReturnType<typeof syncPluginsLocked> {
+  const key = resolve(projectDir);
+  const run = (SYNC_QUEUE.get(key) ?? Promise.resolve()).then(() =>
+    syncPluginsExclusive(projectDir, argv, harnessDir)
+  );
+  const tail = run.catch(() => undefined);
+  SYNC_QUEUE.set(key, tail);
+  void tail.then(() => {
+    if (SYNC_QUEUE.get(key) === tail) SYNC_QUEUE.delete(key);
+  });
+  return run;
+}
+
+async function syncPluginsExclusive(
+  projectDir: string,
+  argv: string[],
+  harnessDir: string,
+): ReturnType<typeof syncPluginsLocked> {
+  if (!acquireAuditLock(projectDir, undefined, undefined, SYNC_LOCK_NAME, SYNC_LOCK_NAME)) {
+    throw new Error("plugin sync could not acquire the project plugin-sync lock");
+  }
+  try {
+    return await syncPluginsLocked(projectDir, argv, harnessDir);
+  } finally {
+    releaseAuditLock(projectDir, SYNC_LOCK_NAME, SYNC_LOCK_NAME);
+  }
+}
+
+async function syncPluginsLocked(
+  projectDir: string,
+  argv: string[],
+  harnessDir: string,
   lockRetry = 0,
-): Promise<{ synced: string[]; pruned: string[]; operations: number }> {
-  const harness = harnessKind(harnessDir);
+): Promise<{
+  synced: string[];
+  pruned: string[];
+  operations: number;
+  held: HeldRecord[];
+  newlyHeld: HeldRecord[];
+  paused: string[];
+  superseded: string[];
+}> {
+  const harness = harnessKind(harnessDir, projectDir);
   const inventory = currentRoots().length > 0
     ? currentRootInventory(harness)
     : discoverPluginInventory(harnessDir, projectDir);
@@ -1542,6 +2362,8 @@ export async function syncPlugins(
   const prune = argv.includes("--prune-missing");
   let plugins: InstalledPlugin[];
   let missing: string[] = [];
+  let hostList: InstalledPlugin[] | null = null;
+  const superseded = supersededLines(inventory);
   if (inventory.capability === "full-inventory") {
     if (inventory.invalid.length > 0) {
       throw new Error(
@@ -1551,6 +2373,7 @@ export async function syncPlugins(
     plugins = inventory.installed.filter((plugin) =>
       plugin.enabled && (selection === null || selection.has(plugin.key))
     );
+    hostList = inventory.installed;
     const installed = new Set(inventory.installed.map((plugin) => plugin.key));
     missing = [...new Set([
       ...evidence.stamps.keys(),
@@ -1568,19 +2391,99 @@ export async function syncPlugins(
     }
     plugins = inventory.installed;
     if (plugins.length === 0) {
-      throw new Error("host inventory unavailable; run sync through an installed plugin's host hook");
+      throw new Error(
+        noPluginListLine(projectDir, harnessDir) ?? "host inventory unavailable; run sync through an installed plugin's host hook",
+      );
+    }
+    // An old aidlc-<name> copy's own hook leaves the composing to the rebuilt
+    // copy the host also lists, so the two never take turns.
+    if (plugins.some(hostListsUnderAidlcName)) {
+      const host = discoverPluginInventory(harnessDir, projectDir);
+      const rebuilt = new Set((host.superseded ?? []).map((old) => old.key));
+      plugins = plugins.filter((plugin) => !hostListsUnderAidlcName(plugin) || !rebuilt.has(plugin.key));
+    }
+    // A host hook names only its own plugin. Where the host lists its
+    // plugins, the installed base that plugin builds on composes first in the
+    // same run, so the order of the hosts' hooks does not matter.
+    if (plugins.some((plugin) => plugin.base !== null)) {
+      const host = discoverPluginInventory(harnessDir, projectDir);
+      if (host.capability === "full-inventory") {
+        hostList = host.installed;
+        const run = new Map(plugins.map((plugin) => [plugin.key, plugin]));
+        for (const plugin of plugins) {
+          const found = host.installed.find((candidate) =>
+            candidate.key === plugin.base?.name && candidate.enabled &&
+            (selection === null || selection.has(candidate.key))
+          );
+          if (found && !run.has(found.key)) run.set(found.key, found);
+        }
+        plugins = [...run.values()];
+      }
     }
   }
+  const harnessName = runtimeHarnessName(projectDir, harnessDir);
+  const order = layerOrder(
+    plugins,
+    (name) => {
+      if (selection !== null && !selection.has(name)) return { kind: "off" };
+      const stamp = evidence.stamps.get(name);
+      const composed: BaseView | null = stamp
+        ? {
+          kind: "here",
+          version: stamp.version,
+          where: "composed in this project",
+          base: stamp.base ?? null,
+          stages: ownedStageSlugs(evidence.ownership.get(name)),
+        }
+        : null;
+      if (hostList === null) return composed ?? { kind: "missing", why: "not-in-project" };
+      const found = hostList.find((plugin) => plugin.key === name);
+      if (!found) return { kind: "missing", why: "not-installed" };
+      return composed ?? { kind: "missing", why: "host-disabled" };
+    },
+    (key) => evidence.stamps.get(key)?.version ?? null,
+    {
+      hostName: harness === "codex" ? "Codex" : "Claude Code",
+      harnessName,
+    },
+  );
+  plugins = order.ordered;
+  const held: HeldRecord[] = order.held.map(({ plugin, reason }) => ({
+    schemaVersion: 1,
+    name: plugin.key,
+    version: plugin.version,
+    reason,
+  }));
+  const heldNow = new Set(held.map((record) => record.name));
+  // A record goes once its plugin composes; where the host lists its plugins,
+  // also once the plugin is gone or no longer held.
+  const staleHeld = [...evidence.held.keys()].filter((key) =>
+    plugins.some((plugin) => plugin.key === key) ||
+    (inventory.capability === "full-inventory" && !heldNow.has(key))
+  );
+  // Said once: sync says a held plugin when its record is new or changed;
+  // plugin list and doctor keep showing it.
+  const newlyHeld = held.filter((record) => {
+    const recorded = evidence.held.get(record.name);
+    return recorded?.version !== record.version || recorded.reason !== record.reason;
+  });
+  const paused = order.paused.map((plugin) => plugin.key);
   const pruned = prune ? missing : [];
   announcePrune(argv, pruned);
   if (
     pruned.length === 0 &&
-    plugins.every((plugin) => compositionIsCurrent(plugin, evidence, projectDir))
+    staleHeld.length === 0 &&
+    newlyHeld.length === 0 &&
+    plugins.every((plugin) => compositionIsCurrent(plugin, evidence, projectDir, harnessDir, selection))
   ) {
     return {
       synced: plugins.map((plugin) => plugin.key).sort(),
       pruned: [],
       operations: 0,
+      held,
+      newlyHeld,
+      paused,
+      superseded,
     };
   }
   const stagingRoot = mkdtempSync(join(tmpdir(), "aidlc-plugin-sync-"));
@@ -1596,6 +2499,7 @@ export async function syncPlugins(
           harnessDir,
           plugin.key,
           evidence.ownership.get(plugin.key),
+          syncCommand(harnessName, plugin.key, plugin.root),
         ),
       );
       // The staged copy carries the previous record. A current compose hook
@@ -1615,6 +2519,12 @@ export async function syncPlugins(
         refuseLinkOnTheWay(projectDir, assertOwnedPath(projectDir, file.path));
       }
       pruneOwnedPlugin(stagedProject, harnessDir, key, evidence.ownership.get(key));
+    }
+    const stagedData = harnessDataDir(stagedProject, harnessDir);
+    for (const key of staleHeld) rmSync(join(stagedData, `plugin-held-${key}.json`), { force: true });
+    for (const record of held) {
+      mkdirSync(stagedData, { recursive: true });
+      writeFileSync(join(stagedData, `plugin-held-${record.name}.json`), `${JSON.stringify(record, null, 2)}\n`);
     }
     const claimedPaths = new Set<string>();
     for (const plugin of plugins) {
@@ -1648,27 +2558,49 @@ export async function syncPlugins(
         ) {
           await Bun.sleep(50);
         }
-        return syncPlugins(projectDir, argv, harnessDir, lockRetry + 1);
+        return syncPluginsLocked(projectDir, argv, harnessDir, lockRetry + 1);
       }
       const refreshedEvidence = projectEvidence(projectDir, harnessDir);
       if (
         pruned.length === 0 &&
         plugins.every((plugin) =>
-          compositionIsCurrent(plugin, refreshedEvidence, projectDir)
+          compositionIsCurrent(plugin, refreshedEvidence, projectDir, harnessDir, selection)
         )
       ) {
         return {
           synced: plugins.map((plugin) => plugin.key).sort(),
           pruned: [],
           operations: 0,
+          held,
+          newlyHeld: [],
+          paused,
+          superseded,
         };
       }
       throw error;
+    }
+    // A sync that exits 0 must leave its plugins composed; a silent miss would
+    // leave a blocking gate sensor absent with nothing to tell the user.
+    if (pruned.length === 0) {
+      const committed = projectEvidence(projectDir, harnessDir);
+      const uncomposed = plugins
+        .filter((plugin) => !compositionIsCurrent(plugin, committed, projectDir, harnessDir, selection));
+      if (uncomposed.length > 0) {
+        const again = [...new Set(uncomposed.map((plugin) => syncCommand(harnessName, plugin.key, plugin.root)))];
+        throw new Error(
+          `plugin sync finished but ${uncomposed.map((plugin) => plugin.key).join(", ")} ` +
+            `${uncomposed.length === 1 ? "is" : "are"} not composed; run ${again.join(", then ")} again`,
+        );
+      }
     }
     return {
       synced: plugins.map((plugin) => plugin.key).sort(),
       pruned,
       operations: plan.operations.length,
+      held,
+      newlyHeld,
+      paused,
+      superseded,
     };
   } finally {
     rmSync(stagingRoot, { recursive: true, force: true });
@@ -1705,9 +2637,16 @@ export async function main(argv: string[]): Promise<void> {
       return;
     }
     if (command === "sync") {
+      // Kiro IDE's folder-dropped hook names its root here: /bin/sh and
+      // cmd.exe, the shells Kiro runs hooks in, set a variable differently.
+      if (flags["plugin-root"]) process.env.AIDLC_PLUGIN_ROOT = resolve(flags["plugin-root"]);
+      // A plugin hook names its harness too.
+      if (flags["harness-dir"]) pinNamedHarness(projectDir, flags["harness-dir"]);
       const result = await syncPlugins(projectDir, argv);
       const message = `plugin sync complete: ${result.synced.length} plugin(s)` +
-        (result.pruned.length > 0 ? `; pruned ${result.pruned.length} missing plugin(s)` : "");
+        (result.pruned.length > 0 ? `; pruned ${result.pruned.length} missing plugin(s)` : "") +
+        result.newlyHeld.map((record) => `\n${record.reason}`).join("") +
+        result.superseded.map((line) => `\n${line}`).join("");
       if (flags.json === "true") process.stdout.write(jsonEnvelope(0, message, result));
       else if (flags.quiet !== "true") process.stdout.write(`${message}\n`);
       return;

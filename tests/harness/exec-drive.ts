@@ -14,7 +14,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "./fixtures.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
+import { STOP_HOOK_PROBE_ENV } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codexExecTimeout, codexPersonTurn, recordCodexExec } from "./codex-test-lifecycle.ts";
+import { turnEvidence } from "./codex-turn-evidence.ts";
+import { type AgentWords, keepAgentWords, keepLegAudit } from "./leg-evidence.ts";
+import type { CapturedToolResult } from "./sdk-drive.ts";
 import { LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
@@ -210,6 +214,94 @@ export function execCodexResume(proj: string, home: string, prompt: string): Exe
   return runCodex(proj, home, codexResumeArgs(prompt), prompt);
 }
 
+const ENGINE_STEP = /engine orchestrate|aidlc-orchestrate\.ts/;
+
+/** The shell commands of one `codex exec --json` turn, in the shape the SDK drive captures tool calls. */
+export function codexToolResults(stdout: string): CapturedToolResult[] {
+  const results: CapturedToolResult[] = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let event: { type?: unknown; item?: { id?: unknown; type?: unknown; command?: unknown; aggregated_output?: unknown; exit_code?: unknown } };
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const item = event.item;
+    if (event.type !== "item.completed" || item?.type !== "command_execution") continue;
+    results.push({
+      toolName: "Bash", input: { command: String(item.command ?? "") }, toolUseId: String(item.id ?? ""),
+      resultText: String(item.aggregated_output ?? ""), isError: item.exit_code !== 0,
+    });
+  }
+  return results;
+}
+
+/** What Codex told the person in one `codex exec --json` turn: its finished agent messages. */
+export function codexReplies(stdout: string): AgentWords[] {
+  const replies: AgentWords[] = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let event: { type?: unknown; item?: { type?: unknown; text?: unknown } };
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const text = event.item?.text;
+    if (event.type !== "item.completed" || event.item?.type !== "agent_message" || typeof text !== "string" || !text.trim()) continue;
+    replies.push({ text });
+  }
+  return replies;
+}
+
+export interface CodexJsonTurn extends ExecResult {
+  stdout: string;
+  sessionId?: string;
+  results: CapturedToolResult[];
+}
+
+/**
+ * One person turn as `codex exec --json`: a new session, or `sessionId`
+ * resumed. Recorded like every live exec (recordCodexExec: a decision no turn
+ * backs, or the sandbox refusing AI-DLC's own command, fails it). Codex can
+ * keep a finished command's output as empty (a nightly saw it); when the turn's last
+ * engine step came back empty, the engine's read-only Stop-hook probe says what
+ * it hands out now, and that stands in for it.
+ */
+export function codexJsonTurn(proj: string, home: string, prompt: string, label: string, sessionId?: string): CodexJsonTurn {
+  const argv = codexHeadlessArgs(...(sessionId ? ["exec", "resume", "--json", sessionId, prompt] : ["exec", "--json", prompt]));
+  const turn = codexPersonTurn(proj, prompt);
+  const r = spawnSync(CODEX_BIN, argv, {
+    cwd: proj,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, CODEX_HOME: home },
+    timeout: codexExecTimeout(TEST_TIMEOUT_MS),
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const stdout = r.stdout ?? "";
+  const result = {
+    rc: r.status ?? -1, stdout, out: `${stdout}\n${r.stderr ?? ""}\n${r.error?.message ?? ""}`, signal: r.signal, error: r.error?.message,
+  };
+  recordCodexExec(label, proj, [CODEX_BIN, ...argv], result, turn);
+  const results = codexToolResults(stdout);
+  const last = results.findLast((t) => ENGINE_STEP.test(String(t.input.command)));
+  if (last && !last.isError && last.resultText === "") {
+    const probe = spawnSync("bun", [join(".codex", "tools", "aidlc.ts"), "engine", "orchestrate", "next", "--resume"], {
+      cwd: proj, encoding: "utf-8", env: { ...process.env, CODEX_HOME: home, [STOP_HOOK_PROBE_ENV]: "1" },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "Codex engine probe" }),
+    });
+    if (probe.status === 0) {
+      results.push({
+        toolName: "Bash", input: { command: "engine orchestrate next --resume (read-only probe for an empty capture)" },
+        toolUseId: "probe", resultText: probe.stdout ?? "", isError: false,
+      });
+    }
+  }
+  return { ...result, results, ...(result.rc === 0 ? { sessionId: turnEvidence(stdout).sessionId } : {}) };
+}
+
 // A scratch install: dist/copilot copied verbatim (dotfiles included: the
 // engine at .aidlc/, the shell at .github/), then git-initialized (Copilot
 // resolves repo context from the git root).
@@ -236,6 +328,8 @@ export function runCopilot(proj: string, args: string): ExecResult {
       timeout: remainingOperationTimeoutMs(TEST_TIMEOUT_MS, { phase: "Copilot exec" }),
     },
   );
+  keepAgentWords("copilot", copilotReplies(result.stdout ?? "", false));
+  keepLegAudit(proj);
   return {
     rc: result.status ?? -1,
     out: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
@@ -257,31 +351,100 @@ export interface CopilotTurnOptions {
   /** Where Copilot writes the session's token usage. */
   usageFile?: string;
   timeoutMs?: number;
+  /** Print the turn as JSON events (one per line), which `copilotToolResults` reads. */
+  json?: boolean;
+  /**
+   * Hand the line over on stdin, not as `-p <line>`: no shell or launcher sees
+   * it, so it arrives as typed. On Windows the CLI is an npm `.cmd` launcher,
+   * and Bun refuses an argument with a double quote for one.
+   */
+  stdin?: boolean;
+}
+
+/** The argv and stdin of one Copilot CLI turn for `line`. */
+export function copilotTurnCommand(line: string, options: CopilotTurnOptions): { argv: string[]; input?: string } {
+  return {
+    argv: [
+      ...(options.stdin ? [] : ["-p", line]), "-s", "--no-remote", "--allow-all-tools",
+      ...(options.resume ? ["--resume", options.sessionId] : ["--session-id", options.sessionId]),
+      ...(options.usageFile ? ["--usage-output-file", options.usageFile] : []),
+      ...(options.json ? ["--output-format", "json"] : []),
+    ],
+    ...(options.stdin ? { input: line } : {}),
+  };
 }
 
 // One person turn in a named Copilot CLI session: the typed line rides the
 // prompt as it is (`/aidlc ...` or a reply), so AI-DLC's hooks see what the
 // person typed. --allow-all-tools as in runCopilot.
 export function copilotTurn(proj: string, line: string, options: CopilotTurnOptions): ExecResult {
+  const { argv, input } = copilotTurnCommand(line, options);
   const result = spawnSync(
     COPILOT_BIN,
-    [
-      "-p", line, "-s", "--no-remote", "--allow-all-tools",
-      ...(options.resume ? ["--resume", options.sessionId] : ["--session-id", options.sessionId]),
-      ...(options.usageFile ? ["--usage-output-file", options.usageFile] : []),
-    ],
+    argv,
     {
       cwd: proj,
       encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
+      ...(input === undefined ? { stdio: ["ignore", "pipe", "pipe"] as const } : { input, stdio: ["pipe", "pipe", "pipe"] as const }),
       env: { ...process.env, PWD: proj, COPILOT_HOME: options.copilotHome },
       timeout: remainingOperationTimeoutMs(options.timeoutMs ?? TEST_TIMEOUT_MS, { phase: "Copilot turn" }),
+      // A JSON turn prints an event per streamed token: several MB for one stage.
+      maxBuffer: 64 * 1024 * 1024,
     },
   );
+  keepAgentWords("copilot", copilotReplies(result.stdout ?? "", options.json === true));
+  keepLegAudit(proj);
   return {
     rc: result.status ?? -1,
-    out: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+    out: `${result.stdout ?? ""}\n${result.stderr ?? ""}${result.error ? `\n${result.error.message}` : ""}`,
   };
+}
+
+/** What Copilot told the person in one turn: the lead's finished messages of a JSON turn, or the printed reply. */
+export function copilotReplies(stdout: string, json: boolean): AgentWords[] {
+  if (!json) return stdout.trim() ? [{ text: stdout.trim() }] : [];
+  const replies: AgentWords[] = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let event: { type?: unknown; timestamp?: unknown; data?: { content?: unknown; parentToolCallId?: unknown } };
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const content = event.data?.content;
+    if (event.type !== "assistant.message" || event.data?.parentToolCallId || typeof content !== "string" || !content.trim()) continue;
+    replies.push({ ...(typeof event.timestamp === "string" ? { ts: event.timestamp } : {}), text: content });
+  }
+  return replies;
+}
+
+/**
+ * The shell commands of one `copilot --output-format json` turn (its `bash`
+ * tool, `powershell` on Windows), in the shape the SDK drive captures tool calls.
+ */
+export function copilotToolResults(stdout: string): CapturedToolResult[] {
+  const commands = new Map<string, string>();
+  const results: CapturedToolResult[] = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let event: { type?: unknown; data?: { toolCallId?: unknown; arguments?: { command?: unknown }; success?: unknown; result?: { content?: unknown } } };
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const id = String(event.data?.toolCallId ?? "");
+    if (event.type === "tool.execution_start" && typeof event.data?.arguments?.command === "string") {
+      commands.set(id, event.data.arguments.command);
+    } else if (event.type === "tool.execution_complete" && commands.has(id)) {
+      results.push({
+        toolName: "Bash", input: { command: commands.get(id)! }, toolUseId: id,
+        resultText: String(event.data?.result?.content ?? ""), isError: event.data?.success === false,
+      });
+    }
+  }
+  return results;
 }
 
 export interface OpencodeProject {
@@ -300,6 +463,87 @@ export function setupOpencodeProject(): OpencodeProject {
   cpSync(OPENCODE_DIST, proj, { recursive: true });
   initializeGit(proj);
   return { proj, root };
+}
+
+/**
+ * One `opencode run` turn for a line the person typed: `/aidlc ...` runs the
+ * shipped command with the words after it, each word its own argument
+ * (`opencode run` quotes an argument that holds a space, so a whole line would
+ * arrive in quotation marks). Any other line goes to the session as it is, on
+ * stdin, which `opencode run` reads as the message: on Windows the npm launcher
+ * is a .cmd file, and Bun refuses an argument with a quotation mark for one.
+ */
+export function opencodeRunCommand(line: string, sessionId?: string): { argv: string[]; input?: string } {
+  const command = /^\/aidlc(?:\s|$)/.test(line);
+  const words = command ? line.replace(/^\/aidlc\s*/, "").split(/\s+/).filter(Boolean) : [];
+  return {
+    argv: [
+      "run", ...(sessionId ? ["-s", sessionId] : []), ...(command ? ["--command", "aidlc"] : []),
+      "-m", OPENCODE_MODEL, "--format", "json", ...(words.length ? ["--", ...words] : []),
+    ],
+    ...(command ? {} : { input: line }),
+  };
+}
+
+/** The session and tool calls of one `opencode run --format json` turn, in the shape the SDK drive captures tool calls. */
+export function opencodeToolResults(stdout: string): { sessionId?: string; results: CapturedToolResult[] } {
+  let sessionId: string | undefined;
+  const results: CapturedToolResult[] = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let event: { type?: unknown; sessionID?: unknown; part?: { tool?: unknown; callID?: unknown; state?: { status?: unknown; input?: Record<string, unknown>; output?: unknown; error?: unknown } } };
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (sessionId === undefined && typeof event.sessionID === "string") sessionId = event.sessionID;
+    const state = event.part?.state;
+    if (event.type !== "tool_use" || !state) continue;
+    results.push({
+      toolName: event.part?.tool === "bash" ? "Bash" : String(event.part?.tool), input: state.input ?? {},
+      toolUseId: String(event.part?.callID ?? ""), resultText: String(state.output ?? state.error ?? ""), isError: state.status === "error",
+    });
+  }
+  return { sessionId, results };
+}
+
+/** What opencode told the person in one turn: the text parts of a `--format json` turn, or the printed reply. */
+export function opencodeReplies(stdout: string, json: boolean): AgentWords[] {
+  if (!json) return stdout.trim() ? [{ text: stdout.trim() }] : [];
+  const replies: AgentWords[] = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let event: { type?: unknown; timestamp?: unknown; part?: { type?: unknown; text?: unknown } };
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (event.type !== "text" || typeof event.part?.text !== "string" || !event.part.text.trim()) continue;
+    replies.push({ ...(typeof event.timestamp === "number" ? { ts: new Date(event.timestamp).toISOString() } : {}), text: event.part.text });
+  }
+  return replies;
+}
+
+/** One person turn as `opencode run --format json`: a new session, or `sessionId` continued. */
+export function opencodeTurn(proj: string, line: string, options: { sessionId?: string; timeoutMs?: number } = {}): ExecResult & { stdout: string } {
+  const { argv, input } = opencodeRunCommand(line, options.sessionId);
+  const result = spawnSync(OPENCODE_BIN, argv, {
+    cwd: proj,
+    encoding: "utf-8",
+    ...(input === undefined ? { stdio: ["ignore", "pipe", "pipe"] as const } : { input, stdio: ["pipe", "pipe", "pipe"] as const }),
+    env: { ...process.env, PWD: proj },
+    timeout: remainingOperationTimeoutMs(options.timeoutMs ?? TEST_TIMEOUT_MS, { phase: "opencode turn" }),
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  keepAgentWords("opencode", opencodeReplies(result.stdout ?? "", true));
+  keepLegAudit(proj);
+  return {
+    rc: result.status ?? -1,
+    stdout: result.stdout ?? "",
+    out: `${result.stdout ?? ""}\n${result.stderr ?? ""}${result.error ? `\n${result.error.message}` : ""}`,
+  };
 }
 
 // `--command aidlc` invokes the shipped .opencode/command/aidlc.md; the
@@ -323,6 +567,8 @@ export function runOpencode(proj: string, args: string[]): ExecResult {
       timeout: remainingOperationTimeoutMs(TEST_TIMEOUT_MS, { phase: "opencode exec" }),
     },
   );
+  keepAgentWords("opencode", opencodeReplies(result.stdout ?? "", false));
+  keepLegAudit(proj);
   return {
     rc: result.status ?? -1,
     out: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,

@@ -366,7 +366,7 @@ function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean, sp
   expect(blocks()).toHaveLength(blocksBefore + (allowed ? 0 : 1));
   if (allowed) {
     // Relaxed says it carried on in one line; off records the row and says nothing.
-    if (speaks) expect(out).toContain("Continuing past the plan-approval check");
+    if (speaks) expect(out).toContain("Continuing past the plan re-approval check");
     else expect(out).not.toContain("Continuing past");
     expect(err).not.toContain('"ask_type":"guard-recovery"');
     const notice = notices().at(-1)!;
@@ -808,6 +808,8 @@ describe("a parallel batch's writes judged from the parent", () => {
   const stoodAside = (pd: string) => readAuditShardEvents(pd).filter((row) =>
     row.event === "GUARD_STOOD_ASIDE" && auditBlockField(row.block, "Guard") === "plan-approval").length;
   const REFUSAL = "cannot select one approval target";
+  // A write seen only in the main checkout waits for the Units' landings, which check it.
+  const HELD = "the main checkout changes only by their landings";
 
   test("the helper's write in its prepared worktree passes; a write to the main checkout or a stray folder waits", () => {
     const pd = fixture();
@@ -840,7 +842,7 @@ describe("a parallel batch's writes judged from the parent", () => {
     // The main checkout stays as approved while the batch is out.
     const main = write(pd, join(pd, "src", `${UNIT}.ts`));
     expect(main.code, `${main.out}\n${main.err}`).toBe(2);
-    expect(main.err).toContain(REFUSAL);
+    expect(main.err).toContain(HELD);
     expect(blocked(pd)).toBe(before + (win32 ? 2 : 1));
 
     // A folder under .aidlc/worktrees that prepare did not create carries no approval.
@@ -850,6 +852,39 @@ describe("a parallel batch's writes judged from the parent", () => {
     expect(strayWrite.code, `${strayWrite.out}\n${strayWrite.err}`).toBe(2);
     expect(strayWrite.err).toContain(REFUSAL);
     expect(blocked(pd)).toBe(before + (win32 ? 3 : 2));
+  });
+
+  // With the fence on, the main checkout waits for the Units' landings, which check it: the
+  // refusal says so, where the person's approval stands, and when a change there can be made.
+  test("a main-checkout write while the Units are built in parallel says why it waits and when it can be made", () => {
+    const pd = fixture();
+    succeeded(prepare(pd));
+    publish(pd);
+    for (const target of [join(pd, "README.md"), join(pd, "src", `${UNIT}.ts`)]) {
+      const held = write(pd, target);
+      expect(held.code, `${target}\n${held.out}\n${held.err}`).toBe(2);
+      expect(held.err).toContain(
+        "While the Units are built in parallel, the main checkout changes only by their landings, so each landing " +
+          "can check it. The plan for Units alpha is already approved",
+      );
+      expect(held.err).toContain("A change the person asks for in the main checkout can be made once Code Generation is over.");
+      expect(held.err).toContain("aidlc-orchestrate.ts next");
+      expect(held.err).not.toContain("ambiguous or stale");
+      expect(held.err).not.toContain("directive kind");
+    }
+  });
+
+  // A write in a Unit's own worktree is never the main checkout's, whatever its approval says.
+  test("a worker's write in its worktree after its plan changed is not told the main checkout waits", () => {
+    const pd = fixture();
+    succeeded(prepare(pd));
+    publish(pd);
+    const worker = child(pd);
+    revise(worker, false);
+    const changed = write(pd, join(worker, "src", `${UNIT}.ts`));
+    expect(changed.code, `${changed.out}\n${changed.err}`).toBe(2);
+    expect(changed.err).not.toContain("main checkout");
+    expect(changed.err).toContain(REFUSAL);
   });
 
   test("each listed Unit's worker writes in its own worktree and in no other", () => {
@@ -940,7 +975,7 @@ describe("a parallel batch's writes judged from the parent", () => {
     for (const command of refusedProbes) {
       const refused = parentHook(pd, "Bash", { command });
       expect(refused.code, `${command}\n${refused.out}\n${refused.err}`).toBe(2);
-      expect(refused.err).toContain(REFUSAL);
+      expect(refused.err).toContain(HELD);
     }
     expect(blocked(pd)).toBe(before + refusedProbes.length);
   });
@@ -981,16 +1016,16 @@ describe("a parallel batch's writes judged from the parent", () => {
     expect(blocked(pd)).toBe(before);
 
     // Seen writing in the main checkout (its code or its record), or in two worktrees: refused at once.
-    const waits = [
-      `bun test > test.log 2>&1; echo "exit=$?"`,
-      `cd ${alpha} && bun test; echo "exit=$?" > ${sh(join(pd, "src", "alpha.ts"))}`,
-      `echo "$X" > ${sh(join(recordDir(pd)!, "notes.md"))}`,
-      `echo "$X" > ${alpha}/a.txt; echo "$X" > ${beta}/b.txt`,
+    const waits: Array<[string, string]> = [
+      [`bun test > test.log 2>&1; echo "exit=$?"`, HELD],
+      [`cd ${alpha} && bun test; echo "exit=$?" > ${sh(join(pd, "src", "alpha.ts"))}`, HELD],
+      [`echo "$X" > ${sh(join(recordDir(pd)!, "notes.md"))}`, HELD],
+      [`echo "$X" > ${alpha}/a.txt; echo "$X" > ${beta}/b.txt`, REFUSAL],
     ];
-    for (const command of waits) {
+    for (const [command, why] of waits) {
       const refused = parentHook(pd, "Bash", { command });
       expect(refused.code, `${command}\n${refused.out}\n${refused.err}`).toBe(2);
-      expect(refused.err).toContain(REFUSAL);
+      expect(refused.err).toContain(why);
     }
     expect(blocked(pd)).toBe(before + waits.length);
 
@@ -1104,7 +1139,7 @@ describe("a parallel batch's writes judged from the parent", () => {
     const main = write(pd, source);
     expect(main.code, `${main.out}\n${main.err}`).toBe(0);
     expect(stoodAside(pd)).toBe(asideBefore + 1);
-    if (mode === "relaxed") expect(main.out).toContain("Continuing past the plan-approval check");
+    if (mode === "relaxed") expect(main.out).toContain("Continuing past the plan re-approval check");
     else expect(main.out).not.toContain("Continuing past");
     const changedLowered = write(pd, join(worker, "src", `${UNIT}.ts`));
     expect(changedLowered.code, `${changedLowered.out}\n${changedLowered.err}`).toBe(0);
@@ -1121,7 +1156,7 @@ describe("a parallel batch's writes judged from the parent", () => {
     publish(pd);
     const raised = write(pd, source);
     expect(raised.code).toBe(2);
-    expect(raised.err).toContain(REFUSAL);
+    expect(raised.err).toContain(HELD);
   });
 });
 
@@ -1196,5 +1231,62 @@ describe("prepare with plan approval off", () => {
     expect(codeGenerationExecutionAllowed(worker, TARGET)).toBe(true);
     expect(readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toHaveLength(0);
     expect(readFileSync(join(codeGenerationRecordDir(pd, UNIT), "code-generation-questions.md"), "utf-8")).toBe(questions);
+  });
+
+  // Nobody approved this plan, so a change after the engine's record is no
+  // reason to ask for an approval: strict built one Unit at a time carries on,
+  // and so does the parallel build. Asking would loop, since `next` never asks.
+  test("under strict, a pull after the plan-approval-off record still sets the Units up, with no approval asked", () => {
+    const pd = fixture(false, false);
+    const statePath = seededStateFile(pd);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      "- **Guard Policy**: strict (set by you)\n",
+      "- **Guard Policy**: strict (set by you)\n- **Plan Approval**: off (set by you)\n",
+    ));
+    publish(pd);
+    const directive = { kind: "invoke-swarm", stage: STAGE, units: [UNIT] } as unknown as Parameters<typeof publishPlanApprovalSkip>[1];
+    expect(publishPlanApprovalSkip(pd, directive)).toBe(true);
+    const questionsPath = join(codeGenerationRecordDir(pd, UNIT), "code-generation-questions.md");
+    const questions = readFileSync(questionsPath, "utf-8");
+    writeFileSync(join(pd, "src", "pulled.ts"), "export const pulled = 1;\n");
+    git(pd, ["add", "src/pulled.ts"]);
+    git(pd, ["commit", "-qm", "a pull"]);
+
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    expect(JSON.parse(prepared.out).change_notices).toEqual([
+      "1 file changed since this plan was approved: src/pulled.ts. Building alpha now.",
+    ]);
+    const worker = child(pd);
+    expect(existsSync(join(worker, "src", "pulled.ts"))).toBe(true);
+    expect(starts(pd)).toHaveLength(1);
+    expect(codeGenerationExecutionAllowed(worker, TARGET)).toBe(true);
+    const rows = () => readAuditShardEvents(pd);
+    expect(rows().filter((row) => row.event === "CHANGE_ACCEPTED")).toHaveLength(1);
+    expect(rows().filter((row) => row.event === "PLAN_APPROVAL_SKIPPED")).toHaveLength(1);
+    expect(rows().filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toHaveLength(0);
+    expect(rows().filter((row) => row.event === "DECISION_RECORDED" &&
+      auditBlockField(row.block, "Checkpoint") === "plan-approval")).toHaveLength(0);
+    expect(readFileSync(questionsPath, "utf-8")).toBe(questions);
+
+    // The way on leads on: `next` hands back the batch that is out, asking nothing.
+    const after = tool(pd, "aidlc-orchestrate.ts", ["next", "--project-dir", pd]);
+    succeeded(after);
+    expect(JSON.parse(after.out)).toMatchObject({ kind: "invoke-swarm", units: [UNIT] });
+
+    // The batch is sent back, the engine builds the new attempt's plan without
+    // asking again, and another pull lands before the batch is picked up again.
+    completeAndReject(pd);
+    expect(publishPlanApprovalSkip(pd, directive)).toBe(true);
+    expect(rows().filter((row) => row.event === "PLAN_APPROVAL_SKIPPED")).toHaveLength(2);
+    writeFileSync(join(pd, "src", "later.ts"), "export const later = 1;\n");
+    git(pd, ["add", "src/later.ts"]);
+    git(pd, ["commit", "-qm", "another pull"]);
+    const resumed = prepare(pd, true);
+    expect(resumed.code, `${resumed.out}\n${resumed.err}`).toBe(0);
+    expect(JSON.parse(resumed.out).change_notices).toEqual([
+      "1 file changed since this plan was approved: src/later.ts. Building alpha now.",
+    ]);
+    expect(rows().filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toHaveLength(0);
   });
 });

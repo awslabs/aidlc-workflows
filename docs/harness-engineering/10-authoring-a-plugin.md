@@ -64,11 +64,12 @@ block:
 ```jsonc
 {
   "name": "test-pro",                 // == dir name; "core", "aidlc", and "aidlc-*" are reserved
-  "version": "0.1.0",                 // semver (dependency checks are deferred)
+  "version": "0.1.0",                 // semver
   "description": "Full-featured testing plugin — unit/branch coverage, functional, integration, regression, edge, and API positive+negative.",
   "author": { "name": "AWS AIDLC" },
-  "dependencies": ["core"],           // other plugins, e.g. ["compliance@^1.2.0"]
+  "dependencies": ["core"],           // core plus at most one base, e.g. ["core", "compliance@^1.2.0"]
   "aidlc": {
+    // "marketplace": "acme-aidlc-plugins",  // optional, your plugin's catalogue (below)
     "contributes": {                  // which subtrees this plugin ships
       "stages": "stages/",            // NEW stage files
       "overlays": "contributions/",   // CONTRIBUTION files (§3 — modify existing)
@@ -120,10 +121,9 @@ A plugin stage is an ordinary stage file (see
   `test-pro-integration-test-results`).
 
 The same logical plugin name must appear in every owned stage, scope, agent,
-and contribution. Compose derives that identity from the emitted host manifest
-(`aidlc-<name>` at the host layer, `<name>` in AIDLC frontmatter); content cannot
-rename or impersonate its package. A mismatch is skipped and recorded for
-`/aidlc --doctor`.
+and contribution. Compose takes that identity from the plugin's own manifest,
+which every build carries; content cannot rename or impersonate its package. A
+mismatch is skipped and recorded for `/aidlc --doctor`.
 
 `bundle:` was the pre-rename ownership key and is rejected with an error naming the fix - write `plugin:`. The word is reserved for a possible future collection-of-plugins concept.
 
@@ -367,6 +367,19 @@ projection remains deferred (doc 18 §9 Status).
   creates the native `.opencode/agents/` subagent twin and denies nested
   `task` delegation. See
   [Adding an Agent](03-adding-an-agent.md).
+  On Kiro IDE and Kiro CLI v3 (the `kiro-ide` projection), compose gives your
+  agent the tools, MCP servers and rules AI-DLC's own personas have, so leave
+  Kiro's `tools:` and `permissions:` out of the agent (Claude Code would read a
+  `tools:` line as its allowlist); your stages can dispatch it. Kiro asks the
+  person before the aidlc agent hands it work, until they pick Always allow, as
+  it asks before each MCP call (the aidlc agent allows only AI-DLC's own
+  personas by name). This needs a
+  plugin built with this release or later: rebuild it and drop it in again.
+  On Kiro CLI V2 (the `kiro` projection), a plugin's agent that a stage
+  dispatches needs a hand-written agent file, `.kiro/agents/<agent>.json`
+  (agent-v1 JSON, naming each MCP server it uses as `@<server>` in `tools`),
+  and a trust entry for it in `toolsSettings.subagent.trustedAgents` of
+  `.kiro/agents/aidlc.json`; on V3 and Kiro IDE it needs neither.
   On Kiro CLI, a natively dispatched plugin roster worker's hand-authored agent-v1 JSON must also include `file://aidlc/active-memory/**/*.md` (the engine's copy of the active space's memory, the same path on every install) in its `resources` array, resolving to at least one existing Markdown file, because plugin workers receive the same active-stage rules as core workers.
 - **Sensors.** Ship the manifest `sensors/aidlc-<id>.md` **and** its script under
   `tools/` (both — a manifest alone is discoverable but its script must live in
@@ -400,7 +413,13 @@ projection remains deferred (doc 18 §9 Status).
   the selected core/plugin set may claim it, and graph compilation rejects an
   ambiguous set. Membership for plugin-authored stages is their `scopes:`
   frontmatter list; a contribution's `adds.scopes` (§3) adds YOUR scope to an
-  existing core stage. See [Scopes](04-scopes.md).
+  existing core stage. A plugin built on a base runs the base's stages in its
+  own scope with `include_stages: [acme-1-intent-capture,
+  acme-3-code-generation]`: compile puts them in that scope's column only, and
+  the base's stages and scopes stay as they are. It names the base's stages
+  only. `include_stages` needs an AI-DLC release newer than 2.11.0; 2.11.0 and
+  earlier ignore it, so there the scope runs your own stages alone. See
+  [Scopes](04-scopes.md).
 
 ### Ship a doctor check
 
@@ -455,15 +474,23 @@ first-party `dist/plugins/<name>/<harness>/` trees, so its byte-parity guard als
 guards external builds. Publish the output to a git repo with semver tags and a
 `marketplace.json`; teams then install through the host's native commands.
 
+The host shows your plugin under the names you chose: the plugin is the
+manifest `name`, listed in a catalogue named by `aidlc.marketplace`, or by the
+plugin's own name when you leave that out. The `aidlc` namespace is AI-DLC's own
+(our plugins show as `aidlc-<name>` in the `aidlc-plugins` catalogue), so validate
+and build refuse a catalogue named `aidlc` or starting `aidlc-`, in any letter
+case: a second `aidlc-plugins` catalogue replaces ours in Claude Code. Each repository you
+publish needs its own catalogue name, because a host keeps one catalogue per name.
+
 ### Claude / Codex (host store)
 
 ```bash
 # teams run these in their host CLI:
 /plugin marketplace add <your-org>/<your-plugin-repo>    # Claude
-/plugin install aidlc-test-pro@<marketplace>             # Claude
+/plugin install acme-standards@acme-aidlc-plugins        # Claude
 
 codex plugin marketplace add <your-org>/<your-plugin-repo>   # Codex
-codex plugin add aidlc-test-pro@<marketplace>                # Codex
+codex plugin add acme-standards@acme-aidlc-plugins           # Codex
 ```
 
 A **SessionStart hook** (bundled in the emitted plugin) calls the same
@@ -498,8 +525,10 @@ aidlc engine plugin sync
 
 `plugin select` stages disabled-contribution removal, graph/grid compilation,
 runners, and generated tables before committing one project transaction;
-re-enabled contributions return on the next SessionStart sync. It refuses to
-disable a plugin needed by an active workflow. The
+re-enabled contributions return on the next SessionStart sync (on Kiro CLI and
+opencode, which run no compose hook, when you run
+`aidlc engine plugin sync --plugin-root <folder>` with the plugin's folder).
+It refuses to disable a plugin needed by an active workflow. The
 `PLUGIN_SELECTION_CHANGED` audit append is part of committed validation, so an
 audit failure rolls the whole selection back. `plugin list` is different: it
 compares host inventory with composition/ownership stamps and does not change
@@ -508,24 +537,24 @@ selection.
 ### Kiro (no store — folder-drop, then run the composer explicitly)
 
 ```bash
-# From the AIDLC source root, materialize the ignored local plugin projections:
-bun scripts/package.ts
-# Then copy the Kiro projection into the project:
-cp -r dist/plugins/<name>/kiro/. <project>/
+# Copy the Kiro projection's .kiro folder into the project; the plugin lands
+# in its own folder, .kiro/aidlc-plugins/<name>/, beside any other plugin:
+cp -r <projection>/.kiro <project>/
 # preferred when aidlc is on PATH:
-AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
+AIDLC_PLUGIN_ROOT="<project>/.kiro/aidlc-plugins/<name>" AIDLC_PROJECT_DIR="<project>" \
   AIDLC_HARNESS_DIR=.kiro aidlc engine plugin sync
 
 # fallback: run the composer explicitly:
-AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
-  AIDLC_HARNESS_DIR=.kiro bun "<plugin-root>/hooks/compose.ts"
+AIDLC_PLUGIN_ROOT="<project>/.kiro/aidlc-plugins/<name>" AIDLC_PROJECT_DIR="<project>" \
+  AIDLC_HARNESS_DIR=.kiro bun "<project>/.kiro/aidlc-plugins/<name>/hooks/compose.ts"
 # open in Kiro IDE or kiro-cli chat → /aidlc
 ```
 
 > **Kiro note.** Use the `kiro-ide` projection for Kiro IDE 1.x or Kiro CLI v3; its folder-drop
 > includes a `version: "v1"` `.kiro/hooks/aidlc-<plugin>-compose.json` SessionStart registration
-> that runs the cross-platform `hooks/aidlc-plugin-compose.ts` Bun launcher from
-> the workspace root. The `kiro` projection emits no hook registration,
+> that runs `aidlc engine plugin sync --harness-dir .kiro --plugin-root ./.kiro/aidlc-plugins/<name>` from the workspace root,
+> or that plugin folder's cross-platform `hooks/aidlc-plugin-compose.ts` Bun launcher where `aidlc` is not installed.
+> The `kiro` projection emits no hook registration,
 > so run one of the explicit composer commands above. Neither projection emits the
 > retired `.kiro.hook` plugin registration.
 
@@ -574,6 +603,7 @@ composing:
 ```bash
 bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root>
 bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root> --json
+bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root> --with <base-root>
 ```
 
 The tool is offline and standalone: `<plugin-root>` is the directory containing
@@ -590,13 +620,23 @@ Validation checks:
   filename, and plugin ownership;
 - scopes use `<plugin>-<name>.md`, match their frontmatter identity, declare a
   supported depth, and parse declared keywords as a non-empty block or flow
-  list;
+  list; `include_stages` names only your base's stages (never your own or a
+  core stage; a base's stage slugs start with its name, as compose requires),
+  and each is a warning that it is not checked unless `--with <base-root>`
+  names your checkout of the base, which must have it;
 - agents use `<plugin>-<role>-agent.md` and match their frontmatter identity;
 - no two plugin stages produce the same artifact across `produces` and
   `optional_produces`, even when no stage consumes it;
 - produced artifacts use the plugin-name prefix, stage bodies are non-empty,
   stage agent references resolve against the bundled core plus plugin roster,
-  and contribution targets resolve to bundled core stage slugs;
+  and contribution targets resolve to bundled core stage slugs. A plugin built
+  on a base can lead a stage with the base's agent: without the base's
+  checkout such an agent (`<base>-...`) is a warning that it is not checked;
+  `--with <base-root>` names your own checkout of the base, whose agents then
+  count, and must be the base your manifest names. A plugin that declares no
+  base and names a stage (`requires_stage`) or agent that is neither core's nor
+  its own fails with the one step: add the plugin that ships it to
+  `dependencies`;
 - authored plugin content uses regular files and directories; symlinks under
   stages, scopes, agents, contributions, sensors, knowledge, tools, or hooks
   are rejected instead of being silently omitted or followed;
@@ -654,7 +694,7 @@ that install:
 
 ```bash
 bun <tools-dir>/aidlc-plugin-test.ts <plugin-root> \
-  --install <project-root> [--harness <name>] [--json]
+  --install <project-root> [--harness <name>] [--with <base-root>] [--json]
 ```
 
 The tool validates and builds first, copies the selected install surfaces into
@@ -665,7 +705,9 @@ missing plugin node, or second-pass file change exits `1`. The live install is
 hashed before and after and is never a compose target.
 
 Pass `--harness` when the install is ambiguous, including `.kiro` (Kiro CLI vs
-Kiro IDE) and `.aidlc` (Copilot vs OpenCode). `--dist <version>` is reserved
+Kiro IDE) and `.aidlc` (Copilot vs OpenCode). For a plugin built on a base,
+`--with <base-root>` composes your checkout of the base into the candidate
+first, as sync composes bases first, so the install does not need the base. `--dist <version>` is reserved
 until RFC #722 milestone 2 defines a released runtime-bundle channel.
 
 1. **Content validation** is the always-on baseline. Run
@@ -744,10 +786,19 @@ test("plugin composes into a Claude install", () => {
   collide with core or another plugin — a collision is a compose error with
   attribution. (Method files are not a plugin contribution yet: the validator
   rejects `contributes.memory`.)
-- **Dependencies** *(⏳ deferred).* `dependencies` is designed to resolve a
-  `name@^x.y.z` constraint against the dependency's `version` with cycle
-  rejection, but **nothing reads the field yet** — declaring it has no effect
-  today (doc 18 §9 Status).
+- **One base at most.** A plugin builds on core and at most one base plugin:
+  `"dependencies": ["core", "acme@^1.2.0"]`. The base itself builds on core
+  alone. Sync composes the base first, so your stages can order after its
+  stages (`requires_stage`), read its artifacts, name its agents and run its
+  stages in your scopes (`include_stages`); check those with `--with
+  <base-root>`. `aidlc plugin create` writes `["core"]`, so add the base by
+  hand: until you do, validate and build stop on a stage or agent of another
+  plugin, which would otherwise compose only when the names happen to sort the
+  right way. If the installed base is missing, outside your range, builds
+  on another plugin or lacks a stage your scopes include, your plugin is not
+  composed (a version composed before stays as it was) and the person sees one
+  line saying why; everything else still composes. A second base, your own name, or a range npm cannot read fails
+  `aidlc plugin validate` (doc 18 §8).
 - **Additive only.** Contributions add — they cannot override or remove a core
   stage's fields, agent, or prose. (A genuine need to _change_ upstream behavior
   is a framework design decision, not a plugin concern.)

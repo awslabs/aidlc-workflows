@@ -47,6 +47,10 @@
             },
             {
               "classname": "native Bun terminal driver commands",
+              "name": "a pick on a lone menu goes into the drive's record of the person's turns in its own words"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
               "name": "an answered menu that repaints slowly or partially is not answered again"
             },
             {
@@ -68,6 +72,10 @@
             {
               "classname": "native Bun terminal driver commands",
               "name": "kill completes while its caller already holds the native session lock"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "Kiro's V3 offer at launch is answered Remind me later before the wait matches"
             },
             {
               "classname": "native Bun terminal driver commands",
@@ -423,6 +431,14 @@
             {
               "classname": "Claude onboarding profile isolation",
               "name": "without an override the legacy home-level config is still seeded additively"
+            },
+            {
+              "classname": "Kiro CLI's V3 offer at launch",
+              "name": "navigation takes Remind me later and refuses anything else"
+            },
+            {
+              "classname": "Kiro CLI's V3 offer at launch",
+              "name": "the offer is answered Remind me later and never Enter on another option"
             }
           ]
         },
@@ -902,6 +918,10 @@
             },
             {
               "classname": "native Bun terminal driver commands",
+              "name": "a pick on a lone menu goes into the drive's record of the person's turns in its own words"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
               "name": "an answered menu that repaints slowly or partially is not answered again"
             },
             {
@@ -923,6 +943,10 @@
             {
               "classname": "native Bun terminal driver commands",
               "name": "kill completes while its caller already holds the native session lock"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "Kiro's V3 offer at launch is answered Remind me later before the wait matches"
             },
             {
               "classname": "native Bun terminal driver commands",
@@ -1254,6 +1278,14 @@
             {
               "classname": "Claude onboarding profile isolation",
               "name": "without an override the legacy home-level config is still seeded additively"
+            },
+            {
+              "classname": "Kiro CLI's V3 offer at launch",
+              "name": "navigation takes Remind me later and refuses anything else"
+            },
+            {
+              "classname": "Kiro CLI's V3 offer at launch",
+              "name": "the offer is answered Remind me later and never Enter on another option"
             }
           ]
         },
@@ -1762,6 +1794,10 @@
             },
             {
               "classname": "native Bun terminal driver commands",
+              "name": "a pick on a lone menu goes into the drive's record of the person's turns in its own words"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
               "name": "an answered menu that repaints slowly or partially is not answered again"
             },
             {
@@ -1783,6 +1819,10 @@
             {
               "classname": "native Bun terminal driver commands",
               "name": "kill completes while its caller already holds the native session lock"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "Kiro's V3 offer at launch is answered Remind me later before the wait matches"
             },
             {
               "classname": "native Bun terminal driver commands",
@@ -2142,6 +2182,14 @@
             {
               "classname": "Claude onboarding profile isolation",
               "name": "without an override the legacy home-level config is still seeded additively"
+            },
+            {
+              "classname": "Kiro CLI's V3 offer at launch",
+              "name": "navigation takes Remind me later and refuses anything else"
+            },
+            {
+              "classname": "Kiro CLI's V3 offer at launch",
+              "name": "the offer is answered Remind me later and never Enter on another option"
             }
           ]
         },

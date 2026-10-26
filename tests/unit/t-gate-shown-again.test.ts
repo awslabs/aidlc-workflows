@@ -12,8 +12,9 @@
 //
 // The steps that show the gate again end the turn, until the person writes;
 // at an open gate whose reviewed work changed and is not on record, `next`
-// hands the gate's report first. A reply to the gate shown again still carries
-// the turn on into recording it (#2532).
+// hands the gate's report first. A pick at the gate shown again that the agent
+// leaves unrecorded (#2532) ends the attended turn too: the pick stays on
+// record, and the person's next message gets it recorded.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -25,8 +26,10 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   readAuditShardEvents,
+  personsWordsText,
   setGuardPolicyLine,
   turnEndMarkerPath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -172,14 +175,14 @@ function claudeTranscript(proj: string, command: string, picked?: string): strin
 describe("t-gate-shown-again", () => {
   for (const shownBy of ["next", "report"] as const) {
     for (const evidence of ["markers", "claude"] as const) {
-      test(`the gate shown again by ${shownBy} after the person's reply ends the turn (${evidence})${evidence === "claude" ? "; a pick at it carries on" : ""}`, async () => {
+      test(`the gate shown again by ${shownBy} after the person's reply ends the turn (${evidence})${evidence === "claude" ? "; a pick at it left unrecorded stays on record" : ""}`, async () => {
         const proj = project("off");
         openGate(proj);
         await personSays(proj, "review it again");
         const args = shownBy === "next" ? ["next"] : ["report", "--stage", STAGE, "--result", "awaiting-approval"];
         const shown = step(proj, args);
         if (shownBy === "next") expect(shown).toMatchObject({ kind: "run-stage", gate_only: true });
-        else expect(shown.message).toBe(`Stage "${STAGE}" is already awaiting approval; gate evidence revalidated.`);
+        else expect(shown.message).toStartWith(`Stage "${STAGE}" is already awaiting approval; gate evidence revalidated.`);
         const transcript = evidence === "claude"
           ? claudeTranscript(proj, `bun .claude/tools/aidlc.ts engine orchestrate ${args.join(" ")}`)
           : undefined;
@@ -190,13 +193,17 @@ describe("t-gate-shown-again", () => {
 
         // The person picks Approve at the gate shown again (a question box's
         // reply, no new prompt) and the agent ends its turn with nothing
-        // recorded: their choice is owed (#2532). A reply typed as a new
-        // message and answered with no engine call ends as a chat, as before.
+        // recorded (#2532). The attended turn ends with no line; their pick is
+        // on record for their next message.
         if (evidence === "claude") {
           await personSays(proj, "Approve");
           const owed = stop(proj, claudeTranscript(proj, `bun .claude/tools/aidlc.ts engine orchestrate ${args.join(" ")}`, "Approve"));
           expect(owed.status, owed.out).toBe(0);
-          expect(owed.stdout).toContain(CARRY_ON);
+          expect(owed.stdout).not.toContain(CARRY_ON);
+          const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1)?.block ?? "";
+          const id = /\*\*Message Id\*\*: (\S+)/.exec(turn)?.[1] ?? "";
+          const kept = readMessage(proj, id);
+          expect(kept && personsWordsText(kept.text)).toBe("Approve");
         }
       });
     }

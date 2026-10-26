@@ -3,20 +3,24 @@
  * the engine owns when to present a checkpoint and which Unit is the skeleton.
  */
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import type { Writable } from "node:stream";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readSync, rmdirSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { proveMessage, readMessage } from "./aidlc-message-store.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
-import { APPROVAL_GATE_CHOICES, exactOptionPick } from "./aidlc-reply-reader.ts";
+import { APPROVAL_GATE_CHOICES } from "./aidlc-reply-reader.ts";
 import {
   activeIntentUuid,
   attemptEventDefinitelyBefore,
   constructionSkeletonOn,
   auditBlockField,
   authorizedVerificationCommand,
+  markPersonLinesHeard,
+  addPendingPersonLines,
   verificationCommandRecovery,
   type VerificationCommand,
   claimAttemptFields,
@@ -38,26 +42,29 @@ import {
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
   changeRequestWords,
+  personsWordsText,
+  protectedResponseFields,
   readProtectedResponse,
   requireProtectedResponse,
   protectedTargetDigest,
   gateWordsSinceUnitReview,
+  protectedReplyFloor,
+  isoTimestamp,
   markProtectedQuestionReplied,
   mintProtectedQuestion,
+  PROTECTED_RESPONSE_REPLIES_MAX,
   PROTECTED_RESPONSE_WORDS_MAX_CHARS,
   writeProtectedResponse,
   isAutonomousMode,
   constructionCheckpointsApply,
   isNonAnswer,
   latestMainWorkflowStageRunFloorForProject,
-  latestPersonTurn,
   leftOutLine,
   reviewCheckOffer,
   loadStageGraph,
   maximalAttemptEvents,
   personMayApproveOverUnfinishedReview,
   parseCheckboxes,
-  personSpokeSinceGate,
   readAuditShardEvents,
   readRegularFileNoFollowOrThrow,
   readStateFile,
@@ -76,7 +83,6 @@ import {
   reviewAttemptEventMatchesCurrentClaim,
   reviewAttemptWindow,
   reviewRequestBindingFromBlock,
-  selfAttributedDecisionMarker,
   setField,
   sortAttemptEvents,
   sourceListingChangedPaths,
@@ -102,9 +108,27 @@ import {
   rawFingerprintForm,
   committedTextSha256,
 } from "./aidlc-lib.ts";
+import { unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
+import type { ApprovalDecider } from "./aidlc-review-brief.ts";
 
 
 export type ConstructionCheckpointKind = "unit" | "skeleton";
+
+// The fields an approval row records for the open review findings of the
+// stages and Units it covers, from the review ledger's one writer. The caller
+// hands it in: aidlc-review-brief.ts imports this module.
+export type ApprovalFindingDispositions = (
+  stages: readonly string[],
+  units: readonly string[],
+  decider: ApprovalDecider,
+) => Record<string, string>;
+
+// The fields a Request Changes row records for the review findings the person
+// rejected or reopened, from the same writer.
+export type RejectedFindingDispositions = (
+  stages: readonly string[],
+  units: readonly string[],
+) => Record<string, string>;
 
 export function constructionCheckpointKind(
   stateContent: string,
@@ -199,6 +223,9 @@ export interface ConstructionCheckpoint {
   /** From ask: what the person left out of this Unit's build, said once just
    *  before the question. */
   left_out?: string;
+  /** From ask: the files the person brought that this build changed or
+   *  deleted, with the way back, said once just before the question. */
+  changed_files?: string;
   /** From ask: the one check offered when a stage's review passes are spent
    *  and its reviewed work changed after the last review, said with
    *  `left_out` just before the question. */
@@ -212,6 +239,142 @@ export interface ConstructionCheckpoint {
 
 const PROOF_DIR = ".aidlc-construction-checkpoints";
 const CHECK_TIMEOUT_MS = EXTENDED_SUBPROCESS_TIMEOUT_MS;
+
+/** A finite execution budget; Node timers cannot represent larger values. */
+export function verificationTimeoutMs(value: number = CHECK_TIMEOUT_MS): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 2_147_483_647) {
+    throw new Error("checkpoint --timeout-ms must be an integer between 1 and 2147483647 milliseconds.");
+  }
+  return value;
+}
+
+interface VerificationProcessResult {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  error: Error | null;
+}
+
+// Own one newly-created process group, never discover processes by their name.
+// Retire it before reading outputs or taking the post-check evidence snapshot.
+async function runVerificationProcess(
+  command: string, args: string[], cwd: string, outFd: number, errFd: number, timeoutMs: number,
+): Promise<VerificationProcessResult> {
+  // A watcher in the check's own group reads a private pipe from the verifier.
+  // SIGKILL cannot be caught: EOF on that pipe retires the group even when the
+  // verifier disappears. A normal shell exit disarms it; no PID polling/reuse.
+  let retiring = false;
+  const watched = process.platform !== "win32";
+  // Ignore forwarded stops before forking, so the watcher inherits protection;
+  // restore the shell's defaults before executing the person's command.
+  const watcher = [
+    'aidlc_group=$$; trap "" INT TERM HUP;',
+    '(if ! read -r aidlc_done <&3; then kill -s KILL -- "-$aidlc_group"; fi) >/dev/null 2>&1 &',
+    'trap - INT TERM HUP; exec "$@" 3<&-',
+  ].join(" ");
+  const child = spawn(watched ? "/bin/sh" : command, watched ? ["-c", watcher, "aidlc-check", command, ...args] : args, {
+    cwd, detached: watched, stdio: watched ? ["ignore", outFd, errFd, "pipe"] : ["ignore", outFd, errFd],
+    windowsHide: true, windowsVerbatimArguments: process.platform === "win32",
+  });
+  const control = watched ? child.stdio[3] as Writable | null : null;
+  if (watched) {
+    // The group can close the pipe while we are retiring it.
+    control?.on("error", () => {});
+    child.on("exit", () => { if (!retiring) control?.end("done\n"); });
+  }
+  let error: Error | null = null;
+  let timedOut = false;
+  let interrupted: NodeJS.Signals | null = null;
+  let closed = false;
+  let cleanup: Promise<string | null> = Promise.resolve(null);
+  const completed = new Promise<VerificationProcessResult>((resolve) => {
+    child.on("error", (failure) => { error = failure; });
+    child.on("close", (status, signal) => {
+      closed = true;
+      resolve({ status, signal, error });
+    });
+  });
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  let stalled!: (result: VerificationProcessResult) => void;
+  const retirementLimit = new Promise<VerificationProcessResult>((resolve) => { stalled = resolve; });
+  const retire = (signal: NodeJS.Signals) => {
+    if (retiring || closed || child.pid === undefined) return;
+    retiring = true;
+    watchdog = setTimeout(() => stalled({ status: null, signal: null,
+      error: new Error("verification process did not close") }), 4_000);
+    const pid = child.pid;
+    cleanup = (async () => {
+      if (process.platform === "win32") {
+        // Keep the root alive until taskkill has enumerated its owned tree.
+        return await new Promise<string | null>((resolve) => {
+          const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+          const ceiling = setTimeout(() => { killer.kill(); child.kill("SIGKILL"); resolve("taskkill did not finish"); }, 2_000);
+          killer.on("error", (failure) => { clearTimeout(ceiling); child.kill("SIGKILL"); resolve(failure.message); });
+          killer.on("close", (code) => { clearTimeout(ceiling); if (code !== 0) child.kill("SIGKILL"); resolve(code === 0 ? null : `taskkill exited ${code}`); });
+        });
+      }
+      try { process.kill(-pid, signal); }
+      catch (failure) {
+        if ((failure as NodeJS.ErrnoException).code !== "ESRCH") {
+          child.kill("SIGKILL");
+          return String(failure);
+        }
+      }
+      const started = Date.now();
+      const deadline = started + 2_000;
+      let forced = signal === "SIGKILL";
+      do {
+        try { process.kill(-pid, 0); }
+        catch (failure) {
+          return (failure as NodeJS.ErrnoException).code === "ESRCH" ? null : String(failure);
+        }
+        // Forward the person's stop first, then retire children that ignore it.
+        if (!forced && Date.now() - started >= 250) {
+          try { process.kill(-pid, "SIGKILL"); }
+          catch (failure) {
+            return (failure as NodeJS.ErrnoException).code === "ESRCH" ? null : String(failure);
+          }
+          forced = true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      } while (Date.now() < deadline);
+      return "the owned process group still exists";
+    })().catch((failure: unknown) => String(failure));
+  };
+  const stopSignals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  const handlers = stopSignals.map((signal) => ({ signal, listener: () => {
+    interrupted ??= signal;
+    retire(signal);
+  } }));
+  if (process.platform !== "win32") {
+    for (const { signal, listener } of handlers) process.on(signal, listener);
+  }
+  const timer = setTimeout(() => {
+    if (retiring || closed) return;
+    timedOut = true;
+    retire("SIGKILL");
+  }, timeoutMs);
+  // Both a timeout and a person's stop wait for the same bounded retirement.
+  try {
+    const result = await Promise.race([completed, retirementLimit]);
+    if (!closed) child.unref();
+    if (!timedOut && interrupted === null) return result;
+    const incomplete = await cleanup;
+    const reason = interrupted !== null
+      ? `Verification command interrupted by ${interrupted}.`
+      : `Verification command timed out after ${timeoutMs} ms.`;
+    return {
+      ...result,
+      error: new Error(reason +
+        (incomplete || !closed ? ` Process cleanup incomplete: ${incomplete ?? "the shell did not close"}.` : " Owned process cleanup completed.")),
+    };
+  } finally {
+    clearTimeout(timer);
+    if (watchdog !== undefined) clearTimeout(watchdog);
+    for (const { signal, listener } of handlers) process.removeListener(signal, listener);
+    control?.destroy();
+  }
+}
+
 const CHECK_OUTPUT_TAIL_BYTES = 2048;
 const EMPTY_OUTPUT_SHA256 = createHash("sha256").update("").digest("hex");
 
@@ -427,6 +590,8 @@ interface Snapshot {
   /** The stages whose unfinished review the person let the Unit go on
    *  without, which its verification records. */
   waivedStages: string[];
+  /** The message the person said to go on without the review in, as the latest verification recorded it. */
+  waiverMessage: string | null;
 }
 
 interface ApprovedStageEvidence {
@@ -1149,6 +1314,7 @@ function snapshot(
   const unfinishedStages = stages.filter((slug) => notFinished.includes(slug) || endedUnfinished.includes(slug));
   return {
     root, rows, state, verificationCommand: shared.verificationCommand, accepted,
+    waiverMessage: verification ? auditBlockField(verification.block, "Message Id") : null,
     approvedEvidence: JSON.stringify(approvedEvidence),
     overAllowed: rereview?.unfinished !== undefined && unfinishedMayGoOn && overAllowed(),
     waivedStages: notFinished,
@@ -1236,8 +1402,9 @@ function requireReady(current: Snapshot): void {
         : ` The ${reviewsNamed([step.stage])} for ${result.unit} ` +
           `${step.unfinished === "no-verdict" ? "did not finish" : "is NOT-READY with a pass left"}. ` +
           (current.overAllowed
-            ? `If the person said to approve ${result.unit} as it is (their words since the last question), verify ` +
-              `with --over-unfinished-review; otherwise finish the review: ${finish}.`
+            ? `If the person said to approve ${result.unit} as it is, verify with --over-unfinished-review ` +
+              "--message <id>, the id of the message they said it in; " +
+              `otherwise finish the review: ${finish}.`
             : `Finish it first, without asking the person: ${finish}.`);
     throw new Error(`Construction checkpoint is not ready: ${result.errors.join(" ")}${rereview}`);
   }
@@ -1280,19 +1447,27 @@ function outputTail(output: Buffer | null): string {
   );
 }
 
-export function verifyConstructionCheckpoint(
+export async function verifyConstructionCheckpoint(
   projectDir: string,
   unit: string,
   kind: ConstructionCheckpointKind,
-  options: { overUnfinishedReview?: boolean } = {},
-): ConstructionCheckpoint {
+  options: { overUnfinishedReview?: boolean; timeoutMs?: number; message?: string } = {},
+): Promise<ConstructionCheckpoint> {
+  // The person's "approve it as it is": the message the agent names
+  // (--message), proved, is what lets the Unit go on without its review.
+  let over: string | null = null;
+  if (options.overUnfinishedReview === true && options.message !== undefined) {
+    const proof = proveMessage(projectDir, options.message, "request", { request: true });
+    if ("refusal" in proof) throw new Error(proof.refusal);
+    over = proof.message.id;
+  }
   // A check that formats or regenerates the Unit's files changes what it
   // checked, so it runs once more against the files as they are now.
-  const over = options.overUnfinishedReview === true;
-  const first = verifyOnce(projectDir, unit, kind, false, over);
+  const timeoutMs = verificationTimeoutMs(options.timeoutMs);
+  const first = await verifyOnce(projectDir, unit, kind, false, over, timeoutMs);
   if (!first.rerun) return first.result;
   // The line about an accepted change is said once, on whichever run made it.
-  const second = verifyOnce(projectDir, unit, kind, true, over).result;
+  const second = (await verifyOnce(projectDir, unit, kind, true, over, timeoutMs)).result;
   const notices = [...(first.result.change_notices ?? []), ...(second.change_notices ?? [])];
   return notices.length > 0 ? { ...second, change_notices: notices } : second;
 }
@@ -1301,16 +1476,16 @@ const CHECK_KEPT_CHANGING =
   "The check changed this Unit's files each time it ran, so no one version of them passed. " +
   "Use a check that leaves the files as they are, then verify again.";
 
-function verifyOnce(
+async function verifyOnce(
   projectDir: string,
   unit: string,
   kind: ConstructionCheckpointKind,
   secondRun: boolean,
-  overUnfinishedReview: boolean,
-): { result: ConstructionCheckpoint; rerun: boolean } {
-  // The agent passes on the person's "approve it as it is"; their words since
-  // the last decision are what let the Unit go on without its review.
-  const personAllows = overUnfinishedReview && personSpokeSinceGate(projectDir, { requests: true });
+  // The message the person said to approve it as it is in, proved; null when they said nothing of it now.
+  overUnfinishedReview: string | null,
+  timeoutMs: number,
+): Promise<{ result: ConstructionCheckpoint; rerun: boolean }> {
+  const personAllows = overUnfinishedReview !== null;
   const before = locked(projectDir, () => {
     withdrawProtectedQuestions(projectDir, "*");
     const current = snapshot(projectDir, unit, kind, undefined, undefined, personAllows);
@@ -1352,18 +1527,14 @@ function verifyOnce(
   const outputDir = mkdtempSync(join(tmpdir(), "aidlc-check-"));
   const outPath = join(outputDir, "stdout");
   const errPath = join(outputDir, "stderr");
-  let check: ReturnType<typeof spawnSync>;
+  let check: VerificationProcessResult;
   let stdout: ReturnType<typeof capturedOutput>;
   let stderr: ReturnType<typeof capturedOutput>;
   try {
     const outFd = openSync(outPath, "w");
     const errFd = openSync(errPath, "w");
     try {
-      check = spawnSync(command, args, {
-        cwd: projectDir, timeout: CHECK_TIMEOUT_MS,
-        stdio: ["pipe", outFd, errFd], killSignal: "SIGKILL", windowsHide: true,
-        windowsVerbatimArguments: process.platform === "win32",
-      });
+      check = await runVerificationProcess(command, args, projectDir, outFd, errFd, timeoutMs);
     } finally {
       closeSync(outFd);
       closeSync(errFd);
@@ -1411,6 +1582,8 @@ function verifyOnce(
     proof.verified = passed && proof.error === null && proof.evidence_unchanged;
     writeRecordFileNoFollow(before.root, proofRelativePath(unit, kind), `${JSON.stringify(proof, null, 2)}\n`);
     if (after.root !== before.root) throw new Error("Active intent changed during Construction verification.");
+    // The waiver it records stands on the message the person said it in: named now, or carried from the last one.
+    const waiverMessage = overUnfinishedReview ?? before.waiverMessage;
     appendAuditEntryUnlocked("CHECKPOINT_VERIFICATION_RECORDED", {
       Unit: unit,
       Kind: kind,
@@ -1425,6 +1598,7 @@ function verifyOnce(
       ...(before.waivedStages.length > 0 ? {
         "Review Not Finished": JSON.stringify(Object.fromEntries(before.waivedStages
           .map((stage) => [stage, before.result.run_floors[stage]]))),
+        ...(waiverMessage ? { "Message Id": waiverMessage } : {}),
       } : {}),
       ...claimAttemptFields(projectDir, unit),
     }, projectDir);
@@ -1490,42 +1664,60 @@ export function askConstructionCheckpoint(
     // The person may have answered while the Unit's review ran: their words
     // typed in this chat after it was asked for and before any other question
     // was asked (gateWordsSinceUnitReview), read before this question's own
-    // row, are its reply, kept as a reply typed after it is.
+    // row, are its reply, kept as a reply typed after it is, for the conductor
+    // to read.
     const earlier = gateWordsSinceUnitReview(projectDir, session, unit, current.result.stages);
     withdrawProtectedQuestions(projectDir, session);
     appendAuditEntryUnlocked("DECISION_RECORDED", {
       Checkpoint: "Construction Unit Approval", Unit: unit, Kind: kind,
       Stage: current.result.stages.at(-1)!, Fingerprint: current.result.fingerprint,
-      Session: session, Options: "Approve,Request Changes",
+      Session: session, Options: APPROVAL_GATE_CHOICES.join(","),
       // What the person is shown, so a change before their answer is said
       // once instead of asking again (relaxed and off).
       "Asked Evidence": current.approvedEvidence, "Run floors": JSON.stringify(current.result.run_floors),
     }, projectDir);
     const question = mintProtectedQuestion(projectDir, {
-      kind: "checkpoint-approval", session, target: approvalTarget(current),
+      kind: "checkpoint-approval", session, target: approvalTarget(current), choices: APPROVAL_GATE_CHOICES,
     });
     const leftOut = leftOutLine(current.result.stages
       .filter((slug) => findStageBySlug(slug)?.workspace_requires === true)
       .map((slug) => join(current.root, "construction", unit, slug, "traceability.json")));
     const offer = current.result.stages.map((slug) => findStageBySlug(slug))
       .map((stage) => stage ? reviewCheckOffer(projectDir, stage, unit) : null).find((found) => found !== null) ?? null;
+    const changedFiles = current.result.stages.includes("code-generation")
+      ? unheardBroughtFilesLine(projectDir, readStateFile(projectDir), session, true)
+      : null;
+    // With their reply already in, the question is not shown: the line about
+    // their files rides the next step the agent speaks from instead.
+    const carried = changedFiles !== null && earlier !== null &&
+      addPendingPersonLines(projectDir, session, [changedFiles.line]);
+    if (changedFiles !== null && (earlier === null || carried)) markPersonLinesHeard(projectDir, session, [changedFiles.key]);
     const result = {
       ...current.result,
       ...(leftOut === null ? {} : { left_out: leftOut }),
+      ...(changedFiles === null || carried ? {} : { changed_files: changedFiles.line }),
       ...(offer === null ? {} : { check_offer: offer.offer }),
     };
     if (earlier === null) return result;
-    const words = earlier.join("\n").slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
-    const pick = exactOptionPick(earlier.at(-1), APPROVAL_GATE_CHOICES);
+    const words = earlier.map((reply) => reply.words).join("\n").slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
     markProtectedQuestionReplied(projectDir, question);
     writeProtectedResponse(projectDir, {
       version: 1, session, challengeId: question.challengeId,
-      ...(pick === 0 ? { choice: "Approve" as const } : pick === 1 ? { choice: "Request Changes" as const } : {}),
       responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
       words,
+      at: isoTimestamp(),
+      replies: earlier.slice(-PROTECTED_RESPONSE_REPLIES_MAX),
     });
     return { ...result, earlier_reply: words };
   });
+}
+
+// A Unit checkpoint's reply the agent names: after the Unit's review was
+// requested in the checkpoint's stages, else after their start.
+function namedReply(
+  projectDir: string, stages: readonly string[], unit: string, message: string | undefined,
+): { message: string; floor: string | null } | undefined {
+  return message === undefined ? undefined : { message, floor: protectedReplyFloor(projectDir, stages, [unit]) };
 }
 
 export function approveConstructionCheckpoint(
@@ -1534,6 +1726,9 @@ export function approveConstructionCheckpoint(
   kind: ConstructionCheckpointKind,
   reply?: string,
   session = "",
+  findingDispositions?: ApprovalFindingDispositions,
+  // The message the agent read the approval from, when it names one.
+  message?: string,
 ): ConstructionCheckpoint {
   // The conductor read the person's reply and reports their approval. The
   // receipt records it beside the person's own words, kept by the human-turn
@@ -1548,16 +1743,21 @@ export function approveConstructionCheckpoint(
     // The person's "approve it as it is", which the verification took, is the
     // approval; nothing more is asked of them.
     const inWords = current.result.review_not_finished?.approved_in_words === true;
-    let words: string | undefined;
+    let theirs: Record<string, string> = {};
     if (humanRequired && inWords) {
       // Already approved from their words: an approve run again records nothing more.
       if (current.result.approved) return current.result;
-      words = latestPersonTurn(projectDir)?.words ?? undefined;
+      // Their words are the message the verification took their approval from.
+      const named = current.waiverMessage === null ? null : readMessage(projectDir, current.waiverMessage);
+      theirs = {
+        ...(named?.words ? { "Person Reply": personsWordsText(named.words) } : {}),
+        ...(current.waiverMessage ? { "Message Id": current.waiverMessage } : {}),
+      };
     } else if (humanRequired) {
       requireProtectedResponse(projectDir, session, {
         kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: "Approve",
-      });
-      words = readProtectedResponse(projectDir, session)?.words;
+      }, namedReply(projectDir, current.result.stages, unit, message));
+      theirs = protectedResponseFields(readProtectedResponse(projectDir, session));
     } else if (current.result.approved) {
       return current.result;
     }
@@ -1577,14 +1777,18 @@ export function approveConstructionCheckpoint(
     // approval says so, and so does the one line they hear.
     const notFinished = rechecked.result.review_not_finished;
     if (notFinished) notices.push(`Approved. The ${reviewsNamed(notFinished.stages)} for ${unit} did not finish.`);
+    const gate = gateFields(projectDir, rechecked.result, rechecked.state);
     appendAuditEntryUnlocked("GATE_APPROVED", {
-      ...gateFields(projectDir, rechecked.result, rechecked.state),
+      ...gate,
       "Verification Id": rechecked.result.verification!.id,
       "Approved Evidence": rechecked.approvedEvidence,
       ...(humanRequired ? { Session: session } : {}),
       ...(humanRequired ? { "User Input": "Approve" } : { Autonomous: "true" }),
-      ...(words ? { "Person Reply": words } : {}),
+      ...theirs,
       ...(notFinished ? { Review: "not finished" } : {}),
+      ...findingDispositions?.(
+        gate["Gate Stages"].split(", ").filter(Boolean), [unit], humanRequired ? "person" : "nobody",
+      ),
     }, projectDir);
     if (humanRequired) consumeProtectedQuestion(projectDir, session);
     const result = resolveConstructionCheckpoint(projectDir, unit, kind);
@@ -1623,6 +1827,8 @@ export function rejectConstructionCheckpoint(
   _reply: string,
   givenReason: string,
   session = "",
+  message?: string,
+  rejectedFindings?: RejectedFindingDispositions,
 ): ConstructionCheckpoint {
   // The conductor read the person's reply as a change request. What they said
   // to change is the reason: the conductor's --reason when given, otherwise the
@@ -1634,23 +1840,24 @@ export function rejectConstructionCheckpoint(
     }
     requireProtectedResponse(projectDir, session, {
       kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: "Request Changes",
-    });
-    const words = readProtectedResponse(projectDir, session)?.words;
-    const reason = givenReason.trim() || changeRequestWords(words);
+    }, namedReply(projectDir, current.result.stages, unit, message));
+    const response = readProtectedResponse(projectDir, session);
+    const reason = givenReason.trim() || changeRequestWords(response?.words);
     const userInput = "Request Changes";
-    if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason) ||
-      selfAttributedDecisionMarker(reason, "rejection")) {
+    if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason)) {
       throw new Error("Request Changes needs what the person asked to change, on one line, in --reason.");
     }
     const rechecked = snapshot(projectDir, unit, kind);
     if (current.root !== rechecked.root || current.result.fingerprint !== rechecked.result.fingerprint) {
       throw new Error("Construction checkpoint evidence changed before rejection.");
     }
+    const gate = gateFields(projectDir, rechecked.result, rechecked.state);
     appendAuditEntryUnlocked("GATE_REJECTED", {
-      ...gateFields(projectDir, rechecked.result, rechecked.state),
+      ...gate,
       Session: session,
       "User Input": userInput, Feedback: reason, Reason: reason,
-      ...(words ? { "Person Reply": words } : {}),
+      ...protectedResponseFields(response),
+      ...rejectedFindings?.(gate["Gate Stages"].split(", ").filter(Boolean), [unit]),
     }, projectDir);
     consumeProtectedQuestion(projectDir, session);
     return resolveConstructionCheckpoint(projectDir, unit, kind);

@@ -10,9 +10,11 @@ import {
   HUMAN_PRESENCE_NO_SWITCH,
   LAUNCHER_GLOBAL_FLAGS,
   launcherRouteUsesPin,
+  nextFlagTakesFollowing,
   parseDispatcherPluginCommand,
   parseDispatcherWorkspaceCommand,
   type RouteNamespaceName,
+  TRUSTED_ROUTE_NAMESPACE,
 } from "./aidlc-command.ts";
 import {
   cmd,
@@ -418,7 +420,7 @@ export const ROUTES: readonly Route[] = [
       "config models [--deciding-effort <e>] [--reviewing-effort <e>] [--writing-up-effort <e>] [--agent <name> [--effort <e>] [--model <raw-id>]] [--session-model <id>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config runtime [--show [--json]|--check|--record-paths|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config providers [--show [--json]|--check|--reset|--provider <current|amazon-bedrock|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
-      "config trust [--show [--json]|--check|--acknowledge|--kiro-workflows <on|off>|--kiro-terminal powershell|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
+      "config trust [--show [--json]|--check|--acknowledge|--kiro-workflows <on|off>|--kiro-cli-workflows <on|off>|--kiro-terminal powershell|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config flags [--show [--json]|--check|--reset] [--default-scope <name>] [--swarm <on|off>] [--hook-debug <on|off>] [--sensor-timeout-ms <n>] [--question-retention-days <days|unlimited>] [--bypass <name>] [--clear-bypass <name>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config project [--show [--json]|--check|--reset] [--plugins <names|all>] [--mcp <defaults|none>] [--completions <shell|none>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config --pin <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline]",
@@ -593,6 +595,8 @@ export const ROUTES: readonly Route[] = [
       "finalize",
       "complete-workflow",
       "gate-start",
+      // The review request runs it (aidlc-log.ts, completionChecksHold).
+      "completion-checks",
       "approve",
       "reject",
       "revise",
@@ -847,13 +851,13 @@ export const ROUTES: readonly Route[] = [
     group: "intent",
     kind: "custom",
     classification: "translation",
-    verbs: ["list", "switch", "<name>", "create", "archive", "unarchive", "add-repo", "remove-repo"],
+    verbs: ["list", "switch", "<name>", "create", "archive", "unarchive", "add-repo", "remove-repo", "set-repos", "add-checkout", "remove-checkout"],
     custom: "workspace",
     ...PUBLIC_ENGINE,
     human: [
       {
-        command: "intent [list|switch|create|archive|unarchive|add-repo|remove-repo]",
-        summary: "list, switch, create, archive, or unarchive intent context; add or remove one of its sibling repos",
+        command: "intent [list|switch|create|archive|unarchive|add-repo|remove-repo|set-repos|add-checkout|remove-checkout]",
+        summary: "list, switch, create, archive, or unarchive intent context; add or remove one of its sibling repos or recorded checkouts, or set exactly which repos it covers",
       },
     ],
     all: [
@@ -863,8 +867,11 @@ export const ROUTES: readonly Route[] = [
       "create [args]",
       "archive <name> [--reason <text>]",
       "unarchive <name>",
-      "add-repo <name>",
+      "add-repo <name> [--url <address>] [--reason <text>]",
       "remove-repo <name>",
+      "set-repos <name,...> | --all",
+      "add-checkout <path>",
+      "remove-checkout <path>",
     ],
   },
   {
@@ -981,10 +988,10 @@ export const ROUTES: readonly Route[] = [
       { command: "plugin select [names]", summary: "set enabled plugins" },
       { command: "plugin list [--verbose|--json]", summary: "compare installed and composed plugins" },
       { command: "plugin sync [--prune-missing]", summary: "transactionally compose installed plugins" },
-      { command: "plugin validate [path]", summary: "validate an authored plugin" },
+      { command: "plugin validate [path] [--with <base-root>]", summary: "validate an authored plugin" },
       { command: "plugin build <harness> [outDir]", summary: "build an authored plugin for a harness" },
     ],
-    all: ["select [names]", "sync [--prune-missing] [--yes]", "list [--verbose] [--json]", "validate [path]", "build <harness> [outDir]"],
+    all: ["select [names]", "sync [--prune-missing] [--yes]", "list [--verbose] [--json]", "validate [path] [--with <base-root>]", "build <harness> [outDir]"],
   },
   {
     // The plugin AUTHORING surface (v2): `aidlc plugin validate` / `aidlc plugin
@@ -1006,7 +1013,7 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "none",
     outputModes: ["human", "json"],
-    all: ["validate [path]", "build <harness> [outDir] [--plugin-root <path>]"],
+    all: ["validate [path] [--with <base-root>]", "build <harness> [outDir] [--plugin-root <path>]"],
   },
   {
     // The DocumentKB noun. Unlike `plugin`, the verb IS the subcommand -- these
@@ -1090,6 +1097,7 @@ export const ROUTES: readonly Route[] = [
     classification: "passthrough",
     verbs: ["review", "context", "summary"],
     tool: TOOLS.reviewBrief,
+    verbHelp: true,
     ...HIDDEN_ENGINE,
   },
   {
@@ -2038,7 +2046,25 @@ function resolveEngine(argv: string[]): Action {
   );
   if (routeOnly) return handleRouteOnly(routeOnly, argv);
 
-  return topLevelError(`engine ${argv[0]}`);
+  return engineNounError(argv[0]);
+}
+
+// An engine noun the route table does not hold: the nearest one by spelling
+// (`sensors` is `sensor`, which an agent guessed live), and the engine's own
+// help, never the public one, which lists no engine noun.
+function engineNounError(noun: string): Action {
+  const invoke = aidlcInvocation();
+  const nouns = new Set(ROUTES.filter((route) => route.namespace === "engine")
+    .flatMap((route) => route.group === "top" ? route.verbs : [route.group]));
+  const nearest = [...nouns]
+    .map((candidate) => ({ candidate, distance: editDistance(noun, candidate) }))
+    .sort((left, right) => left.distance - right.distance || left.candidate.localeCompare(right.candidate))[0];
+  const tip = nearest && nearest.distance <= 2 ? ` did you mean '${invoke} engine ${nearest.candidate}'?` : "";
+  return {
+    type: "error",
+    code: 2,
+    message: `aidlc: unknown command or noun 'engine ${noun}';${tip} try '${invoke} engine --help'\n`,
+  };
 }
 
 function resolveSystem(argv: string[]): Action {
@@ -2146,26 +2172,41 @@ function canonicalizeLegacyCopilotHookArgv(argv: string[]): string[] {
  *
  * `route` is how many leading tokens the resolver read as the route (the
  * delegate's own argv is what is left), so the grammar decides the boundary and
- * nothing here mirrors it. A token after one of our flags is that flag's value,
- * never a word of theirs.
+ * nothing here mirrors it. `verbOnLine` is false for a shortcut that opens the
+ * line with one of `next`'s own flags (`aidlc --resume`), which stands for the
+ * route and the verb. A flag's value is never a word of theirs, and a flag
+ * `next` takes with no value takes no word: the rule nextArgsCarryRequestWords
+ * reads in aidlc-lib.ts (nextFlagTakesFollowing).
  */
-function theirWordsBegin(argv: readonly string[], route: number): number | undefined {
+function theirWordsBegin(argv: readonly string[], route: number, verbOnLine = true): number | undefined {
   let named = 0;
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
     if (token === "--") return i;
-    // A token after any flag is that flag's value, never a word of theirs: the
-    // same rule nextArgsCarryRequestWords reads in aidlc-lib.ts, so a line like
-    // `config --harness kiro --project-dir <dir>` still names this launcher's
-    // own directory.
     if (token.startsWith("-")) {
-      if (argv[i + 1] !== undefined && !argv[i + 1].startsWith("-")) i++;
+      if (nextFlagTakesFollowing(token, argv[i + 1])) i++;
       continue;
     }
+    // A leading `compose` after the verb is the engine's own, as the
+    // orchestrator's launcher reads it (requestWordsBeginAt).
+    if (named === route + 1 && token === "compose") continue;
     named++;
-    if (named > route + 1) return i;
+    if (named > route + (verbOnLine ? 1 : 0)) return i;
   }
   return undefined;
+}
+
+// Whether the dispatcher words after `engine` route to a command in `admitted`
+// (the state-transition guard's delegateAdmittedVerbs): Kiro IDE builds each
+// persona's shell deny from it, and the Cursor adapter lets a delegate run that
+// command. It lives here, not in the guard, so the guard loads without the
+// dispatcher, as a guard that cannot load refuses nothing.
+export function admittedEngineRoute(
+  admitted: Readonly<Record<string, readonly string[]>>,
+  words: readonly string[],
+): boolean {
+  const action = resolveAction([TRUSTED_ROUTE_NAMESPACE, ...words]);
+  return action.type === "delegate" && (admitted[action.tool] ?? []).includes(action.args[0] ?? "");
 }
 
 export function resolveAction(
@@ -2220,13 +2261,14 @@ function theirWordsOn(
   rawArgv: readonly string[],
   route: number | undefined,
   routeArgs: readonly string[] | undefined,
+  verbOnLine: boolean,
 ): number | undefined {
   if (route === undefined || routeArgs === undefined) return undefined;
   const [verb, ...rest] = routeArgs;
   if (verb !== "next") return undefined;
   const workspace = parseDispatcherWorkspaceCommand(rest).kind;
   if (workspace !== "not-workspace" && workspace !== "error") return undefined;
-  return theirWordsBegin(rawArgv, route);
+  return theirWordsBegin(rawArgv, route, verbOnLine);
 }
 
 interface ResolvedWithRoute {
@@ -2315,7 +2357,7 @@ function resolveActionFrom(
     : undefined;
   // Read before anything of ours is put back on the line below.
   const routeArgs = action.type === "delegate" ? [...action.args] : undefined;
-  const words = theirWordsOn(argv, route, routeArgs);
+  const words = theirWordsOn(argv, route, routeArgs, !(clean[0]?.startsWith("-") ?? false));
   if (action.type === "version" && globalFlags.includes("--json")) {
     action.json = true;
   }
@@ -3565,14 +3607,7 @@ function renderPublicGrammarFailure(
     (process.stdin.isTTY || process.env.AIDLC_TEST_CONFIG_TTY === "1")
   ) {
     const invoke = aidlcInvocation();
-    const nearest = [
-      "models",
-      "runtime",
-      "providers",
-      "trust",
-      "flags",
-      "project",
-    ]
+    const nearest = [...CONFIG_SECTIONS]
       .map((candidate) => ({
         candidate,
         distance: editDistance(configSection, candidate),
@@ -3613,9 +3648,15 @@ function projectPolicyError(route: Route, argv: readonly string[]): string | nul
     "aidlc",
   ].some((entry) => existsSync(join(projectDir, entry))) ||
     discoverProjectHarnesses(projectDir).length > 0;
+  // Config there would set up a new project, so the line names the steps that
+  // reach the person's project. Our options are read only before the person's
+  // own words, so the flag goes right after the tool.
   return recognized
     ? null
-    : `${route.id} requires an installed project harness or recognized project directory; run aidlc config`;
+    : `${route.id} requires an installed project harness or recognized project directory; ` +
+      `run it from the project folder, or add --project-dir <path> right after ${
+        aidlcInvocation() === "aidlc" ? "aidlc" : "aidlc.ts"
+      }`;
 }
 
 // A project inside a machine root is never acceptable. The reverse (a machine
@@ -3680,6 +3721,30 @@ async function standAsideInMachineRoot(argv: readonly string[]): Promise<number>
   return 0;
 }
 
+// Copilot CLI reads .claude/settings.json as its own repository settings and
+// runs the hooks registered there, beside the Copilot install's own wiring
+// (.github/hooks/aidlc.json), so each Claude registration would run a second
+// time and record each typed line twice (#2921). Copilot marks every process
+// it starts with COPILOT_CLI=1 and gives the hooks it runs from .claude
+// CLAUDE_PROJECT_DIR (its shell tool gets neither that nor CLAUDECODE).
+// Claude Code started from Copilot's shell sets CLAUDECODE=1 on its own hooks,
+// and an adapter pins its harness before it runs a core hook as a child, so
+// neither stands aside. The adapter spellings stay handleRouteOnly's.
+export function copilotRunsClaudeRegistration(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env.COPILOT_CLI !== "1" || !env.CLAUDE_PROJECT_DIR || env.CLAUDECODE === "1") return false;
+  const pinned = env.AIDLC_HARNESS_NAME ?? "";
+  if (pinned !== "" && pinned !== "claude") return false;
+  try {
+    const action = resolveAction([...argv]);
+    return action.type === "hook" || action.type === "hook-group";
+  } catch {
+    return false;
+  }
+}
+
 function effectiveMutationScope(
   route: Route,
   argv: readonly string[],
@@ -3740,6 +3805,13 @@ export async function main(rawArgv: string[]): Promise<void> {
       runtime: process.versions.bun ?? process.version,
     });
     process.on("exit", (code) => hookTrace("exit", { code }));
+  }
+  // Before anything reads the project or pins a harness. The payload is taken
+  // so Copilot does not meet a closed pipe, and nothing is said.
+  if (tracedHook === "hook" && copilotRunsClaudeRegistration(argv)) {
+    hookTrace("copilot-stand-aside");
+    await readStdin();
+    return;
   }
   configureColor(argv);
   const projectDirOption = projectDirFlag(argv.slice(0, ourFlagLimit(argv)));
@@ -3803,9 +3875,11 @@ export async function main(rawArgv: string[]): Promise<void> {
     !["doctor", "--doctor", "uninstall"].includes(argv[0] ?? "")
   ) {
     try {
-      const { describeWindowsUninstallFailure, recoverWindowsUninstallContinuations } = await import(
-        "./aidlc-windows-uninstall.ts"
-      );
+      const {
+        describeWindowsUninstallFailure,
+        recoverWindowsUninstallContinuations,
+        windowsUninstallStillFinishingLine,
+      } = await import("./aidlc-windows-uninstall.ts");
       // A failed continuation does not block other commands: the fence still
       // stops machine mutation, and `aidlc uninstall` retries it explicitly.
       // A reinstall retries it too, since the failed cleanup may have removed
@@ -3823,7 +3897,7 @@ export async function main(rawArgv: string[]): Promise<void> {
                 ? ` (last attempt ${recovery.retriedFailures.map(describeWindowsUninstallFailure).join("; ")})`
                 : ""
             }`
-            : "a Windows uninstall cleanup is still running; this command was not run",
+            : windowsUninstallStillFinishingLine(recovery.finishesAt, Date.now(), reinstalling ? "install" : "other"),
         );
         return;
       }
