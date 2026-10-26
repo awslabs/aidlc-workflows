@@ -37,10 +37,13 @@ const REVIEWER = "aidlc-architecture-reviewer-agent";
 const CHAT = "01995000-7a11-7000-8000-0000000c0001";
 const README = "# Greeter\n\nSays hello.\n";
 const ADDED = "\nA line the next release adds.\n";
+// An ignore line the next release adds to AI-DLC's part of .gitignore.
+const IGNORED = "aidlc/.aidlc-next-release/";
 
 type Tree = "codex" | "copilot" | "opencode";
 // Where each tree keeps its engine, and AI-DLC's files outside it the next
-// release changes (as 2.11.2 changed skills, agents and AGENTS.md's part).
+// release changes (as 2.11.2 changed skills, agents and AGENTS.md's part; a
+// release often changes AI-DLC's part of .gitignore too).
 const TREES: Record<Tree, { harnessDir: string; refreshed: string[] }> = {
   codex: { harnessDir: ".codex", refreshed: [".agents/skills/aidlc/SKILL.md", ".agents/skills/aidlc-session-cost/SKILL.md"] },
   copilot: { harnessDir: ".aidlc", refreshed: [".github/agents/aidlc-architect-agent.md", ".github/skills/aidlc/SKILL.md"] },
@@ -50,12 +53,8 @@ const TREES: Record<Tree, { harnessDir: string; refreshed: string[] }> = {
   },
 };
 
-// No hook of this fixture's ever ran, which `next` stops on once the project
-// has an install record; the presence check is not this file's subject.
 function chat(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return {
-    AIDLC_SESSION_OVERRIDE: CHAT, AIDLC_SESSION_OVERRIDE_SOURCE: "payload", AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1", ...extra,
-  };
+  return { AIDLC_SESSION_OVERRIDE: CHAT, AIDLC_SESSION_OVERRIDE_SOURCE: "payload", ...extra };
 }
 
 function git(proj: string, args: string[]): string {
@@ -125,10 +124,12 @@ function builtOverUpdate(tree: Tree, options: { type?: "Greenfield" | "Brownfiel
   cpSync(release, update, { recursive: true });
   const { harnessDir, refreshed } = TREES[tree];
   for (const path of [...refreshed, `${harnessDir}/tools/data/root-blocks/agents`]) appendFileSync(join(update, path), ADDED);
+  appendFileSync(join(update, harnessDir, "tools", "data", "root-blocks", "gitignore"), `\n${IGNORED}\n`);
   config(proj, update, tree);
   for (const path of [...refreshed, "AGENTS.md"]) {
     expect(readFileSync(join(proj, path), "utf-8"), `the refresh rewrote ${path}`).toContain(ADDED.trim());
   }
+  expect(readFileSync(join(proj, ".gitignore"), "utf-8"), "the refresh rewrote .gitignore").toContain(IGNORED);
   return proj;
 }
 
@@ -167,7 +168,7 @@ describe("t-gate-skips-refreshed-own-files", () => {
       expect(line).toContain(
         "The build changed README.md, a file you had before this work started. To put it back, run `git checkout HEAD -- README.md`.",
       );
-      namesNone(line, [...TREES[tree].refreshed, "AGENTS.md"]);
+      namesNone(line, [...TREES[tree].refreshed, "AGENTS.md", ".gitignore"]);
     });
   }
 
@@ -204,6 +205,6 @@ describe("t-gate-skips-refreshed-own-files", () => {
     expect(line).toContain(
       "The build changed README.md, a file you had before this work started. There is no committed copy to put back.",
     );
-    namesNone(line, [...TREES.copilot.refreshed, "AGENTS.md"]);
+    namesNone(line, [...TREES.copilot.refreshed, "AGENTS.md", ".gitignore"]);
   });
 });
