@@ -393,6 +393,9 @@ let recordedRow = false;
 let rowEndsTurn = false;
 let stageWorkRow = true;
 
+// The follow-up a bare Request changes at the summary asks (stage-protocol-summary.md).
+const SUMMARY_CHANGES_QUESTION = "What should change?";
+
 // --- Flag parsing ---
 
 function parseFlags(
@@ -2376,9 +2379,30 @@ function handleAnswer(args: string[]): void {
         error(`Audit emission failed: ${errorMessage(e)}.${rollback}`);
       }
       // Request changes with nothing said about what: the person answers
-      // next, so the turn ends at the question (the summary protocol).
+      // next, so the turn ends at the question (the summary protocol). The
+      // question is recorded here, so their reply is its answer, on its own
+      // row behind this change request; with nothing open it had no row, and
+      // the next confirmation took it as its Person Reply.
       const asksWhat = !positive && summaryFeedback === null;
-      if (asksWhat) rowEndsTurn = true;
+      let whatAsked = false;
+      if (asksWhat) {
+        rowEndsTurn = true;
+        try {
+          emitAudit(pd, "DECISION_RECORDED", {
+            Stage: flags.stage,
+            Decision: SUMMARY_CHANGES_QUESTION,
+            ...(fields.Unit !== undefined ? { Unit: fields.Unit } : {}),
+            ...(fields["Attempt Generation"] !== undefined ? { "Attempt Generation": fields["Attempt Generation"] } : {}),
+            ...(workflow !== undefined ? { Workflow: workflow } : {}),
+          });
+          whatAsked = true;
+        } catch {
+          // The change request is on record; the question is asked all the same.
+        }
+      }
+      const whatAnswer = `${aidlcDispatcherInvocation("log answer")} --stage ${quoteCommandArgument(flags.stage)}` +
+        `${flags.unit ? ` --unit ${quoteCommandArgument(flags.unit)}` : ""}${workflow !== undefined ? " --single" : ""} ` +
+        `--details ${quoteCommandArgument("<their words>")}`;
       console.log(
         JSON.stringify({
           emitted: "SUMMARY_CONFIRMATION_RECORDED",
@@ -2387,7 +2411,14 @@ function handleAnswer(args: string[]): void {
           choice: flags.details,
           ...(positive ? { summary_authorization_id: authorization.id } : {}),
           ...(summaryFeedback !== null ? { feedback: summaryFeedback } : {}),
-          ...(asksWhat ? { agent_note: 'Ask "What should change?" and end the turn; their next reply is what should change.' } : {}),
+          ...(asksWhat
+            ? {
+              agent_note: `Ask "${SUMMARY_CHANGES_QUESTION}" and end the turn; ` +
+                (whatAsked
+                  ? `when they reply, record what they said with \`${whatAnswer}\`.`
+                  : "their next reply is what should change."),
+            }
+            : {}),
         }),
       );
       return;

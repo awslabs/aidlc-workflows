@@ -131,7 +131,7 @@ import {
 import {
   latestMessage, listMessages, noReplySince, personTurnStands, readMessage, standingPersonTurn,
 } from "./aidlc-message-store.ts";
-import { aidlcEntryWords, APPROVAL_GATE_CHOICES, protectedChoices } from "./aidlc-reply-reader.ts";
+import { aidlcEntryWords, APPROVAL_GATE_CHOICES, protectedChoices, SUMMARY_CONFIRMATION_CHOICES } from "./aidlc-reply-reader.ts";
 import {
   type AskDirective,
   type Directive,
@@ -3928,8 +3928,15 @@ function openQuestionAnswer(
     ? " --checkpoint verification-command --command-file verification-command.txt"
     : policy ? ` --checkpoint construction-policy --field ${shellArg(field)} --value ${shellArg(value)}` : null;
   // The summary confirmation is recorded against its questions file, whose
-  // `[Answer]:` tag holds the choice first (stage-protocol-summary.md).
+  // `[Answer]:` tag holds the choice first (stage-protocol-summary.md). Each
+  // choice has its own command: one whose --details named what they asked to
+  // change left a bare Request changes unrecorded while the agent asked what.
   const summaryFile = checkpoint === SUMMARY_CONFIRMATION_CHECKPOINT ? auditBlockField(block, "Questions File") : null;
+  const summaryAnswer = (choice: string) => `\`${summaryConfirmationCommands({
+    stage, unit, questionsFile: summaryFile,
+    single: auditBlockField(block, "Workflow")?.startsWith("single-stage:") === true,
+    details: choice,
+  }).answer}\``;
   return gate
     ? `${numbered}answer it through that checkpoint, never \`log answer\` (which would not approve it): ` +
       `run \`${gate} --action approve${target}\` or \`${gate} --action reject${target}\`` +
@@ -3937,12 +3944,11 @@ function openQuestionAnswer(
       "(and their feedback as `--reason` when they ask for changes)"
     : summaryFile !== null
       ? `${options.length > 0 ? numberedChoices(options) : ""}write the choice they made on the summary's ` +
-        `\`[Answer]:\` line in ${summaryFile}, then record it with \`${summaryConfirmationCommands({
-          stage, unit, questionsFile: summaryFile,
-          single: auditBlockField(block, "Workflow")?.startsWith("single-stage:") === true,
-          // What they asked to change rides after Request changes (aidlc-log.ts keeps it as Feedback).
-          details: options.length === 2 ? `<${options[0]}, or ${options[1]}: what they asked to change>` : "<their choice>",
-        }).answer}\``
+        `\`[Answer]:\` line in ${summaryFile}, then, before you ask them anything, record it with ` +
+        `${summaryAnswer(SUMMARY_CONFIRMATION_CHOICES[0])} or ${summaryAnswer(SUMMARY_CONFIRMATION_CHOICES[1])}` +
+        // aidlc-log.ts keeps what rides after Request changes as Feedback.
+        " (when their reply says what should change, it goes after Request changes, as 'Request changes: <what>'), " +
+        "and follow what it prints"
     : flags !== null
       ? `${numbered}record the choice they made with ` +
         `\`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)}${flags} ` +
