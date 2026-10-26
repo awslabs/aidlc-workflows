@@ -2533,6 +2533,10 @@ export function renderShow(d: ShownDocument): string {
   if (d.content !== undefined) {
     out.push("", d.content_notice ?? UNTRUSTED_CONTENT_NOTICE, "", "--- content ---", d.content);
   }
+  if (d.excerpt !== undefined) {
+    const extent = d.excerpt_truncated ? `the first ${BRIEF_EXCERPT_CHARS} characters of the text, not the whole` : "the whole text";
+    out.push("", d.content_notice ?? UNTRUSTED_CONTENT_NOTICE, "", `--- excerpt (${extent}) ---`, d.excerpt);
+  }
   return out.join("\n") + "\n";
 }
 

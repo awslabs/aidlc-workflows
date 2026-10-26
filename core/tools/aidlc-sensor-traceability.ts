@@ -317,8 +317,10 @@ function experienceDefinitions(specContent: string): Map<string, number> {
       items.add(item.id);
       head = text.slice(line.contentStart);
     }
-    // Only markup may precede the ID: emphasis, code, or a link's bracket.
-    const id = head === null ? undefined : /^[^\p{L}\p{N}]*(UX\d+\.\d+\.\d+)\b/u.exec(head)?.[1];
+    // Only markup may precede the ID: emphasis, code, a link's bracket, or an
+    // inline HTML tag.
+    const opening = head?.replace(/<[^>]*>/g, "");
+    const id = opening === undefined ? undefined : /^[^\p{L}\p{N}]*(UX\d+\.\d+\.\d+)\b/u.exec(opening)?.[1];
     if (id) defined.set(id, (defined.get(id) ?? 0) + 1);
   });
   return defined;

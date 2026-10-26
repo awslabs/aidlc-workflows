@@ -237,6 +237,14 @@ describe("t293 the documented workflow, end to end, through the public dispatche
       const briefLong = run(p, "show long.md --brief", ["show", longRow.id, "--brief"]);
       expect((briefLong.excerpt as string).length).toBe(2000);
       expect(briefLong.excerpt_truncated).toBe(true);
+      const human = spawnSync(
+        "bun",
+        [AIDLC, "engine", "knowledge", "show", longRow.id, "--brief", "--project-dir", p],
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
+      );
+      expect(human.status, human.stderr).toBe(0);
+      expect(human.stdout).toContain("--- excerpt (the first 2000 characters of the text, not the whole) ---");
+      expect(human.stdout).toContain("x".repeat(2000));
 
       // 4. edit a.md in place, onboard again: exactly ONE live row, status
       // "edited", same id (identity survives a same-path edit).

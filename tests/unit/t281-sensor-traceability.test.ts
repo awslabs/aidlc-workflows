@@ -799,6 +799,7 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
       ["| `UX1.1.1` | Sign in on one page [Q2] |", "| **UX1.1.1** | A failed sign-in keeps the email [Q4] |"],
       ["* `UX1.1.1` Sign in on one page [Q2]", "### UX1.1.1 A failed sign-in keeps the email [Q4]"],
       ["- [UX1.1.1](#sign-in) Sign in on one page [Q2]", "- **[`UX1.1.1`](#keep)** A failed sign-in keeps the email [Q4]"],
+      ["- <code>UX1.1.1</code> Sign in on one page [Q2]", "#### <b>UX1.1.1</b> A failed sign-in keeps the email [Q4]"],
     ];
     for (const [first, second] of forms) {
       const table = first.startsWith("|") ? ["| ID | Decision |", "|---|---|", first, second] : [first, "", second];
