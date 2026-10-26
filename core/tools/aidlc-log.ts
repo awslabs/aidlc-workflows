@@ -1110,7 +1110,7 @@ function handleDecision(args: string[]): void {
   if (flags["decision-file"] !== undefined) {
     if (flags.decision !== undefined) error("Pass either --decision or --decision-file, not both.");
     try {
-      flags.decision = readAnswerTextFile(resolveActiveProjectDir(projectDir), flags["decision-file"]);
+      flags.decision = readAnswerTextFile(resolveActiveProjectDir(projectDir, flags.stage), flags["decision-file"]);
     } catch (err) {
       error(errorMessage(err));
     }

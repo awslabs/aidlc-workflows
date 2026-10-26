@@ -251,12 +251,17 @@ describe("a stage run on its own in a project with no work", () => {
     }, SCOPE_RUN_TIMEOUT_MS);
   }
 
-  test("an answer the agent writes to a file, for words a shell would read, is read from the run's record", () => {
+  test("a question and an answer the agent writes to a file, for words a shell would read, are read from the run's record", () => {
     const noWork = project("none");
     const { host, person, agent } = noWork;
     person.say("/aidlc --scope enterprise --stage market-research --single");
     expect(agent.next("--scope", "enterprise", "--stage", "market-research", "--single").kind).toBe("run-stage");
-    expect(host.engine("log", "decision", "--stage", "market-research", "--decision", "Question 1", "--options", "A,B,X").status).toBe(0);
+    const question = "Which market first, the 'home' one or $ABROAD?";
+    host.write([...NO_WORK_RECORD, ".aidlc-engine", "answer-text", "question.txt"].join("/"), `${question}\n`);
+    const asked = host.engine("log", "decision", "--stage", "market-research", "--decision-file", ".aidlc-engine/answer-text/question.txt", "--options", "A,B,X");
+    expect(asked.status, asked.stdout + asked.stderr).toBe(0);
+    const decision = rowsFrom(noWork.proj, "market-research").events.find((e) => e.event === "DECISION_RECORDED");
+    expect(field(decision?.block ?? "", "Decision")).toBe(question);
     const words = "B, because 'quotes' & $HOME";
     person.say(words);
     host.write([...NO_WORK_RECORD, ".aidlc-engine", "answer-text", "answer.txt"].join("/"), `${words}\n`);
