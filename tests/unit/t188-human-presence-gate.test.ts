@@ -2491,8 +2491,9 @@ describe("t188: what the person's message asks for outlives the approval given i
   });
 
   // A setting is the exception (Arden's rule for every setting): a message that
-  // already gave an approval does not also stand for one, so the setting goes
-  // first, then the approval, which the message still backs.
+  // already gave an approval does not also stand for one later, so the setting
+  // goes first, then the approval, which the message still backs, or follows
+  // it while that reply is in hand (t-setting-rides-approval).
   test("approve, and turn plan approval off: the setting first, then the approval, both carried out", () => {
     const slug = openGate();
     const id = recordTypedReply(proj, "approve, and turn plan approval off");
@@ -2505,16 +2506,15 @@ describe("t188: what the person's message asks for outlives the approval given i
     expect(planApproval()).toBe("off");
   });
 
-  test("approve, and turn plan approval off: the approval first, then the setter on that message, is refused", () => {
+  test("approve, and turn plan approval off: the approval first, then the setter on that message, both carried out", () => {
     const slug = openGate();
     const id = recordTypedReply(proj, "approve, and turn plan approval off");
     tick();
     const approved = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
     expect(approved.rc, approved.out).toBe(0);
     const off = setter(["config-change", "--plan-approval", "off", "--message", id]);
-    expect(off.rc).not.toBe(0);
-    expect(off.out).not.toContain(id);
-    expect(planApproval()).not.toBe("off");
+    expect(off.rc, off.out).toBe(0);
+    expect(planApproval()).toBe("off");
   });
 
   test("approve the plan, and turn plan approval off: after the plan answers for several Units, the setter is refused", () => {

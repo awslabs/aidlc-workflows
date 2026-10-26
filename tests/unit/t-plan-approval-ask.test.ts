@@ -1037,12 +1037,11 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
-  // "Approve it, and turn the sensors off": the agent records the approval
-  // first, then runs the setter naming their message, with no chat it can name.
-  // The approval their reply led to leaves the setting it also asked for theirs.
-  // A message that already gave an approval does not also stand for a setting
-  // (t-setting-spent-message): the setting rides the answer, or goes first.
-  test("an approval and a setting in one reply: riding the answer, the setting is theirs; after the answer, refused", () => {
+  // "Approve it, and turn the sensors off": the setting rides the answer, or
+  // goes first, or follows it while that reply is in hand
+  // (t-setting-rides-approval). Once the person has said more, the message that
+  // gave the approval stands for no setting (t-setting-spent-message).
+  test("an approval and a setting in one reply: riding the answer, the setting is theirs; once they say more, refused", () => {
     const proj = project();
     askFor(proj);
     const words = "approve it, and turn the sensors off";
@@ -1053,6 +1052,7 @@ describe("the engine asks for Plan Approval", () => {
     const approved = answer(proj, "Approve Plan", ["--sensors", "off"]);
     expect(approved.code, approved.message).toBe(0);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Sensors**: off (set by you)");
+    reply(proj, "thanks");
     const set = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "sensors", "on", "--message", id, "--project-dir", proj], {
       cwd: proj,
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
