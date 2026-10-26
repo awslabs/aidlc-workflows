@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, relative, sep } from "node:path";
 import { artifactFilename, headingKey } from "./aidlc-artifact-vocabulary.ts";
 import { asksForHelp, errorMessage, parseBoltDag, printUsageAndExit, unitsBlockRepair } from "./aidlc-lib.ts";
 import { sensorFireUsage } from "./aidlc-runtime-paths.ts";
@@ -59,6 +59,19 @@ interface Flags {
 	// build-test-results writes test-results.md); otherwise it is ignored and a
 	// config warning emitted. Absent/empty: no artifact is eligible.
 	templateEligible?: string[];
+	// `--paths-stdin json`: the paths to evaluate arrive on stdin (evaluatePathSet).
+	pathsStdin?: boolean;
+}
+
+// One result for a set of paths: the failing files' own results, each naming
+// its file (relative to the project), and the count evaluated.
+interface PathSetResult {
+	pass: boolean;
+	findings_count: number;
+	files_evaluated: number;
+	failed_outputs: string[];
+	files: Array<Result & { file: string }>;
+	message?: string;
 }
 
 function parseFlags(argv: string[]): Flags {
@@ -78,6 +91,8 @@ function parseFlags(argv: string[]): Flags {
 				.split(",")
 				.map((s) => s.trim())
 				.filter((s) => s.length > 0);
+		} else if (arg === "--paths-stdin") {
+			out.pathsStdin = argv[++i] === "json";
 		}
 	}
 	return out;
@@ -130,35 +145,76 @@ function fail(msg: string): never {
 export function main(argv: string[]): void {
 	if (asksForHelp(argv)) printUsageAndExit(`Usage: ${sensorFireUsage("required-sections")}`);
 	const flags = parseFlags(argv);
+	if (flags.pathsStdin) {
+		evaluatePathSet(flags);
+		process.exit(0);
+	}
 
 	if (!flags.outputPath) {
 		fail("--output-path is required");
 	}
-	if (!existsSync(flags.outputPath)) {
-		fail(`--output-path not found: ${flags.outputPath}`);
+	process.stdout.write(`${JSON.stringify(evaluate(flags.outputPath, flags))}\n`);
+	process.exit(0);
+}
+
+// The gate at a codekb stage hands every repository's files on stdin, a JSON
+// list (PATH_SET_SENSOR_IDS, aidlc-graph.ts): each is evaluated exactly as a
+// file given alone, and one result reports them, with each failing file's own
+// result whole so every finding still names its file.
+function evaluatePathSet(flags: Flags): void {
+	let paths: unknown;
+	try {
+		paths = JSON.parse(readFileSync(0, "utf-8"));
+	} catch (err) {
+		fail(`--paths-stdin expects a JSON list of paths on stdin: ${errorMessage(err)}`);
+	}
+	if (!Array.isArray(paths) || paths.length === 0 || !paths.every((p) => typeof p === "string" && p !== "")) {
+		fail("--paths-stdin expects a non-empty JSON list of paths on stdin");
+	}
+	const failing: Array<Result & { file: string }> = [];
+	let findings = 0;
+	for (const path of paths as string[]) {
+		const file = relative(process.cwd(), path).split(sep).join("/");
+		const one = evaluate(path, flags, file);
+		findings += one.findings_count;
+		if (!one.pass) failing.push({ file, ...one });
+	}
+	const result: PathSetResult = {
+		pass: failing.length === 0,
+		findings_count: findings,
+		files_evaluated: paths.length,
+		failed_outputs: failing.map((f) => f.file),
+		files: failing,
+	};
+	if (failing.length > 0) result.message = failing.map((f) => f.message).filter(Boolean).join(" ");
+	process.stdout.write(`${JSON.stringify(result)}\n`);
+}
+
+// `named` is how a finding names the file: its basename alone, or its path in a set.
+function evaluate(outputPath: string, flags: Flags, named = basename(outputPath)): Result {
+	if (!existsSync(outputPath)) {
+		fail(`--output-path not found: ${outputPath}`);
 	}
 
 	// This sensor validates Markdown document shape. Its broad record-tree
 	// manifest glob also matches structured stage artifacts such as
 	// traceability.json, so non-Markdown outputs quiet-pass before any read,
 	// heading, template, or filename-specific logic.
-	if (!flags.outputPath.toLowerCase().endsWith(".md")) {
-		const result: Result = {
+	if (!outputPath.toLowerCase().endsWith(".md")) {
+		return {
 			pass: true,
 			h2_count: 0,
 			headings: [],
 			findings_count: 0,
 		};
-		process.stdout.write(`${JSON.stringify(result)}\n`);
-		return;
 	}
 
 	let body: string;
 	try {
-		body = readFileSync(flags.outputPath, "utf-8");
+		body = readFileSync(outputPath, "utf-8");
 	} catch (err) {
 		fail(
-			`failed to read --output-path ${flags.outputPath}: ${errorMessage(err)}`,
+			`failed to read --output-path ${outputPath}: ${errorMessage(err)}`,
 		);
 	}
 
@@ -167,7 +223,7 @@ export function main(argv: string[]): void {
 	// (two hashes + space); `### Foo`.startsWith("## ") is false because
 	// char[2] is '#', not ' ', so deeper headings are excluded.
 	const headings = parseH2Headings(body);
-	const file = basename(flags.outputPath);
+	const file = basename(outputPath);
 	const stem = file.replace(/\.md$/, "");
 
 	// With no template, no heading is required: the stage's prose shapes the
@@ -236,7 +292,7 @@ export function main(argv: string[]): void {
 			result.template_missing = missing;
 			if (missing.length > 0) {
 				pass = false;
-				reasons.push(templateMissSentence(file, missing));
+				reasons.push(templateMissSentence(named, missing));
 			}
 		}
 	}
@@ -261,8 +317,7 @@ export function main(argv: string[]): void {
 	result.pass = pass;
 	result.findings_count = findings_count;
 	if (reasons.length > 0) result.message = reasons.join(" ");
-	process.stdout.write(`${JSON.stringify(result)}\n`);
-	process.exit(0);
+	return result;
 }
 
 if (import.meta.main) main(process.argv.slice(2));

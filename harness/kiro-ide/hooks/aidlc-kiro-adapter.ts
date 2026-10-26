@@ -544,7 +544,8 @@ function legacyRecoveryBlockReason(
   if (recovery.recoveryRequired) {
     return (
       "Legacy Plan Approval recovery requires a human response. " +
-      "Present exactly `Recover Plan Approval`, end the turn, then retry recovery. " +
+      "Ask the directive's question in plain words and end the turn; when the person says yes, in any words, " +
+      "run its choice's command, then retry recovery. " +
       `The unknown original shell command remains blocked. Directive: ${recovery.detail}`
     );
   }
@@ -2376,6 +2377,14 @@ if (target === NOTE_CALL) {
       const path = isAbsolute(rawPath) ? rawPath : resolve(projectDir, rawPath);
       writePendingCall(projectDir, { kind: "write", at: Date.now(), session, tool, path, before: fileSnapshot(path) });
     }
+  } else if (isKiroDelegationTool(toolName) && toolName !== "subagent_response") {
+    // The record that each helper was sent, which its completion closes: Kiro IDE
+    // runs no dispatch hook of AI-DLC's, so one is forwarded per delegate, once
+    // the guard card let the call through.
+    const targets = kiroDelegationTargets(toolName, toolArgs);
+    for (const t of targets.length > 0 ? targets : [{ agent: "" }]) {
+      runCore("aidlc-log-subagent.ts", { hook_event_name: "SubagentStart", session_id: session, agent_type: t.agent });
+    }
   }
   return 0;
 }
@@ -2913,8 +2922,8 @@ function buildForward(): Forward {
       }
       const eventSessionId = ide.sessionId?.trim();
       // Who sent the turn (kiroTurnOrigin): a message Kiro's own chat record
-      // marks as its own, or one of Kiro's fixed workflow sentences (a Kiro
-      // Workflows step's brief opens with one), is the host's; a session other
+      // marks as its own, or a Kiro Workflows brief (Kiro leaves it unmarked;
+      // its opening sentence says whose it is), is the host's; a session other
       // than the chat's decides nothing by itself, so a message typed in another
       // chat tab stays the person's. A host's turn is a side worker's: it starts no session here, is not
       // remembered as the chat, opens no turn, and the core hook records it as
@@ -2991,6 +3000,11 @@ function buildForward(): Forward {
           // verb-intercept, beside this hook, runs a command the person typed
           // and hands the agent its output itself.
           relays_terminal_output: true,
+          // Kiro IDE draws a card in the chat for every command hook it runs,
+          // and whether the card shows this hook's output to the person is not
+          // measured, so the hook keeps its message-id line to itself here;
+          // the reply steps of `next` name the ids instead.
+          context_may_reach_person: true,
         },
       };
     }

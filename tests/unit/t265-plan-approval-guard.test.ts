@@ -41,7 +41,6 @@ import {
   mutationBlockReason,
   promptStageMarkers,
   promptUnitMarkers,
-  questionsFileApproved,
   questionsFileHasPendingPlanApproval,
   normalizeStageName,
   type UnitEvidence,
@@ -334,64 +333,6 @@ describe("t265a plan-approval decision table", () => {
     ).toEqual(["code-generation"]);
   });
 
-  test("only an explicit answer on the Plan Approval question authorizes generation", () => {
-    expect(questionsFileApproved("## Plan Approval\n[Answer]:\n")).toBe(false);
-    expect(questionsFileApproved("## Plan Approval\n[Answer]: ___\n")).toBe(false);
-    expect(questionsFileApproved("## Plan Approval\n[Answer]: A. Approve Plan\n")).toBe(true);
-    expect(questionsFileApproved("## Q1: Plan Approval\n[Answer]: A. Approve Plan\n")).toBe(true);
-    expect(
-      questionsFileApproved("## Question 1 - Plan Approval\n[Answer]: A. Approve Plan\n"),
-    ).toBe(true);
-    expect(
-      questionsFileApproved(
-        "## Q1\n\nPlan Approval\n\nA. Approve Plan\nB. Request Changes\n[Answer]: A. Approve Plan\n",
-      ),
-    ).toBe(true);
-    expect(
-      questionsFileApproved("## Question 1\n\n**Plan Approval**\n[Answer]: A. Approve Plan\n"),
-    ).toBe(true);
-    expect(
-      questionsFileApproved("## Q1\n\nPlan Approval\n[Answer]: B. Request Changes\n"),
-    ).toBe(false);
-    expect(questionsFileApproved("## Plan Approval\n[Answer]: B. Request Changes\n")).toBe(false);
-    expect(
-      questionsFileApproved(
-        "## Implementation Question\n[Answer]: A. Approve Plan\n## Plan Approval\n[Answer]:\n",
-      ),
-    ).toBe(false);
-    expect(
-      questionsFileApproved(
-        "## Plan Approval\n[Answer]: A. Approve Plan\n## Notes\n[Answer]: B. Request Changes\n",
-      ),
-    ).toBe(true);
-    expect(
-      questionsFileApproved(
-        "## Plan Approval\n[Answer]: A. Approve Plan\n## Q2\n\nPlan Approval\n[Answer]:\n",
-      ),
-    ).toBe(false);
-    expect(
-      questionsFileApproved(
-        "## Q1\n\nWhich checkpoint applies?\n\nA. Plan Approval\n[Answer]: A. Approve Plan\n",
-      ),
-    ).toBe(false);
-    expect(
-      questionsFileApproved(
-        "<!--\n## Plan Approval\n[Answer]: A. Approve Plan\n-->\n## Plan Approval\n[Answer]:\n",
-      ),
-    ).toBe(false);
-    expect(
-      questionsFileApproved(
-        "```markdown\n## Plan Approval\n[Answer]: A. Approve Plan\n```\n",
-      ),
-    ).toBe(false);
-    expect(
-      questionsFileApproved(
-        "~~~markdown\n## Q1\nPlan Approval\n[Answer]: A. Approve Plan\n~~~\n",
-      ),
-    ).toBe(false);
-    expect(questionsFileApproved("")).toBe(false);
-  });
-
   test("only a blank visible Plan Approval section is a pending mandatory stop", () => {
     expect(questionsFileHasPendingPlanApproval("## Plan Approval\n[Answer]:\n")).toBe(true);
     expect(questionsFileHasPendingPlanApproval("## Q1\nPlan Approval\n[Answer]: ___\n")).toBe(
@@ -571,6 +512,8 @@ function scratchProject(): string {
     // decides the refusal's last clause); the setting resolver and what it imports.
     "aidlc-guard-switch.ts",
     "aidlc-question-store.ts",
+    // What the agent writes before a plan is picked, kept whatever the hook decides.
+    "aidlc-before-pick.ts",
     "aidlc-recorded-switches.ts",
     "aidlc-model-policy.ts",
     "aidlc-guard-operation.ts",
@@ -584,6 +527,8 @@ function scratchProject(): string {
     "aidlc-message-store.ts",
     "aidlc-review-brief.ts",
     "aidlc-construction-checkpoints.ts",
+    // The checkpoint question names the person's files a build changed.
+    "aidlc-brought-files.ts",
     "aidlc-testing-posture.ts",
     // The config sections the hook sorts while a plan waits, and what that imports.
     "aidlc-command.ts",
@@ -688,7 +633,15 @@ function publishRestartRecovery(
   });
 }
 
-function recordRecoverySelection(proj: string, prompt = "Restart code-generation."): void {
+// The person's reply to the recovery question, then the agent's record of the
+// remedy it read from it (`details`, by default the reply's own words; null when
+// the reply names none). A record that names no offered remedy is refused and
+// records nothing, as the agent's would be.
+function recordRecoverySelection(
+  proj: string,
+  prompt = "Restart code-generation.",
+  details: string | null = prompt,
+): void {
   const started = performance.now();
   const result = spawnSync(
     BUN,
@@ -714,6 +667,21 @@ function recordRecoverySelection(proj: string, prompt = "Restart code-generation
     stdout: result.stdout,
     stderr: result.stderr,
   })).toBe(0);
+  if (details === null) return;
+  spawnSync(
+    BUN,
+    [join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "guard-recovery",
+      "--details", details, "--project-dir", proj],
+    {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: proj,
+      env: {
+        ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0",
+        AIDLC_SESSION_OVERRIDE: "01995000-0265-7000-8000-000000000001",
+      },
+      encoding: "utf-8",
+    },
+  );
 }
 
 function seedUnit(
@@ -847,6 +815,34 @@ const STAGE_DISPATCH = (proj: string, prompt: string) => ({
 
 // A POSIX single-quoted word, as the engine and the harness shells carry a path.
 const shellQuoted = (word: string): string => `'${word.replaceAll("'", "'\\''")}'`;
+
+// A Windows folder's 8.3 spelling, as t244 asks for it, leading back to the
+// same folder. The path goes in through the environment: cmd.exe would read
+// the quotes a spawned argument carries as part of the name.
+function windowsShortSpelling(folder: string): string {
+  const spelled = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:AIDLC_T265_FOLDER).ShortPath",
+    ],
+    {
+      env: { ...process.env, AIDLC_T265_FOLDER: folder },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    },
+  );
+  expect(spelled.status, `${spelled.stdout}${spelled.stderr}`).toBe(0);
+  const short = spelled.stdout.trim();
+  // A volume without 8.3 names cannot show the defect; say so, not pass.
+  expect(short.toLowerCase(), `no 8.3 short name for ${folder}; see fsutil 8dot3name query`)
+    .not.toBe(folder.toLowerCase());
+  expect(short).toContain("~");
+  expect(realpathSync.native(short)).toBe(folder);
+  return short;
+}
 
 const WRITE = (filePath: string) => ({
   hook_event_name: "PreToolUse",
@@ -1112,8 +1108,13 @@ describe("t265b hook lifecycle", () => {
       expect(withBom.status, withBom.stderr).toBe(0);
       expect(withBom.stdout.endsWith(readFileSync(instructionsPath, "utf-8"))).toBe(true);
       expect(withBom.stdout).toContain("\n\n\uFEFF# Unit Test Instructions");
-      // And the brief refuses before approval, so it can never precede authority.
+      // And the brief refuses before approval, so it can never precede authority:
+      // the engine's receipt is the approval, and none is on record now.
       seedUnit(proj, "todo-core", { plan: true, answer: null });
+      const receipts = dirname(planApprovalRuntimeFile(proj, "receipt.json"));
+      for (const name of readdirSync(receipts).filter((entry) => /^receipt-.*\.json$/.test(entry))) {
+        rmSync(join(receipts, name));
+      }
       const unapproved = spawnSync(
         BUN,
         [
@@ -1312,11 +1313,12 @@ describe("t265b hook lifecycle", () => {
         const result = runHook(proj, BASH(command));
         expect(result.code, `${command}\n${result.stderr}`).toBe(0);
       }
-      // A direct state advance is the state-transition guard's. A completion
-      // report waits for the plan: the report tool does not check it.
+      // A direct state advance is the state-transition guard's, and a
+      // completion report the engine's: `report` holds it while the plan waits.
       expect(runHook(proj, BASH("aidlc engine state advance")).code).toBe(0);
-      expect(runHook(proj, BASH("aidlc engine orchestrate report --stage code-generation --result completed")).code)
-        .toBe(2);
+      const completion = runHook(proj, BASH("aidlc engine orchestrate report --stage code-generation --result completed"));
+      expect(completion.code, completion.stderr).toBe(0);
+      expect(completion.stderr).toBe("");
       for (const command of [
         "./aidlc engine orchestrate next",
         "PATH=. aidlc engine orchestrate next",
@@ -1339,17 +1341,21 @@ describe("t265b hook lifecycle", () => {
   // #1369 follow-up: `report --result awaiting-approval` moves the state past the
   // issued run-stage directive (a checkbox is part of the state digest) and
   // publishes no successor, so the held gate has no current directive. The
-  // human's answer to that gate must still reach the engine, while generation
-  // and every other lifecycle report stay fenced. Both fence decisions are
-  // covered: strict holds, and relaxed (poc's scope default) stands aside.
-  for (const relaxed of [false, true]) {
-    test(`the held Code Generation gate admits the human's answer (${relaxed ? "relaxed" : "strict"}, #1369)`, () => {
+  // human's answer to that gate must still reach the engine, and so must the
+  // gate's own report showing it again (the step `next` prints when a reviewed
+  // file changed after the review); every completion report is the engine's,
+  // which holds it while the plan waits. All three Guard Policies are covered:
+  // strict holds the rest; under relaxed (poc's scope default) and off the step
+  // the opening retired stands for every call but AI-DLC's own commands the
+  // admission holds.
+  for (const policy of ["strict", "relaxed", "off"] as const) {
+    test(`the held Code Generation gate admits the human's answer and its own report (${policy}, #1369)`, () => {
       const proj = scratchProject();
       try {
         seedState(proj);
         const statePath = join(proj, RECORD_REL, "aidlc-state.md");
-        const policy = relaxed ? "\n## Scope Configuration\n- **Guard Policy**: relaxed (from scope poc)\n" : "";
-        writeFileSync(statePath, `${readFileSync(statePath, "utf-8")}${policy}
+        const scopePolicy = policy === "strict" ? "" : `\n## Scope Configuration\n- **Guard Policy**: ${policy} (from scope poc)\n`;
+        writeFileSync(statePath, `${readFileSync(statePath, "utf-8")}${scopePolicy}
 ## Stage Progress
 - [x] requirements-analysis \u2014 EXECUTE
 - [-] code-generation \u2014 EXECUTE
@@ -1358,10 +1364,9 @@ describe("t265b hook lifecycle", () => {
         const report = "bun .claude/tools/aidlc.ts engine orchestrate report --stage code-generation";
         const approve = `${report} --result approved --user-input "Approve"`;
         seedUnit(proj, null, { plan: true, answer: null });
-        // Before Plan Approval, completing Code Generation waits like the build:
-        // `report` would open the gate or complete the stage without checking the
-        // plan's approval, so this guard keeps that one condition.
-        expect(runHook(proj, BASH(approve)).code).toBe(2);
+        // Before Plan Approval, completing Code Generation is still the engine's
+        // own command: `report` holds it while the plan waits.
+        expect(runHook(proj, BASH(approve)).code).toBe(0);
 
         seedUnit(proj, null, { plan: true, answer: "Approve Plan" });
         expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(true);
@@ -1379,18 +1384,20 @@ describe("t265b hook lifecycle", () => {
           approve,
           `${report} --result rejected --user-input "Request Changes" --reason "Rename the flag."`,
           'aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"',
+          // The gate's own report showing it again, in either spelling.
+          `${report} --result awaiting-approval`,
+          "aidlc engine orchestrate report --stage code-generation --result awaiting-approval",
         ]) {
           const result = runHook(proj, BASH(command));
           expect(result.code, `${command}\n${result.stderr}`).toBe(0);
         }
-        // At the held gate only the person's answer completes the stage; another
-        // completion report still waits for a current step.
-        for (const command of [
-          `${report} --result completed`,
-          `${report} --result approved --result completed`,
-        ]) {
-          expect(runHook(proj, BASH(command)).code, command).toBe(2);
+        // At the held gate another completion report is the engine's to answer
+        // too; AI-DLC's answer through a wrapper is no installed command and
+        // still waits for a current step under every Guard Policy.
+        for (const command of [`${report} --result completed`, `${report} --result approved --result completed`]) {
+          expect(runHook(proj, BASH(command)).code, command).toBe(0);
         }
+        expect(runHook(proj, BASH(`env -C other ${approve}`)).code).toBe(2);
         // Another stage's report is the engine's to refuse, and a direct state
         // verb is the state-transition guard's and the state tool's.
         for (const command of [
@@ -1399,22 +1406,48 @@ describe("t265b hook lifecycle", () => {
         ]) {
           expect(runHook(proj, BASH(command)).code, command).toBe(0);
         }
-        // A write to code beside the answer, a wrapper, or code alone still waits.
-        for (const command of [
+        // The stage's own record files, read and written by file tool and by a
+        // shell the guard reads, pass under every Guard Policy.
+        const record = join(RECORD_REL, "construction", "code-generation");
+        const trace = join(record, "traceability.json");
+        writeFileSync(join(proj, trace), "{}\n");
+        // A shell line names the file with forward slashes, as an agent writes it
+        // under Bash (Git Bash on Windows): a backslash there is an escape, and
+        // the line would write another file.
+        const traceLine = toPosix(trace);
+        for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-summary.md", "traceability.json"]) {
+          const write = runHook(proj, WRITE(join(proj, record, name)));
+          expect(write.code, `${name}: ${write.stderr}`).toBe(0);
+        }
+        for (const command of [`cat ${traceLine}`, `jq . ${traceLine}`, `printf '{}' > ${traceLine}`, `sed -i 's/a/b/' ${traceLine}`]) {
+          expect(runHook(proj, BASH(command)).code, command).toBe(0);
+        }
+        // Code beside the answer, a command whose writes cannot be seen, and code
+        // alone: strict waits for a current step, naming the fresh `next`;
+        // relaxed and off go on from the approved plan.
+        const code = [
           `${approve} > src/inline.ts`,
           `${approve}; printf code > src/inline.ts`,
-          `env -C other ${approve}`,
           "printf code > src/inline.ts",
-        ]) {
-          expect(runHook(proj, BASH(command)).code, command).toBe(2);
+          `python3 -c "open('${traceLine}','w').write('{}')"`,
+        ];
+        for (const command of code) {
+          expect(runHook(proj, BASH(command)).code, command).toBe(policy === "strict" ? 2 : 0);
         }
         const write = runHook(proj, WRITE(join(proj, "src", "inline.ts")));
-        expect(write.code).toBe(2);
-        // Either fence decision names the way back, spelled the way this tree
-        // runs it: a fresh `next` re-issues the step.
-        expect(write.stderr).toContain(
-          "Run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own",
-        );
+        expect(write.code, write.stderr).toBe(policy === "strict" ? 2 : 0);
+        if (policy === "strict") {
+          expect(write.stderr).toContain(
+            "Run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own",
+          );
+        } else {
+          expect(write.stdout).toBe("");
+          // An approval that no longer lets the plan build keeps the refusal:
+          // the plan is emptied, so no approved plan stands behind the step.
+          writeFileSync(join(proj, record, "code-generation-plan.md"), "  \n");
+          expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+          expect(runHook(proj, BASH("printf code > src/inline.ts")).code).toBe(2);
+        }
       } finally {
         rmSync(proj, { recursive: true, force: true });
       }
@@ -1650,8 +1683,8 @@ describe("t265b hook lifecycle", () => {
         // Offered but not answered: the report is the engine's own command,
         // and the engine refuses an answer nobody gave.
         expect(runHook(proj, BASH(reject)).code).toBe(0);
-        // With Request Changes the only choice, the person's words are the feedback.
-        recordRecoverySelection(proj, "Rework the payload contract.");
+        // The agent records the person's words as the Request Changes they asked for.
+        recordRecoverySelection(proj, "Rework the payload contract.", "Request Changes: Rework the payload contract.");
         for (const admitted of [
           reject,
           reject.replace("aidlc engine orchestrate", "bun .claude/tools/aidlc-orchestrate.ts"),
@@ -1662,14 +1695,14 @@ describe("t265b hook lifecycle", () => {
           expect(result.code, `[${checkbox}] ${admitted}\n${result.stderr}`).toBe(0);
         }
         const plan = join(proj, RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
-        // A completion the person did not pick waits for the plan: the report
-        // tool does not check it.
+        // A completion the person did not pick is the engine's to refuse:
+        // `report` holds it while the plan waits.
         for (const completion of [
           reject.replace("--result rejected", "--result approved"),
           reject.replace("--result rejected", "--result revised"),
         ]) {
           const result = runHook(proj, BASH(completion));
-          expect(result.code, `[${checkbox}] ${completion}\n${result.stderr}`).toBe(2);
+          expect(result.code, `[${checkbox}] ${completion}\n${result.stderr}`).toBe(0);
         }
         // Other reports and a direct state verb are the engine's to judge.
         for (const other of [
@@ -1700,10 +1733,12 @@ describe("t265b hook lifecycle", () => {
         publishAsk(proj, [
           { op: "finish-revision", action: "Finish the revision.", interaction: "external-work" },
         ]);
+        // The revision's report is the engine's own command before the pick as
+        // after it: `report` holds it until the person picks the remedy.
         const revised = "aidlc engine orchestrate report --stage code-generation --result revised";
-        expect(runHook(proj, BASH(revised)).code).toBe(2);
+        expect(runHook(proj, BASH(revised)).code).toBe(0);
         expect(runHook(proj, WRITE(plan)).code).toBe(0);
-        recordRecoverySelection(proj, "1");
+        recordRecoverySelection(proj, "1", "finish-revision");
         expect(runHook(proj, BASH(revised)).code).toBe(0);
         expect(runHook(proj, WRITE(plan)).code).toBe(0);
         expect(runHook(proj, BASH(reject)).code).toBe(0);
@@ -1739,11 +1774,11 @@ describe("t265b hook lifecycle", () => {
         // guard lets it say so.
         ["bolt prepare --unit u1", 0],
         ["state approve code-generation", 0],
-        // A completion waits for the plan: neither tool checks it. Before
-        // approval only a picked recovery may complete a Unit.
-        ["state unit complete --stage code-generation --unit u1", 2],
-        ["orchestrate report --stage code-generation --result approved --user-input Approve", 2],
-        ["orchestrate report --skeleton-stance off --result completed", 2],
+        // A completion is the engine's too: `report` and `unit complete` hold
+        // it while the plan waits. A stance report completes nothing.
+        ["state unit complete --stage code-generation --unit u1", 0],
+        ["orchestrate report --stage code-generation --result approved --user-input Approve", 0],
+        ["orchestrate report --skeleton-stance off --result completed", 0],
       ];
       for (const [route, code] of cases) {
         const [noun, ...rest] = route.split(" ");
@@ -2332,10 +2367,14 @@ describe("t265b hook lifecycle", () => {
         const record = join(proj, RECORD_REL, "construction", "code-generation");
         const questions = runHook(proj, WRITE(join(record, "code-generation-questions.md")));
         expect(questions.code, questions.stderr).toBe(0);
-        // The build waits as before: code, the developer, and a completion
-        // report, which the report tool does not check against the plan.
+        // A completion report is the engine's own command: `report` holds it
+        // while the plan waits.
+        const completion = runHook(proj,
+          BASH('aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"'));
+        expect(completion.code, completion.stderr).toBe(0);
+        expect(completion.stderr).toBe("");
+        // The build waits as before: code and the developer.
         for (const payload of [
-          BASH('aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"'),
           WRITE(join(proj, "src", "inline.ts")),
           BASH("echo 'export const x = 1;' > src/inline.ts"),
           STAGE_DISPATCH(proj, "Build the plan."),
@@ -2479,10 +2518,14 @@ describe("t265b hook lifecycle", () => {
               expect(result.code, `${state}: ${JSON.stringify(payload.tool_input)}\n${result.stderr}`).toBe(0);
               expect(result.stderr, `${state}: ${JSON.stringify(payload.tool_input)}`).toBe("");
             }
-            // The build still waits: code, a shell write to code, the developer,
-            // and a completion report, which the report tool does not check.
+            // A completion report is the engine's own command: `report` holds
+            // it while the plan waits.
+            const completion = runHook(proj,
+              BASH('aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"'));
+            expect(completion.code, `${state}: ${completion.stderr}`).toBe(0);
+            expect(completion.stderr, state).toBe("");
+            // The build still waits: code, a shell write to code, the developer.
             for (const payload of [
-              BASH('aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"'),
               WRITE(join(proj, "src", "new.ts")),
               BASH("echo 'export const x = 1;' > src/inline.ts"),
               DISPATCH(proj, "Build the plan."),
@@ -2621,9 +2664,11 @@ describe("t265b hook lifecycle", () => {
           const result = runHook(proj, BASH(command));
           expect(result.code, `${command}\n${result.stderr}`).toBe(0);
         }
-        // A completion report waits for the plan: the report tool does not check it.
-        expect(runHook(proj, BASH(`bun ${entry} engine orchestrate report --stage code-generation --result completed`)).code)
-          .toBe(2);
+        // A completion report is the engine's to judge too: `report` holds it
+        // while the plan waits.
+        const completion = runHook(proj, BASH(`bun ${entry} engine orchestrate report --stage code-generation --result completed`));
+        expect(completion.code, completion.stderr).toBe(0);
+        expect(completion.stderr).toBe("");
         // Every other engine verb through the installed entry point is the
         // engine's to judge (the checkpoint refuses --check-cmd itself).
         for (const command of [
@@ -2758,6 +2803,156 @@ describe("t265b hook lifecycle", () => {
     },
   );
 
+  // The Kiro adapters name the project by the guard's own path, the long
+  // spelling, and hand it the host's folder and paths, which can carry 8.3
+  // short names (%TEMP% does for a user name over eight characters). A host
+  // can also name the project short and write by the long path.
+  test.skipIf(process.platform !== "win32")(
+    "a write through a Windows short-name spelling of the project waits for the plan as one through its own spelling does",
+    () => {
+      const proj = realpathSync.native(scratchProject());
+      try {
+        seedState(proj);
+        seedActiveDirective(proj, "code-generation");
+        seedUnit(proj, null, { plan: true, answer: null });
+        const short = windowsShortSpelling(proj);
+        const plan = join(RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
+        // Every row's exit code beside the one expected, so one run shows them all.
+        const expected: Record<string, number> = {};
+        const actual: Record<string, number> = {};
+        const stderr: Record<string, string> = {};
+        const check = (project: string, cwd: string, row: string, payload: Record<string, unknown>, code: number) => {
+          const key = `project ${project === short ? "short" : "long"}, cwd ${cwd === short ? "short" : "long"}: ${row}`;
+          const result = runHook(proj, { ...payload, cwd }, { CLAUDE_PROJECT_DIR: project });
+          expected[key] = code;
+          actual[key] = result.code;
+          stderr[key] = result.stderr;
+        };
+        check(proj, short, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+        check(proj, short, "Write src/inline.ts", WRITE(join(short, "src", "inline.ts")), 2);
+        check(proj, short, "Write the plan", WRITE(join(short, plan)), 0);
+        check(proj, short, "printf plan > the plan", BASH(`printf plan > ${toPosix(plan)}`), 0);
+        check(proj, short, "Write NOTES.md", WRITE(join(short, "NOTES.md")), 0);
+        check(proj, short, "Write outside the project", WRITE(join(dirname(short), "t265-elsewhere", "notes.md")), 0);
+        check(short, proj, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+        check(short, proj, "Write the plan", WRITE(join(proj, plan)), 0);
+        check(short, proj, "Write NOTES.md", WRITE(join(proj, "NOTES.md")), 0);
+        check(proj, proj, "Write src/inline.ts", WRITE(join(proj, "src", "inline.ts")), 2);
+        expect(actual).toEqual(expected);
+        // The code waits with the words its own spelling gets.
+        expect(stderr["project long, cwd short: Write src/inline.ts"])
+          .toBe(stderr["project long, cwd long: Write src/inline.ts"]);
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // The same folder through a linked parent: a host can hand the guard the
+  // folder the person opened while the guard names the project by its real
+  // path, or the other way round.
+  test("a write through a linked parent of the project waits for the plan as one through its own spelling does", () => {
+    const outer = mkdtempSync(join(tmpdir(), "t265-outer-"));
+    const links = mkdtempSync(join(tmpdir(), "t265-links-"));
+    const proj = join(outer, "proj");
+    try {
+      renameSync(scratchProject(), proj);
+      const dirLink = process.platform === "win32" ? "junction" : "dir";
+      // The link leads only to this test's own folder.
+      symlinkSync(outer, join(links, "outer"), dirLink);
+      const linked = join(links, "outer", "proj");
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation");
+      seedUnit(proj, null, { plan: true, answer: null });
+      const record = join(RECORD_REL, "construction", "code-generation");
+      const plan = join(record, "code-generation-plan.md");
+      // A link inside the project is still a link, whichever spelling reaches it.
+      mkdirSync(join(proj, "src"), { recursive: true });
+      symlinkSync(join(proj, "src"), join(proj, record, "workspace-alias"), dirLink);
+      const expected: Record<string, number> = {};
+      const actual: Record<string, number> = {};
+      const stderr: Record<string, string> = {};
+      const check = (project: string, cwd: string, row: string, payload: Record<string, unknown>, code: number) => {
+        const key = `project ${project === linked ? "linked" : "real"}, cwd ${cwd === linked ? "linked" : "real"}: ${row}`;
+        const result = runHook(proj, { ...payload, cwd }, { CLAUDE_PROJECT_DIR: project });
+        expected[key] = code;
+        actual[key] = result.code;
+        stderr[key] = result.stderr;
+      };
+      check(proj, linked, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+      check(proj, linked, "Write src/inline.ts", WRITE(join(linked, "src", "inline.ts")), 2);
+      check(proj, linked, "Write the plan", WRITE(join(linked, plan)), 0);
+      check(proj, linked, "printf plan > the plan", BASH(`printf plan > ${toPosix(plan)}`), 0);
+      check(proj, linked, "Write NOTES.md", WRITE(join(linked, "NOTES.md")), 0);
+      check(proj, linked, "Write through a link inside the project",
+        WRITE(join(linked, record, "workspace-alias", "blocked.ts")), 2);
+      check(proj, linked, "Write outside the project", WRITE(join(links, "elsewhere", "notes.md")), 0);
+      check(linked, proj, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+      check(linked, proj, "Write the plan", WRITE(join(proj, plan)), 0);
+      check(linked, proj, "Write NOTES.md", WRITE(join(proj, "NOTES.md")), 0);
+      check(proj, proj, "Write src/inline.ts", WRITE(join(proj, "src", "inline.ts")), 2);
+      expect(actual).toEqual(expected);
+      // The code waits with the words its own spelling gets.
+      expect(stderr["project real, cwd linked: Write src/inline.ts"])
+        .toBe(stderr["project real, cwd real: Write src/inline.ts"]);
+    } finally {
+      rmSync(links, { recursive: true, force: true });
+      rmSync(outer, { recursive: true, force: true });
+    }
+  });
+
+  // A drive letter substituted for the project folder (`subst`, or a mapped
+  // drive) is the project spelled from a drive root, with no folder above it.
+  test.skipIf(process.platform !== "win32")(
+    "a write through a drive letter substituted for the project folder waits for the plan as one through its own spelling does",
+    () => {
+      const proj = realpathSync.native(scratchProject());
+      // A letter nothing uses, substituted for this test's own folder and
+      // removed in finally; the mapping lives only in this logon session.
+      const letter = "ZYXWVUTSRQPONMLKJ".split("").find((l) => !existsSync(`${l}:\\`));
+      expect(letter, "no free drive letter").toBeDefined();
+      const root = `${letter}:\\`;
+      const made = spawnSync("subst", [`${letter}:`, proj], {
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      try {
+        expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+        seedState(proj);
+        seedActiveDirective(proj, "code-generation");
+        seedUnit(proj, null, { plan: true, answer: null });
+        const plan = join(RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
+        const expected: Record<string, number> = {};
+        const actual: Record<string, number> = {};
+        const stderr: Record<string, string> = {};
+        const check = (project: string, cwd: string, row: string, payload: Record<string, unknown>, code: number) => {
+          const key = `project ${project === root ? "drive" : "folder"}, cwd ${cwd === root ? "drive" : "folder"}: ${row}`;
+          const result = runHook(proj, { ...payload, cwd }, { CLAUDE_PROJECT_DIR: project });
+          expected[key] = code;
+          actual[key] = result.code;
+          stderr[key] = result.stderr;
+        };
+        check(proj, root, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+        check(proj, root, "Write src/inline.ts", WRITE(join(root, "src", "inline.ts")), 2);
+        check(proj, root, "Write the plan", WRITE(join(root, plan)), 0);
+        check(proj, root, "printf plan > the plan", BASH(`printf plan > ${toPosix(plan)}`), 0);
+        check(proj, root, "Write NOTES.md", WRITE(join(root, "NOTES.md")), 0);
+        check(proj, root, "Write outside the project", WRITE(join(dirname(proj), "t265-elsewhere", "notes.md")), 0);
+        check(root, proj, "echo code > src/inline.ts", BASH("echo code > src/inline.ts"), 2);
+        check(root, proj, "Write the plan", WRITE(join(proj, plan)), 0);
+        check(root, proj, "Write NOTES.md", WRITE(join(proj, "NOTES.md")), 0);
+        check(proj, proj, "Write src/inline.ts", WRITE(join(proj, "src", "inline.ts")), 2);
+        expect(actual).toEqual(expected);
+        // The code waits with the words its own spelling gets.
+        expect(stderr["project folder, cwd drive: Write src/inline.ts"])
+          .toBe(stderr["project folder, cwd folder: Write src/inline.ts"]);
+      } finally {
+        spawnSync("subst", [`${letter}:`, "/d"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+        rmSync(proj, { recursive: true, force: true });
+      }
+    },
+  );
+
   test.skipIf(process.platform !== "win32")(
     "Windows cwd casing preserves recovery without authorizing workspace changes",
     () => {
@@ -2785,6 +2980,82 @@ describe("t265b hook lifecycle", () => {
       }
     },
   );
+
+  // The Kiro adapters name the project by the guard's own path, the long
+  // spelling, and hand it the folder the IDE runs in, which can carry 8.3 short
+  // names (%TEMP% does for a user name over eight characters).
+  test.skipIf(process.platform !== "win32")(
+    "a Windows short-name spelling of the project runs AI-DLC's own tools and authorizes nothing else",
+    () => {
+      const proj = realpathSync.native(scratchProject());
+      try {
+        seedState(proj);
+        seedActiveDirective(proj, "code-generation");
+        seedUnit(proj, null, { plan: true, answer: null });
+        mkdirSync(join(proj, "other", ".claude", "tools"), { recursive: true });
+        cpSync(join(proj, ".claude", "tools", "aidlc.ts"), join(proj, "other", ".claude", "tools", "aidlc.ts"));
+        const short = windowsShortSpelling(proj);
+        // Every command's exit code beside the one expected, so one run shows them all.
+        const expected: Record<string, number> = {};
+        const actual: Record<string, number> = {};
+        const check = (cwd: string, command: string, code: number) => {
+          const key = `${cwd === short ? "short" : "long"} cwd: ${command}`;
+          expected[key] = code;
+          actual[key] = runHook(proj, { ...BASH(command), cwd }).code;
+        };
+        const next = "bun .claude/tools/aidlc.ts engine orchestrate next";
+        check(short, next, 0);
+        check(short, "bun .claude/tools/aidlc-testing-posture.ts render", 0);
+        check(short, `bun ${shellQuoted(join(short, ".claude", "tools", "aidlc.ts"))} engine orchestrate next`, 0);
+        check(proj, `${next}; cd ${shellQuoted(short)}`, 0);
+        check(short, "bun other/.claude/tools/aidlc.ts engine orchestrate next", 2);
+        check(short, `${next}; cd ${shellQuoted(join(proj, "other"))}`, 2);
+        expect(actual).toEqual(expected);
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // The same folder through a linked parent: a host can hand the guard the
+  // folder the person opened while the guard names the project by its real path.
+  test("a project folder reached through a linked parent runs AI-DLC's own tools and authorizes nothing else", () => {
+    const outer = mkdtempSync(join(tmpdir(), "t265-outer-"));
+    const links = mkdtempSync(join(tmpdir(), "t265-links-"));
+    const proj = join(outer, "proj");
+    try {
+      renameSync(scratchProject(), proj);
+      // The link leads only to this test's own folder.
+      symlinkSync(outer, join(links, "outer"), process.platform === "win32" ? "junction" : "dir");
+      const linked = join(links, "outer", "proj");
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation");
+      seedUnit(proj, null, { plan: true, answer: null });
+      mkdirSync(join(proj, "other", ".claude", "tools"), { recursive: true });
+      cpSync(join(proj, ".claude", "tools", "aidlc.ts"), join(proj, "other", ".claude", "tools", "aidlc.ts"));
+      const expected: Record<string, number> = {};
+      const actual: Record<string, number> = {};
+      const check = (cwd: string, command: string, code: number) => {
+        const key = `${cwd === linked ? "linked" : "real"} cwd: ${command}`;
+        expected[key] = code;
+        actual[key] = runHook(proj, { ...BASH(command), cwd }).code;
+      };
+      const next = "bun .claude/tools/aidlc.ts engine orchestrate next";
+      check(linked, next, 0);
+      check(linked, "bun .claude/tools/aidlc-testing-posture.ts render", 0);
+      check(linked, `bun ${shellQuoted(join(linked, ".claude", "tools", "aidlc.ts"))} engine orchestrate next`, 0);
+      check(proj, `${next}; cd ${shellQuoted(linked)}`, 0);
+      check(linked, "bun other/.claude/tools/aidlc.ts engine orchestrate next", 2);
+      check(linked, `cd ${shellQuoted(join(linked, "other"))} && ${next}`, 2);
+      check(proj, `${next}; cd ${shellQuoted(join(linked, "other"))}`, 2);
+      check(linked, "echo code > src/inline.ts", 2);
+      check(linked, `${next}; echo code > src/inline.ts`, 2);
+      expect(actual).toEqual(expected);
+    } finally {
+      rmSync(links, { recursive: true, force: true });
+      rmSync(outer, { recursive: true, force: true });
+    }
+  });
 
   test("planning through the Bun entry point requires a real installed file", () => {
     const proj = scratchProject();
@@ -3145,6 +3416,8 @@ describe("t265b hook lifecycle", () => {
         `cd ${proj}; aidlc ${next}`,
         `cd ${proj}; aidlc --version`,
         `Set-Location -LiteralPath '${proj}'; aidlc ${next} 2>$null | Select-Object -Last 1`,
+        // A location change moves the reading: the engine run from a subfolder.
+        `cd '${join(proj, "other")}'; aidlc ${next}`,
         // A program that writes nothing is not refused for its spelling: a
         // path or an extension names some other program, and that program is
         // neither the engine nor a write.
@@ -3174,7 +3447,6 @@ describe("t265b hook lifecycle", () => {
         `aidlc ${next} 2> src/inline.ts`,
         "Get-Content (Set-Content src/inline.ts code)",
         "Get-ChildItem | Select-Object @{n='x';e={Remove-Item src/app.ts}}",
-        `cd '${join(proj, "other")}'; aidlc ${next}`,
         // A wrapper is not read as plain PowerShell, so the command is not read whole.
         "env Get-Content aidlc/x.md",
       ]) {
@@ -3208,6 +3480,247 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // Copilot CLI and Kiro CLI on Windows run their shell tool in PowerShell, and
+  // the agent makes the stage's own record folder and plan file there before
+  // any plan exists: `-ItemType Directory` is New-Item's value, not a path, and
+  // a backslash separates. The person's code still waits for the plan.
+  test("a PowerShell line makes the stage's own record folder and files while the plan is written", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation");
+      mkdirSync(join(proj, "other"));
+      const windows = process.platform === "win32";
+      const rec = join(RECORD_REL, "construction", "code-generation").replaceAll("/", "\\");
+      const pwsh = (command: string, cwd = proj) =>
+        runHook(proj, { ...BASH(command), cwd, aidlc_shell: "powershell" });
+      for (const [command, cwd] of [
+        [`New-Item -ItemType Directory -Force ${rec} | Out-Null`, proj],
+        [`New-Item -ItemType Directory -Path '${rec}\\' -Force | Out-Null`, proj],
+        [`New-Item -ItemType File -Path '${rec}\\code-generation-plan.md' -Force | Out-Null`, proj],
+        [`ni -ItemType Directory -Path '${rec}' -Force | Out-Null`, proj],
+        [`Set-Content -Path '${rec}\\notes.md' -Value 'a'`, proj],
+        [`Add-Content -Path ${rec}\\notes.md -Value b`, proj],
+        [`Get-ChildItem | Out-File ${rec}\\listing.txt`, proj],
+        [`Get-ChildItem -Force ${rec} | Select-Object Name,Length`, proj],
+        // Read from where the cd leads.
+        [`cd '${proj}'; New-Item -ItemType File -Path '${rec}\\notes.ts' -Force`, join(proj, "other")],
+        // The engine's own commands as the agent spells them there.
+        ...(windows
+          ? [
+            [`bun .claude\\tools\\aidlc.ts engine sensor-traceability --stage code-generation --output-path ${rec}\\traceability.json --write-upstream`, proj],
+            ["bun .claude\\tools\\aidlc.ts engine audit history | Select-Object -Last 80", proj],
+          ] as const
+          : []),
+      ] as const) {
+        const result = pwsh(command, cwd);
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+      for (const [command, cwd] of [
+        // The person's code, and anything the reading cannot bind to the record.
+        ["New-Item -ItemType File -Path src\\app.ts -Force", proj],
+        ["Set-Content src\\app.ts x", proj],
+        [`New-Item -Path ${rec} -Name ..\\..\\..\\..\\..\\..\\..\\src\\x.ts -ItemType File`, proj],
+        [`Set-Content -Path '${rec}\\*.md' -Value x`, proj],
+        [`Get-Item ${rec}\\notes.md | Set-Content -Value y`, proj],
+        // PowerShell 7 runs sc.exe for sc.
+        [`sc ${rec}\\notes.md y`, proj],
+        [`New-Item -ItemType Directory -Force ${rec}; Remove-Item src\\base.ts`, proj],
+        // Without the cd the same line names a file under other.
+        [`New-Item -ItemType File -Path '${rec}\\notes.ts' -Force`, join(proj, "other")],
+      ] as const) {
+        expect(pwsh(command, cwd).code, command).toBe(2);
+      }
+      // Unmarked, the line keeps the POSIX reading, which drops the backslashes.
+      expect(runHook(proj, { ...BASH(`New-Item -ItemType Directory -Force ${rec} | Out-Null`), cwd: proj }).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  // #2456: while the plan-approval guard is refusing the build, doctor and
+  // status are where the person gets the whole picture of why. An agent's
+  // terminal is often not at the project root - VS Code and the Copilot CLI
+  // keep the folder an earlier command left it in - so the agent writes the
+  // `cd` that gets it there. Those are the spellings the reported run was
+  // refused, as a "mutation-capable shell command", and sent back to `next`;
+  // switching the guard off was the only way it reached a diagnosis.
+  //
+  // This case pins only that the reads run. How that is settled is open:
+  // #2523 argues for fewer guard exceptions rather than one more, and both
+  // an exemption and a simpler guard satisfy what is asserted here.
+  test("#2456: the doctor and status reads run while the plan-approval guard blocks the build", () => {
+    const proj = scratchProject();
+    const machine = mkdtempSync(join(realpathSync.native(tmpdir()), "aidlc-t265-doctor-"));
+    // A folder outside the project: there a bare `aidlc doctor` reads some
+    // other project or none, so the `cd` form is the only one that diagnoses
+    // this one.
+    const elsewhere = mkdtempSync(join(realpathSync.native(tmpdir()), "aidlc-t265-outside-"));
+    try {
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation");
+      seedUnit(proj, null, { plan: true, answer: null });
+      const windows = process.platform === "win32";
+      const launcher = join(machine, "bin", windows ? "aidlc.cmd" : "aidlc");
+      const active = join(machine, "versions", "9.9.9", windows ? "aidlc.exe" : "aidlc");
+      for (const file of [launcher, active]) {
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, "fixture\n");
+      }
+      writeFileSync(join(machine, "active-executable"), `${active}\n`);
+      writeFileSync(join(proj, ".claude", "tools", "aidlc-doctor.ts"), "// installed tool\n");
+      const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+      const subfolder = join(proj, "other");
+      mkdirSync(subfolder, { recursive: true });
+
+      // The guard is blocking: the build's own write is refused, which is the
+      // state the person needs the diagnosis for.
+      const build = runHook(proj, WRITE(join(proj, "src", "app.ts")), env);
+      expect(build.code).toBe(2);
+      expect(build.stderr).toContain("the plan is not approved yet");
+
+      // Every one of these runs the read in the project, from a terminal that
+      // is somewhere else.
+      const reads = [
+        `cd '${proj}' && aidlc doctor`,
+        `cd '${proj}'; aidlc doctor`,
+        `cd '${proj}' && aidlc --doctor`,
+        `cd '${proj}' && aidlc doctor --verbose`,
+        `cd '${proj}' && bun .claude/tools/aidlc.ts doctor`,
+        `cd '${proj}' && bun .claude/tools/aidlc-doctor.ts doctor`,
+        `cd '${proj}' && aidlc status`,
+      ];
+      // The POSIX reading every harness keeps, and the PowerShell reading an
+      // adapter marks (Copilot in VS Code, Kiro IDE): the same reads, from a
+      // subfolder of the project and from outside it.
+      for (const marked of [false, true]) {
+        for (const terminal of [subfolder, elsewhere]) {
+          for (const command of reads) {
+            const result = runHook(
+              proj,
+              {
+                ...BASH(command),
+                cwd: terminal,
+                ...(marked ? { aidlc_shell: "powershell" } : {}),
+              },
+              env,
+            );
+            expect(
+              result.code,
+              `${marked ? "powershell" : "posix"} in ${terminal}: ${command}\n${result.stderr}`,
+            ).toBe(0);
+          }
+        }
+      }
+
+      // Not the spelling: from the same terminal, the forms that name the
+      // project outright pass today and keep passing.
+      for (const command of [
+        `bun '${join(proj, ".claude", "tools", "aidlc.ts")}' doctor`,
+        `aidlc doctor --project-dir '${proj}'`,
+        `aidlc status --project-dir '${proj}'`,
+      ]) {
+        const result = runHook(proj, { ...BASH(command), cwd: elsewhere }, env);
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+
+      // Not the folder either: the same reads run with the guard switched off,
+      // which was the reported run's only way to a diagnosis, and once the
+      // person has approved the plan. What refuses them is the block itself.
+      for (const command of reads) {
+        const off = runHook(proj, { ...BASH(command), cwd: elsewhere }, {
+          ...env,
+          AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+        });
+        expect(off.code, `${command}\n${off.stderr}`).toBe(0);
+      }
+      seedUnit(proj, null, { plan: true, answer: "A. Approve Plan" });
+      for (const command of reads) {
+        const result = runHook(proj, { ...BASH(command), cwd: elsewhere }, env);
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+      rmSync(machine, { recursive: true, force: true });
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  // The rest of #2456's case: a line that starts with a `cd` is read from the
+  // folder the `cd` moves to, the way the shell runs it, so the build still
+  // waits there. While the plan waits, a write into the project after a `cd` is
+  // refused, from a subfolder and from outside, under both readings; the
+  // completion report after a `cd` is the engine's own command, as it is from
+  // the project root (`report` holds it while the plan waits); a write outside
+  // the project after a `cd` there is judged as that write is; a `cd` the reader
+  // cannot follow keeps the starting folder's reading. The refusal's way on runs
+  // as named and with the `cd` too.
+  test("a line that starts with a cd is read from where the cd leads: a write into the project still waits for the plan", () => {
+    const proj = scratchProject();
+    const outside = mkdtempSync(join(realpathSync.native(tmpdir()), "aidlc-t265-cd-outside-"));
+    try {
+      seedState(proj);
+      mkdirSync(join(proj, "src"), { recursive: true });
+      mkdirSync(join(proj, "other"), { recursive: true });
+      writeFileSync(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), "// installed tool fixture\n");
+      const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+      const p = shellQuoted(proj);
+      const named = "bun .claude/tools/aidlc-orchestrate.ts next";
+      // VS Code hands a hook `c:\...` where an agent writes `C:\...`.
+      const lowerDrive = (path: string) => path.replace(/^[A-Z](?=:)/, (drive) => drive.toLowerCase());
+      const upperDrive = (path: string) => path.replace(/^[a-z](?=:)/, (drive) => drive.toUpperCase());
+      for (const asked of [false, true]) {
+        seedUnit(proj, null, { plan: true, answer: null });
+        if (asked) {
+          writeActiveDirectiveMarker(proj, {
+            kind: "ask", ask_type: "plan-approval", stage: "code-generation",
+            state_sha256: stateDigest(readFileSync(statePath, "utf-8")),
+          });
+        }
+        for (const marked of [false, true]) {
+          const mark = marked ? { aidlc_shell: "powershell" } : {};
+          for (const terminal of [join(proj, "other"), outside]) {
+            const run = (command: string) => runHook(proj, { ...BASH(command), cwd: terminal, ...mark });
+            const where = `${asked ? "asked" : "written"} ${marked ? "powershell" : "posix"} in ${terminal}`;
+            for (const command of [
+              `cd ${p} && echo x > src/app.ts`,
+              `cd ${p}; echo x > src/app.ts`,
+              `cd ${shellQuoted(join(proj, "src"))} && echo x > app.ts`,
+              `cd ${shellQuoted(outside)} && echo x > ${shellQuoted(join(proj, "src", "app.ts"))}`,
+              `(cd ${p} && echo x > src/app.ts)`,
+              `cd "$P" && echo x > src/app.ts`,
+            ]) {
+              const refused = run(command);
+              expect(refused.code, `${where}: ${command}\n${refused.stderr}`).toBe(2);
+            }
+            if (!asked) expect(run(`cd ${p} && echo x > src/app.ts`).stderr).toContain(`\`${named}\``);
+            for (const command of [
+              // A `>` into a file is not plain PowerShell, so under the mark this
+              // write waits as it does without the `cd`.
+              ...(marked ? [] : [`cd ${shellQuoted(outside)} && echo x > out.txt`]),
+              // Unquoted, a Windows path keeps its backslashes only in PowerShell.
+              ...(marked || process.platform !== "win32" ? [`cd ${proj}; aidlc doctor`] : []),
+              `cd ${p} && ${named}`,
+              `cd ${p} && aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"`,
+            ]) {
+              const passed = run(command);
+              expect(passed.code, `${where}: ${command}\n${passed.stderr}`).toBe(0);
+            }
+          }
+          const fromRoot = runHook(proj, { ...BASH(named), cwd: proj, ...mark });
+          expect(fromRoot.code, fromRoot.stderr).toBe(0);
+          const drive = runHook(proj, {
+            ...BASH(`cd ${shellQuoted(upperDrive(join(proj, "other")))}; aidlc doctor`), cwd: lowerDrive(proj), ...mark,
+          });
+          expect(drive.code, drive.stderr).toBe(0);
+        }
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   // Keep real Git-backed authority/fingerprint checks and both hook processes;
   // the aggregate fixture work can exceed Bun's 5s default on hosted macOS.
   test("a conductor-authored Approve Plan markdown answer has no authority receipt", () => {
@@ -3219,11 +3732,13 @@ describe("t265b hook lifecycle", () => {
         answer: "Approve Plan",
         receipt: false,
       });
+      // The line in the file approves nothing: only the engine's receipt does.
       const approval = evaluateCodeGenerationApproval(proj, { unit: null });
       expect(approval.ok).toBe(false);
-      expect(approval.approved).toBe(true);
-      expect(approval.receiptValid).toBe(false);
-      expect(approval.reason).toContain("no current Plan Approval receipt matches this question, target");
+      expect(approval.approved).toBe(false);
+      // Nothing approved it, so the receipt check is never reached.
+      expect(approval.receiptValid).toBeNull();
+      expect(approval.reason).toContain("the plan is not approved yet");
       const authority = resolveCodeGenerationAuthority(proj, { unit: null });
       const questionsPath = join(
         codeGenerationRecordDir(proj, null),
@@ -4047,7 +4562,8 @@ describe("t265b hook lifecycle", () => {
       seedActiveDirective(proj, "code-generation", "auth");
       const crossTarget = evaluateCodeGenerationApproval(proj, { unit: "auth" });
       expect(crossTarget.ok).toBe(false);
-      expect(crossTarget.fingerprintValid).toBe(false);
+      // No approval of the engine's is for that target: the copied bytes approve nothing there.
+      expect(crossTarget.approved).toBe(false);
 
       // Re-issuing the directive for the SAME target and attempt, on the other
       // hand, must leave the approval standing. The engine reissues constantly (a

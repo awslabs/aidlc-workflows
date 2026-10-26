@@ -203,13 +203,45 @@ export interface DriveResult {
 // AnswerScript — declarative, structure-based question answering.
 //
 // Resolved against the STRUCTURED AskUserQuestion input (questions[].options),
-// never by screen-scraping rendered text. The default policy mirrors the tmux
-// "take the default" loop: pick option 1 for every question.
+// never by screen-scraping rendered text. The default person picks by label,
+// never by position (defaultChoice), so a box the agent shows in another
+// order gets the same decision.
 // ---------------------------------------------------------------------------
+
+/** The plain choice a person makes in each kind of menu, first match wins. */
+const PLAIN_CHOICES: RegExp[] = [
+  /^Approve Plans?\b/,
+  /^Guide me\b/i,
+  /^Looks correct\b/i,
+  /^Nothing to add\b/i,
+  /^Approve\b/,
+];
+
+/**
+ * The plain choice at an approval, a mode, a summary or a learnings question;
+ * the shortest of several, so "Approve" wins over "Approve, and add User
+ * Stories next".
+ */
+export function plainChoice(options: string[]): string | undefined {
+  for (const choice of PLAIN_CHOICES) {
+    const hits = options.filter((o) => choice.test(o));
+    if (hits.length > 0) return hits.reduce((a, b) => (b.length < a.length ? b : a));
+  }
+  return undefined;
+}
+
+export function recommended(options: string[]): string | undefined {
+  return options.find((o) => /recommended/i.test(o));
+}
+
+/** What the test person picks when the test names nothing: the plain choice, else the recommended one, else the first. */
+export function defaultChoice(options: string[]): string | undefined {
+  return plainChoice(options) ?? recommended(options) ?? options[0];
+}
 
 /** How a single question's answer is chosen. */
 export type AnswerSpec =
-  /** Pick the option at this 0-based index (default 0 / option 1). */
+  /** Pick the option at this 0-based index. */
   | { optionIndex: number }
   /** Pick the option whose label === this string exactly. */
   | { label: string }
@@ -222,11 +254,11 @@ export type AnswerSpec =
 
 /**
  * A declarative answer policy:
- *   - 'default'    — every question takes option 1 (index 0).
- *   - byHeader     — map a question's `header` (or `question` text) to a spec;
- *                    questions not matched fall back to option 1.
- *   - sequence     — answer the Nth AskUserQuestion menu (across the whole run)
- *                    with the Nth spec; menus past the array fall back to default.
+ *   - 'default': every question takes the default person's pick (defaultChoice).
+ *   - byHeader: map a question's `header` (or `question` text) to a spec;
+ *     questions not matched take the default pick.
+ *   - sequence: answer the Nth AskUserQuestion menu (across the whole run)
+ *     with the Nth spec; menus past the array take the default pick.
  *   - pick: a function chooses each question's answer as the person would,
  *     seeing the whole menu (a live journey's person script).
  *
@@ -239,25 +271,23 @@ export type AnswerScript =
   | { kind: "default" }
   | { kind: "byHeader"; map: Record<string, AnswerSpec>; fallback?: AnswerSpec }
   | { kind: "sequence"; specs: AnswerSpec[]; fallback?: AnswerSpec }
-  /** The person decides per question, seeing the whole menu; undefined takes option 1. */
+  /** The person decides per question, seeing the whole menu; undefined takes the default pick. */
   | { kind: "pick"; pick: (question: AskUserQuestionItem, menu: AskUserQuestionItem[], menuIndex: number) => AnswerSpec | undefined };
-
-const DEFAULT_SPEC: AnswerSpec = { optionIndex: 0 };
 
 /**
  * Resolve one AnswerSpec against a single question's options into the chosen
- * label (or label[] for multi). Falls back to option 1 if a spec can't match,
- * so the driver never stalls a run — a calibrator can detect the fallback by
- * comparing askedQuestions to the script.
+ * label (or label[] for multi). No spec, or a spec that can't match, takes
+ * the default pick, so the driver never stalls a run; a calibrator can detect
+ * the fallback by comparing askedQuestions to the script.
  */
-function resolveSpec(item: AskUserQuestionItem, spec: AnswerSpec): string | string[] {
+function resolveSpec(item: AskUserQuestionItem, spec: AnswerSpec | undefined): string | string[] {
   const labels = item.options.map((o) => o.label);
-  const pickIndex = (i: number): string => labels[i] ?? labels[0] ?? "";
-  const pickLabel = (l: string): string =>
-    labels.includes(l) ? l : (labels[0] ?? "");
-  const pickContains = (sub: string): string =>
-    labels.find((l) => l.includes(sub)) ?? labels[0] ?? "";
+  const fallback = defaultChoice(labels) ?? "";
+  const pickIndex = (i: number): string => labels[i] ?? fallback;
+  const pickLabel = (l: string): string => (labels.includes(l) ? l : fallback);
+  const pickContains = (sub: string): string => labels.find((l) => l.includes(sub)) ?? fallback;
 
+  if (spec === undefined) return fallback;
   if ("optionIndex" in spec) return pickIndex(spec.optionIndex);
   if ("label" in spec) return pickLabel(spec.label);
   if ("labelContains" in spec) return pickContains(spec.labelContains);
@@ -269,7 +299,7 @@ function resolveSpec(item: AskUserQuestionItem, spec: AnswerSpec): string | stri
       return pickContains(s.labelContains);
     });
   }
-  return pickIndex(0);
+  return fallback;
 }
 
 /**
@@ -287,14 +317,14 @@ export function buildAnswers(
 
   const answers: Record<string, string | string[]> = {};
   for (const q of questions) {
-    let spec: AnswerSpec = DEFAULT_SPEC;
+    let spec: AnswerSpec | undefined;
     if (norm.kind === "byHeader") {
       const key = q.header ?? q.question;
-      spec = norm.map[key] ?? norm.map[q.question] ?? norm.fallback ?? DEFAULT_SPEC;
+      spec = norm.map[key] ?? norm.map[q.question] ?? norm.fallback;
     } else if (norm.kind === "sequence") {
-      spec = norm.specs[menuIndex] ?? norm.fallback ?? DEFAULT_SPEC;
+      spec = norm.specs[menuIndex] ?? norm.fallback;
     } else if (norm.kind === "pick") {
-      spec = norm.pick(q, questions, menuIndex) ?? DEFAULT_SPEC;
+      spec = norm.pick(q, questions, menuIndex);
     }
     answers[q.question] = resolveSpec(q, spec);
   }
@@ -1548,8 +1578,9 @@ export async function prepareSdkStageFixture(projectDir: string, stage: string):
 
 /**
  * Bind a main-workflow approval menu to this record, workflow and stage attempt.
- * English labels are the fixture's stage-protocol vocabulary; arbitrary
- * question prose, blockers and the preceding learnings menus are not gates.
+ * English labels are the fixture's stage-protocol vocabulary, in any order and
+ * beside any other choice; arbitrary question prose, blockers and the preceding
+ * learnings menus are not gates.
  */
 export async function stageApprovalQuestionBoundary(projectDir: string, stage: string) {
   const {
@@ -1587,11 +1618,11 @@ export async function stageApprovalQuestionBoundary(projectDir: string, stage: s
     identity: { record, stage, workflow, attempt },
     matches(menu: CapturedAskUserQuestion): boolean {
       const q = menu.questions[0];
+      const labels = q?.options.map((o) => o.label.trim().toLowerCase()) ?? [];
       if (
         menu.questions.length !== 1 || q.multiSelect ||
         q.header?.trim().toLowerCase() !== "approval" ||
-        q.options[0]?.label.trim().toLowerCase() !== "approve" ||
-        q.options[1]?.label.trim().toLowerCase() !== "request changes"
+        !labels.includes("approve") || !labels.includes("request changes")
       ) return false;
       const state = readStateFile(projectDir);
       if (

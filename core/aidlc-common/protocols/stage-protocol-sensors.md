@@ -19,7 +19,13 @@ timing, and `default_severity`; only sensors imported by the stage are eligible
 to run. `fire_on: write` runs during matching writes and remains advisory in
 this release, even when the manifest declares `blocking`. `fire_on: gate` runs
 against matching declared deliverables when the stage enters or re-enters its
-approval gate. Advisory outcomes emit their audit rows but do not stop the
+approval gate, and its advisory checks run once before that, when the
+documents are written and handed on: the review request, or the report that
+opens the gate when no review took them first, comes back as a `print` that
+names what a check found and the same command. That step is yours: fix what
+is yours in those documents, then run the command again. It goes on without
+checking again; the gate checks again and says what is left.
+Advisory outcomes emit their audit rows but do not stop the
 gate; a gate the engine approves itself under Construction autonomy runs only
 its blocking sensors, since advisory evidence has no reader there. A blocking gate sensor requires a verified pass: findings, unavailable
 evaluation, malformed output, and timeouts refuse gate entry until the issue
@@ -27,15 +33,19 @@ is fixed or the human-backed override flow above completes. Autonomous mode
 cannot override a blocking sensor.
 
 Failed checks emit a `SENSOR_FAILED` audit row and write findings to
-`<record>/.aidlc-engine/sensors/<stage-slug>/<sensor>-<fire-id>.md`.
+`<record>/.aidlc-engine/sensors/<stage-slug>/<sensor>-<fire-id>.md`. A check
+whose script crashed or could not start emits `SENSOR_COULD_NOT_RUN`: it checked
+nothing.
 
 When a gate opens, or is shown again, the engine's reply names each check that
-still fails on a declared output in its `narration`
+still fails on a declared output, and in one line the checks that could not run,
+in its `narration`
 on its own line after what the stage produced: say it to the person with the
 approval question, never claim coverage a
-check reports against (every requirement traced, every section present), and
+check reports against or could not run (every requirement traced, every section
+present, the code type-checks), and
 when they ask for changes, correct from that detail file. A Unit's own gate
-names that Unit's outputs only; with Sensors off,
+names that Unit's outputs and writes only; with Sensors off,
 nothing is said about checks.
 
 `required-sections` requires the `##` headings of a markdown output's

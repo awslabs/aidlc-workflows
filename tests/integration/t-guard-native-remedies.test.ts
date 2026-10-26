@@ -327,6 +327,11 @@ class Fixture {
     return output;
   }
 
+  // The agent's record of the recovery remedy it read from the person's reply.
+  recordRemedy(op: string): Run {
+    return this.tool("log", ["answer", "--stage", "code-generation", "--checkpoint", "guard-recovery", "--details", op]);
+  }
+
   marker(): ActiveDirectiveMarker | null {
     const path = join(seededRecordDir(this.project), ".aidlc-engine", "active-directive.json");
     return existsSync(path) ? JSON.parse(readFileSync(path, "utf-8")) as ActiveDirectiveMarker : null;
@@ -582,10 +587,8 @@ describe("source and native guard remedies execute their owning operations", () 
 
     const before = p.audit();
     const finished = json(p.exact(finishCommand!));
-    expect(finished).toMatchObject({
-      kind: "print",
-      message: `Recorded revised for "${STAGE}".`,
-    });
+    expect(finished).toMatchObject({ kind: "print" });
+    expect(finished.message).toStartWith(`Recorded revised for "${STAGE}".`);
     expect(p.state()).toContain(`- [?] ${STAGE} — EXECUTE`);
     const appended = p.audit().slice(before.length);
     expect(appended).toContain("**Event**: STAGE_AWAITING_APPROVAL");
@@ -614,6 +617,7 @@ describe("source and native guard remedies execute their owning operations", () 
       succeeded(harness.name === "copilot"
         ? p.copilotAdapter("record-human-turn", human)
         : p.hook("record-human-turn", human));
+      succeeded(p.recordRemedy(remedy.op));
       const selected = p.marker();
       expect(selected).toMatchObject({
         kind: "ask", delivery: "consumed", needs_rehydrate: false,
@@ -704,6 +708,7 @@ describe("source and native guard remedies execute their owning operations", () 
     succeeded(p.copilotAdapter("record-human-turn", {
       hook_event_name: "UserPromptSubmit", prompt: remedy.op,
     }));
+    succeeded(p.recordRemedy(remedy.op));
     const selected = p.marker();
     expect(selected).toMatchObject({
       kind: "ask", delivery: "consumed", needs_rehydrate: false,
@@ -749,6 +754,7 @@ describe("source and native guard remedies execute their owning operations", () 
       succeeded(p.copilotAdapter("record-human-turn", {
         hook_event_name: "UserPromptSubmit", prompt: remedy.op,
       }));
+      succeeded(p.recordRemedy(remedy.op));
       expect(p.marker()?.guard_recovery_response?.selected_op).toBe("redo-jump");
       // Obtain a real returned jump for the later denial assertion. Like the
       // conductor, select first; this read does not consume or replace the ask.
@@ -809,6 +815,7 @@ describe("source and native guard remedies execute their owning operations", () 
     succeeded(p.copilotAdapter("record-human-turn", {
       hook_event_name: "UserPromptSubmit", prompt: remedy.op,
     }));
+    succeeded(p.recordRemedy(remedy.op));
     const selectedJump = returnedJump(json(p.exact(remedy.command!)));
     const settled = (id: string, delivered?: string) => {
       const input = {
@@ -840,6 +847,7 @@ describe("source and native guard remedies execute their owning operations", () 
         hook_event_name: "UserPromptSubmit",
         prompt: choice === "wrong" ? "Approve Plan" : remedy.op,
       }));
+      if (choice === "stale") succeeded(p.recordRemedy(remedy.op));
       if (choice === "wrong") {
         expect(p.marker()?.guard_recovery_response?.selected_op).toBeNull();
       } else {
@@ -894,37 +902,23 @@ describe("source and native guard remedies execute their owning operations", () 
           const { refusal, remedy } = p.remedy(scenario.op);
           expect(refusal.state).toBe(scenario.lifecycle);
           expect(remedy.operation).toEqual({ kind: "restart-stage", stage: STAGE });
-          const instruction = json(p.exact(remedy.command!));
-          expect(instruction.kind, JSON.stringify(instruction)).toBe("print");
-          expect(p.state()).toBe(state);
-          expect(p.audit()).not.toContain("**Event**: STAGE_JUMPED");
-          const match = /^Run `([^`]+)` to perform the jump/.exec(String(instruction.message));
-          expect(match, JSON.stringify(instruction)).not.toBeNull();
-          const jumpCommand = match![1];
-          const jumpArgv = splitKiroCommandArgs(jumpCommand);
-          expect(jumpArgv[jumpArgv.indexOf("--target") + 1]).toBe(STAGE);
-          expect(jumpArgv[jumpArgv.indexOf("--direction") + 1]).toBe(scenario.direction);
-          // Follow the returned instruction verbatim, not a test-rebuilt jump.
-          const jumped = json(p.exact(jumpCommand));
-          expect(jumped).toMatchObject({
-            target: STAGE, direction: scenario.direction,
-            state_updated: true, audit_appended: true,
-          });
-          expect(jumped.stages_reset).toContain(STAGE);
-          expect(p.state()).toContain(`- [-] ${STAGE} — EXECUTE`);
+          // Outside Code Generation the remedy's own `next --stage` makes the
+          // restart itself and returns the target's step, run verbatim.
+          let directive = json(p.exact(remedy.command!));
+          expect(directive.kind, JSON.stringify(directive)).not.toBe("print");
+          expect(p.state()).toContain(`- [-] ${STAGE} \u2014 EXECUTE`);
           expect(p.state()).toContain(`- **Current Stage**: ${STAGE}`);
           expect(p.state()).toContain("- **Next Stage**: code-generation");
           if (scenario.direction === "backward") {
-            expect(jumped.stages_reset).toContain("code-generation");
-            expect(p.state()).toContain("- [ ] code-generation — EXECUTE");
-            expect(p.state()).toContain("- [ ] build-and-test — EXECUTE");
+            expect(p.state()).toContain("- [ ] code-generation \u2014 EXECUTE");
+            expect(p.state()).toContain("- [ ] build-and-test \u2014 EXECUTE");
           }
           expect(p.audit()).toContain("**Event**: STAGE_JUMPED");
+          expect(p.audit()).toContain(`**Direction**: ${scenario.direction.toUpperCase()}`);
           expect(p.audit()).toContain("**Event**: STAGE_STARTED");
           expect(p.audit()).not.toContain("**Event**: STAGE_COMPLETED");
           expect(readFileSync(questions, "utf-8")).toBe(answers);
 
-          let directive = json(p.tool("orchestrate", ["next"]));
           // Copilot's smaller directive budget sends the stage's rules first.
           for (let i = 0; directive.kind === "load-steering" && i < 64; i++) {
             expect(typeof directive.receipt).toBe("string");

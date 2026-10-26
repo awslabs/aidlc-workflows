@@ -1,4 +1,4 @@
-// covers: cli:aidlc-utility(intent add-checkout, intent remove-checkout), function:handleIntentCheckouts, function:readRecordedSourceCheckouts, function:writeRecordedSourceCheckouts, function:sourceWalkReach, function:recordUnitClaimCheckouts, function:walkSourceCheckouts
+// covers: cli:aidlc-utility(intent add-checkout, intent remove-checkout), function:handleIntentCheckouts, function:readRecordedSourceCheckouts, function:writeRecordedSourceCheckouts, function:sourceWalkReach, function:recordUnitClaimCheckouts, function:walkSourceCheckouts, function:registryExcludedSourceKeys
 //
 // A checkout the work's code is kept in where the review would not see it (a
 // worktree in the harness folder, or one outside the project) is recorded by
@@ -7,7 +7,9 @@
 // `remove-checkout`. The one source identity then walks the checkout, its files
 // listed as `<label>@checkout/<path>`; an empty record changes no fingerprint,
 // AI-DLC's own records in a same-repo worktree stay out of it, and 400 other
-// worktrees in the harness folder are never walked.
+// worktrees in the harness folder are never walked. A cache in the checkout is
+// left out by the exclude in the checkout's own .aidlc-source-paths.json, the
+// file its walk reads, and the refusal names that file.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -19,6 +21,7 @@ import {
   auditBlockField,
   readAuditShardEvents,
   readRecordedSourceCheckouts,
+  registryExcludedSourceKeys,
   workspaceSourceState,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -29,6 +32,7 @@ import {
   isGuardAsk,
   outsideRepo,
   PERSON,
+  personSays,
   reasonCodes,
   report,
   review,
@@ -37,10 +41,16 @@ import {
   sourceWorkRows,
   stageBox,
   startCodeGeneration,
+  state,
   tempDir,
   worktreeOf,
   writeCode,
 } from "../harness/source-work-layouts.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -287,5 +297,70 @@ describe("a Unit's claim records the checkout it lies in", () => {
     expect(codes).toContain("SOURCE_REVIEW_STALE");
     expect(codes).not.toContain("SOURCE_BOUNDARY_UNBINDABLE");
     expect(stageBox(proj)).toBe("?");
+  });
+});
+
+// A tool cache inside the recorded checkout (a test run's, the project does not
+// ignore it) rewritten after the review, on a plan with no Units, strict.
+describe("an exclude in a recorded checkout's own .aidlc-source-paths.json", () => {
+  const CACHE = "apps/web/.jest-cache";
+  const CHANGED = `feature@checkout/${CACHE}/haste-map-abc`;
+
+  function cacheRewrittenAfterReview(): { proj: string; worktree: string } {
+    const proj = shellWorkspace(".claude/worktrees/\n");
+    setGuardPolicy(proj, "strict", "set by you");
+    startCodeGeneration(proj, false);
+    commitRecords(proj);
+    const worktree = worktreeOf(proj, join(proj, ".claude", "worktrees", "feature"));
+    writeCode(worktree);
+    expect(checkoutCommand(proj, "add-checkout", ".claude/worktrees/feature").rc).toBe(0);
+    mkdirSync(join(worktree, CACHE), { recursive: true });
+    writeFileSync(join(worktree, CACHE, "haste-map-abc"), "\u0000haste-v1");
+    expect(review(proj, false, []).rc).toBe(0);
+    expect(report(proj, "awaiting-approval", PERSON).rc).toBe(0);
+    expect(stageBox(proj)).toBe("?");
+    writeFileSync(join(worktree, CACHE, "haste-map-abc"), "\u0000haste-v2");
+    return { proj, worktree };
+  }
+
+  function excludeIn(dir: string): void {
+    writeFileSync(join(dir, ".aidlc-source-paths.json"), `${JSON.stringify({ version: 1, exclude: [CACHE] })}\n`);
+  }
+
+  function reviewRequests(proj: string): number {
+    return readAuditShardEvents(proj).filter((row) => row.event === "REVIEW_REQUESTED").length;
+  }
+
+  test("the refusal names the checkout's own file, and the exclude written there completes with no further review", () => {
+    const { proj, worktree } = cacheRewrittenAfterReview();
+    const stale = state(proj, ["approve", "code-generation", "--user-input", "Approve"]);
+    expect(stale.rc).not.toBe(0);
+    expect(stale.out).toContain(`What changed: ${CHANGED}`);
+    expect(stale.out).toContain("of the path's own folder (.claude/worktrees/feature/.aidlc-source-paths.json)");
+    const requests = reviewRequests(proj);
+    excludeIn(worktree);
+    personSays(proj);
+    const approved = report(proj, "approved", PERSON, ["--user-input", "Approve"]);
+    expect(stageBox(proj), approved.out).toBe("x");
+    expect(reviewRequests(proj)).toBe(requests);
+  });
+
+  test("the project root's exclude does not leave out a checkout's file of the same path", () => {
+    const { proj } = cacheRewrittenAfterReview();
+    excludeIn(proj);
+    const stale = state(proj, ["approve", "code-generation", "--user-input", "Approve"]);
+    expect(stale.rc).not.toBe(0);
+    expect(stale.out).toContain(`What changed: ${CHANGED}`);
+    expect(stale.out).toContain("of the path's own folder (.claude/worktrees/feature/.aidlc-source-paths.json)");
+  });
+
+  test("each key reads its own checkout's registry, and a checkout no longer recorded leaves its keys counted", () => {
+    const { proj, worktree } = cacheRewrittenAfterReview();
+    excludeIn(worktree);
+    const key = `\0${CHANGED}`;
+    const code = "\0feature@checkout/src/auth/login.ts";
+    expect([...registryExcludedSourceKeys(proj, [key, code])]).toEqual([key]);
+    expect(checkoutCommand(proj, "remove-checkout", ".claude/worktrees/feature").rc).toBe(0);
+    expect([...registryExcludedSourceKeys(proj, [key])]).toEqual([]);
   });
 });

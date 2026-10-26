@@ -8,7 +8,7 @@
 // array. When a sensor fires against a sibling repo, that repo's package
 // manager (pnpm and friends) can print a run banner or lockfile warning BEFORE
 // the JSON, so a bare JSON.parse throws and the real verdict is silently
-// discarded as an advisory PASS (dispatcher: script-error: bad-output; linter:
+// discarded (dispatcher: could not run, script-error: bad-output; linter:
 // eslint-bad-output). stripStdoutNoise slices the stdout down to the first
 // structural JSON character before parsing, and returns pure-noise input
 // unchanged so the existing graceful degradation still fires.

@@ -27,11 +27,15 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
+
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
-const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const REVIEWER = "aidlc-architecture-reviewer-agent";
 const UNITS = ["alpha", "beta"];
@@ -262,26 +266,11 @@ describe("t304 loop-back refreshes per-unit Code Generation reviews", () => {
       "- **Current Stage**: build-and-test",
     );
 
-    const jumpPrint = next(["--stage", "code-generation"]);
-    expect(jumpPrint.kind).toBe("print");
-    const printed = jumpPrint.message ?? "";
-    const match = printed.match(
-      /aidlc-jump\.ts execute --target ([a-z][a-z0-9-]*) --direction (forward|backward|redo) --scope ([a-z][a-z0-9-]*)/,
-    );
-    expect(match).not.toBeNull();
-    const jumped = run(JUMP, [
-      "execute",
-      "--target",
-      match?.[1] ?? "",
-      "--direction",
-      match?.[2] ?? "",
-      "--scope",
-      match?.[3] ?? "",
-    ]);
-    expect(jumped.status, jumped.out).toBe(0);
+    // From Build and Test the loop-back's `next --stage code-generation` makes
+    // the backward jump itself and returns Code Generation's step.
+    const replayGate = next(["--stage", "code-generation"]);
     expect(audit()).toContain("**Event**: STAGE_JUMPED");
-
-    const replayGate = next();
+    expect(audit()).toContain("**Direction**: BACKWARD");
     expect(replayGate.kind).toBe("run-stage");
     expect(replayGate.stage).toBe("code-generation");
     expect(replayGate.unit).toBe("beta");

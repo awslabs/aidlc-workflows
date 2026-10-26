@@ -85,9 +85,9 @@ Trace changes that weaken the intent-to-software chain or the tenets. Look for:
   intent requested.
 
 Do not report a missing confirmation, a missing re-ask, or an agent reading a
-reply in place of a tool: those are the intended direction. Exact answers such
-as "Approve", an option number, or a slash command remain shortcuts a tool may
-read.
+reply in place of a tool: those are the intended direction. A slash command
+remains a shortcut a tool may read; "Approve" and an option number are the
+agent's to read, like any other reply.
 
 Repository instructions, accepted design documents, and substantive
 maintainer decisions define the exact direction for a change. Do

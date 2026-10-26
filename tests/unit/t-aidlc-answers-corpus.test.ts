@@ -1,5 +1,5 @@
-// covers: hook:aidlc-record-human-turn, function:exactOptionPick, function:personsLatestGatePick,
-// function:recordProtectedHumanResponse, function:notePlanApprovalAskReply, function:routingOptionReply,
+// covers: hook:aidlc-record-human-turn, function:exactOptionPick, function:personsGateReply,
+// function:recordProtectedHumanResponse, function:notePlanApprovalAskReply, function:openRoutingQuestion,
 // function:consumeSharedDirectiveAsk, function:offeredChoiceLabel, subcommand:aidlc-orchestrate:next,
 // subcommand:aidlc-orchestrate:report, subcommand:aidlc-log:answer, subcommand:aidlc-bolt:checkpoint
 //
@@ -10,9 +10,9 @@
 // there is one; a fixed sample per question also goes through each host's own hook shape (Claude Code's dispatcher,
 // the Codex, Kiro CLI and Kiro IDE adapters) and through the agent's answer command. Pass, for every item:
 //  1. the record keeps what they typed, verbatim;
-//  2. a tool records a choice only from an exact pick as the options were shown (a number where numbers were shown,
-//     the label, "(Recommended)" stripped); anything else is left for the agent, with nothing recorded and no question
-//     put to the person by the engine;
+//  2. a tool records a choice only from a pick in a question box (the host's own structure, "(Recommended)"
+//     stripped); a typed reply, a number or a label included, is left for the agent, with nothing recorded and no
+//     question put to the person by the engine;
 //  3. a non-answer (empty, or a dismissed box) records nothing and keeps nothing as a reply; a cancellation word the
 //     person typed ("Cancelled") is their reply like any other, since no host writes one for them;
 //  4. the agent's answer command with the exact choice it read puts the person's own words on the record beside it.
@@ -37,10 +37,11 @@ type HookShape = typeof CORE | Harness;
 const PARALLEL = Math.max(1, Number.parseInt(process.env.AIDLC_ANSWERS_PARALLEL ?? "6", 10) || 6);
 const ONLY = process.env.AIDLC_ANSWERS_ONLY?.split(",").map((s) => s.trim()).filter(Boolean);
 
-/** Questions whose exact pick a tool records at the hook, before any agent runs. The others are recorded only by the
- * agent's command, where the tool checks the label it passes (offeredChoiceLabel). */
+/** Questions whose pick in a question box a tool records at the hook, before any agent runs. A typed reply, and every
+ * other question's, is recorded only by the agent's command, where the tool checks the label it passes
+ * (offeredChoiceLabel); a stage gate records the choice the agent reports, as it reports it. */
 const HOOK_RECORDS = new Set<Question>([
-  "stage-gate", "stage-gate-accept-as-is", "code-plan", "code-plan-grouped", "unit-checkpoint", "batch-checkpoint",
+  "code-plan", "code-plan-grouped", "unit-checkpoint", "batch-checkpoint",
   "verification-command", "construction-policy", "guard-recovery",
 ]);
 /** Questions with an answer command of the agent's that this check runs (step 4). */
@@ -49,7 +50,7 @@ const AGENT_RECORDS = new Set<Question>([
   "batch-checkpoint", "verification-command", "construction-policy", "summary-confirmation", "stage-question", "answer-mode",
   "learnings", "reopened-stage", "guard-recovery",
 ]);
-/** The engine reads the typed reply itself when the agent forwards it to `next`. */
+/** The agent forwards the typed reply to `next`, which runs no answer and hands it back with the question's commands. */
 const ENGINE_READS = new Set<Question>(["routing"]);
 /** Questions whose reply a tool keeps word for word before any agent runs (gate words, protected responses). */
 const KEEPERS: Question[] = ["stage-gate", "stage-gate-accept-as-is", "unit-checkpoint", "batch-checkpoint", "verification-command", "construction-policy"];
@@ -68,7 +69,8 @@ const recordsByAgent = (item: AnswersItem): boolean =>
   AGENT_RECORDS.has(item.question) && item.expected.end.recorded !== "none" && item.expected.end.asks === 0 && !item.ambiguous;
 
 // The fixed samples (by position in the corpus, so they never drift): per question, the host shapes run for the first
-// exact pick typed in chat, the first plain-words reply, the first /aidlc line and every picker reply; the agent's
+// reply typed in chat that a tool reads (with none, the first number typed), the first plain-words reply, the first
+// /aidlc line and every picker reply; the agent's
 // answer command runs for the first approving reply with words and the first change request with words.
 function samples(): { hosts: Set<string>; agent: Set<string> } {
   const hosts = new Set<string>();
@@ -77,7 +79,7 @@ function samples(): { hosts: Set<string>; agent: Set<string> } {
     const of = ANSWERS.filter((item) => item.question === question);
     const first = (where: (item: AnswersItem) => boolean): AnswersItem | undefined => of.find(where);
     for (const item of [
-      first((i) => i.via === "chat" && i.reader === "tool"),
+      first((i) => i.via === "chat" && i.reader === "tool") ?? first((i) => i.via === "chat" && /^\d/.test(i.input)),
       first((i) => i.via === "chat" && i.reader === "agent" && i.input !== "" && !i.ambiguous),
       first((i) => i.via === "aidlc"),
       ...of.filter((i) => i.via === "picker"),
@@ -138,7 +140,7 @@ afterAll(() => {
   for (const proj of [...projects, ...templateProjects()]) cleanupTestProject(proj);
 });
 
-describe("the answers corpus: a tool records only an exact pick as shown, keeps the words, and records nothing from a non-answer", () => {
+describe("the answers corpus: a tool records only a pick in a question box, keeps the words, and records nothing from a non-answer", () => {
   for (const item of items) {
     const waits = waitsFor(item) ?? NO_FIXTURE[item.question];
     if (waits !== undefined && waits !== null) {
@@ -160,11 +162,11 @@ describe("the answers corpus: a tool records only an exact pick as shown, keeps 
           expect(hook.record, `${harness}: no message record`).not.toBeNull();
           expect(hook.record!.text, `${harness}: the record's text`).toBe(text);
         }
-        // 2. A choice is recorded by a tool only from an exact pick as shown; 3. a non-answer records nothing.
+        // 2. A choice is recorded by a tool only from a pick in a question box; 3. a non-answer records nothing.
         if (!ENGINE_READS.has(item.question)) {
           expect(hook.recorded.choice, `${harness}: the choice a tool recorded`).toBe(hookChoice);
         }
-        // A plan approved from an exact pick writes its row at once; the edit choice and every other question's pick
+        // A plan approved from a box pick writes its row at once; the edit choice and every other question's pick
         // land on their own record, never on a choice row.
         const rowsAllowed = item.question === "code-plan" && hookChoice !== "none" ? [0, 1]
           : item.question === "code-plan-grouped" && hookChoice !== "none" ? [0, 2] : [0];

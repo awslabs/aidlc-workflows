@@ -378,7 +378,9 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
       .toContain("- [R] requirements-analysis");
   });
 
-  test("revise refuses without a fresh post-rejection reviewer receipt", () => {
+  // A Request Changes that changed nothing keeps its review instead
+  // (t-unchanged-request-changes-keeps-review).
+  test("revise after a revision that changed the document refuses without a fresh post-rejection reviewer receipt", () => {
     const p = createTestProject();
     tempDirs.push(p);
     seedAidlcMemory(p);
@@ -401,6 +403,11 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
         TEST_ENV,
       ).status,
     ).toBe(0);
+    appendAuditEntry("ARTIFACT_UPDATED", {
+      File: join(seededRecordDir(p), "inception", "requirements-analysis", "requirements.md"),
+      Tool: "Edit",
+      Context: "inception > requirements-analysis > requirements.md",
+    }, p);
 
     const refused = run(
       STATE_TOOL,

@@ -137,15 +137,16 @@ Imports: `required-sections`.
 
 When `directive.protocol_modules` lists `learnings`, follow
 `stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
-working and run the ritual before the approval gate. When the module is absent,
-skip both the diary and the ritual.
+working, and take the learnings step before the approval gate; that module says
+when it asks the person anything. When the module is absent, skip both the diary
+and the step.
 ```
 
 The body opens with `## Steps` — the imperative prose the lead agent follows.
 The `## Sensors` compartment then summarizes output location, exact frontmatter
 imports, and upstream targets; preserve any stage-specific sensor exception.
 The final `## Learn` compartment points to `stage-protocol-learnings.md` §13
-only when `directive.protocol_modules` lists `learnings`; otherwise skip the diary and ritual. The module owns the bootstrap, isolated-run, per-unit, and gate-revision exemptions. For the complete field table,
+only when `directive.protocol_modules` lists `learnings`; otherwise skip the diary and step. The module owns when the step asks, and the bootstrap, isolated-run and per-unit exemptions. For the complete field table,
 types, and constraints, see
 [Field reference — when to use](../reference/15-stage-definition.md#field-reference-when-to-use).
 
@@ -295,7 +296,8 @@ topology, reviewer, and completion checks, reports once with
 not run workflow learnings or open a workflow approval gate.
 A `--single` run is deliberately isolated: it **never touches the main workflow's
 `Current Stage`** — the tool refuses to advance the main workflow from a single
-run, so running one stage on its own can never derail an in-flight workflow.
+run. It writes the stage's documents where the work keeps them, after keeping a
+copy of the files already there under the record's `archive/` folder.
 
 ### The runner skill is optional packaging
 

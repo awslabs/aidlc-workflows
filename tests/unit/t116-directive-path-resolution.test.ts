@@ -37,9 +37,9 @@
 // .sh drove (`bun "$TOOL" next ... 2>&1` then python-parsed the JSON). An
 // in-process twin is IMPOSSIBLE here: the functions are unreachable from TS.
 //
-// VEHICLE (mirrors the .sh's emit_for, t116): a WITH-STATE jump now emits
-// a `print` naming aidlc-jump.ts execute (NOT a run-stage; pinned by t114/t117/
-// t118), so the path-resolution behaviour is reached via the Branch-10 happy
+// VEHICLE (mirrors the .sh's emit_for, t116): a WITH-STATE jump also moves the
+// workflow (aidlc-jump.ts execute; pinned by t114/t117/t118), so the
+// path-resolution behaviour is reached via the Branch-10 happy
 // path — seed a fixture, pivot Current Stage to the target slug AND mark its
 // checkbox in-flight ([-]), then run bare `next`. That emits a run-stage for the
 // in-flight stage with produces/consumes resolved. Scope MUST be one where the
@@ -416,7 +416,9 @@ describe("t116 per-unit {unit-name} injection", () => {
   test("Code Generation owes Plan Approval but no summary confirmation in a summary-on scope", () => {
     expect(CG.ceremony?.summary_confirmation).toBe("off");
     expect(CG.ceremony?.plan_approval).toBe("on");
-    expect(CG.ceremony_note).toStartWith("Summary confirmation is off for this work:");
+    expect(CG.ceremony_note).toContain("skip the stage file's Consolidated Summary step");
+    expect(CG.ceremony_note).not.toContain("is off");
+    expect(CG.ceremony_note).not.toMatch(/summary confirmation/i);
     expect(CG.ceremony_note).not.toContain("confirm the summary of the answers");
     expect(CG.protocol_modules ?? []).not.toContain("summary");
   });
@@ -560,7 +562,7 @@ describe("t116 consumes presence split (consumes_absent)", () => {
     );
   });
 
-  test("17: multi-repo codekb consumes enumerate every present registered-repo path", () => {
+  test("17: multi-repo codekb consumes name each present artifact once, for every registered repo", () => {
     const repos = ["repo-a", "repo-b"];
     const dir = emitFor(
       "state-brownfield-feature.md",
@@ -595,19 +597,12 @@ describe("t116 consumes presence split (consumes_absent)", () => {
       },
     );
 
-    for (const repo of repos) {
-      expect(dir.consumes).toContain(
-        `aidlc/spaces/${DEFAULT_SPACE}/codekb/${repo}/architecture.md`,
-      );
-      expect(dir.consumes).toContain(
-        `aidlc/spaces/${DEFAULT_SPACE}/codekb/${repo}/component-inventory.md`,
-      );
-    }
-    expect(
-      allConsumePaths(dir).some((path) =>
-        /\/codekb\/[^/]+\/(?:architecture|component-inventory)\.md$/.test(path)
-      ),
-    ).toBe(true);
+    const codekb = allConsumePaths(dir).filter((path) => path.includes("/codekb/"));
+    expect(codekb.sort()).toEqual([
+      `aidlc/spaces/${DEFAULT_SPACE}/codekb/{repo}/architecture.md`,
+      `aidlc/spaces/${DEFAULT_SPACE}/codekb/{repo}/component-inventory.md`,
+    ]);
+    expect(dir.consumes).toEqual(expect.arrayContaining(codekb));
   });
 
   test("18: [S] without conditional-skip provenance does not make an on-path producer's absence expected", () => {

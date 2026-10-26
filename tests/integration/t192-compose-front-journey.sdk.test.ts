@@ -15,11 +15,11 @@
 //              11 files and 11 grid keys, and the created state runs a stock
 //              scope with a `Plan: <name>` line (the name the gate showed) and stage
 //              suffixes that differ from that scope's grid.
-//   case 2:    Approve and save as scope. After creation the conductor runs
-//              `scope save`, so a 12th scope lands (durable record + harness
-//              pair) carrying the running plan, keywords: [] (inferability is
-//              an explicit choice, never a side effect) and the four approved
-//              settings in the loader's words.
+//   case 2:    Approve and save as scope. The creation the engine names for
+//              that pick saves it (`--save-as`), so a 12th scope lands
+//              (durable record + harness pair) carrying the running plan,
+//              keywords: [] (inferability is an explicit choice, never a side
+//              effect) and the four approved settings in the loader's words.
 //
 // Assertions stay at the JOURNEY level (disk + tool results), tolerant of
 // conversational variance - NEVER on assistantText. If the live composer
@@ -48,7 +48,7 @@ import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { driveAidlc } from "../harness/sdk-drive.ts";
+import { type AnswerScript, driveAidlc } from "../harness/sdk-drive.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
 const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
@@ -72,12 +72,16 @@ const APPROVE_ALL = {
   map: {},
   fallback: { labelContains: "Approve" },
 };
-// Take the save option at the plan gate; the name question that follows offers
-// the composer's suggested name first, and a menu without the label takes it.
-const APPROVE_AND_SAVE = {
-  kind: "byHeader" as const,
-  map: {},
-  fallback: { labelContains: "save as scope" },
+// Take the save option at the plan gate, whatever its exact words ("Approve and
+// save", "Save as scope" are the person's same pick); the name question that
+// follows offers the composer's suggested name first, and a menu with no save
+// option takes the default pick.
+const APPROVE_AND_SAVE: AnswerScript = {
+  kind: "pick",
+  pick: (question) => {
+    const save = question.options.find((option) => /save/i.test(option.label));
+    return save === undefined ? undefined : { label: save.label };
+  },
 };
 
 const STOCK_SCOPES = new Set([
@@ -103,7 +107,7 @@ function planOf(state: string): Record<string, string> {
   return plan;
 }
 
-async function drive(proj: string, answerScript: typeof APPROVE_ALL, stopAfter: string, deadlineMs: number) {
+async function drive(proj: string, answerScript: AnswerScript, stopAfter: string, deadlineMs: number) {
   return driveAidlc(`/aidlc compose "${TASK}"`, {
     projectDir: proj,
     answerScript,

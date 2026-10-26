@@ -236,6 +236,41 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     );
   });
 
+  // Claude Code started in a folder inside the project offers /aidlc there but
+  // runs none of the project's hooks, and no setting changes that. Its own
+  // record of the chat (sessions/<pid>.json in its config folder) names that
+  // folder, so doctor gives the one step that works, before and after progress.
+  test("a Claude Code chat started in a folder inside the project gets the step to start it in the project folder", () => {
+    const inSrc = (project: string): Record<string, string> => {
+      const src = join(project, "src");
+      mkdirSync(src, { recursive: true });
+      const config = join(project, ".managed-policy", "claude-config");
+      mkdirSync(join(config, "sessions"), { recursive: true });
+      const session = "22222222-3333-4444-8555-666666666666";
+      writeFileSync(
+        join(config, "sessions", `${process.pid}.json`),
+        JSON.stringify({ pid: process.pid, sessionId: session, cwd: src }),
+        "utf-8",
+      );
+      return { CLAUDE_PID: String(process.pid), CLAUDE_CODE_SESSION_ID: session, CLAUDE_CONFIG_DIR: config };
+    };
+    const step = (project: string) =>
+      "Claude Code runs this project's hooks only when it is started in the project folder. Exit Claude Code, " +
+      `start it again in ${project}, then type /aidlc.`;
+
+    const fresh = freshProject();
+    const before = output(runUtility(fresh, ["doctor", "--verbose"], inSrc(fresh)));
+    expect(before).toContain("warn  AIDLC hooks have not run in this project yet");
+    expect(before).toContain(`fix: ${step(fresh)}`);
+    expect(before).not.toContain("This is expected before your first Claude Code chat");
+
+    const progressed = projectWithWorkflowProgress();
+    const after = output(runUtility(progressed, ["doctor", "--verbose"], inSrc(progressed)));
+    expect(after).toMatch(/fail {2}Hooks have never executed although this workflow has progressed/);
+    expect(after).toContain(step(progressed));
+    expect(after).not.toContain('Set "disableAllHooks": false in this project');
+  });
+
   test("Kiro IDE with a chat message's heartbeat reports the hooks as fired", () => {
     const project = freshProject();
     // Where the adapter's prompt heartbeat lands with no intent (t218 pins the write).

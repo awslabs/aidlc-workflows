@@ -4,14 +4,20 @@
 // comes back first in a new session and counts once, and the path checks read
 // only what the journey covers, and a question the agent asked from the
 // stage's questions file without logging it reaches them as the Stop hook reads
-// it. Seeded audit rows, questions files and engine output stand in for a live
-// run, so each case is exact.
+// it, and a question it asked in chat with nothing on record reaches them as a
+// model reads its words, and the person's files stay as they were until their
+// pick of a plan starts the work. Seeded audit rows, questions files, engine
+// output, shipped trees and a stand-in for the model stand in for a live run,
+// so each case is exact.
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { codexToolResults, copilotToolResults, copilotTurnCommand, opencodeRunCommand, opencodeToolResults } from "../harness/exec-drive.ts";
-import { cleanupTestProject, createTestProject, seededAuditShard, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
+import { addRootBlocks } from "../../dist/claude/.claude/tools/aidlc-includes.ts";
+import { sourceBaselineAuditFields, workspaceBaselineStageSlugs } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { codexReplies, codexToolResults, copilotToolResults, copilotTurnCommand, opencodeRunCommand, opencodeToolResults } from "../harness/exec-drive.ts";
+import { cleanupTestProject, createTestProject, REPO_ROOT, seededAuditShard, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { type GoldenJourney, type GoldenRun, goldenPathProblems, GoldenPerson } from "../harness/golden-journey.ts";
+import { seedGreeter } from "../harness/release-journey.ts";
 import type { CapturedToolResult } from "../harness/sdk-drive.ts";
 
 const projects: string[] = [];
@@ -176,6 +182,92 @@ describe("a question the stage's questions file holds", () => {
     expect(person.typedReply(7, []).line).toBeUndefined();
     expect(person.problems).toHaveLength(1);
     expect(person.problems[0]).toStartWith("turn 7 ended at requirements-analysis with nothing asked of the person");
+  });
+});
+
+describe("the plan question is one question, whichever record shows it", () => {
+  // The Copilot golden of 2026-10-22 (nightly 39678180458, attempt 1): the first session ends with the plan question
+  // the agent showed from the engine's note, so the person finds it in the questions file; the new session's /aidlc
+  // shows it as the engine's ask. The person met it once in each session, as the journey asks.
+  const PLAN_FILE = [
+    "# Code Generation Plan Approval", "", "## Plan Approval", "", "Approve the code plan?", "",
+    "- Builds: the greeting uses the name.", "", "- A. Approve Plan", "- B. Request Changes", "- C. I'll edit the files", "",
+    "[Answer]:", "",
+  ].join("\n");
+  const RUN_STAGE = shell("bun .aidlc/tools/aidlc-orchestrate.ts continue EGu2NsTK", { kind: "run-stage", stage: "code-generation", phase: "construction" });
+
+  test("left for the day from the questions file, it comes back as the engine's ask in the new session and counts once", () => {
+    const dir = createTestProject();
+    projects.push(dir);
+    writeFileSync(seededStateFile(dir), "# AI-DLC State\n\n- **Lifecycle Phase**: CONSTRUCTION\n- **Current Stage**: code-generation\n");
+    const file = join(seededRecordDir(dir), "construction", "code-generation", "code-generation-questions.md");
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, PLAN_FILE);
+    const person = new GoldenPerson(journey(dir, { newSessionAtPlan: "/aidlc" }));
+    expect(person.typedReply(6, [RUN_STAGE])).toEqual({ line: "/aidlc", newSession: true });
+    expect(person.typedReply(7, [PLAN_ASK])).toEqual({ line: "Approve Plan", newSession: false });
+    expect(person.problems).toEqual([]);
+    expect(person.planAsked).toBe(1);
+    expect(person.typedRun().problems).not.toContain("the plan question left for the day was never offered again in the new session");
+  });
+});
+
+describe("a question the agent asked in chat with nothing on record", () => {
+  const ASKED = "Which persona should the stories start with? A) the admin B) a guest";
+  const reads = (verdict: { asked: boolean; question: string; reason: string } | { failure: string }) => {
+    const seen: string[] = [];
+    const openQuestion = (words: string) => {
+      seen.push(words);
+      return verdict;
+    };
+    return { seen, openQuestion };
+  };
+
+  test("the person answers it as they answer an agent's question, in their own words at their stage", () => {
+    const judge = reads({ asked: true, question: "Which persona first?", reason: "it asks which persona" });
+    const person = new GoldenPerson(journey(project("user-stories"), { openQuestion: judge.openQuestion }));
+    expect(person.typedReply(3, [], ASKED)).toEqual({ line: "Go with what you recommend", newSession: false });
+    expect(judge.seen).toEqual([ASKED]);
+    expect(person.problems).toEqual([]);
+    expect(person.said).toEqual(['typed "Go with what you recommend" for "Which persona first?" (asked in chat) at user-stories']);
+    const own = new GoldenPerson(journey(project("requirements-analysis"), { openQuestion: judge.openQuestion }));
+    expect(own.typedReply(3, [], ASKED).line).toBe("Keep it small");
+  });
+
+  test("the same question again reached them twice", () => {
+    const judge = reads({ asked: true, question: "Which persona first?", reason: "it asks" });
+    const person = new GoldenPerson(journey(project("user-stories"), { openQuestion: judge.openQuestion }));
+    person.typedReply(3, [], ASKED);
+    person.typedReply(4, [], ASKED);
+    expect(person.problems).toEqual(['asked twice: "Which persona first?" at user-stories']);
+  });
+
+  test("words that ask nothing leave the turn one with nothing asked, with the model's reason", () => {
+    const person = new GoldenPerson(journey(project("user-stories"), { openQuestion: reads({ asked: false, question: "", reason: "it only reports what it did" }).openQuestion }));
+    expect(person.typedReply(3, [], "I wrote the stories.").line).toBeUndefined();
+    expect(person.problems).toEqual(["turn 3 ended at user-stories with nothing asked of the person (it only reports what it did); the engine's last step was null"]);
+  });
+
+  test("a judge that cannot answer leaves the turn as it was, saying why; no words, no judge", () => {
+    const failed = new GoldenPerson(journey(project("user-stories"), { openQuestion: reads({ failure: "the judge could not run (exit 127): claude: not found" }).openQuestion }));
+    failed.typedReply(3, [], ASKED);
+    expect(failed.problems[0]).toStartWith("turn 3 ended at user-stories with nothing asked of the person (the judge could not run (exit 127)");
+    const silent = reads({ asked: true, question: "never asked", reason: "" });
+    const person = new GoldenPerson(journey(project("user-stories"), { openQuestion: silent.openQuestion }));
+    expect(person.typedReply(3, []).line).toBeUndefined();
+    expect(silent.seen).toEqual([]);
+    expect(person.problems[0]).toStartWith("turn 3 ended at user-stories with nothing asked of the person (the agent said nothing to the person)");
+  });
+
+  test("what Codex told the person comes from its JSON stream's finished agent messages, in order", () => {
+    const stdout = [
+      JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "First." } }),
+      JSON.stringify({ type: "item.completed", item: { id: "item_2", type: "command_execution", command: "ls", aggregated_output: "x", exit_code: 0 } }),
+      JSON.stringify({ type: "item.completed", item: { id: "item_3", type: "agent_message", text: "  " } }),
+      JSON.stringify({ type: "item.completed", item: { id: "item_4", type: "agent_message", text: "Which persona first?" } }),
+      "not json",
+    ].join("\n");
+    expect(codexReplies(stdout)).toEqual([{ text: "First." }, { text: "Which persona first?" }]);
   });
 });
 
@@ -344,5 +436,102 @@ describe("an opencode run turn", () => {
         { toolName: "Bash", input: { command: "rm -r x" }, toolUseId: "c2", resultText: "The user rejected permission to use this specific tool call.", isError: true },
       ],
     });
+  });
+});
+
+describe("the person's files until their pick of a plan starts the work", () => {
+  const TREES = ["claude", "codex", "copilot", "opencode", "kiro", "kiro-ide", "cursor"];
+  // A Copilot golden run of 2026-10-23: in its first turn, before the plan question was ever shown, the agent left
+  // src/app.js like this, and WORKFLOW_STARTED's Source Baseline listed it so.
+  const FIXED = `const name = process.argv[2];\nconsole.log(\`Hello, \${name}!\`);\n`;
+
+  /** The person's greeter with `tree`'s shipped files copied in, as a copy that config never ran in. */
+  function greeter(tree: string): string {
+    const dir = createTestProject();
+    projects.push(dir);
+    cpSync(join(REPO_ROOT, "dist", tree), dir, { recursive: true });
+    seedGreeter(dir);
+    return dir;
+  }
+
+  /** Their pick starts the work: `intent create` writes its state and WORKFLOW_STARTED, which lists their files. */
+  function picked(dir: string, baseline?: string): void {
+    writeFileSync(seededStateFile(dir), "# AI-DLC State\n\n- **Current Stage**: workspace-detection\n");
+    row(dir, "WORKFLOW_STARTED", {
+      Scope: "bugfix", ...(baseline === undefined ? sourceBaselineAuditFields(dir, workspaceBaselineStageSlugs()) : { "Source Baseline": baseline }),
+    });
+  }
+
+  const fileLines = (person: GoldenPerson, dir: string) =>
+    goldenPathProblems(journey(dir), run(person)).filter((p) => /the person's files|list of the person's files/.test(p));
+
+  test("an edit before their pick is named: the kept Copilot run", () => {
+    const dir = greeter("copilot");
+    const person = new GoldenPerson(journey(dir));
+    writeFileSync(join(dir, "src", "app.js"), FIXED);
+    picked(dir);
+    expect(fileLines(person, dir)).toEqual(["the person's files changed before their pick started the work: src/app.js"]);
+  });
+
+  test("a file removed and a file added before their pick are named too", () => {
+    const dir = greeter("copilot");
+    const person = new GoldenPerson(journey(dir));
+    unlinkSync(join(dir, "README.md"));
+    writeFileSync(join(dir, "src", "name.js"), "module.exports = (name) => name;\n");
+    picked(dir);
+    expect(fileLines(person, dir)).toEqual(["the person's files changed before their pick started the work: README.md, src/name.js"]);
+  });
+
+  for (const tree of TREES) {
+    test(`on the ${tree} tree, AI-DLC's own first session changes none of their files, and an edit is named`, () => {
+      const untouched = greeter(tree);
+      const person = new GoldenPerson(journey(untouched));
+      addRootBlocks(untouched);
+      picked(untouched);
+      expect(fileLines(person, untouched)).toEqual([]);
+      const edited = greeter(tree);
+      const ranAhead = new GoldenPerson(journey(edited));
+      addRootBlocks(edited);
+      writeFileSync(join(edited, "src", "app.js"), FIXED);
+      picked(edited);
+      expect(fileLines(ranAhead, edited)).toEqual(["the person's files changed before their pick started the work: src/app.js"]);
+    });
+  }
+
+  test("AI-DLC's part of the root files, the host's own folder and the work after their pick are not theirs changed first", () => {
+    // The kept opencode run: AI-DLC's first session added its part of .gitignore and AGENTS.md, and opencode installed
+    // its plugin's packages in .opencode, before the pick.
+    const dir = greeter("opencode");
+    const person = new GoldenPerson(journey(dir));
+    expect(addRootBlocks(dir)).toEqual(expect.arrayContaining([".gitignore", "AGENTS.md"]));
+    writeFileSync(join(dir, ".opencode", "package.json"), '{ "dependencies": { "@opencode-ai/plugin": "1.19.4" } }\n');
+    picked(dir);
+    writeFileSync(join(dir, "src", "app.js"), FIXED);
+    writeFileSync(join(dir, "src", "name.js"), "module.exports = (name) => name;\n");
+    expect(fileLines(person, dir)).toEqual([]);
+  });
+
+  test("with no pick in the journey, a change by its end is named", () => {
+    const dir = greeter("claude");
+    const person = new GoldenPerson(journey(dir));
+    writeFileSync(join(dir, "src", "app.js"), FIXED);
+    expect(fileLines(person, dir)).toEqual(["the person's files changed and no plan was picked: src/app.js"]);
+  });
+
+  test("a pick before the journey began leaves nothing to check", () => {
+    const dir = greeter("claude");
+    picked(dir);
+    const person = new GoldenPerson(journey(dir));
+    writeFileSync(join(dir, "src", "app.js"), FIXED);
+    expect(fileLines(person, dir)).toEqual([]);
+  });
+
+  test("a pick whose record keeps no list of their files says so", () => {
+    const dir = greeter("claude");
+    const person = new GoldenPerson(journey(dir));
+    picked(dir, "unbindable");
+    expect(fileLines(person, dir)).toEqual([
+      "the record keeps no list of the person's files from when their pick started the work (Source Baseline unbindable), so the journey cannot tell whether they changed before it",
+    ]);
   });
 });

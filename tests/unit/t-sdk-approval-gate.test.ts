@@ -35,6 +35,7 @@ mock.module("@anthropic-ai/claude-agent-sdk", () => ({
   query: (input: QueryInput) => scenario(input),
 }));
 const {
+  buildAnswers,
   driveAidlc,
   prepareSdkStageFixture,
   stageApprovalQuestionBoundary,
@@ -529,5 +530,27 @@ describe("the answer stream stays open while subagents still run", () => {
     expect(driven.resultEvent?.subtype).toBe("success");
     // The earlier success does not make the timed-out run pass.
     expect(() => assertResultOk(driven)).toThrow("the drive timed out");
+  });
+});
+
+describe("the test person's decision does not move with the box's order", () => {
+  test.each([
+    [["Approve", "Request Changes"]],
+    [["Request Changes", "Approve"]],
+    [["Request Changes", "Approve", "Add User Stories"]],
+    [["Approve, and add User Stories next", "Approve", "Request Changes"]],
+  ])("the default person approves the gate: %j", (labels) => {
+    const asked = approval();
+    asked.questions[0].options = labels.map((label) => ({ label }));
+    expect(buildAnswers(asked.questions, "default", 0)).toEqual({ [asked.questions[0].question]: "Approve" });
+  });
+
+  test("the gate is the gate whatever order the box shows its choices in", async () => {
+    const project = positionedProject();
+    const gate = await stageApprovalQuestionBoundary(project, STAGE);
+    holdGate(project);
+    expect(gate.matches(menu("Approval", ["Request Changes", "Approve"], "Review the reverse-engineering artifacts."))).toBe(true);
+    expect(gate.matches(menu("Approval", ["Approve", "Request Changes", "Add User Stories"], "Review the artifacts."))).toBe(true);
+    expect(gate.matches(menu("Approval", ["Approve", "Add User Stories"], "Review the artifacts."))).toBe(false);
   });
 });

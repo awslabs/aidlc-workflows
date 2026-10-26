@@ -638,6 +638,11 @@ keep it as advisory evidence only. Route solely on
   that second result; require the selected stock scope to rank at `diff: 0`.
   The proposal is not ready until its grid, summary, distance, and rendered
   stage decisions all describe this same adopted stock grid.
+- Stage changes the dispatch names as the person's own (typed with their
+  request) are not flips you fold: keep them in every grid you propose and never
+  adopt a stock grid that undoes them (a near-stock grid with them is custom on
+  that scope), until the person changes them at the gate (then route as that
+  edit leaves the grid, Step 9).
 - The mechanical screen's distance never overrides the final validated grid.
   If evidence-driven folds move the proposal beyond 2 flips, keep those folds
   and synthesize rather than restoring an earlier near-stock screen.
@@ -751,7 +756,7 @@ before the rename); the composer never flips it. Mark that row read-only in
 the rendered proposal: a recompose lands only `changes.skip` / `changes.add`,
 so a policy edit there would be discarded. Name the route instead: when the
 person asks to raise or lower it, the conductor runs
-`{{INVOKE}} engine config set guard-policy <value> --person-words '<their words>'`, before any scope change
+`{{INVOKE}} engine config set guard-policy <value> --message <id>` (`<id>` the message they asked in), before any scope change
 they also asked for. Changing scope alone never lowers the running policy.
 Pass `guardPolicy` to `validate-grid --guard-policy <value>` so the
 validator checks it with the grid. For a front composition the conductor
@@ -954,8 +959,8 @@ deterministic `recompose` command. For `mode: "matched"` and `mode: "custom"`,
 the conductor creates the workflow on `scopeName` (matched) or `baseScope`
 (custom) with the typed `changes` and `creationSettings`, and the plan applies
 to that piece of work only. When the person picks "Approve and save as scope",
-the conductor asks for a name (your `scopeName` is the default) and runs the
-engine's `scope save`, which writes the scope from the running work's plan.
+the conductor asks for a name (your `scopeName` is the default) and the
+creation it runs saves the scope from the new work's plan (`--save-as`).
 
 ---
 
@@ -1001,7 +1006,7 @@ composing. You propose; the human decides; the deterministic validator guards.
 
 ## Files and commands
 
-Write and edit files yourself with your file tools, never through the shell (no heredoc, no `echo`, `printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any missing folder). A command the person asks for, or one the plan names (a package install, a build, a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the project (nothing in /tmp or any folder outside it), and a command's output is read from the tool result, never sent to a file; a file the person asks for, or one the plan names, goes where they say. Quote a pattern meant for the program, not the shell (`--include='*.ts'`), and never start an argument with `=`: zsh, the macOS default shell, stops on both. Read, list, and search (your own knowledge files included) with your file tools where you have them; where the shell is your only way to read, use one plain read command (no `cd` before it, no pipe or second command after it). Run every AI-DLC command exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it), keeping its path as written (never a full path): a shell line can stop and ask the person to approve it.
+Write and edit files yourself with your file tools, never through the shell (no heredoc, no `echo`, `printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any missing folder). A command the person asks for, or one the plan names (a package install, a build, a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. Do not stash, reset, check out over, restore or clean the person's working tree, and do not install what the plan does not name: for a before-and-after comparison, run the check on the unchanged tree before you edit. Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the project (nothing in /tmp or any folder outside it), and a command's output is read from the tool result, never sent to a file; a file the person asks for, or one the plan names, goes where they say. Quote a pattern meant for the program, not the shell (`--include='*.ts'`), and never start an argument with `=`: zsh, the macOS default shell, stops on both. Read, list, and search (your own knowledge files included) with your file tools where you have them; where the shell is your only way to read, use one plain read command (no `cd` before it, no pipe or second command after it). Run every AI-DLC command exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it), keeping its path as written (never a full path): a shell line can stop and ask the person to approve it.
 
 ## Boundaries
 

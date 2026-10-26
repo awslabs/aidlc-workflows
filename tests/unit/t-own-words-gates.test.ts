@@ -1,7 +1,7 @@
 // covers: function:isNonAnswer, function:stripRecommendedDecorator, function:formatReceivedReply
-// covers: function:exactOptionPick, function:stageGateApproval, function:personsGateWords
-// covers: function:stageRevisionCycles, function:stageAcceptAsIsOnOffer, function:ACCEPT_AS_IS_REVISION_CYCLES
-// covers: function:personsLatestGatePick, function:changeRequestWords, function:markProtectedQuestionReplied
+// covers: function:exactOptionPick, function:personsGateReply
+// covers: function:changeRequestWords, function:markProtectedQuestionReplied
+// covers: function:stageRevisionCycles, function:ACCEPT_AS_IS_REVISION_CYCLES, function:addRevisionCycle
 // covers: function:recordProtectedHumanResponse, function:requireProtectedResponse
 // covers: function:consumeSharedDirectiveAsk, function:recordGuardRecoveryChoice
 // covers: function:openDecisionBlock, function:PROTECTED_RESPONSE_WORDS_MAX_CHARS
@@ -11,10 +11,12 @@
 // for judgement). The agent reads the person's reply and records the choice
 // they made; the engine keeps their exact words on the receipt and never reads
 // meaning into them. What stays a tool's job is exact: that a person replied
-// since the question was shown, their words verbatim, and a reply that is
-// exactly one offered option, which is recorded as their pick and cannot be
-// overruled by the agent. These cases protect that split at a stage gate, the
-// summary confirmation, a protected checkpoint question, and a recovery ask.
+// since the last decision, their words verbatim, and, at the engine's own
+// checkpoint and recovery questions, a reply that is exactly one of the choices
+// the engine handed, which is recorded as their pick. At a stage gate the
+// choice is the agent's reading, recorded as it passed it. These cases protect
+// that split at a stage gate, the summary confirmation, a protected checkpoint
+// question, and a recovery ask.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
@@ -27,12 +29,14 @@ import {
   createTestProject,
   FIXTURES_DIR,
   resetAidlcEnv,
+  seedAidlcMemory,
   seededAuditShard,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 import {
+  ACCEPT_AS_IS_REVISION_CYCLES,
   type ActiveDirectiveGuardRemedy,
   auditBlockField,
   changeRequestWords,
@@ -50,7 +54,7 @@ import {
   readProtectedResponse,
   recordGuardRecoveryChoice,
   requireProtectedResponse,
-  stageGateApproval,
+  stageRevisionCycles,
   stateDigest,
   stripRecommendedDecorator,
   turnEndIsOpen,
@@ -71,6 +75,7 @@ const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
 const SESSION = "01995000-7a11-7000-8000-00000000f00d";
+const OTHER_SESSION = "01995000-7a11-7000-8000-00000000beef";
 
 function run(tool: string, args: string[], extra: Record<string, string> = {}): { rc: number; out: string } {
   const env: Record<string, string | undefined> = {
@@ -185,11 +190,7 @@ describe("an exact pick is syntax, and only syntax", () => {
     for (const blank of ["", "   ", "\n\t", null, undefined]) expect(isNonAnswer(blank)).toBe(true);
     expect(stripRecommendedDecorator("Approve (Recommended)")).toBe("Approve");
     expect(formatReceivedReply("  a\n b ")).toBe('"a b"');
-    expect(stageGateApproval("Accept as-is", true)).toBe("Accept as-is");
-    expect(stageGateApproval("c) Accept as-is", true)).toBe("Accept as-is");
-    expect(stageGateApproval("Accept as-is", false)).toBe("Approve");
-    expect(stageGateApproval("looks fine but rename the handler", true)).toBe("Approve");
-    expect(changeRequestWords("2\nrename the handler\nRequest Changes")).toBe("rename the handler");
+    expect(changeRequestWords("2\nrename the handler\nRequest Changes")).toBe("2 rename the handler Request Changes");
   });
 });
 
@@ -217,21 +218,6 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(refused.message).toContain("never answer it for the person");
     expect(refused.message).not.toContain('"error":');
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
-    return refused;
-  }
-
-  // The person already chose, and the agent reported something else: nothing
-  // is recorded and the gate stays as it was, but the step is to record their
-  // choice now, not to ask them again, so the turn does not end there.
-  function theirChoice(refuse: () => { kind: string; message?: string }): { kind: string; message?: string } {
-    const before = readFileSync(seededStateFile(proj), "utf-8");
-    const refused = refuse();
-    expect(refused.kind, JSON.stringify(refused)).toBe("print");
-    expect(refused.message).toContain("Report that");
-    expect(refused.message).not.toContain("is still open");
-    expect(refused.message).not.toContain('"error":');
-    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
-    expect(turnEndIsOpen(proj)).toBe(false);
     return refused;
   }
 
@@ -389,11 +375,16 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(events(proj, "WORKFLOW_PARKED")).toHaveLength(1);
   });
 
-  test.each(["2", "b) Request Changes"])("an exact Request Changes (%s) is the person's pick: an approval is refused", (pick) => {
-    says(proj, pick);
-    const refused = theirChoice(() => report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]));
-    expect(refused.message).toContain("picked Request Changes");
-    expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+  // The agent read "2" against the list it showed (its own question beside the
+  // gate, say): its approval stands, and the record keeps "2" beside it.
+  test.each(["2", "b) Request Changes"])("the agent's approval on %s is recorded, with their words beside it", (typed) => {
+    says(proj, typed);
+    const done = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    const approved = events(proj, "GATE_APPROVED");
+    expect(approved).toHaveLength(1);
+    expect(auditBlockField(approved[0].block, "User Input")).toBe("Approve");
+    expect(auditBlockField(approved[0].block, "Person Reply")).toBe(typed);
   });
 
   // The gate is shown as a picker or as numbered options, never with letters:
@@ -418,11 +409,13 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(events(proj, "GATE_REJECTED")).toHaveLength(1);
   });
 
-  test("a Request Changes picked in the picker is the person's pick: an approval is refused", () => {
+  test("a pick in the question box is their words on the record, beside the choice the agent reported", () => {
     picks(proj, "Request Changes");
-    const refused = theirChoice(() => report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]));
-    expect(refused.message).toContain("picked Request Changes");
-    expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+    const done = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    const approved = events(proj, "GATE_APPROVED");
+    expect(approved).toHaveLength(1);
+    expect(auditBlockField(approved[0].block, "Person Reply")).toBe("Request Changes");
   });
 
   test("an Approve picked in some other picker is not the gate's pick", () => {
@@ -433,7 +426,7 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(events(proj, "GATE_REJECTED")).toHaveLength(1);
   });
 
-  // The change requests the escape hatch counts, as the reject path records
+  // Change requests at the stage's gate, as the reject path records
   // them, each followed by the revised gate shown again.
   function changesRequested(stage: string, times: number, fields: Record<string, string> = {}): void {
     for (let i = 0; i < times; i++) {
@@ -442,83 +435,128 @@ describe("the stage gate records the choice the agent read, with the person's wo
     }
   }
 
-  test("once Accept as-is is on offer, a typed 3 is that pick, whatever approval the agent reports", () => {
+  test("once Accept as-is is on offer, the approval the agent read from a typed 3 is the one recorded", () => {
     changesRequested(slug, 3);
     says(proj, "3");
-    expect(report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]).kind).toBe("done");
-    expect(auditBlockField(events(proj, "GATE_APPROVED")[0].block, "User Input")).toBe("Accept as-is");
-  });
-
-  // The escape hatch opens after three change requests on the same stage. The
-  // state file's Revision Count runs across the workflow, so other stages'
-  // requests never put it on offer here.
-  test("other stages' change requests leave Accept as-is off: a typed 3 is no pick at a two-option gate", () => {
-    changesRequested("intent-capture", 3);
-    expect(state(proj, ["set", "Revision Count=3"]).rc).toBe(0);
-    says(proj, "3");
-    const revised = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "tighten it"]);
-    expect(revised.kind, JSON.stringify(revised)).toBe("print");
-    expect(revised.message ?? "").not.toContain("picked Accept as-is");
-    expect(events(proj, "GATE_REJECTED").filter((row) => auditBlockField(row.block, "Stage") === slug)).toHaveLength(1);
-  });
-
-  test("other stages' change requests leave Accept as-is off: the approval is recorded as Approve", () => {
-    changesRequested("intent-capture", 3);
-    expect(state(proj, ["set", "Revision Count=3"]).rc).toBe(0);
-    says(proj, "Accept as-is");
     expect(report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Accept as-is"]).kind).toBe("done");
-    expect(auditBlockField(events(proj, "GATE_APPROVED")[0].block, "User Input")).toBe("Approve");
+    const approved = events(proj, "GATE_APPROVED")[0].block;
+    expect(auditBlockField(approved, "User Input")).toBe("Accept as-is");
+    expect(auditBlockField(approved, "Person Reply")).toBe("3");
   });
 
-  test("an approval or a fresh reopen of the stage starts its count again", () => {
-    changesRequested(slug, 3);
+  // The count the status line shows is this stage's own change requests since
+  // it was last approved or freshly reopened; the state file's Revision Count
+  // runs across the workflow.
+  test("the revision count is this stage's own change requests since its last approval or fresh reopen", () => {
+    const count = () => stageRevisionCycles(readAuditShardEvents(proj), slug);
+    changesRequested("intent-capture", 3);
+    expect(state(proj, ["set", "Revision Count=3"]).rc).toBe(0);
+    expect(count()).toBe(0);
+    changesRequested(slug, ACCEPT_AS_IS_REVISION_CYCLES);
+    expect(count()).toBe(ACCEPT_AS_IS_REVISION_CYCLES);
     appendAuditEntry("GATE_APPROVED", { Stage: slug, "User Input": "Approve" }, proj);
+    expect(count()).toBe(0);
     changesRequested(slug, 1, { Reopen: "jump" });
     changesRequested(slug, 2);
-    says(proj, "Accept as-is");
-    expect(report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Accept as-is"]).kind).toBe("done");
-    const approvals = events(proj, "GATE_APPROVED");
-    expect(auditBlockField(approvals[approvals.length - 1].block, "User Input")).toBe("Approve");
+    expect(count()).toBe(2);
   });
 
-  test("an exact Approve is the person's pick: a rejection is refused", () => {
+  // The conductor offers Accept as-is from the gate reply, never from its own
+  // count in the chat, so the offer survives a park and a new chat.
+  test("the gate reply carries this stage's change-request count, and a park keeps it", () => {
+    type GateReply = { kind: string; revision_cycle?: number; accept_as_is?: string };
+    const shown: GateReply[] = [];
+    for (let i = 0; i < 2; i++) {
+      says(proj, `tighten section ${i + 1}`);
+      const rejected = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "tighten it"]);
+      expect(rejected.kind, JSON.stringify(rejected)).toBe("print");
+      shown.push(report(proj, ["--stage", slug, "--result", "revised"]) as GateReply);
+    }
+    expect(shown.map((r) => [r.kind, r.revision_cycle, r.accept_as_is])).toEqual([
+      ["print", 1, undefined],
+      ["print", 2, "next-revision"],
+    ]);
+
+    says(proj, "tighten it once more, then let's stop for today");
+    const third = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "tighten it"]);
+    expect(third.kind, JSON.stringify(third)).toBe("print");
+    expect(state(proj, ["park"]).rc).toBe(0);
+    expect(events(proj, "WORKFLOW_PARKED")).toHaveLength(1);
+
+    // A new chat picks the revision up: the gate shown again still counts three.
+    const resumed = run(ORCHESTRATE, ["next", "--resume", "--project-dir", proj], { AIDLC_SESSION_OVERRIDE: OTHER_SESSION });
+    expect(resumed.rc, resumed.out).toBe(0);
+    const again = JSON.parse(
+      run(ORCHESTRATE, ["report", "--stage", slug, "--result", "revised", "--project-dir", proj], {
+        AIDLC_SESSION_OVERRIDE: OTHER_SESSION,
+      }).out.split("\n").find((line) => line.startsWith("{")) as string,
+    ) as GateReply;
+    expect([again.kind, again.revision_cycle, again.accept_as_is]).toEqual(["print", 3, "offered"]);
+  });
+
+  // The gate is where people stop: the step `next` shows it again with, in a
+  // new chat or after a park at the open gate, carries the count too.
+  test("the gate shown again in a new chat, or after a park at the open gate, carries the count", () => {
+    type GateStep = { kind: string; gate_only?: boolean; revision_cycle?: number; accept_as_is?: string };
+    seedAidlcMemory(proj);
+    for (let i = 0; i < 3; i++) {
+      says(proj, `tighten section ${i + 1}`);
+      report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "tighten it"]);
+      expect(report(proj, ["--stage", slug, "--result", "revised"]).kind).toBe("print");
+    }
+    const shownAgain = (args: string[]): GateStep => {
+      const r = run(ORCHESTRATE, [...args, "--project-dir", proj], { AIDLC_SESSION_OVERRIDE: OTHER_SESSION });
+      expect(r.rc, r.out).toBe(0);
+      const step = JSON.parse(r.out.split("\n").find((line) => line.startsWith("{")) as string) as GateStep;
+      return { kind: step.kind, gate_only: step.gate_only, revision_cycle: step.revision_cycle, accept_as_is: step.accept_as_is };
+    };
+    const offered = { kind: "run-stage", gate_only: true, revision_cycle: 3, accept_as_is: "offered" };
+
+    expect(shownAgain(["next"])).toEqual(offered);
+
+    says(proj, "let me think about it, stop for today");
+    expect(state(proj, ["park"]).rc).toBe(0);
+    expect(state(proj, ["unpark"]).rc).toBe(0);
+    expect(shownAgain(["next", "--resume"])).toEqual(offered);
+  });
+
+  test("a gate shown with no change request on record carries no count", () => {
+    const opened = report(proj, ["--stage", slug, "--result", "awaiting-approval"]) as Record<string, unknown>;
+    expect(opened.kind, JSON.stringify(opened)).toBe("print");
+    expect("revision_cycle" in opened).toBe(false);
+    expect("accept_as_is" in opened).toBe(false);
+  });
+
+  // A misread shows on the record, where the person's correction starts from:
+  // their word as the feedback, the agent's own account beside it.
+  test("a rejection the agent reports on \"Approve\" is recorded with their word as the feedback", () => {
     says(proj, "Approve");
-    const refused = theirChoice(() =>
-      report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "x"])
-    );
-    expect(refused.message).toContain("picked Approve");
-    expect(events(proj, "GATE_REJECTED")).toHaveLength(0);
+    const revised = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "x"]);
+    expect(revised.kind, JSON.stringify(revised)).toBe("print");
+    const rejected = events(proj, "GATE_REJECTED");
+    expect(rejected).toHaveLength(1);
+    expect(auditBlockField(rejected[0].block, "Feedback")).toBe("Approve");
+    expect(auditBlockField(rejected[0].block, "Conductor Summary")).toBe("x");
   });
 
-  test("their latest message decides: a pick they then talked past is not held against them", () => {
+  test("a reply they then talked past is theirs too: the approval the agent read stands", () => {
     says(proj, "2");
     says(proj, "actually it is fine, go ahead");
     expect(report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]).kind).toBe("done");
   });
 
-  test("a change request takes their words as the feedback, leaving out a bare pick", () => {
+  test("a change request takes every word they said as the feedback, the pick included", () => {
     says(proj, "Request Changes");
     says(proj, "rename the handler");
     const revised = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes"]);
     expect(revised.kind, JSON.stringify(revised)).toBe("print");
-    expect(auditBlockField(events(proj, "GATE_REJECTED")[0].block, "Feedback")).toBe("rename the handler");
+    expect(auditBlockField(events(proj, "GATE_REJECTED")[0].block, "Feedback")).toBe("Request Changes\\nrename the handler");
   });
 
-  test("nothing is decided without a reply from the person since the gate was shown", () => {
+  test("nothing is decided without a reply from the person since the last decision", () => {
     const refused = stillOpen(() => report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]));
     expect(refused.message).toContain("no new human reply");
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
-  });
-
-  test("an approval the agent says it made itself is refused, and the question stays theirs", () => {
-    says(proj, "looks fine");
-    const refused = stillOpen(() =>
-      report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Agent-initiated approval."])
-    );
-    expect(refused.message).toContain("came from the assistant");
-    expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
-    // The question is theirs to answer, so the turn may end at it.
-    expect(turnEndIsOpen(proj)).toBe(true);
   });
 
   test("their reply is on record and the agent named no choice: the step is to report it, not to ask again", () => {
@@ -678,11 +716,12 @@ describe("a protected checkpoint question keeps the person's reply", () => {
     expect(() => require("Approve")).not.toThrow();
   });
 
-  test.each(["2", "Request Changes", "request changes."])("an exact pick (%s) is theirs: the other choice is refused", (reply) => {
+  test.each(["2", "Request Changes", "request changes."])("a typed %s is kept as typed: no choice is read into it, and the agent's reading stands", (reply) => {
     recordProtectedHumanResponse(proj, session, reply, null);
-    expect(readProtectedResponse(proj, session)?.choice).toBe("Request Changes");
-    expect(() => require("Approve")).toThrow(/picked "Request Changes"/);
+    expect(readProtectedResponse(proj, session)?.choice).toBeUndefined();
+    expect(readProtectedResponse(proj, session)?.words).toBe(reply);
     expect(() => require("Request Changes")).not.toThrow();
+    expect(() => require("Approve")).not.toThrow();
   });
 
   test("nothing is recorded without a reply", () => {
@@ -740,7 +779,7 @@ describe("which question is open is syntax too", () => {
   });
 });
 
-describe("a recovery question: exact picks are recorded, everything else is the agent's to read", () => {
+describe("a recovery question: a pick in a question box is recorded, every typed reply is the agent's to read", () => {
   let proj: string;
   let content: string;
   beforeEach(() => {
@@ -762,19 +801,11 @@ describe("a recovery question: exact picks are recorded, everything else is the 
     guard_recovery_response?: { selected_op?: string | null; status?: string; picked_by?: string };
   }).guard_recovery_response;
 
+  // A number, a remedy's name or the person's own words: the agent reads each.
   test.each([
-    ["1", "reconfirm-summary"],
-    ["Present the current summary again", "reconfirm-summary"],
-    ["2", "request-changes"],
-  ])("%s is the person's exact pick of %s", (reply, op) => {
-    ask();
-    expect(consumeSharedDirectiveAsk(proj, reply)).toBe(true);
-    expect(response()).toMatchObject({ selected_op: op, picked_by: "person" });
-  });
-
-  // The remedies are shown by number and name, never with letters: a lone
-  // letter is the person's words, read by the agent.
-  test.each(["the first one", "Presnt the current summary again", "go with 2", "split the flow into two steps", "a", "b."])(
+    "1", "Present the current summary again", "2",
+    "the first one", "Presnt the current summary again", "go with 2", "split the flow into two steps", "a", "b.",
+  ])(
     "%s waits for the agent's reading",
     (reply) => {
       ask();
@@ -783,9 +814,9 @@ describe("a recovery question: exact picks are recorded, everything else is the 
     },
   );
 
-  // The person is shown each way on by its plain name, so that name typed back
-  // is an exact pick, and the agent may name it when it records their reading.
-  test("a shown name typed back is the person's exact pick, and the agent can record it by name", () => {
+  // The person is shown each way on by its plain name, and the agent may name
+  // it when it records their reading.
+  test("a shown name typed back is the agent's to read, and it can record it by name", () => {
     const named: ActiveDirectiveGuardRemedy[] = [
       { op: "reconfirm-summary", label: "Confirm the summary again", action: "Present the current summary again" },
       { op: "request-changes", label: "Request Changes", action: "Ask what should change" },
@@ -795,6 +826,8 @@ describe("a recovery question: exact picks are recorded, everything else is the 
       remedies: named,
     });
     expect(consumeSharedDirectiveAsk(proj, "Confirm the summary again")).toBe(true);
+    expect(response()?.selected_op ?? null).toBeNull();
+    expect(recordGuardRecoveryChoice(proj, "Confirm the summary again", false)).toMatchObject({ op: "reconfirm-summary" });
     expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "person" });
 
     writeActiveDirectiveMarker(proj, {
@@ -824,40 +857,41 @@ describe("a recovery question: exact picks are recorded, everything else is the 
     expect(response()?.picked_by).toBeUndefined();
   });
 
-  test("Request Changes with what to change, read by the agent, is ready and bound to their words", () => {
+  test("Request Changes with what to change, read by the agent, is ready for the rejection that keeps their words", () => {
     ask();
     consumeSharedDirectiveAsk(proj, "split the save-search flow into two steps");
     const picked = recordGuardRecoveryChoice(proj, "Request Changes: split the save-search flow into two steps", true);
     expect(picked).toMatchObject({ op: "request-changes", awaitingWords: false });
-    expect(response()).toMatchObject({ selected_op: "request-changes", status: "ready", picked_by: "conductor" });
-    expect(guardRecoveryFeedbackStatus(proj, readFileSync(seededStateFile(proj), "utf-8"), "functional-design", undefined,
-      "split the save-search flow into two steps")).toBe("match");
+    expect(response()).toMatchObject({ selected_op: "request-changes", status: "ready", picked_by: "person" });
+    expect(guardRecoveryFeedbackStatus(proj, readFileSync(seededStateFile(proj), "utf-8"), "functional-design", undefined))
+      .toBe("ready");
   });
 
-  test("the agent cannot overrule an exact pick", () => {
+  test("no tool holds the agent to a reading of a typed number: its record stands as it hands it", () => {
     ask();
     consumeSharedDirectiveAsk(proj, "2");
-    expect(() => recordGuardRecoveryChoice(proj, "Present the current summary again", false))
-      .toThrow(/picked "Ask what should change"/);
+    expect(recordGuardRecoveryChoice(proj, "Present the current summary again", false).op).toBe("reconfirm-summary");
+    expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "person" });
   });
 
-  // The person picks again while their first pick waits for what should
-  // change: the new pick replaces it, and "2" is never taken as the change.
-  test("1 then 2: the second exact pick replaces the first and is not taken as what should change", () => {
+  // The person replies again while the agent's first record waits for what
+  // should change: that record no longer stands on their latest reply, and "2"
+  // is never taken as the change.
+  test("1 then 2: each typed reply is the agent's to read, and the record on the latest one stands", () => {
     writeActiveDirectiveMarker(proj, {
       kind: "ask", ask_type: GUARD_RECOVERY_ASK_TYPE, stage: "functional-design", state_sha256: stateDigest(content),
       remedies: [remedies[1], remedies[0]],
     });
     consumeSharedDirectiveAsk(proj, "1");
+    expect(response()?.selected_op ?? null).toBeNull();
+    recordGuardRecoveryChoice(proj, "request-changes", false);
     expect(response()).toMatchObject({ selected_op: "request-changes", status: "awaiting-feedback", picked_by: "person" });
-    consumeSharedDirectiveAsk(proj, "1");
-    expect(response()).toMatchObject({ selected_op: "request-changes", status: "awaiting-feedback" });
     consumeSharedDirectiveAsk(proj, "2");
-    expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "person" });
+    expect(response()?.selected_op ?? null).toBeNull();
     expect(response()).not.toHaveProperty("feedback_sha256");
     expect(recordGuardRecoveryChoice(proj, "reconfirm-summary", false).op).toBe("reconfirm-summary");
-    expect(guardRecoveryFeedbackStatus(proj, readFileSync(seededStateFile(proj), "utf-8"), "functional-design", undefined,
-      "2")).toBe("other-remedy");
+    expect(guardRecoveryFeedbackStatus(proj, readFileSync(seededStateFile(proj), "utf-8"), "functional-design", undefined))
+      .toBe("other-remedy");
   });
 
   test("the agent can correct its own misread in one step", () => {
@@ -866,7 +900,7 @@ describe("a recovery question: exact picks are recorded, everything else is the 
     recordGuardRecoveryChoice(proj, "request changes", false);
     consumeSharedDirectiveAsk(proj, "no, I meant show me the summary again");
     expect(recordGuardRecoveryChoice(proj, "Present the current summary again", false).op).toBe("reconfirm-summary");
-    expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "conductor" });
+    expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "person" });
   });
 
   // An action can carry a backtick-wrapped command for the agent to run later;
@@ -894,7 +928,7 @@ describe("a recovery question: exact picks are recorded, everything else is the 
     });
     expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
     expect(existsSync(join(proj, "ran-from-action"))).toBe(false);
-    expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "conductor" });
+    expect(response()).toMatchObject({ selected_op: "reconfirm-summary", picked_by: "person" });
   });
 
   test("nothing is picked before the person replies", () => {

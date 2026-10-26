@@ -70,8 +70,9 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    consolidated answers are confirmed and every verifiable required output
    document exists; a Unit's review has one more check (the reviewer-unit module). If the request is refused,
    finish the named prerequisite before dispatching the reviewer. When it
-   returns `kind: "print"` instead of the request (Units Generation's units
-   block cannot be read), the step is yours: do what its `message` says, then
+   returns `kind: "print"` instead of the request (the stage's checks found
+   something in its documents, or Units Generation's units block cannot be
+   read), the step is yours: do what its `message` says, then
    run the request command it names again, and say nothing to the person
    about it.
 
@@ -262,8 +263,8 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    recovery review on its own (a review the person asks for still runs, as
    above): the gate or completion records one `CHANGE_ACCEPTED` row, the engine's `report`
    directive (or the tool's JSON) carries one `change_notices` line for the
-   human, and the Review brief below says `Changed after review` with the
-   changed paths (a Unit's own brief, with `--unit`, says only that Unit's). The reviewer's verdict is never altered. Under `relaxed` or
+   human, and the Review brief below marks each open finding on that work
+   `Changed after review` (a Unit's own brief, with `--unit`, marks only that Unit's). The reviewer's verdict is never altered. Under `relaxed` or
    `off`, a change the person asks for after the verdict ("rename the handler",
    "fix that answer") is made directly, with no Request Changes round and no
    new review; the gate then shows the change as above. The freeze stays this
@@ -296,11 +297,18 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
 
    Gate dispositions are receipt-safe audit data, never artifact edits:
    - **Approve** records every current `New` or `Unresolved` finding on the
-     tool-owned `GATE_APPROVED` row.
+     tool-owned `GATE_APPROVED` row. When the human asks, as they approve, for
+     an open finding to be fixed (for example
+     `approve, but make sure R-03 gets handled`), append
+     `--fix-finding "<review-artifact>#R-03"` to the approval command (the
+     stage gate's `report --result approved`, or a checkpoint's
+     `--action approve`) for each one: it is recorded as
+     `Fix requested` and stays open for the next review.
    - **Request Changes** leaves open findings unresolved. When the human
      explicitly rejects a finding as inapplicable, append
      `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` to the
-     ordinary rejected report command for each rejected finding. When the human
+     rejection command (the rejected report, or a checkpoint's
+     `--action reject`) for each rejected finding. When the human
      disagrees that a reviewer-fixed finding is fixed (for example
      `R-03 isn't fixed: <why>`), append
      `--reopen-finding "<review-artifact>#R-03=<why>"`. The review artifact
@@ -308,7 +316,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
      finding carries the id; when two findings share it, the refusal names
      both. Never
      infer either decision from generic revision feedback. The same ID cannot
-     appear in both flags. The state tool validates the artifact, ID, current
+     appear in both flags. The engine validates the artifact, ID, current
      status, and nonblank reason before recording the decision on
      `GATE_REJECTED`.
 
@@ -380,7 +388,7 @@ re-presented gate using the required Review brief).
 
 ### Files and commands
 
-Write and edit files yourself with your file tools, never through the shell (no heredoc, no `echo`, `printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any missing folder). A command the person asks for, or one the plan names (a package install, a build, a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the project (nothing in /tmp or any folder outside it), and a command's output is read from the tool result, never sent to a file; a file the person asks for, or one the plan names, goes where they say. Quote a pattern meant for the program, not the shell (`--include='*.ts'`), and never start an argument with `=`: zsh, the macOS default shell, stops on both. Read, list, and search (your own knowledge files included) with your file tools where you have them; where the shell is your only way to read, use one plain read command (no `cd` before it, no pipe or second command after it). Run every AI-DLC command exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it), keeping its path as written (never a full path): a shell line can stop and ask the person to approve it. The review file's folder already exists: the review request creates it.
+Write and edit files yourself with your file tools, never through the shell (no heredoc, no `echo`, `printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any missing folder). A command the person asks for, or one the plan names (a package install, a build, a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. Do not stash, reset, check out over, restore or clean the person's working tree, and do not install what the plan does not name: for a before-and-after comparison, run the check on the unchanged tree before you edit. Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the project (nothing in /tmp or any folder outside it), and a command's output is read from the tool result, never sent to a file; a file the person asks for, or one the plan names, goes where they say. Quote a pattern meant for the program, not the shell (`--include='*.ts'`), and never start an argument with `=`: zsh, the macOS default shell, stops on both. Read, list, and search (your own knowledge files included) with your file tools where you have them; where the shell is your only way to read, use one plain read command (no `cd` before it, no pipe or second command after it). Run every AI-DLC command exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it), keeping its path as written (never a full path): a shell line can stop and ask the person to approve it. The review file's folder already exists: the review request creates it.
 
 ### What the reviewer does NOT do
 

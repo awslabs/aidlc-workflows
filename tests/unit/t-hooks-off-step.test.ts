@@ -146,6 +146,13 @@ function attendedEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
     "TERM_PROGRAM",
     "VSCODE_IPC_HOOK",
     "VSCODE_PID",
+    // So is the chat it runs in, and the host's own record of where that chat started.
+    "CLAUDE_PID",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CONFIG_DIR",
+    "CODEX_THREAD_ID",
+    "CODEX_SESSION_ID",
+    "CODEX_HOME",
   ]) delete env[key];
   env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "0";
   return { ...env, ...extra };
@@ -175,7 +182,7 @@ function age(proj: string): void {
   }
 }
 
-function intentCreate(proj: string, h: Harness): void {
+function intentCreate(proj: string, h: Harness, extra: Record<string, string> = {}): void {
   const r = run(proj, [
     join(proj, h.dir, "tools", "aidlc-utility.ts"),
     "intent-create",
@@ -185,12 +192,16 @@ function intentCreate(proj: string, h: Harness): void {
     "hooks off",
     "--arguments",
     "fix the flag parser",
-  ], attendedEnv());
+  ], attendedEnv(extra));
   expect(r.code, r.stderr).toBe(0);
   age(proj);
 }
 
-type Printed = { kind: string; message?: string };
+type Printed = { kind: string; message?: string; narration?: string };
+
+// Nothing here to carry on with: the first step in a new project asks what to build.
+const noWorkflow = (directive: Printed) =>
+  directive.kind === "print" && directive.narration === "Tell me what to build and I'll start it.";
 
 function next(proj: string, h: Harness, extra: Record<string, string> = {}, args: string[] = []): Printed {
   const r = run(proj, [join(proj, h.dir, "tools", "aidlc-orchestrate.ts"), "next", ...args], attendedEnv(extra));
@@ -199,6 +210,12 @@ function next(proj: string, h: Harness, extra: Record<string, string> = {}, args
 }
 
 // What `next` returns when it stops for hooks that never ran.
+// The kept `next --stage requirements-analysis` ran: that `next` made the jump
+// and returned the step it lands on (its rules first, where they come in parts).
+function jumpedToRequirements(directive: Printed): boolean {
+  return directive.kind !== "print" && (directive as { stage?: unknown }).stage === "requirements-analysis";
+}
+
 function isStop(directive: Printed): boolean {
   return directive.kind === "print" && (directive.message ?? "").startsWith(RULES);
 }
@@ -659,8 +676,6 @@ describe("the request the first next stopped with carries on after the restart",
   const LINE = "Carrying on with your earlier request.";
   const kept = (proj: string) => join(proj, "aidlc", ".aidlc-sessions", "kept-request.json");
   type Routed = Printed & { narration?: string };
-  const noWorkflow = (directive: Printed) =>
-    directive.kind === "error" && (directive.message ?? "").includes("No workflow state found");
 
   for (const h of HARNESSES) {
     test(`${h.name}: the entry word alone carries on with the request, once`, () => {
@@ -794,9 +809,11 @@ describe("a next stopped inside a workflow is named in the restart line and runs
       beat(proj, "reviewer-scope");
       // The entry alone carries on where the work stands.
       expect(JSON.stringify(next(proj, h))).not.toContain("aidlc-jump");
-      const picked = next(proj, h, {}, ["--request", id]) as Printed & { narration?: string };
-      expect(picked.narration ?? "", JSON.stringify(picked)).toStartWith(LINE);
-      expect(picked.message ?? "").toContain("execute --target requirements-analysis");
+      // The kept jump is made by that `next`, which returns the step it lands on
+      // and says first that it carries on with the earlier request.
+      const picked = next(proj, h, {}, ["--request", id]) as Printed & { change_notices?: string[] };
+      expect(jumpedToRequirements(picked), JSON.stringify(picked)).toBe(true);
+      expect(picked.change_notices?.[0], JSON.stringify(picked)).toBe(LINE);
       expect(ran(next(proj, h, {}, ["--request", id]))).toBe(true);
     });
   }
@@ -872,7 +889,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     // Nothing ran: once that work is selected, the same command runs it.
     const switched = run(proj, [join(proj, OPENCODE.dir, "tools", "aidlc.ts"), "engine", "intent", "switch", first], attendedEnv());
     expect(switched.code, switched.stdout + switched.stderr).toBe(0);
-    expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+    expect(jumpedToRequirements(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
   });
 
   test("work renamed since is the same work, found by its uuid", () => {
@@ -887,7 +904,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     const registry = join(intents, "intents.json");
     writeFileSync(registry, readFileSync(registry, "utf-8").replaceAll(`"${before}"`, `"${after}"`), "utf-8");
     writeFileSync(join(intents, "active-intent"), `${after}\n`, "utf-8");
-    expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+    expect(jumpedToRequirements(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
   });
 
   test("anything beside the id runs nothing: the agent reads the kept request with it, then runs the id alone or not at all", () => {
@@ -914,7 +931,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     // Nothing was used or changed: the id alone still runs the kept command as it was kept.
     const kept = JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", "restarts", `${id}.json`), "utf-8")) as { args: string[] };
     expect(kept.args).toEqual(JUMP);
-    expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+    expect(jumpedToRequirements(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
   });
 
   test("a kept stop stopped again keeps its own id, even with work selected since", () => {
@@ -953,7 +970,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     // A plan named before it is a flag of the same line, so the id is still read as kept.
     const planned = next(proj, OPENCODE, {}, ["bugfix", "--request", id]);
     expect(planned.message ?? "", JSON.stringify(planned)).toContain("with nothing beside it");
-    expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+    expect(jumpedToRequirements(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
   });
 
   test("before any workflow, it runs in the space it was stopped in, and not once that space is gone", () => {
@@ -1029,7 +1046,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
     const both = next(proj, OPENCODE, {}, ["--request", id, "--request", "0badc0de"]);
     expect(both.kind, JSON.stringify(both)).toBe("print");
     expect(both.message ?? "").toContain("Nothing ran.");
-    expect(next(proj, OPENCODE, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+    expect(jumpedToRequirements(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
   });
 
   // Windows: a folder's mode does not stop a write there; as root nothing does.
@@ -1044,7 +1061,7 @@ describe("a next stopped inside a workflow is named in the restart line and runs
       chmodSync(restarts, 0o500);
       try {
         const unmarked = next(proj, OPENCODE, {}, ["--request", id]) as Printed & { change_notices?: string[] };
-        expect(unmarked.message ?? "").toContain("execute --target requirements-analysis");
+        expect(jumpedToRequirements(unmarked), JSON.stringify(unmarked)).toBe(true);
         // With no chat to keep the line for, it rides the step's notices, which a stage in parts keeps too.
         expect(unmarked.change_notices ?? []).toContain(
           "AI-DLC could not mark it as run, so the same line would run it again.",
@@ -1073,8 +1090,6 @@ describe("a next stopped inside a workflow is named in the restart line and runs
 
   test("before any workflow, the id and the entry alone carry it on once between them", () => {
     const REQUEST = "add a dark mode toggle to the settings page";
-    const noWorkflow = (directive: Printed) =>
-      directive.kind === "error" && (directive.message ?? "").includes("No workflow state found");
     // The id first: the entry alone then finds nothing to carry on with.
     const named = installed(OPENCODE);
     const id = idIn(next(named, OPENCODE, {}, ["--", REQUEST]));
@@ -1152,7 +1167,7 @@ describe("claude: a .claude/settings.json that is missing or not valid JSON gets
     // Once the file is back and a hook has run, the new chat runs the kept command.
     writeFileSync(settings(proj), shipped, "utf-8");
     beat(proj, "reviewer-scope");
-    expect(next(proj, h, {}, ["--request", id]).message ?? "").toContain("execute --target requirements-analysis");
+    expect(jumpedToRequirements(next(proj, h, {}, ["--request", id]))).toBe(true);
   });
 
   test("not valid JSON: the line names the file to correct, not config, which stops on it too", () => {
@@ -1189,6 +1204,213 @@ describe("claude: a .claude/settings.json that is missing or not valid JSON gets
       if (saved.project !== undefined) process.env.AIDLC_PROJECT_DIR = saved.project;
       else delete process.env.AIDLC_PROJECT_DIR;
     }
+  });
+});
+
+// Claude Code runs a project's hooks only when it is started in the project
+// folder, and Codex runs them from the folder it started in, where their
+// commands do not find AI-DLC; both offer the entry from a folder inside the
+// project (live, Claude Code 2.1.310 and Codex 0.164.0). Each keeps its own
+// record of the running chat, which names the folder it started in: a folder
+// strictly inside the project gets the one step that works, and anything else
+// keeps the tool's usual step.
+describe("a chat started in a folder inside the project is told to start the tool in the project folder", () => {
+  const CHAT = "22222222-3333-4444-8555-666666666666";
+  const CLAUDE = HARNESSES[0];
+  const CODEX = HARNESSES[1];
+  const entryOf = (h: Harness) => (h.name === "codex" ? "$aidlc" : "/aidlc");
+  // The engine names the folder the way this OS writes it, unless the project
+  // came in AIDLC_PROJECT_DIR, which it names as given.
+  const lineFor = (h: Harness, proj: string, entry: string, folder = normalize(proj)) =>
+    h.name === "codex"
+      ? `AI-DLC's hooks work only when Codex is started in the project folder. Exit Codex, start it again in ` +
+        `${folder}, then type ${entry}.`
+      : `Claude Code runs this project's hooks only when it is started in the project folder. Exit Claude Code, ` +
+        `start it again in ${folder}, then type ${entry}.`;
+  const show = (h: Harness, proj: string, entry: string, folder?: string) =>
+    `Show the person this line and end your turn: "${lineFor(h, proj, entry, folder)}"`;
+  const pad = (n: number) => String(n).padStart(2, "0");
+
+  function scratch(prefix: string): string {
+    const dir = mkdtempSync(join(process.env.TMPDIR || tmpdir(), prefix));
+    outsides.push(dir);
+    return dir;
+  }
+
+  // Claude Code's record: sessions/<pid>.json in its config folder, for the pid
+  // and session id in its agent's shell. This test's own pid stands in: it is alive.
+  function claudeChat(folder: string, record: Record<string, unknown> | string = {}, pid = process.pid): Record<string, string> {
+    const config = scratch("aidlc-claude-config-");
+    mkdirSync(join(config, "sessions"));
+    const body = typeof record === "string"
+      ? record
+      : JSON.stringify({ pid, sessionId: CHAT, cwd: folder, kind: "interactive", ...record });
+    writeFileSync(join(config, "sessions", `${pid}.json`), body, "utf-8");
+    return { CLAUDE_PID: String(pid), CLAUDE_CODE_SESSION_ID: CHAT, CLAUDE_CONFIG_DIR: config };
+  }
+
+  // Codex's record: the thread's rollout, under the day its UUIDv7 id was made
+  // (or `daysOff` days from it), whose first line names the folder. The line
+  // after it names the folder above, so a reader that went past the first line
+  // would miss the start. With `home`, it sits in that home folder's .codex and
+  // CODEX_HOME is not set.
+  function codexChat(
+    folder: string,
+    meta: Record<string, unknown> | string = {},
+    options: { daysOff?: number; home?: string } = {},
+  ): Record<string, string> {
+    const codexHome = options.home === undefined ? scratch("aidlc-codex-home-") : join(options.home, ".codex");
+    const now = new Date();
+    const hex = now.getTime().toString(16).padStart(12, "0");
+    const thread = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-7abc-8def-0123456789ab`;
+    const filed = new Date(now.getTime() + (options.daysOff ?? 0) * 24 * 60 * 60 * 1000);
+    const day = join(codexHome, "sessions", String(filed.getFullYear()), pad(filed.getMonth() + 1), pad(filed.getDate()));
+    mkdirSync(day, { recursive: true });
+    const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}-` +
+      `${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+    const first = typeof meta === "string"
+      ? meta
+      : JSON.stringify({ timestamp: now.toISOString(), type: "session_meta", payload: { id: thread, cwd: folder, originator: "codex-tui", ...meta } });
+    const later = JSON.stringify({ timestamp: now.toISOString(), type: "turn_context", payload: { cwd: dirname(folder) } });
+    writeFileSync(join(day, `rollout-${stamp}-${thread}.jsonl`), `${first}\n${later}\n`, "utf-8");
+    return options.home === undefined
+      ? { CODEX_THREAD_ID: thread, CODEX_HOME: codexHome }
+      : { CODEX_THREAD_ID: thread, HOME: options.home, USERPROFILE: options.home };
+  }
+
+  const chatIn = (h: Harness, folder: string, record?: Record<string, unknown> | string) =>
+    h.name === "codex" ? codexChat(folder, record) : claudeChat(folder, record);
+
+  function withSrc(h: Harness): { proj: string; src: string } {
+    const proj = installed(h);
+    const src = join(proj, "src");
+    mkdirSync(src);
+    return { proj, src };
+  }
+
+  for (const h of [CLAUDE, CODEX]) {
+    test(`${h.name}: before any workflow, the line names the project folder and the kept request, which carries on there`, () => {
+      const { proj, src } = withSrc(h);
+      const REQUEST = "fix the flag parser";
+      const stopped = next(proj, h, chatIn(h, src), ["--", REQUEST]);
+      expect(isStop(stopped), JSON.stringify(stopped)).toBe(true);
+      const message = stopped.message ?? "";
+      const id = message.match(/ --request ([0-9a-f]{8})\b/)?.[1] ?? "";
+      expect(id, message).toMatch(/^[0-9a-f]{8}$/);
+      expect(message).toBe(`${RULES} ${show(h, proj, `${entryOf(h)} --request ${id}`)}`);
+      for (const line of h.lines(proj)) expect(message).not.toContain(line);
+      // The new chat, in the project folder: its hooks run, and the request carries on.
+      beat(proj, "record-human-turn");
+      const picked = next(proj, h, {}, ["--request", id]) as Printed & { narration?: string };
+      expect(picked.narration ?? "", JSON.stringify(picked)).toStartWith("Carrying on with your earlier request.");
+      expect(JSON.stringify(picked)).toContain(REQUEST);
+    });
+
+    test(`${h.name}: inside a workflow, the same line, and doctor gives it too`, () => {
+      const { proj, src } = withSrc(h);
+      const chat = chatIn(h, src);
+      intentCreate(proj, h, chat);
+      const stopped = next(proj, h, chat);
+      expect(isStop(stopped), JSON.stringify(stopped)).toBe(true);
+      expect(stopped.message).toBe(`${RULES} ${show(h, proj, entryOf(h))}`);
+      const doctor = run(proj, [join(proj, h.dir, "tools", "aidlc-utility.ts"), "doctor", "--verbose"], attendedEnv(chat));
+      expect(doctor.stdout).toContain("Hooks have never executed");
+      expect(doctor.stdout).toContain(lineFor(h, proj, entryOf(h)));
+      for (const line of h.lines(proj)) expect(doctor.stdout).not.toContain(line);
+    });
+
+    test(`${h.name}: a record naming the project folder, a folder outside it, another chat, or nothing readable keeps the tool's step`, () => {
+      const { proj, src } = withSrc(h);
+      const other = scratch("aidlc-elsewhere-");
+      const records: Array<[string, Record<string, string>]> = [
+        ["the project folder", chatIn(h, proj)],
+        ["a folder outside it", chatIn(h, other)],
+        ["another chat", h.name === "codex" ? codexChat(src, { id: "01a16f23-f923-7441-b0c0-89e1823eedee" }) : claudeChat(src, { sessionId: "33333333-4444-4555-8666-777777777777" })],
+        ["not JSON", chatIn(h, src, "{not json")],
+        ["no folder", chatIn(h, src, h.name === "codex" ? { cwd: 7 } : { cwd: null })],
+        ["a relative folder", chatIn(h, src, { cwd: "src" })],
+      ];
+      if (h.name === "codex") {
+        // Only the first line counts: a thread whose first line is not its own
+        // session record names no folder, whatever a later line says.
+        records.push(["a first line that is not its session record", codexChat(src, JSON.stringify({ type: "turn_context", payload: { cwd: src } }))]);
+      } else {
+        // A chat that is gone: its pid is not running.
+        const gone = spawnSync(process.execPath, ["-e", ""]).pid;
+        records.push(["a pid that is not running", claudeChat(src, {}, gone)]);
+        records.push(["no record", { ...claudeChat(src), CLAUDE_CONFIG_DIR: scratch("aidlc-claude-config-") }]);
+      }
+      for (const [what, chat] of records) {
+        const message = next(proj, h, chat).message ?? "";
+        for (const line of h.lines(proj)) expect(message, what).toContain(`"${line}"`);
+        expect(message, what).not.toContain("is started in the project folder");
+      }
+    });
+  }
+
+  test.skipIf(process.platform === "win32")("claude: with .claude/settings.local.json a link, the line is still the start-folder one", () => {
+    // Windows: a symlink needs a privilege the runner may not have.
+    const { proj, src } = withSrc(CLAUDE);
+    const elsewhere = join(scratch("aidlc-elsewhere-"), "settings.local.json");
+    writeFileSync(elsewhere, "{}\n", "utf-8");
+    symlinkSync(elsewhere, join(proj, ".claude", "settings.local.json"));
+    expect(next(proj, CLAUDE, claudeChat(src)).message).toBe(`${RULES} ${show(CLAUDE, proj, "/aidlc")}`);
+  });
+
+  test("claude: the refusal for a reply that was not recorded carries the same line, with the bare entry", () => {
+    const { proj, src } = withSrc(CLAUDE);
+    const chat = claudeChat(src);
+    intentCreate(proj, CLAUDE, chat);
+    const keys = ["AIDLC_UNATTENDED", "AIDLC_PROJECT_DIR", ...Object.keys(chat)];
+    const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    delete process.env.AIDLC_UNATTENDED;
+    Object.assign(process.env, { AIDLC_PROJECT_DIR: proj, ...chat });
+    try {
+      const hint = unattendedHumanPresenceHint();
+      expect(hint).toContain("do not ask them to answer again");
+      expect(hint).toContain(`${RULES} ${show(CLAUDE, proj, "/aidlc", proj)}`);
+      expect(hint).not.toContain("disableAllHooks");
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  for (const h of [CLAUDE, CODEX]) {
+    test.if(process.platform === "win32")(`${h.name}: on Windows a start folder spelled in another letter case still counts`, () => {
+      const { proj, src } = withSrc(h);
+      expect(next(proj, h, chatIn(h, src.toUpperCase())).message).toBe(`${RULES} ${show(h, proj, entryOf(h))}`);
+    });
+  }
+
+  test("codex: the rollout is found in the day folder either side of its id's day, not two days off", () => {
+    const { proj, src } = withSrc(CODEX);
+    for (const daysOff of [-1, 1]) {
+      expect(next(proj, CODEX, codexChat(src, {}, { daysOff })).message, String(daysOff)).toBe(`${RULES} ${show(CODEX, proj, "$aidlc")}`);
+    }
+    for (const daysOff of [-2, 2]) {
+      const message = next(proj, CODEX, codexChat(src, {}, { daysOff })).message ?? "";
+      expect(message, String(daysOff)).toContain(`"${CODEX.lines(proj)[0]}"`);
+    }
+  });
+
+  test("codex: a first line longer than one read is read whole, and one with no end within 1 MB names no folder", () => {
+    const { proj, src } = withSrc(CODEX);
+    const long = next(proj, CODEX, codexChat(src, { base_instructions: "x".repeat(200 * 1024) })).message;
+    expect(long).toBe(`${RULES} ${show(CODEX, proj, "$aidlc")}`);
+    const endless = next(proj, CODEX, codexChat(src, { base_instructions: "x".repeat(1024 * 1024) })).message ?? "";
+    expect(endless).toContain(`"${CODEX.lines(proj)[0]}"`);
+  });
+
+  test("codex: with CODEX_HOME unset the record is read from the home folder's .codex, and with no record the step is the usual one", () => {
+    const { proj, src } = withSrc(CODEX);
+    expect(next(proj, CODEX, codexChat(src, {}, { home: scratch("aidlc-home-") })).message).toBe(
+      `${RULES} ${show(CODEX, proj, "$aidlc")}`,
+    );
+    const none = { ...codexChat(src), CODEX_HOME: scratch("aidlc-codex-home-") };
+    expect(next(proj, CODEX, none).message ?? "").toContain(`"${CODEX.lines(proj)[0]}"`);
   });
 });
 
@@ -1308,7 +1530,7 @@ describe("a person at their own terminal is told the step that works there", () 
     intentCreate(other, h);
     const agent = run(other, [join(other, h.dir, "tools", "aidlc.ts"), "engine", "config", "set", "guard.plan-approval", "off"], attendedEnv());
     expect(agent.code).not.toBe(0);
-    expect(`${agent.stdout}${agent.stderr}`).toContain("No reply from the person");
+    expect(`${agent.stdout}${agent.stderr}`).toContain("Run it with --message <id>, the message they asked in, when they ask for it.");
     expect(`${agent.stdout}${agent.stderr}`).not.toMatch(/AIDLC_SKIP_/);
   });
 

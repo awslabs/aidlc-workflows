@@ -13,7 +13,7 @@ see [Development and Releases](DEVELOPERS.md).
 
 ## How this repository is built
 
-AI-DLC ships to many CLI harnesses (today Claude Code, Kiro CLI, Kiro IDE, Codex CLI, opencode, and GitHub Copilot) from a single hand-authored source. The layout has three zones:
+AI-DLC ships to many CLI harnesses (today Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, and GitHub Copilot) from a single hand-authored source. The layout has three zones:
 
 - **`core/`** — the harness-neutral source of truth (tools, stages, agents, rules, scopes, sensors, knowledge, hooks, session skills). **Edit here.**
 - **`harness/<name>/`** — the thin per-harness surface (`manifest.ts`, the orchestrator skill, harness-specific files). **Edit here.**

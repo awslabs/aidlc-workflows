@@ -100,6 +100,7 @@ import {
   resolveProjectDir,
   resolveProjectFlag,
   resolveWorkflowSelection,
+  REVIEW_CLASSES,
   type ReviewClass,
   scalarField,
   type ScopeDefinition,
@@ -255,6 +256,12 @@ export interface GraphStage extends StageEntry {
   summary_confirmation?: "required" | "if-present";
 }
 
+/** A stage a custom plan skips and the stages it keeps that use what it makes. */
+export interface SkippedInput {
+  stage: string;
+  used_by: string[];
+}
+
 export interface ScopeValidation {
   valid: boolean;
   errors: string[];
@@ -262,7 +269,9 @@ export interface ScopeValidation {
   // The deterministic ceremony count of the validated grid (stage/gate/per-unit
   // counts). The composer copies this into its proposal verbatim so the gate the
   // human sees leads with numbers the validator computed, not an LLM recount.
-  summary?: ScopeCostSummary;
+  // A passing --custom run adds skipped_inputs when the plan's own skips leave a
+  // kept stage without what it uses: the offer says it once, in one line.
+  summary?: ScopeCostSummary & { skipped_inputs?: SkippedInput[] };
   // Graph/plugin-authored stock scopes ranked by grid distance from the
   // validated proposal; composer-authored entries are excluded. A front/report
   // matched-vs-custom verdict routes on nearest_stock[0].diff (match when <= 2
@@ -1430,6 +1439,13 @@ export function consumedArtifactProducerCollisions(): {
  *  stage's verdict. The dispatcher and the gate both read this set. */
 export const STAGE_WIDE_SENSOR_IDS: ReadonlySet<string> = new Set(["upstream-coverage", "claim-sources"]);
 
+/** The sensors whose script evaluates a set of output paths handed on stdin
+ *  (`--paths-stdin json`), each path as it would evaluate it alone. At a codekb
+ *  stage, whose outputs span one folder per repository, the gate fires each of
+ *  these once for the stage over every repository's files instead of once per
+ *  file or folder; every other stage keeps its fires. */
+export const PATH_SET_SENSOR_IDS: ReadonlySet<string> = new Set(["required-sections", "upstream-coverage"]);
+
 export function templateEligibleArtifacts(produces: string[]): string[] {
   return (produces ?? []).filter(
     (a) =>
@@ -1747,49 +1763,24 @@ export function validateGrid(
     );
   }
 
-  const onPath = new Set(
-    Object.entries(grid)
-      .filter(([slug, action]) => action === "EXECUTE" && knownSlugs.has(slug))
-      .map(([slug]) => slug)
-  );
-  const subgraph = graph
-    .filter((s) => onPath.has(s.slug))
-    .sort((a, b) => numericStageOrder(a.number, b.number));
-
-  for (const stage of subgraph) {
-    for (const consume of stage.consumes ?? []) {
-      // required: false -> silent
-      if (!consume.required) continue;
-      // projectType filter for conditional consumes
-      if (
-        consume.conditional_on &&
-        opts?.projectType &&
-        consume.conditional_on !== opts.projectType
-      ) {
-        continue;
-      }
-      const producers = producersOf(consume.artifact);
-      if (producers.length === 0) {
-        errors.push(
-          `Stage "${stage.slug}" requires artifact "${consume.artifact}" ` +
-            `but no stage in the graph produces it.`
-        );
-        continue;
-      }
-      const onPathProducers = producers.filter((p) => onPath.has(p.slug));
-      if (onPathProducers.length === 0) {
-        const message =
-          `Stage "${stage.slug}" requires artifact "${consume.artifact}" ` +
-          `whose producer(s) [${producers.map((p) => p.slug).join(", ")}] ` +
-          `are not on the "${label}" path.`;
-        if (opts?.strict) {
-          errors.push(
-            `${message} Strict (recompose) mode rejects a starved required input.`
-          );
-        } else {
-          advisories.push(`${message} Ensure existing artifact is current.`);
-        }
-      }
+  for (const { stage, artifact, producers } of unmadeInputs(grid, opts?.projectType)) {
+    if (producers.length === 0) {
+      errors.push(
+        `Stage "${stage.slug}" requires artifact "${artifact}" ` +
+          `but no stage in the graph produces it.`
+      );
+      continue;
+    }
+    const message =
+      `Stage "${stage.slug}" requires artifact "${artifact}" ` +
+      `whose producer(s) [${producers.map((p) => p.slug).join(", ")}] ` +
+      `are not on the "${label}" path.`;
+    if (opts?.strict) {
+      errors.push(
+        `${message} Strict (recompose) mode rejects a starved required input.`
+      );
+    } else {
+      advisories.push(`${message} Ensure existing artifact is current.`);
     }
   }
 
@@ -1812,6 +1803,60 @@ export function validateGrid(
     grid as Record<string, "EXECUTE" | "SKIP">,
   );
   return { valid: errors.length === 0, errors, advisories, summary, nearest_stock };
+}
+
+/** Each required input `grid` leaves unmade: a stage it runs whose required
+ *  artifact no stage it runs produces (`producers` empty when no stage in the
+ *  graph does). In stage order, then consume order. The one walk behind
+ *  validateGrid's errors and advisories and the plan offer's skippedInputs.
+ *  required: false is silent; projectType filters conditional_on consumes. */
+function unmadeInputs(
+  grid: Record<string, string>,
+  projectType?: "brownfield" | "greenfield",
+): Array<{ stage: GraphStage; artifact: string; producers: GraphStage[] }> {
+  const graph = loadGraph();
+  const onPath = new Set(graph.filter((s) => grid[s.slug] === "EXECUTE").map((s) => s.slug));
+  const subgraph = graph
+    .filter((s) => onPath.has(s.slug))
+    .sort((a, b) => numericStageOrder(a.number, b.number));
+  const unmade: Array<{ stage: GraphStage; artifact: string; producers: GraphStage[] }> = [];
+  for (const stage of subgraph) {
+    for (const consume of stage.consumes ?? []) {
+      if (!consume.required) continue;
+      if (consume.conditional_on && projectType && consume.conditional_on !== projectType) continue;
+      const producers = producersOf(consume.artifact);
+      if (producers.some((p) => onPath.has(p.slug))) continue;
+      unmade.push({ stage, artifact: consume.artifact, producers });
+    }
+  }
+  return unmade;
+}
+
+/** The stages a custom plan skips that a stage it keeps uses, where the plan's
+ *  own changes cause it. A stock scope leaves some inputs unmade by design
+ *  (t66 pins those edges), so a skipped producer is named only when one of the
+ *  plan's unmade inputs it would make is not one `base`, the stock scope the
+ *  plan runs on, leaves unmade too (the plan skipped it, or added a stage that
+ *  needs it); it is then named with every kept stage that uses what it makes,
+ *  so the offer's one line is whole. Display names, in stage order. */
+function skippedInputs(
+  plan: Record<string, string>,
+  base: Record<string, string>,
+  projectType?: "brownfield" | "greenfield",
+): SkippedInput[] {
+  const key = (gap: { stage: GraphStage; artifact: string }): string => `${gap.stage.slug} ${gap.artifact}`;
+  const onBase = new Set(unmadeInputs(base, projectType).map(key));
+  const gaps = unmadeInputs(plan, projectType).filter((gap) => gap.producers.length > 0);
+  const named = new Set(gaps.filter((gap) => !onBase.has(key(gap))).flatMap((gap) => gap.producers.map((p) => p.slug)));
+  return loadGraph()
+    .filter((s) => named.has(s.slug))
+    .sort((a, b) => numericStageOrder(a.number, b.number))
+    .map((producer) => ({
+      stage: producer.name,
+      used_by: [...new Set(
+        gaps.filter((gap) => gap.producers.some((p) => p.slug === producer.slug)).map((gap) => gap.stage.name),
+      )],
+    }));
 }
 
 /** Check a composer proposal's `scopeSettings` member. All four keys are
@@ -2704,7 +2749,7 @@ export function compileStageGraph(): {
     if (!consumer) continue;
 
     // Shared artifact names are legal when unconsumed: traceability is
-    // produced by eight stages and consumed by none, so only consumed names
+    // produced by nine stages and consumed by none, so only consumed names
     // require a unique producer.
     const producerList = producers
       .map(({ file, slug }) => `${file} (stage "${slug}")`)
@@ -3608,17 +3653,54 @@ export function computeArs(
 }
 
 // The composer's scores for the plan a front compose dispatch is working out
-// (#2575). The dispatch opens the record with its request id; `ars`
-// fills it with the scores it screened; creation of the plan the composer
-// validated writes them on WORKFLOW_STARTED and removes the record. It sits
-// beside the proposal, in the space's gitignored engine dir. Every step is
-// best-effort: a record that cannot be read or written records nothing.
+// (#2575). The dispatch opens the record with its request id and the project
+// type the scan found then; `ars` fills it with the scores it screened, and
+// `validate-grid` keeps the plan its last routed run passed, the one the gate
+// shows, with the project type that run was given. Creation of that plan takes
+// its stage changes, and its type when the composer planned for another type
+// than that scan's (the person's word, never a scan the folder has outgrown),
+// writes the scores on WORKFLOW_STARTED, then removes the record. The plan
+// also keeps the depth, settings and Guard Policy the gate showed beside its
+// stages, so the creation that approves it runs at them. It sits beside the
+// proposal, in the space's gitignored engine dir. Every step is best-effort: a
+// record that cannot be read or written records nothing.
 export type ArsMethod = "codekb" | "fallback";
+type ProjectTypeWord = "brownfield" | "greenfield";
 interface ComposerScores {
   request: string;
+  scanned?: ProjectTypeWord;
   scores?: Record<ArsComponent, number>;
   method?: ArsMethod;
+  plan?: KeptComposerPlan;
 }
+const isProjectTypeWord = (value: unknown): value is ProjectTypeWord => value === "brownfield" || value === "greenfield";
+interface KeptComposerPlan {
+  scope: string;
+  changes: PlanChanges;
+  projectType?: ProjectTypeWord;
+  // Each only where it differs from the scope the plan runs on: creation_depth,
+  // creation_settings, and a Guard Policy above that scope's default.
+  depth?: CreationDepth;
+  settings?: SettingsChanges;
+  guardPolicy?: GuardPolicy;
+}
+type CreationDepth = NonNullable<ScopeValidation["creation_depth"]>;
+const CREATION_DEPTHS: readonly CreationDepth[] = ["minimal", "standard", "comprehensive"];
+
+/** A kept settings record whose every key is a setting and every value one of
+ *  its words, or null: a record edited by hand never reaches a command. */
+function keptSettings(value: unknown): SettingsChanges | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const settings: SettingsChanges = {};
+  for (const [key, word] of Object.entries(value)) {
+    if (key === "review" && (REVIEW_CLASSES as readonly unknown[]).includes(word)) settings.review = word as ReviewClass;
+    else if ((CEREMONY_KEYS as readonly string[]).includes(key) && (word === "on" || word === "off")) settings[key as CeremonyKey] = word;
+    else return null;
+  }
+  return settings;
+}
+
+const KEPT_SLUG = /^[a-z0-9][a-z0-9-]*$/;
 
 export function composerScoresPath(projectDir: string): string {
   return join(dirname(composerProposalPath(projectDir)), "composer-scores.json");
@@ -3635,12 +3717,24 @@ function readComposerScores(projectDir: string): ComposerScores | null {
     ) as Partial<ComposerScores> | null;
     if (typeof parsed?.request !== "string" || parsed.request === "") return null;
     const record: ComposerScores = { request: parsed.request };
+    if (isProjectTypeWord(parsed.scanned)) record.scanned = parsed.scanned;
     const scores = parsed.scores;
     if (scores !== undefined) {
       if (!ARS_COMPONENTS.every((c) => typeof scores?.[c] === "number" && scores[c] >= 0 && scores[c] <= 1)) return null;
       record.scores = Object.fromEntries(ARS_COMPONENTS.map((c) => [c, scores[c]])) as Record<ArsComponent, number>;
     }
     if (parsed.method === "codekb" || parsed.method === "fallback") record.method = parsed.method;
+    const plan = parsed.plan;
+    const slugs = (list: unknown): list is string[] =>
+      Array.isArray(list) && list.every((slug) => typeof slug === "string" && KEPT_SLUG.test(slug));
+    if (typeof plan?.scope === "string" && KEPT_SLUG.test(plan.scope) && slugs(plan.changes?.skip) && slugs(plan.changes?.add)) {
+      record.plan = { scope: plan.scope, changes: { skip: plan.changes.skip, add: plan.changes.add } };
+      if (isProjectTypeWord(plan.projectType)) record.plan.projectType = plan.projectType;
+      if ((CREATION_DEPTHS as readonly unknown[]).includes(plan.depth)) record.plan.depth = plan.depth;
+      const settings = keptSettings(plan.settings);
+      if (settings !== null) record.plan.settings = settings;
+      if (plan.guardPolicy === "strict" || plan.guardPolicy === "relaxed") record.plan.guardPolicy = plan.guardPolicy;
+    }
     return record;
   } catch {
     return null;
@@ -3648,10 +3742,12 @@ function readComposerScores(projectDir: string): ComposerScores | null {
 }
 
 /** A front compose dispatch for `request` opens a fresh record, replacing any
- *  an earlier composition left. */
-export function openComposerScores(projectDir: string, request: string): void {
+ *  an earlier composition left, with the project type the scan found as it
+ *  dispatched (none when the scan could not say). */
+export function openComposerScores(projectDir: string, request: string, scanned?: string | null): void {
+  const record: ComposerScores = { request, ...(isProjectTypeWord(scanned) ? { scanned } : {}) };
   try {
-    writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify({ request })}\n`);
+    writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify(record)}\n`);
   } catch {
     // No record: the plan's creation records no scores.
   }
@@ -3664,8 +3760,10 @@ function fillComposerScores(projectDir: string, scores: Record<ArsComponent, num
   if (open === null) return;
   const record: ComposerScores = {
     request: open.request,
+    ...(open.scanned ? { scanned: open.scanned } : {}),
     scores: Object.fromEntries(ARS_COMPONENTS.map((c) => [c, scores[c]])) as Record<ArsComponent, number>,
     ...(method ? { method } : {}),
+    ...(open.plan ? { plan: open.plan } : {}),
   };
   try {
     writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify(record)}\n`);
@@ -3673,6 +3771,46 @@ function fillComposerScores(projectDir: string, scores: Record<ArsComponent, num
     // Unwritten: creation records no scores.
   }
 }
+
+/** A routed `validate-grid` run that passes keeps its plan in a record a
+ *  dispatch opened, replacing an earlier run's; with none open it writes nothing. */
+function keepComposerPlan(projectDir: string, plan: KeptComposerPlan): void {
+  const open = readComposerScores(projectDir);
+  if (open === null) return;
+  try {
+    writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify({ ...open, plan })}\n`);
+  } catch {
+    // Unwritten: creation takes the stage changes and type the command carries.
+  }
+}
+
+/** The plan the composer validated for one of `requests` (a creation's
+ *  request and the one it was composed from) on `scope`: the stage changes
+ *  creation of the approved plan carries, whatever list was typed for it, and
+ *  the project type it was validated for when that is not the type the scan
+ *  found as the dispatch opened the record: the composer plans on the scan's
+ *  type unless the person said otherwise, so only their word is carried. The
+ *  depth, settings and Guard Policy the gate showed ride with it. Null when the
+ *  record belongs to other work, keeps no plan (one an older version wrote), or
+ *  its plan runs on another scope. */
+export function approvedComposerPlan(
+  projectDir: string,
+  requests: readonly string[],
+  scope: string,
+): ApprovedComposerPlan | null {
+  const record = readComposerScores(projectDir);
+  if (record?.plan === undefined || !requests.includes(record.request) || record.plan.scope !== scope) return null;
+  const { changes, depth, settings, guardPolicy } = record.plan;
+  const theirs = record.plan.projectType !== undefined && record.scanned !== undefined && record.plan.projectType !== record.scanned;
+  return {
+    changes,
+    ...(theirs ? { projectType: record.plan.projectType } : {}),
+    ...(depth ? { depth } : {}),
+    ...(settings ? { settings } : {}),
+    ...(guardPolicy ? { guardPolicy } : {}),
+  };
+}
+export type ApprovedComposerPlan = Omit<KeptComposerPlan, "scope">;
 
 /** The WORKFLOW_STARTED fields for a plan being created for `requests` (its
  *  request id and the one it was composed from): the composer's scores when
@@ -4013,6 +4151,8 @@ const COMMANDS: Record<string, Handler> = {
         } else if (base !== null && !("error" in base)) {
           r.base_scope = base.scope;
           r.plan_changes = base.changes;
+          const skipped = skippedInputs(grid, loadScopeGrid()[base.scope]?.stages ?? {}, projectType);
+          if (skipped.length > 0 && r.summary) r.summary.skipped_inputs = skipped;
           r.creation_settings = creationSettingsFor(base.scope, r.scope_settings);
           const baseDepth = (loadScopeMapping()[base.scope]?.depth ?? "").toLowerCase();
           if (planDepth !== undefined && planDepth !== baseDepth) r.creation_depth = planDepth;
@@ -4020,6 +4160,21 @@ const COMMANDS: Record<string, Handler> = {
       }
     }
     r.valid = r.errors.length === 0;
+    if (r.valid && r.routing !== undefined) {
+      const kept = r.routing === "matched" ? r.matched_scope : r.base_scope;
+      if (kept !== undefined) {
+        const raised = r.guard_policy !== undefined && r.guard_policy !== scopeGuardPolicyDefault(kept) &&
+          guardPolicyAtLeast(r.guard_policy, scopeGuardPolicyDefault(kept));
+        keepComposerPlan(resolveProjectDir(), {
+          scope: kept,
+          changes: r.plan_changes ?? { skip: [], add: [] },
+          ...(projectType ? { projectType } : {}),
+          ...(r.creation_depth ? { depth: r.creation_depth } : {}),
+          ...(r.creation_settings && Object.keys(r.creation_settings).length > 0 ? { settings: r.creation_settings } : {}),
+          ...(raised ? { guardPolicy: r.guard_policy } : {}),
+        });
+      }
+    }
     process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
     if (!r.valid) process.exit(1);
   },

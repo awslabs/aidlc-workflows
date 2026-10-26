@@ -131,6 +131,20 @@ do not fold that security boundary into the block adapter. See
 [Markdown structure](01-architecture.md#markdown-structure) for how the adapter
 recovers source lines from the renderer.
 
+## Where new tool code goes
+
+`core/tools/aidlc-lib.ts` takes no new code: a new function, type or constant
+goes in its area's module under `core/tools/` (an existing `aidlc-<area>.ts`, or
+a new one), never in `aidlc-lib.ts`. Code moves out of it one area at a time,
+byte for byte, and stays importable from it through one `export ... from` line,
+so nothing that imports `aidlc-lib.ts` changes; a module split out of it never
+imports `aidlc-lib.ts`. `tests/unit/t-aidlc-lib-only-shrinks.test.ts` fails on a
+name `aidlc-lib.ts` declares that is not on
+`tests/fixtures/aidlc-lib-declarations.txt`, and on a module it imports that
+imports it back (the ones that did before this rule are listed in the test); a
+move deletes its names from that list and lowers the file's size cap in
+`biome.json`, and neither is ever raised.
+
 ## Testing
 
 The suite is entirely TypeScript (`t*.test.ts`, run via `bun`) across four levels — `smoke`, `unit`, `integration`, `e2e` — that map onto the three-layer pyramid (smoke + unit = L1 Protocol, integration = L2 Stage, e2e = L3 Acceptance). After the pinned development dependencies are installed, L1 runs locally without external services; the live integration and e2e files require the `claude` CLI tool (and Bedrock creds) and skip cleanly when it is absent.
@@ -244,9 +258,10 @@ The intent-configuration handlers share a single mutation path:
 | `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `collaborators`, or one of the four `guard.<fence>` keys; the retired key `change-control` resolves to `guard-policy` |
 | `aidlc engine config list [--json]` | `config-list` | Read all thirteen settings in that order; Guard Policy, fence, and ceremony values include effective sources |
 | `aidlc engine config set <key> <value> [--key value ...]` | `config-change --<key> <value> ...` | Apply all supplied setting flags in one transaction; every key uses this route |
-| `aidlc engine scope change --scope <name> [--key value ...] [--person-words '<their words>']` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same twelve settings in the same transaction, including when the requested scope is already current |
+| `aidlc engine scope change --scope <name> [--key value ...] [--message <id>]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same twelve settings in the same transaction, including when the requested scope is already current |
 
-`config-change` accepts only the twelve setting flags plus `--intent`, `--space`,
+`config-change` accepts only the twelve setting flags plus `--message` (and the
+`--person-words` forms from before it, which prove nothing), `--intent`, `--space`,
 and `--project-dir`, and requires at least one setting. Reject unknown flags by
 name and validate all values before any mutation. A shared utility applier
 returns candidate content, `AuditEntryInput[]`, and output lines in canonical
@@ -264,7 +279,8 @@ Memory continues to control the effective value.
 Preserve state and event contracts: `review adversarial` stores an empty
 `Review Override`; explicit Guard Policy and ceremony values use `(set by you)`
 when `settingTheirs` finds the person behind them (a typed switch, their own
-terminal, or `--person-words` equal to a reply of theirs on record) and
+terminal, or the message of theirs the agent names with `--message <id>`, once
+`proveMessage` proves it) and
 `(set by a command)` otherwise, while inherited scope defaults retain scope provenance. A
 scope change preserves explicit overrides and absent legacy Guard
 Policy/ceremony rows. Only real stored field or source changes produce setting

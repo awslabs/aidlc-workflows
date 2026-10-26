@@ -1,4 +1,5 @@
-// covers: function:codeGenerationIssuance, function:codeGenerationRulesArrivingReason
+// covers: function:codeGenerationIssuance, function:codeGenerationRulesArrivingReason, function:nextOnItsOwn,
+// function:stepNextCommand, function:recordHandedOverBuild
 //
 // Every refusal from the plan-approval guard names the step that ends it, in
 // the spelling this install runs, under every Guard Policy. The journeys run
@@ -37,11 +38,15 @@
 //     runs as printed, and whose output is a handoff the guard lets through;
 //   - no plan yet with Guard Policy off: the refusal names the plan files and
 //     the command, as it does with the fence on;
-//   - a native release names `aidlc engine orchestrate next`.
+//   - a native release names `aidlc engine orchestrate next`;
+//   - an isolated Code Generation run with the workflow at another stage: a
+//     write, the developer handoff, the rules still arriving and a build that
+//     cannot be shown name that run's own `next`, on every tool's hook, and
+//     running it brings back that run's step, never the workflow's.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -54,6 +59,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { namedCommands, respell, SESSION as SHAPE_SESSION, SHAPES } from "../harness/code-generation-states.ts";
 import {
   AS_ITS_OWN_COMMAND,
   codeGenerationRulesArrivingReason,
@@ -87,6 +93,8 @@ const SOURCE_BRIEF = "bun .claude/tools/aidlc-testing-posture.ts brief --stage-l
 
 interface Emitted {
   kind: string;
+  stage?: string;
+  message?: string;
   ask_type?: string;
   plan_approval?: { status?: string };
 }
@@ -184,8 +192,8 @@ function writePlan(proj: string, unit: string | null = null): void {
 }
 
 // `next` as the project's own tools run it (the spelling refusals name).
-function next(proj: string): Emitted {
-  const result = runOrchestrateNext(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), proj, [], {
+function next(proj: string, args: string[] = []): Emitted {
+  const result = runOrchestrateNext(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), proj, args, {
     cwd: proj,
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
   });
@@ -469,8 +477,9 @@ describe("the person answered the plan question another way, and the agent write
     const proj = project("off");
     writePlan(proj);
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
-    // "I'll edit the files" is the question's own choice: the hook records it as typed.
+    // The person says they will edit the files; the agent records that choice.
     say(proj, "I'll edit the files");
+    expect(answer(proj, "I'll edit the files")).toContain("Recorded");
     const write = said(guard(proj, "Write", { file_path: join(stageDir(proj, null), "code-generation-plan.md"), content: "x\n" }));
     expect(write).toContain("The person is editing the plan files themselves: leave those files to them.");
     expect(write).not.toContain("Show them the question from the last");
@@ -574,6 +583,106 @@ describe("while the rules arrive in parts", () => {
     } as Parameters<typeof codeGenerationRulesArrivingReason>[0]);
     expect(reason).toContain(`Run each command named here ${AS_ITS_OWN_COMMAND}.`);
     expect(reason).toContain("`bun .claude/tools/aidlc-orchestrate.ts continue abcdEFGH`");
+  });
+});
+
+// An isolated Code Generation run (`next --stage code-generation --single`)
+// while the workflow sits at Requirements Analysis: its step's marker says
+// `single`, and every refusal over it names that run's own `next` with the
+// scope it started with, since a bare `next` routes the main workflow and hands
+// the agent Requirements Analysis.
+describe("an isolated Code Generation run, the workflow at another stage: the refusal names that run's own next", () => {
+  const SINGLE = ["--stage", "code-generation", "--single"];
+  const ISOLATED_NEXT = `${SOURCE_NEXT} --stage code-generation --single --scope poc`;
+
+  function isolated(policy: "strict" | "relaxed" | "off", planApproval: "on" | "off" = "on"): string {
+    const proj = project(policy, planApproval);
+    const stateFile = seededStateFile(proj);
+    writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
+      .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: requirements-analysis"), "utf-8");
+    return proj;
+  }
+
+  // The named command, run as printed (its rule parts followed as the agent follows them).
+  function follow(proj: string, command: string): Emitted {
+    const words = command.split(" ");
+    expect(words.slice(0, 3)).toEqual(["bun", ".claude/tools/aidlc-orchestrate.ts", "next"]);
+    return next(proj, words.slice(3));
+  }
+
+  test.each(["strict", "relaxed", "off"] as const)("no plan yet, Guard Policy %s: a write and the handoff name it, and it brings back the plan step", (policy) => {
+    const proj = isolated(policy);
+    const planning = next(proj, SINGLE);
+    expect(planning, JSON.stringify(planning)).toMatchObject({ kind: "run-stage", stage: "code-generation", plan_approval: { status: "plan" } });
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+
+    const write = said(writeSource(proj));
+    expect(namedCommand(write)).toBe(ISOLATED_NEXT);
+    const dispatched = said(handoff(proj));
+    expect(namedCommand(dispatched)).toBe(ISOLATED_NEXT);
+    expect(dispatched).toContain("and that command again after their answer hands over the build.");
+
+    const admitted = shell(proj, ISOLATED_NEXT);
+    expect(admitted.code, admitted.stderr).toBe(0);
+    expect(follow(proj, ISOLATED_NEXT)).toMatchObject({ kind: "run-stage", stage: "code-generation", plan_approval: { status: "plan" } });
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(state);
+  });
+
+  test("every tool's hook names it, in that tool's spelling", async () => {
+    const proj = isolated("relaxed");
+    next(proj, SINGLE);
+    const named: string[] = [];
+    for (const shape of SHAPES) {
+      shape.install(proj);
+      const verdict = await shape.call(proj, SHAPE_SESSION, { tool: "Write", path: join(proj, "src", "slugify.ts") });
+      const nexts = namedCommands(verdict.said).filter((command) => / next\b/.test(command));
+      named.push(`${shape.name} ${verdict.code} ${nexts.map((command) => respell(command, ".claude")).join(" | ")}`);
+    }
+    expect(named).toEqual(SHAPES.map((shape) => `${shape.name} 2 ${ISOLATED_NEXT}`));
+  });
+
+  test("the rules still arriving: the refusal and the brief name it when the earlier parts are gone", () => {
+    const proj = isolated("relaxed");
+    const part = JSON.parse(runInstalled(proj, `${SOURCE_NEXT} --stage code-generation --single`)) as Emitted;
+    expect(part, JSON.stringify(part)).toMatchObject({ kind: "load-steering", stage: "code-generation" });
+    const fallback = `If you do not have the earlier parts, run \`${ISOLATED_NEXT}\` instead.`;
+    expect(said(writeSource(proj))).toContain(fallback);
+    const brief = spawnSync(BUN, SOURCE_BRIEF.split(" ").slice(1), {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(brief.status, brief.stdout).not.toBe(0);
+    expect(brief.stderr).toContain(fallback);
+  });
+
+  test("plan approval off and the build cannot be recorded: the line names it, and it brings back the build", () => {
+    const proj = isolated("relaxed", "off");
+    next(proj, SINGLE);
+    writePlan(proj);
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    // A folder where the record's file goes: the fixture's stand-in for a folder another program holds.
+    const questions = join(stageDir(proj, null), "code-generation-questions.md");
+    mkdirSync(questions);
+    const notShown = next(proj, SINGLE);
+    expect(notShown.kind, JSON.stringify(notShown)).toBe("error");
+    expect(notShown.message).toBe(
+      "The plan could not be recorded as built without asking yet, so the build is not shown. " +
+        `Run \`${ISOLATED_NEXT}\` to receive it.`,
+    );
+    rmdirSync(questions);
+    expect(follow(proj, ISOLATED_NEXT)).toMatchObject({ kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" } });
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(state);
+  });
+
+  test("the workflow's own Code Generation keeps the bare next", () => {
+    const proj = project("relaxed");
+    expect(next(proj)).toMatchObject({ kind: "run-stage", plan_approval: { status: "plan" } });
+    expect(namedCommand(said(writeSource(proj)))).toBe(SOURCE_NEXT);
+    const dispatched = said(handoff(proj));
+    expect(namedCommand(dispatched)).toBe(SOURCE_NEXT);
+    expect(dispatched).toContain("and the `next` after their answer hands over the build.");
   });
 });
 
@@ -889,7 +998,7 @@ describe("the plan's Testing Contract changed after the person approved it", () 
     const relaxed = approvedBuildThenPostureEdit("relaxed").proj;
     const write = guardOut(relaxed, "Write", { file_path: join(relaxed, "src", "slugify.ts"), content: "x\n" });
     expect(write.code, write.stderr).toBe(0);
-    expect(write.stdout).toContain("Continuing past the plan-approval check");
+    expect(write.stdout).toContain("Continuing past the plan re-approval check");
     expect(contractRows(relaxed)).toHaveLength(0);
     const strict = approvedBuildThenPostureEdit("strict").proj;
     expect(said(writeSource(strict))).toContain("the approved Testing Contract is stale");

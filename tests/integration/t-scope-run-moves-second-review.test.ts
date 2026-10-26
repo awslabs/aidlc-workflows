@@ -114,24 +114,20 @@ describe("a second review the review cap refuses at a Unit's checkpoint", () => 
       const refused = host.engine("log", "review", "--stage", "code-generation", "--reviewer", reviewer,
         "--iteration", "2", "--unit", "extra");
       expect(refused.status).not.toBe(0);
-      const ask = refusalAsk(refused.stdout + "\n" + refused.stderr);
-      expect(ask?.agent_work, refused.stdout + refused.stderr).toBe(true);
-      expect(ask!.remedies.map((remedy) => remedy.op)).toEqual(["present-findings-at-gate"]);
-      const gate = ask!.remedies[0];
-      expect(gate).toMatchObject({ executableNow: true, interaction: "external-work" });
-      expect(gate.label).toBeUndefined();
+      // Nothing was corrected, so no learnings question came between the
+      // review and the checkpoint, and the person has not spoken since the
+      // review was requested: the refusal's one way on is the agent's own step,
+      // put to nobody, the checkpoint again with the findings.
+      const said = refused.stdout + refused.stderr;
+      const ask = refusalAsk(said);
+      expect(ask?.agent_work, said).toBe(true);
+      expect(ask?.remedies.map((remedy) => [remedy.op, remedy.executableNow])).toEqual([["present-findings-at-gate", true]]);
+      expect(said).toContain("include the findings in the approval summary");
 
       // The agent takes the step with nothing put to the person.
       const saidBefore = person.said.length;
-      const named = /`(bun \.claude\/tools\/[^`]+)`/.exec(gate!.action)?.[1];
-      expect(named, gate!.action).toBeDefined();
-      const words = commandWords(named!);
-      expect(words).toContain("next");
-      expect(words).not.toContain("report");
-      const ran = host.bash(named!);
-      expect(ran.status, ran.stdout + ran.stderr).toBe(0);
-      const shown = JSON.parse(ran.stdout) as Directive;
-      expect(shown.kind, ran.stdout).toBe("run-stage");
+      const shown = agent.next();
+      expect(shown.kind, JSON.stringify(shown)).toBe("run-stage");
       expect((shown.construction_checkpoint as { unit?: string } | undefined)?.unit).toBe("extra");
       expect(host.refusals).toEqual([]);
       expect(person.said.length).toBe(saidBefore);
@@ -237,7 +233,8 @@ describe("another review the person asks for at a Unit's checkpoint", () => {
         ?.reviewer as string;
       person.say("Please review extra's code again before I approve it");
       const review = ["log", "review", "--stage", "code-generation", "--reviewer", reviewer, "--iteration", "2", "--unit", "extra"];
-      const request = host.engine(...review, "--person-asked");
+      // The agent names the message they asked in, as the hook's line names it.
+      const request = host.engine(...review, "--person-asked", "--message", agent.latestMessageId());
       expect(request.status, request.stdout + request.stderr).toBe(0);
       host.write(String((JSON.parse(request.stdout) as Directive).reviewFile),
         `## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Date:** 2026-01-01T00:00:00Z\n**Iteration:** 2\n\n` +

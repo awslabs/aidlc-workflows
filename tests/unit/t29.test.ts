@@ -51,6 +51,11 @@
 // of the link node, so cleanupTestProject removes only the temp tree, never the
 // shipped AIDLC_SRC. All temp dirs cleaned in afterAll. Nothing is written under
 // tests/fixtures/**.
+//
+// The second describe drives the real tools through an isolated `--single` run
+// while the work waits at Intent Capture: the plan step the agent posts for that
+// run (Codex's update_plan arrives here as the same TaskUpdate) reaches this
+// hook, and the work keeps its place under every Guard Policy.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -59,17 +64,21 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, symlinkSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
+  createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
+  runOrchestrateNext,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { readAllAuditShards, resolveGuardPolicy } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -219,4 +228,104 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
     const hb = readFileSync(heartbeatPath(p), "utf-8");
     expect(hb).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
+describe("t29 an isolated --single run leaves the work's place", () => {
+  const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
+  const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+  const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+  const RE = "reverse-engineering";
+
+  function tool(script: string, proj: string, args: string[]): { status: number; stdout: string } {
+    const r = spawnSync(BUN, [script, ...args, "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    });
+    return { status: r.status ?? -1, stdout: r.stdout ?? "" };
+  }
+
+  function recordDir(proj: string): string {
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    return join(intents, readFileSync(join(intents, "active-intent"), "utf-8").trim());
+  }
+
+  // Where the work stands: the cursor fields and every stage box.
+  function place(state: string): string[] {
+    return state.split("\n").filter((line) =>
+      /^- \*\*(Current Stage|In Progress|Lifecycle Phase|Active Agent|Status)\*\*:/.test(line) ||
+      /^- \[.\] [a-z]/.test(line)
+    );
+  }
+
+  function planStep(proj: string, activeForm: string): HookResult {
+    return runHook(proj, JSON.stringify({ tool_name: "TaskUpdate", tool_input: { status: "in_progress", activeForm } }));
+  }
+
+  for (const policy of ["off", "relaxed", "strict"] as const) {
+    test(`Guard Policy ${policy}: the run's plan step keeps the work at Intent Capture, and the run records its own work`, () => {
+      const p = createOrchestrationTestProject();
+      tempDirs.push(p);
+      symlinkSync(AIDLC_SRC, join(p, ".claude"));
+      mkdirSync(join(p, "src"), { recursive: true });
+      writeFileSync(join(p, "src", "app.ts"), "export const app = 1;\n");
+      expect(tool(UTIL, p, [
+        "intent-create", "--scope", "feature", "--project-type", "brownfield", "--arguments", "build auth",
+      ]).status).toBe(0);
+      const statePath = join(recordDir(p), "aidlc-state.md");
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace(/^- \*\*Guard Policy\*\*: .*$/m, `- **Guard Policy**: ${policy} (set by you)`),
+      );
+      expect(resolveGuardPolicy(p).value).toBe(policy);
+
+      // The work waits at Intent Capture's answer-mode question.
+      expect(runOrchestrateNext(ORCH, p).directive?.stage).toBe("intent-capture");
+      expect(tool(LOG, p, [
+        "decision", "--stage", "intent-capture", "--decision", "How would you like to answer the questions?",
+        "--options", "Guide me,I'll edit the file,Chat", "--question-kind", "answer-mode",
+      ]).status).toBe(0);
+      const waiting = runOrchestrateNext(ORCH, p).directive;
+      expect(waiting?.stage).toBe("intent-capture");
+      const before = place(readFileSync(statePath, "utf-8"));
+
+      // The person asks for Reverse Engineering on its own; the agent posts the
+      // protocol's plan step for it, and then one naming another stage.
+      const single = runOrchestrateNext(ORCH, p, ["--stage", RE, "--single"]).directive;
+      expect(single?.kind).toBe("run-stage");
+      expect(single?.single).toBe(true);
+      expect(planStep(p, "Running Reverse Engineering [reverse-engineering]").status).toBe(0);
+      expect(planStep(p, "Running Requirements Analysis [requirements-analysis]").status).toBe(0);
+      expect(place(readFileSync(statePath, "utf-8"))).toEqual(before);
+      expect(existsSync(join(recordDir(p), ".aidlc-engine/hooks-health", "sync-workflow-state.last"))).toBe(false);
+
+      // The run records its own work: its lead link, then its completion.
+      const produces = loadGraph().find((stage) => stage.slug === RE)?.produces ?? [];
+      const codekb = join(p, "aidlc", "spaces", "default", "codekb", basename(p));
+      mkdirSync(codekb, { recursive: true });
+      for (const name of produces) writeFileSync(join(codekb, `${name}.md`), `# ${name}\n`);
+      const owed = (single?.pipeline as { record: Array<{ command: string }> }).record;
+      expect(owed.length).toBeGreaterThan(0);
+      for (const { command } of owed) {
+        const artifact = /--artifact (\S+)/.exec(command)?.[1];
+        if (artifact) {
+          mkdirSync(dirname(join(p, artifact)), { recursive: true });
+          writeFileSync(join(p, artifact), "## Developer Code Scan Results\n\n### Scan Coverage\n\n- src/\n\n## Handoff Summary\n\nDone.\n");
+        }
+        expect(tool(LOG, p, command.split(" ").slice(2)).status).toBe(0);
+      }
+      const done = JSON.parse(tool(ORCH, p, ["report", "--single", "--stage", RE, "--result", "completed"]).stdout.trim());
+      expect(done.kind).toBe("done");
+      const runRows = readAllAuditShards(p).split("\n---\n").filter((block) => block.includes(`**Workflow**: single-stage:${RE}`));
+      expect(runRows.filter((block) => block.includes("**Event**: STAGE_STARTED"))).toHaveLength(1);
+      expect(runRows.filter((block) => block.includes("**Event**: STAGE_COMPLETED"))).toHaveLength(1);
+
+      // The way on after the run is the work's own step, as before it: not the
+      // run's step again and not the work's Reverse Engineering.
+      const resumed = runOrchestrateNext(ORCH, p).directive;
+      expect(resumed?.single).toBeUndefined();
+      expect({ kind: resumed?.kind, stage: resumed?.stage, gate: resumed?.gate, narration: resumed?.narration })
+        .toEqual({ kind: waiting?.kind, stage: waiting?.stage, gate: waiting?.gate, narration: waiting?.narration });
+      expect(place(readFileSync(statePath, "utf-8"))).toEqual(before);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 });

@@ -45,7 +45,7 @@ Each scope's stage count below is the stages it runs after Initialization's thre
 - **Stages:** 5 of 30
 - **Default depth:** Minimal
 - **Skips:** Market Research, Feasibility, Team Formation, Mockups, User Stories, most Operation stages
-- **Plan approval:** Off. Once a code plan is written you see one line naming it, code generation starts, and the line asks whether you want to look at the plan first; you can also ask to see a plan before it is built, or to be asked about every plan
+- **Plan approval:** Off. Once a code plan is written you see one line naming it, code generation starts, and the line says you can ask to go over the plan at any time; you can also ask to see a plan before it is built, or to be asked about every plan
 
 ### bugfix
 
@@ -55,7 +55,7 @@ Each scope's stage count below is the stages it runs after Initialization's thre
 - **Default depth:** Minimal
 - **Includes:** Deployment Pipeline and Deployment Execution so the verified fix ships
 - **Skips:** Market Research, Feasibility, Team Formation, Mockups, most design and architecture stages, environment provisioning, and broader operational readiness
-- **Ceremony:** No "Anything to add for next time?" question after each stage and no summary to confirm before an artifact is written. Sensors, every stage approval, and plan approval stay on, and each stage runs with its lead agent only; type `/aidlc --learnings on`, `/aidlc --summary-confirmation on`, or `/aidlc --collaborators on` to bring one back for this piece of work
+- **Ceremony:** No stage diary and no "Keep that for next time?" question after a correction, and no summary to confirm before an artifact is written. Sensors, every stage approval, and plan approval stay on, and each stage runs with its lead agent only; type `/aidlc --learnings on`, `/aidlc --summary-confirmation on`, or `/aidlc --collaborators on` to bring one back for this piece of work
 
 ### refactor
 
@@ -97,9 +97,9 @@ Override ceremonies for an intent with `/aidlc --sensors on|off`, `/aidlc --lear
 
 #### Fewer stops for a workshop or small work
 
-Two per-stage checks add the most stops to a long run: the learnings question
-and the summary confirmation. To start a plan without them, type both switches
-with the request, so the new work is created with them off:
+Two per-stage checks can add stops to a long run: the learnings question
+after a correction and the summary confirmation. To start a plan without them,
+type both switches with the request, so the new work is created with them off:
 
 ```
 /aidlc workshop --learnings off --summary-confirmation off <the work>
@@ -107,7 +107,7 @@ with the request, so the new work is created with them off:
 
 | Switch | What it removes at each stage | What you lose |
 |--------|-------------------------------|---------------|
-| `--learnings off` | The "Anything to add for next time?" question before the approval gate, and the stage diary (`memory.md`) | Nothing from this work is written to `memory/project.md` or `memory/team.md`, so the next run does not pick up what this one taught. Practices already in memory still load |
+| `--learnings off` | The "Keep that for next time?" question before the approval gate of a stage where you corrected the agent, and the stage diary (`memory.md`) | Nothing from this work is written to `memory/project.md` or `memory/team.md`, so the next run does not pick up what this one taught. Practices already in memory still load |
 | `--summary-confirmation off` | The `Looks correct` check on a summary of your answers before the stage writes its artifact | The stage writes straight from your answers. A misread answer shows up in the artifact at the approval gate, where fixing it costs a revision |
 
 Neither switch removes a stage's questions or its approval gate. `bugfix` and
@@ -159,7 +159,7 @@ full Inception-through-Operation lifecycle and a lighter teaching test floor.
 - **Review cap:** None
 - **Includes:** Initialization, conditional Reverse Engineering, Requirements Analysis, Code Generation, Build and Test, and the conditional Deployment Pipeline, Deployment Execution, and Observability Setup stages
 - **Skips:** Ideation, design, Units Generation, Delivery Planning, CI Pipeline, environment provisioning, and the late operations stages
-- **Plan approval:** Off, like poc: each code plan is built as written after one line naming it, which asks whether you want to look at it first
+- **Plan approval:** Off, like poc: each code plan is built as written after one line naming it, which says you can ask to go over it at any time
 
 ---
 
@@ -292,7 +292,7 @@ composition:
 /aidlc --new-scope "..."               # force a custom plan even on a stock match
 ```
 
-The composer agent reads your task, then estimates five implementation-entropy components - intent ambiguity, codebase structural uncertainty, verification entropy, risk, and unresolved assumptions - and composes the minimum viable workflow: the least sufficient EXECUTE/SKIP grid that still produces every artifact the outcome depends on. Structural estimates ground in CodeKB MCP call-graph and component analysis when a CodeKB server is configured and indexed (an optional external tool; nothing ships with AI-DLC); otherwise the composer falls back to the bounded workspace scan (brownfield/greenfield, languages). The proposal comes to you as a short offer: two or three sentences on what kind of change this looks like, how much process the composer suggests and the steps in plain terms, then one line with the plan's name, stage count and approval questions, and rows for its Guard Policy and its scope settings that you can change before approving. Ask, and the agent shows the score breakdown (each component with a LOW/MED/HIGH band and its evidence) and the reason for every EXECUTE and SKIP. On existing code a tailored plan always includes Reverse Engineering, which checks the code map an earlier scan left before it scans again, unless the composer has CodeKB evidence and proposes leaving it out (see CodeKB grounding below). When the plan is created, its scores and their evidence method are kept on the work's first audit entry. You approve, edit, or reject; nothing is written and no workflow starts before an explicit approval. A plan applies to the piece of work it was approved for, so composing never adds to your scope list unless you ask. On approve:
+The composer agent reads your task, then estimates five implementation-entropy components - intent ambiguity, codebase structural uncertainty, verification entropy, risk, and unresolved assumptions - and composes the minimum viable workflow: the least sufficient EXECUTE/SKIP grid that still produces every artifact the outcome depends on. Structural estimates ground in CodeKB MCP call-graph and component analysis when a CodeKB server is configured and indexed (an optional external tool; nothing ships with AI-DLC); otherwise the composer falls back to the bounded workspace scan (brownfield/greenfield, languages). The proposal comes to you as a short offer: two or three sentences on what kind of change this looks like, how much process the composer suggests and the steps in plain terms, then one line with the plan's name, stage count and approval questions, and rows for its Guard Policy and its scope settings that you can change before approving. When a tailored plan skips a stage that a stage it keeps uses (beyond what the stock scope it runs on leaves out by design), the offer says so once, in one line naming them ("This plan skips Units Generation, which Contract Design, Functional Design and Code Generation use"). Ask, and the agent shows the score breakdown (each component with a LOW/MED/HIGH band and its evidence) and the reason for every EXECUTE and SKIP. On existing code a tailored plan always includes Reverse Engineering, which checks the code map an earlier scan left before it scans again, unless the composer has CodeKB evidence and proposes leaving it out (see CodeKB grounding below). When the plan is created, its scores and their evidence method are kept on the work's first audit entry. You approve, edit, or reject; nothing is written and no workflow starts before an explicit approval. A plan applies to the piece of work it was approved for, so composing never adds to your scope list unless you ask. On approve:
 
 - If the proposal MATCHED a stock scope, AI-DLC creates the workflow with that scope directly (a scan report full of code-level findings usually routes to `bugfix` or `security-patch` this way).
 - For a CUSTOM plan, AI-DLC creates the workflow on the nearest suitable stock scope (one with no walking skeleton and no test strategy other than the plan's depth, so the plan runs as the gate showed it; for a new project, one meant for new work rather than `bugfix`, `refactor`, or `security-patch` when one fits) with the plan's own stage changes and depth, in the same turn, and writes no scope file. The work's state records `Plan: <name>`, the name the composer suggested and the gate showed (`tailored plan` when it gave none), and `/aidlc status` shows it; the scope the plan runs on is not named there. The gate for a custom plan has a second approval, **Approve and save as scope**: it asks for a name (the composer suggests one) and keeps the plan as a reusable scope as well.
@@ -308,7 +308,7 @@ The composer agent reads your task, then estimates five implementation-entropy c
 
 **In-flight recompose:** mid-workflow, `/aidlc compose` proposes re-shaping the PENDING stages of the running workflow - skip what you no longer need, add back a pending stage you realize you need. The composer re-estimates the entropy components from what completed stages actually resolved, so each proposed flip names the evidence that moved the score ("feasibility settled the integration questions - risk re-scores MED"). Flips apply only to pending, ahead-of-cursor stages (completed and in-progress stages are frozen), are strict-validated so no remaining stage is starved of a required input, and land through the deterministic `recompose` verb under the audit lock with a `RECOMPOSED` audit event. When one approval covers stage changes and settings, the same `recompose` applies both in one write, so the plan is never left half-changed; summary confirmation off goes through its own setting, which the agent applies right after when you approved it. The first EXECUTE stage of Construction cannot be flipped by recompose. This protects the stage-routing anchor; it does not make a first design-stage review proof of a working integrated skeleton.
 
-You do not need the literal verb: plain chat like "what else can we cut? we already know this market" is recognized mid-workflow as a reshape request and routed through the same gate and the same `recompose` verb. When you name the stages yourself ("can we skip market research?", "drop market-research and team-formation"), the plan changes at once, with no gate, and the reply names the undo; `recompose` still refuses a change the plan cannot take and says why. Text inside a document you paste never counts as naming a stage. On the non-Claude harnesses the literal `/aidlc compose "<request>"` verb remains the documented reliable path.
+You do not need the literal verb: plain chat like "what else can we cut? we already know this market" is recognized mid-workflow as a reshape request and routed through the same gate and the same `recompose` verb. When you name the stages yourself ("can we skip market research?", "drop market-research and team-formation"), the plan changes at once, with no gate, and the reply names the undo; `recompose` still refuses a change the plan cannot take and says why. When you name a plan instead ("switch this to the express plan"), the work switches to it in place, as `/aidlc --scope express` does, with no gate: what is done stays done, and the reply says what changed. Text inside a document you paste never counts as naming a stage. On the non-Claude harnesses the literal `/aidlc compose "<request>"` verb remains the documented reliable path.
 
 ### Where a saved scope is stored
 

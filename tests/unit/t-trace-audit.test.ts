@@ -80,6 +80,7 @@ function nightly(): string {
     "## Sensor Failed\n**Timestamp**: 2026-10-20T21:05:00Z\n**Event**: SENSOR_FAILED\n**Sensor ID**: required-sections\n**Stage slug**: requirements-analysis\n**Findings count**: 2\n",
     "## Sensor Passed\n**Timestamp**: 2026-10-20T21:05:01Z\n**Event**: SENSOR_PASSED\n**Sensor ID**: linter\n**Stage slug**: code-generation\n**Note**: tool-unavailable\n",
     "## Sensor Passed\n**Timestamp**: 2026-10-20T21:05:02Z\n**Event**: SENSOR_PASSED\n**Sensor ID**: traceability\n**Stage slug**: code-generation\n",
+    "## Sensor Could Not Run\n**Timestamp**: 2026-10-20T21:05:03Z\n**Event**: SENSOR_COULD_NOT_RUN\n**Sensor ID**: type-check\n**Stage slug**: build-and-test\n**Note**: script-error: exit-1\n",
     "## Blocked\n**Timestamp**: 2026-10-20T21:06:00Z\n**Event**: REVIEW_FREEZE_BLOCKED\n**Stage**: requirements-analysis\n**Reason**: a reviewer is reading\n",
     "## Error\n**Timestamp**: 2026-10-20T21:07:00Z\n**Event**: ERROR_LOGGED\n**Stage**: requirements-analysis\n**Tool**: aidlc-state\n**Command**: advance\n**Error**: lock timeout\n",
     "## Change Accepted\n**Timestamp**: 2026-10-20T21:08:00Z\n**Event**: CHANGE_ACCEPTED\n**Stage**: requirements-analysis\n**Details**: plan source drift\n",
@@ -146,12 +147,13 @@ describe("the extractor reads a nightly's live legs, the passing ones too", () =
     ]);
   });
 
-  test("sensor findings and noted passes come from the audit rows, by sensor and stage", () => {
+  test("sensor findings, checks that could not run and noted passes come from the audit rows, by sensor and stage", () => {
     const sensor = rowsOf(nightly()).filter((r) => r.cls === "sensor").map((r) => `${r.event} ${r.stage} ${r.detail}`);
     // A pass with no note is no row: only what a person or a triage would want to know.
     expect(sensor).toEqual([
       "SENSOR_FAILED requirements-analysis required-sections: 2 findings",
       "SENSOR_PASSED code-generation linter: tool-unavailable",
+      "SENSOR_COULD_NOT_RUN build-and-test type-check: could not run (script-error: exit-1)",
     ]);
   });
 
@@ -299,6 +301,27 @@ describe("the story of a leg is what the person lived, clipped to a budget", () 
     const codex = storyText(run.legs.find((l) => l.harness === "codex")!);
     expect(codex).toContain("AGENT said: Reverse Engineering is ready for your approval.");
     expect(codex).toContain("PERSON typed: Approve");
+  });
+
+  test("each decision recorded for the person is shown with the reply of theirs kept beside it", () => {
+    const root = scratch();
+    const leg = join(root, "1-full-suite-live-codex-1-Linux", "2026-10-20T21-00-00Z-p1", "e2e-artifacts", "t-exec-codex-x.serial", "attempt-1");
+    put(join(leg, "sdk-drive-7.ndjson"), jsonl([
+      { ts: at(0), event: "start", prompt: "/aidlc fix the greeter", projectDir: "/home/x/proj" },
+      { ts: at(5), event: "next_message", turn: 2, message: "3" },
+      { ts: at(9), event: "end", timedOut: false },
+    ]));
+    put(join(leg, "retained-fixtures", "proj", "aidlc", "spaces", "default", "intents", "261020-greet", "audit", "host-1.md"), [
+      "## Human Turn\n**Timestamp**: 2026-10-20T21:05:00Z\n**Event**: HUMAN_TURN\n**Origin**: person\n",
+      "## Gate Approved\n**Timestamp**: 2026-10-20T21:06:00Z\n**Event**: GATE_APPROVED\n**Stage**: requirements-analysis\n**User Input**: Approve\n**Person Reply**: 3\n",
+      "## Question Answered\n**Timestamp**: 2026-10-20T21:07:00Z\n**Event**: QUESTION_ANSWERED\n**Stage**: user-stories\n**Details**: Guide me\n",
+    ].join("\n---\n"));
+    const story = storyText(auditFolder(root).legs[0]);
+    const recorded = story.slice(story.indexOf("## Recorded for the person"), story.indexOf("## What happened"));
+    expect(recorded).toContain('[06:00] GATE_APPROVED requirements-analysis: recorded "Approve"; their reply "3"');
+    expect(recorded).toContain('[07:00] QUESTION_ANSWERED user-stories: recorded "Guide me"; no reply of theirs kept');
+    expect(recorded).not.toContain("HUMAN_TURN");
+    expect(storyText(auditFolder(nightly()).legs.find((l) => l.test === "t-journey-b.sdk")!)).not.toContain("## Recorded for the person");
   });
 
   test("a story over budget keeps the person's lines and cuts calls from the middle", () => {

@@ -290,6 +290,8 @@ function makeProject(withState: boolean): string {
     "aidlc-runtime-paths.ts",
     "aidlc-runtime-budget.ts",
     "aidlc-lock-line.ts",
+    "aidlc-command.ts",
+    "aidlc-color.ts",
     "aidlc-guard-fences.ts",
     "aidlc-guard-switch.ts",
     "aidlc-guard-operation.ts",

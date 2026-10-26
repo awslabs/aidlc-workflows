@@ -4536,8 +4536,10 @@ describe("t243 project initialization", () => {
     expect(merged.startsWith(original)).toBe(true);
     expect(merged.match(/BEGIN AI-DLC:gitignore/g)).toHaveLength(1);
 
-    // Quiet output is one message, and the finding is part of it.
-    const quietProject = temp("aidlc-t243-hidden-records-quiet-");
+    // Quiet output is one message, and the finding is part of it. The folder's
+    // name is short: on Windows a project folder 75 characters deep gets
+    // config's own warning that it is too deep for AI-DLC's records.
+    const quietProject = temp("aidlc-t243-quiet-");
     expect(spawnSync("git", ["init", "-q", quietProject]).status).toBe(0);
     writeFileSync(join(quietProject, ".gitignore"), original);
     for (const flags of [["--dry-run", "--quiet"], ["--quiet"]]) {
@@ -8821,6 +8823,7 @@ describe("t243 projection channel", () => {
           "sha256:724c2e36547e1eab35a3637595cea3f4bf1ddecf75fb798e0e165932c06cd93e",
           "sha256:b0f5e39317a501be8567bbb0ecbdff651116abc28a500b9c451b732ca8f2e088",
           "sha256:b87a3ec2c39cb24074c6fa37f626e9d150d435d18069fbd0c762fdbd70719c5c",
+          "sha256:a885fe6b7137ba16e0c24ce168b30ef5c780fe9991fc2d6bdff10cc15ad83c05",
         ],
       },
     };

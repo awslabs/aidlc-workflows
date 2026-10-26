@@ -249,9 +249,10 @@ New intents store `Sensors`, `Learnings`, `Summary Confirmation`,
 label such as `on (from scope classic)`. For a plan composed for this piece of work, `--status` shows that label as `(from the approved plan)`; the state file keeps the scope. The label reads `set by you` when the
 record shows you asked for it: you typed the switch as a flag on your own line
 (with the settings typed beside it), you ran the command at your own terminal,
-or you asked in your own words and the agent passed those words with the setter
-(`--person-words`), and a message of yours in this chat since the last decision
-is exactly those words. Your words go on the audit row. A setting the agent runs
+or you asked in your own words and the agent named the message you asked in
+with the setter (`--message <id>`), which the engine proves is yours, from this
+chat and not used up by a later decision. Your whole message goes on the audit
+row. A setting the agent runs
 on its own after a reply that never asked for it ("looks good, carry on") still
 takes effect, and reads `set by a command`. Sensors, learnings or summary confirmation you type with a request
 (`/aidlc --learnings on build the export`), or before any work exists, also
@@ -303,16 +304,15 @@ plan. The `plan_approval` ceremony decides whether it asks on this piece of work
 - **Off** (express and poc): once the plan is written you see one line, and the
   build starts:
 
-  > Plan written: aidlc/spaces/default/intents/260820-checkout/construction/code-generation/code-generation-plan.md. Plan approval (you approve each code plan before it is built) is off for this piece of work (from scope poc). Starting code generation now. Do you want me to go over the plan with you?
+  > Plan written: aidlc/spaces/default/intents/260820-checkout/construction/code-generation/code-generation-plan.md. Plan approval (you approve each code plan before it is built) is off for this piece of work (from scope poc). Starting code generation now. You can ask me to go over the plan at any time.
 
   The audit trail gets a `PLAN_APPROVAL_SKIPPED` row carrying the fingerprint of
   the plan that was built, and the questions file reads
   `[Answer]: Plan approval off`. Nothing records that you approved it.
 
 **Review the plan first.** With plan approval off, the line that names each
-plan asks whether you want to look at it first; say yes, or ask to review the
-plan in your own words at any time, and that plan is shown for
-approval while the build waits. The setting stays off: the next plan builds
+plan says you can ask to go over it at any time, and the build starts; ask in
+your own words, and that plan is shown for approval while the build waits. The setting stays off: the next plan builds
 without asking. If the plan is already being built when you ask, that build
 finishes, then its plan is shown beside what was built, and nothing else starts
 until you answer. Approving keeps what was built; changes you ask for come back
@@ -382,7 +382,7 @@ Guard Policy is one setting with three values, `strict`, `relaxed`, and `off`. I
 
 **When an approved input changed.** A reviewed document was edited after its review, or an output was saved without the current summary confirmation.
 
-- `strict` reopens the approval. The run stops with one plain sentence naming what changed and asks you again.
+- `strict` reopens the approval. The run stops with one plain sentence naming what changed and asks you again. When your confirmation is current and only a document the agent saved before it has not been saved again, and nothing has reviewed it yet, the agent saves it again first and asks you only if that does not clear it.
 - `relaxed` and `off` keep going. The change is recorded once in the audit trail as a `CHANGE_ACCEPTED` row, you hear one line about it, and the run continues. Nothing is deleted: the approval and its evidence stay exactly as they were.
 
 Other code moving after you approved a code plan (a `git pull`, another Unit landing) never asks again, on any value, with one exception below: approving a plan is about the plan and its test instructions. The build continues, you hear which files moved (for example `2 files changed since this plan was approved: src/api.ts, src/db.ts. Building auth now.`), and a `CHANGE_ACCEPTED` row records it. An AI-DLC update you took is not your change: its files are never named, and when they are all that moved, nothing is said or recorded and a build of Units in parallel starts without asking you to commit them.
@@ -463,9 +463,9 @@ A fence is a guard that refuses an action nothing asked for: no step the workflo
 
 Lowering a fence or the policy word is the person's call. Ask in your own words and the agent runs the setter (asking for the guards as a whole to be off, such as "turn the guards off", sets Guard Policy `off`), or type `/aidlc config set guard.<fence> off`, `/aidlc --guard-policy relaxed|off`, or the confirmation words `guard policy relaxed|off`, choosing one value. The agent's setter applies a typed switch to the piece of work selected by `--intent <name>` and `--space <name>`, or by the chat's workflow selection when those selectors are omitted, and writes the state and audit row. It reports `AIDLC Guard Policy: ...` as hook context on harnesses that inject it. A nonexistent named intent is refused. A Guard Policy `relaxed` or `off` switch typed before the work exists is for the piece of work this chat starts next (`Guard Policy relaxed for the piece of work you start now (set by you).`). Typed in the same message as a request, it goes with that request (`Guard Policy relaxed for the work you are asking for (set by you).`): new work takes it when it is created, and if you choose to continue the open work instead, it is applied there; the message alone never changes the open work. A fence switch such as `/aidlc --guard.review-freeze off fix the parser` works the same way (`The review freeze check is off for the work you are asking for (set by you).`). The one exception is while the code plan question is open and you are not editing the plan files: then a setting typed with words (`/aidlc --guard-policy off approve the plan`, or `strict` with your choice) is for this work, and the words are your reply to that question. Words after an unquoted `--` still describe new work. Plan approval `off`, a fence switch, and every other setting typed before the work exists (the ceremonies, collaborators, depth, test strategy and review) are kept the same way, for the piece of work this chat starts next. An unrelated reply opens nothing.
 
-The CLI setters lower only when a reply from you has arrived since the last decision, and perform no switch-authority session lookup. An approval you give in the same message leaves the rest of it standing: "approve, and turn plan approval off" approves, then turns it off, and "approve the plan, and run Construction on its own from here" does both. The answer you give the agent's own question in that message leaves it standing too (the option you pick when the agent offers a change is your request for it); any other decision recorded after your message uses it up, and an approval always needs its own reply. Hooks run on Windows too, so the typed switch works on every harness that forwards the prompt. An already-off fence or an identical policy word already marked `set by you` needs no key because the CLI update is a no-op.
+The CLI setters lower only when a reply from you has arrived since the last decision, and perform no switch-authority session lookup. A setting you ask for in the same message as an approval rides that approval: "approve, and turn plan approval off" turns it off and approves in one step. "Approve the plan, and run Construction on its own from here" also does both. A message of yours that already gave an approval or another decision does not also change a setting later, so an agent cannot turn one of your checks off on your earlier "Approve"; ask for it in a message of its own and it is done at once. Once a code plan is written for you to approve, plan approval goes off only on a message you send after its question is shown: if you asked before that, that plan is asked about once, with one line saying why, and saying so again turns it off. The answer you give the agent's own question in that message leaves it standing too (the option you pick when the agent offers a change is your request for it); any other decision recorded after your message uses it up, and an approval always needs its own reply. Hooks run on Windows too, so the typed switch works on every harness that forwards the prompt. An already-off fence or an identical policy word already marked `set by you` needs no key because the CLI update is a no-op.
 
-When a guard question offers "turn the check off for this piece of work", choosing it is enough: the agent turns it off for you and says in one line that it is off for this piece of work, comes back on for the next one, and that you can ask to turn it back on. On Codex the skill is `$aidlc`.
+When a guard question offers "turn the check off for this piece of work", choosing it is enough: the agent turns it off for you and tells you once, in the line the switch prints, that it is off for this piece of work and that you can turn it back on any time. On Codex the skill is `$aidlc`.
 
 What counts as typing the switch: a message that begins with `/aidlc` (or `$aidlc`, or `aidlc`) and carries the flags first, such as `/aidlc --guard-policy relaxed`, `/aidlc --guard-policy off --guard.state-transition off`, or `/aidlc --guard-policy relaxed build the auth service` (the description follows the flags and is not read); `config set guard-policy relaxed|off` or `config set guard.<fence> off` after the same command head, optionally followed by other settings (`--depth minimal --sensors off`) and `--intent <name>` and `--space <name>` pairs; or the confirmation words `guard policy relaxed|off` on their own. An unknown flag or invalid value refuses the whole line, naming it. Case and a trailing period do not matter. A question or remark that mentions a switch is not a switch: `/aidlc why was config set guard.plan-approval off suggested?` changes nothing, and neither does a flag placed after the description.
 
@@ -481,21 +481,21 @@ Switching one off writes `- **Guards Off**: review-freeze (set by you)` into `ai
 
 The reviewer-scope setting governs the dispatched reviewer's read/search bound. A checkout stamped as owning one team Unit still cannot write another Unit's `construction/` subtree; that ownership boundary is not switchable by Guard Policy, a per-work fence setting, or `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK`.
 
-Ask in your own words and the agent carries it out; a typed switch is the same setter, run by the agent from its first `next`. A switchable fence's main-session refusal names its switch. A setter that would turn a fence off, run when no reply from you has arrived since the last decision, says:
+Ask in your own words and the agent carries it out; a typed switch is the same setter, run by the agent from its first `next`. A switchable fence's main-session refusal names its switch. A setter that would turn a fence off, run without naming the message you asked in, says:
 
-> Turning the review-freeze check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
+> Turning the review-freeze check off is the person's call. Run it with --message <id>, the message they asked in, when they ask for it.
 
 A CLI setter that would turn plan approval off says:
 
-> Turning plan approval off lets code generation start without the person approving the plan, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it.
+> Turning plan approval off lets code generation start without the person approving the plan, so it is their call. Run it with --message <id>, the message they asked in, when they ask for it.
 
-A setter that would change the policy to `relaxed`, run when no reply from you has arrived since the last decision, says:
+A setter that would change the policy to `relaxed`, run without naming the message you asked in, says:
 
-> Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
+> Setting Guard Policy relaxed lowers fences, which is the person's call. Run it with --message <id>, the message they asked in, when they ask for it.
 
 Creation with an explicit `relaxed` flag below the scope's default (on `enterprise`), run with no message of yours on record in that chat, says the same:
 
-> Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it.
+> Setting Guard Policy relaxed lowers fences, which is the person's call. Run it with --message <id>, the message they asked in, when they ask for it.
 
 Other fence names and `off` use the corresponding name or value; unattended runs append the driver guidance. Memory-held strict refuses before applying a switch or checking a bypass and instead names the memory file to edit. A human-presence refusal names no switch; it says no reply from the person is on record and what happened to one they already sent (the harness's hook steps, or `/aidlc --doctor`), and never asks them to reply again.
 
@@ -515,7 +515,7 @@ This classification never lowers a fence or substitutes for the person's typed s
 
 ### What you see when a guard decides
 
-- **It stands aside.** One line names what lowered the fence, and the work continues: `Continuing past the plan-approval check because it is off for this piece of work (guard policy off (from scope classic)). Recorded in the audit trail: dispatch of aidlc-developer-agent`. One `GUARD_STOOD_ASIDE` row records the fence, the authority in force, how a grant was proven, and whether the actor was the main session or a dispatched agent. You are never asked "are you sure": the fence is already off.
+- **It stands aside.** One line names what lowered the fence, and the work continues: `Continuing past the plan re-approval check because it is off for this piece of work (guard policy relaxed (set by you)). Recorded in the audit trail: dispatch of aidlc-developer-agent`. One `GUARD_STOOD_ASIDE` row records the fence, the authority in force, how a grant was proven, and whether the actor was the main session or a dispatched agent. You are never asked "are you sure": the fence is already off.
 
   On Claude Code the hook emits one JSON `systemMessage`, which Claude Code shows to you as a hook message; the model does not see it, and the `GUARD_STOOD_ASIDE` row is the record. On Codex, opencode, and Kiro CLI you see the plain hook line. On Kiro IDE you do not: the IDE hands a hook's output to the agent only at session start and at prompt submit, so a stand-aside there is silent and the audit row is the only record of it. A refusal is different: when a hook blocks a tool call, the agent does see the reason. The row is written only when the intent already has an audit trail, so on Kiro IDE against a brand-new project with no ledger yet a stand-aside leaves neither the line nor the row. If you want to know what a lowered fence let through, read the `GUARD_STOOD_ASIDE` rows in the intent's `audit/` shards rather than relying on having seen the line.
 - **It holds.** When memory does not hold Guard Policy strict, a switchable fence's main-session refusal says what is missing and adds one sentence telling the agent to offer the way through: if you meant to do this now, it asks whether to turn the review-freeze check off for this piece of work, and when you say so it turns it off and tells you so in one line. When memory holds strict, the refusal names the memory file instead of offering a switch. Human presence instead says no reply from the person is on record, never asks them to repeat it, and never advertises a switch.
@@ -561,7 +561,7 @@ On Claude Code it looks like this, from a run on the `mvp` plan (drawing charact
 [AIDLC] inventory-api - IDEATION [##--------] 1/4 > Feasibility -- Architect Agent
 ```
 
-This shows, in order: the piece of work, the current phase, phase progress (as a bar and a ratio, both scoped to the current phase), stage display name, and lead agent. Before any work is selected it reads `[AIDLC] ready`. On the right come Claude Code's model, then `ctx:N%`, how much of the context window is used. When the Claude usage ledger has data, the tokens in and out and `$<usd>` follow for the active workflow and current transcript/session only; prior workflows and sessions are excluded. Setting `AIDLC_DISABLE_USAGE_TRACKING=1` turns usage tracking off entirely and removes this segment. [Your First Workflow](02-your-first-workflow.md) explains each segment.
+This shows, in order: the piece of work, the current phase, phase progress (as a bar and a ratio, both scoped to the current phase), stage display name, and lead agent. While Reverse Engineering analyses ten or more repositories, the stage name is followed by how many of them are done, as in `> Reverse Engineering 37/190`. Before any work is selected it reads `[AIDLC] ready`. On the right come Claude Code's model, then `ctx:N%`, how much of the context window is used. When the Claude usage ledger has data, the tokens in and out and `$<usd>` follow for the active workflow and current transcript/session only; prior workflows and sessions are excluded. Setting `AIDLC_DISABLE_USAGE_TRACKING=1` turns usage tracking off entirely and removes this segment. [Your First Workflow](02-your-first-workflow.md) explains each segment.
 
 The `$<usd>` value is a local estimate priced from **public list prices**, not a bill. When Amazon Bedrock is the recorded provider (`CLAUDE_CODE_USE_BEDROCK=1`), what Bedrock actually charges depends on your inference profile, region, service tier, and any negotiated or subscription pricing, so the figure may not match your invoice. Most of the token volume in a long workflow is cache reads — billed, at the reduced cache-read rate — so the counts and the estimate grow steadily; that is real usage, not inflation. To price new usage at your own rates, point `AIDLC_MODEL_RATES` at a rates file (see [Rate table and overrides](../reference/06-hooks-and-tools.md#rate-table-and-overrides)); totals already recorded keep the rates they were priced at. If you'd rather not show the estimate — while presenting, screen-sharing, or recording — set `AIDLC_DISABLE_USAGE_TRACKING=1` (see [Troubleshooting](15-troubleshooting.md#statusline-shows-a-cost-segment-you-dont-want-or-usage-tracking-concerns)).
 

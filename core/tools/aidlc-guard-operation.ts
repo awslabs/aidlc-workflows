@@ -432,13 +432,29 @@ export const GUARD_REMEDY_WORDING = {
   "finish-unit-step": null,
   "dispatch-pipeline-links": null,
   "produce-stage-output": null,
+  "ask-stage-questions": null,
   "repair-source-boundary": null,
-  "reconfirm-summary": (c) => ({
-    label: "Confirm the summary again",
-    description:
-      `I'll show you the current summary of your answers for ${c.target} to confirm, then save ` +
-      "its documents again from it.",
-  }),
+  // With no questions asked yet there is no summary to show again; with no
+  // questions file for some Units, their answers were never summarized.
+  "reconfirm-summary": (c) =>
+    c.code === "SUMMARY_QUESTIONS_MISSING"
+      ? {
+          label: "Answer its questions",
+          description:
+            `I'll ask you the questions for ${c.target}, show you a summary of your answers to confirm, ` +
+            "then save its documents again from them.",
+        }
+      : c.code === "SUMMARY_UNIT_EVIDENCE_MISSING"
+      ? {
+          label: "Confirm a summary",
+          description: `I'll show you a summary of ${c.target} to confirm, then save its documents again from it.`,
+        }
+      : {
+          label: "Confirm the summary again",
+          description:
+            `I'll show you the current summary of your answers for ${c.target} to confirm, then save ` +
+            "its documents again from it.",
+        },
   // The person decides; the agent runs the setter (the remedy's command), which
   // records it as set by them. So the option says what will happen.
   "lower-fence": (c) => ({

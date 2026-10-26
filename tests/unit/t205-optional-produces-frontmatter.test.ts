@@ -212,12 +212,20 @@ describe("t205 optional_produces frontmatter", () => {
       }
     });
 
-    test("functional-design and build-and-test are the stages carrying optional_produces", () => {
+    // functional-design's frontend-components is written only for a UI Unit;
+    // build-and-test's test instructions only at the strategy that calls for
+    // them; requirements-analysis's traceability record is optional so a run
+    // with no record (work begun before it existed) still reviews and approves.
+    test("functional-design, build-and-test and requirements-analysis are the stages carrying optional_produces", () => {
       const carriers = loadGraph()
         .filter((s) => s.optional_produces !== undefined)
-        .map((s) => s.slug)
+        .map((s) => `${s.slug}:${s.optional_produces?.join(",")}`)
         .sort();
-      expect(carriers).toEqual(["build-and-test", "functional-design"]);
+      expect(carriers).toEqual([
+        "build-and-test:integration-test-instructions,performance-test-instructions,security-test-instructions",
+        "functional-design:frontend-components",
+        "requirements-analysis:traceability",
+      ]);
     });
   });
 

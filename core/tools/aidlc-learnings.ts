@@ -1,16 +1,18 @@
 // Learning-gate tool -- the tool-as-actor half of stage-protocol section 13's
 // Learnings Ritual. Two subcommands:
 //
-//   surface --slug <stage-slug> [--project-dir <path>]
-//       Read-only. Reads the just-approved stage's memory.md (via
-//       parseMemoryEntries), partitions entries into keep-candidates
-//       (Interpretations / Deviations / Tradeoffs) and parked open
-//       questions, and emits a structured JSON candidate set on stdout.
-//       Carries NO AskUserQuestion field names — the orchestrator renders
-//       the AUQ, runs the single-line admission conflict-check (KNOWLEDGE),
-//       and the user decides keep/heading/scope (JUDGEMENT).
-//       ALSO binds the space + intent active AT SURFACE TIME into the
-//       output -- see "Provenance binding" below.
+//   surface --slug <stage-slug> [--correction <their change> | --correction-file <file>]... [--project-dir <path>]
+//       Read-only. Prints, for each correction the agent read in the
+//       person's words (KNOWLEDGE), the one question the person answers
+//       (JUDGEMENT): "You asked me to <it>. Keep that for next time?" with
+//       its exact choices; with no correction it prints no question. A
+//       --correction-file is read from the record's answer-text folder and
+//       removed, so words a shell would expand never pass through one. The
+//       agent's diary (memory.md) is the stage's record and is never offered:
+//       only its counts ride along. Carries NO AskUserQuestion field names;
+//       the orchestrator renders the question and runs the single-line
+//       admission conflict-check. ALSO binds the space + intent active AT
+//       SURFACE TIME into the output -- see "Provenance binding" below.
 //
 //   persist --slug <stage-slug> --selections-json <selections_file> [--project-dir <path>]
 //       The deterministic WRITER. Reads the post-AUQ selections-json
@@ -118,10 +120,14 @@ import {
   getField,
   isoTimestamp,
   intentsDir,
-  LEARNINGS_KEEP_NONE,
-  LEARNINGS_KEEP_QUESTION,
-  LEARNINGS_NOTE_CHOICES,
-  LEARNINGS_NOTE_QUESTION,
+  auditBlockField,
+  LEARNINGS_CORRECTION_CHOICES,
+  LEARNINGS_NOTE_QUESTION_KIND,
+  learningsCorrectionQuestion,
+  learningsCorrectionText,
+  readAnswerTextFile,
+  readAuditShardEvents,
+  sortAttemptEvents,
   listIntentDirs,
   listField,
   parseMemoryEntries,
@@ -206,12 +212,10 @@ function stagesDir(projectDir: string): string {
 
 // --- surface ---
 
+/** A correction the agent read in the person's words, as the question carries it. */
 interface SurfaceCandidate {
   id: string;
-  source_heading: "Interpretations" | "Deviations" | "Tradeoffs";
-  ts: string;
-  summary: string;
-  context: string;
+  correction: string;
   default_scope: "project";
 }
 
@@ -239,6 +243,8 @@ interface SurfaceQuestion {
   question: string;
   multi_select: boolean;
   options: string[];
+  /** The --question-kind its `log decision` takes. */
+  question_kind: string;
 }
 
 const SELECTIONS_MAX_BYTES = 1024 * 1024;
@@ -434,10 +440,21 @@ function approvedTogetherStage(stateContent: string, current: string, slug: stri
   return approvesTogetherStages(stateContent, current)?.includes(slug) === true;
 }
 
-// The §13 ritual runs while the just-completed stage is still the Active
+// A note the person gave with their approval ("approve, and next time use the
+// shared fixtures") is kept under the stage they approved, also once that
+// approval is recorded and has moved Current Stage on: the stage the latest
+// approval names takes it until another approval is recorded.
+function approvedLast(projectDir: string, slug: string, intent?: string, space?: string): boolean {
+  const approvals = sortAttemptEvents(readAuditShardEvents(projectDir, intent, space)).filter((row) =>
+    row.event === "GATE_APPROVED" && auditBlockField(row.block, "Workflow")?.startsWith("single-stage:") !== true);
+  return approvals.length > 0 && auditBlockField(approvals[approvals.length - 1].block, "Stage") === slug;
+}
+
+// The section 13 step runs while the just-completed stage is still the Active
 // (Current Stage) row at the approval gate. Reject a slug that isn't the
-// active one — the orchestrator must surface the stage it just ran.
-function assertActiveStage(stateContent: string, slug: string, atCheckpoint: string[]): void {
+// active one (or the one approved last): the orchestrator must surface the
+// stage it just ran.
+function assertActiveStage(stateContent: string, slug: string, atCheckpoint: string[], approved: () => boolean): void {
   const current = getField(stateContent, "Current Stage");
   if (current === null) {
     fail("state file has no Current Stage field", 1);
@@ -445,7 +462,8 @@ function assertActiveStage(stateContent: string, slug: string, atCheckpoint: str
   if (
     current !== slug &&
     atCheckpoint.length === 0 &&
-    !approvedTogetherStage(stateContent, current, slug)
+    !approvedTogetherStage(stateContent, current, slug) &&
+    !approved()
   ) {
     // --slug takes a stage's slug. When the value is no stage at all (an
     // intent's record name is the usual one), name the active stage to pass.
@@ -460,7 +478,7 @@ function handleSurface(args: string[], projectDir: string): void {
   const flags = parseFlags(args);
   const slug = flags.slug;
   if (!slug) {
-    fail("Usage: aidlc-learnings.ts surface --slug <stage-slug> [--project-dir <path>]", 1);
+    fail("Usage: aidlc-learnings.ts surface --slug <stage-slug> [--correction <their change> | --correction-file <file>]... [--project-dir <path>]", 1);
   }
 
   // Resolve space/intent FIRST, before touching any per-intent path. A
@@ -484,17 +502,25 @@ function handleSurface(args: string[], projectDir: string): void {
   }
 
   const atCheckpoint = checkpointUnits(projectDir, stateContent, slug);
-  assertActiveStage(stateContent, slug, atCheckpoint);
+  assertActiveStage(stateContent, slug, atCheckpoint, () => approvedLast(projectDir, slug, pinnedIntent, space));
+  // Read after the stage check, so a refused call leaves its files for the retry.
+  let corrections: string[];
+  try {
+    corrections = correctionFlags(args)
+      .map((f) => learningsCorrectionText(f.file ? readAnswerTextFile(projectDir, f.value) : f.value))
+      .filter((c) => c !== "");
+  } catch (e) {
+    fail(errorMessage(e), 1);
+  }
 
   const memRel = resolveMemoryPath(projectDir, slug, pinnedIntent, space);
   const memAbs = join(projectDir, memRel);
 
   // memory.md may be absent (the per-stage lifecycle owns deterministic
-  // creation; if a stage ran without it, surface zero candidates rather than
-  // failing the gate).
+  // creation; a stage that ran without it counts no entries).
   const raw = existsSync(memAbs) ? readFileSync(memAbs, "utf-8") : "";
   // Every Unit's turn at a stage writes the one stage diary. At a Unit's
-  // checkpoint, offer that Unit's entries and the ones that name no Unit.
+  // checkpoint, count that Unit's entries and the ones that name no Unit.
   const unit = atCheckpoint.length === 1 ? atCheckpoint[0] : null;
   const entries = parseMemoryEntries(raw).filter((e) => unit === null || e.unit === undefined || e.unit === unit);
 
@@ -506,24 +532,14 @@ function handleSurface(args: string[], projectDir: string): void {
   const segs = memRel.split("/");
   const phase = segs.at(-3) ?? "";
 
-  const candidates: SurfaceCandidate[] = [];
-  const parked: SurfaceParkedQuestion[] = [];
-  let seq = 0;
-  for (const e of entries) {
-    if (e.heading === "Open questions") {
-      parked.push({ ts: e.ts, summary: e.summary });
-      continue;
-    }
-    seq++;
-    candidates.push({
-      id: `c${seq}`,
-      source_heading: e.heading,
-      ts: e.ts,
-      summary: e.summary,
-      context: e.context,
-      default_scope: "project",
-    });
-  }
+  const parked: SurfaceParkedQuestion[] = entries
+    .filter((e) => e.heading === "Open questions")
+    .map((e) => ({ ts: e.ts, summary: e.summary }));
+  const candidates: SurfaceCandidate[] = corrections.map((correction, index) => ({
+    id: `c${index + 1}`,
+    correction,
+    default_scope: "project",
+  }));
 
   const out: SurfaceOutput = {
     schema_version: 1,
@@ -536,17 +552,14 @@ function handleSurface(args: string[], projectDir: string): void {
     candidates,
     parked_open_questions: parked,
     // Handed over whole, so the agent does not compose the box: live runs
-    // folded both into one question and dropped a choice from it.
-    questions: [
-      ...(candidates.length > 0
-        ? [{
-          question: LEARNINGS_KEEP_QUESTION,
-          multi_select: true,
-          options: [LEARNINGS_KEEP_NONE, ...candidates.map((c) => c.summary)],
-        }]
-        : []),
-      { question: LEARNINGS_NOTE_QUESTION, multi_select: false, options: [...LEARNINGS_NOTE_CHOICES] },
-    ],
+    // folded questions together and dropped a choice. No correction, no
+    // question: the stage goes from its summary to its gate.
+    questions: candidates.map((c) => ({
+      question: learningsCorrectionQuestion(c.correction),
+      multi_select: false,
+      options: [...LEARNINGS_CORRECTION_CHOICES],
+      question_kind: LEARNINGS_NOTE_QUESTION_KIND,
+    })),
   };
   console.log(JSON.stringify(out));
 }
@@ -701,7 +714,10 @@ function parseSelectionsFile(path: string): SelectionsFile {
   if (!Array.isArray(selectionsRaw)) {
     fail("selections-json is malformed: expected { stage_slug, space, intent, selections[] }", 1);
   }
-  const rawSelections: unknown[] = selectionsRaw;
+  // An entry marked `keep: false` is a candidate the person did not keep (an
+  // agent may list every candidate with its pick): left out before its shape is
+  // read, so a declined note is never written or recorded as learned.
+  const rawSelections: unknown[] = selectionsRaw.filter((raw) => !(isRecord(raw) && raw.keep === false));
   return {
     stage_slug: parsed.stage_slug,
     space: parsed.space,
@@ -1284,6 +1300,17 @@ function parseFlags(args: string[]): Record<string, string> {
   return flags;
 }
 
+// Every --correction and --correction-file, in the order given.
+function correctionFlags(args: string[]): Array<{ file: boolean; value: string }> {
+  const values: Array<{ file: boolean; value: string }> = [];
+  for (let i = 0; i < args.length - 1; i++) {
+    if (args[i] === "--correction" || args[i] === "--correction-file") {
+      values.push({ file: args[i] === "--correction-file", value: args[++i] });
+    }
+  }
+  return values;
+}
+
 function stripProjectDir(args: string[]): { projectDirArg: string | undefined; rest: string[] } {
   const out = [...args];
   const pdIdx = out.indexOf("--project-dir");
@@ -1301,9 +1328,9 @@ function printHelp(): void {
       "aidlc-learnings.ts — §13 learning-gate tool (tool-as-actor).",
       "",
       "Subcommands:",
-      "  surface --slug <stage-slug> [--project-dir <path>]",
-      "      Read memory.md for the active stage; emit structured candidates",
-      "      (Interpretations/Deviations/Tradeoffs) + parked open questions.",
+      "  surface --slug <stage-slug> [--correction <their change> | --correction-file <file>]... [--project-dir <path>]",
+      "      Print the question for each correction the person made in the stage",
+      "      (none without one), and the selections file persist reads.",
       "  persist --slug <stage-slug> --selections-json <selections_file> [--project-dir <path>]",
       "      Write confirmed learnings as practices under the routed heading in",
       "      {project,team}.md (the relocated method files) and/or scaffold + bind",

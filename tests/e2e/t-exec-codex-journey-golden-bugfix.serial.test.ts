@@ -36,7 +36,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { codexExecDiagnostic, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
-import { codexJsonTurn, setupCodexProject } from "../harness/exec-drive.ts";
+import { codexJsonTurn, codexReplies, setupCodexProject } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   driveTyped,
@@ -117,7 +117,7 @@ describe("t-exec-codex-journey-golden-bugfix: fix existing code on Codex, from t
             if (newSession || tokens.length === 0) tokens.push(usage ?? {});
             else if (usage) tokens[tokens.length - 1] = usage;
             session = turn.sessionId;
-            return turn.results;
+            return { results: turn.results, words: codexReplies(turn.stdout) };
           });
           problems.push(...run.problems, ...goldenPathProblems(journey, run));
           const recorded = recordedPersonLines(proj);

@@ -1,5 +1,6 @@
-// covers: audit:GATE_APPROVED, subcommand:aidlc-bolt:checkpoint, subcommand:aidlc-orchestrate:next,
-// subcommand:aidlc-orchestrate:report, subcommand:aidlc-log:review, function:approvalDispositionField
+// covers: audit:GATE_APPROVED, audit:GATE_REJECTED, subcommand:aidlc-bolt:checkpoint, subcommand:aidlc-orchestrate:next,
+// subcommand:aidlc-orchestrate:report, subcommand:aidlc-log:review, function:approvalDispositionField,
+// function:rejectedFindingDispositionField
 //
 // #2208 part 2: what the record says about a Unit's open review findings when
 // Construction approves it. The Unit's own approval records them: Accepted risk
@@ -9,6 +10,8 @@
 // a stage approval nobody gave records Approved autonomously. No question,
 // step or refusal changes; a finding the person accepted at a Unit's
 // checkpoint is not put to them again when the Unit is asked about again.
+// A finding the person names as they decide the Unit (a fix asked for, a
+// rejection, a reopening) is recorded on its row as at a stage's gate.
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -30,6 +33,11 @@ import {
 import {
   readReviewArtifactContexts, renderFindingsContext, REVIEW_FINDING_DISPOSITIONS_FIELD,
 } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -147,27 +155,39 @@ function recordCommand(p: string) {
   }
 }
 
-// The Unit's checkpoint, as the conductor runs it: the person's Approve, or the
-// approval Construction records on its own when the person let it run.
-function approveUnit(p: string, unit: string, autonomous: boolean) {
+function checkpoint(p: string, unit: string, args: string[]) {
+  return tool(p, "bolt", ["checkpoint", "--unit", unit, "--kind", "unit", ...args]);
+}
+
+function checkpointed(p: string, unit: string, args: string[]) {
+  const result = checkpoint(p, unit, args);
+  expect(result.status, result.out).toBe(0);
+  return JSON.parse(result.stdout);
+}
+
+// The Unit's checkpoint verified and, when the person decides it, asked in
+// the session this returns.
+function askUnit(p: string, unit: string, autonomous: boolean): string {
   recordCommand(p);
-  const checkpoint = (args: string[]) => {
-    const result = tool(p, "bolt", ["checkpoint", "--unit", unit, "--kind", "unit", ...args]);
-    expect(result.status, result.out).toBe(0);
-    return JSON.parse(result.stdout);
-  };
-  const verified = checkpoint(["--action", "verify"]);
+  const verified = checkpointed(p, unit, ["--action", "verify"]);
   expect(verified.errors).toEqual([]);
   expect(verified.verified).toBe(true);
   expect(verified.human_required).toBe(!autonomous);
+  const session = `t-dispositions-${unit}`;
+  if (!autonomous) checkpointed(p, unit, ["--action", "ask", "--session", session]);
+  return session;
+}
+
+// The Unit's checkpoint, as the conductor runs it: the person's Approve, or the
+// approval Construction records on its own when the person let it run.
+function approveUnit(p: string, unit: string, autonomous: boolean) {
+  const session = askUnit(p, unit, autonomous);
   if (autonomous) {
-    expect(checkpoint(["--action", "approve"]).approved).toBe(true);
+    expect(checkpointed(p, unit, ["--action", "approve"]).approved).toBe(true);
     return;
   }
-  const session = `t-dispositions-${unit}`;
-  checkpoint(["--action", "ask", "--session", session]);
   human(p, "Approve", session);
-  expect(checkpoint(["--action", "approve", "--session", session, "--user-input", "Approve"]).approved).toBe(true);
+  expect(checkpointed(p, unit, ["--action", "approve", "--session", session, "--user-input", "Approve"]).approved).toBe(true);
 }
 
 // The Unit's reviewed document of a stage, which its findings are recorded against.
@@ -180,10 +200,11 @@ function stageArtifact(p: string, slug: string, unit: string): string {
 
 // One review through the logger, as a real run records it: the request, the
 // reviewer's report in the slot it names, then the verdict. `open` is the one
-// Major finding the review raises; `still` reports R-01 as still applying.
+// Major finding the review raises; `still` reports R-01 as still applying, and
+// `fixed` as fixed.
 function reviewThroughLog(
   p: string, slug: string, unit: string, iteration: number,
-  report: { open?: string; still?: boolean } = {},
+  report: { open?: string; still?: boolean; fixed?: boolean } = {},
 ) {
   const reviewer = findStageBySlug(slug)!.reviewer!;
   const args = ["review", "--stage", slug, "--reviewer", reviewer, "--unit", unit, "--iteration", String(iteration)];
@@ -196,7 +217,8 @@ function reviewThroughLog(
     `**Verdict:** ${verdict}`, `**Reviewer:** ${reviewer}`, `**Iteration:** ${iteration}`, "",
     "### Findings", "",
     "**Prior findings**", "", "| ID | Now | Severity | Note |", "|---|---|---|---|",
-    ...(report.still ? ["| R-01 | Still applies | Major | The rule is still not covered. |"] : []), "",
+    ...(report.still ? ["| R-01 | Still applies | Major | The rule is still not covered. |"] : []),
+    ...(report.fixed ? ["| R-01 | Fixed | | Covered now. |"] : []), "",
     "**New findings**", "", "| Severity | Location | Finding | Required action |", "|---|---|---|---|",
     ...(report.open !== undefined
       ? [`| Major | ${stageArtifact(p, slug, unit)} > ${report.open} | It is not covered. | Cover it. |`]
@@ -243,6 +265,11 @@ function approvals(p: string): AuditShardEvent[] {
 
 function unitApprovals(p: string, unit: string): AuditShardEvent[] {
   return approvals(p).filter((row) => auditBlockField(row.block, "Unit") === unit);
+}
+
+function unitRejections(p: string, unit: string): AuditShardEvent[] {
+  return readAuditShardEvents(p).filter((row) =>
+    row.event === "GATE_REJECTED" && auditBlockField(row.block, "Unit") === unit);
 }
 
 function stageApprovals(p: string, slug: string): AuditShardEvent[] {
@@ -397,5 +424,124 @@ describe("t-unit-approval-dispositions: a Unit's findings on its own approval", 
       artifact: stageArtifact(p, "functional-design", "alpha"), id: "R-01", status,
     }]);
     expect(alphaFinding(p)).toEqual([{ id: "R-01", status: autonomous ? "New" : "Accepted risk" }]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // "Approve, but make sure R-01 gets fixed": a fix asked for is no decision,
+  // so R-01 stays open and the next review re-checks it.
+  test("the person approves a Unit and asks a finding fixed: its row records Fix requested and the finding stays open", () => {
+    const p = fixture();
+    buildUnit(p, "alpha");
+    expect(next(p).construction_checkpoint?.unit).toBe("alpha");
+    const session = askUnit(p, "alpha", false);
+    human(p, "Approve, but make sure R-01 gets fixed", session);
+    expect(checkpointed(p, "alpha", [
+      "--action", "approve", "--session", session, "--user-input", "Approve", "--fix-finding", "R-01",
+    ]).approved).toBe(true);
+    expect(unitApprovals(p, "alpha").map(recorded)).toEqual([[{
+      artifact: stageArtifact(p, "functional-design", "alpha"), id: "R-01", status: "Fix requested",
+    }]]);
+    expect(alphaFinding(p)).toEqual([{ id: "R-01", status: "New" }]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The agent named a finding the Unit does not have: the shared refusal
+  // names the open ones before anything is recorded, and the corrected retry
+  // takes the person's reply they already gave.
+  test("a fix asked for a finding the Unit does not have is refused with no row, and the retry approves with no new question", () => {
+    const p = fixture();
+    buildUnit(p, "alpha");
+    expect(next(p).construction_checkpoint?.unit).toBe("alpha");
+    const session = askUnit(p, "alpha", false);
+    human(p, "Approve, but make sure the rule 3 finding gets fixed", session);
+    const approve = (finding: string) => checkpoint(p, "alpha", [
+      "--action", "approve", "--session", session, "--user-input", "Approve", "--fix-finding", finding,
+    ]);
+    const refused = approve("R-99");
+    expect(refused.status, refused.out).toBe(1);
+    expect(refused.out).toContain(
+      "Cannot ask a fix for R-99: it is not a current review finding for this gate. " +
+        `Current open findings: ${stageArtifact(p, "functional-design", "alpha")}#R-01.`,
+    );
+    expect(unitApprovals(p, "alpha")).toEqual([]);
+    const retried = approve("functional-spec#R-01");
+    expect(retried.status, retried.out).toBe(0);
+    expect(JSON.parse(retried.stdout).approved).toBe(true);
+    expect(unitApprovals(p, "alpha").map(recorded)).toEqual([[{
+      artifact: stageArtifact(p, "functional-design", "alpha"), id: "R-01", status: "Fix requested",
+    }]]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A misspelled finding flag would otherwise be dropped and the approval
+  // recorded as Accepted risk, the opposite of what the person said.
+  test("a misspelled finding flag is refused with no row, and the retry approves with no new question", () => {
+    const p = fixture();
+    buildUnit(p, "alpha");
+    expect(next(p).construction_checkpoint?.unit).toBe("alpha");
+    const session = askUnit(p, "alpha", false);
+    human(p, "Approve, but make sure R-01 gets fixed", session);
+    const approve = (flag: string) => checkpoint(p, "alpha", [
+      "--action", "approve", "--session", session, "--user-input", "Approve", flag, "R-01",
+    ]);
+    const refused = approve("--fix-findng");
+    expect(refused.status, refused.out).toBe(1);
+    const refusal = JSON.parse(refused.out).error as string;
+    expect(refusal).toStartWith('checkpoint does not accept "--fix-findng". It accepts --unit, ');
+    expect(refusal).toContain("--fix-finding");
+    expect(unitApprovals(p, "alpha")).toEqual([]);
+    const retried = approve("--fix-finding");
+    expect(retried.status, retried.out).toBe(0);
+    expect(JSON.parse(retried.stdout).approved).toBe(true);
+    expect(unitApprovals(p, "alpha").map(recorded)).toEqual([[{
+      artifact: stageArtifact(p, "functional-design", "alpha"), id: "R-01", status: "Fix requested",
+    }]]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Construction approving a Unit on its own refuses a fix asked for, which no person asked", () => {
+    const p = fixture({ autonomous: true });
+    buildUnit(p, "alpha");
+    expect(next(p).construction_checkpoint).toMatchObject({ unit: "alpha", human_required: false });
+    askUnit(p, "alpha", true);
+    const refused = checkpoint(p, "alpha", ["--action", "approve", "--fix-finding", "R-01"]);
+    expect(refused.status, refused.out).toBe(1);
+    expect(refused.out).toContain("Cannot record --fix-finding: Construction is approving this gate on its own");
+    expect(unitApprovals(p, "alpha")).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // "Request Changes: R-01 does not apply": the rejection is a decision, kept
+  // on the Unit's row, so R-01 is not put to the person again.
+  test("Request Changes that rejects a finding records Rejected with the person's reason on the Unit's row", () => {
+    const p = fixture();
+    buildUnit(p, "alpha");
+    expect(next(p).construction_checkpoint?.unit).toBe("alpha");
+    const session = askUnit(p, "alpha", false);
+    human(p, "Request Changes: R-01 does not apply, rule 3 is out of scope. Rename the handler.", session);
+    checkpointed(p, "alpha", [
+      "--action", "reject", "--session", session, "--user-input", "Request Changes",
+      "--reason", "Rename the handler", "--reject-finding", "R-01=rule 3 is out of scope",
+    ]);
+    expect(unitRejections(p, "alpha").map(recorded)).toEqual([[{
+      artifact: stageArtifact(p, "functional-design", "alpha"), id: "R-01", status: "Rejected: rule 3 is out of scope",
+    }]]);
+    expect(alphaFinding(p)).toEqual([{ id: "R-01", status: "Rejected: rule 3 is out of scope" }]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Asked about alpha again after its re-check marked R-01 fixed, the person
+  // says it is not: the reopening is recorded as at a stage's gate.
+  test("Request Changes that reopens a finding the reviewer marked fixed records Reopened with the person's reason", () => {
+    const p = fixture({ policy: "strict" });
+    buildUnit(p, "alpha");
+    approveUnit(p, "alpha", false);
+    editDocument(p, "functional-design", "alpha");
+    expect(next(p).construction_checkpoint?.rereview?.stage).toBe("functional-design");
+    reviewThroughLog(p, "functional-design", "alpha", 2, { fixed: true });
+    expect(next(p).construction_checkpoint).toMatchObject({ unit: "alpha", ready: true, human_required: true });
+    const session = askUnit(p, "alpha", false);
+    human(p, "Request Changes: R-01 isn't fixed, rule 3 still has no test", session);
+    checkpointed(p, "alpha", [
+      "--action", "reject", "--session", session, "--user-input", "Request Changes",
+      "--reopen-finding", "functional-spec#R-01=rule 3 still has no test",
+    ]);
+    expect(unitRejections(p, "alpha").map(recorded)).toEqual([[{
+      artifact: stageArtifact(p, "functional-design", "alpha"), id: "R-01", status: "Reopened: rule 3 still has no test",
+    }]]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

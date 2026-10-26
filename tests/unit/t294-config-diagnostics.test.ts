@@ -3966,7 +3966,9 @@ describe("t294 config diagnostics CLI", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("first Codex install keeps a project's own config.toml and adds AI-DLC's settings", () => {
-    const project = temp("aidlc-t294-codex-own-config-");
+    // A short name: on Windows a project folder 75 characters deep gets
+    // config's own warning that it is too deep for AI-DLC's records.
+    const project = temp("aidlc-t294-own-config-");
     mkdirSync(join(project, ".git"));
     mkdirSync(join(project, ".codex"));
     const own = "# team codex settings\nmodel = \"team-model\"\n\n" +
@@ -4006,7 +4008,9 @@ describe("t294 config diagnostics CLI", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("first Codex install keeps a project's own output budget and says so once", () => {
-    const project = temp("aidlc-t294-codex-own-budget-");
+    // A short name: on Windows a project folder 75 characters deep gets
+    // config's own warning that it is too deep for AI-DLC's records.
+    const project = temp("aidlc-t294-own-budget-");
     mkdirSync(join(project, ".git"));
     mkdirSync(join(project, ".codex"));
     const own = "model = \"team-model\"\ntool_output_token_limit = 40000\n";

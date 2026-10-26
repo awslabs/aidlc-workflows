@@ -120,17 +120,13 @@ export interface KiroNumberedProseAnswerState {
    *  prompt's distinct "before I ..." tail (one checkpoint per stage that ran
    *  a Q&A, so a multi-stage journey presents several). */
   confirmedSummaries: Set<string>;
-  /** False when the journey's scope turns learnings off: no stage asks
-   *  "Anything to add for next time?", so an approval needs no learning
-   *  response before it. */
-  learningsRequired: boolean;
+  /** Learnings questions answered. The step asks only after a correction, so
+   *  an approval never waits on one. */
   learningsAnswered: number;
   approvalsAnswered: number;
 }
 
-export function createKiroNumberedProseAnswerState(
-  options: { learnings?: boolean } = {},
-): KiroNumberedProseAnswerState {
+export function createKiroNumberedProseAnswerState(): KiroNumberedProseAnswerState {
   return {
     guideModeChosen: false,
     answeredQuestions: new Set(),
@@ -138,7 +134,6 @@ export function createKiroNumberedProseAnswerState(
     answeredFollowUps: new Set(),
     answeredClarifications: new Set(),
     confirmedSummaries: new Set(),
-    learningsRequired: options.learnings ?? true,
     learningsAnswered: 0,
     approvalsAnswered: 0,
   };
@@ -190,7 +185,7 @@ export function nextKiroNumberedProseAnswer(
   // as one combined prompt.
   const learningPromptIndex = lastMatchIndex(
     screen,
-    /(?:Anything to add for next time|Nothing to add[\s\S]{0,500}?Add a note)/gi,
+    /(?:Keep that for next time\?|Anything to add for next time|Nothing to add[\s\S]{0,500}?Add a note)/gi,
   );
   const approvalPromptIndex = lastMatchIndex(
     screen,
@@ -209,14 +204,16 @@ export function nextKiroNumberedProseAnswer(
 
   // The viewport retains prior turns and tool diffs. Only line-anchored
   // conversational question labels count; source-file diffs such as "+## Q8"
-  // are not active prompts. Whichever prompt type appears latest wins.
+  // are not active prompts. Whichever prompt type appears latest wins. The
+  // label may name who would answer in brackets after the number
+  // ("Q1 [Product owner] - ...", stage-protocol.md Step 3a).
   const confirmationQuestionMatches = [
     ...screen.matchAll(/^[ \t]*Q(\d+):[ \t]*1 confirmed\b/gim),
   ];
   const visibleQuestionMatches = [
-    ...screen.matchAll(/^[ \t]*Q(\d+)(?:[ \t]+of[ \t]+\d+\b|[.:]|[ \t]*[—-])/gim),
+    ...screen.matchAll(/^[ \t]*Q(\d+)(?:[ \t]+\[[^\]\n]+\])?(?:[ \t]+of[ \t]+\d+\b|[.:]|[ \t]*[—-])/gim),
     ...screen.matchAll(
-      /^[ \t]*Question[ \t]+(\d+)(?:[ \t]+of[ \t]+\d+\b|[ \t]*[.:—-])/gim,
+      /^[ \t]*Question[ \t]+(\d+)(?:[ \t]+\[[^\]\n]+\])?(?:[ \t]+of[ \t]+\d+\b|[ \t]*[.:—-])/gim,
     ),
   ];
   const latestQuestionIndex = Math.max(
@@ -286,16 +283,13 @@ export function nextKiroNumberedProseAnswer(
   }
   if (learningPromptIndex > approvalPromptIndex) {
     state.learningsAnswered += 1;
+    // The question about a correction: the person keeps nothing.
+    if (screen.startsWith("Keep that for next time?", learningPromptIndex)) return "No";
     return /(?:Keep c\d+|Keep none of these|Nothing to keep|discard (?:all|both))/i.test(screen)
       ? "Nothing to keep. Nothing to add."
       : "Nothing to add";
   }
   if (approvalPromptIndex > learningPromptIndex) {
-    if (state.learningsRequired && state.learningsAnswered <= state.approvalsAnswered) {
-      throw new Error(
-        "Kiro presented approval before the mandatory learning response completed",
-      );
-    }
     state.approvalsAnswered += 1;
     return "Approve";
   }
