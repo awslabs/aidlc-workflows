@@ -27,8 +27,10 @@ import {
   runtimeHarnessDir,
   runtimeHarnessName,
   SPACE_NAME_REGEX,
+  repoNameProblem,
+  repoNameRefusal,
 } from "./aidlc-runtime-paths.ts";
-export { entrySkillInvocation, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
+export { entrySkillInvocation, repoNameProblem, repoNameRefusal, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { NEXT_VALUELESS_FLAGS, nextFlagTakesFollowing } from "./aidlc-command.ts";
 import {
   type EngineInvocation,
@@ -3940,14 +3942,15 @@ function mainCheckoutRepoName(projectDir: string): string | null {
 
 // A folder's name as a repo name, for a name the engine records on its own (a
 // project root no repo is registered for, a checkout the work found), never a
-// name the person typed: those are checked as they are. A name the rule takes
-// comes back byte for byte. Otherwise accents are dropped first, so a macOS
-// (NFD) and a Windows or Linux (NFC) spelling of one name agree, each run of
-// characters the rule does not take becomes "-", and anything before the first
-// letter or digit and any trailing "-" go: "portal app" is portal-app. Empty
-// when no letter or digit is left; the caller names its fallback.
+// name the person typed: those are checked as they are. A name already in the
+// shape the engine coins (REPO_NAME_REGEX) comes back byte for byte. Otherwise
+// accents are dropped first, so a macOS (NFD) and a Windows or Linux (NFC)
+// spelling of one name agree, each run of other characters becomes "-", and
+// anything before the first letter or digit and any trailing "-" go: "portal
+// app" is portal-app. Empty when no letter or digit is left; the caller names
+// its fallback.
 export function folderRepoName(folder: string): string {
-  if (isValidRepoName(folder)) return folder;
+  if (REPO_NAME_REGEX.test(folder)) return folder;
   return folder
     .normalize("NFKD")
     .replace(/\p{M}+/gu, "")
@@ -23381,12 +23384,13 @@ export function legacyParkedRefPrefix(slug: string): string {
 // repoDir resolves the on-disk dir for a repo name; it does NOT validate that the
 // dir exists or is a git repo (the caller does, where the git op runs).
 
-// A repo name is a single path segment (no separators, no `..`) so it can only
-// resolve to an immediate child of the workspace — never escape it.
+// The shape of a name the engine coins itself (folderRepoName): letters,
+// digits, ".", "_" and "-", starting with a letter or digit. A repo folder's own
+// name is read as the person named it (repoNameProblem, in aidlc-runtime-paths.ts).
 export const REPO_NAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export function isValidRepoName(name: string): boolean {
-  return REPO_NAME_REGEX.test(name) && name !== "." && name !== "..";
+  return repoNameProblem(name) === null;
 }
 
 // The on-disk dir for a sibling repo: an immediate child of the workspace root.
@@ -29791,8 +29795,9 @@ export function isWorkspaceRepoDir(projectDir: string, name: string): boolean {
 // any child directory holding a `.git`, following directory symlinks but excluding
 // workspace internal dirs and the harness engine dir. Sorted + deduped. Returns [] when the workspace root is
 // unreadable or holds no sibling repos (the legacy single-repo / fresh-greenfield
-// case — the caller records no repos row and the lone repo is inferred later).
-export function discoverSiblingRepos(projectDir: string): string[] {
+// case: the caller records no repos row and the lone repo is inferred later). A
+// folder whose name cannot be a repo's is not one; `leftOut` lists those instead.
+export function discoverSiblingRepos(projectDir: string, leftOut = false): string[] {
   const found: string[] = [];
   let entries: string[];
   try {
@@ -29805,7 +29810,7 @@ export function discoverSiblingRepos(projectDir: string): string[] {
     if (isHarnessDirName(name)) continue; // .claude / .kiro / .codex
     const dir = join(projectDir, name);
     try {
-      if (statSync(dir).isDirectory() && isGitRepoDir(dir)) found.push(name);
+      if (statSync(dir).isDirectory() && isGitRepoDir(dir) && isValidRepoName(name) !== leftOut) found.push(name);
     } catch {
       // Ignore unreadable entries and dangling directory symlinks.
     }
@@ -29829,7 +29834,7 @@ export function resolveIntentRepoSet(
     for (const name of names) {
       if (!isValidRepoName(name)) {
         throw new Error(
-          `Invalid --repos entry "${name}": a repo name must be a single path segment matching ${REPO_NAME_REGEX} (no separators or "..").`,
+          repoNameRefusal("Invalid --repos entry", name),
         );
       }
     }
@@ -30072,7 +30077,7 @@ export function resolveConstructionRepo(
   if (requestedRepo !== undefined) {
     if (!isValidRepoName(requestedRepo)) {
       throw new Error(
-        `Invalid --repo "${requestedRepo}": a repo name must be a single path segment matching ${REPO_NAME_REGEX}.`,
+        repoNameRefusal("Invalid --repo", requestedRepo),
       );
     }
     if (repos.length > 0 && !repos.includes(requestedRepo)) {
