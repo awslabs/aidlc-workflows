@@ -171,7 +171,9 @@ type PublicLifecycleGrammar = {
   positionals: number;
 };
 
-const PUBLIC_LIFECYCLE_GRAMMARS: Readonly<
+// Exported so t230 can prove command help names every flag this grammar
+// accepts: the parser is the owner of what is legal, help must not lag it.
+export const PUBLIC_LIFECYCLE_GRAMMARS: Readonly<
   Record<PublicLifecycleCommand, PublicLifecycleGrammar>
 > = {
   update: {

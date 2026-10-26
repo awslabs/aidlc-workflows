@@ -1374,6 +1374,56 @@ export function listRoutes(): readonly Route[] {
   return ROUTES;
 }
 
+// `--no-color` is a launcher global every route honours, so no usage form in
+// `all` spells it.
+const ROUTE_ALWAYS_OPTIONS: readonly string[] = ["--no-color"];
+
+export type RouteOption = {
+  flag: string;
+  /** The value placeholder `all` spells after the flag, without its angle brackets. */
+  metavar?: string;
+};
+
+// One owner for "which options does this verb accept": the usage forms in
+// `all`, plus the launcher globals the route's own metadata says it honours.
+// `renderCommandHelp` and the shell-completion generator both read this, so
+// command help and completions cannot drift apart or from the parser.
+export function routeOptions(route: Route, verb: string): RouteOption[] {
+  const metavars = new Map<string, string>();
+  const flags = new Set<string>(ROUTE_ALWAYS_OPTIONS);
+  if (route.outputModes.includes("json")) flags.add("--json");
+  if (route.outputModes.includes("quiet")) flags.add("--quiet");
+  if (route.networkPolicy !== "forbidden") flags.add("--offline");
+  for (const line of usageFormsFor(route, verb)) {
+    for (const match of line.matchAll(/(--[a-z][a-z-]*)(?:\s+<([^>]+)>)?/g)) {
+      const flag = match[1];
+      flags.add(flag);
+      if (match[2] && !metavars.has(flag)) metavars.set(flag, match[2]);
+    }
+  }
+  return [...flags].sort().map((flag) => {
+    const metavar = metavars.get(flag);
+    return metavar ? { flag, metavar } : { flag };
+  });
+}
+
+function usageFormsFor(route: Route, verb: string): readonly string[] {
+  return (route.all ?? []).filter((form) => form.split(/\s+/, 1)[0] === verb);
+}
+
+// The required placeholders a verb takes before its options, read from the
+// same usage form, so `use <version>` documents its argument.
+export function routePositionals(route: Route, verb: string): string[] {
+  const form = usageFormsFor(route, verb)[0];
+  if (!form) return [];
+  const positionals: string[] = [];
+  for (const token of form.split(/\s+/).slice(1)) {
+    if (!token.startsWith("<")) break;
+    positionals.push(token);
+  }
+  return positionals;
+}
+
 // The tool scripts behind a route that can change the machine (a release,
 // machine-wide settings, the installation). Copy channels pre-approve
 // AI-DLC's other tool scripts, never these, so running one directly shows the
@@ -1464,6 +1514,88 @@ export function renderHumanHelp(): string {
   ].join("\n");
 }
 
+// One-line meanings for every option the public commands accept, in the
+// wording docs/guide/18-install-and-lifecycle.md uses, so command help and the
+// guide say the same thing. A flag reachable from a public route without an
+// entry here fails t230: the test is what stops a new flag shipping
+// undocumented.
+const FLAG_SUMMARIES: Readonly<Record<string, string>> = {
+  "--allow-root": "Act as root where root is the only user (container, CI job, agent sandbox)",
+  "--ca-bundle": "Verify the download against this CA bundle",
+  "--channel": "Take this run's release from the other channel; 'aidlc config --channel' sets the one this machine follows",
+  "--check": "Refresh release metadata without installing; exits 5 when a newer release is available, 0 when current",
+  "--check-updates": "Also ask whether a newer release exists; without it doctor reads only its metadata cache",
+  "--dry-run": "Work out the whole plan and print it without changing any bytes",
+  "--export": "Also write a redacted diagnostic bundle",
+  "--from": "Use release files already on this machine instead of downloading",
+  "--json": "Emit one result object",
+  "--no-color": "Disable color output",
+  "--offline": "Do no network work; say so rather than fetching",
+  "--output": "Write the --export bundle here instead of its default place in the project",
+  "--purge": "Also remove machine config, the update cache, pin registrations, and the default harness",
+  "--quiet": "Emit one summary or remediation line",
+  "--release-api-url": "Read release metadata from this API instead of GitHub's",
+  "--release-base-url": "Download releases from this mirror",
+  "--verbose": "Expand every check instead of collapsing the healthy ones",
+  "--version": "Install this exact release instead of the newest one",
+  "--yes": "Confirm without asking; needed when no terminal is attached",
+};
+
+// Options that only matter when a command reaches the network, and options
+// that only shape what it prints, read better under their own headings than
+// mixed into one long list.
+const DOWNLOAD_FLAGS: ReadonlySet<string> = new Set([
+  "--ca-bundle",
+  "--from",
+  "--offline",
+  "--release-api-url",
+  "--release-base-url",
+]);
+const OUTPUT_FLAGS: ReadonlySet<string> = new Set([
+  "--json",
+  "--no-color",
+  "--quiet",
+]);
+
+function optionForm(option: RouteOption): string {
+  return option.metavar ? `${option.flag} <${option.metavar}>` : option.flag;
+}
+
+// Every group is rendered from one column width so the summaries line up
+// across headings, and a group with no options is left out entirely.
+function renderOptionGroups(
+  options: readonly RouteOption[],
+  out: typeof process.stdout,
+): string[] {
+  if (options.length === 0) return [];
+  const width = Math.max(
+    ...options.map((option) => optionForm(option).length),
+  ) + 2;
+  const groups: readonly { label: string; members: RouteOption[] }[] = [
+    {
+      label: "OPTIONS",
+      members: options.filter((option) =>
+        !DOWNLOAD_FLAGS.has(option.flag) && !OUTPUT_FLAGS.has(option.flag)
+      ),
+    },
+    {
+      label: "DOWNLOAD AND MIRRORS",
+      members: options.filter((option) => DOWNLOAD_FLAGS.has(option.flag)),
+    },
+    { label: "OUTPUT", members: options.filter((option) => OUTPUT_FLAGS.has(option.flag)) },
+  ];
+  const lines: string[] = [];
+  for (const group of groups) {
+    if (group.members.length === 0) continue;
+    lines.push("", heading(group.label, out));
+    for (const option of group.members) {
+      const form = optionForm(option);
+      lines.push(`  ${form}${" ".repeat(Math.max(2, width - form.length))}${FLAG_SUMMARIES[option.flag] ?? ""}`);
+    }
+  }
+  return lines;
+}
+
 const COMMAND_HELP_USAGE: Record<PublicCommand, string> = {
   config: "aidlc config [options]",
   doctor: "aidlc doctor [options]",
@@ -1529,7 +1661,7 @@ export function renderCommandHelp(command: PublicCommand): string {
       heading("COMMON FLAGS", out),
       "  --pin <version>   Pin this project to an installed release",
       "  --download        Fetch and verify the release this project needs, if it is missing",
-      "  --channel [name]  Show or set the machine release channel (stable, preview)",
+      "  --channel [name]  Show or set the release channel this machine follows (stable, preview); 'aidlc update --channel' switches for one run only",
       "  --show            Show one section, or every section with no section named, without changing it",
       "  --dry-run         Print the transaction plan without writing",
       "  --yes             Confirm explicit choices; it never chooses values",
@@ -1562,11 +1694,26 @@ export function renderCommandHelp(command: PublicCommand): string {
     use: [`  ${invoke} use 2.6.2`],
     uninstall: [`  ${invoke} uninstall`, `  ${invoke} uninstall --purge`, `  ${invoke} uninstall --allow-root`],
   };
+  const argumentSummaries: Readonly<Record<string, string>> = {
+    "<version>": "The exact release to switch to; 'aidlc doctor' lists the installed ones",
+  };
+  const positionals = routePositionals(route, command);
+  const options = routeOptions(route, command);
   return [
     descriptions[command],
     "",
     heading("USAGE", out),
     `  ${cmd(`${invoke} ${COMMAND_HELP_USAGE[command].replace(/^aidlc\s+/, "")}`, out)}`,
+    ...(positionals.length
+      ? [
+          "",
+          heading("ARGUMENTS", out),
+          ...positionals.map((placeholder) =>
+            `  ${placeholder}${" ".repeat(2)}${argumentSummaries[placeholder] ?? ""}`
+          ),
+        ]
+      : []),
+    ...renderOptionGroups(options, out),
     ...(examples[command]?.length
       ? [
           "",

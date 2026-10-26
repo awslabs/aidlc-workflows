@@ -599,6 +599,15 @@ variables. Release acquisition and the transaction engine enforce the network
 and mutation boundaries, while a per-session fingerprint cache avoids repeating
 a full retained-version inspection without weakening pin validation.
 
+A route's `all` usage forms are also the one source for the options a public
+command accepts. `routeOptions` reads them, adds the launcher globals the
+route's own `outputModes` and `networkPolicy` admit, and both `aidlc <command>
+--help` and the shell-completion generator render that result, so help and
+completions cannot describe different flags. A flag reachable that way needs a
+one-line meaning in `FLAG_SUMMARIES`, and a flag the parser accepts needs a
+usage form; `tests/unit/t230-dispatcher-routes.test.ts` fails on either gap,
+which is what keeps a newly added option out of shipping undocumented.
+
 ### Shared transaction engine
 
 Install-mechanism mutations use `core/tools/aidlc-transaction.ts`. A plan is a
