@@ -291,7 +291,7 @@ export function broughtFileNames(projectDir: string, stateContent: string | null
 export function broughtFilesNote(names: readonly string[]): string {
   const named = names.slice(0, NAMED_MAX).map((name) => `\`${name}\``).join(", ");
   const more = names.length > NAMED_MAX
-    ? `, and ${names.length - NAMED_MAX} more: every file here before this work started is theirs.`
+    ? `, and ${names.length - NAMED_MAX} more that were here before this work started.`
     : ".";
   return `These files were in this project before this work started and are the person's: ${named}${more} ` +
     "Leave them as they are unless this work's plan changes one of them.";

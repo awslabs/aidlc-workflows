@@ -1,7 +1,7 @@
 // covers: function:broughtFileNames, function:broughtFilesNote, function:withAgentNotes, subcommand:aidlc-orchestrate:next
 //
-// The build wrote the app's README over the one the person brought (t51 on
-// macOS, run 40419252454): the lead planned "Write a short README.md" as if
+// The build wrote the app's README over the one the person brought (t51, run
+// 40419252454): the lead planned "Write a short README.md" as if
 // there were none, and briefed the developer with a list of files to leave that
 // it made up. Every Code Generation step whose work runs here now names the
 // files the project held when the work started, from the listing the gate's
@@ -84,24 +84,11 @@ interface Setup {
   later?: Record<string, string>;
 }
 
-// A poc project at Code Generation with plan approval off (t51's path), its work
-// started over the person's files; the step that writes the plan.
+// `atPlanIn` over a new project.
 function atPlan(setup: Setup): { proj: string; plan: Record<string, unknown> } {
   const proj = createCodeGenerationProject("off", "off");
   created.push(proj);
-  const stateFile = seededStateFile(proj);
-  writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
-    .replace("- **Project Type**: Brownfield", `- **Project Type**: ${setup.type ?? "Greenfield"}`)
-    .replace("- [ ] code-generation", "- [-] code-generation")
-    .replace(/^(- \[.\] units-generation) — EXECUTE$/m, "$1 — SKIP"), "utf-8");
-  write(proj, setup.brought);
-  appendAuditEntry("WORKFLOW_STARTED", { Scope: "poc", ...sourceBaselineAuditFields(proj, workspaceBaselineStageSlugs()) }, proj);
-  write(proj, setup.later ?? {});
-  appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", ...sourceBaselineAuditFields(proj, "code-generation") }, proj);
-  const plan = step(proj);
-  expect(plan.kind, JSON.stringify(plan).slice(0, 600)).toBe("run-stage");
-  expect((plan.plan_approval as { status?: string } | undefined)?.status).toBe("plan");
-  return { proj, plan };
+  return atPlanIn(proj, setup);
 }
 
 // The step after the plan is written: the build, dispatched to the developer.
@@ -164,18 +151,22 @@ describe("the steps that plan and build Code Generation", () => {
     const { proj } = atPlan({ brought: { "README.md": README, ...long } });
     const build = atBuild(proj);
     // README.md, the twelve records and the fixture's src/base.ts: ten named, four counted.
-    expect(String(build.brief_note)).toContain("and 4 more: every file here before this work started is theirs.");
+    expect(String(build.brief_note)).toContain("and 4 more that were here before this work started.");
   });
 
   test("no listing of the work's start on this machine (a teammate's clone): no note", () => {
-    const { proj } = atPlan({ brought: { "README.md": README } });
+    // A file added before the build, so the work's start and the build's own listings differ and only the first goes.
+    const { proj } = atPlan({ brought: { "README.md": README }, later: { "CONTRIBUTING.md": "a teammate's\n" } });
     const audit = readdirSync(join(seededRecordDir(proj), "audit"))
       .map((name) => readFileSync(join(seededRecordDir(proj), "audit", name), "utf-8")).join("\n");
     const started = /WORKFLOW_STARTED[\s\S]*?\*\*Source Baseline\*\*: (\S+)/.exec(audit)?.[1] ?? "";
     const hash = /([0-9a-f]{64})$/.exec(started)?.[1] ?? "";
     expect(hash, started).not.toBe("");
     unlinkSync(join(seededRecordDir(proj), ".aidlc-engine", "source-review", "code-generation", `baseline-${hash.slice(0, 12)}.tsv`));
-    expect(next(proj).brought_files_note).toBeUndefined();
+    const plan = next(proj);
+    expect(plan.kind, JSON.stringify(plan).slice(0, 600)).toBe("run-stage");
+    expect((plan.plan_approval as { status?: string } | undefined)?.status).toBe("plan");
+    expect(plan.brought_files_note).toBeUndefined();
   });
 
   test("the gate shown again, whose work does not run, carries no note; the build redone after Request Changes does", () => {
@@ -194,7 +185,9 @@ describe("the steps that plan and build Code Generation", () => {
   });
 });
 
-// The `atPlan` steps over a project already made (one whose install record the test wrote first).
+// A poc project at Code Generation with plan approval off (t51's path), its work
+// started over the person's files: the step that writes the plan. `proj` is made
+// first, so a test can write its install record before the work starts.
 function atPlanIn(proj: string, setup: Setup): { proj: string; plan: Record<string, unknown> } {
   const stateFile = seededStateFile(proj);
   writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
@@ -203,9 +196,11 @@ function atPlanIn(proj: string, setup: Setup): { proj: string; plan: Record<stri
     .replace(/^(- \[.\] units-generation) — EXECUTE$/m, "$1 — SKIP"), "utf-8");
   write(proj, setup.brought);
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "poc", ...sourceBaselineAuditFields(proj, workspaceBaselineStageSlugs()) }, proj);
+  write(proj, setup.later ?? {});
   appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", ...sourceBaselineAuditFields(proj, "code-generation") }, proj);
   const plan = step(proj);
   expect(plan.kind, JSON.stringify(plan).slice(0, 600)).toBe("run-stage");
+  expect((plan.plan_approval as { status?: string } | undefined)?.status).toBe("plan");
   return { proj, plan };
 }
 
@@ -239,9 +234,9 @@ describe("the note's words", () => {
     ...fields,
   });
 
-  test("names at most ten, then that every file here before the work started is the person's", () => {
+  test("names at most ten, then counts the rest", () => {
     const note = broughtFilesNote(Array.from({ length: 13 }, (_, i) => `docs/page-${String(i).padStart(2, "0")}.md`));
-    expect(note).toContain("`docs/page-09.md`, and 3 more: every file here before this work started is theirs.");
+    expect(note).toContain("`docs/page-09.md`, and 3 more that were here before this work started.");
     expect(note).not.toContain("page-10");
     expect(note.replace(/`[^`]*`/g, " ")).not.toMatch(/[a-z]+_[a-z_]+/);
   });
