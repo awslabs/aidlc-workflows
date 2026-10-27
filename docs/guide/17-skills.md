@@ -123,7 +123,7 @@ The three bootstrap **initialization** stages ship no stage-runner - creating ha
 | Composer | `/aidlc-compose` | Propose a plan made for your task, then run it after you approve | `/aidlc compose` |
 | Document knowledge | `/aidlc-knowledge` | Index and read the team's own documents (per-space DocumentKB) | `/aidlc knowledge <verb>` |
 
-There's one stage-runner for every runnable stage in the lifecycle. To see the full set, list your skills directory. In a project set up for Claude Code with `aidlc config` (shortened):
+There's one stage-runner for every runnable stage in the lifecycle, unless the stage's file says `runner: false`. To see the full set, list your skills directory. In a project set up for Claude Code with `aidlc config` (shortened):
 
 ```text
 $ ls .claude/skills/

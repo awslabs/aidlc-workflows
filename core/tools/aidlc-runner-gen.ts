@@ -103,15 +103,19 @@ function runnerDirName(node: Pick<GraphStage, "slug" | "plugin">): string {
 // runner would be a typeable command that always errors. We exclude them from
 // stage-runner generation and ship ONE `/aidlc-init` runner that starts intent
 // creation instead - initialization is a PHASE, not standalone stages, so the
-// stage-runner set is the runnable (non-init) stages.
+// stage-runner set is the runnable (non-init) stages. A stage whose
+// frontmatter says `runner: false` (one that only makes sense inside its
+// scope's workflow) is left out the same way, so the drift guard reads it as
+// having no runner rather than missing one, and write prunes a runner
+// generated for it earlier.
 function isRunnableStage(node: GraphStage): boolean {
-  return node.phase !== "initialization";
+  return node.phase !== "initialization" && node.runner !== false;
 }
 
 // The runnable stage nodes — every compiled stage EXCEPT the bootstrap
-// initialization stages. This is the source of truth for which stage-runners
-// exist; a runner is generated for each, and the drift guard asserts the
-// on-disk set matches it exactly.
+// initialization stages and those that opt out with `runner: false`. This is
+// the source of truth for which stage-runners exist; a runner is generated for
+// each, and the drift guard asserts the on-disk set matches it exactly.
 export function runnableStages(): GraphStage[] {
   return loadGraph().filter(isRunnableStage);
 }

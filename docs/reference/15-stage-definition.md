@@ -645,6 +645,25 @@ Three rules keep the screen predictable:
 Each screen row's `priorSource` (`shipped`, `stage` or `null`) says where its
 prior came from.
 
+### `runner`
+
+Boolean, default `true`. `runner: false` keeps the stage out of the generated
+stage-runner set, the stage-side twin of a scope's `runner: true`.
+
+Why it exists: `aidlc engine gen runners` writes a typeable `/aidlc-<slug>`
+(or plugin-owned `/<slug>`) command for every runnable stage, and that command
+runs the stage alone with `--single`, outside any workflow. For a plugin stage
+that only makes sense inside its scope (one that records the person's answers
+or updates a tracker before the next stage starts) the runner is a command
+people pick by mistake. With `runner: false` the generator writes no runner
+for the stage and prunes one it generated before, `--check` treats the stage as
+having none rather than missing one, and `aidlc engine gen runner-list` leaves
+it out. The stage itself is unchanged: its scopes run it, and
+`/aidlc --stage <slug> --single` still works.
+
+An install from before this field refuses it as an unknown key, like any new
+stage key, so a plugin that sets it needs a release that knows it.
+
 ---
 
 ## Relationship to agent frontmatter
