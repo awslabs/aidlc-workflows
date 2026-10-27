@@ -61,7 +61,7 @@ have a separate setting under **Settings → Advanced Security**.
 ## 2. Merge to `main`
 
 Once the checks and review feedback are addressed, a repository maintainer
-(Maintain role or higher) clicks **Merge when ready** to add the PR to the merge
+(Maintainer role or higher) clicks **Merge when ready** to add the PR to the merge
 queue. The queue runs the CI workflow on the queued merge commit, including the
 cross-OS checks that PR pushes skip, and squash-merges it. The merged commit
 becomes eligible for preview testing and publication.
