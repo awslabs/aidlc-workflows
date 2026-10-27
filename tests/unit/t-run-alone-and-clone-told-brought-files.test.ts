@@ -14,7 +14,8 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  AIDLC_SRC, cleanupTestProject, createOrchestrationTestProject, runOrchestrateNext, seededRecordDir, seededStateFile,
+  AIDLC_SRC, cleanupTestProject, createOrchestrationTestProject, createTestProject, runOrchestrateNext, seedAidlcMemory, seedBoltDag,
+  seededRecordDir, seededStateFile,
 } from "../harness/fixtures.ts";
 import { createCodeGenerationProject, reviewText, runNamed, stageDir, writePlan } from "../harness/code-generation-states.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -207,5 +208,58 @@ describe("a teammate's clone that picks up the build", () => {
     expect(probe.brought_files_note).toBeUndefined();
     expect(taken(seededRecordDir(proj))).toEqual([]);
     expect(planStep(step(proj)).brought_files_note).toBe(note("README.md"));
+  });
+
+  test("what the work's Units built before the pick-up (their source manifests) is the work's, not the person's", () => {
+    const p = createTestProject();
+    created.push(p);
+    seedAidlcMemory(p);
+    writeFileSync(seededStateFile(p), `# AI-DLC State Tracking
+## Project Information
+- **Project**: Picked up
+- **Project Type**: Greenfield
+- **Project Type Source**: you
+- **Scope**: feature
+- **State Version**: 8
+## Runtime State
+- **Revision Count**: 0
+- **Skeleton Stance**: off
+- **Construction Iteration**: unit-major
+- **Construction Checkpoints**: enabled
+- **Construction Execution**: serial
+- **Construction Autonomy Mode**: gated
+- **Review Override**: advisory
+- **Change Control**: strict
+## Scope Configuration
+- **Stages to Execute**: all
+- **Stages to Skip**: none
+- **Depth**: Standard
+- **Test Strategy**: Standard
+## Stage Progress
+### CONSTRUCTION PHASE
+- [S] functional-design \u2014 SKIP
+- [S] nfr-requirements \u2014 SKIP
+- [S] nfr-design \u2014 SKIP
+- [S] infrastructure-design \u2014 SKIP
+- [-] code-generation \u2014 EXECUTE
+- [ ] build-and-test \u2014 EXECUTE
+## Current Status
+- **Lifecycle Phase**: CONSTRUCTION
+- **Current Stage**: code-generation
+- **Status**: Running
+`);
+    seedBoltDag(p, ["alpha", "beta"]);
+    cpSync(AIDLC_SRC, join(p, ".claude"), { recursive: true });
+    write(p, { "README.md": README });
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", ...sourceBaselineAuditFields(p, workspaceBaselineStageSlugs()) }, p);
+    // Unit alpha's build ran on the machine the work started on.
+    write(p, { "docs/alpha.md": "# Alpha\n" });
+    const manifest = join(seededRecordDir(p), "construction", "alpha", "code-generation", "source-manifest.json");
+    mkdirSync(dirname(manifest), { recursive: true });
+    writeFileSync(manifest, JSON.stringify({ stage: "code-generation", unit: "alpha", version: 1, writes: [{ path: "docs/alpha.md" }] }));
+    asClone(p);
+    const plan = planStep(step(p));
+    expect(plan.unit).toBe("alpha");
+    expect(plan.brought_files_note).toBe(note("README.md"));
   });
 });

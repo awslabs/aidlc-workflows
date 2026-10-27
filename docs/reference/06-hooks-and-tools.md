@@ -2444,9 +2444,16 @@ for every file in one `git cat-file --batch` per repo, else for a named file one
 of the last 20 commits that touched it), the line gives the
 `git checkout <commit> -- <path>` that puts it back; a path no shell quoting
 passes to git as that one file is named as held by git, with no command;
-otherwise it says there is no committed copy. It says nothing when a listing is
-not on this machine (the copies are AI-DLC's ignored files: a teammate's clone)
-or cannot be read. The line is said once per build attempt in a chat (the
+otherwise it says there is no committed copy. The listings are AI-DLC's ignored
+files, so a teammate's clone does not hold them: there, the files the project
+held when its Code Generation first ran a step on this machine stand for what
+the person brought (taken then, beside the record's other engine files under
+`.aidlc-engine/brought-files/`), less what the code walk reads as code by its
+name and what the work's Units built before (their `source-manifest.json`), and
+the build's attempt starts from that listing too when its own is not here
+either. A clone that picks the work up at the gate has taken none, and the line
+says nothing, as it does when a listing cannot be read. The line is said once
+per build attempt in a chat (the
 person-lines said record, keyed with the attempt's starting listing and the
 files, and checked before git is asked), counted as heard only when a step that
 carries it is written. With Construction Checkpoints the Unit's checkpoint says
@@ -2461,8 +2468,12 @@ the build, a Unit's) carries `brought_files_note`, and a dispatched build's
 project held when the work started, less the code itself on existing code and
 the files AI-DLC's install wrote whole and still holds as written (the same
 check the line uses), up to ten by name and then a count, and says to leave
-them as they are unless the work's plan changes one of them. It says nothing
-when the listing is not on this machine.
+them as they are unless the work's plan changes one of them. On a teammate's
+clone it names the files from the listing taken there (above). A Code Generation
+run on its own (`next --stage code-generation --single`) reads neither the
+work's listing nor another work's: its first step takes its own, the files
+there when the run started, less the code, and a run started over with other
+settings keeps it; such a run has no gate, so it has no line.
 
 ### `aidlc-testing-posture.ts` — Code Generation Testing Contract
 

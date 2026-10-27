@@ -1719,9 +1719,11 @@ function prepareEmission(directive: Directive): PreparedEmission {
     const works = otherOpenWorkClaims(route.codekbCtx.projectDir, directive.stage);
     if (works.length > 0) directive.other_work_note = otherWorkNote(works);
     // The plan writer and the builder are told which files were here when the
-    // work started, the ones the gate names if the build changes them.
+    // work started (a run on its own: when it did), the ones the gate names if
+    // the build changes them.
     if (directive.stage === "code-generation") {
-      const names = broughtFileNames(route.codekbCtx.projectDir, loadStateFileIfPresent(route.codekbCtx.projectDir));
+      const pd = route.codekbCtx.projectDir;
+      const names = broughtFileNames(pd, loadStateFileIfPresent(pd), directive.single === true);
       if (names !== null) directive.brought_files_note = broughtFilesNote(names);
     }
   }
