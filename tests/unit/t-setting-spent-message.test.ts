@@ -13,10 +13,11 @@
 // setting riding the approval itself ("approve, and turn learnings off" as one
 // report, written before the approval in the same command). Answers, a routing
 // answer and a question box closed with nothing picked are no decision it backed.
-// The approval's own reply is the exception: a setter run on it right after the
-// approval, before the person says anything else and before a guard turns the
-// agent back, is that reply's setting (t-setting-rides-approval). The cases here
-// that reuse the Approve do it after a guard refused the agent, as in the live run.
+// The reply's own decision is the exception: a setter run on it right after the
+// answer, before the person says anything else, a guard turns the agent back or
+// the next question is asked, is that reply's setting (t-setting-rides-approval,
+// t-setting-any-question). The cases here that reuse the message do it after a
+// guard refused the agent or the next question was asked, as in the live runs.
 // Each case runs under Guard Policy off and strict: the rule is the proof's, not a
 // guard the policy lowers.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -157,7 +158,9 @@ describe.each(POLICIES)("Guard Policy %s: a message that gave an approval or a d
     expect(getField(stateOf(proj), "Summary Confirmation")).toBe(before);
   });
 
-  test("summary confirmation off on the yes that answered a Construction policy question: refused", () => {
+  // The live Copilot CLI run: the yes recorded, then the next questions asked
+  // (each Unit's summary), then the summary confirmation off on the yes.
+  test("summary confirmation off on the yes that answered a Construction policy question, once the next question is asked: refused", () => {
     const proj = project();
     const id = said(proj, "that's right");
     tick();
@@ -165,6 +168,10 @@ describe.each(POLICIES)("Guard Policy %s: a message that gave an approval or a d
       Stage: "code-generation", Checkpoint: "Construction Policy", Field: "Construction Execution", Value: "swarm",
       "User Input": "Approve", Session: CHAT, "Message Id": id,
     }, proj);
+    tick();
+    for (const unit of ["alpha", "beta"]) {
+      appendAuditEntry("DECISION_RECORDED", { Stage: "code-generation", Unit: unit, Decision: "Does this all look correct?" }, proj);
+    }
     const before = getField(stateOf(proj), "Summary Confirmation");
     const off = setter(proj, ["--summary-confirmation", "off", "--message", id]);
     expect(off.status).not.toBe(0);
