@@ -3336,8 +3336,9 @@ export function codeGenerationPlanWaits(projectDir: string, units: ReadonlyArray
  * Whether the target's build is finished as its plan stands: the build reading
  * refuses because the Testing Contract moved, while the completion reading
  * holds because the build was reviewed under the plan's own contract (a
- * practice kept after the review). Its next step is the finish, not more
- * building, so `next` hands that over and a refused write names it.
+ * practice kept after the review). Whether its next step is the finish also
+ * depends on the person not having asked to see the plan again
+ * (codeGenerationBuildFinishes).
  */
 export function codeGenerationFinishedUnderPlanContract(projectDir: string, unit: string | null): boolean {
   try {

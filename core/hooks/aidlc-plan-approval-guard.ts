@@ -168,7 +168,6 @@ import {
   beginCodeGeneration,
   beginCodeGenerationBatch,
   codeGenerationExecutionAllowed,
-  codeGenerationFinishedUnderPlanContract,
   type CodeGenerationIssuance,
   codeGenerationIssuance,
   codeGenerationPlanApprovalFence,
@@ -664,10 +663,10 @@ export function mutationBlockReason(
   const action = opaqueShell
     ? "run mutation-capable shell commands"
     : "modify workspace paths";
-  // A build reviewed under its plan, whose contract moved after the review
-  // (codeGenerationFinishedUnderPlanContract): the moved contract is for the
-  // next plan, so no approval is promised; `next` says what the build does now
-  // (its finish, or the plan when the person asked to see it again).
+  // A build reviewed under its plan, whose contract moved after the review,
+  // and whose plan the person has not asked to see again
+  // (codeGenerationBuildFinishes): the moved contract is for the next plan, so
+  // no approval is promised.
   if (finished) {
     return (
       `Code generation cannot ${action} for ${scope}: its build was reviewed under the approved plan, and ` +
@@ -1013,6 +1012,18 @@ function isOutsideProject(projectDir: string, target: string): boolean {
     }
     const real = join(expandedRealPath(cursor), ...suffix);
     return !isWithinDir(real, projectLexical) && !isWithinDir(real, projectReal);
+  } catch {
+    return false;
+  }
+}
+
+// Whether the target's build is finished and `next` hands over its finish
+// (codeGenerationBuildFinishes), loaded only for a write already refused. False
+// when that module cannot be read, which keeps the ordinary refusal.
+function buildFinishes(projectDir: string, unit: string | null): boolean {
+  try {
+    const ask = require("../tools/aidlc-plan-approval-ask.ts") as typeof import("../tools/aidlc-plan-approval-ask.ts");
+    return ask.codeGenerationBuildFinishes(projectDir, unit);
   } catch {
     return false;
   }
@@ -2803,7 +2814,7 @@ async function evaluate(
             unit,
             opaqueShell: outsideRecord === undefined,
             detail: receiptDetail([evidence], verdict.mentioned),
-            finished: !approval.ok && codeGenerationFinishedUnderPlanContract(projectDir, unit),
+            finished: !approval.ok && buildFinishes(projectDir, unit),
           };
         }
       }

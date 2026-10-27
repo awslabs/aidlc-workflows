@@ -98,6 +98,7 @@ import {
   replaceTestingContractSection,
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
+  codeGenerationFinishedUnderPlanContract,
   stepNextCommand,
   testingContractDefectMessage,
   usableTestingContract,
@@ -385,6 +386,22 @@ export function codeGenerationPlanReviewRequested(
   }
   return planApprovalReviewRequested(projectDir, targetId, intentId) ||
     planApprovalReviewRequested(projectDir, nextPlanReviewId(intentId), intentId);
+}
+
+/**
+ * Whether the target's build is finished and its next step is the finish: its
+ * plan stands only as its finished build reads it (a practice kept after its
+ * review, codeGenerationFinishedUnderPlanContract), and the person has not
+ * asked to see the plan again. `next` hands the finish over on it, and the
+ * write guard's refusal reads it, so the two say the same. False when it cannot
+ * be told.
+ */
+export function codeGenerationBuildFinishes(projectDir: string, unit: string | null): boolean {
+  try {
+    return !codeGenerationPlanReviewRequested(projectDir, unit) && codeGenerationFinishedUnderPlanContract(projectDir, unit);
+  } catch {
+    return false;
+  }
 }
 
 export function planApprovalReviewRequested(projectDir: string, targetId: string, intentId: string): boolean {
@@ -1024,7 +1041,8 @@ function routedPlanApproval(projectDir: string, directive: Directive): Directive
   // plan is read as the completion reads it. A build directive keeps the build
   // reading the guard and the brief use, so the plan `next` calls approved is
   // one they admit (a reviewed stage-level build whose contract moved after its
-  // review gets its finish step instead: finishedReviewStep).
+  // review gets its finish step instead, unless the person asked to see the
+  // plan again: finishedReviewStep, codeGenerationBuildFinishes).
   const use: CodeGenerationApprovalUse =
     directive.kind === "run-stage" && directive.unit_record_step !== undefined ? "completion" : "build";
   const states = units.map((unit) => targetState(projectDir, unit, intentId, record, directive, planApprovalOff, use));

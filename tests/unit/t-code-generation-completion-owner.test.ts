@@ -398,6 +398,7 @@ describe("a testing practice kept at the gate is for the next build", () => {
     expect(refused).toStartWith("exit 2;");
     expect(refused).toContain("it says what this build does next");
     expect(refused).not.toContain("asks the person to approve");
+    expect(refused).not.toContain("approve the plan");
     expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message).not.toBe(WAITS);
     expect(stageLine(proj)).toContain("[?] code-generation");
   });
@@ -419,6 +420,10 @@ describe("a testing practice kept at the gate is for the next build", () => {
     const step = next(proj);
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
     expect(step.plan_approval?.status, JSON.stringify(step)).toBe("plan");
+    const refused = guardOn(proj, "echo hi > src/y.ts");
+    expect(refused).toStartWith("exit 2;");
+    expect(refused).toContain("the engine asks the person to approve it before any code is written");
+    expect(refused).not.toContain("applies from the next plan");
   });
 
   test("strict: moved before the review, while the build ran, the build still waits for the plan", () => {
