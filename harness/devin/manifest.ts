@@ -62,6 +62,20 @@ const manifest: HarnessManifest = {
   hookActivation: {
     recovery:
       "In Devin CLI, type /hooks and approve this project's AI-DLC hooks if prompted, then fully restart Devin CLI (/clear is not enough) and run doctor again.",
+    // Devin reads AI-DLC's hook registrations from .devin/hooks.v1.json (the
+    // whole file is the hooks object); a missing or unparsable file runs none
+    // of them.
+    registration: {
+      file: ".devin/hooks.v1.json",
+      missing:
+        ".devin/hooks.v1.json is missing from this project, so Devin CLI runs none of AI-DLC's hooks here. " +
+        "In a terminal in this folder, <repair>, then fully restart Devin CLI in this folder, " +
+        "and type <entry>.",
+      invalid:
+        "Devin CLI cannot read this project's .devin/hooks.v1.json because it is not valid JSON, so it runs " +
+        "none of AI-DLC's hooks here. Correct the file, then fully restart Devin CLI in this folder, " +
+        "and type <entry>.",
+    },
   },
   harnessDir: ".devin",
   orchestratorSkillPath: ".devin/skills/aidlc/SKILL.md",
@@ -276,6 +290,12 @@ const manifest: HarnessManifest = {
 
   // plugin omitted → the packager derives the default `.devin-plugin` +
   // kind:"store" projection (Devin's native plugin format), per manifest-types.
+
+  // A plugin agent gets the same dispatch surface as a shipped delegation
+  // agent unless its author declares the key: `model: inherit` puts it on the
+  // session's model and effort, and the delegation allowlist (no
+  // `run_subagent`/`read_subagent`/`skill`) keeps delegation one level deep.
+  pluginAgentFrontmatter: ["model: inherit", DELEGATION_ALLOWED_TOOLS],
 };
 
 export default manifest;
