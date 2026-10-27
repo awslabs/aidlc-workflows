@@ -1,6 +1,7 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { lockFolderHeldGiveUpMs, lockFolderHeldLine } from "./aidlc-lock-line.ts";
 import { reviewManifestForms } from "./aidlc-review-manifest.ts";
+import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
@@ -42495,7 +42496,7 @@ export function memoryGuardPolicyDeclarations(
       if (!body.trim()) continue;
       const raw = structuredField(body, "Mode");
       if (raw === null) continue;
-      const value = parseGuardPolicy(raw);
+      const value = parseGuardPolicy(withoutLearnedDate(raw));
       const section = heading.replace(/^## /, "");
       if (value === null) {
         throw new Error(

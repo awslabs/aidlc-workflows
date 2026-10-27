@@ -166,6 +166,7 @@ import {
   TESTING_POSTURE_SUBCOMMANDS,
 } from "./aidlc-lib.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
+import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { noReplySince, personTurnStands, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
 import { aidlcToolInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import {
@@ -534,7 +535,7 @@ interface ClassifiedPosture {
   components: TestingMethodology[];
 }
 
-const TESTING_HEADING = "## Testing Posture";
+export const TESTING_HEADING = "## Testing Posture";
 const TESTABLE_LAYERS = [
   "Data model / database behavior",
   "Repository / data access",
@@ -654,7 +655,7 @@ function normalizeMethodology(value: string): TestingMethodology | null {
 }
 
 function structuredMethodology(value: string): TestingMethodology {
-  const normalized = value
+  const normalized = withoutLearnedDate(value)
     .toLowerCase()
     .replace(/[`*_]/g, "")
     .trim();

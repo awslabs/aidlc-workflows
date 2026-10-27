@@ -685,6 +685,25 @@ describe("t333 (3) resolution precedence", () => {
     expect(resolveGuardPolicy(proj).source).toBe("scope enterprise");
   });
 
+  // The learnings tool once wrote its visible date after the text of every
+  // line it kept, a `Mode:` line too. Such a line already in memory declares
+  // its value, under either heading; anything else after the value is still
+  // refused.
+  test("a Mode line the learnings tool wrote with its date declares its value", () => {
+    const { proj } = project("classic");
+    declareMemoryMode(proj, "project", "strict (learned 2026-10-26) <!-- cid:unscoped:user-stories:3c289971 -->");
+    expect(memoryGuardPolicyDeclarations(proj)).toEqual([
+      { layer: "project", path: memoryFile(proj, "project"), heading: "## Guard Policy", value: "strict" },
+    ]);
+    expect(resolveGuardPolicy(proj).value).toBe("strict");
+    const legacy = project("classic");
+    declareLegacyMemoryMode(legacy.proj, "team", "relaxed (learned 2026-10-26)");
+    expect(memoryGuardPolicyDeclarations(legacy.proj).map((d) => d.value)).toEqual(["relaxed"]);
+    const other = project("classic");
+    declareMemoryMode(other.proj, "team", "strict (learned yesterday)");
+    expect(() => resolveGuardPolicy(other.proj)).toThrow('Invalid Guard Policy Mode "strict (learned yesterday)"');
+  });
+
   test("an invalid memory value is a validation error naming the file, the section, and the allowed values", () => {
     const { proj } = project("classic");
     declareMemoryMode(proj, "team", "sometimes");
