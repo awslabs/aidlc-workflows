@@ -22,6 +22,10 @@
       "productName": "Cursor"
     },
     {
+      "name": "devin",
+      "productName": "Devin CLI"
+    },
+    {
       "name": "kiro",
       "productName": "Kiro CLI"
     },

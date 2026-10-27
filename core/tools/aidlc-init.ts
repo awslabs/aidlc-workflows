@@ -150,12 +150,10 @@ import {
   personAskedForThisLowering,
   RECORDABLE_PROJECT_BYPASSES,
   type ProjectFlagsRecord,
-  normalizeDriveLetter,
   pausedBySelection,
   pausedLine,
   resolveInvokingSessionId,
   resumedLine,
-  sameFileIdentity,
   withAuditLock,
   writeFileAtomic,
 } from "./aidlc-lib.ts";

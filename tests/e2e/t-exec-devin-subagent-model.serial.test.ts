@@ -28,7 +28,6 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   compareTriples,
   DEVIN_MIN_VERSION,

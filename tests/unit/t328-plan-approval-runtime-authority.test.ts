@@ -2135,7 +2135,7 @@ describe("Item 1 session isolation", () => {
     expect(readPlanApprovalResponse(project, "session-a")).toMatchObject({
       session: "session-a",
       challengeId: challengeA.challengeId,
-      choice: "Approve Plan",
+      words: "Approve Plan",
     });
     expect(readPlanApprovalChallenge(project, "session-b")).toEqual(challengeB);
     expect(readPlanApprovalResponse(project, "session-b")).toBeNull();
