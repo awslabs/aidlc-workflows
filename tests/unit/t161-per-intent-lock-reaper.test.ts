@@ -14,7 +14,7 @@
 // owner or an old stamp that never finished (none, empty, or cut off). Live
 // owners, stamps that name no valid owner, and unreadable stamps fail closed.
 //
-// SOURCE UNDER TEST (core/tools/aidlc-lib.ts):
+// SOURCE UNDER TEST (core/tools/aidlc-locks.ts):
 //   auditLockDir(pd, intent?, space?) / auditLockIdentity — per-intent + sentinel.
 //   acquireAuditLock(pd, retries, ms, intent?, space?) — stamps owner.json, reaps.
 //   releaseAuditLock / withAuditLock — composite-keyed depth + exit handlers.

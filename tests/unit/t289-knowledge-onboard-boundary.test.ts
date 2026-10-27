@@ -1400,7 +1400,7 @@ describe("t289 a descendant of documentkb/ is ITSELF a symlink: refused, nothing
 
 // The active-space CURSOR escape. `resolveSpaceFlag` validates an explicit
 // `--space`, but the pathless fallback read straight from `activeSpace()`
-// (aidlc-lib.ts) with no shape check of its own. A hand-edited
+// (aidlc-locks.ts) with no shape check of its own. A hand-edited
 // `aidlc/active-space` cursor holding `..` or `../../evil` made
 // `knowledgeDir`/`documentkbDir` resolve ABOVE `aidlc/spaces/`, so `onboard`
 // wrote the catalog outside the space tree entirely. A third `../` level is

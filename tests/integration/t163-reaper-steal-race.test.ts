@@ -25,7 +25,7 @@
 // gate. Every generation still carries its own token so a moved candidate can be
 // verified exactly before deletion or restoration.
 //
-// SOURCE UNDER TEST (core/tools/aidlc-lib.ts):
+// SOURCE UNDER TEST (core/tools/aidlc-locks.ts):
 //   reapStaleLock — recoverable reap-gate election + private retire/restore.
 //   acquireAuditLock — mkdir-or-reap loop that calls it.
 //
