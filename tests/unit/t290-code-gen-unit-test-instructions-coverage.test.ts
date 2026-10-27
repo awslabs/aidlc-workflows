@@ -264,6 +264,10 @@ describe("t290 code-generation coverage requires per-unit test instructions", ()
     );
     expect(codeGeneration).toContain("Never change that threshold to make a Unit's run pass");
     expect(codeGeneration).toContain(
+      "Put any run that floor's threshold can fail in a command of its own, with no step after it that the " +
+        "threshold exit would stop: Build and Test does not exempt a command whose exit stopped a later step.",
+    );
+    expect(codeGeneration).toContain(
       "A coverage target set for this Unit or one of its paths still gets its own Unit-scoped check.",
     );
     expect(buildAndTest).toContain(
@@ -279,18 +283,20 @@ describe("t290 code-generation coverage requires per-unit test instructions", ()
       "In a multi-repo intent, run it once in each repository the floor applies to, with that repository's own " +
         "command and coverage configuration",
     );
-    // A threshold exit stops a chained step before it runs; the exemption
-    // must not pass that step. The reference mirrors the stage rule.
+    // A threshold exit can stop a chained step before it runs, and replaying
+    // that step outside its command loses the command's own setup, so a
+    // command whose exit stopped a later step is not exempt. The reference
+    // mirrors the stage rule.
     const reference = readFileSync(
       join(REPO_ROOT, "docs", "reference", "04-stages", "construction.md"),
       "utf-8",
     ).replace(/\s+/g, " ");
     for (const prose of [buildAndTest, reference]) {
       expect(prose).toContain(
-        "That covers only its test run: any applicable step the command did not reach (one chained after the " +
-          "tests, such as `… && <lint>`, including steps inside scripts and lifecycle hooks) has not passed. Run " +
-          "each such step on its own, from the directory and environment the command set up for it, and record its " +
-          "result; the command has not passed until those steps pass, and a non-zero exit there is a failed command.",
+        "That applies only when that exit stopped no later step of the command: when a step after it did not run " +
+          "because of it (one chained, such as `… && <lint>`, one in a script or lifecycle hook the command calls, " +
+          "or a later task or phase of a build tool; tell from the scripts, hooks and task or phase definitions the " +
+          "command runs and from its output), the command is not exempt and its non-zero exit is a failed command.",
       );
       expect(prose).toContain("in each repository the floor applies to");
       expect(prose).toContain("one repository's run is never the");

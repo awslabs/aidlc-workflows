@@ -171,13 +171,13 @@ Attempt to execute the build and test commands documented in the instruction fil
    whole project (one that applies to all measured source, even when the
    runner checks it file by file) as the only cause of its non-zero exit
    counts as passed, from a new or an already-approved instructions file:
-   record its exit code and this reason in `test-results.md`. That covers only
-   its test run: any applicable step the command did not reach (one chained
-   after the tests, such as `… && <lint>`, including steps inside scripts and
-   lifecycle hooks) has not passed. Run each such step on its own, from the
-   directory and environment the command set up for it, and record its result;
-   the command has not passed until those steps pass, and a non-zero exit
-   there is a failed command.
+   record its exit code and this reason in `test-results.md`. That applies
+   only when that exit stopped no later step of the command: when a step after
+   it did not run because of it (one chained, such as `… && <lint>`, one in a
+   script or lifecycle hook the command calls, or a later task or phase of a
+   build tool; tell from the scripts, hooks and task or phase definitions the
+   command runs and from its output), the command is not exempt and its
+   non-zero exit is a failed command.
    Any other non-zero exit (a failed or errored test, a threshold set for one
    path or Unit), or output that does not show both, is a failed command. A
    coverage target set for one Unit needs its own check on that Unit's scope

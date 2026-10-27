@@ -987,8 +987,11 @@ This stage has a **two-part structure**: planning followed by generation.
    commands (on one Unit's tests a runner's threshold can fail on source other
    Units' tests cover); the file names the floor, and the floor's threshold in
    the project's coverage configuration is never changed to make a Unit's run
-   pass. A coverage target set for the Unit or one
-   of its paths gets its own Unit-scoped check.
+   pass. A command that the floor's threshold can fail keeps no step after it
+   that the threshold exit would stop, because Build and Test does not exempt
+   a command whose exit stopped a later step. A coverage target set for the
+   Unit or one of its paths gets its own Unit-scoped check.
+
 
    The plan opens with a short `## Summary` (Builds, Touches, Tests lines) that
    the engine shows the person when it asks for approval.
@@ -1385,14 +1388,14 @@ with the aidlc-devsecops-agent providing security testing expertise.
        tests passed and the project-wide floor's threshold (one for all
        measured source, even when the runner checks it file by file) as the
        only cause of its non-zero exit counts as passed, with its exit and the
-       reason recorded in test-results.md. That covers only its test run: any
-       applicable step the command did not reach (one chained after the tests,
-       such as `… && <lint>`, including steps inside scripts and lifecycle
-       hooks) has not passed. Run each such step on its own, from the
-       directory and environment the command set up for it, and record its
-       result; the command has not passed until those steps pass, and a
-       non-zero exit there is a failed command. Any other non-zero exit
-       (including a threshold set for one path or Unit) is a failure. A
+       reason recorded in test-results.md. That applies only when that exit
+       stopped no later step of the command: when a step after it did not run
+       because of it (one chained, such as `… && <lint>`, one in a script or
+       lifecycle hook the command calls, or a later task or phase of a build
+       tool; tell from the scripts, hooks and task or phase definitions the
+       command runs and from its output), the command is not exempt and its
+       non-zero exit is a failed command. Any other non-zero exit (including a
+       threshold set for one path or Unit) is a failure. A
        target set for one Unit needs its own Unit-scoped evidence.
     c. **Integration tests** (if applicable): Run integration test commands.
        Capture results.
