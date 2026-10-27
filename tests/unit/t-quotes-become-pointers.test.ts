@@ -378,21 +378,19 @@ describe.each(POLICIES)("Guard Policy %s: a message stands for what it asks besi
   };
 
   // ans-ga-13: "approve, and turn plan approval off for the rest of this work".
-  // Arden's rule for every setting: a message that already gave an approval
-  // does not also stand for a setting; the setting goes first, or rides the
-  // approval's own report (t-setting-spent-message).
-  test("approve first, then the setter naming that message: refused, naming no message, and plan approval stays on", () => {
+  // A message that already gave an approval stands for no setting later
+  // (t-setting-spent-message), but the setting goes first, rides the
+  // approval's own report, or follows it while that reply is in hand
+  // (t-setting-rides-approval).
+  test("approve first, then the setter naming that message: off, set by them on that message", () => {
     const proj = project();
     const slug = openGate(proj);
     const id = said(proj, "approve, and turn plan approval off for the rest of this work");
     tick();
     approve(proj, slug);
-    const before = planApproval();
     const off = setter(proj, ["--plan-approval", "off", "--message", id]);
-    expect(off.status).not.toBe(0);
-    expect(off.out).not.toContain(id);
-    expect(off.out).toContain("already gave an approval or another decision");
-    expect(planApproval()).toBe(before);
+    expect(off.status, off.out).toBe(0);
+    expect(planApproval()).toBe("off (set by you)");
   });
 
   test("the setter first, then the approval on the same message: both are recorded", () => {
@@ -407,7 +405,9 @@ describe.each(POLICIES)("Guard Policy %s: a message stands for what it asks besi
   });
 
   // The grant of autonomy is a request: what one message asks beside the one
-  // decision it gave still stands for it, and a setting does not.
+  // decision it gave still stands for it. A setting does too while the
+  // approval naming that message is the reply in hand, and not on an approval
+  // that names none.
   const grant = (proj: string, id: string) =>
     run(proj, [BOLT, "set-autonomy", "--mode", "autonomous", "--message", id, "--project-dir", proj]);
 
@@ -419,9 +419,29 @@ describe.each(POLICIES)("Guard Policy %s: a message stands for what it asks besi
     append(proj, "GATE_APPROVED", {
       Stage: "approval-handoff", "User Input": "Approve", "Approved Together With": "feasibility", "Message Id": id,
     });
-    expect(setter(proj, ["--plan-approval", "off", "--message", id]).status).not.toBe(0);
+    const off = setter(proj, ["--plan-approval", "off", "--message", id]);
+    expect(off.status, off.out).toBe(0);
     const granted = grant(proj, id);
     expect(granted.status, granted.out).toBe(0);
+  });
+
+  // The grant uses the message up, for a setting too: the approval's reply is
+  // no window past it (an agent's setter after "approve, and run Construction
+  // on its own" is not theirs).
+  test("approve, and run Construction on its own: after the grant, a setting on that message is refused", () => {
+    const proj = project();
+    const id = said(proj, "approve, and run Construction on its own from here");
+    tick();
+    append(proj, "GATE_APPROVED", { Stage: "feasibility", "User Input": "Approve", "Message Id": id });
+    const granted = grant(proj, id);
+    expect(granted.status, granted.out).toBe(0);
+    const before = planApproval();
+    const off = setter(proj, ["--plan-approval", "off", "--message", id]);
+    expect(off.status).not.toBe(0);
+    expect(off.out).not.toContain(id);
+    expect(off.out).toContain("It stays on; go on with the open step.");
+    expect(planApproval()).toBe(before);
+    expect(rows(proj, "CEREMONY_SET")).toHaveLength(0);
   });
 
   test("one plan answer for several Units is one decision, so the message still stands for a request", () => {

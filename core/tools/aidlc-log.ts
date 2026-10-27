@@ -16,8 +16,10 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { prepareReviewCopy, removeReviewCopy } from "./aidlc-kiro-review-copy.ts";
 import {
   chatsSince,
+  latestMessage,
   latestSpendingTimestamp,
   listMessages,
+  messageBeforeJoining,
   proveMessage,
   readMessage,
   type StoredMessage,
@@ -916,6 +918,45 @@ function answersSummaryQuestion(
   return latest.includes("checkpoint") ? "checkpoint" : latest.includes("plain") ? "plain" : null;
 }
 
+// After a Request changes the summary is shown again, revised, and its question
+// is recorded before that showing, as the first one was (stage-protocol-summary.md).
+// A chat that picked the summary up in a new chat never loaded the stage's
+// rules, so the receipt of the step before it names that record while the
+// summary is still owed, as the step's own ceremony says (the person may have
+// switched it off since), and its latest row is the change request
+// (pendingSummaryDecision), read from every clone's shard. `unit` and
+// `workflow` are the work item the caller's answer is for. Null otherwise, and
+// when the record cannot be read: the answer is already on record, and a note
+// never turns it into a failure.
+function revisedSummaryNote(
+  pd: string, stage: StageEntry | undefined, content: string | null, unit: string | undefined, workflow: string | undefined,
+): string | null {
+  if (stage === undefined || !summaryConfirmationOwed(stage, { stateContent: content, ignoreGuardSwitch: true })) {
+    return null;
+  }
+  let questionsFile: string | null = null;
+  try {
+    let receipt: AuditShardEvent | undefined;
+    for (const row of readAuditShardEvents(pd)) {
+      if (row.event !== "SUMMARY_CONFIRMATION_RECORDED" || auditBlockField(row.block, "Stage") !== stage.slug ||
+        auditBlockField(row.block, "Checkpoint") !== SUMMARY_CONFIRMATION_CHECKPOINT ||
+        (auditBlockField(row.block, "Unit") ?? undefined) !== unit ||
+        (auditBlockField(row.block, "Workflow") ?? undefined) !== workflow) continue;
+      if (receipt === undefined || row.timestamp >= receipt.timestamp) receipt = row;
+    }
+    questionsFile = receipt === undefined ? null : auditBlockField(receipt.block, "Questions File");
+    if (questionsFile !== null && !pendingSummaryDecision(pd, stage.slug, unit, workflow, questionsFile).changeRequested) {
+      questionsFile = null;
+    }
+  } catch {
+    questionsFile = null;
+  }
+  if (questionsFile === null) return null;
+  const { decision } = summaryConfirmationCommands({ stage: stage.slug, unit, questionsFile, single: workflow !== undefined });
+  return `When you show the revised summary, first set its \`[Answer]:\` line in ${questionsFile} back to blank and ` +
+    `record its question with \`${decision}\`; then show it with its choices and end the turn.`;
+}
+
 // A summary confirmation recorded without its checkpoint flags is an ordinary
 // question the gate never counts, so the stage would refuse for good with
 // SUMMARY_RECEIPT_MISSING. When the call is plainly the summary (its two
@@ -1038,6 +1079,21 @@ function decisionRowsInScope(rows: AuditShardEvent[], stage: string, unit: strin
 function latestDecisionMessageId(pd: string, stage: string, unit: string | undefined): string | null {
   const question = decisionRowsInScope(readAuditShardEvents(pd), stage, unit).at(-1);
   return question === undefined ? null : auditBlockField(question.block, "Message Id");
+}
+
+// With no reply on record, the refusal names this chat's latest message when it
+// came before the chat was on this work (a teammate's clone, the message that
+// picked the work up: messageBeforeJoining), by id and time, so the agent
+// records the answer on it if it holds one. Only the latest: an earlier one may
+// be a reply the chat gave on other work. Null when it is not such a message.
+function keptMessageRefusal(pd: string): string | null {
+  const chat = invokingChat(pd);
+  const latest = chat === null ? null : latestMessage(pd, chat);
+  if (latest === null || messageBeforeJoining(pd, latest.id) === null) return null;
+  const missed = unattendedHumanPresenceHint(pd);
+  return `Cannot record this answer: the person's message ${latest.id} (sent ${latest.at}) came before this chat ` +
+    "was on this work, so it is on record as no reply. If it answers the question, run the same command with " +
+    `--message ${latest.id}; do not ask them again.` + (missed === "" ? "" : ` If no message of theirs answers it:${missed}`);
 }
 
 function handleDecision(args: string[]): void {
@@ -1486,7 +1542,7 @@ function pendingSummaryDecision(
   unit: string | undefined,
   workflow: string | undefined,
   questionsFile: string,
-): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string } {
+): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string; changeRequested?: boolean } {
   const rows = readAuditShardEvents(pd);
   const entries = rows.filter((entry) => {
     // A turn that was only a command to AIDLC is no reply to the summary.
@@ -1579,7 +1635,10 @@ function pendingSummaryDecision(
     };
   }
   if (!latestKinds.has("DECISION_RECORDED")) {
-    return { pending: false, humanAfterDecision: false };
+    // The latest is a receipt: after a change request the summary is shown again, revised.
+    const changeRequested = latestActions.every((entry) =>
+      auditBlockField(entry.block, "Details") === SUMMARY_CONFIRMATION_CHOICES[1]);
+    return { pending: false, humanAfterDecision: false, ...(changeRequested ? { changeRequested } : {}) };
   }
 
   // Whether a reply turn of the person's came after the question's record: the
@@ -2403,6 +2462,8 @@ function handleAnswer(args: string[]): void {
       const whatAnswer = `${aidlcDispatcherInvocation("log answer")} --stage ${quoteCommandArgument(flags.stage)}` +
         `${flags.unit ? ` --unit ${quoteCommandArgument(flags.unit)}` : ""}${workflow !== undefined ? " --single" : ""} ` +
         `--details ${quoteCommandArgument("<their words>")}`;
+      // What to change is known, so the agent revises now.
+      const revised = summaryFeedback !== null ? revisedSummaryNote(pd, stageNode, content, flags.unit, workflow) : null;
       console.log(
         JSON.stringify({
           emitted: "SUMMARY_CONFIRMATION_RECORDED",
@@ -2418,7 +2479,7 @@ function handleAnswer(args: string[]): void {
                   ? `when they reply, record what they said with \`${whatAnswer}\`.`
                   : "their next reply is what should change."),
             }
-            : {}),
+            : revised !== null ? { agent_note: revised } : {}),
         }),
       );
       return;
@@ -2642,7 +2703,8 @@ function handleAnswer(args: string[]): void {
       // One reply answers every question the agent asked, each as its own
       // answer: an answer spends no reply.
       error(
-        "Cannot record this answer because no new human reply has arrived for the question. "
+        keptMessageRefusal(pd) ??
+          "Cannot record this answer because no new human reply has arrived for the question. "
           + "Wait for the human to type an answer, then try again."
           + commandTurnHint(pd)
           + unattendedHumanPresenceHint(pd),
@@ -2666,6 +2728,12 @@ function handleAnswer(args: string[]): void {
     const asksForNote = fromBox ?? (picksAddANote(flags.details) && question !== undefined &&
       isLearningsNoteDecision(question.block));
     if (asksForNote) rowEndsTurn = true;
+    // What should change, or a follow-up, after a Request changes at the summary.
+    // A new chat's step for "What should change?" names no Unit or single-stage
+    // run, and the question's own row has them.
+    const revised = asksForNote ? null : revisedSummaryNote(pd, stageNode, content,
+      flags.unit ?? (question === undefined ? undefined : auditBlockField(question.block, "Unit") ?? undefined),
+      workflow ?? (question === undefined ? undefined : auditBlockField(question.block, "Workflow") ?? undefined));
     console.log(
       JSON.stringify({
         emitted: "QUESTION_ANSWERED",
@@ -2676,7 +2744,7 @@ function handleAnswer(args: string[]): void {
               "not ask for it again. Otherwise ask what the note should say. End the turn at the question you ask " +
               "next; their next reply answers it.",
           }
-          : {}),
+          : revised !== null ? { agent_note: revised } : {}),
       })
     );
   });

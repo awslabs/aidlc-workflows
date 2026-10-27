@@ -283,6 +283,7 @@ import {
   attemptEventDefinitelyBefore,
   resolveAuditProjectPath,
   swarmWorkerWorktreeMeta,
+  UNIT_NAME_PLACEHOLDER,
 } from "./aidlc-lib.js";
 import {
   personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
@@ -9566,7 +9567,9 @@ function handleReuseArtifact(args: string[]): void {
   const decision = getFlagValue(rest, "--decision");
   const artifacts = getFlagValue(rest, "--artifacts");
   const repoFlag = getFlagValue(rest, "--repo");
-  const unitFlag = getFlagValue(rest, "--unit");
+  // The engine's own {unit-name}, as an isolated step leaves it, names no Unit.
+  const unitGiven = getFlagValue(rest, "--unit");
+  const unitFlag = unitGiven === UNIT_NAME_PLACEHOLDER ? undefined : unitGiven;
   const singleRun = rest.includes("--single");
   if (unitFlag !== undefined && unitFlag !== null && !UNIT_NAME_REGEX.test(unitFlag)) error(`Invalid Unit name: ${unitFlag}`);
   if (!decision) error("Missing --decision <keep|modify|redo>");

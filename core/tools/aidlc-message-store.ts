@@ -5,6 +5,7 @@ import {
   APPROVED_TOGETHER_WITH_FIELD,
   auditBlockField,
   type AuditShardEvent,
+  type GuardRefusalEvent,
   HOOK_HEARTBEAT_STALE_SLACK_MS,
   hookLiveness,
   humanTurnMintAllowed,
@@ -610,8 +611,51 @@ function messageReach(
 function settingOnDecidedMessage(lowers: boolean): string {
   return "Cannot record this setting on that message: it already gave an approval or another decision, so it " +
     (lowers
-      ? "does not also turn a check off. It stays on; run it on the message they ask in."
+      ? "does not also turn a check off. It stays on; go on with the open step."
       : "does not also stand for a setting. If their words asked for it, run the same command with no --message.");
+}
+
+// A guard's refusal of an agent's action, one key per kind, so a new kind
+// fails the typecheck until it is listed here.
+const GUARD_REFUSALS: Record<GuardRefusalEvent, true> = {
+  PLAN_APPROVAL_BLOCKED: true,
+  STATE_TRANSITION_BLOCKED: true,
+  STAGE_RULES_BLOCKED: true,
+  REVIEW_FREEZE_BLOCKED: true,
+  REVIEWER_SCOPE_BLOCKED: true,
+};
+
+// Whether the agent is still carrying out the reply that gave the latest
+// approval, so a setting that reply asked for stands when run after the
+// approval on that message, as it does riding the approval's own command
+// (settingsBesideDecision): live Copilot CLI and Kiro CLI runs recorded
+// "approve, and turn plan approval off" as the approval first, then lost the
+// setting. The reply is over, and its Approve stands for no setting
+// (messageReach), once the person has sent another message on this work (in
+// any chat: a resume is one), a later decision is on record (the run's own
+// approval included, which names no message), the message no longer stands as
+// a request does (onlyItsOwnDecisionAfter: a grant of autonomy uses it up), a
+// guard has refused the agent, or the next gate or the code plan question is
+// up. Ids, the engine's own rows and their places only, never words.
+function answeringItsApproval(pd: string, rows: readonly AuditShardEvent[], message: StoredMessage): boolean {
+  if (!onlyItsOwnDecisionAfter(pd, rows, message)) return false;
+  let approval: AuditShardEvent | null = null;
+  for (const row of rows) {
+    if (!MESSAGE_SPENDING_EVENTS.has(row.event) || auditBlockField(row.block, APPROVED_TOGETHER_WITH_FIELD) !== null) continue;
+    if (approval === null || rowAfter(row, approval, true)) approval = row;
+  }
+  if (
+    approval === null || (approval.event !== "GATE_APPROVED" && approval.event !== "PLAN_APPROVAL_RECORDED") ||
+    auditBlockField(approval.block, "Message Id") !== message.id
+  ) return false;
+  const since = approval;
+  const turn = rows.find((row) => row.event === "HUMAN_TURN" && auditBlockField(row.block, "Message Id") === message.id);
+  const over = rows.some((row) =>
+    (row.event === "HUMAN_TURN" && auditBlockField(row.block, "Message Id") !== message.id &&
+      (turn === undefined ? row.timestamp > message.at : rowAfter(row, turn, true))) ||
+    ((Object.hasOwn(GUARD_REFUSALS, row.event) || row.event === "STAGE_AWAITING_APPROVAL") && rowAfter(row, since, true))
+  );
+  return !over && sincePlanQuestion(pd) === null;
 }
 
 // Whether the only decision recorded after `message` is one redo or jump back
@@ -723,7 +767,9 @@ function messageProof(
     : !(options.reopened === true && onlyItsReopenAfter(rows, message)) && spentAt !== null && message.at < spentAt
       ? "spent"
       : "stands";
-  if (reach === "backed") return { refusal: settingOnDecidedMessage(options.lowers === true) };
+  if (reach === "backed" && !answeringItsApproval(pd, rows, message)) {
+    return { refusal: settingOnDecidedMessage(options.lowers === true) };
+  }
   if (reach === "spent") {
     return {
       refusal: `Cannot record this ${what}: message ${id} arrived before the last approval or decision` +
@@ -738,15 +784,18 @@ function messageProof(
 // this work's record names it and it can answer the open question: their chat
 // had not joined the work when it came (a teammate's clone, where the
 // selection is not committed, so the human-turn hook kept the message and
-// wrote no turn), and the answer's own proof takes it. The step names it on
-// its answer command, by its id. No turn is made for it, so what a gate joins
+// wrote no turn), and the answer's own proof takes it. The work was on record
+// before it came: the message a piece of work starts with is kept the same way,
+// and it answers no question the work asks later. The step names it on its
+// answer command, by its id. No turn is made for it, so what a gate joins
 // (personsGateReply) stays the turns on the record. Null otherwise, and on any
 // read error.
 export function messageBeforeJoining(pd: string, id: string | undefined): string | null {
   if (id === undefined) return null;
   try {
     const message = readMessage(pd, id);
-    if (message === null || sentOnThisWork(readAuditShardEvents(pd))(message)) return null;
+    const rows = readAuditShardEvents(pd);
+    if (message === null || sentOnThisWork(rows)(message) || !rows.some((row) => row.timestamp < message.at)) return null;
     return "message" in proveMessage(pd, id, "answer") ? id : null;
   } catch {
     return null;

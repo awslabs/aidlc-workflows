@@ -235,7 +235,7 @@ below.
 
 ### Markdown adapter coverage
 
-`markdownBlocks` in `core/tools/aidlc-lib.ts` is the single block interpreter for
+`markdownBlocks` in `core/tools/aidlc-markdown.ts` is the single block interpreter for
 visibility, containers, definitions, and claim splitting; `visibleMarkdownLines`
 projects it. It is backed by the built-in `Bun.markdown` renderer. Tests defend
 consumer outcomes rather than maintaining a second CommonMark oracle. The

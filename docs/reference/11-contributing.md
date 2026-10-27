@@ -121,7 +121,7 @@ Security](19-supply-chain-security.md).
 
 ## Markdown structure
 
-Use `markdownBlocks` in `core/tools/aidlc-lib.ts` for block visibility,
+Use `markdownBlocks` in `core/tools/aidlc-markdown.ts` for block visibility,
 containers, link reference definitions, and claim splitting. It is backed by
 the built-in `Bun.markdown` renderer; its `visibleMarkdownLines` projection
 preserves consumer-specific visibility options. Do not add a Markdown

@@ -30,6 +30,7 @@ import {
   reviewCopyRequest,
   reviewFileDigestOnDisk,
   stateFilePathForSelection,
+  swarmUnitOpenReviews,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
 
@@ -182,20 +183,26 @@ export async function run(input: string): Promise<number> {
   if (agentId) fields["Agent ID"] = agentId;
   if (agentMessage) fields.Message = agentMessage;
   // What a reviewer left in the review file of every request still open for
-  // it, at the moment it finished. The review is the reviewer's: the verdict
-  // compares the bytes it records with this digest and marks a file that
-  // changed since (aidlc-log.ts review --verdict) as edited after the reviewer.
+  // it, at the moment it finished: a side-by-side Unit's too, recorded in the
+  // Unit's own worktree while its reviewer runs from here. The review is the
+  // reviewer's: the verdict compares the bytes it records with this digest and
+  // marks a file that changed since (aidlc-log.ts review --verdict) as edited
+  // after the reviewer.
   // Evidence only: a ledger or record that cannot be read leaves the row as
   // it was.
   try {
     const record = recordDir(projectDir, intent, space);
     if (record !== null) {
-      const digests = (openRequests ?? openReviewRequests(readAuditShardEvents(projectDir, intent, space)))
+      const units = intent && space && agentType !== "unknown" ? swarmUnitOpenReviews(projectDir, intent, space) : [];
+      const digests = [
+        { record, requests: openRequests ?? openReviewRequests(readAuditShardEvents(projectDir, intent, space)) },
+        ...units,
+      ].flatMap((open) => open.requests
         .filter((request) => request.reviewer === agentType)
         .map((request) => ({
           reviewFile: request.reviewFile,
-          digest: reviewFileDigestOnDisk(join(record, ...request.reviewFile.split("/"))),
-        }));
+          digest: reviewFileDigestOnDisk(join(open.record, ...request.reviewFile.split("/"))),
+        })));
       if (digests.length > 0) fields[REVIEW_FILE_DIGEST_FIELD] = renderReviewFileDigests(digests);
     }
   } catch (e) {

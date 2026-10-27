@@ -299,7 +299,7 @@ builds, and release packaging regenerate before consuming either local root.
 
 ### Markdown structure
 
-`markdownBlocks` in `core/tools/aidlc-lib.ts` is the single Markdown block
+`markdownBlocks` in `core/tools/aidlc-markdown.ts` is the single Markdown block
 interpreter for visibility, containers, link reference definitions, claim
 splitting, and confirmation parsing. It is backed by `Bun.markdown`, the
 CommonMark/GFM renderer built into Bun and into every native `aidlc` binary, so
