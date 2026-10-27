@@ -16,7 +16,7 @@
 //     acquire audit lock", the slug-length message)
 //   - the literal bytes the tool copies / appends to audit.md on disk
 //   - the AIDLC_AUDIT_LOCK_RETRIES / _RETRY_MS env-var seam
-//   - the planted-mkdir-lock contention path (auditLockDir = md5(projectDir)[0:8]) [aidlc-lib.ts]
+//   - the planted-mkdir-lock contention path (auditLockDir = md5(projectDir)[0:8]) [aidlc-locks.ts]
 //   - the chmod-readonly post-emit failure path -> ERROR_LOGGED [fork-emitted:<ts>]
 // An in-process twin would lose the process.exit shell, the env seam, the
 // JSON-on-stdout contract, and the cross-process lock contention.

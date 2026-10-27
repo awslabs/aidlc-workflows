@@ -1408,7 +1408,7 @@ describe("t289 a descendant of documentkb/ is ITSELF a symlink: refused, nothing
 // the escape was bounded to within `projectDir` -- still a real corruption of
 // the project tree from a file the tool itself is supposed to own. The cursor
 // reads as the default space unless it names a space this project has
-// (activeSpace in aidlc-lib.ts), and the fallback is still validated here.
+// (activeSpace in aidlc-locks.ts), and the fallback is still validated here.
 describe("t289 the active-space cursor resolves to a space this project has", () => {
   test("a cursor holding `..` reads as the default space", () => {
     const p = scratchProject();
@@ -1937,7 +1937,7 @@ describe("t289 the completeness property is keyed to the fs-mutation CALL, not t
     // the function's BODY calls, not what its parameters are named.
     //
     // This module imports no `rmSync` of its own (every remove routes through
-    // `removeTreeSync` in aidlc-lib.ts), so a defeat function that calls a bare
+    // `removeTreeSync` in aidlc-locks.ts), so a defeat function that calls a bare
     // `rmSync` must import it itself, same as any real attacker adding a
     // brand-new import would have to.
     const defeat = `

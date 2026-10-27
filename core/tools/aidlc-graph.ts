@@ -432,7 +432,7 @@ function memoryDisplayPath(rel: string): string {
  *  `<projectDir>/aidlc/spaces/<space>/memory`. FOLLOWS the active-space cursor —
  *  `space` defaults to `activeSpace(projectDir)` (which itself falls back to
  *  `default` when no cursor is set), mirroring the `space?`/`?? activeSpace`
- *  shape of codekbDir()/knowledgeDir()/intentsDir() in aidlc-lib.ts. So the
+ *  shape of codekbDir()/knowledgeDir() in aidlc-lib.ts and intentsDir() in aidlc-locks.ts. So the
  *  learnings/practices writers that resolve through here land under the active
  *  space, while a cursorless resolve still yields `default`. The path layout
  *  stays byte-aligned with the packager's emit and the native includes via
