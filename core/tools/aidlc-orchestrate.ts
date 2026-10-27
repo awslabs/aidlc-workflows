@@ -7937,6 +7937,28 @@ function memoryPathFor(phase: string, slug: string, recordPrefix: string | null)
   return `${prefix}/${phase}/${slug}/memory.md`;
 }
 
+// Under team ownership a per-Unit stage's diary is always a Unit's own. A
+// directive that names no Unit (the skeleton-stance ask, the walk after a change
+// reopen) takes the claimed checkout's Unit, and elsewhere the {unit-name}
+// placeholder, which is never bootstrapped: the stage-level diary is a file a
+// claimed checkout cannot land (pin refuses it).
+function stageMemoryPath(
+  node: GraphStage,
+  unit: string | null,
+  stateContent: string | null,
+  recordPrefix: string | null,
+  projectDir: string | undefined,
+): string {
+  const named = unit === UNIT_NAME_PLACEHOLDER ? null : unit;
+  const own = teamUnitMemoryPath(node, named, stateContent, recordPrefix);
+  if (own) return own;
+  if (!isTeamUnitOwnership(stateContent) || !isPerUnitStage(node)) {
+    return memoryPathFor(node.phase, node.slug, recordPrefix);
+  }
+  const claimed = projectDir ? readApplicableTeamUnitScopeStamp(projectDir, stateContent ?? undefined)?.unit : undefined;
+  return unitMemoryPath(node.slug, claimed ?? UNIT_NAME_PLACEHOLDER, recordPrefix);
+}
+
 // Callers create the stage diary at the deterministic directive-emission boundary
 // only when the learnings ritual is on, so the conductor need not probe for it.
 // This is advisory: a missing install template, unresolved placeholder, or
@@ -9136,9 +9158,7 @@ function buildRunStageDirective(
     mode: node.mode as RunStageDirective["mode"],
     inline_context_paths: inlineContext.paths,
     gate: computeGate(node, scope, stateContent),
-    memory_path:
-      teamUnitMemoryPath(node, unit === UNIT_NAME_PLACEHOLDER ? null : unit, stateContent, recordPrefix) ??
-      memoryPathFor(node.phase, node.slug, recordPrefix),
+    memory_path: stageMemoryPath(node, unit, stateContent, recordPrefix, codekbCtx?.projectDir),
     consumes: present,
     produces: resolveProduces(
       node,
