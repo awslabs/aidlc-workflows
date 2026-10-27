@@ -216,8 +216,7 @@ describe("t205 optional_produces frontmatter", () => {
     // build-and-test's test instructions only at the strategy that calls for
     // them; requirements-analysis's traceability record is optional so a run
     // with no record (work begun before it existed) still reviews and approves.
-    // refined-mockups's HTML preview is written only for user-facing UI.
-    test("functional-design, build-and-test, requirements-analysis and refined-mockups are the stages carrying optional_produces", () => {
+    test("functional-design, build-and-test and requirements-analysis are the stages carrying optional_produces", () => {
       const carriers = loadGraph()
         .filter((s) => s.optional_produces !== undefined)
         .map((s) => `${s.slug}:${s.optional_produces?.join(",")}`)
@@ -225,7 +224,6 @@ describe("t205 optional_produces frontmatter", () => {
       expect(carriers).toEqual([
         "build-and-test:integration-test-instructions,performance-test-instructions,security-test-instructions",
         "functional-design:frontend-components",
-        "refined-mockups:mockups-preview",
         "requirements-analysis:traceability",
       ]);
     });

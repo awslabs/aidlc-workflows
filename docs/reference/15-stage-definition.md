@@ -416,11 +416,8 @@ consumes:
 A plain kebab-case string list, parallel to `produces:`. It names artifacts
 the stage **may** write (per unit, for a per-unit stage) but is **not
 required** to. Absent means none. `functional-design` declares
-`frontend-components`, written only for a Unit with a UI; Requirements
-Analysis and Build and Test declare outputs a run may not need; and
-`refined-mockups` declares `mockups-preview`, written only for user-facing UI.
-A stage may consume an optional output (`required: false`); the engine's
-`producersOf` resolves it to the stage that may write it.
+`frontend-components`, written only for a Unit with a UI, and Requirements
+Analysis and Build and Test declare outputs a run may not need.
 
 Why it exists: a per-unit Construction stage (`for_each: unit-of-work`) is
 COVERED for a unit only when every `produces[]` artifact exists on disk under

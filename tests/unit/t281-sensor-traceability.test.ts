@@ -799,7 +799,8 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
       ["| `UX1.1.1` | Sign in on one page [Q2] |", "| **UX1.1.1** | A failed sign-in keeps the email [Q4] |"],
       ["* `UX1.1.1` Sign in on one page [Q2]", "### UX1.1.1 A failed sign-in keeps the email [Q4]"],
       ["- [UX1.1.1](#sign-in) Sign in on one page [Q2]", "- **[`UX1.1.1`](#keep)** A failed sign-in keeps the email [Q4]"],
-      ["- <code>UX1.1.1</code> Sign in on one page [Q2]", "#### <b>UX1.1.1</b> A failed sign-in keeps the email [Q4]"],
+      ["- <code>UX1.1.1</code> Sign in on one page [Q2]", "1. <b>UX1.1.1</b> A failed sign-in keeps the email [Q4]"],
+      ["- <span title=\"1 > 0\">UX1.1.1</span> Sign in on one page [Q2]", "- <span\n  class=\"keep\">UX1.1.1</span> A failed sign-in keeps the email [Q4]"],
     ];
     for (const [first, second] of forms) {
       const table = first.startsWith("|") ? ["| ID | Decision |", "|---|---|", first, second] : [first, "", second];
@@ -824,6 +825,21 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     write(proj, "inception/refined-mockups/interaction-spec.md", "# Interaction Spec\n\n- [UX1.1.1](#sign-in) Sign in on one page [Q2]\n");
     out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2"]));
     expect(out.result.missing_from_upstream_ids, "a linked ID is a decision").toEqual(["UX1.1.1"]);
+  });
+
+  test("code-generation reports a visible ID that no row defines, so no form can hide a decision", () => {
+    const proj = project();
+    seedExperience(proj);
+    write(proj, "inception/refined-mockups/interaction-spec.md", [
+      "# Interaction Spec",
+      "",
+      "- UX1.1.1 Sign in on one page [Q2]",
+      "",
+      "#### <b>UX1.1.2</b> A failed sign-in keeps the email [Q4]",
+    ].join("\n"));
+    const out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1"]));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.reason).toContain("interaction-spec.md mentions UX1.1.2, but no list item, table row, or heading opens with it");
   });
 
   test("code-generation reports a decision naming a story stories.md lacks", () => {

@@ -1517,8 +1517,8 @@ with the aidlc-devsecops-agent providing security testing expertise.
     stage or phase state; the reported gate outcome owns the transition.
 
 12. **Completion** -- Present completion message and approval gate. When
-    Refined Mockups wrote `mockups-preview.html`, it names the built screens to
-    compare with the preview; whether the build matches the approved
+    Refined Mockups ran, it names the built screens or API responses to compare
+    with `mockups-preview.html`; whether the build matches the approved
     experience, brand and feel included, is the person's judgement at this gate.
 
 ### Outputs

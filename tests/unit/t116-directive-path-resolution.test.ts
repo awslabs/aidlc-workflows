@@ -516,7 +516,7 @@ describe("t116 per-unit {unit-name} injection", () => {
     );
   });
 
-  test("14: brownfield Refined Mockups reads the code's UI inventory and may write its HTML preview", () => {
+  test("14: brownfield Refined Mockups reads the code's UI inventory and writes its HTML preview", () => {
     const { directive, projectDir } = emitForWithProject(
       "state-brownfield-feature.md",
       "refined-mockups",

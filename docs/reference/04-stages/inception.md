@@ -828,18 +828,19 @@ designs the refined mockups from the stories and requirements.
    Each experience decision gets a `UX{x}.{y}.{n}` ID and its source: an
    answer (`[Q<n>]`), a document's `knowledge show` citation, a memory rule,
    or `[assumption]`. Design-system rows separate where a component is
-   observed in the code from the standard it follows. For user-facing UI, also
-   write `mockups-preview.html`: one self-contained HTML file (inline CSS and
-   SVG, no scripts, nothing loaded from elsewhere) showing each decided screen
-   in each state, labelled with its `UX` IDs.
+   observed in the code from the standard it follows. Also write
+   `mockups-preview.html`: one self-contained HTML file (inline CSS and SVG, no
+   scripts, nothing loaded from elsewhere) showing each decided screen in each
+   state, or for an API example requests and responses in each state, labelled
+   with its `UX` IDs.
    For non-UI initiatives, create API developer experience specification.
 
 5. **Prepare Completion** -- Verify the refined-mockup artifacts. Do not edit
    state; report the gate outcome through `aidlc-orchestrate.ts`.
 
 6. **Present Completion & Request Approval** -- Display completion message
-   with :art: emoji, pointing the person at `mockups-preview.html` when it
-   exists. Standard approval gate (Approve / Request Changes).
+   with :art: emoji, pointing the person at `mockups-preview.html`. Standard
+   approval gate (Approve / Request Changes).
 
 ### Outputs
 
@@ -851,7 +852,7 @@ All artifacts written to `<record>/inception/refined-mockups/`:
 | `interaction-spec.md`           | Interaction patterns, state management, transitions; one story-keyed `UX{x}.{y}.{n}` ID and source per experience decision, traced by Code Generation |
 | `design-system-mapping.md`      | Component mapping to design system / component library       |
 | `accessibility-checklist.md`    | WCAG compliance checklist and requirements                   |
-| `mockups-preview.html`          | (CONDITIONAL, user-facing UI) Self-contained preview of each decided screen in its states; approved and fingerprinted with the other outputs |
+| `mockups-preview.html`          | Self-contained preview of each decided screen in its states (for an API, example requests and responses); approved and fingerprinted with the other outputs |
 | `refined-mockups-questions.md`  | Clarifying questions with `[Answer]:` tags (input artifact)  |
 
 ### Approval Gate

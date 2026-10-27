@@ -301,26 +301,34 @@ function decisionsOfStories(specContent: string, stories: Set<string> | null): S
 
 // A decision is defined where its ID opens a visible list item, a table row's
 // first cell, or a heading, after markup only; a mention elsewhere, or in code
-// or a comment, is not one. Returns how many times each ID is defined.
+// or a comment, is not one. Inline HTML is dropped where the shared parser
+// places it, and an item whose first line holds only markup opens on the next.
+// Returns how many times each ID is defined.
 function experienceDefinitions(specContent: string): Map<string, number> {
   const { lines } = markdownBlocks(specContent);
-  const visible = visibleMarkdownLines(specContent);
-  const items = new Set<number>();
+  const source = specContent.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
+  const text = (index: number): string => {
+    let line = source[index] ?? "";
+    const spans = lines[index].invisible.filter((span) => span.kind !== "codeText").sort((a, b) => b.start - a.start);
+    for (const span of spans) line = line.slice(0, span.start) + line.slice(span.end);
+    return line;
+  };
+  const opened = new Set<number>();
+  let pending: number | null = null;
   const defined = new Map<string, number>();
   lines.forEach((line, index) => {
-    const text = visible[index] ?? "";
+    if (line.kind === "codeFenced" || line.kind === "codeIndented" || line.kind === "htmlFlow") return;
     const item = line.containers.at(-1);
     let head: string | null = null;
-    if (line.kind === "table") head = text.replace(/^[\s>]*\|/, "").split("|")[0];
-    else if (line.kind === "heading") head = text.slice(line.contentStart).replace(/^\s*#+/, "");
-    else if (item?.kind === "listItem" && !items.has(item.id)) {
-      items.add(item.id);
-      head = text.slice(line.contentStart);
+    if (line.kind === "table") head = text(index).replace(/^[\s>]*\|/, "").split("|")[0];
+    else if (line.kind === "heading") head = text(index).slice(line.contentStart).replace(/^\s*#+/, "");
+    else if (item?.kind === "listItem" && (!opened.has(item.id) || pending === item.id)) {
+      opened.add(item.id);
+      head = text(index).slice(line.contentStart);
+      pending = /[\p{L}\p{N}]/u.test(head) ? null : item.id;
     }
-    // Only markup may precede the ID: emphasis, code, a link's bracket, or an
-    // inline HTML tag.
-    const opening = head?.replace(/<[^>]*>/g, "");
-    const id = opening === undefined ? undefined : /^[^\p{L}\p{N}]*(UX\d+\.\d+\.\d+)\b/u.exec(opening)?.[1];
+    // Only markup may precede the ID: emphasis, code, or a link's bracket.
+    const id = head === null ? undefined : /^[^\p{L}\p{N}]*(UX\d+\.\d+\.\d+)\b/u.exec(head)?.[1];
     if (id) defined.set(id, (defined.get(id) ?? 0) + 1);
   });
   return defined;
@@ -348,13 +356,19 @@ function storyOfDecision(ux: string): string {
   return `US${group}.${story}`;
 }
 
-// Two decisions under one ID would be traced as one, and a decision whose story
-// stories.md lacks belongs to no Unit: both are fixed at Refined Mockups, so
-// every table that reads the spec reports them.
+// Two decisions under one ID would be traced as one, a visible ID nothing
+// defines would be traced as none, and a decision whose story stories.md lacks
+// belongs to no Unit: each is fixed at Refined Mockups, so every table that
+// reads the spec reports them.
 function experienceProblems(specContent: string, storiesContent: string | null): string[] {
   const defined = experienceDefinitions(specContent);
   const stories = storiesContent === null ? null : extractIds(storiesContent, [ID_PATTERNS.US]);
   const problems: string[] = [];
+  for (const id of extractIds(visibleMarkdownLines(specContent).join("\n"), [ID_PATTERNS.UX])) {
+    if (!defined.has(id)) {
+      problems.push(`interaction-spec.md mentions ${id}, but no list item, table row, or heading opens with it; define each experience decision on its own row at Refined Mockups`);
+    }
+  }
   for (const [id, count] of defined) {
     if (count > 1) {
       problems.push(`interaction-spec.md defines ${id} more than once; give each experience decision its own ID at Refined Mockups`);

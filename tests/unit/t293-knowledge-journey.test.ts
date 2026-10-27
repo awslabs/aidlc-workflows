@@ -243,8 +243,13 @@ describe("t293 the documented workflow, end to end, through the public dispatche
         { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: CHILD_ENV },
       );
       expect(human.status, human.stderr).toBe(0);
-      expect(human.stdout).toContain("--- excerpt (the first 2000 characters of the text, not the whole) ---");
+      expect(human.stdout).toContain("--- excerpt (part 1 of 3 of the text, 2000 characters each) ---");
       expect(human.stdout).toContain("x".repeat(2000));
+      const last = run(p, "show long.md --brief --part 3", ["show", longRow.id, "--brief", "--part", "3"]);
+      expect((last.excerpt as string).length, "the last part holds the remainder").toBe(1000);
+      expect([last.excerpt_part, last.excerpt_parts]).toEqual([3, 3]);
+      expect(knowledge(p, ["show", longRow.id, "--brief", "--part", "4"]).status, "a part past the end is refused").not.toBe(0);
+      expect(knowledge(p, ["show", longRow.id, "--part", "2"]).status, "--part needs --brief").not.toBe(0);
 
       // 4. edit a.md in place, onboard again: exactly ONE live row, status
       // "edited", same id (identity survives a same-path edit).

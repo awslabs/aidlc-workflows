@@ -26,7 +26,7 @@ afterEach(() => {
 describe("t-mockups-preview-bound", () => {
   test("the preview resolves to one HTML file", () => {
     expect(artifactFilename("mockups-preview")).toBe("mockups-preview.html");
-    expect(findStageBySlug("refined-mockups")?.optional_produces).toContain("mockups-preview");
+    expect(findStageBySlug("refined-mockups")?.produces).toContain("mockups-preview");
   });
 
   test("the reviewed outputs' fingerprint covers the preview", () => {
@@ -38,6 +38,7 @@ describe("t-mockups-preview-bound", () => {
     mkdirSync(dir, { recursive: true });
     for (const name of stage.produces ?? []) writeFileSync(join(dir, artifactFilename(name)), `# ${name}\n`);
     writeFileSync(join(dir, "mockups-preview.html"), "<!doctype html><title>Add policyholder</title>\n");
+    expect(reviewArtifactFingerprint(p, stage, undefined, { requireRequiredArtifacts: true })).not.toBeNull();
     const approved = reviewArtifactFingerprint(p, stage);
     expect(approved).not.toBeNull();
 
