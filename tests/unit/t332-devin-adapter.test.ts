@@ -1032,7 +1032,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
         expect(responseA).toMatchObject({
           session: sessionA,
           challengeId,
-          choice: "Approve Plan",
+          words: "Approve Plan",
         });
         writeFileSync(
           questionsPath,
@@ -1377,6 +1377,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       expect(box.code, box.stderr).toBe(0);
       const gate = runDevinTool(dir, "aidlc-state.ts", ["gate-start", slug], {
         AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
       });
       expect(gate.code, gate.stderr).toBe(0);
       const r = runAdapter(
@@ -1513,6 +1514,100 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
   });
 
   // --- rebuild-stage-graph: exec PostToolUse advisory ---
+
+  test("13r: a picker PostToolUse forwards the core's context with the message id", () => {
+    // The adapter used to drop the record-human-turn stdout: the core's
+    // hookSpecificOutput note ("on record as <id> ... --message <id>") never
+    // reached Devin, so a decision set from the answer read "set by a command".
+    const dir = scratchProject(true);
+    try {
+      const r = runAdapter(
+        dir,
+        "record-human-turn",
+        withCwd(FIXTURES.postToolUse_askUserQuestion as Record<string, unknown>, dir),
+      );
+      expect(r.code).toBe(0);
+      const parsed = JSON.parse(r.stdout) as {
+        hookSpecificOutput?: { hookEventName?: string; additionalContext?: string };
+      };
+      expect(parsed.hookSpecificOutput?.hookEventName).toBe("PostToolUse");
+      const id = listMessages(dir).at(-1)?.id;
+      expect(id).toBeDefined();
+      expect(parsed.hookSpecificOutput?.additionalContext).toContain(`--message ${id}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("13s: a typed UserPromptSubmit forwards the core's context with the message id", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runAdapter(
+        dir,
+        "record-human-turn",
+        withCwd(devinTypedPayload("019eb8be-e4fe-7a42-ba1b-e5f963dbddc9", "turn plan approval on"), dir),
+      );
+      expect(r.code).toBe(0);
+      const parsed = JSON.parse(r.stdout) as {
+        hookSpecificOutput?: { hookEventName?: string; additionalContext?: string };
+      };
+      expect(parsed.hookSpecificOutput?.hookEventName).toBe("UserPromptSubmit");
+      const id = listMessages(dir).at(-1)?.id;
+      expect(id).toBeDefined();
+      expect(parsed.hookSpecificOutput?.additionalContext).toContain(`--message ${id}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("13t: with no note to give, record-human-turn prints nothing", () => {
+    // A cancelled picker is silent: the core mints no message id and has no
+    // context to hand back, so the adapter emits empty stdout.
+    const dir = scratchProject(true);
+    try {
+      const r = runAdapter(
+        dir,
+        "record-human-turn",
+        withCwd(FIXTURES.postToolUse_askUserQuestion_cancelled as Record<string, unknown>, dir),
+      );
+      expect(r.code).toBe(0);
+      expect(r.stdout).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("13u: a settings change naming the forwarded message id reads 'set by you'", () => {
+    // End to end: the picker reply's id goes back through hookSpecificOutput,
+    // and `engine config set ... --message <id>` attributes the change to the
+    // person, not to a command.
+    const dir = scratchProject(true);
+    try {
+      const r = runAdapter(
+        dir,
+        "record-human-turn",
+        withCwd(FIXTURES.postToolUse_askUserQuestion as Record<string, unknown>, dir),
+      );
+      expect(r.code).toBe(0);
+      const id = listMessages(dir).at(-1)?.id;
+      expect(id).toBeDefined();
+      const set = runDevinTool(dir, "aidlc.ts", [
+        "engine",
+        "config",
+        "set",
+        "plan-approval",
+        "on",
+        "--message",
+        id!,
+      ]);
+      expect(set.code).toBe(0);
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toContain(
+        "- **Plan Approval**: on (set by you)",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   test("14: rebuild-stage-graph with exec PostToolUse is advisory (exit 0)", () => {
     const dir = scratchProject(true);
@@ -2584,6 +2679,30 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       const audit = readAudit(dir);
       expect(audit).toContain("**Agent Type**: subagent_explore");
       expect(audit).toContain("**Agent ID**: aa37dc28");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Item 3 case 2b: a Devin dispatch writes SUBAGENT_DISPATCHED and its completion closes the pair by Agent Type", () => {
+    // Upstream 00976d00: off Claude Code a "no reviewer finished" verdict is
+    // marked only when every helper sent since the request came back. The
+    // pairing is by Agent Type — the core deliver-stage-rules hook writes
+    // SUBAGENT_DISPATCHED for the normalized Task dispatch, and the adapter's
+    // synthesized SubagentStop carries the same profile through to
+    // SUBAGENT_COMPLETED, so the open dispatch closes.
+    const dir = scratchProject(true);
+    try {
+      const session = "item3-case2b";
+      launchBackground(dir, session, "aa37dc28");
+      let audit = readAudit(dir);
+      expect(audit).toContain("**Event**: SUBAGENT_DISPATCHED");
+      readTerminal(dir, session, "aa37dc28");
+      audit = readAudit(dir);
+      const dispatched = audit.match(/\*\*Event\*\*: SUBAGENT_DISPATCHED[\s\S]*?\*\*Agent Type\*\*: (\S+)/);
+      const completed = audit.match(/\*\*Event\*\*: SUBAGENT_COMPLETED[\s\S]*?\*\*Agent Type\*\*: (\S+)/);
+      expect(dispatched?.[1]).toBe("subagent_explore");
+      expect(completed?.[1]).toBe("subagent_explore");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

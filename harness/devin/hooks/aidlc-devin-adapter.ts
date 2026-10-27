@@ -51,6 +51,9 @@
 //   - session-start: the core hook prints {"additionalContext": "..."};
 //     Devin expects the hookSpecificOutput wrapper (same as codex/Claude) —
 //     the shim re-wraps.
+//   - record-human-turn: the core's context line ({"additionalContext":
+//     "..."} for PostToolUse or UserPromptSubmit) is re-wrapped the same
+//     way and forwarded; a cancelled picker prints nothing.
 //   - continue-workflow: {"decision":"block","reason"} passes through VERBATIM
 //     — the contract is identical on Devin (stop_hook_active included).
 //   - PreToolUse guards (reviewer-scope, review-freeze, plan-approval-guard,
@@ -1293,7 +1296,9 @@ export async function run(
       // on Devin 3000.6.14: the parser couldn't recognize the real interactive
       // tool_response shape, so it skipped the mint and every later gate
       // refused). For UserPromptSubmit and all other events, always forward.
-      // Advisory, no stdout.
+      // The core's context output (the message-id note, the unanswered-picker
+      // notice) is re-wrapped and forwarded; a genuine cancellation stays
+      // silent.
       if (
         tool === "ask_user_question" &&
         !hasExplicitHumanSelection(devin.tool_response, devin.tool_input) &&
@@ -1320,7 +1325,7 @@ export async function run(
           asked.length <= 1
             ? (entries[0]?.reply.join(", ") ?? "")
             : entries.map((e) => `${e.question}: ${e.reply.join(", ")}`).join("\n");
-        runCore(
+        const turn = runCore(
           "aidlc-record-human-turn.ts",
           JSON.stringify({
             hook_event_name: "PostToolUse",
@@ -1345,6 +1350,7 @@ export async function run(
                 : { answer: "" },
           }),
         );
+        if (turn.stdout) process.stdout.write(wrapContext(turn.stdout, "PostToolUse"));
         return 0;
       }
       const responseText =
@@ -1352,7 +1358,7 @@ export async function run(
         devin.user_prompt ||
         devin.message ||
         "";
-      runCore(
+      const turn = runCore(
         "aidlc-record-human-turn.ts",
         JSON.stringify({
           hook_event_name: "UserPromptSubmit",
@@ -1360,6 +1366,7 @@ export async function run(
           prompt: responseText,
         }),
       );
+      if (turn.stdout) process.stdout.write(wrapContext(turn.stdout, "UserPromptSubmit"));
       return 0;
     }
 
