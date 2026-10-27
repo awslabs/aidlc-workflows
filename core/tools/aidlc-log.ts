@@ -23,6 +23,7 @@ import {
   proveMessage,
   readMessage,
   type StoredMessage,
+  SUMMARY_CHANGES_QUESTION,
 } from "./aidlc-message-store.ts";
 import {
   CODEKB_ANALYSED_FILE,
@@ -394,9 +395,6 @@ function emitAudit(
 let recordedRow = false;
 let rowEndsTurn = false;
 let stageWorkRow = true;
-
-// The follow-up a bare Request changes at the summary asks (stage-protocol-summary.md).
-const SUMMARY_CHANGES_QUESTION = "What should change?";
 
 // --- Flag parsing ---
 
