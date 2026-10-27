@@ -615,6 +615,11 @@ function settingOnDecidedMessage(lowers: boolean): string {
       : "does not also stand for a setting. If their words asked for it, run the same command with no --message.");
 }
 
+// Rows that put a new question to the person: one the agent or a checkpoint
+// asked, or a gate opened. The plan question's "asked after it" (askedAfter)
+// and the window below read this one set.
+export const QUESTION_ASKED_EVENTS: ReadonlySet<string> = new Set(["DECISION_RECORDED", "STAGE_AWAITING_APPROVAL"]);
+
 // A guard's refusal of an agent's action, one key per kind, so a new kind
 // fails the typecheck until it is listed here.
 const GUARD_REFUSALS: Record<GuardRefusalEvent, true> = {
@@ -626,36 +631,41 @@ const GUARD_REFUSALS: Record<GuardRefusalEvent, true> = {
 };
 
 // Whether the agent is still carrying out the reply that gave the latest
-// approval, so a setting that reply asked for stands when run after the
-// approval on that message, as it does riding the approval's own command
-// (settingsBesideDecision): live Copilot CLI and Kiro CLI runs recorded
-// "approve, and turn plan approval off" as the approval first, then lost the
-// setting. The reply is over, and its Approve stands for no setting
-// (messageReach), once the person has sent another message on this work (in
-// any chat: a resume is one), a later decision is on record (the run's own
-// approval included, which names no message), the message no longer stands as
-// a request does (onlyItsOwnDecisionAfter: a grant of autonomy uses it up), a
-// guard has refused the agent, or the next gate or the code plan question is
-// up. Ids, the engine's own rows and their places only, never words.
-function answeringItsApproval(pd: string, rows: readonly AuditShardEvent[], message: StoredMessage): boolean {
+// decision (an approval, a change request, or its answer to the summary, the
+// code plan, the Construction policy or the verification command), so a
+// setting that reply asked for stands when run after the answer on that
+// message, as it does riding the approval's own command
+// (settingsBesideDecision): live Claude Code, Copilot CLI, Kiro CLI and
+// opencode runs recorded "approve, and turn plan approval off" as the answer
+// first, then lost the setting. The reply is over, and the message stands for
+// no setting (messageReach), once the person has sent another message on this
+// work (in any chat: a resume is one), a later decision is on record (the
+// run's own approval included, which names no message), the message no longer
+// stands as a request does (onlyItsOwnDecisionAfter: a grant of autonomy uses
+// it up), a guard has refused the agent, or the next question is up: one asked
+// or a gate opened (a live Copilot CLI run asked the next questions, then
+// turned the summary confirmation off on the yes to the one before), or a code
+// plan question shown since. The plan question the reply answered still reads
+// as waiting while its answer is being written, so it counts by when it was
+// shown (Kiro CLI ran the setter beside the plan answer). Ids, the engine's own
+// rows and their places only, never words.
+function answeringItsDecision(pd: string, rows: readonly AuditShardEvent[], message: StoredMessage): boolean {
   if (!onlyItsOwnDecisionAfter(pd, rows, message)) return false;
-  let approval: AuditShardEvent | null = null;
+  let decision: AuditShardEvent | null = null;
   for (const row of rows) {
     if (!MESSAGE_SPENDING_EVENTS.has(row.event) || auditBlockField(row.block, APPROVED_TOGETHER_WITH_FIELD) !== null) continue;
-    if (approval === null || rowAfter(row, approval, true)) approval = row;
+    if (decision === null || rowAfter(row, decision, true)) decision = row;
   }
-  if (
-    approval === null || (approval.event !== "GATE_APPROVED" && approval.event !== "PLAN_APPROVAL_RECORDED") ||
-    auditBlockField(approval.block, "Message Id") !== message.id
-  ) return false;
-  const since = approval;
+  if (decision === null || auditBlockField(decision.block, "Message Id") !== message.id) return false;
+  const since = decision;
   const turn = rows.find((row) => row.event === "HUMAN_TURN" && auditBlockField(row.block, "Message Id") === message.id);
   const over = rows.some((row) =>
     (row.event === "HUMAN_TURN" && auditBlockField(row.block, "Message Id") !== message.id &&
       (turn === undefined ? row.timestamp > message.at : rowAfter(row, turn, true))) ||
-    ((Object.hasOwn(GUARD_REFUSALS, row.event) || row.event === "STAGE_AWAITING_APPROVAL") && rowAfter(row, since, true))
+    ((Object.hasOwn(GUARD_REFUSALS, row.event) || QUESTION_ASKED_EVENTS.has(row.event)) && rowAfter(row, since, true))
   );
-  return !over && sincePlanQuestion(pd) === null;
+  const plan = sincePlanQuestion(pd);
+  return !over && (plan === null || plan(since));
 }
 
 // Whether the only decision recorded after `message` is one redo or jump back
@@ -767,7 +777,7 @@ function messageProof(
     : !(options.reopened === true && onlyItsReopenAfter(rows, message)) && spentAt !== null && message.at < spentAt
       ? "spent"
       : "stands";
-  if (reach === "backed" && !answeringItsApproval(pd, rows, message)) {
+  if (reach === "backed" && !answeringItsDecision(pd, rows, message)) {
     return { refusal: settingOnDecidedMessage(options.lowers === true) };
   }
   if (reach === "spent") {

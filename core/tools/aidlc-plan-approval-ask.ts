@@ -103,7 +103,7 @@ import {
   type CodeGenerationIssuance,
   type PlanApprovalPickerQuestion,
 } from "./aidlc-testing-posture.ts";
-import { readMessage } from "./aidlc-message-store.ts";
+import { QUESTION_ASKED_EVENTS, readMessage } from "./aidlc-message-store.ts";
 import { exactOptionPick, isNonAnswer, pickerOffersChoices } from "./aidlc-reply-reader.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
@@ -1899,14 +1899,12 @@ interface OpenEngineQuestion {
   askedAt: string;
 }
 
-const LATER_QUESTION_EVENTS = new Set(["DECISION_RECORDED", "STAGE_AWAITING_APPROVAL"]);
-
 // Whether a question was asked after `since`, the second the one in hand was
 // shown: that later question is the open one. A routing answer can only follow
 // its question, so the same second counts for it.
 function askedAfter(projectDir: string, since: string): boolean {
   return readAuditShardEvents(projectDir).some((row) =>
-    LATER_QUESTION_EVENTS.has(row.event) ? row.timestamp > since
+    QUESTION_ASKED_EVENTS.has(row.event) ? row.timestamp > since
       : row.event === "REQUEST_ROUTED" && row.timestamp >= since);
 }
 
