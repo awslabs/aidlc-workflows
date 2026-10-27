@@ -559,6 +559,9 @@ describe("t299 (2) methodology-specific plan profiles", () => {
     );
     expect(acceptance).toBeGreaterThan(0);
     expect(acceptance).toBeLessThan(implementation);
+    expect(atdd.steps[acceptance]).toBe(
+      "Acceptance Red - write executable acceptance tests for the complete feature before implementation, run them, and record the failing command output.",
+    );
   });
 
   test("custom/mixed preserves its exact ordering without TDD coercion", () => {

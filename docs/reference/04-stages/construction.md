@@ -940,7 +940,8 @@ This stage has a **two-part structure**: planning followed by generation.
      slice, followed by cross-layer implementation, green scenarios, and
      refactoring. It is not converted to layer-local TDD.
    - **ATDD** -- executable acceptance tests before the complete cross-layer
-     feature implementation, followed by acceptance-green and refactoring.
+     feature implementation, run with their failing output recorded,
+     followed by acceptance-green and refactoring.
    - **Custom/mixed** -- the exact affirmed ordering is preserved, including
      combinations such as scenario-first BDD with lower-level unit tests after
      implementation.
