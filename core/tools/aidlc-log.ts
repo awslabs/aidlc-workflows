@@ -157,6 +157,7 @@ import {
   governedChangeControl,
   guardPolicyAcceptsChanges,
   ownShardRows,
+  MESSAGE_SPENDING_EVENTS,
   readAuditShardEvents,
   backgroundAgentOutSince,
   isRequestTurn,
@@ -1536,6 +1537,37 @@ function summaryRow(
     (unit === undefined || eventMatchesClaimAttempt(pd, entry.block, unit));
 }
 
+// The person's reply to a summary the agent showed before recording its
+// question: their latest reply in this chat before the question's record, with
+// no other question recorded between them (an ERROR_LOGGED row, such as the
+// agent's answer refused for want of the record, asks nothing), sent after the
+// questions file was written since the stage's last question, answer, decision
+// or start, so the summary was there to see. The agent writes their pick into
+// its `[Answer]:` line after that reply, as it does after the record when the
+// question comes first. Null when there is none: a reply sent before the
+// summary was written never confirms it. Whether the reply is unspent is
+// personsGateReply's.
+function replyToSummaryShownFirst(
+  pd: string,
+  writes: (row: AuditShardEvent) => boolean,
+  asked: (row: AuditShardEvent) => boolean,
+): AuditShardEvent | null {
+  const chat = invokingChat(pd);
+  const { mine } = ownShardRows(pd);
+  let reply = mine.findLastIndex(asked) - 1;
+  for (; reply >= 0; reply--) {
+    if (mine[reply].event === "DECISION_RECORDED") return null;
+    if (isReplyTurn(mine[reply]) && (chat === null || auditBlockField(mine[reply].block, "Session") === chat)) break;
+  }
+  for (let at = reply - 1; at >= 0; at--) {
+    if (writes(mine[at])) return mine[reply];
+    const event = mine[at].event;
+    if (event === "DECISION_RECORDED" || event === "QUESTION_ANSWERED" || event === "STAGE_STARTED" ||
+      MESSAGE_SPENDING_EVENTS.has(event)) return null;
+  }
+  return null;
+}
+
 function pendingSummaryDecision(
   pd: string,
   stage: string,
@@ -2307,8 +2339,10 @@ function handleAnswer(args: string[]): void {
       // record, as a stage gate's does on one after its showing, or on the
       // message the agent names: the one it read the confirmation from when it
       // showed the summary before recording the question, sent after the
-      // summary was last written. The engine proves a named message and never
-      // reads its words.
+      // summary was last written. With no message named, their reply to the
+      // summary shown first stands as a reply after the record does, as a
+      // question the agent logs after their reply records on it. The engine
+      // proves a named message and never reads its words.
       let named: StoredMessage | null = null;
       if (flags.message !== undefined) {
         const proof = proveMessage(pd, flags.message, "answer");
@@ -2320,8 +2354,13 @@ function handleAnswer(args: string[]): void {
           error(stageStartFloorRefusal("confirm the summary of", flags.stage, named.id, "the summary"));
         }
         // What the summary showed: its questions file as written before its
-        // question was recorded (filling in its `[Answer]:` comes after).
+        // question was recorded, or before their reply to it when it was shown
+        // first (filling in its `[Answer]:` comes after either).
         const questionsAbs = resolve(pd, summaryEvidence!.relativePath);
+        const writes = (row: AuditShardEvent) => auditRowWritesFile(pd, row, questionsAbs);
+        const asked = (row: AuditShardEvent) => row.event === "DECISION_RECORDED" &&
+          summaryRow(pd, row, flags.stage, flags.unit, workflow, summaryEvidence!.relativePath);
+        const shownFirst = pending.humanAfterDecision ? null : replyToSummaryShownFirst(pd, writes, asked);
         const checked = answeredBeforeShownStep(pd, flags.stage, {
           refused: "Cannot record the summary choice",
           question: `the "${flags.stage}" summary`,
@@ -2330,12 +2369,14 @@ function handleAnswer(args: string[]): void {
           why: "no reply of the person's has arrived since the summary question was recorded.",
           shownWriting: {
             what: "the summary",
-            writes: (row) => auditRowWritesFile(pd, row, questionsAbs),
-            until: (row) => row.event === "DECISION_RECORDED" &&
-              summaryRow(pd, row, flags.stage, flags.unit, workflow, summaryEvidence!.relativePath),
+            writes,
+            until: shownFirst === null
+              ? asked
+              : (row) => row.shard === shownFirst.shard && row.pos === shownFirst.pos,
           },
         }, named ?? undefined);
-        if (checked.before || (named === null && !pending.humanAfterDecision)) error(checked.step);
+        const repliedToShown = shownFirst !== null && checked.named;
+        if (checked.before || (named === null && !pending.humanAfterDecision && !repliedToShown)) error(checked.step);
       }
       // Their words go on the receipt: the message named, or every reply of
       // theirs in this chat that no decision has used yet (personsGateReply).
