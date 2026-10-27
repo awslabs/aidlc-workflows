@@ -111,9 +111,11 @@ ask_user_question({
 ## Native limits and Other
 
 - **Batching**: 1–4 questions per call and 2–4 explicit options per question.
-  For larger option sets, use multiple calls with no one-option remainder:
-  five options as 3 + 2, not 4 + 1. Apply the option-coverage rules in
-  [Question Format]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#3-question-format).
+  A question from the questions file with more options is asked on its own as
+  a numbered list instead, never split across calls; the questions file keeps
+  the full option set. Apply the option-coverage rules in
+  [Question Format]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#3-question-format)
+  (Step 3a).
 - **Other**: `ask_user_question` automatically adds the Other free-text option.
   Omit the file's Other entry from the native `options` array; do not add a
   second interactive Other option. Some editors that drive Devin over ACP show

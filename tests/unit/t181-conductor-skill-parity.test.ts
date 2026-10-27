@@ -1440,7 +1440,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
           "{{INVOKE}} engine log decision", "{{INVOKE}} engine log answer",
           '--checkpoint summary-confirmation --questions-file "<questions-path>"',
           '`--unit "<directive.unit>"`', "`--single`", "a self-selected answer",
-          "no reply of theirs since their last answer", "same `--unit` / `--single` identity",
+          "no reply of theirs since you recorded it", "same `--unit` / `--single` identity",
           '**"What should change?"**', "END THE TURN", "Do not revise anything until",
           "reset the confirmation entry to a blank `[Answer]:`", "re-present the summary",
           "receipt command succeeds", "before re-saving artifacts or requesting review",
@@ -1450,7 +1450,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         expect(logging).toBeDefined();
         expect(logging).toContain("Once `decision` succeeds, render that question and END THE TURN");
         expect(logging).toContain("only the human's next interaction may be followed by `answer`");
-        expect(protocol).toContain("questions → artifact → reviewer (if declared) → learnings (only when the directive lists the `learnings` protocol module) → gate");
+        expect(protocol).toContain("questions -> artifact -> reviewer (if declared) -> learnings (only when the directive lists the `learnings` protocol module) -> gate");
         expect(body).not.toContain("[Answer]: Looks correct");
         expect(body).not.toContain("aidlc-log.ts decision");
         continue;

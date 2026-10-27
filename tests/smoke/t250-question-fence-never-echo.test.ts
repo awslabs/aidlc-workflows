@@ -168,7 +168,8 @@ describe("t250 (smoke) ```question fence is a SPEC to render, never echoed to ch
     }
     expect(annex).toContain("1–4 questions per call");
     expect(annex).toContain("2–4 explicit options per question");
-    expect(annex).toContain("five options as 3 + 2, not 4 + 1");
+    expect(annex).toContain("asked on its own as\n  a numbered list instead, never split across calls");
+    expect(annex).not.toContain("five options as 3 + 2");
     expect(annex).not.toContain("options A-D, then E+");
   });
 

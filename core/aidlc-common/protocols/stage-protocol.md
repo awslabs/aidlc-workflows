@@ -168,7 +168,7 @@ This applies to every structured-question site, including but not limited to:
 - the ladder prompt after the walking skeleton;
 - halt-and-ask on Bolt failure;
 - consolidated-summary confirmation before artifact generation;
-- the §13 learnings gate.
+- the section 13 learnings question after a correction (keep for this project, for the team, or not).
 
 Literal question fences remain valid in framework documentation: annex mapping examples are illustrative authoring specs, while this protocol's templates are normative authoring specs. The prohibition concerns raw fences in live orchestration turns, not their presence in source.
 
