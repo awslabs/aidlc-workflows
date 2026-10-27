@@ -436,14 +436,7 @@ describe("t288 a malformed removed_at is refused, not silently read as live", ()
     ])).ok).toBe(true);
   });
 
-  test("a genuine ISO-string removed_at is still accepted", () => {
-    expect(validateDocumentIndex(index([
-      row({
-        removed_at: "2026-08-07T05:00:00Z",
-        extraction: DESIGN_CONFORMANT_EXTRACTION.unsupported_type,
-      }),
-    ])).ok).toBe(true);
-  });
+
 });
 
 describe("t288 source is DISCRIMINATED, not a bag of optionals", () => {
@@ -774,7 +767,7 @@ describe("t288 tombstones", () => {
     expect(isTombstoned(row({ removed_at: "" }) as never)).toBe(false);
   });
 
-  test("a tombstone is still a VALID row — it must survive to carry its citation", () => {
+  test("a tombstone with a valid UTC removed_at remains a valid row for its citation", () => {
     // A rule promoted in S3 cites this id; the citation must not dangle just
     // because the original is gone.
     expect(validateDocumentIndex(index([

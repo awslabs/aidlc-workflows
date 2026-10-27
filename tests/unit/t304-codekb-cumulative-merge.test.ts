@@ -324,6 +324,41 @@ describe("t304 source and store generation interleavings", () => {
     expect(snapshot(project, ["src/payments"]).paths).toEqual(["src/payments"]);
   });
 
+  test("publish accepts a candidate whose paths differ from the snapshot only by a trailing slash (#2578)", () => {
+    for (const [snapshotPaths, candidatePaths] of [
+      [["src/a", "src/b"], ["src/a/", "src/b/"]],
+      [["src/a/", "src/b/"], ["src/a", "src/b"]],
+    ]) {
+      const project = freshProject();
+      for (const dir of ["a", "b"]) {
+        mkdirSync(join(project, "src", dir), { recursive: true });
+        writeFileSync(join(project, "src", dir, "index.ts"), `export const ${dir} = 1;\n`);
+      }
+      const baseline = snapshot(project, snapshotPaths);
+      const candidate = join(project, "candidate");
+      writeCandidate(candidate, "FIRST SCAN", "slash", candidatePaths, ["a", "b"], currentFingerprint(project, candidatePaths));
+      const published = publish(project, candidate, snapshotPaths, baseline);
+      expect(published.status, `${published.stdout}${published.stderr}`).toBe(0);
+    }
+  });
+
+  test("publish still refuses a candidate path outside the snapshot", () => {
+    const project = freshProject();
+    for (const dir of ["a", "b"]) {
+      mkdirSync(join(project, "src", dir), { recursive: true });
+      writeFileSync(join(project, "src", dir, "index.ts"), `export const ${dir} = 1;\n`);
+    }
+    const baseline = snapshot(project, ["src/a"]);
+    const candidate = join(project, "candidate");
+    writeCandidate(candidate, "WIDER", "slash", ["src/a/", "src/b/"], ["a", "b"], currentFingerprint(project, ["src/a/", "src/b/"]));
+    const refused = publish(project, candidate, ["src/a"], baseline);
+    expect(refused.status).not.toBe(0);
+    const said = `${refused.stdout}${refused.stderr}`;
+    expect(said).toContain("do not cover candidate analyzed path");
+    expect(said).toContain("src/b/");
+    expect(said).not.toContain("src/a/");
+  });
+
   test.skipIf(process.platform === "win32")("outside git, a named pipe under the paths names leaving it out, and that is accepted", () => {
     const project = createTestProject();
     tempDirs.push(project);

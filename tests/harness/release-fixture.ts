@@ -5,10 +5,8 @@ import { createHash } from "node:crypto";
 import {
   closeSync,
   copyFileSync,
-  cpSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   openSync,
   readFileSync,
   readdirSync,
@@ -168,6 +166,8 @@ export type ReleaseFixtureOptions = {
   distributions?: readonly string[];
   target?: string;
   hostileRoot?: string;
+  /** The plugins tree the release carries; `<repoRoot>/dist/plugins` by default. */
+  pluginsRoot?: string;
 };
 
 export type ReleaseFixture = {
@@ -229,84 +229,67 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
   const distributionRows: Array<{ name: string; productName: string }> = [];
   const copyRuntimeEntries: ArchiveEntry[] = [];
   const runtimeEntries: ArchiveEntry[] = [];
-  const scratch = mkdtempSync(join(tmpdir(), "aidlc-release-fixture-"));
-  try {
-    for (const distribution of distributions) {
-      const projections = [
-        {
-          source: join(copyProjectionRoot, distribution),
-          root: join(scratch, "copy", distribution),
-          entries: copyRuntimeEntries,
-        },
-        {
-          source: join(releaseProjectionRoot, distribution),
-          root: join(scratch, "native", distribution),
-          entries: runtimeEntries,
-        },
-      ];
-      let productName = "";
-      for (const item of projections) {
-        if (!existsSync(item.source)) {
-          throw new Error(`unknown release fixture distribution: ${distribution}`);
-        }
-        cpSync(item.source, item.root, { recursive: true });
-        const { stamp, descriptor } = projectionFiles(item.root);
-        const stampPath = join(
-          item.root,
-          stamp.harnessDir,
-          "tools",
-          "data",
-          "aidlc-stamp.json",
-        );
-        writeFileSync(
-          stampPath,
-          `${JSON.stringify({ ...stamp, frameworkVersion: version }, null, 2)}\n`,
-        );
-        // As the real release: the copy runtime leaves out editor-owned files.
-        const omitted = item.entries === copyRuntimeEntries ? copyChannelOmits(descriptor) : new Set<string>();
-        item.entries.push(...archiveEntries(item.root).filter((entry) => !omitted.has(entry.path)).map((entry) => ({
-          ...entry,
-          path: `runtime/${distribution}/${entry.path}`,
-        })));
-        if (productName && productName !== descriptor.productName) {
-          throw new Error(`${distribution}: copy and native product names differ`);
-        }
-        productName = descriptor.productName;
+  for (const distribution of distributions) {
+    const projections = [
+      { source: join(copyProjectionRoot, distribution), entries: copyRuntimeEntries },
+      { source: join(releaseProjectionRoot, distribution), entries: runtimeEntries },
+    ];
+    let productName = "";
+    for (const item of projections) {
+      if (!existsSync(item.source)) {
+        throw new Error(`unknown release fixture distribution: ${distribution}`);
       }
-      distributionRows.push({ name: distribution, productName });
-    }
-    const pluginsRoot = join(repoRoot, "dist", "plugins");
-    if (existsSync(pluginsRoot)) {
-      for (const plugin of readdirSync(pluginsRoot).sort()) {
-        const pluginRoot = join(pluginsRoot, plugin);
-        if (!statSync(pluginRoot).isDirectory()) continue;
-        for (const harness of readdirSync(pluginRoot).sort()) {
-          const harnessRoot = join(pluginRoot, harness);
-          if (!statSync(harnessRoot).isDirectory()) continue;
-          const entries = archiveEntries(harnessRoot).map((entry) => ({
-            ...entry,
-            path: `plugins/${plugin}/${harness}/${entry.path}`,
-          }));
-          copyRuntimeEntries.push(...entries);
-          runtimeEntries.push(...entries);
-        }
+      const { stamp, descriptor } = projectionFiles(item.source);
+      const stampPath = `${stamp.harnessDir}/tools/data/aidlc-stamp.json`;
+      const versionedStamp = Buffer.from(`${JSON.stringify({ ...stamp, frameworkVersion: version }, null, 2)}\n`);
+      // Only the archive stamp changes; generated trees remain available to
+      // other tests, and every call observes the current source bytes.
+      const omitted = item.entries === copyRuntimeEntries ? copyChannelOmits(descriptor) : new Set<string>();
+      item.entries.push(...archiveEntries(item.source).filter((entry) => !omitted.has(entry.path)).map((entry) => ({
+        ...entry,
+        path: `runtime/${distribution}/${entry.path}`,
+        data: entry.path === stampPath ? versionedStamp : entry.data,
+      })));
+      if (productName && productName !== descriptor.productName) {
+        throw new Error(`${distribution}: copy and native product names differ`);
       }
+      productName = descriptor.productName;
     }
-    writeFileSync(
-      join(options.root, runtimeAsset),
-      createTarGz(runtimeEntries),
-    );
-    writeFileSync(
-      join(options.root, copyRuntimeAsset),
-      createTarGz(copyRuntimeEntries),
-    );
-    writeFileSync(
-      join(options.root, `${copyRuntimeAsset}.sha256`),
-      `${digest(join(options.root, copyRuntimeAsset))}  ${copyRuntimeAsset}\n`,
-    );
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    distributionRows.push({ name: distribution, productName });
   }
+  const pluginsRoot = options.pluginsRoot ?? join(repoRoot, "dist", "plugins");
+  if (existsSync(pluginsRoot)) {
+    for (const plugin of readdirSync(pluginsRoot).sort()) {
+      const pluginRoot = join(pluginsRoot, plugin);
+      if (!statSync(pluginRoot).isDirectory()) continue;
+      // As package-release: a dot folder is the catalogue our plugins share.
+      if (plugin.startsWith(".")) {
+        const entries = archiveEntries(pluginRoot).map((entry) => ({
+          ...entry,
+          path: `plugins/${plugin}/${entry.path}`,
+        }));
+        copyRuntimeEntries.push(...entries);
+        runtimeEntries.push(...entries);
+        continue;
+      }
+      for (const harness of readdirSync(pluginRoot).sort()) {
+        const harnessRoot = join(pluginRoot, harness);
+        if (!statSync(harnessRoot).isDirectory()) continue;
+        const entries = archiveEntries(harnessRoot).map((entry) => ({
+          ...entry,
+          path: `plugins/${plugin}/${harness}/${entry.path}`,
+        }));
+        copyRuntimeEntries.push(...entries);
+        runtimeEntries.push(...entries);
+      }
+    }
+  }
+  writeFileSync(join(options.root, runtimeAsset), createTarGz(runtimeEntries));
+  writeFileSync(join(options.root, copyRuntimeAsset), createTarGz(copyRuntimeEntries));
+  writeFileSync(
+    join(options.root, `${copyRuntimeAsset}.sha256`),
+    `${digest(join(options.root, copyRuntimeAsset))}  ${copyRuntimeAsset}\n`,
+  );
 
   const names = [
     binaryName,

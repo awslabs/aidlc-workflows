@@ -17,7 +17,7 @@ guardMatrixSuite("a later Unit edits an approved Unit's file, with the guards of
   { cell: { policy: "off", review: "advisory", plan: "off" }, change: "later-unit-edit" },
 ]);
 
-test.todo("plan approval off typed with the request holds without the person saying it again (blocked by: intent create refuses --plan-approval off typed with the request, and the setting then waits for a new reply)", () => {
+test("plan approval off typed with the request holds without the person saying it again", () => {
   const run = runCell({ policy: "off", review: "advisory", plan: "off" }, "none");
   expect(run.run?.agent.detours ?? ["stuck"]).toEqual([]);
 }, SCOPE_RUN_TIMEOUT_MS);

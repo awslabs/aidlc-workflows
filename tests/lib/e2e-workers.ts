@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
-  existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statfsSync, writeFileSync,
+  existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmdirSync, rmSync,
+  statfsSync, writeFileSync,
 } from "node:fs";
 import { cp, mkdir, mkdtemp, realpath, rename, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -75,13 +76,53 @@ function allocatedCopyBytes(path: string, sourceRoot: string): number {
   return 4096 + readdirSync(path).reduce((sum, entry) => sum + allocatedCopyBytes(join(path, entry), sourceRoot), 0);
 }
 
+let shortRoot: string | undefined;
+
+/**
+ * The temp folder for a test project whose depth must be a person's, whatever
+ * the runner's own TEMP: on Windows the shorter writable one of the user's and
+ * the system's temp folder, elsewhere tmpdir(). windows-latest's user temp puts
+ * a test project 85 to 120 characters deep, where config says the folder is too
+ * deep for AI-DLC's records.
+ */
+export function shortTemporaryRoot(): string {
+  if (shortRoot !== undefined) return shortRoot;
+  const user = tmpdir();
+  shortRoot = user;
+  if (process.platform !== "win32") return shortRoot;
+  const system = join(process.env.SystemRoot || "C:\\Windows", "Temp");
+  const length = (root: string): number => {
+    try {
+      return realpathSync(root).length;
+    } catch {
+      return Number.POSITIVE_INFINITY;
+    }
+  };
+  if (length(system) >= length(user)) return shortRoot;
+  try {
+    rmdirSync(mkdtempSync(join(system, "aidlc-probe-")));
+    shortRoot = system;
+  } catch {
+    // Not writable here: the user's temp folder stays the root.
+  }
+  return shortRoot;
+}
+
+// Each file's fixtures sit under shortTemporaryRoot() first, so a test whose
+// subject is not the folder's depth meets a folder like a person's. A live
+// Codex leg keeps the runner's own TEMP and nothing else: Codex's Windows
+// sandbox refuses AI-DLC's writes under %SystemRoot%, where no person's
+// project lives, so falling back there would only fail later.
+function defaultTemporaryRoots(): string[] {
+  if (process.platform !== "win32") return [tmpdir(), "/var/tmp"];
+  if (process.env.AIDLC_CODEX_EXEC_LIVE === "1") return [tmpdir()];
+  return [shortTemporaryRoot(), tmpdir(), join(process.env.SystemRoot || "C:\\Windows", "Temp")];
+}
+
 /** Some applications discover .git markers even when Git rejects the marker.
  * Avoid both valid repositories and incomplete markers without modifying them. */
-export async function createE2eTemporaryRoot(candidates = [
-  tmpdir(),
-  process.platform === "win32" ? join(process.env.SystemRoot || "C:\\Windows", "Temp") : "/var/tmp",
-]): Promise<string> {
-  for (const candidate of new Set(candidates)) {
+export async function createE2eTemporaryRoot(candidates?: string[]): Promise<string> {
+  for (const candidate of new Set(candidates ?? defaultTemporaryRoots())) {
     let base: string;
     try {
       base = await realpath(candidate);

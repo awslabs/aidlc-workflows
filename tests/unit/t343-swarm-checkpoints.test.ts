@@ -2,7 +2,7 @@
 // function:approvedConstructionUnits, function:unitSourceFingerprint, subcommand:aidlc-bolt:swarm-checkpoint,
 // function:readCommittedUnitSourceManifest, function:swarmUnitCheckpointRejections
 // covers: subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize, audit:SWARM_UNIT_CONVERGED
-// covers: function:askSwarmCheckpoint, function:requireProtectedResponse
+// covers: function:askSwarmCheckpoint, function:requireProtectedResponse, function:protectedQuestionPick
 // covers: function:withdrawProtectedQuestions
 // covers: function:gitTreeLeafEntries
 // covers: function:hasPendingDecision
@@ -11,8 +11,9 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { readReviewArtifactContexts } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
 import {
   approveSwarmCheckpoint,
   rejectSwarmCheckpoint,
@@ -75,6 +76,11 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 resetAidlcEnv();
@@ -323,6 +329,44 @@ function gates(pd: string, event = "GATE_APPROVED") {
   return readAuditShardEvents(pd).filter((row) => row.event === event && auditBlockField(row.block, "Checkpoint") === "swarm-batch");
 }
 
+// One advisory review of alpha's Code Generation through the logger, as a
+// real run records it, leaving one Major finding open: R-01.
+function openFinding(pd: string): void {
+  const path = seededStateFile(pd);
+  writeFileSync(path, readFileSync(path, "utf-8").replace("- **Review Override**: none", "- **Review Override**: advisory"));
+  const definition = findStageBySlug(STAGE)!;
+  const reviewer = definition.reviewer!;
+  const args = ["review", "--stage", STAGE, "--reviewer", reviewer, "--unit", "alpha", "--iteration", "1"];
+  const requested = tool(pd, "log", args);
+  expect(requested.code, requested.out).toBe(0);
+  const request = JSON.parse(requested.stdout.trim().split(/\r?\n/).at(-1)!) as { reviewFile: string };
+  const artifact = relative(pd, join(seededRecordDir(pd), "construction", "alpha", STAGE,
+    artifactFilename(definition.review_artifact ?? definition.produces![0]))).replaceAll("\\", "/");
+  mkdirSync(dirname(join(pd, request.reviewFile)), { recursive: true });
+  writeFileSync(join(pd, request.reviewFile), [
+    "**Verdict:** NOT-READY", `**Reviewer:** ${reviewer}`, "**Iteration:** 1", "", "### Findings", "",
+    "**Prior findings**", "", "| ID | Now | Severity | Note |", "|---|---|---|---|", "",
+    "**New findings**", "", "| Severity | Location | Finding | Required action |", "|---|---|---|---|",
+    `| Major | ${artifact} > retry | Retry is not covered. | Cover it. |`, "",
+  ].join("\n"));
+  const recorded = tool(pd, "log", [...args, "--verdict", "NOT-READY"]);
+  expect(recorded.code, recorded.out).toBe(0);
+}
+
+function dispositionsOf(row: { block: string }) {
+  const field = auditBlockField(row.block, "Review Finding Dispositions");
+  return field === null
+    ? null
+    : (JSON.parse(field) as { dispositions: Array<{ id: string; status: string }> }).dispositions
+      .map(({ id, status }) => ({ id, status }));
+}
+
+function alphaFindings(pd: string) {
+  return readReviewArtifactContexts(pd, findStageBySlug(STAGE)!, "alpha")
+    .flatMap((context) => context.findings)
+    .map(({ id, status }) => ({ id, status }));
+}
+
 describe("t343 completed swarm batch checkpoints", () => {
   test("check and finalize refuse a missing or substituted authorized command before execution", () => {
     const pd = fixture(false, [], false);
@@ -412,6 +456,76 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(resolveSwarmCheckpoint(pd, 2, ["gamma"]).ready).toBe(true);
     expect(approveSwarmCheckpoint(pd, 2, ["gamma"]).approved).toBe(true);
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(true);
+  });
+
+  // #2208 part 2: the batch's approval records its Units' open review findings
+  // through the writer its caller hands in, as the person's approval when they
+  // gave it and as nobody's when Construction ran on its own.
+  test.each([false, true])("a batch approval records its Units' findings with who approved it (autonomous: %p)", (autonomous) => {
+    const pd = fixture(autonomous);
+    converge(pd);
+    const asked: unknown[] = [];
+    const recorded = JSON.stringify({ version: 1, dispositions: [] });
+    const dispositions = (stages: readonly string[], units: readonly string[], decider: string) => {
+      asked.push({ stages, units, decider });
+      return { "Review Finding Dispositions": recorded };
+    };
+    if (!autonomous) human(pd);
+    const approved = autonomous
+      ? approveSwarmCheckpoint(pd, 1, BATCH, undefined, "", dispositions)
+      : approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint", dispositions);
+    expect(approved.approved).toBe(true);
+    expect(asked).toEqual([{ stages: [STAGE], units: BATCH, decider: autonomous ? "nobody" : "person" }]);
+    const [row] = gates(pd);
+    expect(auditBlockField(row.block, "Review Finding Dispositions")).toBe(recorded);
+    expect(auditBlockField(row.block, autonomous ? "Autonomous" : "User Input")).toBe(autonomous ? "true" : "Approve");
+  });
+
+  // The person names a finding as they decide the batch, and the conductor
+  // passes it to the command it runs: a fix asked for is no decision, so the
+  // next review re-checks the finding.
+  test("approving a batch and asking a finding fixed records Fix requested, and the finding stays open", () => {
+    const pd = fixture();
+    openFinding(pd);
+    converge(pd);
+    human(pd, "Approve, but get R-01 fixed");
+    const approved = tool(pd, "bolt", ["swarm-checkpoint", "--action", "approve", "--batch", "1", "--units", BATCH.join(","),
+      "--session", "t343-checkpoint", "--user-input", "Approve", "--fix-finding", "R-01"]);
+    expect(approved.code, approved.out).toBe(0);
+    expect(gates(pd).map(dispositionsOf)).toEqual([[{ id: "R-01", status: "Fix requested" }]]);
+    expect(alphaFindings(pd)).toEqual([{ id: "R-01", status: "New" }]);
+  });
+
+  test("a misspelled finding flag on a batch is refused with no row, and the retry approves with no new question", () => {
+    const pd = fixture();
+    openFinding(pd);
+    converge(pd);
+    human(pd, "Approve, but get R-01 fixed");
+    const approve = (flag: string) => tool(pd, "bolt", ["swarm-checkpoint", "--action", "approve", "--batch", "1",
+      "--units", BATCH.join(","), "--session", "t343-checkpoint", "--user-input", "Approve", flag, "R-01"]);
+    const refused = approve("--fix-findng");
+    expect(refused.code, refused.out).toBe(1);
+    expect(JSON.parse(refused.out).error).toStartWith('swarm-checkpoint does not accept "--fix-findng". It accepts --batch, ');
+    expect(gates(pd)).toEqual([]);
+    const retried = approve("--fix-finding");
+    expect(retried.code, retried.out).toBe(0);
+    expect(gates(pd).map(dispositionsOf)).toEqual([[{ id: "R-01", status: "Fix requested" }]]);
+  });
+
+  // One decision for the batch, so each Unit's row carries it.
+  test("Request Changes on a batch that rejects a finding records the rejection on each Unit's row", () => {
+    const pd = fixture();
+    openFinding(pd);
+    converge(pd);
+    human(pd, "Request Changes: R-01 does not apply, retry is out of scope; rename the handler");
+    const rejected = tool(pd, "bolt", ["swarm-checkpoint", "--action", "reject", "--batch", "1", "--units", BATCH.join(","),
+      "--session", "t343-checkpoint", "--user-input", "Request Changes", "--reason", "rename the handler",
+      "--reject-finding", "R-01=retry is out of scope"]);
+    expect(rejected.code, rejected.out).toBe(0);
+    const rows = gates(pd, "GATE_REJECTED");
+    expect(rows.map((row) => auditBlockField(row.block, "Unit"))).toEqual(BATCH);
+    expect(rows.map(dispositionsOf)).toEqual(BATCH.map(() => [{ id: "R-01", status: "Rejected: retry is out of scope" }]));
+    expect(alphaFindings(pd)).toEqual([{ id: "R-01", status: "Rejected: retry is out of scope" }]);
   });
 
   test("a passing caller check cannot replace the failing authorized command", () => {
@@ -541,9 +655,6 @@ describe("t343 completed swarm batch checkpoints", () => {
     converge(pd);
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("requires the person's reply to this question");
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow("--action ask");
-    // An exact pick is the person's: the conductor cannot record the other choice.
-    human(pd, "Request Changes");
-    expect(() => approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint")).toThrow('picked "Request Changes"');
     // The conductor read their approval; the receipt carries their own words.
     human(pd, "both look good");
     expect(approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint").approved).toBe(true);
@@ -578,12 +689,11 @@ describe("t343 completed swarm batch checkpoints", () => {
     converge(pd);
     approveSwarmCheckpoint(pd, 1, BATCH);
     expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please fix the API", "t343-checkpoint")).toThrow("--action ask");
-    human(pd, "Approve");
-    expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please fix the API", "t343-checkpoint")).toThrow('picked "Approve"');
     human(pd, "Request Changes");
-    // A reason with no words, or more than one line, is refused; a word such as
-    // "DISMISSED" is what the conductor read from the person, and is a reason.
-    for (const reason of ["", " ", "first\nsecond"]) {
+    // A reason on more than one line is refused (with none passed, the person's
+    // own words are the reason); a word such as "DISMISSED" is what the
+    // conductor read from the person, and is a reason.
+    for (const reason of ["first\nsecond"]) {
       expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", reason, "t343-checkpoint")).toThrow("reason");
     }
     const rejected = rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please fix the API", "t343-checkpoint");
@@ -900,6 +1010,50 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     expect(gates(pd, "GATE_REJECTED")).toHaveLength(BATCH.length);
   });
 
+  // A batch asked with Request Changes alone is shown as "1. Request Changes"
+  // where choices are numbered; the agent reads a typed number against it.
+  for (const typed of ["1", "/aidlc 1"]) {
+    test(`"${typed}" at a batch offering Request Changes alone: the agent's Request Changes sends it back, with no second question`, () => {
+      const pd = fixture(true);
+      converge(pd);
+      writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
+      const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
+      expect(asked.code, asked.out).toBe(0);
+      choice(pd, "t343-checkpoint", typed);
+      expect(readProtectedResponse(pd, "t343-checkpoint")?.choice).toBeUndefined();
+      const rejected = tool(pd, "bolt", ["swarm-checkpoint", "--action", "reject", "--batch", "1", "--units", BATCH.join(","),
+        "--user-input", typed, "--reason", "Please rework the changed source", "--session", "t343-checkpoint"]);
+      expect(rejected.code, rejected.out).toBe(0);
+      expect(gates(pd, "GATE_REJECTED")).toHaveLength(BATCH.length);
+    });
+  }
+
+  // A number or label that batch did not offer picks nothing: the agent reads it.
+  test("at a batch offering Request Changes alone, \"2\" or \"Approve\" records no pick", () => {
+    const pd = fixture(true);
+    converge(pd);
+    writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
+    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
+    expect(asked.code, asked.out).toBe(0);
+    expect(readProtectedQuestion(pd, "t343-checkpoint")?.options).toHaveLength(1);
+    for (const typed of ["2", "Approve"]) {
+      choice(pd, "t343-checkpoint", typed);
+      expect(readProtectedResponse(pd, "t343-checkpoint")?.words?.split("\n").at(-1)).toBe(typed);
+      expect(readProtectedResponse(pd, "t343-checkpoint")?.choice).toBeUndefined();
+    }
+  });
+
+  test("at a batch offering both choices, a typed number is no pick; the agent's reading is recorded", () => {
+    const pd = fixture();
+    converge(pd);
+    human(pd, "2");
+    expect(readProtectedQuestion(pd, "t343-checkpoint")?.options).toHaveLength(2);
+    expect(readProtectedResponse(pd, "t343-checkpoint")?.choice).toBeUndefined();
+    human(pd, "1");
+    expect(readProtectedResponse(pd, "t343-checkpoint")?.choice).toBeUndefined();
+    expect(approveSwarmCheckpoint(pd, 1, BATCH, "1", "t343-checkpoint").approved).toBe(true);
+  });
+
   test("under Guard Policy off, prepare goes on when the parent source moved after Plan Approval", () => {
     for (const policy of ["strict", "off (set by you)"]) {
       const pd = fixture();
@@ -1070,7 +1224,7 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     }
   });
 
-  test("approved inline units are excluded, and cannot substitute for native batch members", () => {
+  test("approved inline units are excluded, and cannot substitute for native batch members", async () => {
     const pd = fixture();
     const content = readFileSync(seededStateFile(pd), "utf-8");
     for (const stage of unitMajorConstructionStageSlugs("feature", content, true)) {
@@ -1087,7 +1241,7 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
       : `'${process.execPath.replaceAll("'", "'\\''")}'`;
     const check = `${executable} -e "if (!require('fs').readFileSync('src/alpha.ts','utf8').includes('alpha = 1')) process.exit(1)"`;
     recordCommand(pd, check);
-    expect(verifyConstructionCheckpoint(pd, "alpha", "unit").verified).toBe(true);
+    expect((await verifyConstructionCheckpoint(pd, "alpha", "unit")).verified).toBe(true);
     expect(tool(pd, "bolt", ["checkpoint", "--action", "ask", "--unit", "alpha", "--kind", "unit", "--session", "inline-checkpoint"]).code).toBe(0);
     choice(pd, "inline-checkpoint", "Approve");
     expect(approveConstructionCheckpoint(pd, "alpha", "unit", "Approve", "inline-checkpoint").approved).toBe(true);
@@ -1122,7 +1276,7 @@ describe("t343 response-bound swarm decisions", () => {
     for (const id of [session, "other-swarm-session"]) {
       expect(tool(pd, "bolt", [...route(id), "--action", "ask"]).code).toBe(0);
       choice(pd, id, "Approve");
-      expect(readProtectedResponse(pd, id)?.choice).toBe("Approve");
+      expect(readProtectedResponse(pd, id)?.words).toBe("Approve");
     }
     // Even a finalize run that declines all Units starts a new verification boundary.
     const finalized = tool(pd, "swarm", ["finalize", "--batch", "1", "--units", BATCH.join(",")]);
@@ -1208,7 +1362,7 @@ describe("t343 response-bound swarm decisions", () => {
     expect(accepted.code, accepted.out).toBe(0);
   });
 
-  test("autonomous approval needs no challenge but rejection requires Request Changes", () => {
+  test("autonomous approval needs no challenge but rejection needs the person's reply", () => {
     const pd = fixture(true);
     converge(pd);
     const reject = () => tool(pd, "bolt", [...route(), "--action", "reject", "--user-input", "Request Changes", "--reason", "Fix the API"]);
@@ -1217,8 +1371,7 @@ describe("t343 response-bound swarm decisions", () => {
     const approved = tool(pd, "bolt", ["swarm-checkpoint", "--batch", "1", "--units", BATCH.join(","), "--action", "approve"]);
     expect(approved.code, approved.out).toBe(0);
     expect(tool(pd, "bolt", [...route(), "--action", "ask"]).code).toBe(0);
-    choice(pd, session, "Approve");
-    expect(reject().code).not.toBe(0);
+    // Their reply is the agent's to read; it records the Request Changes it read.
     choice(pd, session, "Request Changes");
     const rejected = reject();
     expect(rejected.code, rejected.out).toBe(0);

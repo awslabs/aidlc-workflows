@@ -1,48 +1,59 @@
 # Release supply chain
 
-AI-DLC releases are created in `awslabs/aidlc-workflows` by two isolated
-workflows: `.github/workflows/release.yml` for stable tags and
-`.github/workflows/preview-release.yml` for scheduled or manually dispatched
-previews. Both use the repository-provided `GITHUB_TOKEN`. Neither requires a
-GitHub App, a personal access token, a second repository, or repository
-secrets for publication. Full Suite live tests use the existing `ai-pr-review`
-environment's `AWS_AI_PR_REVIEW_ROLE_ARN` secret, resolved by Full Suite's own
-live jobs. The preview starts Full Suite as a separate run through the GitHub
-API (a workflow dispatch); a stable release that has no reusable result calls
-it as a reusable workflow and passes `secrets: inherit`, without which that
-environment secret resolved empty in the called run.
+AI-DLC uses `.github/workflows/promote-release.yml` to select a published
+preview's source, `.github/workflows/release.yml` to build and publish its stable
+release, and `.github/workflows/preview-release.yml` to produce nightly previews.
+Publication uses the repository's `GITHUB_TOKEN`; no additional credential is
+needed. Only the preview's Full Suite uses the live model environment.
 
 ## Release trigger
 
-Pushing a strict `vX.Y.Z` tag starts the release workflow. The first job rejects
-the release unless all of these conditions hold:
+Run **Promote preview** on `main`. An empty dispatch lists all published previews
+with their source, manifest compatibility and warnings. A promotion supplies `preview`, `version`,
+reviewed release `notes` and, optionally, the `contributors` list made and
+scanned on the maintainer's machine; [DEVELOPERS.md](../../DEVELOPERS.md#4-promote-a-preview-to-production)
+has the commands. Preview publication may have succeeded despite test failures;
+selection is the maintainer's decision, with those failures still recorded.
 
-- the event ref is the pushed tag;
-- the checked-out commit is the tag target;
-- the tag target is contained in `main`;
-- the tag equals `v` plus the version in `core/tools/aidlc-version.ts`.
+`scripts/release-promotion.ts` checks that the selected release is a published
+prerelease, its annotated tag's source trailer agrees with its commit and
+repository, and that commit is on `main`. Before creating a release commit or
+reserving a tag, it downloads the preview's `version.json` and applies the same
+manifest contract as the final asset verifier, bound to that preview and source.
+An incompatible historical preview stays in the list with its rejection reason;
+the maintainer must select a compatible preview. It prepares one child commit with:
 
-Stable publication requires a passing release-purpose Full Suite for the exact
-tagged commit. This reverses the 2026-09-21 decision that stable releases need
-no Full Suite result; the maintainer reversed it on 2026-09-26. The
-`Find Full Suite evidence` job (`actions: read`) searches successful Preview
-Release runs of the tagged commit and successful manual `full-suite.yml`
-dispatches on `main`, downloads their `full-suite-result`, and reuses the first
-that qualifies. Evidence counts only from those reviewed workflows on `main`:
-runs on other branches or events, verification artifacts, and results for
-another commit or run never qualify. When none qualifies, the release calls
-`full-suite.yml` for the tagged commit with `contents: read`,
-`id-token: write` and `secrets: inherit`. A failed search
-falls back to running the suite. `Require a passing Full Suite` then downloads
-the result and runs `scripts/ci-full-suite-evidence.ts check`, which requires the
-tagged `sha`, the producing `runId`, `purpose: "release"`,
-`verificationFamily: "all"`, `coveragePolicy: "required-hosted-live-shards-v3"`,
-`passed: true`, no disabled legs, and exactly `deterministic` and
-`production_guards` omitted and skipped. All other declared jobs must succeed.
-A suite this run called must also have succeeded. `publish` and `release` need
-that gate and recheck its verified commit; builds and lifecycle checks run
-alongside the suite. A tag outside `main` fails the stable workflow's source
-validation, independently of whether Full Suite has tested it.
+- the chosen stable version in `core/tools/aidlc-version.ts` and README;
+- the new CHANGELOG entry, preserving all previous entries;
+- the complete workflow tree, promotion script, preview tag parser and shared
+  manifest verifier from the
+  immutable main snapshot checked out during preparation;
+- `.github/release-promotion.json`, binding the preview, source, controls,
+  version, notes, date, recorded warnings, the previous stable version and
+  the contributor list.
+
+The workflow tree is copied in full, including deletions, so its files match
+reviewed main content and do not require an additional workflow-writing token.
+The product source, dependencies, build scripts and harnesses otherwise remain
+those of the preview. Carrying publication controls lets an older preview use
+the current release process. The candidate's source and controls commits must
+both be ancestors of `main`; the release commit itself need not be on `main`.
+Validation checks its single parent, the complete changed-file set, exact
+metadata contents, file modes and the exact control blobs. It runs again before
+signing and publication. An arbitrary tag on `main` cannot release.
+
+Preparation pushes the stable tag without force and dispatches `release.yml`
+explicitly on that tag, because a `GITHUB_TOKEN` push does not trigger another
+push workflow. The tagged workflow checks the event ref, checkout and tag SHA.
+The source identity seen by provenance remains the actual stable tag and commit.
+Preparation serializes independently from stable builds. Retries reuse only a
+matching verified reservation; another preview, notes or contributor list
+cannot claim its tag.
+
+Stable promotion does not repeat CI or Full Suite. Previous results remain
+associated with the selected preview and are linked from the stable notes;
+recorded warnings are retained. Failed tests are not relabeled as passing.
+The existing `release` environment still controls final publication.
 
 An explicit manual `full-suite.yml` dispatch may set `live_verification=true`
 to validate a candidate's live jobs before merge, or `full_verification=true` to
@@ -107,48 +118,40 @@ evidence collection follows. Timeouts fail coverage.
 The existing IAM role duration and credential-separation boundary are unchanged.
 
 Feature, fix, documentation, refactor, and test PRs do not update release
-metadata. The release-preparation PR summarizes the user-visible changes merged
-since the previous release and updates the version, README badge, and changelog
-entry together before the tag is created. The workflow does not modify source
-files.
+metadata. Promotion updates it on the selected source. After publication a
+metadata-only branch and PR link synchronize the version, badge and changelog
+with current `main`, without changing its product code or downgrading a newer
+version.
 
 ## Build and validation
 
-After validating the exact tag and source commit, the stable workflow:
+After validating the promotion, the stable workflow:
 
-1. regenerates every harness distribution and checks deterministic output;
-2. runs typecheck, lint, ShellCheck, and
-   PSScriptAnalyzer;
-3. builds native binaries for Linux, macOS, and Windows;
-4. runs native and installer smoke tests;
-5. creates the out-of-band manual-copy `aidlc-copy-runtime-X.Y.Z.tar.gz` and
-   its `.sha256` sidecar, the manifest-listed native
-   `aidlc-runtime-X.Y.Z.tar.gz`, installers, `version.json`, and `checksums.txt`;
-6. verifies the staged release inventory and checksums;
-7. requires a passing Full Suite for that commit before `publish` attests
-   anything, reusing an earlier result or running the suite alongside steps 1
-   to 6.
+1. regenerates the preview source's harness distributions and checks determinism;
+2. builds native binaries for Linux, macOS, and Windows with the stable version;
+3. runs native and installer smoke tests, ShellCheck and PSScriptAnalyzer;
+4. packages the native and manual-copy runtime archives, installers, manifest
+   and checksums;
+5. checks installation, lifecycle and updates from the previous stable release;
+6. verifies and attests the staged release inventory before publication.
 
-The stable workflow runs the source test tiers only through that Full Suite.
-Required PR checks provide Linux smoke, unit, and deterministic integration
-coverage plus production-guard checks on every push; the merge queue adds the
-focused cross-OS native-terminal and OS-isolation checks. Cross-platform E2E and
-hosted live coverage run in the Full Suite, which the nightly preview calls and
-stable publication requires for the tagged commit. The stable workflow
-independently validates generated output, native binaries, installers,
-lifecycle flows, checksums, and provenance of the release assets.
+The update journey and final asset verifier use the pinned publication-control
+commit's tooling; the build and packager use the selected preview's source.
+No PR test matrix or live suite runs during promotion. Required PR checks provide
+Linux smoke, unit, and deterministic integration coverage for product changes;
+nightly previews provide the broader harness coverage. Lifecycle and upgrade
+failures in the newly built stable candidate still block publication.
 
-The release manifest records the tag ref and exact source commit. Both runtime
-archive names include the release version. Manual-copy users download
-`aidlc-copy-runtime-X.Y.Z.tar.gz`; native installers select
-`aidlc-runtime-X.Y.Z.tar.gz`. The copy archive stays outside the manifest and
-main checksum inventory so 2.8.x clients retain forward-compatible update
-discovery; its sidecar and release provenance authenticate it independently.
+The release manifest records the stable tag ref and exact release commit. Native
+installers select `aidlc-runtime-X.Y.Z.tar.gz`; manual-copy users download
+`aidlc-copy-runtime-X.Y.Z.tar.gz`. The copy archive and its checksum sidecar stay
+outside the manifest and main checksum inventory for older client compatibility.
+Provenance authenticates them independently. No installer trust rule changes.
 
 ## Provenance
 
 The `publish` job receives `id-token: write` and `attestations: write` only
-after the build, lifecycle and update-from-the-last-release jobs and the Full Suite gate pass
+after the build, lifecycle and update-from-the-last-release jobs pass
 (a preview's `publish` does not wait for the update job, which only reports there). GitHub generates build provenance for
 the staged assets. The exported provenance bundle is included as
 `aidlc-release.intoto.jsonl`.
@@ -187,18 +190,20 @@ occupied ids. Leftover `aidlc-staging-*` drafts still require inspection and
 removal before the publisher stages another candidate.
 
 The planner renders notes from changes since the previous preview. Contract
-checks gate the authorized commit before the normal release build chain. Full
-Suite runs first but does not gate it. A failing suite still builds and
-publishes the preview; its notes open with a warning and end with the Full
-Suite failure report. Full Suite runs separately and retains its failed status
+checks gate the authorized commit, then the release build chain and Full Suite
+run in parallel. Publication waits for validated artifacts and the completed
+test report. A failing suite still permits publication; the preview notes open
+with a warning and end with the Full Suite failure report. Full Suite runs
+separately and retains its failed status
 without failing Preview Release. Only the preview's Full Suite dispatch job adds
 `actions: write`, to start and watch that run; the `Release tests` job adds
 `actions: read` to download its evidence and list its jobs. Preview does not repeat the
 PR CI test matrix.
 PR CI and Full Suite use the same `deterministic-tests.yml` workflow definition
-with different matrices: Linux smoke/sixteen unit shards/integration for PRs, and
+with different matrices: ten Linux unit shards and integration for PRs, and
 Linux/macOS/Windows smoke/sixteen unit shards/integration/E2E for a manual full
-verification. The nightly (release purpose) Full Suite runs no deterministic
+verification. PR CI runs Linux smoke in its combined contract and production-guard
+check job. The nightly (release purpose) Full Suite runs no deterministic
 tier: its scope runs and guard matrix run in a job of their own on every OS,
 beside the live jobs.
 Integration and isolated E2E run in separate jobs with fresh runner processes. Each call
@@ -245,9 +250,9 @@ releases need human approval. After approval, the job downloads the attested
 candidate, rechecks the tag and checksums, and creates the GitHub Release:
 
 ```bash
-bun scripts/release-notes.ts \
+bun scripts/release-promotion.ts notes \
+  --repository "$GITHUB_REPOSITORY" \
   --tag "$RELEASE_TAG" \
-  --changelog "$PWD/CHANGELOG.md" \
   --out "$RUNNER_TEMP/release-notes.md"
 gh release create "$RELEASE_TAG" build/release/* \
   --verify-tag \
@@ -255,64 +260,38 @@ gh release create "$RELEASE_TAG" build/release/* \
   --notes-file "$RUNNER_TEMP/release-notes.md"
 ```
 
-The body is this version's `CHANGELOG.md` entry, read after the recheck above so
-it can only come from the authorized commit, and a missing or empty entry fails
-the job before it creates the release. GitHub's own generated notes are not
-used: their "What's Changed" list names every contributing account by handle.
+The body is the stable page rendered from the verified promotion record: the
+reviewed entry, which also supplies this version's `CHANGELOG.md` entry, laid
+out under Summary, Upgrade, Fresh install and Highlights; the contributor
+sections when the record has a contributor list; the selected preview/source
+reference, which links the preview's page; and the Full Changelog link. The preview's
+recorded validation warnings and failure report stay on that page, not on the
+stable page; the promotion record keeps the warning lines, and the promotion
+run's summary shows them. The helper
+rechecks the promotion before writing the notes. GitHub's own generated notes
+are not used: their "What's Changed" list names every contributing account by
+handle with no private-names scan. The contributor list is made on the
+maintainer's machine, where that scan runs, and CI only renders it.
 
 The job then compares the local asset names with the asset names returned by
 the GitHub Release API. A missing or extra upload fails the workflow.
 
-All earlier jobs retain `contents: read`. The called Full Suite's live jobs also
-receive `id-token: write`, only for the `ai-pr-review` role, as in the preview.
-No stored credential receives release write access, and no job receives
-publication permission before the environment gate.
+Stable build and validation jobs retain `contents: read`; no Full Suite is
+called during promotion. The separate preparation job has `contents: write`
+to reserve the tag and `actions: write` to dispatch its build. After publication,
+metadata synchronization has `contents: write` to push the metadata branch.
+These jobs use `GITHUB_TOKEN`; final publication remains in the protected
+`release` environment.
 
 ## Creating a release
 
-1. Merge a release-preparation PR that updates:
-   - `core/tools/aidlc-version.ts`;
-   - the README version badge;
-   - the matching `CHANGELOG.md` heading, with its `Compatibility:` line right
-     under it (`refresh only`, `refresh plus a step`, or `breaking for scripts`;
-     the Release Metadata Policy in `AGENTS.md` says what each means).
-2. Confirm that the release-preparation PR passed its required branch checks and
-   select its exact merged commit on `main`. A successful preview of that
-   commit, or a manual `full-suite.yml` dispatch on `main` with `ref=<sha>`,
-   leaves a `full-suite-result` the release reuses. Without one, the release
-   runs the Full Suite itself and takes hours longer. On the selected commit,
-   run the Kiro CLI release journey on a machine with a signed-in Kiro CLI and
-   post its one-line result as a comment on the release-preparation PR
-   ([Testing](09-testing.md)).
-3. Create and push the matching tag from the selected commit. The commit may no
-   longer be the tip of `main`, but it must still be contained in `main`:
+Use [Promote a preview to production](../../DEVELOPERS.md#4-promote-a-preview-to-production).
+Select the published preview's tag, choose the final stable version and supply
+its release notes and the contributor list made on your machine. Follow the dispatched stable build, then open the generated
+metadata-only PR to record the version on `main`.
 
-   ```bash
-   RELEASE_SHA="<release-preparation-commit-sha>"
-   RELEASE_VERSION="X.Y.Z"
-   git fetch --no-tags origin \
-     "+refs/heads/main:refs/remotes/origin/main" &&
-   git cat-file -e "${RELEASE_SHA}^{commit}" &&
-   git merge-base --is-ancestor "$RELEASE_SHA" origin/main &&
-   test "$(
-     git show "${RELEASE_SHA}:core/tools/aidlc-version.ts" |
-       awk -F'"' '/^export const AIDLC_VERSION = "/ { print $2 }'
-   )" = "$RELEASE_VERSION" &&
-   git tag "v$RELEASE_VERSION" "$RELEASE_SHA" &&
-   git push origin "v$RELEASE_VERSION"
-   ```
-
-4. Monitor the `Release` workflow. It validates the tag and source, requires a
-   passing Full Suite for the tagged commit (reused or run), and runs
-   deterministic packaging, static checks, native smoke coverage, cross-platform
-   builds, installer lifecycle tests, checksums, and provenance validation.
-5. Confirm that the GitHub Release contains the binaries, installers,
-   `aidlc-copy-runtime-X.Y.Z.tar.gz`, its `.sha256` sidecar,
-   `aidlc-runtime-X.Y.Z.tar.gz`, `version.json`, `checksums.txt`, and the
-   provenance bundle.
-
-If publication fails before the release is created, rerun the failed workflow.
-A failing Full Suite blocks publication: rerun its failed jobs for a flake, or
-fix the failure and prepare a new release.
-If a partial release exists, inspect and remove it before rerunning. Published
-assets must not be replaced silently. Correct them in a new patch release.
+If the build fails before publication, rerun the failed jobs or dispatch Release
+on the same prepared tag. A retry never moves an existing tag to another commit.
+If a release already exists, inspect it before retrying; never replace published
+assets silently. Corrections ship in a new version. Metadata synchronization
+has its own retry and cannot undo a published release.

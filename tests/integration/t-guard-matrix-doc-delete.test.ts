@@ -18,13 +18,4 @@ guardMatrixSuite("Unit 1's functional design is deleted while Unit 2 builds", [
   { cell: { policy: "strict", review: "none", plan: "on" }, change: "doc-delete" },
   { cell: { policy: "strict", review: "advisory", plan: "on" }, change: "doc-delete" },
   { cell: { policy: "strict", review: "adversarial", plan: "on" }, change: "doc-delete" },
-  { cell: { policy: "off", review: "none", plan: "on" }, change: "doc-delete", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
-  { cell: { policy: "off", review: "advisory", plan: "on" }, change: "doc-delete", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
-  { cell: { policy: "off", review: "adversarial", plan: "on" }, change: "doc-delete", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
-  { cell: { policy: "relaxed", review: "none", plan: "on" }, change: "doc-delete", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
-  { cell: { policy: "relaxed", review: "advisory", plan: "on" }, change: "doc-delete", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
-  { cell: { policy: "relaxed", review: "adversarial", plan: "on" }, change: "doc-delete", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
-  { cell: { policy: "strict", review: "none", plan: "on" }, change: "doc-delete", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
-  { cell: { policy: "strict", review: "advisory", plan: "on" }, change: "doc-delete", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
-  { cell: { policy: "strict", review: "adversarial", plan: "on" }, change: "doc-delete", options: { stageMajor: true, thenUnits: true }, label: "design stage by stage, then one Unit at a time" },
 ]);

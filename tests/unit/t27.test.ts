@@ -336,6 +336,48 @@ describe("t27 aidlc-utility status", () => {
     expect(r.stdout).toContain("No active");
   });
 
+  // A teammate's clone: the records are here, the per-user cursor is not.
+  // Status names each piece of work and where it stands, never "no workflow".
+  function cloneWithRecords(withArchived = false): string {
+    const p = bareProj();
+    const intents = join(p, "aidlc", "spaces", "default", "intents");
+    const finished = readdirSync(intents).find((name) => name.startsWith("fixture-"))!;
+    seedStateFile(p, "state-completed.md");
+    const other = "261016-other-work";
+    mkdirSync(join(intents, other), { recursive: true });
+    cpSync(STATE_FIXTURE, join(intents, other, "aidlc-state.md"));
+    const registry = JSON.parse(readFileSync(join(intents, "intents.json"), "utf-8"));
+    registry.push({ uuid: "00000000-0000-7000-8000-000000000002", slug: "other-work", dirName: other, status: "in-flight" });
+    if (withArchived) {
+      const old = "261001-old-work";
+      mkdirSync(join(intents, old), { recursive: true });
+      cpSync(STATE_FIXTURE, join(intents, old, "aidlc-state.md"));
+      registry.push({ uuid: "00000000-0000-7000-8000-000000000003", slug: "old-work", dirName: old, status: "archived" });
+    }
+    writeFileSync(join(intents, "intents.json"), `${JSON.stringify(registry, null, 2)}\n`);
+    rmSync(join(intents, "active-intent"), { force: true });
+    expect(finished).toBeDefined();
+    return p;
+  }
+
+  test("5b: status with work here and none selected names each piece and where it stands", () => {
+    const r = util(["status"], cloneWithRecords());
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toContain("No active");
+    expect(r.stdout).toContain("No work is selected in this conversation. Work in this project:");
+    expect(r.stdout).toMatch(/ {2}fixture \(record fixture-[0-9a-f]+\): finished\n/);
+    expect(r.stdout).toContain("  other-work (record 261016-other-work): at Feasibility");
+    expect(r.stdout).toContain("To carry on with one, or go back to one of its stages: /aidlc intent <record>");
+    expect(r.stdout).toContain('To start new work: /aidlc "build the auth service"');
+  });
+
+  test("5c: archived work is counted, not listed", () => {
+    const r = util(["status"], cloneWithRecords(true));
+    expect(r.stdout).toContain("other-work");
+    expect(r.stdout).not.toContain("old-work");
+    expect(r.stdout).toContain("(1 archived; /aidlc intent list --all shows it)");
+  });
+
   test("6: status shows IDEATION phase", () => {
     const r = util(["status"], stateProj());
     expect(r.stdout).toContain("IDEATION");
@@ -544,10 +586,13 @@ describe("t27 aidlc-utility doctor", () => {
     expect(r.status).not.toBe(0);
   });
 
-  test("59: doctor reports AWS_AIDLC_DEFAULT_SCOPE unset", () => {
+  // In a terminal doctor cannot see the value Claude Code passes from .claude/settings.json, so "unset" would be false
+  // there; with nothing to check, it says nothing.
+  test("59: doctor says nothing about AWS_AIDLC_DEFAULT_SCOPE when no default is set where it can see one", () => {
     const p = bareProj();
     const r = util(["doctor", "--verbose"], p); // env stripped of the var by util()
-    expect(r.stdout).toContain("AWS_AIDLC_DEFAULT_SCOPE (unset");
+    expect(r.stdout).toContain("Plugin selection"); // the verbose list ran past where the row was
+    expect(r.stdout).not.toContain("AWS_AIDLC_DEFAULT_SCOPE");
   });
 
   test("60: doctor reports AWS_AIDLC_DEFAULT_SCOPE=classic as valid", () => {
@@ -667,6 +712,14 @@ describe("t27 aidlc-utility scope-change", () => {
 
   test("16: scope-change poc->mvp updates Scope field to mvp", () => {
     const p = pocStateAuditProj();
+    // poc's own stages, as creation writes them on a new project: switching
+    // back gives the same plan, so the reply offers it.
+    const poc = (require("../../dist/claude/.claude/tools/data/scope-grid.json") as Record<string, { stages: Record<string, string> }>).poc.stages;
+    writeFileSync(statePath(p), readFileSync(statePath(p), "utf-8").replace(
+      /^(- \[.\] )([a-z0-9-]+) \u2014 (?:EXECUTE|SKIP)$/gm,
+      (_line, box: string, slug: string) =>
+        `${box}${slug} \u2014 ${poc[slug] === "EXECUTE" && slug !== "reverse-engineering" ? "EXECUTE" : "SKIP"}`,
+    ));
     const result = util(["scope-change", "--scope", "mvp"], p);
     expect(result.stdout).toContain("Switched to mvp (the set of stages this work runs): ");
     expect(result.stdout).toContain("You can switch back to poc any time.");
@@ -778,6 +831,8 @@ describe("t27 aidlc-utility scope-change", () => {
       );
       sedReplaceInFile(statePath(p), "- [x] market-research", `- ${marker} market-research`);
       sedReplaceInFile(statePath(p), "- [-] feasibility", "- [ ] feasibility");
+      // A new project's plan, as creation writes it, runs no Reverse Engineering.
+      sedReplaceInFile(statePath(p), "- [ ] reverse-engineering \u2014 EXECUTE", "- [ ] reverse-engineering \u2014 SKIP");
       sedReplaceInFile(statePath(p), "**Current Stage**: feasibility", "**Current Stage**: market-research");
       return p;
     };

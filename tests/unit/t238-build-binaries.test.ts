@@ -26,6 +26,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -318,6 +319,7 @@ describe("t238 build-binaries release builder", () => {
       "compiled-kiro-new-work-routing",
       "plugin-select",
       "real-plugin-sync",
+      "plugin-authoring",
       "conductor-persona",
       "workspace-global-flags",
       "bolt-reentry",
@@ -529,6 +531,48 @@ describe("t238 build-binaries release builder", () => {
     const pluginDoctorOutput = `${pluginDoctor.stdout ?? ""}${pluginDoctor.stderr ?? ""}`;
     expect(pluginDoctorOutput).toContain("ok    Plugin check (doctor-probe): native plugin check ran");
     expect(pluginDoctorOutput).not.toContain("returned exit code 2");
+
+    const projectHookProject = createTestProject();
+    tempDirs.push(projectHookProject);
+    cpSync(
+      join(dirname(native.artifact), "runtime", "claude", ".claude"),
+      join(projectHookProject, ".claude"),
+      { recursive: true },
+    );
+    writeFileSync(
+      join(projectHookProject, ".claude", "hooks", "aidlc-team-guard.ts"),
+      "export async function run(): Promise<number> {\n  return 2;\n}\n",
+    );
+    const projectHookSettings = join(projectHookProject, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(projectHookSettings, "utf-8")) as {
+      hooks: Record<string, unknown[]>;
+    };
+    settings.hooks.PreToolUse.push({
+      matcher: "mcp__github__projects_write",
+      hooks: [{ type: "command", command: "aidlc engine hook team-guard" }],
+    });
+    writeFileSync(projectHookSettings, `${JSON.stringify(settings, null, 2)}\n`);
+    const projectHookEnv = { ...process.env, PATH: "", AIDLC_INSTALL_ROOT: join(root, "project-hook-install") };
+    const projectHookRun = spawnSync(native.artifact, ["engine", "hook", "team-guard"], {
+      cwd: projectHookProject,
+      encoding: "utf-8",
+      input: "{}",
+      env: { ...projectHookEnv, CLAUDE_PROJECT_DIR: projectHookProject },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(projectHookRun.status, `${projectHookRun.stdout ?? ""}${projectHookRun.stderr ?? ""}`).toBe(1);
+    const projectHookDoctor = spawnSync(native.artifact, ["doctor", "--verbose", "--project-dir", projectHookProject], {
+      cwd: projectHookProject,
+      encoding: "utf-8",
+      env: projectHookEnv,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const projectHookOutput = `${projectHookDoctor.stdout ?? ""}${projectHookDoctor.stderr ?? ""}`;
+    expect(projectHookOutput).toContain(
+      "fail  aidlc-team-guard.ts is not in this install's runtime: `aidlc engine hook team-guard` exits 1 without running it",
+    );
+    expect(projectHookOutput).not.toContain("aidlc-team-guard.ts present");
+    expect(projectHookOutput).toContain("ok    aidlc-write-audit-log.ts present");
 
     const utility = spawnSync(BUN, [UTILITY_TS, "version"], {
       cwd: tempDirectory("rerun"),
@@ -938,8 +982,13 @@ describe("t238 build-binaries release builder", () => {
         humanInstall.status,
         `${humanInstall.stdout ?? ""}${humanInstall.stderr ?? ""}`,
       ).toBe(0);
-      expect(humanInstall.stdout ?? "")
-        .toContain(`PASS installed AI-DLC ${AIDLC_VERSION} with all harness runtimes`);
+      // The one catalogue path a person adds to Claude Code or Codex, printed to copy.
+      const catalogue = join(realpathSync(installRoot), "plugins");
+      expect(humanInstall.stdout ?? "").toContain(
+        `PASS installed AI-DLC ${AIDLC_VERSION} with all harness runtimes\n` +
+          `Plugin marketplace for Claude Code and Codex: ${catalogue} (add it once; updates keep it current)\n`,
+      );
+      expect(existsSync(join(catalogue, ".claude-plugin", "marketplace.json"))).toBe(true);
       expect(`${humanInstall.stdout ?? ""}${humanInstall.stderr ?? ""}`).not.toContain("\u001b[");
 
       const profileText = readFileSync(profile, "utf-8");
@@ -1071,6 +1120,20 @@ describe("t238 build-binaries release builder", () => {
       expect(readFileSync(join(output, "install.ps1"), "utf-8")).toContain(
         `$PackagedVersion = '${AIDLC_VERSION}'`,
       );
+      // The runtime's plugins/ folder is one catalogue of AI-DLC's own plugins
+      // a person adds once; no plugin in it carries a catalogue of its own.
+      const copy = join(root, "copy-runtime");
+      extractTarGz(join(output, releaseCopyRuntimeAsset(AIDLC_VERSION)), copy);
+      const catalogue = JSON.parse(
+        readFileSync(join(copy, "plugins", ".claude-plugin", "marketplace.json"), "utf-8"),
+      ) as { name: string; plugins: Array<{ name: string; source: string }> };
+      expect(catalogue.name).toBe("aidlc-plugins");
+      expect(catalogue.plugins).toContainEqual(expect.objectContaining({
+        name: "aidlc-test-pro",
+        source: "./test-pro/claude",
+      }));
+      expect(existsSync(join(copy, "plugins", ".agents", "plugins", "marketplace.json"))).toBe(true);
+      expect(existsSync(join(copy, "plugins", "test-pro", "claude", ".claude-plugin", "marketplace.json"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

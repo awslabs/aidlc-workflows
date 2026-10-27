@@ -29,6 +29,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { quoteCommandArgument } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
 import {
   boltName,
   reviewedSourceRefPrefix,
@@ -38,6 +39,7 @@ import {
   currentSwarmAttemptObligations,
   currentSwarmSourceMergeChain,
   currentSwarmSourceOpeningFingerprint,
+  engineDir,
   freshReviewReceipts,
   latestMainWorkflowStageRunFloorForProject,
   readAllAuditShards,
@@ -74,6 +76,11 @@ import {
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 import { approveSuppliedCheckCommand } from "../harness/verification-command.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -189,6 +196,47 @@ describe("t305 strict source-manifest validation", () => {
     if (accepted.ok) {
       expect(sourceClaimCovers("\0src/committed.ts", accepted)).toBe(true);
     }
+  });
+
+  // `d` is one of the characters in `[itemId]`. Read as a Git pathspec, the
+  // folder's claim is a character class that matches this ignored sibling, and
+  // the ignored-source probe refused the claim for it. The probe still reads the
+  // folder itself: an ignored file inside it refuses the claim.
+  test("a bracketed route folder claim is checked for ignored source as the literal folder it names", () => {
+    const { project, record } = fixture();
+    const items = join(project, "src", "app", "items");
+    mkdirSync(join(items, "[itemId]"), { recursive: true });
+    writeFileSync(join(items, "[itemId]", "page.tsx"), "export default function Item() {}\n");
+    writeFileSync(join(items, "d"), "ignored sibling\n");
+    writeFileSync(join(project, ".gitignore"), "src/app/items/d\n");
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "src/app/items/[itemId]/" }],
+    });
+
+    const accepted = readUnitSourceManifest(
+      project,
+      "code-generation",
+      "alpha",
+    );
+    expect(accepted.ok ? "accepted" : accepted.reason).toBe("accepted");
+    if (accepted.ok) {
+      expect(sourceClaimCovers("\0src/app/items/[itemId]/page.tsx", accepted)).toBe(true);
+      expect(sourceClaimCovers("\0src/app/items/d", accepted)).toBe(false);
+    }
+
+    writeFileSync(join(items, "[itemId]", "local.env"), "ignored inside\n");
+    writeFileSync(join(project, ".gitignore"), "src/app/items/d\n*.env\n");
+    const refused = readUnitSourceManifest(
+      project,
+      "code-generation",
+      "alpha",
+    );
+    expect(refused.ok ? "accepted" : refused.reason).toContain(
+      'contains ignored application source "src/app/items/[itemId]/local.env"',
+    );
   });
 
   test("accepts an exact claim when a committed directory becomes a file", () => {
@@ -374,7 +422,10 @@ describe("t305 strict source-manifest validation", () => {
     });
     const prefix = readUnitSourceManifest(project, "code-generation", "alpha");
     expect(prefix.ok).toBe(false);
-    if (!prefix.ok) expect(prefix.reason).toContain("contains ignored application source");
+    if (!prefix.ok) {
+      expect(prefix.reason).toContain("contains ignored application source");
+      expect(prefix.reason).not.toContain("neither tracked at HEAD");
+    }
 
     writeFileSync(join(project, "force-only.secret"), "staged but uncommitted\n");
     writeFileSync(
@@ -428,6 +479,55 @@ describe("t305 strict source-manifest validation", () => {
     );
     expect(slashless.ok).toBe(false);
     if (!slashless.ok) expect(slashless.reason).toContain("must end with");
+  });
+
+  test("a gitignored exact dependency file cannot be registered as source", () => {
+    const { project, record } = fixture();
+    mkdirSync(join(project, "node_modules/pkg"), { recursive: true });
+    writeFileSync(join(project, "node_modules/pkg/index.js"), "module.exports = {};\n");
+    writeFileSync(join(project, ".gitignore"), "node_modules/\n");
+    manifest(record, "alpha", { stage: "code-generation", unit: "alpha", version: 1,
+      writes: [{ path: "node_modules/pkg/index.js" }] });
+    const refused = readUnitSourceManifest(project, "code-generation", "alpha");
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.reason).toContain("omit this exact claim");
+      expect(refused.reason).not.toContain('"paths":[');
+    }
+  });
+
+  test("ignored exact-file admission distinguishes index tracking, HEAD membership, and source registration", () => {
+    const { project, record } = fixture();
+    mkdirSync(join(project, "src"));
+    const file = join(project, "src/main.js.map");
+    writeFileSync(file, "{}\n");
+    writeFileSync(join(project, ".gitignore"), "*.js.map\n");
+    manifest(record, "alpha", { stage: "code-generation", unit: "alpha", version: 1, writes: [{ path: "src/main.js.map" }] });
+    const first = readUnitSourceManifest(project, "code-generation", "alpha");
+    expect(first.ok).toBe(false);
+    if (!first.ok) {
+      expect(first.reason).toContain('"src/main.js.map" is ignored by Git and cannot be source-review evidence');
+      expect(first.reason).toContain("neither tracked at HEAD nor explicitly registered as source");
+      expect(first.reason).toContain("Git index-only additions (including force-add) or jj tracking alone");
+      expect(first.reason).toContain('{"version":1,"paths":["src/main.js.map"]}');
+      expect(first.reason).toContain(".aidlc-source-paths.json in this repository's root (merge with existing entries)");
+      expect(first.reason).toContain("omit this exact claim");
+      expect(first.reason).toContain("exclude list instead of paths");
+    }
+    git(project, ["add", "-f", "--", "src/main.js.map"]);
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+    const registry = join(project, ".aidlc-source-paths.json");
+    writeFileSync(registry, JSON.stringify({ version: 1, paths: ["src/main.js.map"], exclude: ["src/main.js.map"] }));
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
+    expect(workspaceSourceListing(project)?.has("\0src/main.js.map")).toBe(true);
+    // Removing registration restores the refusal even when exclude is present.
+    writeFileSync(registry, JSON.stringify({ version: 1, exclude: ["src/main.js.map"] }));
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+    rmSync(registry);
+    git(project, ["commit", "-qm", "track ignored file in HEAD"]);
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
+    expect(readFileSync(file, "utf-8")).toBe("{}\n");
+    expect(readFileSync(join(project, ".gitignore"), "utf-8")).toBe("*.js.map\n");
   });
 
   test("rechecks mixed ignore matches and negations on each read of the same manifest", () => {
@@ -1003,6 +1103,7 @@ function runtimeFixture(): { project: string; record: string } {
   let state = readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8");
   state = state
     .replace("- **Current Stage**: feasibility", "- **Current Stage**: code-generation\n- **Construction Iteration**: stage-major")
+    .replace("- [ ] units-generation \u2014 EXECUTE", "- [x] units-generation \u2014 EXECUTE")
     .replace("- [ ] code-generation — EXECUTE", "- [?] code-generation — EXECUTE");
   writeFileSync(join(record, "aidlc-state.md"), state, "utf-8");
   const dag = join(record, "inception", "units-generation");
@@ -1380,6 +1481,15 @@ describe("t305 real receipt and guard flows", () => {
     expect(error).not.toContain("Write the manifest listing every application-source path");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  test("the add-repo it offers keeps a repo name with a space whole", () => {
+    const { project, record } = runtimeFixture();
+    writeManifest(record, "alpha", [{ repo: "app b", path: "src/" }]);
+    const refused = cli(LOG, ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", "1"], project);
+    expect(refused.rc).toBe(1);
+    const error = (JSON.parse(refused.out) as { error: string }).error;
+    expect(error).toContain(`intent add-repo ${quoteCommandArgument("app b")} --reason`);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("REVIEW_COMPLETED and retry-pending refuse source edited after dispatch", () => {
     const { project, record } = runtimeFixture();
     writeManifest(record, "alpha", [{ path: "app.ts" }]);
@@ -1446,6 +1556,9 @@ describe("t305 real receipt and guard flows", () => {
     const refused = cli(LOG, args, project);
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain("ignored by Git");
+    expect(refused.out).toContain("neither tracked at HEAD nor explicitly registered as source");
+    const diagnostic = JSON.parse(refused.out) as { error: string };
+    expect(diagnostic.error).toContain('{"version":1,"paths":["ignored.ts"]}');
     expect(readAllAuditShards(project)).not.toMatch(
       /\*\*Event\*\*: REVIEW_REQUESTED[\s\S]*?\*\*Unit\*\*: alpha/,
     );
@@ -1562,6 +1675,30 @@ describe("t305 real receipt and guard flows", () => {
     writeFileSync(join(reverted.project, "extra.ts"), "export const x=1\n"); review(reverted.project, reverted.record, "beta", []); expect(approve(reverted.project).rc).toBe(1); rmSync(join(reverted.project, "extra.ts")); expect(approve(reverted.project).rc).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  test("a file the agent changed before the plan was picked, put back since, is nobody's change", () => {
+    // The pick's Source Baseline holds the agent's early edit (app = 1); before it the file held app = 0, as the
+    // creation kept with the work (aidlc-before-pick.ts). The person ran the undo the pick's line named.
+    const keepBeforePick = (project: string): void => {
+      const before = workspaceSourceListing(project)?.get("\0app.ts")?.split(" ")[1];
+      mkdirSync(engineDir(project), { recursive: true });
+      writeFileSync(join(engineDir(project), "before-pick.json"), `${JSON.stringify({ files: [{ path: "app.ts", listed: before }] })}\n`);
+    };
+    const putBack = runtimeFixture();
+    writeFileSync(join(putBack.project, "app.ts"), "export const app = 0;\n");
+    keepBeforePick(putBack.project);
+    review(putBack.project, putBack.record, "alpha", []); review(putBack.project, putBack.record, "beta", []);
+    const approved = approve(putBack.project);
+    expect(approved.out).not.toContain("no Unit's review covers");
+    expect(approved.rc, approved.out).toBe(0);
+    // Any other content is still a change no Unit claimed.
+    const other = runtimeFixture();
+    writeFileSync(join(other.project, "app.ts"), "export const app = 0;\n");
+    keepBeforePick(other.project);
+    writeFileSync(join(other.project, "app.ts"), "export const app = 2;\n");
+    review(other.project, other.record, "alpha", []); review(other.project, other.record, "beta", []);
+    expect(approve(other.project).out).toContain("no Unit's review covers");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("a setting recorded during the stage is not unclaimed source", () => {
     const { project, record } = runtimeFixture();
     review(project, record, "alpha", [{ path: "app.ts" }]); review(project, record, "beta", []);
@@ -1612,14 +1749,16 @@ describe("t305 real receipt and guard flows", () => {
     expect(refused.out).toContain("no Unit's review covers");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  test("6 unit-major ignores late STAGE_STARTED and destroyed baseline fails closed", () => {
+  test("6 unit-major ignores late STAGE_STARTED; a destroyed baseline is said once, a changed one fails closed", () => {
     const late = runtimeFixture(); const state=join(late.record,"aidlc-state.md"); writeFileSync(state,readFileSync(state,"utf-8").replace("stage-major","unit-major"));
     writeFileSync(join(late.project,"late.ts"),"export const late=1\n");
     const now=workspaceSourceListing(late.project)!; appendAuditEntry("STAGE_STARTED",{Workflow:"single-stage:code-generation",Stage:"code-generation",Agent:"aidlc-developer-agent","Source Baseline":writeBaselineSourceSnapshot(late.project,"code-generation",now)},late.project);
     const syntheticSecond=Math.floor(Date.now()/1000); while(Math.floor(Date.now()/1000)===syntheticSecond){}
     review(late.project,late.record,"alpha",[{path:"app.ts"}]); review(late.project,late.record,"beta",[]); const lateState=readFileSync(state,"utf-8"); const lateReceipts=freshReviewReceipts(late.project,lateState,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect(lateReceipts.sourceBaseline.state).toBe("ready"); if (lateReceipts.sourceBaseline.state === "ready") expect(lateReceipts.sourceBaseline.listing.has("\0late.ts")).toBe(false); expect(approve(late.project).out).toContain("late.ts");
     const destroyed=runtimeFixture(); review(destroyed.project,destroyed.record,"alpha",[{path:"app.ts"}]); review(destroyed.project,destroyed.record,"beta",[]);
-    const audit=readAllAuditShards(destroyed.project); const hash=/\*\*Source Baseline\*\*: sha256:([0-9a-f]{64})/.exec(audit)![1]; rmSync(join(destroyed.record,".aidlc-engine/source-review","code-generation",`baseline-${hash.slice(0,12)}.tsv`)); expect(approve(destroyed.project).out).toContain("the record of what this stage started from is missing");
+    const audit=readAllAuditShards(destroyed.project); const hash=/\*\*Source Baseline\*\*: sha256:([0-9a-f]{64})/.exec(audit)![1]; rmSync(join(destroyed.record,".aidlc-engine/source-review","code-generation",`baseline-${hash.slice(0,12)}.tsv`)); const carried=approve(destroyed.project); expect(carried.rc,carried.out).toBe(0); expect(carried.out).toContain("I could not check Code Generation for files changed outside the units on this machine; carrying on.");
+    const changed=runtimeFixture(); review(changed.project,changed.record,"alpha",[{path:"app.ts"}]); review(changed.project,changed.record,"beta",[]);
+    const changedHash=/\*\*Source Baseline\*\*: sha256:([0-9a-f]{64})/.exec(readAllAuditShards(changed.project))![1]; writeFileSync(join(changed.record,".aidlc-engine/source-review","code-generation",`baseline-${changedHash.slice(0,12)}.tsv`),"workspace\nnot the listing it was\n"); const held=approve(changed.project); expect(held.rc).toBe(1); expect(held.out).toContain("the record of what this stage started from is missing");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("7 manifest tamper and 8 claimed deletion make only the owning unit stale", () => {
@@ -3676,6 +3815,7 @@ describe("t305 stage and protocol source-attribution requirements", () => {
     const reviewerUnit=readFileSync(join(PROTOCOL,"stage-protocol-reviewer-unit.md"),"utf-8"); expect(reviewerUnit).toContain("differentially at those paths"); expect(reviewer).toContain("source-manifest.json"); expect(reviewerUnit).toContain("claimed source paths");
     expect(swarm).toContain("before the in-Bolt review"); expect(swarm).toContain("worktree-relative and omit `repo`"); expect(definition).toContain("source-manifest.json"); expect(definition).toContain("stage-entry source baseline");
     expect(swarm).toContain("Post-finalize source landing"); expect(swarm).toContain("cleanup-only reconciliation"); expect(swarm).toContain("SWARM_SOURCE_MERGED");
+    expect(swarm).toContain("--target <that row's landing_branch>"); expect(swarm).not.toContain("the same base branch used by");
   });
 
   // The review request needs every Step 5 file (aidlc-log.ts review), so the

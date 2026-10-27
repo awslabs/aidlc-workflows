@@ -30,6 +30,7 @@ import {
   KiroIdeScopeHost,
   kiroIdeWired,
 } from "../harness/scope-hosts.ts";
+import kiroManifest from "../../harness/kiro/manifest.ts";
 
 const json = (path: string) => JSON.parse(readFileSync(join(REPO_ROOT, path), "utf-8"));
 const codexWiring = json("dist/codex/.codex/hooks.json");
@@ -212,7 +213,7 @@ describe("Copilot CLI: .github/hooks/aidlc.json and Copilot's own payloads", () 
 
 describe("Kiro CLI: the agent JSON's hooks and Kiro CLI 2.29's own payloads", () => {
   const agent = (name: string) => json(`dist/kiro/.kiro/agents/${name}.json`);
-  const kiro = (target: string) => `bun .kiro/tools/aidlc.ts engine adapter kiro ${target}`;
+  const kiro = (target: string) => `bun .kiro/tools/aidlc.ts engine adapter kiro ${target}${kiroManifest.hookCommandSuffix}`;
   const cli = json("tests/fixtures/kiro-hook-payloads/cli-2.29.0.json") as Record<string, Record<string, unknown>>;
 
   test("a matcher is a glob over the tool's name and its alias, as the CLI reads it", () => {
@@ -396,6 +397,26 @@ describe("opencode: one plugin instance in a process the host waits on", () => {
       expect(helper.startsWith(`${host.session}_child`)).toBe(true);
       expect(helper.endsWith(": the rewritten brief")).toBe(true);
       expect(host.refusals).toHaveLength(1);
+    } finally {
+      host.dispose();
+    }
+  });
+
+  test("a command whose chat the plugin does not name stops, unless the plugin came from a release before it named one", () => {
+    const proj = scratch();
+    mkdirSync(join(proj, ".opencode", "plugin"), { recursive: true });
+    writeFileSync(join(proj, ".opencode", "plugin", "aidlc-opencode-adapter.ts"), STUB);
+    const host = new OpencodeScopeHost(proj);
+    try {
+      expect(() => host.bash("bun --version")).toThrow("the opencode plugin named no chat for bun --version");
+      host.release = "2.11.0";
+      expect(host.bash("bun --version").status).toBe(0);
+      host.release = "2.11.1-preview.20261015.1";
+      expect(host.bash("bun --version").status).toBe(0);
+      host.release = "2.11.1-preview.20261016.1";
+      expect(() => host.bash("bun --version")).toThrow("the opencode plugin named no chat");
+      host.release = "2.11.1";
+      expect(() => host.bash("bun --version")).toThrow("the opencode plugin named no chat");
     } finally {
       host.dispose();
     }

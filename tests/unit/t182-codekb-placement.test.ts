@@ -323,16 +323,18 @@ describe("t182 isCodekb resolver — reverse-engineering artifacts land under sp
     }
   });
 
-  test("multi-repo reverse-engineering enumerates the full produces set under every registered repo", () => {
+  // Once per artifact, with {repo} for each registered repo, and the note naming
+  // them: one path per repo grew the step past one result (#2874).
+  test("multi-repo reverse-engineering names the full produces set once, for every registered repo", () => {
     const repos = ["repo-a", "repo-b"];
     const { dir, proj } = emitReverseEngineering(repos);
-    expect(dir.produces).toHaveLength(18);
-    for (const repo of repos) {
-      const prefix = `${relativeCodekbDir(proj, repo, DEFAULT_SPACE)}/`;
-      expect(dir.produces.filter((path) => path.startsWith(prefix))).toHaveLength(9);
-      expect(dir.produces).toContain(`${prefix}architecture.md`);
-      expect(dir.produces).toContain(`${prefix}reverse-engineering-timestamp.md`);
-    }
+    const prefix = `${relativeCodekbDir(proj, "{repo}", DEFAULT_SPACE)}/`;
+    expect(dir.produces).toHaveLength(9);
+    expect(dir.produces.every((path) => path.startsWith(prefix))).toBe(true);
+    expect(dir.produces).toContain(`${prefix}architecture.md`);
+    expect(dir.produces).toContain(`${prefix}reverse-engineering-timestamp.md`);
+    expect((dir as RunStageDirective & { repos_note?: string }).repos_note)
+      .toBe("Each path with {repo} is one file per repository this work covers: repo-a and repo-b.");
     expect(
       dir.produces.some((path) =>
         path.includes(`/codekb/${basename(proj)}/`)

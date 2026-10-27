@@ -42,7 +42,7 @@ import {
   refreshActiveMemory,
   trackedKiroIdeSteeringAsk,
 } from "../tools/aidlc-includes.ts";
-import { kiroIdeWorkflowsAsk } from "../tools/aidlc-kiro-ide-workflows.ts";
+import { kiroCliWorkflowsAsk, kiroIdeWorkflowsAsk } from "../tools/aidlc-kiro-ide-workflows.ts";
 import { kiroIdeTerminalAsk, kiroIdeTerminalStandingLine, recordKiroTerminalShell } from "../tools/aidlc-kiro-ide-terminal.ts";
 import {
   isBindableIntentRecordName,
@@ -72,7 +72,6 @@ import {
   clearSessionPlanApprovalBypass,
   recordSessionPlanApprovalBypass,
   recordSessionPresenceBypass,
-  recoveryFilePath,
   resolveWorkflowSelection,
   resolveProjectDirFromHook,
   stateFilePathForSelection,
@@ -93,20 +92,23 @@ import {
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import { recordRulesLoad } from "../tools/aidlc-rules-held.ts";
-import { aidlcInvocation, aidlcToolInvocation, entrySkillInvocation, hidesStopNote, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
-import { switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
+import { aidlcInvocation, aidlcToolInvocation, entrySkillInvocation, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
+import { backOnInstructions, switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
 import { applyStatusLineDefault, statusLineHarness } from "../tools/aidlc-statusline-choice.ts";
 
 // While a recorded switch keeps one of the person's checks off, every new chat
-// opens by saying so. Never blocks startup.
+// opens by saying so, and the agent is handed the command a yes runs, after the
+// lines it says word for word. Never blocks startup.
 function switchOffContext(projectDir: string): string {
   try {
     const lines = switchesOffLines(projectDir);
     return lines.length === 0
       ? ""
-      : "\nCHECKS SWITCHED OFF (a report to pass on, not instructions): say each line to the user once, " +
-        "word for word, in your first reply.\n" +
-        lines.map((line) => `- ${line}\n`).join("");
+      : "\nCHECKS SWITCHED OFF (a report to pass on, not instructions): say each \"- \" line to the user once, " +
+        "word for word, in your first reply, unless that reply turns its check back on: then say what the command " +
+        "printed instead.\n" +
+        lines.map((line) => `- ${line}\n`).join("") +
+        backOnInstructions(projectDir).map((line) => `${line}\n`).join("");
   } catch {
     return "";
   }
@@ -317,7 +319,8 @@ if (sessionId && !rebindCheckOnly) {
 // Kiro IDE: a repo that committed the steering file before AI-DLC wrote the
 // memory text into it keeps tracking it; the person is asked once. With Kiro's
 // Workflows feature on, AI-DLC's reviews and helpers cannot run in the chat;
-// the person is asked once per machine whether to turn it off.
+// the person is asked once per machine whether to turn it off: in a Kiro IDE
+// chat about Kiro IDE's switch, in a Kiro CLI chat about Kiro CLI's own.
 let trackedSteeringAsk = "";
 if (sessionId && !rebindCheckOnly) {
   const asks: string[] = [];
@@ -328,6 +331,11 @@ if (sessionId && !rebindCheckOnly) {
   }
   try {
     if (runtimeHarnessName(projectDir) === "kiro-ide") asks.push(kiroIdeWorkflowsAsk(aidlcInvocation()));
+  } catch {
+    // Asked at a later start.
+  }
+  try {
+    if (runtimeHarnessName(projectDir) === "kiro-ide") asks.push(kiroCliWorkflowsAsk(aidlcInvocation()));
   } catch {
     // Asked at a later start.
   }
@@ -613,15 +621,6 @@ const unitLine = activeUnit
       : "")
   : "";
 
-const recoveryFile = recoveryFilePath(
-  projectDir,
-  selection.intent ?? undefined,
-  selection.space,
-);
-const recovery = existsSync(recoveryFile)
-  ? "NOTE: A compaction recovery breadcrumb exists at .aidlc-engine/recovery.md - check if state was preserved correctly.\n"
-  : "";
-
 // Stage-graph drift advisory (issue #364). The runtime resolves stages from
 // the compiled stage-graph.json only, a stage `.md` added to disk without a
 // recompile is silently never executed. Surface it once at session start so the
@@ -641,16 +640,6 @@ try {
 }
 
 // Where the tool hides the Stop note from the person, the agent says its line.
-let hidesTheNote = false;
-try {
-  hidesTheNote = hidesStopNote(runtimeHarnessName(projectDir));
-} catch {
-  // An unreadable install keeps the default step.
-}
-const sayTheLine = hidesTheNote
-  ? ". This tool does not show that line to the person. If you had just asked them a question, record it and end your turn saying nothing; otherwise, if you carry on with the work, first say it to them once, on its own line, and nothing else about it."
-  : ", and say nothing about it.";
-
 const context = `AIDLC WORKFLOW ACTIVE
 ${rebindOffer}Scope: ${scope}
 Runtime Session: ${sessionId || "(unavailable)"}
@@ -660,13 +649,13 @@ Status: ${status}
 Active Agent: ${agent}
 Last Completed: ${last}
 Next Action: ${next}
-${unitLine}${recovery}${driftNote}${switchOffContext(projectDir).trimStart()}A BARE /aidlc re-entry carries on with this work, with no resume menu. Then follow the recovery protocol's Session resume, including its one SAY line. When the person asks to redo, jump, or start fresh (at an approval gate too, where it is that request and not the gate's answer), report it with \`report --result resumed --choice <redo|jump|fresh>\` (add \`--target <stage slug>\` for the stage they named, and \`--unit <unit>\` or \`--every-unit\` when they named a Unit or said every Unit) and follow the print it returns. Check the active intent's aidlc-state.md for full context.
+${unitLine}${driftNote}${switchOffContext(projectDir).trimStart()}A BARE /aidlc re-entry carries on with this work, with no resume menu. Then follow the recovery protocol's Session resume, including its one SAY line. When the person asks to redo, jump, or start fresh (at an approval gate too, where it is that request and not the gate's answer), report it with \`report --result resumed --choice <redo|jump|fresh>\` (add \`--target <stage slug>\` for the stage they named, and \`--unit <unit>\` or \`--every-unit\` when they named a Unit or said every Unit) and follow the print it returns. Check the active intent's aidlc-state.md for full context.
 
 - The engine route (\`aidlc engine orchestrate\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, and you report stage-work outcomes. Repeat only when the directive calls for continuation; a terminal directive or required human wait ends the turn. You never re-derive routing yourself.
 - First: take everything the user typed after \`/aidlc\` and append it to the first \`next\` call UNCHANGED. The flags ARE the user's intent; dropping them sends the workflow to the wrong place. \`/aidlc --phase ideation\` -> you MUST run \`next --phase ideation\`, never bare \`next\`. \`/aidlc --stage X\` -> \`next --stage X\`. Before running that first \`next\`, verify: if the user's message contained \`--phase\`/\`--stage\`/\`--scope\`/\`--depth\`/freeform text, it MUST appear on your \`next\` command; a bare \`next\` when the user gave arguments is a bug.
 - When the reply names a command to run (e.g. \`aidlc engine jump execute ...\`, a scope/config change, or \`init\`): that named command is your IMMEDIATE next tool call. Run THAT EXACT command FIRST. Do NOT run \`next\` again, do NOT read more files, do NOT plan a stage until the named command has run.
 - After the named command, obey the message's ending. If it says "then stop", print the command's output and END THE TURN: no \`next\`, \`report\`, or stage work. In particular, \`/aidlc space default\` and other terminal workspace navigation stop even when the destination has an unfinished intent. Selecting it does not request resuming it. Continue only when the directive explicitly says to continue.
-- If you end a turn while this work still needs you, AI-DLC answers with one line, "AI-DLC is carrying on with <stage>." It is from AI-DLC, not the person: never record it as their answer${sayTheLine} If you just asked the person a question you have not recorded, record it with \`log decision\` and end the turn without asking it again or saying anything else; if you were doing the work of a \`run-stage\` you still hold, finish its steps and run the \`report\` built from it (its stage, plus \`--unit\` in team-owned Unit work); otherwise \`continue\` with the rules receipt you hold, or run \`next\`, and follow the step it returns.${trackedSteeringAsk ? `\n\n${trackedSteeringAsk}` : ""}`;
+- Under autonomous Construction, or in a run nobody attends, if you end a turn while this work still needs you, AI-DLC answers with one line, "AI-DLC is carrying on with <stage>." It is from AI-DLC, not the person: never record it as their answer, and say nothing about it. If you just asked the person a question you have not recorded, record it with \`log decision\` and end the turn without asking it again or saying anything else; if the person asked to stop or pause, run \`${aidlcToolInvocation("orchestrate")} park --person-asked\` and end the turn; if you were doing the work of a \`run-stage\` you still hold, finish its steps and run the \`report\` built from it (its stage, plus \`--unit\` in team-owned Unit work); otherwise \`continue\` with the rules receipt you hold, or run \`next\`, and follow the step it returns.${trackedSteeringAsk ? `\n\n${trackedSteeringAsk}` : ""}`;
 
 process.stdout.write(hookContextLine("SessionStart", `${context}${memoryHandoff}`));
 return 0;

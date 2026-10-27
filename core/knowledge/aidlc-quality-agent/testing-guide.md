@@ -29,6 +29,11 @@ Structure tests in this ratio (approximate):
 - Execute in minutes; run before release
 - Target: critical business workflows only (login, core CRUD, payment)
 - Maximum 20-30 e2e tests; more indicates missing integration coverage
+- A browser workflow is end to end only when it runs in a real browser engine
+  (for example Chromium through Playwright). A journey in Node or a DOM
+  emulator (jsdom, Happy DOM) is an integration test, however much of the app
+  it assembles: it misses native browser behavior, such as `fetch` failing
+  when called without its `window` receiver
 
 ## Test Types Beyond the Pyramid
 

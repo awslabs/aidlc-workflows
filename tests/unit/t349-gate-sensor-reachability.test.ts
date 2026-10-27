@@ -14,8 +14,8 @@
 // paths through aidlc-state.ts producesDirsForStage, which mirrors this
 // resolver's placement (both key codekb stages on KNOWN_CODEKB_STAGES).
 //
-// Write-fired sensors (linter, type-check, traceability) are out of scope:
-// they match the files an agent writes, not the stage's declared deliverables.
+// Write-fired sensors (linter, type-check) are out of scope: they match the
+// files an agent writes, not the stage's declared deliverables.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";

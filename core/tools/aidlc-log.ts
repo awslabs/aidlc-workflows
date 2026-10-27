@@ -6,30 +6,57 @@
 // (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
 // because they fire per-question / per-review, not per state transition.
 
-import { reviewRequestNote } from "./aidlc-directive.ts";
+import { otherWorkNote, reviewRequestNote, reviewVerdictNote } from "./aidlc-directive.ts";
+import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { prepareReviewCopy, removeReviewCopy } from "./aidlc-kiro-review-copy.ts";
 import {
   chatsSince,
-  holdsQuote,
-  isMessageId,
+  latestMessage,
   latestSpendingTimestamp,
   listMessages,
-  messageIsReply,
-  personsSaidWords,
+  messageBeforeJoining,
+  proveMessage,
   readMessage,
   type StoredMessage,
+  SUMMARY_CHANGES_QUESTION,
 } from "./aidlc-message-store.ts";
 import {
+  CODEKB_ANALYSED_FILE,
+  codekbAnalysed,
+  committedTextBytes,
+  engineDir,
+  gateEstimateSeconds,
+  GATE_NOTE_SECONDS,
+  KNOWN_CODEKB_STAGES,
+  MANY_REPOS,
+  writeFileAtomic,
   asksForHelp,
+  answeredBeforeShownStep,
+  auditRowWritesFile,
+  personsWordsText,
   humanRepliedSinceGate,
+  repliedSinceStageStart,
+  stageStartFloorRefusal,
   printUsageAndExit,
   NoGuardRecoveryAskError,
   recordGuardRecoveryChoice,
   requestChangesReportCommand,
-  releaseTakenGuardRecoveryReply,
+  stageGateReportCommand,
+  stageReviewBriefCommand,
+  backwardJumpBoundary,
+  reviewInvalidationAttemptView,
+  markStageWorkLogged,
+  markTurnEnd,
+  LEARNINGS_CORRECTION_ASK,
+  learningsRitualRuns,
+  ceremonyPolicyValues,
+  terminalReviewVerdict,
+  isAutonomousConstructionGate,
   assertNoSymlinkInChainOrThrow,
   codekbRepoName,
   auditBlockField,
@@ -42,7 +69,10 @@ import {
   protectedQuestionRelativePath,
   mintProtectedQuestion,
   protectedTargetDigest,
+  readProtectedQuestion,
+  protectedResponseFields,
   readProtectedResponse,
+  protectedReplyFloor,
   requireProtectedResponse,
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
@@ -94,18 +124,22 @@ import {
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
   humanTurnMintAllowed,
-  humanTurnState,
   isReplyTurn,
   isAutonomousConstructionDecision,
   legacyReviewAppendixEchoFields,
   isAutonomousSwarmStage,
+  unitOpenCheckpoints,
+  waveEligible,
   loadStageGraphAll,
   isNonAnswer,
   ANSWER_MODE_LABELS,
   ANSWER_MODE_QUESTION_KIND,
+  LEARNINGS_NOTE_QUESTION_KIND,
   QUESTION_KIND_FIELD,
   answerModeFromReply,
   isAnswerModeDecision,
+  offeredChoiceLabel,
+  ASSUMPTION_CONFIRMATION_QUESTION_KIND,
   openDecisionBlock,
   isoTimestamp,
   latestPipelineLinkArtifactMtime,
@@ -113,6 +147,8 @@ import {
   readFindingsTable,
   unreadableFindingsTableFinding,
   pipelineAttemptStartedAt,
+  developerHandoffPaths,
+  pipelineLinkCommand,
   pipelineLinkEvidence,
   pipelineLinks,
   effectiveSupportAgentsForProject,
@@ -121,26 +157,41 @@ import {
   recordAcceptedChanges,
   governedChangeControl,
   guardPolicyAcceptsChanges,
+  ownShardRows,
+  MESSAGE_SPENDING_EVENTS,
   readAuditShardEvents,
+  backgroundAgentOutSince,
   isRequestTurn,
-  latestPersonTurn,
-  personSpokeSinceGate,
+  CONFIG_KEYS,
+  latestReplyAfter,
+  repliesAfter,
+  personsGateReply,
+  settingsBesideDecision,
+  personRepliedSinceGateShown,
+  windowMessageIds,
+  personSpokeSinceReviewRequest,
+  messageSinceReviewRequest,
+  messageFill,
   ANSWER_SOURCE_ON_INSTRUCTION,
+  CONDUCTOR_SUMMARY_FIELD,
   unitSkippedUnits,
   readActiveAuditShardEvents,
   sortAttemptEvents,
   UNTRUSTED_AUDIT_NOTICE,
   planApprovalChallengeRelativePath,
+  agentFileText,
   readRegularFileNoFollowOrThrow,
   readStateFile,
   readUnitSourceManifest,
+  recordUnitClaimCheckouts,
   recordDir,
+  runRecordDir,
   recordedReviewFileDigest,
   editedReviewNotice,
   REVIEW_EDITED_FIELD,
   dictatedReviewNotice,
   REVIEW_DICTATED_FIELD,
-  noAgentFinishedSinceReview,
+  noReviewerFinishedSinceReview,
   noReviewerNotice,
   REVIEWER_FINISHED_FIELD,
   recordFileTargetOrThrow,
@@ -154,6 +205,7 @@ import {
   reviewDraftRelativePath,
   reviewerCompletionAfter,
   reviewFileDigest,
+  reviewFileSigner,
   reviewRecordDigest,
   reviewRecordRelativePath,
   reviewRequestArtifactsCurrent,
@@ -174,12 +226,13 @@ import {
   sameWorkspaceSource,
   resolveWorkflowSelection,
   resolveReviewClass,
-  selfAttributedDecisionMarker,
-  impliedConfirmationMarker,
   stripRecommendedDecorator,
-  pickerAnswerNote,
   isSummaryConfirmationChoice,
   isSummaryConfirmationOptions,
+  optionsList,
+  isLearningsNoteDecision,
+  boxPicksAddANote,
+  picksAddANote,
   summaryConfirmationCommands,
   summaryConfirmationOwed,
   summaryQuestionFileRelative,
@@ -187,6 +240,8 @@ import {
   SUMMARY_CONFIRMATION_HASH_SCOPE,
   summaryConfirmationAnswer,
   summaryConfirmationContentHash,
+  singleStageAttemptIsOpen,
+  singleStageAttemptScope,
   stateFilePath,
   teamUnitGateStatus,
   toPosix,
@@ -201,10 +256,14 @@ import {
   writeBaselineSourceSnapshot,
   writeUnitSourceSnapshot,
   writeWorkspaceSourceSnapshot,
+  otherOpenWorkClaims,
   PLAN_APPROVAL_ASKED_BY_ENGINE,
   planApprovalAskIsOpen,
+  LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
+  resolveCeremony,
 } from "./aidlc-lib.js";
 import type {
+  StageEntry,
   GuardAttemptState,
   GuardRefusal,
   TeamUnitGateResolution,
@@ -219,6 +278,7 @@ import type {
 } from "./aidlc-lib.js";
 import {
   deriveReviewFindingsList,
+  readReviewArtifactContexts,
   renderReadableReviewCopy,
 } from "./aidlc-review-brief.js";
 import {
@@ -241,8 +301,9 @@ import {
   recordPlanApprovalBatchReceipts,
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
+  recordPlanApprovalLegacyRecoveryAnswer,
 } from "./aidlc-testing-posture.js";
-import { aidlcDispatcherInvocation, entrySkillInvocation, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcEngineCommand, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES,
   SUMMARY_CONFIRMATION_CHOICES,
@@ -270,8 +331,8 @@ function unitManifestRefusal(
   if (manifest.unrecordedRepo !== undefined) {
     const repo = manifest.unrecordedRepo;
     return `unit "${unit}"'s source manifest at ${manifestPath} names repo ${JSON.stringify(repo)}, which this piece of work does not record. ` +
-      `Ask the person whether this work also touches ${repo}; if it does, run \`${aidlcDispatcherInvocation(`intent add-repo ${repo}`)}\` ` +
-      "(it says what that means for the plan), then request the review again. Do not rewrite the manifest to drop a repo the code was written in.";
+      `Run \`${aidlcDispatcherInvocation(`intent add-repo ${quoteCommandArgument(repo)} --reason "<why this work changes it>"`)}\` and say the line it prints once, ` +
+      "then request the review again. Do not rewrite the manifest to drop a repo the code was written in.";
   }
   return `unit "${unit}" has no valid source manifest at ${manifestPath} (${manifest.reason}). ${rewrite}`;
 }
@@ -283,28 +344,35 @@ function unknownCheckpointMessage(checkpoint: string, accepted: readonly string[
   return `Unknown --checkpoint "${checkpoint}". Accepted: ${accepted.join(", ")}`;
 }
 
-// Resolve the project dir AND assert that an active workflow exists before any
-// audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
-// --intent/--space, so it relies on default intent resolution. On a fresh shell
-// (pre-creation) or a >1-intent workspace with no active-intent cursor, that
-// resolution yields null and stateFilePath()/auditFilePath() collapse to the
-// BARE space record root (aidlc/spaces/<space>/intents/). Emitting there would
-// drop an audit shard DIRECTLY into the bare intents root and break the "no
-// aidlc-state.md / no audit/ ever lives directly in the bare intents root"
-// invariant (aidlc-lib.ts). Existence of the resolved state file is the same
-// "is there an active workflow" signal every other emitter guards on — the
-// hooks via `if (!existsSync(stateFilePath(...)))` no-op, emitError() via the
-// same check. aidlc-log is the lone emitter that was missing it; mirror the
-// clean-error idiom (orchestrator-called → a missing workflow is a misuse, not
-// a routine no-op).
-function resolveActiveProjectDir(explicit?: string): string {
+// Resolve the project dir AND assert, before any audit emit, that an active
+// workflow exists or that the row names an open isolated run. WHY: aidlc-log
+// is orchestrator-called per-question and threads no --intent/--space, so it
+// relies on default intent resolution. On a fresh shell (pre-creation) or a
+// >1-intent workspace with no active-intent cursor, that resolution yields
+// null and stateFilePath()/auditFilePath() collapse to the BARE space record
+// root (aidlc/spaces/<space>/intents/), where a workflow's row would belong to
+// no workflow. Existence of the resolved state file is the same "is there an
+// active workflow" signal every other emitter guards on: the hooks via
+// `if (!existsSync(stateFilePath(...)))` no-op, emitError() via the same check.
+// `isolatedStage` is the stage the row names: with no work selected, `next
+// --single` records that stage's isolated run in the bare root and `report
+// --single` reads its evidence there, so a row for the run whose attempt is
+// open joins its start, with or without `--single` (the stage protocol's own
+// question commands carry none).
+function resolveActiveProjectDir(explicit?: string, isolatedStage?: string): string {
   const pd = resolveProjectDir(explicit);
-  if (!existsSync(stateFilePath(pd))) {
+  if (!existsSync(stateFilePath(pd)) && !rowJoinsIsolatedRun(pd, isolatedStage)) {
     error(
       `No active workflow is selected, so this interaction cannot be recorded. Start one by describing what to build (${entrySkillInvocation()} "build the auth service"), or switch to an existing one with ${entrySkillInvocation()} intent <name>.`
     );
   }
   return pd;
+}
+
+// With no work selected, a row for a stage whose isolated run is open belongs
+// to that run (resolveActiveProjectDir).
+function rowJoinsIsolatedRun(pd: string, stage: string | undefined): boolean {
+  return stage !== undefined && !existsSync(stateFilePath(pd)) && singleStageAttemptIsOpen(pd, stage);
 }
 
 // handleAnswer emits inside a withAuditLock section (classification and
@@ -320,10 +388,20 @@ function emitAudit(
 ): void {
   if (holdsAuditLock(pd, intent, space)) {
     appendAuditEntryUnlocked(eventType, fields, pd, intent, space);
-    return;
+  } else {
+    appendAuditEntry(eventType, fields, pd, intent, space);
   }
-  appendAuditEntry(eventType, fields, pd, intent, space);
+  recordedRow = true;
 }
+
+// This run wrote an audit row: main() then leaves the engine mark for a
+// stage-work verb (markStageWorkLogged). A refusal exits before main() reads it.
+// Two rows are not the stage's work going on: one whose next move is the
+// person's (rowEndsTurn: the turn-end mark instead), and a review of a stage
+// no longer in flight (stageWorkRow false: no mark at all).
+let recordedRow = false;
+let rowEndsTurn = false;
+let stageWorkRow = true;
 
 // --- Flag parsing ---
 
@@ -336,8 +414,15 @@ function parseFlags(
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith("--")) {
-      if (a === "--single" || a === "--retry-pending" || a === "--stage-level" || a === "--park" || a === "--person-asked") {
+      if (a === "--single" || a === "--retry-pending" || a === "--stage-level" || a === "--park" || a === "--person-asked" ||
+        a === "--ends-turn") {
         flags[a.slice(2)] = "true";
+        continue;
+      }
+      // --on-instruction is the kind ("they left it to me"), so it stands alone;
+      // a value after it is the agent's own text, the form before --message.
+      if (a === "--on-instruction" && (i + 1 >= args.length || args[i + 1].startsWith("--"))) {
+        flags["on-instruction"] = "true";
         continue;
       }
       if (i + 1 >= args.length) {
@@ -408,7 +493,8 @@ function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[])
       }
       if (first === null && open !== null && open.words.length > 0) first = open;
       open = null;
-      const valueless = a === "--single" || a === "--retry-pending" || a === "--stage-level" || a === "--park";
+      const valueless = a === "--single" || a === "--retry-pending" || a === "--stage-level" || a === "--park" ||
+        a === "--ends-turn";
       const next = rawArgs[i + 1];
       if (valueless || next === undefined || (next.startsWith("--") && a !== "--project-dir")) continue;
       open = { flag: a, value: next, words: [] };
@@ -488,16 +574,21 @@ const LOG_INTERACTION_OPTIONS = [
 const DECISION_OPTIONS: ReadonlySet<string> = new Set([
   ...LOG_INTERACTION_OPTIONS,
   "--decision",
+  "--decision-file",
   "--rationale",
   "--exact-option-labels",
   "--question-kind",
 ]);
 // --units, --reason and --park: the engine's Plan Approval question, recorded as
 // the person chose (which Units, what to change, and whether to stop for now).
-// --on-instruction: a stage question the person left to the agent.
+// --on-instruction: a stage question the person left to the agent, with
+// --message naming the message that left it.
+// --ends-turn: their reply also asked something, which the agent answers.
+// The `config set` keys: a setting the same reply asked for, beside an Approve
+// Plan (settingsBesideDecision).
 const ANSWER_OPTIONS: ReadonlySet<string> = new Set([
   ...LOG_INTERACTION_OPTIONS, "--details", "--units", "--reason", "--park", "--on-instruction",
-  "--details-file", "--on-instruction-file",
+  "--details-file", "--on-instruction-file", "--ends-turn", ...CONFIG_KEYS.map((key) => `--${key}`),
 ]);
 
 // The person has said something in this piece of work: a turn that can carry a
@@ -545,15 +636,15 @@ function readOverrideReasonFile(pd: string, supplied: string): string {
   }
   let text: string;
   try {
-    text = readRegularFileNoFollowOrThrow(
+    text = agentFileText(readRegularFileNoFollowOrThrow(
       recordFileTargetOrThrow(root, relative(root, absolute)),
       "Plan Approval override reason file",
       4 * 1024,
-    ).toString("utf-8");
+    ));
   } catch (e) {
     error(`Cannot read --override-file ${supplied}: ${errorMessage(e)}`);
   }
-  return text.replace(/^\uFEFF/, "").replace(/\r?\n$/, "");
+  return text.replace(/\r?\n$/, "");
 }
 
 function summaryQuestionEvidence(
@@ -568,7 +659,7 @@ function summaryQuestionEvidence(
     );
   }
   const absolute = resolve(pd, supplied);
-  const root = recordDir(pd);
+  const root = runRecordDir(pd);
   if (
     root === null ||
     (absolute !== root && !absolute.startsWith(`${root}${sep}`))
@@ -724,7 +815,7 @@ function handlePlanApprovalBatch(
   }
   const session = resolvePlanApprovalSession(pd, flags);
   const options = "Approve Plans,Request Changes";
-  if (flags.options !== undefined && flags.options.split(",").map((option) => option.trim()).join(",") !== options) {
+  if (flags.options !== undefined && optionsList(flags.options).join(",") !== options) {
     error(`Batch Plan Approval offers exactly "${options}".`);
   }
   const choice = flags.details === "Approve Plans" ? "Approve Plan" : flags.details;
@@ -832,6 +923,45 @@ function answersSummaryQuestion(
   return latest.includes("checkpoint") ? "checkpoint" : latest.includes("plain") ? "plain" : null;
 }
 
+// After a Request changes the summary is shown again, revised, and its question
+// is recorded before that showing, as the first one was (stage-protocol-summary.md).
+// A chat that picked the summary up in a new chat never loaded the stage's
+// rules, so the receipt of the step before it names that record while the
+// summary is still owed, as the step's own ceremony says (the person may have
+// switched it off since), and its latest row is the change request
+// (pendingSummaryDecision), read from every clone's shard. `unit` and
+// `workflow` are the work item the caller's answer is for. Null otherwise, and
+// when the record cannot be read: the answer is already on record, and a note
+// never turns it into a failure.
+function revisedSummaryNote(
+  pd: string, stage: StageEntry | undefined, content: string | null, unit: string | undefined, workflow: string | undefined,
+): string | null {
+  if (stage === undefined || !summaryConfirmationOwed(stage, { stateContent: content, ignoreGuardSwitch: true })) {
+    return null;
+  }
+  let questionsFile: string | null = null;
+  try {
+    let receipt: AuditShardEvent | undefined;
+    for (const row of readAuditShardEvents(pd)) {
+      if (row.event !== "SUMMARY_CONFIRMATION_RECORDED" || auditBlockField(row.block, "Stage") !== stage.slug ||
+        auditBlockField(row.block, "Checkpoint") !== SUMMARY_CONFIRMATION_CHECKPOINT ||
+        (auditBlockField(row.block, "Unit") ?? undefined) !== unit ||
+        (auditBlockField(row.block, "Workflow") ?? undefined) !== workflow) continue;
+      if (receipt === undefined || row.timestamp >= receipt.timestamp) receipt = row;
+    }
+    questionsFile = receipt === undefined ? null : auditBlockField(receipt.block, "Questions File");
+    if (questionsFile !== null && !pendingSummaryDecision(pd, stage.slug, unit, workflow, questionsFile).changeRequested) {
+      questionsFile = null;
+    }
+  } catch {
+    questionsFile = null;
+  }
+  if (questionsFile === null) return null;
+  const { decision } = summaryConfirmationCommands({ stage: stage.slug, unit, questionsFile, single: workflow !== undefined });
+  return `When you show the revised summary, first set its \`[Answer]:\` line in ${questionsFile} back to blank and ` +
+    `record its question with \`${decision}\`; then show it with its choices and end the turn.`;
+}
+
 // A summary confirmation recorded without its checkpoint flags is an ordinary
 // question the gate never counts, so the stage would refuse for good with
 // SUMMARY_RECEIPT_MISSING. When the call is plainly the summary (its two
@@ -841,7 +971,7 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
   // An answer names a summary choice by its label, with what to change after it.
   const summaryRead = verb === "answer" ? offeredChoiceLabel(flags.details ?? "", SUMMARY_CONFIRMATION_CHOICES) : null;
   const summaryReply = summaryRead?.choice ?? null;
-  const pd = resolveActiveProjectDir(projectDir);
+  const pd = resolveActiveProjectDir(projectDir, flags.stage);
   const stage = loadStageGraphAll().find((entry) => entry.slug === flags.stage);
   if (!stage) return;
   const unit = flags.unit ?? null;
@@ -928,9 +1058,9 @@ function demoteReviewHeadings(body: Buffer): { bytes: Buffer; changed: string[] 
 }
 
 // --- Subcommand: decision ---
-// Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>]
-//   [--rationale <text>] [--question-kind answer-mode] [--checkpoint summary-confirmation
-//   --questions-file <path> [--unit <unit>] [--single]]
+// Usage: aidlc-log decision --stage <slug> (--decision <text> | --decision-file <file>) [--options <csv>]
+//   [--rationale <text>] [--question-kind answer-mode|learnings-note|assumption-confirmation]
+//   [--checkpoint summary-confirmation --questions-file <path> [--unit <unit>] [--single]]
 //
 // Fires BEFORE AskUserQuestion, recording what options will be shown.
 // The chat this command serves, when the engine can tell (the hook's override,
@@ -941,61 +1071,6 @@ function invokingChat(pd: string): string | null {
   } catch {
     return null;
   }
-}
-
-// LLM maps, tool proves: the agent names the message that answered a question
-// it logged after the reply arrived; the engine proves the record exists, came
-// through this chat and is not spent by a later decision, and reads no words.
-// A same-second tie with a spending row favours the message: one message can
-// give an approval and the answers beside it.
-function proveMessage(pd: string, id: string, what: "answer" | "decision"): { message: StoredMessage } | { refusal: string } {
-  const message = isMessageId(id) ? readMessage(pd, id) : null;
-  if (message === null) {
-    return {
-      refusal: `Cannot record this ${what}: no message record ${id} exists in this project. Name the id of the ` +
-        "person's message that answered (a refused answer names it), or wait for their reply.",
-    };
-  }
-  const rows = readAuditShardEvents(pd);
-  if (!messageIsReply(rows, message)) {
-    return {
-      refusal: `Cannot record this ${what}: message ${id} carried no words of the person's own (a command to AIDLC, ` +
-        "or a message with no words), so it answers nothing. Name a message that carries their reply.",
-    };
-  }
-  const spentAt = latestSpendingTimestamp(rows);
-  if (spentAt !== null && message.at < spentAt) {
-    return {
-      refusal: `Cannot record this ${what}: message ${id} arrived before the last approval or decision (${spentAt}), ` +
-        "so it is spent. Only a message the person sent after it can answer this question.",
-    };
-  }
-  const chat = invokingChat(pd);
-  const chatOf = (m: StoredMessage): string => m.session ?? "terminal";
-  if (chat !== null) {
-    if (message.session !== chat) {
-      return {
-        refusal: `Cannot record this ${what}: message ${id} came through another chat, not this one. ` +
-          "Name a message the person sent in this chat.",
-      };
-    }
-    return { message };
-  }
-  const chats = chatsSince(rows, pd, spentAt);
-  if (chats.size > 1) {
-    return {
-      refusal: `Cannot record this ${what}: the engine cannot tell which chat this command serves, and more than ` +
-        "one chat has sent messages since the last decision. Run it from the chat that asked, or wait for the " +
-        "person's reply there.",
-    };
-  }
-  if (chats.size === 1 && !chats.has(chatOf(message))) {
-    return {
-      refusal: `Cannot record this ${what}: message ${id} came through another chat, not the one that has spoken ` +
-        "since the last decision.",
-    };
-  }
-  return { message };
 }
 
 function decisionRowsInScope(rows: AuditShardEvent[], stage: string, unit: string | undefined): AuditShardEvent[] {
@@ -1011,91 +1086,40 @@ function latestDecisionMessageId(pd: string, stage: string, unit: string | undef
   return question === undefined ? null : auditBlockField(question.block, "Message Id");
 }
 
-// The person's messages that arrived before the latest question of this scope
-// was logged: the turn row naming the message orders it against the question
-// row; a message with no turn row yet (new work's first message) by time.
-function messagesBeforeQuestion(pd: string, stage: string, unit: string | undefined): StoredMessage[] {
-  const rows = readAuditShardEvents(pd);
-  const question = decisionRowsInScope(rows, stage, unit).at(-1);
-  if (question === undefined) return [];
-  const spentAt = latestSpendingTimestamp(rows);
+// With no reply on record, the refusal names this chat's latest message when it
+// came before the chat was on this work (a teammate's clone, the message that
+// picked the work up: messageBeforeJoining), by id and time, so the agent
+// records the answer on it if it holds one. Only the latest: an earlier one may
+// be a reply the chat gave on other work. Null when it is not such a message.
+function keptMessageRefusal(pd: string): string | null {
   const chat = invokingChat(pd);
-  // With no chat the engine can name, the hint follows the proof's one-chat rule.
-  if (chat === null && chatsSince(rows, pd, spentAt).size > 1) return [];
-  const turnOf = new Map<string, AuditShardEvent>();
-  for (const row of rows) {
-    if (row.event !== "HUMAN_TURN") continue;
-    const id = auditBlockField(row.block, "Message Id");
-    if (id !== null) turnOf.set(id, row);
-  }
-  const before = (row: AuditShardEvent): boolean =>
-    row.shardIndex === question.shardIndex ? row.pos < question.pos : row.timestamp < question.timestamp;
-  return listMessages(pd).filter((message) => {
-    if (chat !== null && message.session !== chat) return false;
-    if (spentAt !== null && message.at < spentAt) return false;
-    if (!messageIsReply(rows, message)) return false;
-    const turn = turnOf.get(message.id);
-    return turn === undefined ? message.at < question.timestamp : before(turn);
-  });
-}
-
-// Whether the person's reply answers the latest question of this scope: a reply
-// turn provably after the question's row (same shard by position, another shard
-// by a later second), or a question box pick of their latest reply still
-// unspent (a box answers the questions it showed, whenever the agent logs them).
-// A reply sent before the question was logged is no reply to it: the agent
-// names that message (--message) when it does answer, or records the choice the
-// person left to it (--on-instruction). No question in scope asks nothing here.
-function replyAnswersQuestion(pd: string, stage: string, unit: string | undefined): boolean {
-  const rows = readAuditShardEvents(pd);
-  const question = decisionRowsInScope(rows, stage, unit).at(-1);
-  if (question === undefined) return true;
-  const after = (row: AuditShardEvent, than: AuditShardEvent): boolean =>
-    row.shardIndex === than.shardIndex ? row.pos > than.pos : row.timestamp > than.timestamp;
-  const replies = rows.filter((row) => isReplyTurn(row));
-  if (replies.some((row) => after(row, question))) return true;
-  const turn = replies.reduce<AuditShardEvent | null>((latest, row) => latest === null || after(row, latest) ? row : latest, null);
-  if (turn === null) return false;
-  const picks = rows.filter((row) => row.event === "QUESTION_REPLIED" && row.shardIndex === turn.shardIndex && row.pos > turn.pos).length;
-  const answers = rows.filter((row) => row.event === "QUESTION_ANSWERED" && after(row, turn)).length;
-  return answers < picks;
-}
-
-function lateQuestionHint(candidates: StoredMessage[]): string {
-  const shown = candidates.map((message) => {
-    const words = (message.words ?? message.text).replace(/\s+/g, " ").trim();
-    return `${message.id} "${words.length > 40 ? `${words.slice(0, 40)}...` : words}"`;
-  });
-  if (candidates.length === 1) {
-    return `The person's message arrived before this question was logged: ${shown[0]}. If it answers the question, ` +
-      `record the answer with --message ${candidates[0].id}; do not ask them again.`;
-  }
-  return `The person's messages arrived before this question was logged: ${shown.join(", ")}. If one answers the ` +
-    "question, record the answer with --message <id>, the id of the message it answers; do not ask them again.";
+  const latest = chat === null ? null : latestMessage(pd, chat);
+  if (latest === null || messageBeforeJoining(pd, latest.id) === null) return null;
+  const missed = unattendedHumanPresenceHint(pd);
+  return `Cannot record this answer: the person's message ${latest.id} (sent ${latest.at}) came before this chat ` +
+    "was on this work, so it is on record as no reply. If it answers the question, run the same command with " +
+    `--message ${latest.id}; do not ask them again.` + (missed === "" ? "" : ` If no message of theirs answers it:${missed}`);
 }
 
 function handleDecision(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
-  if (!flags.decision) error("Missing --decision <text>");
+  // A question holding the person's words arrives in a file the agent wrote, as
+  // an answer's text does, so no shell reads it on the way.
+  if (flags["decision-file"] !== undefined) {
+    if (flags.decision !== undefined) error("Pass either --decision or --decision-file, not both.");
+    try {
+      flags.decision = readAnswerTextFile(resolveActiveProjectDir(projectDir, flags.stage), flags["decision-file"]);
+    } catch (err) {
+      error(errorMessage(err));
+    }
+  }
+  if (!flags.decision) error("Missing --decision <text> (or --decision-file <file>)");
   if (flags.checkpoint !== undefined && !DECISION_CHECKPOINTS.includes(flags.checkpoint)) {
     error(unknownCheckpointMessage(flags.checkpoint, DECISION_CHECKPOINTS));
   }
   refusePlainSummaryConfirmation(flags, "decision");
-  // A question text that says the person already confirmed ("Continue with X
-  // (user implicitly confirmed by hook trigger)") records a choice they never
-  // made: AI-DLC's carrying-on line is not their answer. Refused with the way
-  // on; a question in the agent's own words, or one quoting the phrase, passes.
-  const implied = humanPresenceGuardDisabled() ? null : impliedConfirmationMarker(flags.decision);
-  if (implied) {
-    error(
-      `Cannot record this question for "${flags.stage}" because --decision says the person confirmed it ` +
-        `(${implied.category}: "${implied.phrase}"). AI-DLC's carrying-on line is not their answer. ` +
-        "Ask them and record what they say, or carry on with no record.",
-    );
-  }
-
-  const pd = resolveActiveProjectDir(projectDir);
+  const pd = resolveActiveProjectDir(projectDir, flags.stage);
   if (flags.checkpoint === "plan-approval" && planApprovalAskIsOpen(pd)) {
     error(PLAN_APPROVAL_ASKED_BY_ENGINE);
   }
@@ -1166,14 +1190,20 @@ function handleDecision(args: string[]): void {
   // Which of the engine's own questions this is, as the step note's command
   // names it; the answer reads the field, never the question's words.
   if (flags["question-kind"] !== undefined) {
-    if (flags["question-kind"] !== ANSWER_MODE_QUESTION_KIND) {
+    const kind = flags["question-kind"];
+    if (
+      kind !== ANSWER_MODE_QUESTION_KIND && kind !== LEARNINGS_NOTE_QUESTION_KIND &&
+      kind !== ASSUMPTION_CONFIRMATION_QUESTION_KIND
+    ) {
       error(
-        `--question-kind ${JSON.stringify(flags["question-kind"])} is not a kind log decision records. Its one kind ` +
-          `is "${ANSWER_MODE_QUESTION_KIND}", for the question of how the person answers a stage's questions; leave ` +
-          "the flag off for any other question.",
+        `--question-kind ${JSON.stringify(kind)} is not a kind log decision records. Its kinds are ` +
+          `"${ANSWER_MODE_QUESTION_KIND}", for the question of how the person answers a stage's questions, ` +
+          `"${LEARNINGS_NOTE_QUESTION_KIND}", for the learnings question about a correction ("... ${LEARNINGS_CORRECTION_ASK}"), and ` +
+          `"${ASSUMPTION_CONFIRMATION_QUESTION_KIND}", for Intent Capture's Assumption Confirmation; leave the ` +
+          "flag off for any other question.",
       );
     }
-    fields[QUESTION_KIND_FIELD] = ANSWER_MODE_QUESTION_KIND;
+    fields[QUESTION_KIND_FIELD] = kind;
   }
   if (flags.checkpoint === "summary-confirmation") {
     fields.Checkpoint = SUMMARY_CONFIRMATION_CHECKPOINT;
@@ -1184,7 +1214,7 @@ function handleDecision(args: string[]): void {
     fields["Command SHA-256"] = verificationCommand.sha256;
     fields["Command Label"] = verificationCommand.label;
     fields.Session = verificationCommandSession(pd, flags);
-    const options = (flags.options ?? "").split(",").map((option) => option.trim().toLowerCase());
+    const options = optionsList(flags.options).map((option) => option.toLowerCase());
     if (options.length !== 2 || options[0] !== "approve" || options[1] !== "request changes") {
       error('Verification command decision requires --options "Approve,Request Changes". ' + verificationCommandRecovery(flags.stage));
     }
@@ -1192,7 +1222,7 @@ function handleDecision(args: string[]): void {
   const policyFields = flags.checkpoint === "construction-policy" ? constructionPolicyFields(pd, flags) : null;
   if (policyFields) {
     Object.assign(fields, policyFields);
-    const options = (flags.options ?? "").split(",").map((option) => option.trim());
+    const options = optionsList(flags.options);
     if (options.length !== 2 || options[0] !== "Approve" || options[1] !== "Request Changes") {
       error('Construction policy decision requires --options "Approve,Request Changes". ' + CONSTRUCTION_POLICY_RECOVERY);
     }
@@ -1203,7 +1233,7 @@ function handleDecision(args: string[]): void {
     // The labels are part of what the human answers, so the conductor does
     // not choose them. Legacy nonce labels are the only other offer.
     const legacyLabels = flags["hash-option-labels"] === "true" || flags["legacy-directive-options"] === "true";
-    const offered = (flags.options ?? "").split(",").map((option) => stripRecommendedDecorator(option.trim()));
+    const offered = optionsList(flags.options).map((option) => stripRecommendedDecorator(option));
     if (!legacyLabels && offered.join(",") !== "Approve Plan,Request Changes") {
       error('Plan Approval decision offers exactly "Approve Plan,Request Changes".');
     }
@@ -1213,8 +1243,8 @@ function handleDecision(args: string[]): void {
     Object.assign(fields, claimAttemptFields(pd, flags.unit));
   }
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
-  // A question logged after the person already replied names the message that
-  // answered it; its answers inherit the id.
+  // A question logged with the message that answered it names it; its answers
+  // inherit the id.
   if (flags.message !== undefined) {
     const proof = proveMessage(pd, flags.message, "decision");
     if ("refusal" in proof) error(proof.refusal);
@@ -1224,9 +1254,12 @@ function handleDecision(args: string[]): void {
   let protectedQuestion: ProtectedQuestion | null = null;
   try {
     protectedQuestion = withAuditLock(pd, () => {
+      // The agent's own question (not a protected or plan question) leaves a
+      // protected question the person already replied to in its chat in place.
       withdrawProtectedQuestions(
         pd,
         fields.Session || flags.session?.trim() || resolveSessionIdFromAncestry(pd) || "*",
+        { keepAnswered: !policyFields && !verificationCommand && !planEvidence },
       );
       emitAudit(pd, "DECISION_RECORDED", fields);
       if (!policyFields && !verificationCommand) return null;
@@ -1247,10 +1280,7 @@ function handleDecision(args: string[]): void {
   let challenge: PlanApprovalRuntimeChallenge | null = null;
   if (planEvidence) {
     try {
-      const options = (flags.options ?? "")
-        .split(",")
-        .map((option) => option.trim())
-        .filter(Boolean);
+      const options = optionsList(flags.options).filter(Boolean);
       if (options.length !== 2) {
         error("Plan Approval decision requires exactly two offered options");
       }
@@ -1312,7 +1342,7 @@ function sameInteractionScope(a: AuditShardEvent, b: AuditShardEvent): boolean {
 function questionView(row: AuditShardEvent) {
   return {
     question: auditBlockField(row.block, "Decision") ?? "",
-    options: (auditBlockField(row.block, "Options") ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+    options: optionsList(auditBlockField(row.block, "Options")).filter(Boolean),
     ...interactionScope(row),
     askedAt: row.timestamp,
   };
@@ -1324,7 +1354,11 @@ function handleAnswers(args: string[]): void {
   if (positional.length > 0 || Object.keys(flags).some((key) => !["stage", "unit"].includes(key))) {
     error("Usage: aidlc-log answers --stage <slug> [--unit <unit>]");
   }
-  const rows = sortAttemptEvents(readActiveAuditShardEvents(resolveProjectDir(projectDir))).filter(
+  const pd = resolveProjectDir(projectDir);
+  // An open isolated run with no work keeps its rows in the space's own record.
+  const rows = sortAttemptEvents(
+    rowJoinsIsolatedRun(pd, flags.stage) ? readAuditShardEvents(pd) : readActiveAuditShardEvents(pd),
+  ).filter(
     (row) => auditBlockField(row.block, "Stage") === flags.stage &&
       auditBlockField(row.block, "Checkpoint") === null &&
       (flags.unit === undefined || auditBlockField(row.block, "Unit") === flags.unit),
@@ -1441,7 +1475,7 @@ function handleAnswers(args: string[]): void {
 // --- Subcommand: answer ---
 // Usage: aidlc-log answer --stage <slug> --details <text>
 //   [--checkpoint summary-confirmation --questions-file <path>
-//   [--unit <unit>] [--single]] [--on-instruction <the person's words>]
+//   [--unit <unit>] [--single]] [--on-instruction [--message <id>]]
 //
 // Fires AFTER the user answers a question.
 
@@ -1493,14 +1527,64 @@ function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
   return open !== null;
 }
 
+// A row of this summary's question or its confirmation: the stage, Unit, workflow
+// and questions file it was asked for.
+function summaryRow(
+  pd: string,
+  entry: { block: string },
+  stage: string,
+  unit: string | undefined,
+  workflow: string | undefined,
+  questionsFile: string,
+): boolean {
+  return auditBlockField(entry.block, "Stage") === stage &&
+    auditBlockField(entry.block, "Checkpoint") === SUMMARY_CONFIRMATION_CHECKPOINT &&
+    (auditBlockField(entry.block, "Unit") ?? undefined) === unit &&
+    (auditBlockField(entry.block, "Workflow") ?? undefined) === workflow &&
+    auditBlockField(entry.block, "Questions File") === questionsFile &&
+    (unit === undefined || eventMatchesClaimAttempt(pd, entry.block, unit));
+}
+
+// The person's reply to a summary the agent showed before recording its
+// question: their latest reply in this chat before the question's record, with
+// no other question recorded between them (an ERROR_LOGGED row, such as the
+// agent's answer refused for want of the record, asks nothing), sent after the
+// questions file was written since the stage's last question, answer, decision
+// or start, so the summary was there to see. The agent writes their pick into
+// its `[Answer]:` line after that reply, as it does after the record when the
+// question comes first. Null when there is none: a reply sent before the
+// summary was written never confirms it. Whether the reply is unspent is
+// personsGateReply's.
+function replyToSummaryShownFirst(
+  pd: string,
+  writes: (row: AuditShardEvent) => boolean,
+  asked: (row: AuditShardEvent) => boolean,
+): AuditShardEvent | null {
+  const chat = invokingChat(pd);
+  const { mine } = ownShardRows(pd);
+  let reply = mine.findLastIndex(asked) - 1;
+  for (; reply >= 0; reply--) {
+    if (mine[reply].event === "DECISION_RECORDED") return null;
+    if (isReplyTurn(mine[reply]) && (chat === null || auditBlockField(mine[reply].block, "Session") === chat)) break;
+  }
+  for (let at = reply - 1; at >= 0; at--) {
+    if (writes(mine[at])) return mine[reply];
+    const event = mine[at].event;
+    if (event === "DECISION_RECORDED" || event === "QUESTION_ANSWERED" || event === "STAGE_STARTED" ||
+      MESSAGE_SPENDING_EVENTS.has(event)) return null;
+  }
+  return null;
+}
+
 function pendingSummaryDecision(
   pd: string,
   stage: string,
   unit: string | undefined,
   workflow: string | undefined,
   questionsFile: string,
-): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string; question?: string } {
-  const entries = readAuditShardEvents(pd).filter((entry) => {
+): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string; changeRequested?: boolean } {
+  const rows = readAuditShardEvents(pd);
+  const entries = rows.filter((entry) => {
     // A turn that was only a command to AIDLC is no reply to the summary.
     if (entry.event === "HUMAN_TURN") return isReplyTurn(entry);
     if (entry.event === "STAGE_COMPLETED") {
@@ -1515,17 +1599,7 @@ function pendingSummaryDecision(
     ) {
       return false;
     }
-    const matching =
-      auditBlockField(entry.block, "Stage") === stage &&
-      auditBlockField(entry.block, "Checkpoint") ===
-        SUMMARY_CONFIRMATION_CHECKPOINT &&
-      (auditBlockField(entry.block, "Unit") ?? undefined) === unit &&
-      (auditBlockField(entry.block, "Workflow") ?? undefined) === workflow &&
-      auditBlockField(entry.block, "Questions File") === questionsFile;
-    return matching && (
-      unit === undefined ||
-      eventMatchesClaimAttempt(pd, entry.block, unit)
-    );
+    return summaryRow(pd, entry, stage, unit, workflow, questionsFile);
   });
   if (entries.length === 0) {
     return { pending: false, humanAfterDecision: false };
@@ -1601,14 +1675,16 @@ function pendingSummaryDecision(
     };
   }
   if (!latestKinds.has("DECISION_RECORDED")) {
-    return { pending: false, humanAfterDecision: false };
+    // The latest is a receipt: after a change request the summary is shown again, revised.
+    const changeRequested = latestActions.every((entry) =>
+      auditBlockField(entry.block, "Details") === SUMMARY_CONFIRMATION_CHOICES[1]);
+    return { pending: false, humanAfterDecision: false, ...(changeRequested ? { changeRequested } : {}) };
   }
 
-  // The person's reply since their last answer is theirs to give whenever the
-  // conductor recorded the question: the conductor says which question it
-  // answers, and the caller proves the reply. This says only whether it came
-  // after the question's record; a turn in another shard at the record's own
-  // second proves neither.
+  // Whether a reply turn of the person's came after the question's record: the
+  // confirmation stands on one, unless the conductor names the message it read
+  // it from (the caller proves that message). A turn in another shard at the
+  // record's own second proves neither.
   const humans = entries.filter((entry) => entry.event === "HUMAN_TURN");
   const humanRelations = humans.map((human) =>
     latestActions.map((decision) => follows(human, decision))
@@ -1632,14 +1708,12 @@ function pendingSummaryDecision(
       ambiguity: latestActionTimestamp,
     };
   }
-  return {
-    pending: true,
-    humanAfterDecision: false,
-    question: auditBlockField(latestActions[0].block, "Decision") ?? undefined,
-  };
+  return { pending: true, humanAfterDecision: false };
 }
 
-function pendingVerificationDecision(pd: string, stage: string, sha256: string, session: string): boolean {
+// Which chat's reply answers it is the protected question's (requireProtectedResponse):
+// the one this chat asked, or the one another chat asked that the person's reply here took.
+function pendingVerificationDecision(pd: string, stage: string, sha256: string): boolean {
   const unreadable: string[] = [];
   const rows = readAuditShardEvents(pd, undefined, undefined, unreadable).filter(
     (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
@@ -1658,11 +1732,10 @@ function pendingVerificationDecision(pd: string, stage: string, sha256: string, 
   return decision.event === "DECISION_RECORDED" &&
     attemptEventDefinitelyBefore(workflows[0], decision) &&
     auditBlockField(decision.block, "Stage") === stage &&
-    auditBlockField(decision.block, "Command SHA-256") === sha256 &&
-    auditBlockField(decision.block, "Session") === session;
+    auditBlockField(decision.block, "Command SHA-256") === sha256;
 }
 
-function pendingConstructionPolicyDecision(pd: string, stage: string, field: string, value: string, session: string): boolean {
+function pendingConstructionPolicyDecision(pd: string, stage: string, field: string, value: string): boolean {
   const unreadable: string[] = [];
   const rows = readAuditShardEvents(pd, undefined, undefined, unreadable).filter(
     (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
@@ -1683,38 +1756,14 @@ function pendingConstructionPolicyDecision(pd: string, stage: string, field: str
     auditBlockField(decision.block, "Checkpoint") === CONSTRUCTION_POLICY_CHECKPOINT &&
     auditBlockField(decision.block, "Stage") === stage &&
     auditBlockField(decision.block, "Field") === field &&
-    auditBlockField(decision.block, "Value") === value &&
-    auditBlockField(decision.block, "Session") === session;
+    auditBlockField(decision.block, "Value") === value;
 }
 
-
-// The offered choice the conductor's --details names: the label itself, in any
-// case, after an optional option prefix ("1." or "B)") and without the
-// "(Recommended)" decorator, optionally followed by what the person asked
-// (`rest`). This checks the conductor's input names an offered choice; it never
-// reads the person's meaning, which is the conductor's to read.
-function offeredChoiceLabel(details: string, choices: readonly string[]): { choice: string; rest: string } | null {
-  const text = stripRecommendedDecorator(details.trim())
-    .replace(/^(?:(?:[A-Za-z]|\d+)[.)])\s*/, "")
-    .replace(/^["'`]+|["'`]+$/g, "")
-    .trim();
-  for (const choice of choices) {
-    const head = text.slice(0, choice.length);
-    if (head.toLowerCase() !== choice.toLowerCase()) continue;
-    const tail = text.slice(choice.length);
-    if (tail === "" || /^[\s:;,.!-]/.test(tail)) {
-      return { choice, rest: tail.replace(/^[\s:;,.!-]+/, "").trim() };
-    }
-  }
-  return null;
-}
 
 // The person's own words for a protected question, as the human-turn hook kept
 // them, for the receipt.
 function protectedPersonsWords(pd: string, session: string | undefined): Record<string, string> {
-  if (!session) return {};
-  const words = readProtectedResponse(pd, session)?.words;
-  return words ? { "Person Reply": words } : {};
+  return session ? protectedResponseFields(readProtectedResponse(pd, session)) : {};
 }
 
 // The engine's Plan Approval question, loaded only on its answer path.
@@ -1751,11 +1800,54 @@ const PARK_FAILED_SAID = {
   edit: "their choice to edit the files is saved",
 } as const;
 
+// The person's yes to the legacy Kiro window's recovery question, read by the
+// agent in any words. The chat is the one this command serves, or with none
+// nameable the one chat that has spoken since the last decision.
+function answerLegacyPlanApprovalRecovery(pd: string, flags: Record<string, string>): void {
+  let session = flags.session?.trim() || null;
+  if (session === null) {
+    try {
+      session = resolveInvokingSessionId(pd);
+    } catch {
+      session = null;
+    }
+  }
+  if (session === null) {
+    const rows = readAuditShardEvents(pd);
+    const chats = chatsSince(rows, pd, latestSpendingTimestamp(rows));
+    if (chats.size === 1 && !chats.has("terminal")) session = [...chats][0];
+  }
+  const next = aidlcDispatcherInvocation("orchestrate next");
+  const result = session === null ? "no-question" : recordPlanApprovalLegacyRecoveryAnswer(pd, session);
+  if (result === "no-question") {
+    error(`No question to bring the code plan back is waiting in this chat. Run \`${next}\` and follow what it returns.`);
+  }
+  if (result === "no-reply") {
+    error(
+      "The person has not replied since they were asked whether to bring the code plan back. Show the question if " +
+        "you have not, end the turn, and record their answer once they reply.",
+    );
+  }
+  console.log(JSON.stringify({
+    recorded: "legacy-plan-approval-recovery",
+    message: `Recorded. Run \`${next}\` now: it brings the code plan question back.`,
+  }));
+}
+
 // The conductor records what the person chose at the engine's Plan Approval
 // question, as it read their reply: approve, request changes, or edit the files
 // themselves, for every Unit asked about or the ones named in --unit/--units.
 // What to change is the person's own words unless --reason says it. --park
 // records that they also asked to stop for now.
+// A setting the person asked for in their reply rides only an Approve Plan
+// (settingsBesideDecision); beside any other answer it is run on its own first.
+function settingRidesOnlyApprovePlan(setting: string): never {
+  return error(
+    `A setting (--${setting}) rides only an Approve Plan: run the setter on its own first ` +
+      `(\`${aidlcDispatcherInvocation("config set")}\` with --message <id>, the message they asked in), then this answer without it.`,
+  );
+}
+
 function answerEnginePlanApproval(
   pd: string,
   flags: Record<string, string>,
@@ -1780,15 +1872,7 @@ function answerEnginePlanApproval(
     if (message === null) {
       error("No Code Generation plan is about to be built, so there is no plan step to hold. Show them the plan file.");
     }
-    // One reply answers one question: a request to see the plan is not also
-    // the answer to an open recovery question.
-    const released = releaseTakenGuardRecoveryReply(pd);
-    console.log(JSON.stringify({
-      recorded: "review-request",
-      message: message + (released
-        ? " Their reply was not taken as the answer to the open recovery question, which still waits for one."
-        : ""),
-    }));
+    console.log(JSON.stringify({ recorded: "review-request", message }));
     return;
   }
   const choice = picked.choice === "Request Changes"
@@ -1797,7 +1881,8 @@ function answerEnginePlanApproval(
   const units = (flags.units ?? flags.unit ?? "").split(",").map((unit) => unit.trim()).filter(Boolean);
   const feedback = flags.reason ?? (choice === "request-changes" && picked.rest ? picked.rest : undefined);
   // A change asked for in the message the question opened for: the one the
-  // agent names, or this chat's latest with words, proved as any answer's is.
+  // agent names, or this chat's latest with words, proved as any answer's is,
+  // the reopen it asked for (a Unit's redo) not counting as spending it.
   // Records keep whole seconds, so two in the latest second cannot be told
   // apart: neither is taken unless the agent names one.
   let opening: { words: string; at: string } | undefined;
@@ -1807,11 +1892,33 @@ function answerEnginePlanApproval(
     const latestAt = said.reduce((at, m) => (m.at > at ? m.at : at), "");
     const newest = said.filter((m) => m.at === latestAt);
     const id = flags.message ?? (newest.length === 1 ? newest[0].id : undefined);
-    const proof = id === undefined ? null : proveMessage(pd, id, "answer");
+    const proof = id === undefined ? null : proveMessage(pd, id, "answer", { reopened: true });
     if (proof !== null && "refusal" in proof && flags.message !== undefined) error(proof.refusal);
     if (proof !== null && "message" in proof && proof.message.words) {
-      opening = { words: proof.message.words, at: proof.message.at };
+      opening = { words: personsWordsText(proof.message.words), at: proof.message.at };
     }
+  }
+  // A setting the same reply asked for ("approve the plan, and turn plan
+  // approval off from here") is written first, on their reply since the plan
+  // question was shown, so the answer after it leaves it standing
+  // (settingsBesideDecision).
+  const settings = CONFIG_KEYS.filter((key) => flags[key] !== undefined).map((key) => [key, flags[key]] as const);
+  let said = "";
+  if (settings.length > 0) {
+    if (choice !== "approve") settingRidesOnlyApprovePlan(settings[0][0]);
+    const shown = planApprovalAsk().planQuestionShown(pd);
+    // Several replies: the agent names the one that asked, so the setting
+    // carries their words for it and no other reply's.
+    const replies = flags.message !== undefined || shown === null || shown === "due" ? [] : repliesAfter(pd, shown);
+    if (replies.length > 1) {
+      error(`Their replies since the plan question was shown, oldest first: ` +
+        `${replies.map((one) => `${one.messageId ?? "(no record)"} (${one.at})`).join(", ")}. ` +
+        "Record their choice again with --message <id>, the one that asked for the setting; nothing was recorded.");
+    }
+    const reply = flags.message ?? (shown === null || shown === "due" ? null : latestReplyAfter(pd, shown)?.messageId ?? null);
+    const set = settingsBesideDecision(pd, resolveInvokingSessionId(pd), settings, reply);
+    if ("refusal" in set) error(`${set.refusal} Nothing was recorded: record their choice again without the setting.`);
+    if (set.lines.length > 0) said = `Say to the person, as it is: "${set.lines.join(" ")}" `;
   }
   let result: { message: string; complete: boolean };
   try {
@@ -1822,9 +1929,9 @@ function answerEnginePlanApproval(
       ...(opening ? { opening } : {}),
     });
   } catch (e) {
-    error(errorMessage(e));
+    error(`${said}${errorMessage(e)}`);
   }
-  const message = result.message;
+  const message = `${said}${result.message}`;
   if (flags.park === "true") {
     // The person replied to this question and asked to stop: their stop wins
     // over an autonomous grant. Loaded on demand: the state tool's module graph
@@ -1850,6 +1957,31 @@ function answerEnginePlanApproval(
   console.log(JSON.stringify({ recorded: choice, message }));
 }
 
+// The person's message behind the answer to the verification command or a
+// Construction policy question, after the stage started: the one the agent
+// names (--message), or, when the hook kept no reply to the question (the agent
+// showed it before logging it), their latest typed reply in this chat that no
+// decision has used yet, as for the agent's other questions. A question box's
+// reply answered the question the box listed, and the hook already kept it when
+// that was this one. A Request Changes recorded on one of this chat's protected
+// questions used the replies before it, though it spends nothing elsewhere.
+function namedProtectedReply(
+  pd: string, stage: string, session: string, message: string | undefined,
+): { message: string; floor: string | null } | undefined {
+  const floor = protectedReplyFloor(pd, [stage]);
+  if (message !== undefined) return { message, floor };
+  const question = readProtectedQuestion(pd, session);
+  if (question !== null && readProtectedResponse(pd, session)?.challengeId === question.challengeId) return undefined;
+  const rows = readAuditShardEvents(pd);
+  const declined = rows.findLastIndex((row) => row.event === "QUESTION_ANSWERED" &&
+    auditBlockField(row.block, "Session") === session &&
+    [VERIFICATION_COMMAND_CHECKPOINT, CONSTRUCTION_POLICY_CHECKPOINT].includes(auditBlockField(row.block, "Checkpoint") ?? ""));
+  const since = new Set(rows.slice(declined + 1).map((row) => auditBlockField(row.block, "Message Id")));
+  const typed = personsGateReply(pd, session, stage).replies
+    .findLast((reply) => since.has(reply.id) && readMessage(pd, reply.id)?.source === "prompt");
+  return typed === undefined ? undefined : { message: typed.id, floor };
+}
+
 function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -1859,20 +1991,26 @@ function handleAnswer(args: string[]): void {
     if (flags[file] === undefined) continue;
     if (flags[text] !== undefined) error(`Pass either --${text} or --${file}, not both.`);
     try {
-      flags[text] = readAnswerTextFile(resolveActiveProjectDir(projectDir), flags[file]);
+      flags[text] = readAnswerTextFile(resolveActiveProjectDir(projectDir, flags.stage), flags[file]);
     } catch (err) {
       error(errorMessage(err));
     }
   }
   if (!flags.details) error("Missing --details <text> (or --details-file <file>)");
+  // The person's reply also asked something: the agent answers it and the
+  // turn ends there, their next reply deciding (the stage protocol). That the
+  // reply asks is the agent's reading (--ends-turn); the turn-end mark replaces
+  // the engine mark, so the Stop hook lets the turn end.
+  if (flags["ends-turn"] === "true") rowEndsTurn = true;
   // A stage question the person left to the agent. Checkpoints and approvals
   // stay the person's own each time, and an unattended run has nobody to hand
-  // anything over.
-  const instruction = flags["on-instruction"]?.replace(/\s+/g, " ").trim();
+  // anything over. Words given with the flag (or in --on-instruction-file) are
+  // the agent's own text, the form from before --message: kept as such, and
+  // never read as the person's.
+  const instruction = flags["on-instruction"] === "true"
+    ? ""
+    : flags["on-instruction"]?.replace(/\s+/g, " ").trim();
   if (instruction !== undefined) {
-    if (instruction === "") {
-      error("--on-instruction needs the person's own words that left the choice to you.");
-    }
     if (flags.checkpoint !== undefined) {
       error(`--on-instruction is for a stage question the person left to you; --checkpoint ${flags.checkpoint} ` +
         "is theirs to answer. Ask them and record their reply.");
@@ -1889,7 +2027,7 @@ function handleAnswer(args: string[]): void {
   // person picked, as it read their reply. "Request Changes: <what>" says the
   // same reply also said what should change.
   if (flags.checkpoint === "guard-recovery") {
-    const pd = resolveActiveProjectDir(projectDir);
+    const pd = resolveActiveProjectDir(projectDir, flags.stage);
     let picked: { op: string; action: string; awaitingWords: boolean; stage: string; unit?: string };
     try {
       picked = recordGuardRecoveryChoice(pd, flags.details, /:\s*\S/.test(flags.details));
@@ -1907,17 +2045,20 @@ function handleAnswer(args: string[]): void {
       }
       error(errorMessage(e));
     }
-    // Request Changes names the exact report, so the agent never guesses its
-    // flags: a solo walk reports the stage, a team-owned Unit gate its Unit.
+    // Request Changes names the exact step, so the agent never guesses its
+    // flags: a solo walk reports the stage, or sends back the one Unit's step the
+    // refusal named (requestChangesReportCommand), a team-owned Unit gate its Unit.
     const report = picked.op === "request-changes"
-      ? `run \`${requestChangesReportCommand(pd, picked.stage, picked.unit)}\` with their exact words added ` +
-        "as a single-quoted --reason."
+      ? `run \`${requestChangesReportCommand(pd, picked.stage, picked.unit)}\`: their messages go on the record ` +
+        "as what should change."
       : "";
     const message = picked.op !== "request-changes"
       ? `Recorded that the person chose "${picked.action}". Carry it out now.`
       : picked.awaitingWords
-        ? 'Recorded that the person chose Request Changes. Ask "What should change?" and end the turn; their ' +
-          `next reply is what should change. Then ${report}`
+        ? 'Recorded that the person chose Request Changes. Ask "What should change?" and end the turn. When ' +
+          `they reply, record what they said with \`${aidlcDispatcherInvocation("log answer")} --stage ` +
+          `${picked.stage} --checkpoint guard-recovery --details 'Request Changes: <their words>'\`, ` +
+          `then ${report}`
         : `Recorded that the person chose Request Changes. Now ${report}`;
     console.log(JSON.stringify({ recorded: picked.op, message }));
     return;
@@ -1925,21 +2066,30 @@ function handleAnswer(args: string[]): void {
   refusePlainSummaryConfirmation(flags, "answer");
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
   const planCheckpoint = flags.checkpoint === "plan-approval";
+  // A setting rides only the engine's Plan Approval question, below.
+  const setting = CONFIG_KEYS.find((key) => flags[key] !== undefined);
   // The engine's own Plan Approval question, or the person asking to review a
   // plan before it is built: the conductor records the choice the person made.
   // A break-glass override keeps its own path below: the engine does not ask
   // when the workspace source cannot be bound, which is when the override exists.
+  if (setting !== undefined && !planCheckpoint) settingRidesOnlyApprovePlan(setting);
+  if (planCheckpoint && offeredChoiceLabel(flags.details, [LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE]) !== null) {
+    if (setting !== undefined) settingRidesOnlyApprovePlan(setting);
+    answerLegacyPlanApprovalRecovery(resolveActiveProjectDir(projectDir, flags.stage), flags);
+    return;
+  }
   if (planCheckpoint && flags.override === undefined && flags["override-file"] === undefined) {
-    const pd = resolveActiveProjectDir(projectDir);
+    const pd = resolveActiveProjectDir(projectDir, flags.stage);
     if (planApprovalAskIsOpen(pd) || offeredChoiceLabel(flags.details, [PLAN_REVIEW_CHOICE]) !== null ||
       planApprovalCorrectionPendingSafe(pd)) {
       answerEnginePlanApproval(pd, flags, offeredChoiceLabel(flags.details, enginePlanApprovalChoices()));
       return;
     }
   }
+  if (setting !== undefined) settingRidesOnlyApprovePlan(setting);
   const verificationCheckpoint = flags.checkpoint === "verification-command";
   const policyCheckpoint = flags.checkpoint === "construction-policy";
-  const policyFields = policyCheckpoint ? constructionPolicyFields(resolveActiveProjectDir(projectDir), flags) : null;
+  const policyFields = policyCheckpoint ? constructionPolicyFields(resolveActiveProjectDir(projectDir, flags.stage), flags) : null;
   if (verificationCheckpoint && (flags.single !== undefined || flags.unit !== undefined)) {
     error("Construction verification commands apply to the whole intent; omit --single and --unit.");
   }
@@ -1959,14 +2109,14 @@ function handleAnswer(args: string[]): void {
     flags.details = picked.choice;
   }
   if (flags["batch-file"] !== undefined) {
-    handlePlanApprovalBatch(resolveActiveProjectDir(projectDir), flags, "answer");
+    handlePlanApprovalBatch(resolveActiveProjectDir(projectDir, flags.stage), flags, "answer");
     return;
   }
   // The mode question ("How would you like to answer them?"): the agent reads
   // the way the person chose from their reply and records its option, which
   // later stages reuse; the person's own words are kept beside it.
   if (flags.checkpoint === undefined && !isNonAnswer(reply)) {
-    const asked = openDecisionBlock(resolveActiveProjectDir(projectDir), flags.stage);
+    const asked = openDecisionBlock(resolveActiveProjectDir(projectDir, flags.stage), flags.stage);
     if (asked !== null && isAnswerModeDecision(asked)) {
       const labels = Object.values(ANSWER_MODE_LABELS);
       const mode = answerModeFromReply(reply) ??
@@ -2017,7 +2167,7 @@ function handleAnswer(args: string[]): void {
   }
   const overrideReason = (
     flags["override-file"] !== undefined
-      ? readOverrideReasonFile(resolveActiveProjectDir(projectDir), flags["override-file"])
+      ? readOverrideReasonFile(resolveActiveProjectDir(projectDir, flags.stage), flags["override-file"])
       : flags.override
   )?.trim() ?? null;
   if (overrideReason !== null) {
@@ -2044,7 +2194,7 @@ function handleAnswer(args: string[]): void {
     );
   }
 
-  const pd = resolveActiveProjectDir(projectDir);
+  const pd = resolveActiveProjectDir(projectDir, flags.stage);
   const verificationCommand = verificationCheckpoint
     ? verificationCommandFromFlags(pd, flags) : null;
   if (flags.unit) validateLiveUnitScope(pd, flags.unit);
@@ -2124,37 +2274,16 @@ function handleAnswer(args: string[]): void {
     const workflow =
       flags.single === "true" ? `single-stage:${flags.stage}` : undefined;
 
-    // Authorship floor (issue 742): the same interview answer the conductor
-    // wrote for itself. isNonAnswer above rejects an answer with no words; this
-    // rejects a self-attributed one ("A. Nothing to add - CONDUCTOR DEFAULT,
-    // session unattended"), which the presence check below cannot catch because
-    // a human is in the session, just not at this question. Autonomous
-    // Construction is exempt for ordinary answers. Summary confirmation remains
-    // a human-backed checkpoint below: its fresh-turn requirement is not waived
-    // by Construction autonomy even though its text is one of two exact strings.
-    const answerAuthorship =
-      (autonomousDecision && !verificationCheckpoint && !policyCheckpoint) ||
-      humanPresenceGuardDisabled()
-        ? null
-        : selfAttributedDecisionMarker(reply, "answer");
-    if (answerAuthorship) {
-      error(
-        `Cannot record this answer for "${flags.stage}" because --details says it was ` +
-          `chosen by the assistant (${answerAuthorship.category}: "${answerAuthorship.phrase}"). ` +
-          `This question must be answered by the human. Re-present it and wait for their reply.`,
-      );
-    }
-
     if (verificationCommand) {
-      if (!pendingVerificationDecision(pd, flags.stage, verificationCommand.sha256, fields.Session)) {
-        error("No matching pending DECISION_RECORDED with the same Command SHA-256 and Session exists in the current workflow. " + verificationCommandRecovery(flags.stage));
+      if (!pendingVerificationDecision(pd, flags.stage, verificationCommand.sha256)) {
+        error("No matching pending DECISION_RECORDED with the same Command SHA-256 exists in the current workflow. " + verificationCommandRecovery(flags.stage));
       }
       // Neither presence bypass nor autonomy supplies the person's recorded reply.
       requireProtectedResponse(pd, fields.Session, {
         kind: "verification-command",
         targetDigest: protectedTargetDigest({ commandSha256: verificationCommand.sha256 }),
         choice: flags.details,
-      });
+      }, namedProtectedReply(pd, flags.stage, fields.Session, flags.message));
       Object.assign(fields, protectedPersonsWords(pd, fields.Session));
       const emitted = flags.details === "Approve" ? "VERIFICATION_COMMAND_RECORDED" : "QUESTION_ANSWERED";
       if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", fields);
@@ -2165,14 +2294,14 @@ function handleAnswer(args: string[]): void {
     }
 
     if (policyFields) {
-      if (!pendingConstructionPolicyDecision(pd, flags.stage, fields.Field, fields.Value, fields.Session)) {
-        error("No matching pending DECISION_RECORDED with the same Field, Value, and Session exists in the current workflow. " + CONSTRUCTION_POLICY_RECOVERY);
+      if (!pendingConstructionPolicyDecision(pd, flags.stage, fields.Field, fields.Value)) {
+        error("No matching pending DECISION_RECORDED with the same Field and Value exists in the current workflow. " + CONSTRUCTION_POLICY_RECOVERY);
       }
       requireProtectedResponse(pd, fields.Session, {
         kind: "construction-policy",
         targetDigest: protectedTargetDigest({ field: fields.Field, value: fields.Value }),
         choice: flags.details,
-      });
+      }, namedProtectedReply(pd, flags.stage, fields.Session, flags.message));
       Object.assign(fields, protectedPersonsWords(pd, fields.Session));
       const emitted = flags.details === "Approve" ? "CONSTRUCTION_POLICY_RECORDED" : "QUESTION_ANSWERED";
       // Append first: a failed append leaves the human's one-shot answer retryable.
@@ -2209,17 +2338,62 @@ function handleAnswer(args: string[]): void {
       }
       if (!humanPresenceGuardDisabled() && !humanActedSinceLastAnswer(pd)) {
         error(
-          "Cannot record the summary choice because no human reply has arrived since their last "
-            + "answer. End the turn, wait for the human's choice, then try again."
+          "Cannot record the summary choice because no human reply has arrived since the last "
+            + "decision. End the turn, wait for the human's choice, then try again."
             + unattendedHumanPresenceHint(pd, { missedReply: false }),
         );
       }
-      // Their words go on the receipt. A reply that came before the question
-      // was recorded is the conductor's reading, so the engine says it back.
-      const words = latestPersonTurn(pd)?.words;
+      // The confirmation stands on a reply after the summary's own question
+      // record, as a stage gate's does on one after its showing, or on the
+      // message the agent names: the one it read the confirmation from when it
+      // showed the summary before recording the question, sent after the
+      // summary was last written. With no message named, their reply to the
+      // summary shown first stands as a reply after the record does, as a
+      // question the agent logs after their reply records on it. The engine
+      // proves a named message and never reads its words.
+      let named: StoredMessage | null = null;
+      if (flags.message !== undefined) {
+        const proof = proveMessage(pd, flags.message, "answer");
+        if ("refusal" in proof) error(proof.refusal);
+        named = proof.message;
+      }
+      if (!humanPresenceGuardDisabled()) {
+        if (named !== null && !repliedSinceStageStart(pd, flags.stage, named.id)) {
+          error(stageStartFloorRefusal("confirm the summary of", flags.stage, named.id, "the summary"));
+        }
+        // What the summary showed: its questions file as written before its
+        // question was recorded, or before their reply to it when it was shown
+        // first (filling in its `[Answer]:` comes after either).
+        const questionsAbs = resolve(pd, summaryEvidence!.relativePath);
+        const writes = (row: AuditShardEvent) => auditRowWritesFile(pd, row, questionsAbs);
+        const asked = (row: AuditShardEvent) => row.event === "DECISION_RECORDED" &&
+          summaryRow(pd, row, flags.stage, flags.unit, workflow, summaryEvidence!.relativePath);
+        const shownFirst = pending.humanAfterDecision ? null : replyToSummaryShownFirst(pd, writes, asked);
+        const checked = answeredBeforeShownStep(pd, flags.stage, {
+          refused: "Cannot record the summary choice",
+          question: `the "${flags.stage}" summary`,
+          shown: "the summary",
+          command: "log answer",
+          why: "no reply of the person's has arrived since the summary question was recorded.",
+          shownWriting: {
+            what: "the summary",
+            writes,
+            until: shownFirst === null
+              ? asked
+              : (row) => row.shard === shownFirst.shard && row.pos === shownFirst.pos,
+          },
+        }, named ?? undefined);
+        const repliedToShown = shownFirst !== null && checked.named;
+        if (checked.before || (named === null && !pending.humanAfterDecision && !repliedToShown)) error(checked.step);
+      }
+      // Their words go on the receipt: the message named, or every reply of
+      // theirs in this chat that no decision has used yet (personsGateReply).
+      const reply = named !== null ? null : personsGateReply(pd, invokingChat(pd), flags.stage);
+      const words = named !== null ? (named.words === null ? null : personsWordsText(named.words)) : reply!.words;
+      const messageId = named !== null ? named.id : reply!.messageId;
+      if (messageId) fields["Message Id"] = messageId;
+      if (reply !== null) Object.assign(fields, windowMessageIds(reply));
       if (words && !isNonAnswer(words)) fields["Person Reply"] = words;
-      const kept = words && !isNonAnswer(words) ? `"${words.replace(/\s+/g, " ").trim()}"` : "reply";
-      const sayBack = pending.question !== undefined ? `Recorded your ${kept} for "${pending.question}".` : null;
       // The confirmation authorizes the outputs generated from it. Mint the
       // authorization id from the attempt, the scope, and the confirmed content
       // (identical confirmations mint the same id; changed answers a new one),
@@ -2300,9 +2474,9 @@ function handleAnswer(args: string[]): void {
             authorization.unit,
           );
           if (previousRegistry === null) {
-            removeRecordFileNoFollow(recordDir(pd) as string, registryRelative);
+            removeRecordFileNoFollow(runRecordDir(pd) as string, registryRelative);
           } else {
-            writeRecordFileNoFollow(recordDir(pd) as string, registryRelative, previousRegistry);
+            writeRecordFileNoFollow(runRecordDir(pd) as string, registryRelative, previousRegistry);
           }
         } catch (restoreError) {
           rollback =
@@ -2312,6 +2486,33 @@ function handleAnswer(args: string[]): void {
         }
         error(`Audit emission failed: ${errorMessage(e)}.${rollback}`);
       }
+      // Request changes with nothing said about what: the person answers
+      // next, so the turn ends at the question (the summary protocol). The
+      // question is recorded here, so their reply is its answer, on its own
+      // row behind this change request; with nothing open it had no row, and
+      // the next confirmation took it as its Person Reply.
+      const asksWhat = !positive && summaryFeedback === null;
+      let whatAsked = false;
+      if (asksWhat) {
+        rowEndsTurn = true;
+        try {
+          emitAudit(pd, "DECISION_RECORDED", {
+            Stage: flags.stage,
+            Decision: SUMMARY_CHANGES_QUESTION,
+            ...(fields.Unit !== undefined ? { Unit: fields.Unit } : {}),
+            ...(fields["Attempt Generation"] !== undefined ? { "Attempt Generation": fields["Attempt Generation"] } : {}),
+            ...(workflow !== undefined ? { Workflow: workflow } : {}),
+          });
+          whatAsked = true;
+        } catch {
+          // The change request is on record; the question is asked all the same.
+        }
+      }
+      const whatAnswer = `${aidlcDispatcherInvocation("log answer")} --stage ${quoteCommandArgument(flags.stage)}` +
+        `${flags.unit ? ` --unit ${quoteCommandArgument(flags.unit)}` : ""}${workflow !== undefined ? " --single" : ""} ` +
+        `--details ${quoteCommandArgument("<their words>")}`;
+      // What to change is known, so the agent revises now.
+      const revised = summaryFeedback !== null ? revisedSummaryNote(pd, stageNode, content, flags.unit, workflow) : null;
       console.log(
         JSON.stringify({
           emitted: "SUMMARY_CONFIRMATION_RECORDED",
@@ -2320,7 +2521,14 @@ function handleAnswer(args: string[]): void {
           choice: flags.details,
           ...(positive ? { summary_authorization_id: authorization.id } : {}),
           ...(summaryFeedback !== null ? { feedback: summaryFeedback } : {}),
-          ...(sayBack !== null ? { say: sayBack } : {}),
+          ...(asksWhat
+            ? {
+              agent_note: `Ask the free-text question "${SUMMARY_CHANGES_QUESTION}" and end the turn; ` +
+                (whatAsked
+                  ? `when they reply, record what they said with \`${whatAnswer}\`.`
+                  : "their next reply is what should change."),
+            }
+            : revised !== null ? { agent_note: revised } : {}),
         }),
       );
       return;
@@ -2335,9 +2543,10 @@ function handleAnswer(args: string[]): void {
             "the person must ask for it in an attended chat.",
         );
       }
-      // Their words go on the record: their latest reply since the offer.
+      // Their words go on the record: their latest reply since the offer, and its message.
       const personReply = planApprovalOverridePersonReply(pd);
-      if (personReply) fields["Person Reply"] = personReply;
+      if (personReply?.words) fields["Person Reply"] = personReply.words;
+      if (personReply) fields["Message Id"] = personReply.messageId;
       // Effects, in order: the person's reply is checked again inside the
       // receipt transaction; the normal path is attempted; when it refuses, the
       // PLAN_APPROVAL_OVERRIDDEN row is appended BEFORE the override receipt is
@@ -2358,7 +2567,8 @@ function handleAnswer(args: string[]): void {
               Session: fields.Session,
               Unit: flags.unit ?? "stage-level",
               Fingerprint: planEvidence!.fingerprint,
-              ...(personReply ? { "Person Reply": personReply } : {}),
+              ...(personReply?.words ? { "Person Reply": personReply.words } : {}),
+              ...(personReply ? { "Message Id": personReply.messageId } : {}),
             });
           },
         );
@@ -2380,10 +2590,7 @@ function handleAnswer(args: string[]): void {
           stage: flags.stage,
           override: recorded.overridden,
           ...(recorded.overridden
-            ? {
-              failed_checks: recorded.failedChecks,
-              say: "Recorded that you approved building this plan with no check of the project's files.",
-            }
+            ? { failed_checks: recorded.failedChecks }
             : { note: "the normal receipt path succeeded, so the override was not needed and nothing was overridden" }),
           ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
         }),
@@ -2486,87 +2693,71 @@ function handleAnswer(args: string[]): void {
     // question it was logged with (a question logged after the reply arrived).
     // An explicit id that fails its proof refuses; an inherited one falls back
     // to the presence test below.
+    // A choice the person left to the agent names the message that left it the
+    // same way, which may also have given an approval ("approve, the rest is up
+    // to you"); with none named, the answer is the agent's own, with no claim.
     let named: StoredMessage | null = null;
-    if (instruction === undefined && !autonomousDecision) {
+    if (!autonomousDecision) {
+      const request = { request: instruction !== undefined };
       if (flags.message !== undefined) {
-        const proof = proveMessage(pd, flags.message, "answer");
+        const proof = proveMessage(pd, flags.message, "answer", request);
         if ("refusal" in proof) error(proof.refusal);
         named = proof.message;
       } else {
         const inherited = latestDecisionMessageId(pd, flags.stage, flags.unit);
         if (inherited !== null) {
-          const proof = proveMessage(pd, inherited, "answer");
+          const proof = proveMessage(pd, inherited, "answer", request);
           if ("message" in proof) named = proof.message;
         }
       }
     }
     // The person's own words go on the record beside the choice the agent read
-    // in them, as they do at a gate and for the engine's own questions.
+    // in them, as they do at a gate: the message named, or every reply of
+    // theirs in this chat that no decision has used yet (personsGateReply).
+    // Which question a reply answers is the agent's reading, so a question
+    // logged after the reply that answers it records on that reply, unless
+    // another answer already names it: the question's own row says which, the
+    // latest on this clone's shard, where the reply turns are read (a
+    // teammate's shard can sort after it and hold an older one).
+    const ownQuestion = decisionRowsInScope(ownShardRows(pd).mine, flags.stage, flags.unit).at(-1);
     if (named !== null) {
       fields["Message Id"] = named.id;
-      if (named.words && !isNonAnswer(named.words)) fields["Person Reply"] = named.words;
+      const namedWords = named.words === null ? null : personsWordsText(named.words);
+      if (namedWords && !isNonAnswer(namedWords)) fields["Person Reply"] = namedWords;
     } else if (instruction === undefined && !autonomousDecision) {
-      const words = latestPersonTurn(pd)?.words;
-      if (words && !isNonAnswer(words)) fields["Person Reply"] = words;
+      const reply = personsGateReply(pd, invokingChat(pd), flags.stage, ownQuestion);
+      if (reply.words) fields["Person Reply"] = reply.words;
+      if (reply.messageId) fields["Message Id"] = reply.messageId;
+      Object.assign(fields, windowMessageIds(reply));
     }
     if (instruction !== undefined) {
       if (!personSpokeInThisWork(pd)) {
         error("Nothing the person said in this piece of work is on record, so no choice was left to you. Ask them." +
           unattendedHumanPresenceHint());
       }
-      // The words have to be theirs. Where the record lacks some of what they
-      // said, nothing proves a quote is not theirs, and it stands as before.
-      const words = personsSaidWords(pd, readAuditShardEvents(pd));
-      if (words.everyTurnHeld && !words.said.some((said) => holdsQuote(said, instruction))) {
-        error("Cannot record this as a choice the person left to you: those words are not in anything they said. " +
-          "Quote their own words that left it to you (--on-instruction '<their words>'), or show them the " +
-          "questions and end your turn; their reply answers them.");
+      // The record says the agent chose, reading a message of theirs, only
+      // beside that message, whose whole words it keeps; words the agent
+      // passed with the flag are its own and claim nothing.
+      if (named !== null) {
+        fields["Answer Source"] = ANSWER_SOURCE_ON_INSTRUCTION;
       }
-      fields["Answer Source"] = ANSWER_SOURCE_ON_INSTRUCTION;
-      fields.Instruction = instruction;
+      if (instruction !== "") fields[CONDUCTOR_SUMMARY_FIELD] = instruction;
     } else if (autonomousDecision) {
       // autonomous Construction: no human presence required
     } else if (humanPresenceGuardDisabled()) {
       // scoped test off-switch
     } else if (named !== null) {
       // The proved message is the person's reply to this question.
-    } else if (humanActedSinceLastAnswer(pd) && !replyAnswersQuestion(pd, flags.stage, flags.unit)) {
-      // A reply is on record since the last decision, but it came before this
-      // question was logged, so it is no answer to it (an answer recorded on it
-      // would carry words the person never gave to this question). The agent
-      // names the message when it does answer, records the choice the person
-      // left to it as theirs to leave, or shows the question and waits.
-      const late = messagesBeforeQuestion(pd, flags.stage, flags.unit);
+    } else if (!humanActedSinceLastAnswer(pd)) {
+      // One reply answers every question the agent asked, each as its own
+      // answer: an answer spends no reply.
       error(
-        "Cannot record this answer: the person's last reply came before this question was logged, so it does " +
-          "not answer it." + (late.length > 0 ? ` ${lateQuestionHint(late)}` : "") +
-          " If they left the choice to you in their own words, record it with --on-instruction '<their words>'. " +
-          "Otherwise show the question and end your turn; their next reply answers it.",
-      );
-    } else if (
-      !humanActedSinceLastAnswer(pd) &&
-      !(humanTurnMintAllowed() && humanTurnState(pd, { replies: true }) === "answered")
-    ) {
-      // One reply answers every question that was open when it arrived, each
-      // as its own answer ("answered": only answers used it, and nothing was
-      // asked since). A question asked after it waits for the next reply,
-      // unless the person's message that answered it arrived before it was
-      // logged: then the agent names that message instead of asking again.
-      const late = messagesBeforeQuestion(pd, flags.stage, flags.unit);
-      error(
-        (late.length > 0
-          ? `Cannot record this answer: the question was logged after the person's reply. ${lateQuestionHint(late)}`
-          : "Cannot record this answer because no new human reply has arrived for the question. "
-            + "Wait for the human to type an answer, then try again."
-            + commandTurnHint(pd))
+        keptMessageRefusal(pd) ??
+          "Cannot record this answer because no new human reply has arrived for the question. "
+          + "Wait for the human to type an answer, then try again."
+          + commandTurnHint(pd)
           + unattendedHumanPresenceHint(pd),
       );
-    }
-    // Where the person replied in a picker, an answer none of their picks
-    // carried is still recorded, with a note saying what they picked.
-    if (instruction === undefined && !autonomousDecision) {
-      const note = pickerAnswerNote(pd, flags.details);
-      if (note !== null) fields["Picker Note"] = note;
     }
 
     try {
@@ -2575,10 +2766,81 @@ function handleAnswer(args: string[]): void {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
 
+    // Add a note at an "Anything to add?" question a record still holds (the
+    // step asked it at every gate before it asked only after a correction): the
+    // person's next reply answers what follows, so the turn ends at that question. A pick in a question box is read from the person's own
+    // recorded reply; a typed one from the exact option the agent recorded on
+    // the question its kind (or its two options) names. Whether their reply
+    // already holds the note is the agent's to read.
+    const fromBox = instruction === undefined && !autonomousDecision ? boxPicksAddANote(pd, named?.id) : null;
+    const question = decisionRowsInScope(readAuditShardEvents(pd), flags.stage, flags.unit).at(-1);
+    const asksForNote = fromBox ?? (picksAddANote(flags.details) && question !== undefined &&
+      isLearningsNoteDecision(question.block));
+    if (asksForNote) rowEndsTurn = true;
+    // What should change, or a follow-up, after a Request changes at the summary.
+    // A new chat's step for "What should change?" names no Unit or single-stage
+    // run, and the question's own row has them.
+    const revised = asksForNote ? null : revisedSummaryNote(pd, stageNode, content,
+      flags.unit ?? (question === undefined ? undefined : auditBlockField(question.block, "Unit") ?? undefined),
+      workflow ?? (question === undefined ? undefined : auditBlockField(question.block, "Workflow") ?? undefined));
     console.log(
-      JSON.stringify({ emitted: "QUESTION_ANSWERED", stage: flags.stage })
+      JSON.stringify({
+        emitted: "QUESTION_ANSWERED",
+        stage: flags.stage,
+        ...(asksForNote
+          ? {
+            agent_note: "When their reply already says what the note is, that is the note: take their words and do " +
+              "not ask for it again. Otherwise ask what the note should say. End the turn at the question you ask " +
+              "next; their next reply answers it.",
+          }
+          : revised !== null ? { agent_note: revised } : {}),
+      })
     );
   });
+}
+
+// What a link receipt at a codekb stage over many repositories tells the agent,
+// as facts it words itself: how many repositories are analysed, a note when the
+// count reaches a new tenth of the set (never after every repository), and on
+// the receipt that completes every chain, the approval gate's wait when that is
+// long. The count is kept in the record's engine folder for the status line,
+// with the repositories it counts, so a set the person changes since is a new
+// count and the status line shows no old one.
+function codekbReceiptNotes(pd: string, node: StageEntry): Record<string, unknown> {
+  const notes: Record<string, unknown> = {};
+  const { done, total, repos } = codekbAnalysed(pd, node);
+  if (total < MANY_REPOS) return notes;
+  const mark = join(engineDir(pd), CODEKB_ANALYSED_FILE);
+  let kept: { done: number; tenth: number } | null = null;
+  try {
+    const prior = JSON.parse(readFileSync(mark, "utf-8")) as { done?: unknown; tenth?: unknown; total?: unknown; repos?: unknown };
+    const sameSet = Array.isArray(prior.repos) && prior.repos.join("\n") === repos.join("\n");
+    if (sameSet && prior.total === total && typeof prior.done === "number" && typeof prior.tenth === "number") {
+      kept = { done: prior.done, tenth: prior.tenth };
+    }
+  } catch {
+    // No count kept yet for this set.
+  }
+  // A count that went down is a new attempt (a rescan): its tenths are said again.
+  const saidTenth = kept !== null && kept.done <= done ? kept.tenth : 0;
+  const tenth = Math.floor((done * 10) / total);
+  notes.analysed = { done, total };
+  if (tenth > saidTenth && done < total) {
+    notes.analysed_note = `${done} of ${total} repositories are analysed: tell the person so, in a few words of your own.`;
+  }
+  const seconds = gateEstimateSeconds(total);
+  if (done === total && kept?.done !== total && seconds >= GATE_NOTE_SECONDS) {
+    notes.gate_wait_note = `Every repository is analysed. The report that opens the approval gate checks the files of all ` +
+      `${total} repositories and takes about ${seconds} seconds: before you run it, tell the person so in one line of ` +
+      "your own.";
+  }
+  try {
+    mkdirSync(dirname(mark), { recursive: true });
+    writeFileAtomic(mark, `${JSON.stringify({ stage: node.slug, done, total, tenth: Math.max(tenth, saidTenth), repos })}\n`);
+  } catch {
+    // The count is a courtesy: a record that cannot take it changes nothing.
+  }
+  return notes;
 }
 
 // --- Subcommand: link ---
@@ -2587,9 +2849,10 @@ function handleAnswer(args: string[]): void {
 //     [--artifact <path>] [--single]
 //       → PIPELINE_LINK_COMPLETED
 //
-// The receipt is emitted only after a declared pipeline link returns. Ordering,
-// duplicate prevention, and attempt freshness are checked under the audit lock
-// so two concurrent conductors cannot advance the same chain.
+// The receipt is emitted only after a declared pipeline link returns. Ordering
+// and attempt freshness are checked under the audit lock so two concurrent
+// conductors cannot advance the same chain; a link the attempt already holds
+// is answered without a second receipt.
 function handleLink(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -2600,16 +2863,21 @@ function handleLink(args: string[]): void {
     );
   }
 
-  const pd = resolveActiveProjectDir(projectDir);
+  const singleRun = flags.single === "true";
+  const pd = resolveActiveProjectDir(projectDir, singleRun ? flags.stage : undefined);
   const selection = resolveWorkflowSelection(pd);
   const space = selection.space;
-  const intent = selection.intent;
-  if (!intent) {
+  // An isolated run with no work selected has no intent: its rows go to the
+  // record its start went to.
+  const intent = selection.intent ?? undefined;
+  if (!intent && !singleRun) {
     error("Cannot resolve the active intent for pipeline link logging.");
   }
-  const singleRun = flags.single === "true";
   // The repo the receipt records (none for the project root).
   let recordedRepo: string | null = null;
+  let alreadyRecorded = false;
+  // What the receipt tells the agent about a codekb stage over many repositories.
+  let receiptNotes: Record<string, unknown> = {};
 
   try {
     withAuditLock(pd, () => {
@@ -2652,13 +2920,20 @@ function handleLink(args: string[]): void {
 
       const repo = repoFlag ?? null;
       recordedRepo = repo;
-      if (evidence.receipts.some((receipt) =>
-        receipt.link === flags.link && receipt.repo === repo
-      )) {
-        throw new Error(
-          `Cannot record pipeline link for "${flags.stage}": link "${flags.link}"` +
-            `${repo ? ` for repo "${repo}"` : ""} already completed this attempt.`,
-        );
+      // A link the attempt already holds lands again with no second receipt:
+      // the agent may run a link again for the person's change, and under
+      // Guard Policy relaxed or off a rejection keeps what it holds. A lead
+      // link naming another handoff file is not that link; the handoff checks
+      // below judge it.
+      const handoffLink = flags.stage === "reverse-engineering" && flags.link === node.lead_agent;
+      const held = evidence.receipts.find((receipt) => receipt.link === flags.link && receipt.repo === repo);
+      if (
+        held !== undefined &&
+        (!handoffLink || !flags.artifact ||
+          (held.artifactPath !== null && resolve(pd, flags.artifact) === resolve(pd, held.artifactPath)))
+      ) {
+        alreadyRecorded = true;
+        return;
       }
       if (index > 0) {
         const previous = links[index - 1];
@@ -2679,27 +2954,14 @@ function handleLink(args: string[]): void {
         Link: flags.link,
         Position: `${index + 1}/${links.length}`,
       };
-      if (
-        flags.stage === "reverse-engineering" &&
-        flags.link === node.lead_agent
-      ) {
+      if (handoffLink) {
         if (!flags.artifact) {
           throw new Error(
-            'Cannot record reverse-engineering developer link: pass --artifact "<record>/inception/reverse-engineering/developer-scan[-<repo>].md".',
+            "Cannot record reverse-engineering developer link without its handoff file: run " +
+              `\`${pipelineLinkCommand(pd, node, flags.link, repo, singleRun)}\`.`,
           );
         }
-        const root = recordDir(pd);
-        if (root === null) {
-          throw new Error(
-            "Cannot record reverse-engineering developer link: active intent record is unavailable.",
-          );
-        }
-        const handoffDir = join(root, "inception", "reverse-engineering");
-        // The root's handoff may also carry the root's name, as a registered
-        // repo's does.
-        const accepted = repo
-          ? [join(handoffDir, `developer-scan-${repo}.md`)]
-          : [join(handoffDir, "developer-scan.md"), join(handoffDir, `developer-scan-${rootName}.md`)];
+        const accepted = developerHandoffPaths(pd, repo);
         const artifact = resolve(pd, flags.artifact);
         if (!accepted.includes(artifact)) {
           throw new Error(
@@ -2760,8 +3022,10 @@ function handleLink(args: string[]): void {
             `Cannot record reverse-engineering developer link: ${toPosix(relative(pd, artifact))} was not rewritten after its prior pipeline receipt.`,
           );
         }
+        // The handoff's text, CRLF read as LF, so a checkout with the other line
+        // endings reads as the same scan.
         const digest = createHash("sha256")
-          .update(artifactBytes)
+          .update(committedTextBytes(artifactBytes))
           .digest("hex");
         fields["Artifact Path"] = toPosix(relative(pd, artifact));
         fields["Artifact SHA256"] = `sha256:${digest}`;
@@ -2770,17 +3034,19 @@ function handleLink(args: string[]): void {
       if (repo) fields.Repo = repo;
       if (singleRun) fields.Workflow = `single-stage:${flags.stage}`;
       emitAudit(pd, "PIPELINE_LINK_COMPLETED", fields, intent, space);
+      if (KNOWN_CODEKB_STAGES.has(node.slug) && !singleRun) receiptNotes = codekbReceiptNotes(pd, node);
     }, intent, space);
   } catch (e) {
     error(errorMessage(e));
   }
 
   console.log(JSON.stringify({
-    emitted: "PIPELINE_LINK_COMPLETED",
+    ...(alreadyRecorded ? { already_recorded: true } : { emitted: "PIPELINE_LINK_COMPLETED" }),
     stage: flags.stage,
     link: flags.link,
     ...(recordedRepo ? { repo: recordedRepo } : {}),
     ...(singleRun ? { single: true } : {}),
+    ...receiptNotes,
   }));
 }
 
@@ -2799,32 +3065,6 @@ function handleLink(args: string[]): void {
 // PER UNIT, so pass --unit; the approve guard requires one review per unit.
 const VALID_VERDICTS = new Set(["READY", "NOT-READY"]);
 
-// The record's half of "the person asked for this review": they spoke since the
-// last decision, after the last request for this review. Whether their words
-// asked for it is the conductor's reading (--person-asked); the two together
-// lift the pass cap and the one recovery, which bound only the reviews the
-// agent starts on its own.
-function personSpokeSinceReviewRequest(
-  pd: string,
-  stage: string,
-  reviewer: string,
-  unit: string | undefined,
-  intent?: string | null,
-  space?: string,
-): boolean {
-  if (!personSpokeSinceGate(pd, { requests: true })) return false;
-  let turn: AuditShardEvent | null = null;
-  let request: AuditShardEvent | null = null;
-  for (const row of sortAttemptEvents(readAuditShardEvents(pd, intent ?? undefined, space))) {
-    if (isRequestTurn(row)) turn = row;
-    else if (
-      row.event === "REVIEW_REQUESTED" && auditBlockField(row.block, "Stage") === stage &&
-      auditBlockField(row.block, "Reviewer") === reviewer && (auditBlockField(row.block, "Unit") || undefined) === unit
-    ) request = row;
-  }
-  return turn !== null && (request === null || attemptEventDefinitelyBefore(request, turn));
-}
-
 // A refusal of a review past the cap when the person spoke since it was last
 // requested and the conductor did not say they asked for it: their words decide
 // which way it goes on, so the flag comes first and the usual way on only if
@@ -2840,7 +3080,9 @@ function reviewBudgetMessage(stage: string, ordinal: number, budget: number, ret
   return unlessPersonAsked(
     `Cannot request review pass ${ordinal} for "${stage}" because this stage allows ` +
       `${budget} review pass${budget === 1 ? "" : "es"}. `,
-    budget === 1
+    budget === 0
+      ? "This stage runs no review in this work: open the approval gate."
+      : budget === 1
       ? "Do not ask the reviewer again; include the findings in the approval summary for the human."
       : "Present the unresolved findings at the approval gate for the human instead of starting another review.",
     retryWith,
@@ -2940,10 +3182,42 @@ function reviewRecoveryAlreadyRequestedMessage(
   );
 }
 
-class ReviewRefusal extends Error {}
+// Under relaxed or off a change after the review is accepted and no further
+// review is owed (stage-protocol-reviewer.md 12a), so a review past the one
+// recovery names the work's own next step.
+function reviewChangeAcceptedMessage(
+  stage: string,
+  next: string,
+  complete: string | null,
+  retryWith: string | null,
+): string {
+  return unlessPersonAsked(
+    `Cannot start another review for "${stage}": its review receipt stands and the change is accepted, ` +
+      "so no further review is owed. ",
+    `${complete === null ? "Run" : `Record this Unit's completion with \`${complete}\`, then run`} ` +
+      `\`${next}\` and follow the step it returns.`,
+    retryWith,
+  );
+}
 
-function refuseReview(message: string): never {
-  throw new ReviewRefusal(message);
+// A Unit's completion while its step is still open on the stage: the step a
+// Unit's last review hands on before `next`.
+function openUnitCompletionCommand(pd: string, stage: string, unit: string | undefined): string | null {
+  if (unit === undefined) return null;
+  const open = unitOpenCheckpoints(pd, stage).some((entry) => entry.unit === unit && entry.state === "in-progress");
+  return open ? aidlcDispatcherInvocation(`state unit complete --stage ${stage} --unit ${quoteCommandArgument(unit)}`) : null;
+}
+
+// `changeNotices`: lines this request already recorded as said (a change
+// accepted under relaxed or off), carried on its refusal so they reach the person.
+class ReviewRefusal extends Error {
+  constructor(message: string, readonly changeNotices: readonly string[] = []) {
+    super(message);
+  }
+}
+
+function refuseReview(message: string, changeNotices: readonly string[] = []): never {
+  throw new ReviewRefusal(message, changeNotices);
 }
 
 function refuseReviewGuard(
@@ -3030,6 +3304,171 @@ function removeParentReviewerDispatch(
   }
 }
 
+// A stage whose review is part of its work going on: in progress, at its
+// gate, or being revised. A review of a stage already approved (the person
+// asked for another look) is not, so it never marks the turn as owing work.
+const REVIEW_IN_FLIGHT: ReadonlySet<string> = new Set(["in-progress", "awaiting-approval", "revising"]);
+
+function stageBox(state: string, stage: string): string | undefined {
+  return parseCheckboxes(state).find((row) => row.slug === stage)?.state;
+}
+
+// The agent's next step after a stage's verdict is recorded (#2400). The
+// verdict used to come back with no step, so an agent that took it as the end
+// of the work ended its turn before the approval gate, and on a host that
+// ignores the Stop hook (Kiro IDE) nothing put it back on track. Whether
+// another pass follows is the engine's own terminal rule (terminalReviewVerdict),
+// whether the stage has the learnings step is the run-stage's own rule
+// (learningsRitualRuns), and the gate's command is the report the stage
+// protocol names. A review the person asked for past the budget (even with
+// reviews off) and the one bounded stale-receipt recovery are one-off passes:
+// their verdict is terminal whatever the class. A Unit's last pass hands on to
+// `next`, which names its route's step, after the Unit's completion when it
+// is still open on the stage (a team's route hands the body back without it).
+// A unit-major walk keeps a later per-Unit stage's own box pending, so for a
+// Unit a pending stage is in flight too. An isolated single-stage run, a Unit
+// in a swarm Bolt or a wave (their own loop goes on), an autonomous
+// Construction gate and a stage no longer in flight keep the step their own
+// directive names: no note. `next` names the same step between the verdict
+// and the gate's report (aidlc-orchestrate.ts finishedReviewStep), where the
+// person's words go with the step `next` hands (their branch would name `next`
+// again) and a learnings question answered since the stage started (since the
+// Request Changes, for a stage being revised) is not asked again. Whether the
+// step asks one is the agent's reading of the person's words, so the note names
+// it beside the gate's report, and either may end the turn.
+export function reviewVerdictStep(
+  pd: string,
+  flags: Record<string, string>,
+  verdict: string,
+  iteration: number,
+  context: {
+    state: string;
+    node: { slug: string; phase: string; for_each?: string; mode?: string; reviewer_max_iterations?: number };
+    reviewClass: ReviewClass | null;
+    autonomousCandidate: boolean;
+    attempt: { boltStarted: boolean };
+  },
+  selection: { intent: string | null; space: string },
+  request: { personAsked: boolean; recovery: boolean },
+  fromNext: { learningsAnswered: boolean } | null = null,
+): string | null {
+  const { state, node, reviewClass } = context;
+  const unit = flags.unit;
+  const oneOff = request.personAsked || request.recovery;
+  if (flags.single === "true" || reviewClass === null) return null;
+  if (unit !== undefined && context.autonomousCandidate && context.attempt.boltStarted) return null;
+  if (unit !== undefined && waveEligible(node) && getField(state, "Construction Iteration")?.trim() !== "unit-major") {
+    return null;
+  }
+  if (reviewClass === "none" && !oneOff) return null;
+  if (node.phase === "initialization") return null;
+  const box = stageBox(state, flags.stage);
+  if (box === undefined || !(REVIEW_IN_FLIGHT.has(box) || (unit !== undefined && box === "pending"))) return null;
+  const terminal = oneOff || terminalReviewVerdict(
+    verdict,
+    String(iteration),
+    reviewClass,
+    node.reviewer_max_iterations ?? 2,
+  ) !== null;
+  // What the person said while the reviewer worked comes first
+  // (stage-protocol-reviewer.md): `next` names the step, with their words.
+  if (
+    fromNext === null &&
+    personSpokeSinceReviewRequest(pd, flags.stage, flags.reviewer, unit, selection.intent, selection.space)
+  ) {
+    return reviewVerdictNote({ kind: "person-wrote", next: aidlcDispatcherInvocation("orchestrate next") });
+  }
+  if (!terminal) {
+    if (box === "awaiting-approval") return null;
+    return reviewVerdictNote({
+      kind: "next-pass",
+      request: renderReviewRequestCommand({
+        projectDir: pd,
+        stage: flags.stage,
+        reviewer: flags.reviewer,
+        ...(unit !== undefined ? { unit } : {}),
+        iteration: iteration + 1,
+      }),
+    });
+  }
+  if (unit !== undefined) {
+    const complete = openUnitCompletionCommand(pd, flags.stage, unit);
+    return reviewVerdictNote({
+      kind: "unit",
+      next: aidlcDispatcherInvocation("orchestrate next"),
+      ...(complete !== null ? { complete } : {}),
+    });
+  }
+  if (node.phase === "construction" && isAutonomousConstructionGate(state, node, pd)) return null;
+  // A recovery pass re-checked an invalidated review, and a backward jump began
+  // this attempt: either way the gate's brief is the stale one.
+  const stale = request.recovery ||
+    backwardJumpBoundary(reviewInvalidationAttemptView(readAuditShardEvents(pd), flags.stage).floor) !== undefined;
+  const brief = stageReviewBriefCommand(flags.stage, stale ? "stale" : box === "revising" ? "revision" : "first");
+  const learnings = fromNext?.learningsAnswered !== true &&
+    learningsRitualRuns(ceremonyPolicyValues(getField(state, "Scope"), state).learnings);
+  if (box === "in-progress") {
+    return reviewVerdictNote({
+      kind: learnings ? "learnings" : "gate",
+      report: stageGateReportCommand(flags.stage, "awaiting-approval"),
+      summary: true,
+      brief,
+    });
+  }
+  // The one recovery pass at an open gate the person already answered: the
+  // approval refused for the stale review stands on their reply, which nothing
+  // has used, so the agent records it rather than asking again. A reply in
+  // another chat is not named: the agent here never saw its words. A pass with
+  // a finding they have not seen (a NOT-READY one, or a READY one with a minor
+  // point) brings it to them at the gate, with the brief.
+  const reviewed = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
+  const unseen = () => reviewed === undefined || readReviewArtifactContexts(pd, reviewed).some((context) =>
+    context.findings.some((finding) => finding.status === "New" || finding.status === "Unresolved"));
+  if (request.recovery && box === "awaiting-approval" && verdict === "READY" &&
+    personRepliedSinceGateShown(pd, { stage: flags.stage }) === true && !unseen()) {
+    const replies = personsGateReply(pd, resolveInvokingSessionId(pd), flags.stage).replies;
+    if (replies.length > 0) {
+      const report = `orchestrate report --stage ${quoteCommandArgument(flags.stage)}`;
+      return reviewVerdictNote({
+        kind: "reply-stands",
+        stage: flags.stage,
+        replies,
+        approve: aidlcDispatcherInvocation(`${report} --result approved --user-input "Approve" --message <id>`),
+        reject: aidlcDispatcherInvocation(`${report} --result rejected --user-input "Request Changes" --message <id>`),
+        report: stageGateReportCommand(flags.stage, "awaiting-approval"),
+        brief,
+      });
+    }
+  }
+  return reviewVerdictNote({
+    kind: box === "revising" && learnings ? "learnings" : "gate",
+    report: stageGateReportCommand(flags.stage, box === "revising" ? "revised" : "awaiting-approval"),
+    summary: false,
+    brief,
+  });
+}
+
+// completionChecksStep (aidlc-state.ts, the one owner) for the review request,
+// run as the state tool's own command: that tool's module graph cannot be
+// required here. Sensors off asks nothing of it; a failure holds nothing.
+function completionChecksHold(pd: string, stage: string, unit: string | undefined, request: string): string | null {
+  const state = readStateFile(pd);
+  if (resolveCeremony("sensors", getField(state, "Scope"), state).value === "off") return null;
+  const [command, ...args] = aidlcEngineCommand(
+    "state",
+    ["completion-checks", stage, ...(unit ? ["--unit", unit] : []), "--hand-off", "review", "--again", request, "--project-dir", pd],
+    fileURLToPath(new URL("./aidlc-state.ts", import.meta.url)),
+  );
+  const result = spawnSync(command, args, { encoding: "utf-8", env: { ...process.env, AIDLC_PROJECT_DIR: pd } });
+  try {
+    const line = (result.stdout ?? "").split(/\r?\n/).findLast((entry) => entry.startsWith("{"));
+    const reply = JSON.parse(line ?? "{}") as { held?: unknown; message?: unknown };
+    return reply.held === true && typeof reply.message === "string" ? reply.message : null;
+  } catch {
+    return null;
+  }
+}
+
 function handleReview(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -3040,13 +3479,22 @@ function handleReview(args: string[]): void {
     );
   }
 
-  const pd = resolveActiveProjectDir(projectDir);
+  const pd = resolveActiveProjectDir(projectDir, flags.stage);
   if (flags.unit) validateLiveUnitScope(pd, flags.unit);
   const selection = resolveWorkflowSelection(pd);
   const space = selection.space;
-  const intent = selection.intent;
-  if (!intent) {
+  // An isolated run with no work selected has no intent: its review records
+  // in the space's own record, where its start is.
+  const intent = selection.intent ?? undefined;
+  if (!intent && flags.single !== "true") {
     error("Cannot resolve the active intent for review logging.");
+  }
+  // A stage's own review of work no longer in flight is not the stage's work
+  // going on: it leaves no engine mark (a Unit's review and an isolated run
+  // keep their own flow's).
+  if (!flags.unit && flags.single !== "true") {
+    const box = stageBox(readStateFile(pd, intent, space), flags.stage);
+    if (box === undefined || !REVIEW_IN_FLIGHT.has(box)) stageWorkRow = false;
   }
   const fields: Record<string, string> = {
     Stage: flags.stage,
@@ -3063,7 +3511,7 @@ function handleReview(args: string[]): void {
     scanReceipts: boolean,
     enforceAdmissibility = true,
   ) => {
-    const state = readStateFile(pd, intent, space);
+    const state = intent ? readStateFile(pd, intent, space) : "";
     const node = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
     if (!node?.reviewer) {
       refuseReview(`Cannot record review: stage "${flags.stage}" has no declared reviewer.`);
@@ -3204,6 +3652,7 @@ function handleReview(args: string[]): void {
       node,
       attempt,
       budget,
+      reviewClass,
       receipts,
       autonomousCandidate,
       requireRequiredArtifacts,
@@ -3212,10 +3661,25 @@ function handleReview(args: string[]): void {
     };
   };
 
+  // `recordCheckouts`: a fresh request records a checkout one of the Unit's
+  // claims lies in where the source walk does not reach, before the binding,
+  // so this review binds it; a retried request keeps the boundary it had.
   const stampRequestedSourceBinding = (
     node: ReturnType<typeof loadStageGraphAll>[number],
+    recordCheckouts = false,
   ): void => {
     if (!node.workspace_requires) return;
+    if (
+      recordCheckouts &&
+      flags.unit !== undefined &&
+      node.for_each === "unit-of-work" &&
+      flags.single !== "true"
+    ) {
+      const recorded = recordUnitClaimCheckouts(pd, flags.stage as string, flags.unit as string);
+      if (recorded.length > 0) {
+        fields["Checkouts Recorded"] = recorded.map((checkout) => `${checkout.label} (${checkout.path})`).join(", ");
+      }
+    }
     const sourceState = workspaceSourceState(pd, intent, space);
     fields["Source Fingerprint"] =
       sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
@@ -3273,7 +3737,7 @@ function handleReview(args: string[]): void {
     draftRelativeToRecord: string;
     recordRelative: string;
   } => {
-    const record = recordDir(pd);
+    const record = runRecordDir(pd);
     if (record === null) refuseReview("Cannot resolve the active intent record.");
     const attemptId = reviewAttemptId(floor);
     const draft = reviewDraftRelativePath(flags.stage as string, flags.unit, attemptId, iteration, requestId);
@@ -3297,8 +3761,10 @@ function handleReview(args: string[]): void {
   ) => {
     const { state, node, attempt, budget, receipts, requireRequiredArtifacts, unitResolution, mergedBoltUnits } = context;
     const teamGate = teamUnitGateStatus(pd, state, node.slug, flags.unit);
+    // With no work, the run's own recorded scope sets its ceremony, as
+    // `report --single` reads it.
     const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
-      stateContent: state,
+      ...(intent ? { stateContent: state } : { stateContent: null, scope: singleStageAttemptScope(pd, node.slug) }),
       unit: flags.unit,
       workflow: fields.Workflow,
       selection: { intent, space },
@@ -3396,6 +3862,22 @@ function handleReview(args: string[]): void {
         return;
       }
     }
+    // The stage's checks run on its documents before their review, so the
+    // agent fixes its own slips first. A review the person asked for runs at
+    // once, and a retry repeats a request already made.
+    if (!retryPending && flags.single !== "true" && flags["person-asked"] !== "true") {
+      const held = completionChecksHold(pd, flags.stage, flags.unit, renderReviewRequestCommand({
+        projectDir: pd,
+        stage: flags.stage,
+        reviewer: flags.reviewer,
+        ...(flags.unit ? { unit: flags.unit } : {}),
+        iteration: Number(flags.iteration),
+      }));
+      if (held !== null) {
+        console.log(JSON.stringify({ kind: "print", message: held }));
+        return;
+      }
+    }
     const iteration = Number(flags.iteration);
     fields.Iteration = flags.iteration;
     let retried = false;
@@ -3404,6 +3886,7 @@ function handleReview(args: string[]): void {
     let replaces: string | null = null;
     let requestId: string | null = null;
     let reviewFile: string | null = null;
+    let workspaceStage = false;
     const requestChangeNotices: string[] = [];
     // Open the reviewer's slot for this request: any draft an earlier dispatch of
     // the same iteration left behind is not this dispatch's review.
@@ -3413,12 +3896,12 @@ function handleReview(args: string[]): void {
       // this record's, so the request refuses instead of clearing a path
       // outside the intent record.
       try {
-        removeRecordFileNoFollow(recordDir(pd) as string, slot.draftRelativeToRecord);
+        removeRecordFileNoFollow(runRecordDir(pd) as string, slot.draftRelativeToRecord);
         // The slot's folder exists before the reviewer runs, so the review is
         // one plain file write with no folder to make first.
-        const draftTarget = recordFileTargetOrThrow(recordDir(pd) as string, slot.draftRelativeToRecord);
+        const draftTarget = recordFileTargetOrThrow(runRecordDir(pd) as string, slot.draftRelativeToRecord);
         mkdirSync(dirname(draftTarget), { recursive: true });
-        recordFileTargetOrThrow(recordDir(pd) as string, slot.draftRelativeToRecord);
+        recordFileTargetOrThrow(runRecordDir(pd) as string, slot.draftRelativeToRecord);
       } catch (e) {
         refuseReview(
           `Cannot start review for "${flags.stage}": the review slot ` +
@@ -3444,6 +3927,7 @@ function handleReview(args: string[]): void {
           unitResolution,
           mergedBoltUnits,
         } = context;
+        workspaceStage = node.workspace_requires === true;
         const { pendingStatus, teamGate } = admitReviewSummary(context, "review-request", requestChangeNotices);
         const expected = attempt.requestCount + 1;
         const sameSourceRecoveryScope =
@@ -3460,8 +3944,7 @@ function handleReview(args: string[]): void {
             : receipts.stageStale);
         // With Construction checkpoints on, a review of a Unit whose reviewed
         // code changed outside any review re-checks that change: it is the
-        // recovery pass, and the person's approval of the Unit since the last
-        // re-check opens a fresh one.
+        // recovery pass.
         const checkpointUnit = receipts !== null && flags.unit !== undefined &&
           getField(state, "Construction Checkpoints") === "enabled";
         const unitSourceScopeStale = checkpointUnit && !artifactScopeStale &&
@@ -3475,24 +3958,47 @@ function handleReview(args: string[]): void {
           sourceScopeStale &&
           (receipts?.sourceRecoverySpent === true ||
             receipts?.sourceStaleProgress?.recoverySpent === true);
-        const recoverySpent = !(checkpointUnit && receipts.unitRecheckReopened.has(flags.unit as string)) &&
+        // The person's approval of the Unit or a new attempt they start for it
+        // since its re-check opens a fresh one (unitRecheckReopened says where).
+        const recoverySpent =
+          !(receipts !== null && flags.unit !== undefined && receipts.unitRecheckReopened.has(flags.unit)) &&
           (attempt.recoverySpent || sourceRecoverySpent);
         // A review the person asked for is never refused for want of passes:
-        // the conductor says they asked (--person-asked) and the record shows
-        // they spoke since it was last requested. The lift goes on the row.
+        // the conductor says they asked (--person-asked) and names the message
+        // they asked in (--message, proved), sent since the review was last
+        // requested. The lift goes on the row.
         let spoke: boolean | null = null;
         const personSpoke = (): boolean =>
           (spoke ??= personSpokeSinceReviewRequest(pd, flags.stage as string, flags.reviewer as string, flags.unit, intent, space));
         const saysPersonAsked = flags["person-asked"] === "true";
+        let asked: boolean | null = null;
+        const askedInNamedMessage = (): boolean => {
+          if (asked === null) {
+            if (!saysPersonAsked || flags.message === undefined) {
+              asked = false;
+            } else {
+              const proof = proveMessage(pd, flags.message, "request", { request: true });
+              if ("refusal" in proof) error(proof.refusal);
+              asked = messageSinceReviewRequest(
+                pd, flags.stage as string, flags.reviewer as string, flags.unit, proof.message, intent, space,
+              );
+            }
+          }
+          return asked;
+        };
         let lifted = false;
         const boundStands = (): boolean => {
-          if (!saysPersonAsked || !personSpoke()) return true;
+          if (!askedInNamedMessage()) return true;
           lifted = true;
           return false;
         };
-        const personMayHaveAsked = (): boolean => !saysPersonAsked && personSpoke();
-        const personAskedRetry = (): string | null =>
-          !personMayHaveAsked() ? null : iteration === expected ? "--person-asked" : `--person-asked --iteration ${expected}`;
+        const personMayHaveAsked = (): boolean => !askedInNamedMessage() && personSpoke();
+        // `inPlaceOf` names a flag the retry drops: kept, it would land here again.
+        const personAskedRetry = (inPlaceOf?: string): string | null =>
+          !personMayHaveAsked()
+            ? null
+            : `--person-asked --message <id>${iteration === expected ? "" : ` --iteration ${expected}`}` +
+              `${inPlaceOf === undefined ? "" : ` in place of ${inPlaceOf}`}${messageFill(pd)}`;
         const refuseAttemptGuard = (
           code: string,
           invariant: string,
@@ -3539,6 +4045,23 @@ function handleReview(args: string[]): void {
         // shown to them, never retried, and would refuse a review they asked for.
         const refuseBound = (code: string, invariant: string, message: string): never =>
           personMayHaveAsked() ? refuseReview(message) : refuseAttemptGuard(code, invariant, message);
+        // Under relaxed or off the change is accepted and no review is owed (the
+        // rule recoveryReviewOwed in aidlc-state.ts reads), so a review of a Unit
+        // the agent starts on its own past the one recovery is refused to it
+        // alone, and its way on is the Unit's next step: never the person's
+        // question, a redo of built work or a restart of the stage. A stage's own
+        // review keeps its way on, and so does a swarm Bolt.
+        const changeAccepted = (): boolean =>
+          flags.unit !== undefined &&
+          !(autonomousCandidate && attempt.boltStarted) &&
+          guardPolicyAcceptsChanges(pd, state, { selection: { intent, space } });
+        const refuseChangeAccepted = (retryWith: string | null): never =>
+          refuseReview(reviewChangeAcceptedMessage(
+            flags.stage,
+            aidlcDispatcherInvocation("orchestrate next"),
+            openUnitCompletionCommand(pd, flags.stage, flags.unit),
+            retryWith,
+          ), requestChangeNotices);
         // The one request that still works when a pending review can never
         // finish (see replaceIteration below): named in every refusal that would
         // otherwise leave the conductor restoring bytes it cannot restore.
@@ -3557,6 +4080,7 @@ function handleReview(args: string[]): void {
         if (retryPending) {
           const pendingRequest = attempt.pendingRequests.get(iteration);
           if (!pendingRequest) {
+            if (recoverySpent && changeAccepted()) refuseChangeAccepted(personAskedRetry("--retry-pending"));
             if (scopeStale) {
               if (recoverySpent) {
                 const message = reviewRecoverySpentMessage(
@@ -3779,7 +4303,7 @@ function handleReview(args: string[]): void {
             fields["Recovery Cause"] = replaced.recoveryCause;
             recovery = "stale-receipt";
           }
-          stampRequestedSourceBinding(node);
+          stampRequestedSourceBinding(node, true);
           openReviewDraftSlot(attempt.floor);
           emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
           return;
@@ -3789,6 +4313,7 @@ function handleReview(args: string[]): void {
           scopeStale &&
           attempt.pendingIterations.size === 0 &&
           !recoverySpent;
+        if (recoverySpent && changeAccepted() && boundStands()) refuseChangeAccepted(personAskedRetry());
         if (scopeStale && recoverySpent && boundStands()) {
           const message = reviewRecoverySpentMessage(
               flags.stage,
@@ -3915,15 +4440,17 @@ function handleReview(args: string[]): void {
         fields["Request Id"] = requestId;
         if (lifted) {
           fields["Person Asked"] = "true";
-          const words = latestPersonTurn(pd)?.words;
-          if (words && !isNonAnswer(words)) fields["Person Reply"] = words;
+          const reply = personsGateReply(pd, invokingChat(pd), flags.stage as string);
+          if (reply.words) fields["Person Reply"] = reply.words;
+          if (reply.messageId) fields["Message Id"] = reply.messageId;
+          Object.assign(fields, windowMessageIds(reply));
         }
-        stampRequestedSourceBinding(node);
+        stampRequestedSourceBinding(node, true);
         openReviewDraftSlot(attempt.floor);
         emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
       }, intent, space);
     } catch (e) {
-      if (e instanceof ReviewRefusal) error(e.message);
+      if (e instanceof ReviewRefusal) error(e.message, e.changeNotices);
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
     // A request is half of the exchange: the slot stays open until the same
@@ -3942,6 +4469,20 @@ function handleReview(args: string[]): void {
     // A Unit of a parallel batch, reviewed in its worktree: the reviewer runs the
     // tests the person approved through AI-DLC's own check, as its worker does.
     const swarmUnit = flags.stage === "code-generation" && flags.unit ? swarmWorkerWorktreeMeta(pd) : null;
+    // On Kiro (kiro-ide), while the reviewer read-scope check holds, this
+    // review's reviewer is dispatched as a copy that carries its read scope; a
+    // replaced request's copy goes with it.
+    if (replaces !== null) removeReviewCopy(pd, replaces);
+    const copy = requestId === null ? null : prepareReviewCopy(pd, {
+      requestId,
+      reviewer: flags.reviewer,
+      ...(flags.unit ? { unit: flags.unit } : {}),
+    });
+    const dispatchAgent = copy !== null && "dispatchAgent" in copy ? copy.dispatchAgent : null;
+    if (copy !== null && "notice" in copy) requestChangeNotices.push(copy.notice);
+    // The reviewer is told which files another open piece of work in this
+    // folder claims, as the build was, so it raises no finding about them.
+    const otherWork = workspaceStage ? otherOpenWorkClaims(pd, flags.stage) : [];
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
@@ -3951,7 +4492,13 @@ function handleReview(args: string[]): void {
       // asked to allow an AI-DLC internal step (two live runs). The request
       // the conductor already runs hands the time over instead.
       reviewed_at: isoTimestamp(),
-      agent_note: reviewRequestNote(flags.reviewer, reviewFile ?? "the review file this request opened", recordVerdict),
+      agent_note: reviewRequestNote(
+        flags.reviewer,
+        reviewFile ?? "the review file this request opened",
+        recordVerdict,
+        dispatchAgent,
+        otherWork.length > 0 ? otherWorkNote(otherWork, "review") : undefined,
+      ),
       ...(retried ? { retry: "pending-request" } : {}),
       ...(upgraded ? { upgrade: "legacy-request" } : {}),
       ...(recovery ? { recovery } : {}),
@@ -3959,6 +4506,7 @@ function handleReview(args: string[]): void {
       requestId,
       reviewFile,
       recordVerdict,
+      ...(dispatchAgent !== null ? { dispatchAgent } : {}),
       ...(swarmUnit && swarmUnit.swarmUnit === flags.unit
         ? { test_command: swarmUnitTestCommand(flags.unit) }
         : {}),
@@ -3989,10 +4537,16 @@ function handleReview(args: string[]): void {
   let recordPath: string | null = null;
   let reviewMarkdown: string | null = null;
   const verdictChangeNotices: string[] = [];
+  // What the verdict was recorded against, for the step it hands the agent.
+  const recorded: {
+    context?: ReturnType<typeof loadContext>;
+    request?: { personAsked: boolean; recovery: boolean };
+  } = {};
 
   try {
     withAuditLock(pd, () => {
       const context = loadContext(false, false);
+      recorded.context = context;
       const {
         node,
         attempt,
@@ -4015,6 +4569,7 @@ function handleReview(args: string[]): void {
           "cannot be recovered by retrying or rebaselining; start a fresh review attempt.",
         );
       }
+      recorded.request = { personAsked: pendingRequest.personAsked, recovery: requestBinding.recoveryCause !== null };
       // A review can outlive a confirmation/retraction. Recheck the same
       // summary/output admission used at request time before issuing terminal
       // authority; an unchanged artifact snapshot alone cannot establish it.
@@ -4115,7 +4670,7 @@ function handleReview(args: string[]): void {
       const readFrom = pendingRequest.ownReviewFile ? slot : reviewSlot(attempt.floor, iteration, null);
       let body: Buffer | null = null;
       try {
-        const recordRoot = realpathSync(recordDir(pd) as string);
+        const recordRoot = realpathSync(runRecordDir(pd) as string);
         const target = assertNoSymlinkInChainOrThrow(recordRoot, readFrom.draftRelativeToRecord);
         const present = lstatExists(target);
         if (reviewFileFlag !== undefined) {
@@ -4161,11 +4716,51 @@ function handleReview(args: string[]): void {
             "appended section so the artifact carries the bytes the reviewer was dispatched on.",
         );
       }
-      const incompleteFallback =
-        body === null &&
-        !appendedAfterRequest &&
-        pendingRequest.retried &&
-        verdict === "NOT-READY";
+      // After the retry, a file that is not a whole review for either verdict
+      // is an incomplete attempt too (the reviewer protocol's step 3) and
+      // records the same fallback as a missing one: none of its text is the
+      // review. A whole review for the other verdict is refused below, so a
+      // finished reviewer's verdict is never recorded as this fallback.
+      const wholeReview = (bytes: Buffer): boolean =>
+        (["READY", "NOT-READY"] as const).some((candidate) => {
+          const expected = {
+            verdict: candidate,
+            reviewer: flags.reviewer,
+            iteration,
+            reviewChallenge: null,
+            standalone: true,
+          };
+          if (validateReviewAppendix(bytes, expected).valid) return true;
+          const demoted = demoteReviewHeadings(bytes);
+          return demoted !== null && validateReviewAppendix(demoted.bytes, expected).valid;
+        });
+      const retriedFallback = !appendedAfterRequest && pendingRequest.retried && verdict === "NOT-READY";
+      const incompleteFile = retriedFallback && body !== null && !wholeReview(body);
+      if (incompleteFile && requestBinding.requestId !== null) {
+        // Only once the reviewer has finished: its completion row since the
+        // retry, or no agent sent in the background since the retry still out
+        // (the SubagentStop hook that writes the row also removes the agent's
+        // in-flight entry). Audit times are whole seconds, so an agent sent in
+        // the second before the retry counts as sent since it. The ledger
+        // names no agent and an interrupted one is never removed, so once the
+        // person has written since the retry their words come first and the
+        // fallback records.
+        const events = readAuditShardEvents(pd, intent, space);
+        const retry = openReviewRequests(events).find((open) => open.requestId === requestBinding.requestId);
+        if (
+          retry !== undefined &&
+          reviewerCompletionAfter(events, flags.reviewer, retry.row) === null &&
+          backgroundAgentOutSince(pd, Date.parse(retry.row.timestamp)) &&
+          !personSpokeSinceReviewRequest(pd, flags.stage, flags.reviewer, flags.unit, intent, space)
+        ) {
+          refuseReview(
+            `Cannot record the verdict for "${flags.stage}" yet: an agent sent in the background ` +
+              `since the retry has not returned, and ${readFrom.reviewerPath} is not a whole review. ` +
+              "Wait for it to return, then record the verdict again.",
+          );
+        }
+      }
+      const incompleteFallback = retriedFallback && (body === null || incompleteFile);
       const embeddedLegacy = body === null && !incompleteFallback && appendedAfterRequest;
       if (body === null && !incompleteFallback && !embeddedLegacy) {
         // After a retry the slot was reopened, so a review written before the
@@ -4184,6 +4779,28 @@ function handleReview(args: string[]): void {
               "incomplete attempt records --verdict NOT-READY without a review.",
         );
       }
+      // A review signed by another agent is that agent's (a live run: the
+      // product lead was asked for, the architecture reviewer ran). The step is
+      // the requested reviewer, never a Reviewer line to change; it is said
+      // before anything below marks or says something about this verdict.
+      const signer = body === null || incompleteFallback ? null : reviewFileSigner(body);
+      if (signer !== null && signer !== flags.reviewer) {
+        const signed = `Refusing REVIEW_COMPLETED for "${flags.stage}": ${readFrom.reviewerPath} is signed by ` +
+          `${signer}, and this review was requested from ${flags.reviewer}.`;
+        refuseReview(
+          pendingRequest.retried
+            ? `${signed} Its one retry is spent, so record --verdict NOT-READY: that records a review that did not finish.`
+            : `${signed} Run \`${renderReviewRequestCommand({
+                projectDir: pd,
+                stage: flags.stage,
+                reviewer: flags.reviewer,
+                ...(flags.unit ? { unit: flags.unit } : {}),
+                ...(flags.single === "true" ? { single: true } : {}),
+                iteration,
+                retryPending: true,
+              })}\` and dispatch the reviewer it names to write the review, then record the verdict again.`,
+        );
+      }
       // The review is the reviewer's: the bytes recorded now are compared with
       // what it left when it finished, the digest the log-subagent hook put on
       // its SUBAGENT_COMPLETED row. A file that changed since was written by
@@ -4193,11 +4810,15 @@ function handleReview(args: string[]): void {
       // the gate tells the person in one line; under relaxed or off the change
       // is accepted and said once here, like every other accepted change. A
       // completion row without the digest is no evidence, and the row carries
-      // nothing. No completion of any agent since the request is evidence only
-      // where noAgentFinishedSinceReview says so (on Claude Code, outside a
-      // worktree, with no background agent sent since): there the row says no
-      // reviewer had finished, said once here, and at the gate under strict.
-      if (body !== null && requestBinding.requestId !== null) {
+      // nothing. No completion of the reviewer since the request (its row,
+      // with the digest for this review file; another agent's row is not it)
+      // is evidence only where noReviewerFinishedSinceReview says so (on Claude
+      // Code; elsewhere when every helper sent since the request came back and
+      // none was the reviewer; outside a worktree, with no background agent
+      // sent since): there the row says no reviewer had finished, said once
+      // here, and at the gate under strict.
+      // The fallback records none of the file, so none of this applies to it.
+      if (body !== null && !incompleteFallback && requestBinding.requestId !== null) {
         const events = readAuditShardEvents(pd, intent, space);
         const request = openReviewRequests(events)
           .find((open) => open.requestId === requestBinding.requestId);
@@ -4226,8 +4847,7 @@ function handleReview(args: string[]): void {
             verdictChangeNotices.push(notice);
           }
         }
-        if (request !== undefined && finished === null &&
-          noAgentFinishedSinceReview(pd, events, request.row, selection)) {
+        if (request !== undefined && noReviewerFinishedSinceReview(pd, events, request, selection)) {
           fields[REVIEWER_FINISHED_FIELD] = "no";
           verdictChangeNotices.push(noReviewerNotice(node.name, flags.unit));
         }
@@ -4262,7 +4882,10 @@ function handleReview(args: string[]): void {
         }
         if (!validity.valid) {
           refuseReview(
-            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${validity.reason}.`,
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${validity.reason}.` +
+              (pendingRequest.retried && body !== null && !wholeReview(body)
+                ? " Its one retry is spent, so record --verdict NOT-READY: that records a review that did not finish."
+                : ""),
           );
         }
         // The reviewer's own answer to whether its brief told it what to
@@ -4380,7 +5003,7 @@ function handleReview(args: string[]): void {
       const findingArtifact = toPosix(
         relative(
           pd,
-          join(recordDir(pd) as string, ...artifactKey.split("/")),
+          join(runRecordDir(pd) as string, ...artifactKey.split("/")),
         ),
       );
       const recordBody = incompleteFallback ? Buffer.alloc(0) : reviewBytes;
@@ -4493,7 +5116,7 @@ function handleReview(args: string[]): void {
       }
       try {
         writeRecordFileNoFollow(
-          recordDir(pd) as string,
+          runRecordDir(pd) as string,
           slot.recordRelative,
           serialized,
         );
@@ -4510,7 +5133,7 @@ function handleReview(args: string[]): void {
       // The draft was the reviewer's input; the record now holds it. The
       // chain was verified when the draft was read, so this cannot redirect.
       if (body !== null && reviewFileFlag === undefined) {
-        removeRecordFileNoFollow(recordDir(pd) as string, readFrom.draftRelativeToRecord);
+        removeRecordFileNoFollow(runRecordDir(pd) as string, readFrom.draftRelativeToRecord);
       }
       // A readable copy for people, beside the artifact the review is about:
       // `<stage dir>/reviews/review-NN.md`, numbered in the order verdicts land.
@@ -4518,7 +5141,7 @@ function handleReview(args: string[]): void {
       // copy back, so a failure to write it never withholds the verdict.
       if (recordBody.length > 0) {
         try {
-          const recordRoot = recordDir(pd) as string;
+          const recordRoot = runRecordDir(pd) as string;
           const reviewsDirRelative = posix.join(posix.dirname(artifactKey), "reviews");
           const reviewsDir = join(recordRoot, ...reviewsDirRelative.split("/"));
           let next = 1;
@@ -4566,10 +5189,19 @@ function handleReview(args: string[]): void {
   // the reviewer-scope hook reads it. Remove that one too, when it is this
   // review's own record; another Unit's review keeps its window.
   removeParentReviewerDispatch(pd, { reviewer: flags.reviewer, stage: flags.stage, unit: flags.unit });
+  // The verdict closes the request, so its reviewer copy (Kiro) goes too.
+  removeReviewCopy(pd, fields["Request Id"]);
 
+  const agentNote = recorded.context === undefined
+    ? null
+    : reviewVerdictStep(pd, flags, verdict, iteration, recorded.context, { intent: intent ?? null, space }, recorded.request ?? {
+      personAsked: false,
+      recovery: false,
+    });
   console.log(JSON.stringify({
     emitted: "REVIEW_COMPLETED",
     stage: flags.stage,
+    ...(agentNote !== null ? { agent_note: agentNote } : {}),
     ...(recordPath !== null ? { reviewRecord: recordPath } : {}),
     ...(reviewMarkdown !== null ? { reviewMarkdown } : {}),
     ...(verdictChangeNotices.length > 0 ? { change_notices: verdictChangeNotices } : {}),
@@ -4586,8 +5218,9 @@ function logUsage(subcommand: string | undefined): string {
     [...options].filter((option) => option !== "--project-dir").sort().join(" ");
   const usage: Record<string, string[]> = {
     decision: [
-      `${invoke("decision")} --stage <slug> --decision "<the question>" --options "<choice>,<choice>"`,
+      `${invoke("decision")} --stage <slug> --decision '<the question>' --options '<choice>,<choice>'`,
       "  Records a question before it is shown to the person. Required: --stage, --decision.",
+      "  When a choice holds a comma, start the list with | and separate the choices with it: \"|<choice>|<choice>\".",
       `  --checkpoint: ${DECISION_CHECKPOINTS.join(", ")}. An ordinary question, the learnings one included, takes none.`,
       `  Options: ${flags(DECISION_OPTIONS)}`,
     ],
@@ -4664,6 +5297,17 @@ export function main(argv: string[]): void {
         break;
       default:
         error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review`);
+    }
+    // The stage's work went on through the record, not through `next`: on the
+    // hosts with no transcript, the Stop hook reads that from the engine mark.
+    // Advisory: a mark that is not written never fails the recorded answer.
+    if (recordedRow) {
+      try {
+        if (rowEndsTurn) markTurnEnd(resolveProjectDir(projectDir), true);
+        else if (stageWorkRow) markStageWorkLogged(subcommand, resolveProjectDir(projectDir));
+      } catch {
+        // The row is recorded either way.
+      }
     }
   } catch (e) {
     // A Plan Approval source-drift refusal is the human sentence; the

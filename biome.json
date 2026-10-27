@@ -48,7 +48,7 @@
     {
       "includes": ["core/tools/aidlc-lib.ts"],
       "files": {
-        "maxSize": 1800000
+        "maxSize": 1890000
       }
     },
     {
@@ -66,7 +66,7 @@
                     "group": ["node:fs", "fs"],
                     "importNamePattern": "(existsSync|lstatSync|statSync|fstatSync|readdirSync|readFileSync|realpathSync|accessSync|readlinkSync)",
                     "invertImportNamePattern": true,
-                    "message": "aidlc-knowledge.ts may only bind read-only node:fs primitives directly; route every mutation (write, append, rename, rm, mkdir, symlink, link, fd-based write) through writeFileAtomic/writeBufferAtomic in aidlc-lib.ts. A namespace (`import * as fs`), default (`import fs`), or dynamic (`await import(\"node:fs\")`) import is refused outright because it hides every bound name from this rule."
+                    "message": "aidlc-knowledge.ts may only bind read-only node:fs primitives directly; route every mutation (write, append, rename, rm, mkdir, symlink, link, fd-based write) through writeFileAtomic/writeBufferAtomic in aidlc-locks.ts. A namespace (`import * as fs`), default (`import fs`), or dynamic (`await import(\"node:fs\")`) import is refused outright because it hides every bound name from this rule."
                   }
                 ]
               }

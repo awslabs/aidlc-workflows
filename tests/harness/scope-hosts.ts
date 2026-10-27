@@ -22,15 +22,18 @@ import { tmpdir } from "node:os";
 import { Worker } from "node:worker_threads";
 import { basename, dirname, join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
+import { compareVersions } from "../../dist/claude/.claude/tools/aidlc-channel.ts";
 import { auditShardHostSegment, cloneIdFileContent, cloneIdPath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { copilotSkillPrompt } from "./aidlc-input-corpus.ts";
 import { FIXTURES_DIR, REPO_ROOT } from "./fixtures.ts";
 import {
   activeRecord,
+  auditEvents,
   cleanupScopeProjects,
   clip,
   createScopeProject,
   expectedStages,
+  field,
   type RunResult,
   runScope,
   SCOPE_RUN_TIMEOUT_MS,
@@ -222,8 +225,8 @@ export abstract class NativeScopeHost extends ScopeHost {
   private uses = 0;
   protected turn = "";
 
-  constructor(proj: string, base?: NodeJS.ProcessEnv) {
-    super(proj, base);
+  constructor(proj: string, base?: NodeJS.ProcessEnv, opts: { unattended?: boolean } = {}) {
+    super(proj, base, opts);
     // The tool gives its hooks and the agent's shell the project as their folder, and no Claude variable.
     delete this.env.CLAUDE_PROJECT_DIR;
     this.fullHost = true;
@@ -922,6 +925,9 @@ interface PluginAnswer {
   nudges?: string[];
 }
 
+/** The first build whose opencode plugin names each shell command's chat (its `shell.env` hook). */
+const FIRST_RELEASE_NAMING_THE_CHAT = "2.11.1-preview.20261016.1";
+
 /**
  * opencode: AI-DLC's plugin (`.opencode/plugin/aidlc-opencode-adapter.ts`)
  * loaded into one opencode process, here a worker thread the host waits on
@@ -944,9 +950,16 @@ export class OpencodeScopeHost extends ScopeHost {
   private readonly hostNumber = ++hostCount;
   private child: string | null = null;
   private uses = 0;
+  /**
+   * The published release the project's plugin came from, when a drive set the
+   * project up from one (the update check's previous release); null for a tree
+   * this repository built. A release from before the plugin named the chat runs
+   * its commands without one, as opencode ran them then.
+   */
+  release: string | null = null;
 
-  constructor(proj: string, base?: NodeJS.ProcessEnv) {
-    super(proj, base);
+  constructor(proj: string, base?: NodeJS.ProcessEnv, opts: { unattended?: boolean } = {}) {
+    super(proj, base, opts);
     delete this.env.CLAUDE_PROJECT_DIR;
     this.fullHost = true;
     this.session = this.sessionName(1);
@@ -1041,7 +1054,8 @@ export class OpencodeScopeHost extends ScopeHost {
       const ran = String(args.command ?? line);
       // opencode asks the plugin for the command's environment, which names its chat.
       const env = this.hookCall("shell.env", { cwd: this.proj, ...call }, { env: {} }).output?.env as Record<string, string> | undefined;
-      if (!env?.AIDLC_SESSION_OVERRIDE) throw new ScopeRunStuck(`the opencode plugin named no chat for ${clip(ran, 200)}`);
+      const named = this.release === null || compareVersions(this.release, FIRST_RELEASE_NAMING_THE_CHAT) >= 0;
+      if (named && !env?.AIDLC_SESSION_OVERRIDE) throw new ScopeRunStuck(`the opencode plugin named no chat for ${clip(ran, 200)}`);
       return this.spawn(ran, this.argv(ran), undefined, { ...this.env, OPENCODE: "1", ...env });
     }, (res) => `${res.stdout}${res.stderr}`);
   }
@@ -1103,16 +1117,19 @@ function parseJson(text: string): Record<string, unknown> | null {
 // Projects
 // ---------------------------------------------------------------------------
 
-/** The host that plays a tool on a project; `base` is the environment the person's machine gives it. */
-export function hostFor(name: "claude" | HostName, proj: string, base?: NodeJS.ProcessEnv): ScopeHost {
+/**
+ * The host that plays a tool on a project; `base` is the environment the person's machine gives it, and `unattended`
+ * says an unattended driver starts it.
+ */
+export function hostFor(name: "claude" | HostName, proj: string, base?: NodeJS.ProcessEnv, opts: { unattended?: boolean } = {}): ScopeHost {
   switch (name) {
-    case "claude": return new ScopeHost(proj, base);
-    case "codex": return new CodexScopeHost(proj, base);
-    case "copilot": return new CopilotScopeHost(proj, base);
-    case "kiro": return new KiroCliScopeHost(proj, base);
-    case "kiro-ide": return new KiroIdeScopeHost(proj, base);
-    case "cursor": return new CursorScopeHost(proj, base);
-    case "opencode": return new OpencodeScopeHost(proj, base);
+    case "claude": return new ScopeHost(proj, base, opts);
+    case "codex": return new CodexScopeHost(proj, base, opts);
+    case "copilot": return new CopilotScopeHost(proj, base, opts);
+    case "kiro": return new KiroCliScopeHost(proj, base, opts);
+    case "kiro-ide": return new KiroIdeScopeHost(proj, base, opts);
+    case "cursor": return new CursorScopeHost(proj, base, opts);
+    case "opencode": return new OpencodeScopeHost(proj, base, opts);
   }
 }
 
@@ -1210,6 +1227,10 @@ export function hostJourneyProblems(journey: HostJourney): string[] {
     problems.push(`the work's audit shards are ${JSON.stringify(shards)}: not the first clone's, sorting last, and one from the fresh clone`);
   }
   for (const detour of run.agent.detours) problems.push(`the person was sent round a detour: ${detour}`);
+  // Classic runs with its guards off, so a step a helper may not take shows only as the fence standing aside.
+  for (const e of auditEvents(run.proj).filter((e) => e.event === "GUARD_STOOD_ASIDE" && field(e.block, "Guard") === "state-transition")) {
+    problems.push(`the state-transition guard stood aside for a step the stand-in took: ${clip(field(e.block, "Details") ?? "", 300)}`);
+  }
   if (new Set(chats).size !== 2) problems.push(`the person used chats ${JSON.stringify(chats)}, not two`);
   const checkpoints = run.agent.asked.filter((a) => a.what === "unit checkpoint").map((a) => a.unit);
   if (JSON.stringify(checkpoints) !== JSON.stringify(UNITS)) problems.push(`Unit checkpoints asked for ${JSON.stringify(checkpoints)}, not each Unit once`);

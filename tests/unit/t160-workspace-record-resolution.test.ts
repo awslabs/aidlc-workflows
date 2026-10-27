@@ -7,7 +7,7 @@
 // aidlc/spaces/<space>/intents/<YYMMDD>-<label>/ - when an intent resolves, and
 // fall back to the bare space record root otherwise.
 //
-// SOURCE UNDER TEST (dist/claude/.claude/tools/aidlc-lib.ts):
+// SOURCE UNDER TEST (dist/claude/.claude/tools/aidlc-lib.ts; activeSpace in aidlc-locks.ts):
 //   activeSpace/activeIntent/recordDir/relativeRecordDir — the selectors.
 //   stateFilePath/auditFilePath/auditShards/readAllAuditShards — re-rooted paths.
 //   uuidv7/slugify/idSuffix — intent identity.

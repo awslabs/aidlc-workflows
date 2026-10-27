@@ -58,7 +58,6 @@ import {
   requireLiveClaimForTeamUnit,
   resolveProjectDir,
   resolveReviewClass,
-  selfAttributedDecisionMarker,
   teamSkeletonOn,
   type UnitMergeEvidence,
   type UnitMergeTransaction,
@@ -82,7 +81,6 @@ import {
 import {
   parseTestingContract,
   PLAN_APPROVAL_CHECKPOINT,
-  questionsFileApproved,
   recordedApprovalFingerprint,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
@@ -1625,15 +1623,11 @@ function candidateEvidence(
       (auditBlockField(approvalEvent.block, "Directive Epoch") ?? "").length >
         0 &&
       (auditBlockField(approvalEvent.block, "Run floor") ?? "").length > 0 &&
+      // The approval row pins the questions file's bytes (Questions SHA-256
+      // above); no label on its `[Answer]:` line is read.
       (approvalEvent.event === "PLAN_APPROVAL_SKIPPED"
-        ? (auditBlockField(approvalEvent.block, "Source") ?? "").length > 0 &&
-          /^\[Answer\]:\s*Plan approval off\s*$/m.test(questions)
-        // The person's answer is read by its label, as every other reader
-        // reads it (questionsFileApproved): the recorder's option letter, in
-        // either case, is not the answer. The bytes stay pinned to the
-        // approval by Questions SHA-256 above.
-        : (auditBlockField(approvalEvent.block, "Session") ?? "").length > 0 &&
-          questionsFileApproved(questions))
+        ? (auditBlockField(approvalEvent.block, "Source") ?? "").length > 0
+        : (auditBlockField(approvalEvent.block, "Session") ?? "").length > 0)
     ) {
       planFingerprint = fingerprint;
     }
@@ -2106,15 +2100,6 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
   ) {
     fail(
       `Refusing Unit "${unit}" merge approval: --user-input "${userInput}" is cancellation boilerplate, not a human decision.`,
-    );
-  }
-  const approvalAuthorship = humanPresenceGuardDisabled()
-    ? null
-    : selfAttributedDecisionMarker(userInput, "approval");
-  if (approvalAuthorship) {
-    fail(
-      `Refusing Unit "${unit}" merge approval: decision self-attribution blocked ` +
-        `(${approvalAuthorship.category}) in --user-input: "${approvalAuthorship.phrase}".`,
     );
   }
   const transaction = readUnitMergeTransaction(pd, unit);
@@ -2876,15 +2861,6 @@ function validateMergeRiskAcknowledgment(
   if (!humanPresenceGuardDisabled() && isNonAnswer(answer)) {
     fail(
       `Refusing Unit "${unit}" released-attempt recovery: --user-input "${answer}" is cancellation boilerplate.`,
-    );
-  }
-  const authorship = humanPresenceGuardDisabled()
-    ? null
-    : selfAttributedDecisionMarker(answer, "approval");
-  if (authorship) {
-    fail(
-      `Refusing Unit "${unit}" released-attempt recovery: decision self-attribution blocked ` +
-        `(${authorship.category}) in --user-input: "${authorship.phrase}".`,
     );
   }
   if (!humanPresenceGuardDisabled()) {

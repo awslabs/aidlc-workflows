@@ -63,6 +63,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
+  agentFileText,
   assertNoSymlinkInChainOrThrow,
   toPosix,
   auditBlockField,
@@ -1160,7 +1161,7 @@ export function resolveSpaceFlag(raw: string | undefined, projectDir: string): s
   // The FALLBACK is validated exactly like an explicit flag, not trusted raw:
   // every downstream path in this file is a plain `join()` off `space`. The
   // cursor itself already reads as "default" unless it names a space this
-  // project has (activeSpace in aidlc-lib.ts), so this keeps one rule for both.
+  // project has (activeSpace in aidlc-locks.ts), so this keeps one rule for both.
   const raw_ = raw === undefined;
   const candidate = raw ?? resolveWorkflowSelection(projectDir).space;
   const valid = validSpaceFlag(candidate);
@@ -4339,7 +4340,7 @@ export function main(argv: string[]): void {
           ? values["--tags"].split(",")
           : undefined;
         const out = summarizeDocument(
-          pd, space, positional[0], textBuf.toString("utf-8"), values["--source-revision"], tags,
+          pd, space, positional[0], agentFileText(textBuf), values["--source-revision"], tags,
         );
         if (json) emitJson(out as unknown as Record<string, unknown>);
         else {

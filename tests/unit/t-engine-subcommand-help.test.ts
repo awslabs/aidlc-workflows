@@ -3,7 +3,7 @@
 // parser read `--help` as a flag waiting for a value: "--help expects a value,
 // got end of arguments.", exit 1, and an ERROR_LOGGED row in the audit. Help is
 // read before any flag, prints to stdout, exits 0 and records nothing.
-// covers: function:asksForHelp
+// covers: function:asksForHelp, function:sensorFireUsage
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -162,6 +162,7 @@ describe("bolt", () => {
     const checkpoint = run(p, "aidlc-bolt.ts", ["checkpoint", "--help"]).stdout;
     expect(checkpoint).toContain("--action status|ask|verify|approve|reject");
     expect(checkpoint).toContain("--kind: unit, skeleton");
+    expect(checkpoint).toContain("--over-unfinished-review and --timeout-ms <milliseconds> go with --action verify.");
     expect(run(p, "aidlc-bolt.ts", ["swarm-checkpoint", "--help"]).stdout).toContain("--action status|ask|approve|reject");
     expect(run(p, "aidlc-bolt.ts", ["dispatch-event", "--help"]).stdout).toContain("--strategy squash|merge|rebase");
   });
@@ -212,6 +213,56 @@ describe("sensor", () => {
     expect(r.status).toBe(1);
     expect(r.out).toContain('fire --unit expects a Unit name, got "-h"');
   });
+
+  // A live Copilot agent that ran a check by hand after a compaction asked a
+  // check script for help and was told "--output-path is required". The script
+  // run bare gets none of the stage's templates or inputs, so its help names
+  // the dispatcher's fire command, which hands them over and records the result.
+  for (const id of ["required-sections", "upstream-coverage", "claim-sources", "traceability"]) {
+    test(`the ${id} check asked for help names the command that runs it, exits 0 and records nothing`, () => {
+      const p = project();
+      const before = errorRows(p);
+      for (const [file, args] of [
+        [`aidlc-sensor-${id}.ts`, ["--help"]],
+        [`aidlc-sensor-${id}.ts`, ["-h"]],
+        ["aidlc.ts", ["engine", `sensor-${id}`, "--help"]],
+      ] as const) {
+        const r = run(p, file, [...args]);
+        expect(r.status, r.out).toBe(0);
+        expect(r.stdout).toContain(`engine sensor fire ${id} --stage <slug> --output-path <path>`);
+        expect(r.out).not.toContain("is required");
+      }
+      expect(errorRows(p)).toBe(before);
+    });
+  }
+
+  test("the traceability check's help also names Build and Test's cross-Unit form", () => {
+    const p = project();
+    expect(run(p, "aidlc-sensor-traceability.ts", ["--help"]).stdout).toContain(
+      "engine sensor-traceability --stage build-and-test",
+    );
+  });
+});
+
+// The same agent's next try was `engine sensors`, answered with the public
+// help, which lists no engine noun.
+describe("an engine noun the route table does not hold", () => {
+  for (const args of [["engine", "sensors", "--help"], ["engine", "sensors"]]) {
+    test(`${args.join(" ")} names engine sensor`, () => {
+      const r = run(project(), "aidlc.ts", args);
+      expect(r.status).toBe(2);
+      expect(r.out).toMatch(/did you mean '[^']*engine sensor'\?/);
+      expect(r.out).toMatch(/try '[^']*engine --help'/);
+      expect(r.out).not.toContain("try 'aidlc --help'");
+    });
+  }
+
+  test("a noun nothing is near names the engine's help alone", () => {
+    const r = run(project(), "aidlc.ts", ["engine", "zzzzzz"]);
+    expect(r.status).toBe(2);
+    expect(r.out).not.toContain("did you mean");
+    expect(r.out).toMatch(/try '[^']*engine --help'/);
+  });
 });
 
 describe("engine <noun> --help", () => {
@@ -223,6 +274,7 @@ describe("engine <noun> --help", () => {
     ["bolt", ["start", "complete"], true],
     ["worktree", ["create", "restore"], true],
     ["sensor", ["list", "describe", "fire"], true],
+    ["review-brief", ["review", "context", "summary"], true],
     ["state", ["unit"], false],
   ] as const) {
     for (const help of ["--help", "-h"]) {
@@ -242,7 +294,7 @@ describe("engine <noun> --help", () => {
   test("every verb of a route marked verbHelp answers --help", () => {
     const p = project();
     const marked = ROUTES.filter((route) => route.verbHelp === true);
-    expect(marked.map((route) => route.group).sort()).toEqual(["bolt", "log", "sensor", "worktree"]);
+    expect(marked.map((route) => route.group).sort()).toEqual(["bolt", "log", "review-brief", "sensor", "worktree"]);
     const before = errorRows(p);
     for (const route of marked) {
       for (const verb of route.verbs) {

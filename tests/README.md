@@ -13,6 +13,14 @@ coverage drops.
 
 For the full test strategy, levels, fixtures, and assertion guidelines, see [docs/reference/09-testing.md](../docs/reference/09-testing.md).
 
+The level directory selects execution; it does not establish that a test is
+cheap or isolated. The current `unit` directory also contains real CLI,
+installation and workflow tests. Use the
+[test boundaries and ownership guide](../docs/reference/09-testing.md#test-boundaries-and-ownership)
+to distinguish direct unit checks, process/adapter contracts, deterministic
+journeys and live journeys, and extend an existing owner before duplicating a
+scenario.
+
 ## Intent grounding regression checks
 
 [t-intent-grounding-regressions.test.ts](unit/t-intent-grounding-regressions.test.ts)
@@ -107,8 +115,8 @@ If two parallel MRs both pick the same number, the second to merge rebases and r
 ## Quick Reference
 
 ```bash
-# Run L1 (protocol — no LLM, seconds)
-bun tests/run-tests.ts
+# Run deterministic protocol checks, including process and workflow tests
+bun tests/run-tests.ts --no-llm
 
 # Run L1+L2 (protocol + integration — requires claude CLI for live tests)
 bun tests/run-tests.ts --ci
@@ -134,12 +142,12 @@ bash tests/run-tests.sh --integration --exclude "^t-tui-"
 # The scope runs, the scope-host runs and the guard matrix (minutes per file) run only when selected
 bash tests/run-tests.sh --integration -P 8 --filter "^t-(scope-run|scope-host|guard-matrix)-"
 
-# Run tests concurrently within a level (larger levels benefit most; smoke/unit stay serial)
+# Run tests concurrently within a level (larger levels benefit most; smoke stays serial, and unit too outside a macOS shard)
 bash tests/run-tests.sh --all --parallel 4
 bash tests/run-tests.sh --integration -P 8
 
-# Run one deterministic unit shard. CI uses sixteen isolated serial shards.
-bash tests/run-tests.sh --unit --shard 1/16
+# Run one deterministic unit shard. Linux CI uses ten isolated serial shards.
+bash tests/run-tests.sh --unit --shard 1/10
 
 # Inspect isolated e2e selection without running tests or generating dist.
 bash tests/run-tests.sh --debug -P 8 --e2e --e2e-plan
@@ -194,16 +202,23 @@ Use the shared profiles in `tests/harness/test-budget.ts` for native startup
 and multi-worktree cases (one hour). These ceilings tolerate variable
 runner load and do not delay successful operations. Explicit deadline and
 performance calibration tests keep their own bounds.
-PR CI runs Linux smoke, sixteen weighted unit shards, and deterministic integration.
-Full Suite runs smoke, the same sixteen unit shards, integration, and isolated
+PR CI runs ten weighted Linux unit shards and deterministic integration. Linux
+smoke shares the combined check job with code contracts and production guards,
+using separate runner processes; macOS and Windows keep their own smoke jobs.
+The combined job has one work deadline that includes setup/contracts: smoke
+gets half the remaining time, guards get what remains, and thirty minutes are
+reserved for cleanup and evidence collection.
+PR CI uses 17 runners, including its required-result job.
+Full Suite full verification runs smoke, sixteen unit shards per OS, integration, and isolated
 E2E on Linux/macOS/Windows. Integration and E2E have independent jobs per OS
 with fresh Bun runner processes. Each call checks out its supplied commit,
 installs frozen dependencies with Bun 1.4.2, packages the projections, and runs
-the Bash wrapper with `--debug -P 8 --no-llm`. Smoke/unit stay serial inside
-each checkout; the independent unit jobs and eight workers in each integration
-or E2E job provide parallelism. Deterministic jobs, including smoke, plus native
-checks and production guards use two-hour file and four-hour run backstops
-inside a 270-minute step and five-hour job. Live credentialed jobs retain
+the Bash wrapper with `--debug -P 8 --no-llm`. Smoke stays serial inside each
+checkout, and so does unit except a macOS shard, which starts up to the cap in
+`tests/unit-shard-weights.json` at once; the independent unit jobs and eight
+workers in each integration or E2E job provide parallelism. Deterministic jobs,
+including smoke, plus native checks and production guards use two-hour file and
+four-hour run backstops inside a 270-minute step and five-hour job. Live credentialed jobs retain
 their separate lease-bound ceilings. Nested operations share actual remaining
 file time; deliberately short timeout calibrations keep their explicit bounds.
 Sanitized `tests/logs/` and root `tmp/ci-deterministic/` captures
@@ -214,7 +229,9 @@ POSIX unit jobs check for tmux and install it with apt/Homebrew when absent;
 Linux unit jobs also require zsh. The merge queue, and manual CI with
 `platform_regressions=true`, expand this same matrix to all three OSes and add the separate E2E jobs,
 without a preceding Linux pass or another broad regression slice. It includes
-all unit regressions through the same sixteen shards and provisioning. Only the
+all unit regressions in ten Linux and sixteen Windows shards; manual expanded
+CI uses sixteen macOS shards, while the merge queue keeps its two selected macOS
+shards. Provisioning stays shared. Only the
 merge queue reruns a smoke, unit or integration file whose assertions failed,
 once, in a fresh process; a pass on that attempt shows a `Flaky test` warning
 and is listed in the run's `retries.json`. PR CI never retries.
@@ -240,7 +257,7 @@ runs and the guard matrix on Linux, macOS and Windows (the `scope_runs` job). Cu
 because its CLI exposes vendor API keys to agent environments. Ordinary Full Suite dispatches accept any requested
 branch or commit, including unmerged PRs, with both verification flags false.
 Every job uses the resolved immutable SHA. Stable publication separately
-requires a tagged commit on `main` and trusted workflow evidence.
+requires a published preview whose source is on `main`.
 
 To run the deterministic and native matrix on an unmerged PR, select its branch,
 set `ref` to that branch's exact workflow-head SHA, and set
@@ -284,8 +301,10 @@ Windows release-contract job also runs. An unchanged preview skips publication,
 but still requires successful tests before reporting that intentional skip.
 
 Live matrices use bounded, duration-balanced shards on the existing platforms: two
-Claude SDK (five on Linux, which alone runs the golden journeys and the answers
-corpus), three Claude TUI, one Codex, one Copilot and one opencode shard per OS (**27 live jobs**). Linux allows four
+Claude SDK (five on Linux, for the golden journeys and the answers corpus; three on
+Windows, for the golden journeys), three Claude TUI, one Codex (two on Linux and
+Windows, for the Codex golden journey), one Copilot and one opencode shard per OS
+(**30 live jobs**). Linux allows four
 concurrent live jobs, macOS two and Windows three. Each shard uses up to two
 isolated file workers; Windows Codex files remain serial. A worker starts each
 file/attempt from the original checkout snapshot and fresh home, temporary
@@ -332,13 +351,11 @@ remain warnings. Outside the native
 profile, individual deterministic/release-contract cases are not reconciled
 across OSes, so successful jobs do not establish full case coverage or convert
 platform-inapplicable skips into passes. Dispatch `full-suite.yml` on `main` with `ref=<sha>` to rerun preview readiness
-for an unchanged SHA or to prepare stable evidence. Preview runs its contract
-checks and Full Suite once; it does not also run the PR CI matrix. Stable release
-requires a passing release-purpose Full Suite for the tagged commit: it reuses a
-qualifying `full-suite-result` from a successful preview of that commit or a
-manual dispatch on `main`, or calls `full-suite.yml` itself, and validates the
-exact tag source, contract checks, and native binary/installer/lifecycle release
-assets.
+for an unchanged SHA. Preview runs its contract checks and Full Suite once;
+it does not also run the PR CI matrix. Stable promotion selects that preview's
+source and retains its recorded results. It does not repeat CI or Full Suite.
+The new stable build still requires exact-source validation, packaging
+checks and native binary, installer, lifecycle and upgrade checks.
 
 Hosted Bedrock agents run under a separate unprivileged OS identity on Linux,
 macOS and Windows, with no access to runner process memory or Actions credentials;

@@ -34,6 +34,7 @@ import {
   guardOperationMatchesRemedy,
   isGuardRecoveryOperation,
 } from "./aidlc-guard-operation.ts";
+import { readsAlikeInDoubleQuotes } from "./aidlc-runtime-paths.ts";
 
 // --- Public types ---
 
@@ -176,6 +177,9 @@ export interface RunStageWaveEntry {
   consumes_absent: Array<{ path: string; expected: boolean }>;
   produces: string[];
   required_produces: string[];
+  // The Unit's questions file, answered in the chat before the wave: the
+  // builder writes from it and asks nothing (the stage file's ARTIFACT-ONLY mode).
+  questions_file?: string;
 }
 
 export interface RunStageWave {
@@ -186,6 +190,12 @@ export interface RunStageWave {
 export interface RunStagePipeline {
   links: string[];
   completed: string[];
+  // Past PIPELINE_REPOS_NAMED repos, `completed` names the first ones and this
+  // counts the other repos with links on record; `record` still names what is owed.
+  completed_other_repos?: number;
+  // The links this attempt still owes, in order, each with the exact command
+  // that records it once its agent returns.
+  record: Array<{ link: string; repo?: string; command: string }>;
 }
 
 export interface LegacyPlanApprovalChoices {
@@ -222,6 +232,8 @@ export interface CodeGenerationPlanApprovalState {
   /** Plan approval is off: build without asking. `notice` is the one line to show the person first. */
   skipped?: true;
   notice?: string;
+  /** An isolated run's own `next`, which the plan step names in place of the workflow's. */
+  next?: string;
 }
 
 // The engine's Plan Approval question for one target, or for several Units
@@ -244,6 +256,8 @@ export interface PlanApprovalAskContent {
   editing: boolean;
   /** One sentence to say with the question (a repair made, or why nothing was recorded). */
   note?: string;
+  /** An isolated run's own `next`, which the question names after the answer in place of the workflow's. */
+  next?: string;
 }
 
 // run-stage — load the resolved rules, load lead + support agents, load
@@ -269,6 +283,11 @@ export interface RunStageDirective {
   // on this before gate handling, reports with `report --single`, and treats
   // the returned `done` as terminal.
   single?: boolean;
+  // The depth and test strategy the stage works to: on a workflow step the
+  // workflow's own; on an isolated run only the ones typed with it, recorded
+  // on its start (the run never changes the workflow's). Absent when none.
+  depth?: string;
+  test_strategy?: string;
   // Exact persona + knowledge files the conductor must read for work it owns
   // inline: the supports' personas on inline stages, then the knowledge of the
   // lead and of every agent the chat works as (the lead alone on a mob, whose
@@ -287,12 +306,12 @@ export interface RunStageDirective {
   // continues with the readable context; rule-delivery failures are blocking
   // error directives instead.
   context_warnings?: string[];
-  // What the person replied to this stage's questions that no answer holds
-  // yet (a chat that ended before the agent wrote or logged it), in order,
-  // the stage's questions and answers already on record before it, and what
-  // the agent does with it. Present only while the stage's questions file
-  // still has a blank answer.
-  kept_replies?: { answered: Array<{ question: string; answer: string }>; replies: string[]; note: string };
+  // What the person replied since the stage started that no decision has used
+  // yet (a chat may have ended before the agent wrote or logged it), in order,
+  // the stage's questions and answers on record, each in order and unpaired,
+  // and what the agent does with it. Present only while the stage's questions
+  // file still has a blank answer.
+  kept_replies?: { questions: string[]; answers: string[]; replies: string[]; note: string };
   // What the person said when they stopped the work at this stage (the park
   // row keeps their words), and what the agent does with it. Present on the
   // step that resumes there, until a row of the stage says the agent acted.
@@ -317,6 +336,12 @@ export interface RunStageDirective {
   inputs_note?: string;
   // planNote(): plan, revise, repair or build, from plan_approval.status.
   plan_note?: string;
+  // otherWorkNote(): on a stage that builds in the workspace, the files another
+  // open piece of work in this folder claims, to leave as they are.
+  other_work_note?: string;
+  // broughtFilesNote() (aidlc-brought-files.ts): on a Code Generation step, the
+  // files the project held when the work started, to leave as they are.
+  brought_files_note?: string;
   // briefNote(): the lines every agent brief carries on a dispatched topology.
   brief_note?: string;
   // ceremonyNote(): the summary confirmation, confirm when on, skip when off.
@@ -396,6 +421,13 @@ export interface RunStageDirective {
   // conductor is never pointed at a path that cannot be read.
   consumes: string[];
   produces: string[];
+  // Beside a code knowledge base path written once with REPO_PLACEHOLDER (a
+  // work recording several repos): which repos the token stands for.
+  repos_note?: string;
+  // The size of what this work covers and about how long each repository takes,
+  // said once before a large analysis starts (estimate_note says how).
+  repo_facts?: RepoFacts;
+  estimate_note?: string;
   // Exact active-space rule paths represented by the delivered rule bundle. On
   // dispatched topologies the conductor passes the already-loaded rule text to
   // every agent brief.
@@ -449,10 +481,20 @@ export interface RunStageDirective {
   // Re-present an open approval gate. Body and review are settled; do not rerun
   // the stage or edit its outputs. Team gates retain their unit_gate routing.
   gate_only?: true;
+  // The open gate shown again carries the same count as the reply that opened
+  // it (PrintDirective.revision_cycle and accept_as_is).
+  revision_cycle?: number;
+  accept_as_is?: "offered" | "next-revision";
+  /** Exact remaining Unit record commands; the stage body is already written. */
+  unit_record_step?: string;
   // Every Unit this per-Unit stage covers was built in the current attempt, so
   // the beat presents the stage gate with nothing left to plan or build. Set by
   // the engine only; the conductor handles the beat as before.
   build_settled?: true;
+  // A Unit's questions before the stage's wave builds it: the step asks them and
+  // confirms the summary, and writes none of the stage's documents (the stage
+  // file's QUESTION-ONLY mode). Set by the engine only.
+  questions_only?: true;
   // The per-Unit stages one late approval covers (unit-major, Unit checkpoints
   // off), in order with display names, the Units, and the engine's question.
   // Set by the engine only; the first stage is `stage`.
@@ -679,6 +721,35 @@ export interface ConstructionStaffingAskDirective extends AskDirectiveBase {
   choices: AskChoice[];
 }
 
+// Before Reverse Engineering reads a large set of repos the person never named:
+// all of them, or only some. "Read all" is one complete command; for "Only
+// some" the agent runs `intent set-repos` with the names the person gives.
+export interface RepoScopeAskDirective extends AskDirectiveBase {
+  ask_type: "repo-scope";
+  response_route: "command";
+  choices: AskChoice[];
+  repo_facts?: RepoFacts;
+  estimate_note?: string;
+}
+
+// What a large analysis covers and costs in time, as facts the agent words:
+// the repositories, their lines by git where every one could be counted, and
+// about how many minutes each takes at this depth.
+export interface RepoFacts {
+  repositories: number;
+  lines?: number;
+  minutes_per_repository: { low: number; high: number };
+}
+
+// After Units Generation is approved, the work's repos changed: under Guard
+// Policy strict, do its Units still stand? "They stand" runs `next`, which
+// carries on and records it; the other choice goes back to Units Generation.
+export interface UnitsReposAskDirective extends AskDirectiveBase {
+  ask_type: "units-repos";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   ask_type: "new-work-routing";
   response_route: "next";
@@ -784,6 +855,8 @@ export type AskDirective =
   | UnitPausedAskDirective
   | ProjectTypeAskDirective
   | ConstructionStaffingAskDirective
+  | RepoScopeAskDirective
+  | UnitsReposAskDirective
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
   | LegacyPlanApprovalRecoveryAskDirective
@@ -803,6 +876,13 @@ export interface PrintDirective {
   // a plan change made during the stage is in it. null = the final in-scope
   // stage. Same meaning as run-stage's next_stage.
   next_stage?: string | null;
+  // On the same gate reply: the person's change requests at this gate since it
+  // was last approved, counted from the audit trail so a park keeps it; absent
+  // when there are none. accept_as_is says when that count opens the third
+  // option: "offered" adds Accept as-is to this question, "next-revision" adds
+  // the note that it comes after one more round of changes.
+  revision_cycle?: number;
+  accept_as_is?: "offered" | "next-revision";
 }
 
 // error — stop with an error (unknown scope, mutually-exclusive flags, init
@@ -925,6 +1005,8 @@ const RUN_STAGE_FIELDS = [
   "mode",
   "pipeline",
   "single",
+  "depth",
+  "test_strategy",
   "inline_context_paths",
   "lead_persona",
   "context_warnings",
@@ -937,6 +1019,8 @@ const RUN_STAGE_FIELDS = [
   "context_note",
   "inputs_note",
   "plan_note",
+  "other_work_note",
+  "brought_files_note",
   "brief_note",
   "ceremony_note",
   "unit_gate",
@@ -949,6 +1033,9 @@ const RUN_STAGE_FIELDS = [
   "memory_path",
   "consumes",
   "produces",
+  "repos_note",
+  "repo_facts",
+  "estimate_note",
   "rules_in_context",
   "rules_content",
   "rules_held",
@@ -964,7 +1051,11 @@ const RUN_STAGE_FIELDS = [
   "protocol_modules",
   "swarm_settled",
   "gate_only",
+  "revision_cycle",
+  "accept_as_is",
+  "unit_record_step",
   "build_settled",
+  "questions_only",
   "approve_together",
   "conductor_persona",
   "next_stage",
@@ -994,11 +1085,17 @@ const DISPATCH_SUBAGENT_FIELDS = [
   ...RUN_STAGE_FIELDS.filter(
     (field) =>
       field !== "single" &&
+      field !== "depth" &&
+      field !== "test_strategy" &&
       field !== "wave" &&
       field !== "protocol_modules" &&
       field !== "swarm_settled" &&
       field !== "gate_only" &&
+      field !== "revision_cycle" &&
+      field !== "accept_as_is" &&
+      field !== "unit_record_step" &&
       field !== "build_settled" &&
+      field !== "questions_only" &&
       field !== "approve_together" &&
       field !== "legacy_plan_approval_choices" &&
       field !== "plan_approval",
@@ -1060,8 +1157,10 @@ const ASK_FIELDS = [
   "existing_code_command",
   "new_project_command",
   "choices",
+  "repo_facts",
+  "estimate_note",
 ] as const;
-const PRINT_FIELDS = ["kind", "message", "next_stage", "document_note"] as const;
+const PRINT_FIELDS = ["kind", "message", "next_stage", "document_note", "revision_cycle", "accept_as_is"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason", "workflow_continues"] as const;
 const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
@@ -1127,18 +1226,59 @@ export function stageValidityNote(invocation: string, stage: string | null): str
     (stage ? ` If their next reply says yes to it, run \`${invocation} next --stage ${stage}\` and follow the step ` +
       "it returns." : "");
 }
+// The one order for a line the person must hear, in the step and in Kiro CLI's
+// hand-over of a step it ran itself. The last message before they reply is the
+// one every host shows: Copilot CLI headless writes one message a turn and
+// `claude -p` prints only the last, so a line said as its step came was lost
+// there (say-once-lands' measure).
+export const SAY_ONCE_BEFORE_THEY_REPLY =
+  "once, as written (only a verb's tense may change to fit when you say it), as your own sentence with nothing in " +
+  "front of it, in the last message you write before they reply (when you end your turn with a question, the text " +
+  "you write just before it)";
 export const CHANGE_NOTICES_NOTE =
-  "Say each change_notices line to the person once, word for word, as your own sentence with nothing in front of " +
-  "it, and add nothing about why.";
+  `Say each change_notices line to the person ${SAY_ONCE_BEFORE_THEY_REPLY}, and add nothing about why.`;
 
 // Every question the engine asks: whose it is, and what a pick does. A choice's
 // command answers the question; a routing command returns the next step, a
 // record command (`log answer`, `unit resume`) returns none, so `next` follows.
-export function questionNote(invocation: string): string {
-  return "This question is for the person, not for you: show it to them with its choices as given, end your turn, and " +
-    "act only on their reply. When their reply picks one of the choices (its number, its words, or their own words " +
-    "for it), run that choice's command; act on the step it returns, or run `" + invocation + " next` when it " +
-    "returns none. Anything else is their own words: read what they meant.";
+// A question with one choice is said as its numbered question, since a picker
+// such as Claude Code's takes two options or more. The engine makes that call:
+// a skill sentence that named the case was read aloud to the person.
+export function questionNote(invocation: string, oneChoice = false, next = `${invocation} next`): string {
+  const show = oneChoice ? "say its numbered question to them as given" : "show it to them with its choices as given";
+  return `This question is for the person, not for you: ${show}, end your turn, and act only on their reply. ` +
+    "When their reply picks one of the choices (its number, its words, or their own words for it), run that " +
+    "choice's command; act on the step it returns, or run `" + next + "` when it returns none. " +
+    "Anything else is their own words: read what they meant.";
+}
+
+// Which repos Reverse Engineering reads: the names are the person's, the
+// command takes them exactly; the engine checks each one. "Only some" has no
+// command of its own, so `next` waits until the names are set. A request that
+// already said which is that answer: the person is not asked it again.
+export function repoScopeQuestionNote(invocation: string): string {
+  const intent = invocation.replace(/aidlc-orchestrate\.ts$/, "aidlc-utility.ts intent").replace(/ orchestrate$/, " intent");
+  return "When the person's own words already said which repositories to read, all of them or named ones, do not " +
+    "put this question: run `" + intent + " set-repos --all` or `" + intent + " set-repos <names>`, then `" +
+    invocation + " next`. Otherwise this question is for the person, not for you: show it to them with its " +
+    "choices as given, end your turn, " +
+    "and act only on their reply. When they want all of the repositories, run the Read all choice's command, then `" +
+    invocation + " next`. When they want only some, run `" + intent + " set-repos <names>` with the folder names " +
+    "they mean, comma-separated, then `" + invocation + " next`; when their reply does not say which, ask which " +
+    "ones and end your turn without running `next`. Anything else is their own words: read what they meant.";
+}
+
+// How the agent says what a large analysis covers and costs in time: the facts
+// are in repo_facts; the agent words them, with the question it goes with or
+// once before the analysis starts.
+export function repoEstimateNote(facts: RepoFacts, withQuestion: boolean): string {
+  const { low, high } = facts.minutes_per_repository;
+  const size = facts.lines === undefined ? "" : `, about ${facts.lines} lines between them by git's count`;
+  return `Reading them covers ${facts.repositories} repositories${size}; each takes about ${low} to ${high} minutes ` +
+    "at this depth, several at once when they run side by side. " +
+    (withQuestion
+      ? "Say this to the person with the question, in your own words, and what a narrower set they name would take."
+      : "Tell the person once, in your own words, before the analysis starts.");
 }
 
 // The routing question asked while no piece of work is selected: continue and
@@ -1183,12 +1323,23 @@ export function showsGateAgain(d: Record<string, unknown>): boolean {
 // The protocol files a step runs by, named from its own stage file, so a chat
 // with no skill loaded reads them (seen live: a Unit's step looped on a review
 // and an autonomy question the agent never knew about).
+// A change the person asks of the code plan goes after the choice, in every
+// step that names the plan question's answer: the recorder never takes it from
+// their words (recordPlanApprovalAnswer). An approval that asks for a change
+// binds the plan as it is when "Approve Plan" is recorded, so the change is
+// made first; recorded first, it binds the plan without their change.
+export const PLAN_CHANGE_DETAILS =
+  "(a change they ask for instead of approving is Request Changes, with what to change after it: " +
+  "--details 'Request Changes: <what they asked>'; when they approve and ask for a change, make it in the plan " +
+  "first, then record 'Approve Plan')";
+
 // The plan question's answer is recorded as the person's choice, then the
-// step goes on; with no skill loaded nothing else names that command.
-export function planApprovalQuestionNote(invocation: string, logInvocation: string): string {
-  return `${questionNote(invocation).replace(/\.$/, "")}. When they answer, record the choice they made with ` +
-    `\`${logInvocation} answer --stage code-generation --checkpoint plan-approval --details '<their choice>'\`, then ` +
-    `run \`${invocation} next\`.`;
+// step goes on; with no skill loaded nothing else names that command. `next`
+// is an isolated run's own (the question's `plan_approval.next`).
+export function planApprovalQuestionNote(invocation: string, logInvocation: string, next = `${invocation} next`): string {
+  return `${questionNote(invocation, false, next).replace(/\.$/, "")}. When they answer, record the choice they made with ` +
+    `\`${logInvocation} answer --stage code-generation --checkpoint plan-approval --details '<their choice>'\` ` +
+    `${PLAN_CHANGE_DETAILS}, then run \`${next}\`.`;
 }
 
 export function protocolNote(stageFile: string, modules: readonly string[]): string | null {
@@ -1197,6 +1348,15 @@ export function protocolNote(stageFile: string, modules: readonly string[]): str
   const dir = `${stageFile.slice(0, at)}/aidlc-common/protocols`;
   const files = [`${dir}/stage-protocol.md`, ...modules.map((module) => `${dir}/stage-protocol-${module}.md`)];
   return `Unless this chat already holds them, read ${files.join(", ")} before this step's work: they say how it runs.`;
+}
+
+// The step before a wave that asks one Unit's questions in the chat, where the
+// person is; the builders the wave hands out cannot ask them.
+export function unitQuestionsNote(unit: string, invocation: string): string {
+  return `This step is only ${unit}'s questions for this stage (the stage file's QUESTION-ONLY mode): ask them ` +
+    "and take the person's answers into the questions file (with nothing to ask, write the file with a line saying " +
+    "so), confirm their summary when this step's notes ask for it, and write none of the stage's documents; the " +
+    `builders write them from the answers. ${unitStepNote(invocation)}`;
 }
 
 export function unitStepNote(invocation: string): string {
@@ -1216,8 +1376,9 @@ export function autonomyChoiceNote(boltInvocation: string): string {
     'work?", with the choices "Continue automatically" (through the ordinary completion checkpoints; plans, enabled ' +
     'summaries, the verification command and failures still come to them) and "Review each checkpoint" (they approve ' +
     `each one). It is theirs to answer: never answer it yourself and never infer it from silence. Record what they ` +
-    `say with \`${boltInvocation} set-autonomy --mode <autonomous|gated>\` (Continue automatically is autonomous, ` +
-    "Review each checkpoint is gated), then run `next` again for the policy that now applies.";
+    `say with \`${boltInvocation} set-autonomy --mode autonomous --message <id>\` (Continue automatically, with ` +
+    "<id> the message they chose it in) or `--mode gated` (Review each checkpoint), then run `next` again for the policy " +
+    "that now applies.";
 }
 
 /**
@@ -1225,9 +1386,77 @@ export function autonomyChoiceNote(boltInvocation: string): string {
  * reviewer's file itself and recorded READY, so the person got a review their
  * reviewer never wrote.
  */
-export function reviewRequestNote(reviewer: string, reviewFile: string, recordVerdict: string): string {
-  return `Dispatch ${reviewer} as a subagent and have it write ${reviewFile}: that file is the reviewer's, so never ` +
-    `write it yourself and never stand in for it. When its verdict is back, record it with \`${recordVerdict}\`.`;
+export function reviewRequestNote(
+  reviewer: string,
+  reviewFile: string,
+  recordVerdict: string,
+  dispatchAgent: string | null = null,
+  otherWork?: string,
+): string {
+  // A reviewer copy (Kiro) is dispatched by its own name; the brief and
+  // the verdict keep the reviewer's.
+  const dispatch = dispatchAgent === null
+    ? `Dispatch ${reviewer} as a subagent`
+    : `Dispatch ${dispatchAgent} (${reviewer} with this review's read scope; if Kiro has no agent by that name, ` +
+      `dispatch ${reviewer} instead and tell the person in one line that this review runs without the reviewer ` +
+      `read-scope check) as a subagent, name ${reviewer} as the reviewer in the brief,`;
+  return `${dispatch} and have it write ${reviewFile}: that file is the reviewer's, so never ` +
+    `write it yourself and never stand in for it. When its verdict is back, record it with \`${recordVerdict}\`.` +
+    (otherWork === undefined ? "" : ` Its brief carries this line word for word: ${otherWork}`);
+}
+
+// The step after a stage's verdict is recorded (#2400), as the logger decides
+// it: one branch, with its exact command. A verdict no further pass follows
+// leads into the skill's ordered completion sequence at its next step,
+// stage-completion verification, named here and owned there. What the person
+// wrote comes before it: their branch is `next` alone. The gate's Review brief
+// is named with its command too: an agent that no longer holds the reviewer
+// protocol (after a compaction) otherwise guesses at the tool. A Unit's step
+// after its last pass is its route's (the next Unit, its checkpoint, a team's
+// Unit gate), so it is `next`, after the Unit's completion when it is still open.
+export type ReviewVerdictStep =
+  | { kind: "person-wrote"; next: string }
+  | { kind: "next-pass"; request: string }
+  | { kind: "unit"; next: string; complete?: string }
+  | { kind: "learnings" | "gate"; report: string; summary: boolean; brief: string }
+  | {
+    kind: "reply-stands";
+    stage: string;
+    replies: ReadonlyArray<{ id: string; at: string }>;
+    approve: string;
+    reject: string;
+    report: string;
+    brief: string;
+  };
+const NO_FURTHER_PASS = "No further review pass follows: run stage-completion verification, then ";
+export function reviewVerdictNote(step: ReviewVerdictStep): string {
+  switch (step.kind) {
+    case "person-wrote":
+      return `The person wrote since the review was requested: run \`${step.next}\` and follow its step together ` +
+        "with what they said; if what they said answers the approval, record it with their words rather than " +
+        "asking again.";
+    case "next-pass":
+      return "Another review pass follows: fix what its findings name (a review that did not finish names nothing " +
+        `to fix), then request the next pass with \`${step.request}\` in this turn.`;
+    case "unit":
+      return `No further review pass follows: ${step.complete === undefined ? "" : `record this Unit's completion with \`${step.complete}\`, then `}` +
+        `run \`${step.next}\` and follow the step it returns, in this turn.`;
+    case "learnings":
+      return `${NO_FURTHER_PASS}${step.summary ? "say the completion summary, then " : ""}take the learnings step ` +
+        "(stage-protocol-learnings.md): when it has a question for the person, ask it and end the turn there. After " +
+        `their answer, or now when it has none, run \`${step.report}\`, then \`${step.brief}\`, printing its output ` +
+        "as the review brief, and ask the approval question.";
+    case "gate":
+      return `${NO_FURTHER_PASS}${step.summary ? "say the completion summary, then " : ""}run ` +
+        `\`${step.report}\`, then \`${step.brief}\`, printing its output as the review brief, and ask the approval ` +
+        "question in this turn.";
+    case "reply-stands":
+      return `${NO_FURTHER_PASS}record the person's reply at the "${step.stage}" gate, which still stands, without ` +
+        `asking them again: if their message ${step.replies.map((reply) => `${reply.id} (sent ${reply.at})`).join(" or ")} ` +
+        `approved it, run \`${step.approve}\`; if it asked for changes, run \`${step.reject}\`. Otherwise run ` +
+        `\`${step.report}\`, then \`${step.brief}\`, printing its output as the review brief, and ask the approval ` +
+        "question in this turn.";
+  }
 }
 
 // How this stage's questions are answered (stage-protocol.md section 3, Step
@@ -1282,29 +1511,52 @@ export function contextNote(paths: readonly string[], consumes: readonly string[
     `listed, with your file tool, and wait for each result. Then read the stage file it names${inputs}.`;
 }
 
+// The segment a code knowledge base path carries in place of the repo when the
+// work records several: one path per artifact, whatever the number of repos.
+export const REPO_PLACEHOLDER = "{repo}";
+
+function carriesRepoPlaceholder(o: Record<string, unknown>): boolean {
+  const paths = (value: unknown): string[] => Array.isArray(value) ? value.filter((p): p is string => typeof p === "string") : [];
+  const absent = (value: unknown): string[] =>
+    Array.isArray(value) ? value.flatMap((row) => isPlainObject(row) && typeof row.path === "string" ? [row.path] : []) : [];
+  const wave = isPlainObject(o.wave) && Array.isArray(o.wave.entries) ? o.wave.entries.filter(isPlainObject) : [];
+  return [
+    ...paths(o.produces), ...paths(o.consumes), ...absent(o.consumes_absent),
+    ...wave.flatMap((entry) => [...paths(entry.produces), ...paths(entry.consumes), ...absent(entry.consumes_absent)]),
+  ].some((path) => path.includes(REPO_PLACEHOLDER));
+}
+
+// A path written once for every repo, as the person reads it.
+function inputPathInWords(path: string): string {
+  const at = path.indexOf(`/${REPO_PLACEHOLDER}/`);
+  return at < 0 ? path : `${path.slice(at + REPO_PLACEHOLDER.length + 2)} in each repository's folder of ${path.slice(0, at)}/`;
+}
+
 // A declared input whose producer ran and still left no file: one line for the
 // person, then the recovery protocol. Absence by design (a stage not on this
 // plan) is not an event in their project and carries nothing.
 export function inputsNote(paths: readonly string[]): string {
-  return `Say to the person once: "Some inputs this stage usually reads are not here: ${paths.join(", ")}. I'll go ` +
-    "on with what is here.\" Then follow stage-protocol-recovery.md for the gap.";
+  return `Say to the person once: "Some inputs this stage usually reads are not here: ${paths.map(inputPathInWords).join(", ")}. ` +
+    "I'll go on with what is here.\" Then follow stage-protocol-recovery.md for the gap.";
 }
 
 // Code Generation: the engine asks for Plan Approval itself (a plan-approval
-// ask), so a stage step only ever says whether to plan or to build.
+// ask), so a stage step only ever says whether to plan or to build. The `next`
+// it names is an isolated run's own when the plan state carries one.
 export function planNote(
-  plan: { status: string; skipped?: true; notice?: string },
+  plan: { status: string; skipped?: true; notice?: string; next?: string },
   invocation: string,
 ): string {
+  const next = plan.next ?? `${invocation} next`;
   switch (plan.status) {
     case "plan":
-      return "Write this plan and its test instructions (Code Generation Steps 1 and 2), then run `" + invocation +
-        " next`: AI-DLC asks the person to approve the plan itself, never you.";
+      return "Write this plan and its test instructions (Code Generation Steps 1 and 2), then run `" + next +
+        "`: AI-DLC asks the person to approve the plan itself, never you.";
     case "revise":
       return "The person asked for changes to this plan: revise the plan and its test instructions from their " +
-        "words, then run `" + invocation + " next`.";
+        "words, then run `" + next + "`.";
     case "repair":
-      return "Fix what the plan's note names, then run `" + invocation + " next`.";
+      return "Fix what the plan's note names, then run `" + next + "`.";
     default:
       return plan.skipped === true
         ? `Say to the person first: ${plan.notice ?? "Plan approval is off for this piece of work."} Then build from ` +
@@ -1314,26 +1566,66 @@ export function planNote(
   }
 }
 
+const OTHER_WORK_PATHS_SHOWN = 20;
+const OTHER_WORKS_SHOWN = 5;
+
+// Another piece of work under way in this same folder (a second chat on its own
+// work) claims these files in its Units' source manifests: this build leaves
+// them as they are, and its review raises nothing about them, unless its own
+// plan changes one.
+export function otherWorkNote(
+  works: ReadonlyArray<{ work: string; record: string; paths: readonly string[] }>,
+  reader: "build" | "review" = "build",
+): string {
+  const listed = works.slice(0, OTHER_WORKS_SHOWN).map(({ work, record, paths }) => {
+    const shown = paths.slice(0, OTHER_WORK_PATHS_SHOWN).map((path) => `\`${path}\``).join(", ");
+    const more = paths.length > OTHER_WORK_PATHS_SHOWN
+      ? `, and ${paths.length - OTHER_WORK_PATHS_SHOWN} more, listed in its Units' source manifests under \`${record}/construction/\``
+      : "";
+    return `${work} (${shown}${more})`;
+  });
+  // The note stays bounded however many pieces of work there are.
+  if (works.length > OTHER_WORKS_SHOWN) {
+    listed.push(`and ${works.length - OTHER_WORKS_SHOWN} more, each listing its files in its Units' source manifests ` +
+      "under its record's `construction/` folder");
+  }
+  return `${works.length === 1 ? "Another piece of work is" : "Other pieces of work are"} under way in this same folder, ` +
+    `and these files are ${works.length === 1 ? "its" : "their"} own: ${listed.join("; ")}. ` +
+    (reader === "build"
+      ? "Leave them as they are unless this work's plan changes one of them."
+      : "They are not this work's to review: raise no finding about one unless this work's plan changes it.");
+}
+
 // A dispatched topology: the lines every agent brief carries, ready to paste,
 // so the agent copies a block instead of reading two fields into prose.
-export function briefNote(ceremony: Record<string, unknown>, modules: readonly string[]): string {
+// `carried` are the step's notes about files to leave as they are.
+export function briefNote(ceremony: Record<string, unknown>, modules: readonly string[], carried: readonly string[] = []): string {
   const switches = CEREMONY_KEYS
     .filter((key) => typeof ceremony[key] === "string")
     .map((key) => `${CEREMONY_FIELDS[key]}: ${String(ceremony[key])}.`);
   return "Every agent brief for this stage carries these lines word for word: " +
-    `${switches.join(" ")} Protocol modules: ${modules.length > 0 ? modules.join(", ") : "none"}.`;
+    `${switches.join(" ")} Protocol modules: ${modules.length > 0 ? modules.join(", ") : "none"}.` +
+    carried.map((note) => ` ${note}`).join("");
 }
 
 // Both states are said: off left as an absence read as the ask on Kiro CLI,
 // where the agent quoted the stage file's own "summary_confirmation: required"
 // and ran the checkpoint twice on a bugfix (the plan-approval-off note has the
-// same shape).
-export function ceremonyNote(state: "on" | "off"): string {
+// same shape). Off is said as the step alone and names no setting: the agent
+// reads the note aloud to people who never chose one. It is said only for a
+// stage that asks questions: worded as if every stage had answers, it had
+// opencode record an answer-mode question at a first Reverse Engineering scan,
+// which asks none, and show the gate again on every reply.
+// A Unit's question step before a wave writes no outputs, so off says the skip alone.
+export function ceremonyNote(state: "on" | "off", questionsOnly = false): string {
   return state === "on"
     ? "After this stage's questions are answered and before writing anything, confirm the summary of the answers " +
       "with the person (stage-protocol-summary.md)."
-    : "Summary confirmation is off for this work: once the answers are written to the questions file, write the " +
-      "stage's outputs; skip the stage file's Consolidated Summary step and record nothing for it.";
+    : questionsOnly
+      ? "If this stage puts questions to the person, skip the stage file's Consolidated Summary step and record " +
+        "nothing for it."
+      : "If this stage puts questions to the person, write the stage's outputs once their answers are in the " +
+        "questions file; skip the stage file's Consolidated Summary step and record nothing for it.";
 }
 
 // --- The numbered rendering of a question ---
@@ -1366,7 +1658,7 @@ export function numberedProseQuestion(prompt: string, options: readonly Pick<Ask
 // single quotes otherwise. The POSIX splice for an apostrophe ('"'"') reaches a
 // program as three arguments through PowerShell, and "I'll edit the files" has one.
 export function fixedLabelArg(label: string): string {
-  return /^[^"$`\\%!^&|<>\r\n]+$/.test(label) ? `"${label}"` : shellArg(label);
+  return readsAlikeInDoubleQuotes(label) ? `"${label}"` : shellArg(label);
 }
 
 // The choices of an engine question, from the routes it already carries. The
@@ -1417,8 +1709,13 @@ function askChoices(d: Record<string, unknown>, invocation: string, logInvocatio
         }));
     case "unit-claim":
       return strings("claimable_units").map((unit) => ({ label: unit, command: `${invocation} next --claim ${shellArg(unit)}` }));
-    case "legacy-plan-approval-recovery":
-      return [{ label: String(d.recovery_choice ?? "Recover Plan Approval"), command: `${invocation} next` }];
+    case "legacy-plan-approval-recovery": {
+      const label = String(d.recovery_choice ?? "Recover Plan Approval");
+      return [{
+        label,
+        command: `${logInvocation} answer --stage code-generation --checkpoint plan-approval --details ${fixedLabelArg(label)}`,
+      }];
+    }
     default:
       return null;
   }
@@ -1456,7 +1753,7 @@ export function knownDirectiveFieldNames(): string[] {
 // a Unit or batch checkpoint and a team gate are handled without it, and a wave
 // hands the body to its builders. Notes about the body ride only when it runs.
 export function bodyRuns(d: Record<string, unknown>): boolean {
-  if (d.gate_only === true || d.swarm_settled === true) return false;
+  if (d.gate_only === true || d.swarm_settled === true || typeof d.unit_record_step === "string") return false;
   if ("construction_checkpoint" in d || "swarm_checkpoint" in d || "unit_gate" in d || "wave" in d) return false;
   return (d.construction_policy as { completion_only?: boolean } | undefined)?.completion_only !== true;
 }
@@ -1464,11 +1761,15 @@ export function bodyRuns(d: Record<string, unknown>): boolean {
 // The notes for one emitted directive. `invocation` is how this install runs
 // the orchestrate tool. A rules part carries none: its run-stage repeats the
 // advisory and the notices, and they are said from there, once.
+// `changeNoticesFollowUps` are the agent's own sentences for lines this
+// directive carries (the command a yes to a switch line runs), after
+// CHANGE_NOTICES_NOTE, so they never ride in a line the person hears.
 export function withAgentNotes<T extends object>(
   directive: T,
   invocation: string,
   logInvocation = invocation.replace(/aidlc-orchestrate\.ts$/, "aidlc-log.ts").replace(/ orchestrate$/, " log"),
   boltInvocation = invocation.replace(/aidlc-orchestrate\.ts$/, "aidlc-bolt.ts").replace(/ orchestrate$/, " bolt"),
+  changeNoticesFollowUps: readonly string[] = [],
 ): T {
   const d = directive as Record<string, unknown>;
   if (d.kind === "load-steering") return directive;
@@ -1478,25 +1779,33 @@ export function withAgentNotes<T extends object>(
     notes.stage_validity_note = stageValidityNote(invocation, typeof stage === "string" ? stage : null);
   }
   if (Array.isArray(d.change_notices) && d.change_notices.length > 0) {
-    notes.change_notices_note = CHANGE_NOTICES_NOTE;
+    notes.change_notices_note = [CHANGE_NOTICES_NOTE, ...new Set(changeNoticesFollowUps)].join(" ");
   }
   if (d.kind === "ask" && d.agent_work !== true) {
-    notes.question_note = d.ask_type === "plan-approval"
-      ? planApprovalQuestionNote(invocation, logInvocation)
-      : d.ask_type === "scope-confirm"
-      ? planOfferQuestionNote(invocation)
-      : d.ask_type === "new-work-routing" && Array.isArray(d.available_intents)
-      ? routingRecordsQuestionNote(invocation)
-      : questionNote(invocation);
     if (!Array.isArray(d.choices)) {
       const choices = askChoices(d, invocation, logInvocation);
       if (choices !== null) notes.choices = choices;
     }
+    const choices = (notes.choices ?? d.choices) as AskChoice[] | undefined;
+    notes.question_note = d.ask_type === "plan-approval"
+      ? planApprovalQuestionNote(
+        invocation, logInvocation,
+        isPlainObject(d.plan_approval) && typeof d.plan_approval.next === "string" ? d.plan_approval.next : undefined,
+      )
+      : d.ask_type === "scope-confirm"
+      ? planOfferQuestionNote(invocation)
+      : d.ask_type === "new-work-routing" && Array.isArray(d.available_intents)
+      ? routingRecordsQuestionNote(invocation)
+      : d.ask_type === "repo-scope"
+      ? repoScopeQuestionNote(invocation)
+      : questionNote(invocation, choices?.length === 1);
     if (typeof d.numbered_prose_question !== "string") {
-      const choices = (notes.choices ?? d.choices) as AskChoice[] | undefined;
       // A question with no options (a guard that has no way on) is said as it is.
       if (choices !== undefined) notes.numbered_prose_question = choices.length > 0 ? numberedProseQuestion(askPrompt(d), choices) : askPrompt(d);
     }
+  }
+  if ((d.kind === "ask" || d.kind === "run-stage") && isPlainObject(d.repo_facts)) {
+    notes.estimate_note = repoEstimateNote(d.repo_facts as unknown as RepoFacts, d.kind === "ask");
   }
   if (d.kind === "run-stage" && typeof d.stage_file === "string") {
     const modules = Array.isArray(d.protocol_modules)
@@ -1510,7 +1819,7 @@ export function withAgentNotes<T extends object>(
       const consumes = Array.isArray(d.consumes) ? d.consumes.filter((p): p is string => typeof p === "string") : [];
       notes.context_note = contextNote(paths, consumes, isPlainObject(d.lead_persona));
       if (isPlainObject(d.ceremony) && (d.ceremony.summary_confirmation === "on" || d.ceremony.summary_confirmation === "off")) {
-        notes.ceremony_note = ceremonyNote(d.ceremony.summary_confirmation);
+        notes.ceremony_note = ceremonyNote(d.ceremony.summary_confirmation, d.questions_only === true);
       }
       if (isPlainObject(d.answer_mode) && typeof d.stage === "string") {
         notes.answer_mode_note = answerModeNote(d.answer_mode as unknown as StageAnswerMode, d.stage, logInvocation);
@@ -1521,11 +1830,14 @@ export function withAgentNotes<T extends object>(
         : [];
       if (gaps.length > 0) notes.inputs_note = inputsNote(gaps);
       if (isPlainObject(d.plan_approval) && typeof d.plan_approval.status === "string") {
-        notes.plan_note = planNote(d.plan_approval as { status: string; skipped?: true; notice?: string }, invocation);
+        notes.plan_note = planNote(d.plan_approval as { status: string; skipped?: true; notice?: string; next?: string }, invocation);
       }
     }
     const dispatched = d.mode === "subagent" || d.mode === "pipeline" || d.mode === "mob" || "wave" in d;
-    if (dispatched && isPlainObject(d.ceremony)) notes.brief_note = briefNote(d.ceremony, modules);
+    if (dispatched && isPlainObject(d.ceremony)) {
+      const carried = [d.other_work_note, d.brought_files_note].filter((note): note is string => typeof note === "string");
+      notes.brief_note = briefNote(d.ceremony, modules, carried);
+    }
   }
   if (
     d.kind === "run-stage" &&
@@ -1539,8 +1851,12 @@ export function withAgentNotes<T extends object>(
       notes.gate_note = verificationCommandRecovery(typeof d.stage === "string" ? d.stage : undefined, logInvocation, stateInvocation);
     } else if (d.gate === GATE_UNRESOLVED) {
       notes.gate_note = unresolvedGateNote(invocation);
+    } else if (typeof d.unit_record_step === "string") {
+      notes.gate_note = d.unit_record_step;
     } else if (showsGateAgain(d)) {
       notes.gate_note = gateOnlyNote();
+    } else if (d.questions_only === true && typeof d.unit === "string") {
+      notes.gate_note = unitQuestionsNote(d.unit, invocation);
     } else if (
       d.gate === false && typeof d.unit === "string" &&
       ![
@@ -1550,6 +1866,13 @@ export function withAgentNotes<T extends object>(
     ) {
       notes.gate_note = unitStepNote(invocation);
     }
+  }
+  // The answer mode reaches the agent as its note alone: handed the object the
+  // note was made from too, the agent read its fields aloud on Kiro CLI ("The
+  // answer mode needs to be asked (answer_mode.ask: true)").
+  if (d.kind === "run-stage" && "answer_mode" in d) {
+    const { answer_mode: _resolved, ...step } = d;
+    return { ...step, ...notes } as T;
   }
   return Object.keys(notes).length > 0 ? { ...directive, ...notes } : directive;
 }
@@ -1608,16 +1931,20 @@ export function validateDirective(obj: unknown): ValidationResult {
     Array.isArray(o[CHANGE_NOTICES_FIELD]) && o[CHANGE_NOTICES_FIELD].length > 0, kind, errors,
   );
   checkAgentNote(o, "question_note", true, kind, errors);
+  checkOptionalRepoFacts(o, kind, errors);
+  checkAgentNote(o, "estimate_note", "repo_facts" in o, kind, errors);
   checkAgentNote(o, "document_note", true, kind, errors);
   checkAgentNote(o, "gate_note", true, kind, errors);
   checkAgentNote(o, "protocol_note", true, kind, errors);
   checkAgentNote(o, "construction_policy_note", true, kind, errors);
-  checkAgentNote(o, "answer_mode_note", "answer_mode" in o, kind, errors);
+  checkAgentNote(o, "answer_mode_note", "stage_file" in o, kind, errors);
   checkAgentNote(o, "context_note", "stage_file" in o, kind, errors);
   checkAgentNote(o, "brief_note", "stage_file" in o, kind, errors);
   checkAgentNote(o, "ceremony_note", "stage_file" in o, kind, errors);
   checkAgentNote(o, "inputs_note", Array.isArray(o.consumes_absent) && o.consumes_absent.length > 0, kind, errors);
   checkAgentNote(o, "plan_note", "plan_approval" in o, kind, errors);
+  checkAgentNote(o, "other_work_note", "stage_file" in o, kind, errors);
+  checkAgentNote(o, "brought_files_note", "stage_file" in o, kind, errors);
 
   // Rule 4-6: per-kind required-field presence + type checks, with specific,
   // kind-aware messages.
@@ -1649,6 +1976,8 @@ export function validateDirective(obj: unknown): ValidationResult {
     case "run-stage":
       checkRunStageShared(o, kind, errors);
       checkOptionalBoolean(o, "single", kind, errors);
+      checkOptionalLevel(o, "depth", kind, errors);
+      checkOptionalLevel(o, "test_strategy", kind, errors);
       checkOptionalWave(o, "wave", kind, errors);
       checkOptionalCodeGenerationPlanState(o, kind, errors);
       break;
@@ -1708,7 +2037,13 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "proposed_scope", kind, errors);
       checkOptionalStringArray(o, "available_intents", kind, errors);
       checkOptionalString(o, "numbered_prose_question", kind, errors);
-      checkChoices(o, kind, errors, o.ask_type === "scope-confirm" || o.ask_type === "construction-staffing");
+      checkChoices(
+        o,
+        kind,
+        errors,
+        o.ask_type === "scope-confirm" || o.ask_type === "construction-staffing" || o.ask_type === "repo-scope" ||
+          o.ask_type === "units-repos",
+      );
       checkOptionalString(o, "recovery_choice", kind, errors);
       checkOptionalString(o, "existing_code_command", kind, errors);
       checkOptionalString(o, "new_project_command", kind, errors);
@@ -1726,10 +2061,12 @@ export function validateDirective(obj: unknown): ValidationResult {
           "plan-approval",
           "project-type",
           "construction-staffing",
+          "repo-scope",
+          "units-repos",
         ].includes(o.ask_type)
       ) {
         errors.push(
-          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type | construction-staffing, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type | construction-staffing | repo-scope | units-repos, got ${String(o.ask_type)}`,
         );
       }
       if ("plan_approval" in o && o.ask_type !== "plan-approval") {
@@ -1838,6 +2175,16 @@ export function validateDirective(obj: unknown): ValidationResult {
           errors.push(`${kind}: construction-staffing response_route must be "command"`);
         }
         rejectUnexpected("construction-staffing", {});
+      } else if (o.ask_type === "repo-scope") {
+        if (o.response_route !== "command") {
+          errors.push(`${kind}: repo-scope response_route must be "command"`);
+        }
+        rejectUnexpected("repo-scope", {});
+      } else if (o.ask_type === "units-repos") {
+        if (o.response_route !== "command") {
+          errors.push(`${kind}: units-repos response_route must be "command"`);
+        }
+        rejectUnexpected("units-repos", {});
       } else if (o.ask_type === "new-work-routing") {
         if (o.response_route !== "next") {
           errors.push(`${kind}: new-work-routing response_route must be "next"`);
@@ -1936,6 +2283,7 @@ export function validateDirective(obj: unknown): ValidationResult {
     case "print":
       checkString(o, "message", kind, errors);
       checkOptionalNullableString(o, "next_stage", kind, errors);
+      checkOptionalRevisionCycle(o, kind, errors);
       break;
     case "error":
       checkString(o, "message", kind, errors);
@@ -1998,6 +2346,7 @@ function checkRunStageShared(
   checkString(o, "memory_path", kind, errors);
   checkStringArray(o, "consumes", kind, errors);
   checkStringArray(o, "produces", kind, errors);
+  checkAgentNote(o, "repos_note", carriesRepoPlaceholder(o), kind, errors);
   checkStringArray(o, "rules_in_context", kind, errors);
   if (o.rules_content !== undefined) {
     checkPathTextArray(o, "rules_content", kind, errors);
@@ -2055,7 +2404,10 @@ function checkRunStageShared(
     checkOptionalProtocolModules(o, kind, errors);
     checkOptionalTrue(o, "swarm_settled", kind, errors);
     checkOptionalTrue(o, "gate_only", kind, errors);
+    checkOptionalRevisionCycle(o, kind, errors);
+    checkOptionalString(o, "unit_record_step", kind, errors);
     checkOptionalTrue(o, "build_settled", kind, errors);
+    checkOptionalTrue(o, "questions_only", kind, errors);
     checkOptionalApproveTogether(o, kind, errors);
   }
   // unit: optional on a run-stage directive (present only on a per-unit
@@ -2423,6 +2775,20 @@ function checkGate(
 // checkOptionalString — a field that may be absent, but if present must be a
 // string (e.g. conductor_persona, delivered only on the first run-stage).
 // An agent note is one non-empty sentence, and only beside the field it is about.
+function checkOptionalRepoFacts(o: Record<string, unknown>, kind: DirectiveKind, errors: string[]): void {
+  if (!("repo_facts" in o)) return;
+  const facts = o.repo_facts;
+  const count = (value: unknown): boolean => Number.isInteger(value) && (value as number) >= 0;
+  const minutes = isPlainObject(facts) ? facts.minutes_per_repository : undefined;
+  if (
+    !isPlainObject(facts) || !count(facts.repositories) ||
+    ("lines" in facts && !count(facts.lines)) ||
+    !isPlainObject(minutes) || !count(minutes.low) || !count(minutes.high)
+  ) {
+    errors.push(`${kind}: repo_facts must be { repositories, lines?, minutes_per_repository: { low, high } } of whole numbers`);
+  }
+}
+
 function checkAgentNote(
   o: Record<string, unknown>,
   field: string,
@@ -2450,6 +2816,19 @@ function checkOptionalString(
   }
 }
 
+// checkOptionalLevel: a depth or test strategy, in the state file's words.
+function checkOptionalLevel(
+  o: Record<string, unknown>,
+  field: string,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(field in o)) return;
+  if (!["Minimal", "Standard", "Comprehensive"].includes(o[field] as string)) {
+    errors.push(`${kind}: ${field} must be Minimal, Standard or Comprehensive, got ${describe(o[field])}`);
+  }
+}
+
 // checkOptionalCodeGenerationPlanState: the plan-or-build state on a
 // code-generation run-stage or invoke-swarm.
 function checkOptionalCodeGenerationPlanState(
@@ -2464,7 +2843,7 @@ function checkOptionalCodeGenerationPlanState(
     return;
   }
   for (const key of Object.keys(value)) {
-    if (!["status", "note", "feedback", "units", "skipped", "notice"].includes(key)) {
+    if (!["status", "note", "feedback", "units", "skipped", "notice", "next"].includes(key)) {
       errors.push(`${kind}: plan_approval unknown key: ${key}`);
     }
   }
@@ -2473,7 +2852,7 @@ function checkOptionalCodeGenerationPlanState(
       `${kind}: plan_approval.status must be one of ${CODE_GENERATION_PLAN_STATUSES.join(" | ")}, got ${describe(value.status)}`,
     );
   }
-  for (const field of ["note", "feedback", "notice"] as const) {
+  for (const field of ["note", "feedback", "notice", "next"] as const) {
     if (field in value && typeof value[field] !== "string") {
       errors.push(`${kind}: plan_approval.${field} must be string, got ${describe(value[field])}`);
     }
@@ -2514,7 +2893,7 @@ function checkPlanApprovalAskContent(
     return;
   }
   for (const key of Object.keys(value)) {
-    if (!["targets", "choices", "editing", "note"].includes(key)) {
+    if (!["targets", "choices", "editing", "note", "next"].includes(key)) {
       errors.push(`${kind}: plan_approval unknown key: ${key}`);
     }
   }
@@ -2547,8 +2926,10 @@ function checkPlanApprovalAskContent(
   if (typeof value.editing !== "boolean") {
     errors.push(`${kind}: plan_approval.editing must be boolean, got ${describe(value.editing)}`);
   }
-  if ("note" in value && typeof value.note !== "string") {
-    errors.push(`${kind}: plan_approval.note must be string, got ${describe(value.note)}`);
+  for (const field of ["note", "next"] as const) {
+    if (field in value && typeof value[field] !== "string") {
+      errors.push(`${kind}: plan_approval.${field} must be string, got ${describe(value[field])}`);
+    }
   }
 }
 
@@ -2622,12 +3003,30 @@ function checkOptionalPipeline(
   }
   const keys = Object.keys(value);
   for (const key of keys) {
-    if (key !== "links" && key !== "completed") {
+    if (key !== "links" && key !== "completed" && key !== "completed_other_repos" && key !== "record") {
       errors.push(`${kind}: pipeline unknown key: ${key}`);
     }
   }
   checkStringArray(value, "links", kind, errors);
   checkStringArray(value, "completed", kind, errors);
+  if (
+    "completed_other_repos" in value &&
+    (!Number.isInteger(value.completed_other_repos) || (value.completed_other_repos as number) < 1)
+  ) {
+    errors.push(`${kind}: pipeline.completed_other_repos must be a positive integer`);
+  }
+  if (!Array.isArray(value.record)) {
+    errors.push(`${kind}: pipeline.record must be array, got ${describe(value.record)}`);
+    return;
+  }
+  value.record.forEach((row, index) => {
+    if (
+      !isPlainObject(row) || typeof row.link !== "string" || typeof row.command !== "string" ||
+      ("repo" in row && typeof row.repo !== "string")
+    ) {
+      errors.push(`${kind}: pipeline.record[${index}] must be { link, repo?, command } strings`);
+    }
+  });
 }
 
 function checkOptionalKeptReplies(
@@ -2642,14 +3041,10 @@ function checkOptionalKeptReplies(
     return;
   }
   for (const key of Object.keys(value)) {
-    if (key !== "answered" && key !== "replies" && key !== "note") errors.push(`${kind}: kept_replies unknown key: ${key}`);
+    if (!["questions", "answers", "replies", "note"].includes(key)) errors.push(`${kind}: kept_replies unknown key: ${key}`);
   }
-  const answered = value.answered;
-  if (!Array.isArray(answered) || !answered.every((entry) =>
-    isPlainObject(entry) && typeof entry.question === "string" && typeof entry.answer === "string" &&
-    Object.keys(entry).every((key) => key === "question" || key === "answer"))) {
-    errors.push(`${kind}: kept_replies.answered must be an array of { question, answer } strings`);
-  }
+  checkStringArray(value, "questions", kind, errors);
+  checkStringArray(value, "answers", kind, errors);
   checkStringArray(value, "replies", kind, errors);
   checkString(value, "note", kind, errors);
 }
@@ -2740,6 +3135,21 @@ function checkOptionalPositiveInteger(
       `${kind}: ${field} must be a positive integer, got ${describe(v)}`,
     );
   }
+}
+
+// The gate's change-request count and what it opens, on the reply or step
+// that shows the gate.
+function checkOptionalRevisionCycle(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  checkOptionalPositiveInteger(o, "revision_cycle", kind, errors);
+  if (!("accept_as_is" in o)) return;
+  if (typeof o.accept_as_is !== "string") {
+    errors.push(`${kind}: accept_as_is must be string, got ${describe(o.accept_as_is)}`);
+  }
+  checkEnum(o, "accept_as_is", ["offered", "next-revision"], kind, errors);
 }
 
 function checkPositiveInteger(
@@ -2990,6 +3400,7 @@ function checkOptionalWave(
     "consumes_absent",
     "produces",
     "required_produces",
+    "questions_file",
   ]);
   const units = new Set<string>();
   value.entries.forEach((item: unknown, i: number) => {
@@ -3053,6 +3464,9 @@ function checkOptionalWave(
       if (typeof item[key] !== "string") {
         errors.push(`${prefix}.${key} must be string, got ${describe(item[key])}`);
       }
+    }
+    if ("questions_file" in item && typeof item.questions_file !== "string") {
+      errors.push(`${prefix}.questions_file must be string, got ${describe(item.questions_file)}`);
     }
     for (const key of ["consumes", "produces", "required_produces"] as const) {
       const nested = item[key];

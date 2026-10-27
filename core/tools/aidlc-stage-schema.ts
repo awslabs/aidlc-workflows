@@ -65,6 +65,11 @@ export interface StageFrontmatter {
     artifact: string;
     required: boolean;
     conditional_on?: "brownfield" | "greenfield";
+    // cited - the deliverables cite this input whenever it exists; the compile
+    // lists these consumes as the stage's `cites`. A key inside the consume
+    // because 2.8.0 to 2.11.0, which refresh a project with their own
+    // validator, pass one there and refuse a new top-level key.
+    cited?: boolean;
   }>;
   requires_stage: string[];
   sensors?: string[];
@@ -105,9 +110,6 @@ export interface StageFrontmatter {
   // required_sections — named `## ` H2 sections a stage's output must contain
   // (plugin contribution mechanism §6). Optional list of non-empty names.
   required_sections?: string[];
-  // cites - optional consumes the stage's deliverables cite whenever they
-  // exist (the upstream-coverage check reads them). Each must name a consume.
-  cites?: string[];
   inputs: string;
   outputs: string;
 }
@@ -214,7 +216,7 @@ const REQUIRED_FIELDS = [
   "outputs",
 ] as const;
 
-const OPTIONAL_FIELDS = ["number", "name", "plugin", "for_each", "workspace_requires", "optional_produces", "produces_kinds", "sensors", "scopes", "reviewer", "review_artifact", "reviewer_max_iterations", "review_class", "summary_confirmation", "when", "ars", "required_sections", "cites"] as const;
+const OPTIONAL_FIELDS = ["number", "name", "plugin", "for_each", "workspace_requires", "optional_produces", "produces_kinds", "sensors", "scopes", "reviewer", "review_artifact", "reviewer_max_iterations", "review_class", "summary_confirmation", "when", "ars", "required_sections"] as const;
 
 const KNOWN_FIELDS = new Set<string>([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 
@@ -467,25 +469,6 @@ export function validateStageFrontmatter(
     }
   }
 
-  // cites - optional list of consumed artifacts the deliverables cite whenever
-  // they exist; each entry must be one of the stage's consumes.
-  if ("cites" in o && o.cites !== undefined) {
-    checkStringArray(o, "cites", errors);
-    const citesVal: unknown = o.cites;
-    if (Array.isArray(citesVal)) {
-      const consumed = new Set(
-        (Array.isArray(o.consumes) ? o.consumes : []).map((entry: unknown) =>
-          entry !== null && typeof entry === "object" ? (entry as { artifact?: unknown }).artifact : entry,
-        ),
-      );
-      citesVal.forEach((name: unknown, i: number) => {
-        if (typeof name === "string" && !consumed.has(name)) {
-          errors.push(`cites[${i}] "${name}" is not one of the stage's consumes`);
-        }
-      });
-    }
-  }
-
   // when — optional structured activation predicate (Layer 4). When present: a
   // plain object with exactly one key from WHEN_PREDICATE_KEYS whose value is a
   // non-empty artifact-slug string. Grid evaluation is a separate compile pass.
@@ -659,7 +642,7 @@ export function validateStageFrontmatter(
     }
   }
 
-  // Rule 8: nested consumes[] — array of {artifact, required, conditional_on?}.
+  // Rule 8: nested consumes[], an array of {artifact, required, conditional_on?, cited?}.
   if ("consumes" in o) {
     const consumesVal = o.consumes;
     if (!Array.isArray(consumesVal)) {
@@ -699,6 +682,10 @@ export function validateStageFrontmatter(
               `consumes[${i}].conditional_on must be one of ${VALID_CONDITIONAL_ON.join(" | ")}, got "${e.conditional_on}"`
             );
           }
+        }
+
+        if ("cited" in e && e.cited !== undefined && typeof e.cited !== "boolean") {
+          errors.push(`consumes[${i}].cited must be boolean, got ${describe(e.cited)}`);
         }
       });
     }

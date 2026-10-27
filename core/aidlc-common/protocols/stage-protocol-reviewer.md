@@ -70,8 +70,9 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    consolidated answers are confirmed and every verifiable required output
    document exists; a Unit's review has one more check (the reviewer-unit module). If the request is refused,
    finish the named prerequisite before dispatching the reviewer. When it
-   returns `kind: "print"` instead of the request (Units Generation's units
-   block cannot be read), the step is yours: do what its `message` says, then
+   returns `kind: "print"` instead of the request (the stage's checks found
+   something in its documents, or Units Generation's units block cannot be
+   read), the step is yours: do what its `message` says, then
    run the request command it names again, and say nothing to the person
    about it.
 
@@ -112,9 +113,10 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    reported fixed stays among the settled decisions, so a recurrence keeps its
    decision.
 
-   Then delegate to the reviewer agent named in `directive.reviewer`. The
-   request remains unmatched while the reviewer runs, so the approval gate and
-   completion stay blocked.
+   Then delegate to the reviewer agent named in `directive.reviewer` (or the
+   request's `dispatchAgent` when it returns one, as the reviewer-unit module
+   says). The request remains unmatched while the reviewer runs, so the
+   approval gate and completion stay blocked.
 
    Pass:
    - The stage definition file path (`directive.stage_file`)
@@ -177,7 +179,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    projects out a terminal `## Review` section left in the plan by a review
    recorded before review records existed; nothing new is written there.
 
-3. **Read verdict.** After the reviewer returns (when the dispatch comes back before its review exists, run `{{INVOKE}} engine orchestrate wait --stage <directive.stage> --for review --review-file <reviewFile>` and re-run it while it answers `status: waiting`; never a shell loop), record the terminal receipt with the same `aidlc-log.ts review` command plus `--verdict <READY|NOT-READY>` (and the same `--unit` / `--single` fields). The logger reads the review from the request's `reviewFile` (a `--review-file <path>` must name that same file), validates it with Bun's Markdown parser (fenced/inline code and HTML comments cannot supply or conflict with authority fields, list/blockquote/table containers cannot mint ownership, and rendered Markdown or raw-HTML H1/H2 headings are section escapes), rechecks current summary confirmation and output admission, proves from one coherent snapshot that the review manifest (including reviewed output bytes and bound question content) and the request-time source identity are unchanged, and then writes the review record `<record>/.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` (or the Unit path under `units/<unit>/`) (verdict, findings, reviewer, request id, artifact and source fingerprints, and the review text) in the same locked transaction as the `REVIEW_COMPLETED` row that names the record and pins its digest. The record is the review; only this command writes one, and a record edited afterwards stops being the review because its digest no longer matches. The review file is the reviewer's: never rewrite or edit it yourself (dispatch the reviewer again instead). A verdict whose file changed after the reviewer finished (its bytes no longer match the digest the reviewer's `SUBAGENT_COMPLETED` row recorded) still records, as the file reads, marked `Review Edited After Reviewer: yes`: it is on record as an edited review, not the reviewer's, and the approval gate tells the person so in one line (under relaxed or off, as an accepted change said once with the verdict). The reviewer's own `**Verdict Dictated:** yes|no` line records as written (`Review Verdict Dictated: yes` or `no`; a missing or unreadable line records nothing); on `yes` the verdict command and the gate say in one line that the reviewer was told what to conclude before it looked. The command's JSON returns `reviewRecord`, the record's path relative to the intent record. It also writes a readable copy with the full engine-owned list as of this review at `<stage dir>/reviews/review-NN.md`, beside the artifact the review is about, and returns it as `reviewMarkdown`; the copy is not an artifact, nothing reads it back, and the JSON record stays the review.
+3. **Read verdict.** After the reviewer returns (when the dispatch comes back before its review exists, run `{{INVOKE}} engine orchestrate wait --stage <directive.stage> --for review --review-file <reviewFile>` and re-run it while it answers `status: waiting`; never a shell loop), record the terminal receipt with the same `aidlc-log.ts review` command plus `--verdict <READY|NOT-READY>` (and the same `--unit` / `--single` fields). The logger reads the review from the request's `reviewFile` (a `--review-file <path>` must name that same file), validates it with Bun's Markdown parser (fenced/inline code and HTML comments cannot supply or conflict with authority fields, list/blockquote/table containers cannot mint ownership, and rendered Markdown or raw-HTML H1/H2 headings are section escapes), rechecks current summary confirmation and output admission, proves from one coherent snapshot that the review manifest (including reviewed output bytes and bound question content) and the request-time source identity are unchanged, and then writes the review record `<record>/.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` (or the Unit path under `units/<unit>/`) (verdict, findings, reviewer, request id, artifact and source fingerprints, and the review text) in the same locked transaction as the `REVIEW_COMPLETED` row that names the record and pins its digest. The record is the review; only this command writes one, and a record edited afterwards stops being the review because its digest no longer matches. The review file is the reviewer's: never rewrite or edit it yourself (dispatch the reviewer again instead). A verdict whose file changed after the reviewer finished (its bytes no longer match the digest the reviewer's `SUBAGENT_COMPLETED` row recorded) still records, as the file reads, marked `Review Edited After Reviewer: yes`: it is on record as an edited review, not the reviewer's, and the approval gate tells the person so in one line (under relaxed or off, as an accepted change said once with the verdict). The reviewer's own `**Verdict Dictated:** yes|no` line records as written (`Review Verdict Dictated: yes` or `no`; a missing or unreadable line records nothing); on `yes` the verdict command and the gate say in one line that the reviewer was told what to conclude before it looked. The command's JSON returns `reviewRecord`, the record's path relative to the intent record. It also writes a readable copy with the full engine-owned list as of this review at `<stage dir>/reviews/review-NN.md`, beside the artifact the review is about, and returns it as `reviewMarkdown`; the copy is not an artifact, nothing reads it back, and the JSON record stays the review. Except for a `--single` run and a Unit reviewed in a swarm batch or a wave, the JSON can also carry `agent_note`, your next step with its exact command: `next` when the person wrote while the review ran (their words come first, so nothing runs before it), otherwise the next pass's request, or, when no further pass follows, stage-completion verification and then the learnings question or the approval gate's `report` (for a Unit, its completion while it is still open, then `next`, which names the Unit's step). Follow it; a recorded verdict never ends the turn.
 
    Anything else is an INCOMPLETE attempt, not a verdict: no review file at all (the reviewer has a hard turn cap and may have been stopped before writing it; the request opened an empty slot, so a missing file means an incomplete review on every path, first entry or revision alike), a review with no canonical verdict line or one that does not match `--verdict`, forged/missing/conflicting duplicate ownership fields, a later top-level heading the logger cannot make level 3, or a malformed findings report (once the request's retry is spent, a findings report is the one defect that records instead; see below). The logger refuses these; a malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request. A review file that is whole except for top-level `#` or `##` heading lines (for example `## What I verified`) is not one of these: the logger records those lines as `###`, checks the result the same way, and records the verdict, so the reviewer is not dispatched again.
 
@@ -211,8 +213,9 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    the section as written, because the section and the recorded reason can hold
    text taken from the reviewed artifacts. Proceed as that verdict directs.
    If the retried attempt is ALSO incomplete, stop retrying: record the
-   terminal receipt with `--verdict NOT-READY` and no review file; the logger
-   accepts a missing review only for this retried NOT-READY fallback, and
+   terminal receipt with `--verdict NOT-READY` and no `--review-file`; the
+   logger accepts a missing or incomplete review only for this retried
+   NOT-READY fallback, records none of an incomplete file's text, and
    writes an empty review record for it. That receipt is no reviewer's
    verdict, and the person's approval over it is recorded as
    `Review: not finished`. The person hears that the review did not finish,
@@ -260,8 +263,8 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    recovery review on its own (a review the person asks for still runs, as
    above): the gate or completion records one `CHANGE_ACCEPTED` row, the engine's `report`
    directive (or the tool's JSON) carries one `change_notices` line for the
-   human, and the Review brief below says `Changed after review` with the
-   changed paths (a Unit's own brief, with `--unit`, says only that Unit's). The reviewer's verdict is never altered. Under `relaxed` or
+   human, and the Review brief below marks each open finding on that work
+   `Changed after review` (a Unit's own brief, with `--unit`, marks only that Unit's). The reviewer's verdict is never altered. Under `relaxed` or
    `off`, a change the person asks for after the verdict ("rename the handler",
    "fix that answer") is made directly, with no Request Changes round and no
    new review; the gate then shows the change as above. The freeze stays this
@@ -293,12 +296,19 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    an internal verdict token.
 
    Gate dispositions are receipt-safe audit data, never artifact edits:
-   - **Approve** automatically maps every current `New` or `Unresolved` finding
-     to `Accepted risk` on the tool-owned `GATE_APPROVED` row.
+   - **Approve** records every current `New` or `Unresolved` finding on the
+     tool-owned `GATE_APPROVED` row. When the human asks, as they approve, for
+     an open finding to be fixed (for example
+     `approve, but make sure R-03 gets handled`), append
+     `--fix-finding "<review-artifact>#R-03"` to the approval command (the
+     stage gate's `report --result approved`, or a checkpoint's
+     `--action approve`) for each one: it is recorded as
+     `Fix requested` and stays open for the next review.
    - **Request Changes** leaves open findings unresolved. When the human
      explicitly rejects a finding as inapplicable, append
      `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` to the
-     ordinary rejected report command for each rejected finding. When the human
+     rejection command (the rejected report, or a checkpoint's
+     `--action reject`) for each rejected finding. When the human
      disagrees that a reviewer-fixed finding is fixed (for example
      `R-03 isn't fixed: <why>`), append
      `--reopen-finding "<review-artifact>#R-03=<why>"`. The review artifact
@@ -306,7 +316,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
      finding carries the id; when two findings share it, the refusal names
      both. Never
      infer either decision from generic revision feedback. The same ID cannot
-     appear in both flags. The state tool validates the artifact, ID, current
+     appear in both flags. The engine validates the artifact, ID, current
      status, and nonblank reason before recording the decision on
      `GATE_REJECTED`.
 
@@ -378,7 +388,7 @@ re-presented gate using the required Review brief).
 
 ### Files and commands
 
-Write and edit files yourself with your file tools, never through the shell (no heredoc, no `echo`, `printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any missing folder). A command the person asks for, or one the plan names (a package install, a build, a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the project (nothing in /tmp or any folder outside it), and a command's output is read from the tool result, never sent to a file; a file the person asks for, or one the plan names, goes where they say. Quote a pattern meant for the program, not the shell (`--include='*.ts'`), and never start an argument with `=`: zsh, the macOS default shell, stops on both. Read, list, and search (your own knowledge files included) with your file tools where you have them; where the shell is your only way to read, use one plain read command (no `cd` before it, no pipe or second command after it). Run every AI-DLC command exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it), keeping its path as written (never a full path): a shell line can stop and ask the person to approve it. The review file's folder already exists: the review request creates it.
+Write and edit files yourself with your file tools, never through the shell (no heredoc, no `echo`, `printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any missing folder). A command the person asks for, or one the plan names (a package install, a build, a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. Do not stash, reset, check out over, restore or clean the person's working tree, and do not install what the plan does not name: for a before-and-after comparison, run the check on the unchanged tree before you edit. Every file you make on your own, a scratch file, a helper script, a command's output, stays inside the project (nothing in /tmp or any folder outside it), and a command's output is read from the tool result, never sent to a file; a file the person asks for, or one the plan names, goes where they say. Quote a pattern meant for the program, not the shell (`--include='*.ts'`), and never start an argument with `=`: zsh, the macOS default shell, stops on both. Read, list, and search (your own knowledge files included) with your file tools where you have them; where the shell is your only way to read, use one plain read command (no `cd` before it, no pipe or second command after it). Run every AI-DLC command exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it), keeping its path as written (never a full path): a shell line can stop and ask the person to approve it. The review file's folder already exists: the review request creates it.
 
 ### What the reviewer does NOT do
 

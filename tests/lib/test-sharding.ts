@@ -7,11 +7,29 @@ export interface ShardConfig {
   defaultSeconds: number;
   weights: Record<string, number>;
   affinityGroups: string[][];
+  /** Per-OS measurements override the conservative fallback, never the inventory. */
+  platformWeights?: Record<string, Record<string, number>>;
+  /** Per-OS cap on unit files a shard runs side by side; a platform not named runs them one at a time. */
+  parallel?: Record<string, number>;
+}
+
+export function shardConfigForPlatform(config: ShardConfig, platform: string): ShardConfig {
+  return { ...config, weights: { ...config.weights, ...config.platformWeights?.[platform] } };
 }
 
 interface WeightedGroup {
   files: string[];
   weight: number;
+}
+
+/**
+ * How many files a unit shard starts at once: the trial cap when one is given
+ * (AIDLC_TEST_UNIT_PARALLEL, a trial off the platform the weights file names),
+ * else the platform's `parallel` entry, else one. -P stays the ceiling.
+ */
+export function unitFileWorkers(config: ShardConfig, platform: string, requested: number, trialCap?: string): number {
+  const cap = Number(trialCap || config.parallel?.[platform] || 1);
+  return Number.isInteger(cap) && cap > 1 ? Math.min(requested, cap) : 1;
 }
 
 export function parseShardSpec(value: string): ShardSpec {
@@ -95,7 +113,7 @@ export function assignWeightedShards(
 
   if (total > groups.length) {
     throw new Error(
-      `--shard count ${total} exceeds ${groups.length} assignable unit-test groups`,
+      `--shard count ${total} exceeds ${groups.length} assignable test groups`,
     );
   }
 

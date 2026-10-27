@@ -1,0 +1,144 @@
+{
+  "schemaVersion": 1,
+  "version": "2.11.1-preview.20261016.1",
+  "date": "2026-10-16",
+  "sourceRef": "refs/heads/main",
+  "sourceDigest": "d27f96b6ab26a0e4571a3e79422bea2c5136e9d5",
+  "distributions": [
+    {
+      "name": "claude",
+      "productName": "Claude Code"
+    },
+    {
+      "name": "codex",
+      "productName": "Codex CLI"
+    },
+    {
+      "name": "copilot",
+      "productName": "GitHub Copilot"
+    },
+    {
+      "name": "cursor",
+      "productName": "Cursor"
+    },
+    {
+      "name": "kiro",
+      "productName": "Kiro CLI"
+    },
+    {
+      "name": "kiro-ide",
+      "productName": "Kiro"
+    },
+    {
+      "name": "opencode",
+      "productName": "opencode"
+    }
+  ],
+  "assets": [
+    {
+      "name": "aidlc-darwin-arm64",
+      "sha256": "882c0b3c13930ed5eb26bd8fb54117f791d4fd68c36e62b10aaeb1414cb91200",
+      "bytes": 67477746,
+      "kind": "binary",
+      "target": "darwin-arm64",
+      "verification": {
+        "status": "VERIFIED",
+        "mode": "full-runtime",
+        "hostTarget": "darwin-arm64"
+      }
+    },
+    {
+      "name": "aidlc-darwin-x64",
+      "sha256": "b3e667e1aa43d42a7564ead119412717daec0b6dc737de5b2effeca7b012adea",
+      "bytes": 74543376,
+      "kind": "binary",
+      "target": "darwin-x64",
+      "verification": {
+        "status": "VERIFIED",
+        "mode": "full-runtime",
+        "hostTarget": "darwin-x64"
+      }
+    },
+    {
+      "name": "aidlc-linux-arm64",
+      "sha256": "8da6534a33e620f564d421921d12cf7a9cf3cc76e839dfbbf1695a642c695210",
+      "bytes": 86493480,
+      "kind": "binary",
+      "target": "linux-arm64",
+      "verification": {
+        "status": "VERIFIED",
+        "mode": "full-runtime",
+        "hostTarget": "linux-arm64"
+      }
+    },
+    {
+      "name": "aidlc-linux-arm64-musl",
+      "sha256": "1787008f2860afc9298ff26262787d8079dab3488bcf831e20746d92e5243177",
+      "bytes": 79629520,
+      "kind": "binary",
+      "target": "linux-arm64-musl",
+      "verification": {
+        "status": "UNVERIFIED",
+        "mode": "inspection-only",
+        "hostTarget": "linux-arm64"
+      }
+    },
+    {
+      "name": "aidlc-linux-x64",
+      "sha256": "8caedbd95de3103ae1d9c9b73e3245a9503b966df517ce908f3292ed159b3b45",
+      "bytes": 86529504,
+      "kind": "binary",
+      "target": "linux-x64",
+      "verification": {
+        "status": "VERIFIED",
+        "mode": "full-runtime",
+        "hostTarget": "linux-x64"
+      }
+    },
+    {
+      "name": "aidlc-linux-x64-musl",
+      "sha256": "da3c652fde8847484cb33afa1c578007c5456c5d5ffe7bd58675aa00cbaa23f2",
+      "bytes": 80500272,
+      "kind": "binary",
+      "target": "linux-x64-musl",
+      "verification": {
+        "status": "UNVERIFIED",
+        "mode": "inspection-only",
+        "hostTarget": "linux-x64"
+      }
+    },
+    {
+      "name": "aidlc-runtime-2.11.1-preview.20261016.1.tar.gz",
+      "sha256": "2cf771993116a650352dac1a92aca1bdf597964f009b0dbb53c1adcf14ec7350",
+      "bytes": 22130811,
+      "kind": "runtime"
+    },
+    {
+      "name": "aidlc-windows-x64.exe",
+      "sha256": "c959208319544d327aedca493d03606349039976be26868c430576f770b9771a",
+      "bytes": 91329536,
+      "kind": "binary",
+      "target": "windows-x64",
+      "verification": {
+        "status": "VERIFIED",
+        "mode": "full-runtime",
+        "hostTarget": "windows-x64"
+      }
+    },
+    {
+      "name": "install.ps1",
+      "sha256": "2f3c553b313f1a8010da31f12772138ad325856ff808761784ad6478799cd2db",
+      "bytes": 30939,
+      "kind": "installer"
+    },
+    {
+      "name": "install.sh",
+      "sha256": "251310bd63ebd4bcc8447e230c0c0bc987e30664bd2c9652bdd6388d8f4049e8",
+      "bytes": 20024,
+      "kind": "installer"
+    }
+  ],
+  "capabilities": [
+    "root-lifecycle"
+  ]
+}

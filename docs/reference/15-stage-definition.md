@@ -135,8 +135,17 @@ stage's question flow:
 
 The receipt is not inferred from markdown alone. `aidlc-log.ts` records the
 reserved `SUMMARY_CONFIRMATION_RECORDED` event after a matching prompt record
-and a reply of the person's since their last answer (before or after that
-record), with their words as `Person Reply`, binding it to the questions-file digest and its recorded
+and a reply of the person's after that record. When the agent showed the
+summary before recording the prompt, their latest reply in that chat before the
+record counts the same way, with no `--message`, when the questions file was
+written after the stage's last question or answer and before that reply, and no
+other question was recorded between the reply and the prompt (the agent writing
+their pick into `[Answer]:` after their reply is not a write of the summary).
+The agent can also name the message with `--message <id>` (a message sent
+before the last write of the questions file this clone's audit records ahead of
+that prompt, or ahead of that reply, cannot be named: the summary was not there
+to see; a stage gate's approval reads the same rule against the stage's
+outputs). The receipt keeps their words as `Person Reply`, binding it to the questions-file digest and its recorded
 `Hash Scope`. New receipts use `confirmed-content-v2`: the unchanged raw-content
 SHA-256 algorithm normalizes CRLF/lone CR to LF, retains sections in file order,
 and trims trailing whitespace once from the resulting content. All visible
@@ -214,14 +223,45 @@ How "source work" is detected depends on the workspace:
 - **Non-git workspace** (or any git error) - the guard falls back to a shell-free
   filesystem-existence check: at least one file must exist outside the `aidlc/`
   workspace tree and the harness dirs.
-- **Multi-repo workspace** - the code may live in one of the intent's recorded
-  repos (the `repos` of its registry row) rather than the workspace repo, for
-  example a gitignored child repo with or without AI-DLC in it. The guard asks
-  each recorded repo the same question it asks the workspace, so a brownfield
-  child repo with no new code does not pass either. Git is asked only in a
-  folder with a real `.git` entry (a clone, submodule or init the person made);
-  a committed folder merely shaped like a repo gets the filesystem check, so
-  its committed git config never runs.
+- **Code kept outside the workspace's own git** - the code may live in one of
+  the intent's recorded repos (the `repos` of its registry row), in a child
+  repo, clone or worktree made after the work started, in a linked worktree of
+  any of those (as `git worktree list` names them), or in a checkout the
+  workspace's git does not track, such as a worktree of a repo kept outside the
+  project and placed in a gitignored folder inside it (found up to three levels
+  below each untracked or ignored folder, without following links). The guard
+  asks each of them the same question it asks the workspace, so a brownfield
+  checkout with no new code does not pass either. A checkout found when the
+  check runs counts only where the review can see its code change, that is
+  where the source walk lists files below it outside AI-DLC's own: code kept in
+  a harness folder such as Claude Code's `.claude/worktrees/`, outside the
+  project or on another drive is not counted, so it goes to the person with the
+  line below, unless the work records that checkout (`intent add-checkout
+  <path>`, which the agent runs before the review, or a Unit's claim inside a
+  worktree of the harness folder, recorded at the review request). A recorded
+  checkout is walked by the review as a root of its own, its files listed as
+  `<label>@checkout/<path>`, so it is asked and found, and a change there after
+  the review is a stale review. Git is asked only in a folder with a real `.git` entry (a clone,
+  submodule, init or worktree the person made); a committed folder merely
+  shaped like a repo gets the filesystem check, so its committed git config
+  never runs. AI-DLC's own Bolt worktrees under `.aidlc/` are left to the
+  swarm's own evidence.
+- **Code committed, then the records** - a records-only last commit hides code
+  committed earlier in the stage, so the guard also compares the source with
+  the stage attempt's `Source Baseline`: a change outside AI-DLC's own files
+  since the stage began is source work.
+
+When the guard finds no source work anywhere it looked, Guard Policy off lets
+the work carry on, and the person hears once "AI-DLC found no source changes
+under <where it looked>". Under strict or relaxed the agent's own first report is
+refused, naming the way on that always works: report again, and the approval
+question goes to the person with that line ("If your code is somewhere else,
+approve as usual; if it is missing, ask for changes."). Their approval records
+it as `Source Work` beside their words. Under strict or relaxed, where no
+approval would be the person's reply after the gate (an autonomous Construction
+gate, the human-presence check switched off, an unattended run) and for the
+agent's own `advance`, `finalize` and `complete-workflow`, the refusal stays. Each outcome is
+recorded once per stage attempt as a `SOURCE_WORK_NOT_FOUND` row.
 
 Today only `code-generation` declares it. Its per-unit reviews additionally
 require `<record>/construction/<unit>/code-generation/source-manifest.json`:
@@ -231,6 +271,17 @@ receipt, compares every fresh unit against a content-addressed stage-entry
 baseline, and refuses changed paths outside the fresh claims union. Directory
 claims cover later additions; in a main multi-repo workspace every entry names
 its recorded repo, while a Bolt's manifest is relative to its one selected repo.
+In a workspace that records no repos, an entry inside a checkout nested in the
+project (a worktree or clone its git does not track) is judged by that
+checkout's own git, so the workspace's `.gitignore` for that folder does not
+refuse it. So is an entry through a link or junction to a checkout outside the
+project (`wt-link/src/`, or `wt-link/` for all of it), and it covers what the
+source walk lists through that link. An entry inside one of the work's
+recorded checkouts is judged by that checkout's git too and keyed by its
+listing name; a checkout outside the project is named that way
+(`<label>@checkout/src/`), with no `repo` even in work that records repos,
+and a listing name the work has not recorded is refused with the step to
+record it.
 Missing pre-upgrade fields fail open only as documented migration evidence;
 present-but-unbindable or destroyed modern evidence fails closed under Guard
 Policy strict; under relaxed or off it is recorded once and the work continues. A team that
@@ -339,25 +390,30 @@ For unconditional consumes, **omit the field entirely**. There is no
 `always` value — an unconditional consume simply has no `conditional_on`
 key.
 
-### `cites`
+### `consumes[].cited`
 
-An optional list of the stage's own `consumes` artifacts that its
-deliverables cite whenever the artifact exists. The `upstream-coverage` check
-asks the deliverables to cite every required consume that exists; it leaves an
-optional one (`required: false`) unchecked, because an optional input may not
-have informed the output, unless the stage lists it here. Requirements
-Analysis lists `intent-statement` and `scope-document`: both are optional
+An optional boolean on a consume: `cited: true` says the stage's deliverables
+cite that input whenever it exists. The `upstream-coverage` check asks the
+deliverables to cite every required consume that exists; it leaves an optional
+one (`required: false`) unchecked, because an optional input may not have
+informed the output, unless the consume is marked `cited: true`. Requirements
+Analysis marks `intent-statement` and `scope-document`: both are optional
 there, because scopes without Ideation produce neither, and when they exist the
-requirements build on them. Each entry must name one of the stage's consumes.
-The key sits outside `consumes`, so adding or removing it does not change the
-record of a stage that already finished.
+requirements build on them.
+
+The compile lists the marked consumes as the stage's `cites` in
+`stage-graph.json` and keeps the compiled `consumes` entries as they were, so
+marking or unmarking one does not change the record of a stage that already
+finished. The flag sits on the consume, not in a top-level list, because a
+project on 2.8.0 to 2.11.0 refreshes to a newer release with its own tool,
+which accepts a key inside a consume and refuses a top-level key it does not
+know.
 
 ```yaml
 consumes:
   - artifact: intent-statement
     required: false
-cites:
-  - intent-statement
+    cited: true
 ```
 
 ### `optional_produces`
@@ -491,7 +547,7 @@ compile validates the value against the discovered agent roster the same way
 Every reviewer-bearing stage must also declare `review_artifact`, naming one
 required Markdown entry from `produces[]`: the artifact the review is about.
 The review record is keyed to it, the gate names it, and
-`--reject-finding` / `--reopen-finding <artifact>#R-NN` address its findings; the reviewer never
+`--reject-finding` / `--reopen-finding` / `--fix-finding <artifact>#R-NN` address its findings; the reviewer never
 writes to it. List ordering and plugin-added outputs cannot change it. On a per-Unit stage the target must remain applicable for every Unit
 kind on which any required output is applicable, otherwise graph compilation
 fails. Structured outputs such as `traceability.json` cannot be review targets.
@@ -569,7 +625,10 @@ priors-file entry, `aidlc-graph compile` copies it onto the node, and the `ars`
 subcommand screens it exactly like a file entry: `role: core` always executes,
 `structural` and a `null` cost are left to judgment at the gate,
 `project_types` screens the stage out on the other project kind, and a
-`--completed` stage outranks everything.
+`--completed` stage outranks everything. The priors file has one role a stage
+block cannot declare, `project-type` (Reverse Engineering): it runs the stage
+on its own project kind whatever it scores, so on that kind a plugin stage's
+`project_types` still goes by its components.
 
 Three rules keep the screen predictable:
 

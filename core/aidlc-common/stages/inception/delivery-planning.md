@@ -213,10 +213,8 @@ exists yet (greenfield), the human may defer selection; leave the field
 unset and explain that the first checkpoint will ask before verification. Never
 invent a placeholder or treat deferral as approval.
 
-Only one protected question may be open per session. Asking any new question
-(protected or ordinary) or opening a lifecycle gate withdraws it, so ask
-protected questions one at a time and wait for the answer before anything else.
-A withdrawn question must be asked again.
+Only one protected question may be open per session. Ask protected questions
+one at a time and wait for the answer before anything else.
 
 Use one nonblank line of at most 1024 characters after trimming leading/trailing
 whitespace. The tools refuse control characters (including newline, CR, tab, or
@@ -252,9 +250,10 @@ options:
     description: Propose a different project check before running verification.
 ```
 
-Read the person's reply in that session and record the choice they made. The
+Read the person's reply and record the choice they made. The
 human-turn hook keeps that they replied to this question and their exact words;
-a reply from another session, or to another question, does not count. When they
+a reply typed in a new chat is kept for it while it is the newest question
+asked, and a reply to another question does not count. When they
 approve, record their answer, and set the command with the matching tool-owned
 receipt:
 
@@ -287,6 +286,6 @@ Upstream targets: `requirements`, `stories`, `mockups`, `components`, `unit-of-w
 
 When `directive.protocol_modules` lists `learnings`, follow
 `stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
-working and run the ritual before the approval gate, applying its bootstrap,
-`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
-skip both the diary and the ritual.
+working, and take the learnings step before the approval gate; that module says
+when it asks the person anything. When the module is absent, skip both the diary
+and the step.

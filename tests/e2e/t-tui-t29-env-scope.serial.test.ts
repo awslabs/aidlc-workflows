@@ -8,9 +8,9 @@
 //
 // WHAT IT PROVES:
 //   - Case A (bare command + env default): with NO --scope flag, NO intent, and
-//     NO prior state, the read-only engine refuses to mutate and renders the
-//     no-state guidance. The shipped settings env default is not enough by
-//     itself to start a workflow; the state file remains absent.
+//     NO prior state, the read-only engine creates nothing and asks what to
+//     build, with no error on screen. The shipped settings env default is not
+//     enough by itself to start a workflow; the state file remains absent.
 //   - Case override (explicit flag wins over env): the shipped `classic`
 //     default, but `/aidlc --scope feature <description>` overrides it -> Scope=feature on disk.
 //   - Case known-scope positional: `/aidlc feature: <description>` bootstraps Scope=feature
@@ -307,9 +307,10 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
   // The read-only engine uses AWS_AIDLC_DEFAULT_SCOPE for scope resolution
   // once a command carries an init/jump/freeform target, but a bare `/aidlc` on a
   // no-state project is intentionally not enough to mutate. The live trace
-  // proves the TUI renders the no-state guidance and writes no state file.
+  // proves the person is asked what to build, with no error, and no state file
+  // is written.
   test.skipIf(SKIP_REASON !== null)(
-    `bare /aidlc with env default asks for a scope or intent and writes no state${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
+    `bare /aidlc with env default asks what to build, shows no error and writes no state${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       const session = `aidlc_tui_t29_envdef_${process.pid}`;
       const sessionId = randomUUID();
@@ -326,6 +327,12 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
         // Require that event and the returned input prompt before checking disk.
         expect(await waitForNativeTurnEnd(sessionId)).toBe(true);
         expect(waitFor(session, completedClaudeTurnPattern(""), remainingWorkMs(), 0)).toBe(true);
+        // This is the normal first step, not a failure: the engine's step asks
+        // what to build, and no engine error is relayed on screen.
+        const transcript = nativeTranscript(sessionId);
+        expect(transcript).toContain(String.raw`\"narration\":\"Tell me what to build and I'll start it.\"`);
+        expect(transcript).not.toContain(String.raw`\"kind\":\"error\"`);
+        expect(drive(["capture", "--session", session]).stdout).not.toContain("The workflow stopped with this error");
         // The DURABLE contract: a no-scope run creates no intent, so no
         // per-intent state file resolves (stateFilePathFor falls to the
         // never-created flat fallback path).

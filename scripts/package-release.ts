@@ -114,7 +114,8 @@ function verifyGeneratedInventory(): {
 
   const plugins = sourcePlugins();
   const pluginsRoot = join(REPO_ROOT, "dist", "plugins");
-  const generatedPlugins = directoryNames(pluginsRoot);
+  // The dot folders hold the catalogue our plugins share, not a plugin.
+  const generatedPlugins = directoryNames(pluginsRoot).filter((name) => !name.startsWith("."));
   if (!sameNames(generatedPlugins, plugins)) {
     throw new Error(
       `generated plugin inventory differs from source: expected ` +
@@ -324,6 +325,14 @@ function build(argv: string[]): void {
         copyRuntimeEntries.push(...entries);
         runtimeEntries.push(...entries);
       }
+    }
+    for (const folder of directoryNames(pluginsRoot).filter((name) => name.startsWith("."))) {
+      const entries = entriesFor(join(pluginsRoot, folder)).map((entry) => ({
+        ...entry,
+        path: `plugins/${folder}/${entry.path}`,
+      }));
+      copyRuntimeEntries.push(...entries);
+      runtimeEntries.push(...entries);
     }
   }
   const runtimeName = releaseRuntimeAsset(BUILD_VERSION);

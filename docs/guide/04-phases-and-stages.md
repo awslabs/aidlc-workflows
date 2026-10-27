@@ -67,7 +67,7 @@ Phases execute sequentially. At each phase boundary (except Initialization → I
 **Stages run one at a time, in order.** When a stage completes, the engine moves to the next stage in lifecycle order that your scope runs and that is not already done or skipped (Construction repeats its stages per Unit, as described below). Within one workflow, a later phase does not start while a stage in an earlier phase is still open.
 
 - To move ahead anyway, jump: `/aidlc --stage <name>` or `/aidlc --phase <name>`. The stages you pass over are marked skipped (`[S]`); they are not run later on their own. Jumping back to an earlier stage reopens it and every later stage in your plan. The files stay; a reopened stage that finds its earlier files asks whether to keep them, modify them, or redo the stage from scratch. See [Skipping and Navigating Stages](07-interaction-modes.md#skipping-and-navigating-stages).
-- To run one stage without moving your workflow, use `/aidlc --stage <name> --single`. It writes that stage's artifact and stops with no workflow gate; your workflow stays where it was.
+- To run one stage without moving your workflow, use `/aidlc --stage <name> --single`. It writes that stage's artifact and stops with no workflow gate; your workflow stays where it was. When your work already holds files for that stage, it keeps a copy of them in the record's `archive/` folder first, and one line says where.
 
 **Construction repeats its stages for each Unit**, in one of two walks:
 
@@ -77,7 +77,7 @@ Phases execute sequentially. At each phase boundary (except Initialization → I
 **What can run in parallel**, within a stage or across Units in Construction:
 
 - **Units in Construction.** On a stage-major walk with `Construction Execution: swarm`, Units whose dependencies are done build together in one batch, then share one batch checkpoint. Unit-major stays serial. See [Parallel Unit batches](#parallel-unit-batches).
-- **Per-Unit design passes.** On a stage-major walk, the design stages can hand you a wave of Units that do not depend on each other.
+- **Per-Unit design passes.** On a stage-major walk, the design stages can hand you a wave of Units that do not depend on each other. Each Unit's questions are asked in your chat first, one Unit after another; then the Units are designed side by side from your answers.
 - **People, in team mode.** With `Unit Ownership: team`, each person claims a Unit and builds it in their own checkout at the same time as the others. Each checkout keeps its own place, so two people can be at different Construction stages at once. A claim is refused until that Unit's dependencies, and any required walking skeleton, are complete.
 - **Agents within a stage.** User Stories (2.4) is a mob: the design, developer, and quality agents contribute at the same time. Practices Discovery (2.2) has its inspectors look at the draft independently. Agents and design waves run at the same time where the harness can dispatch in parallel; on a harness that cannot, they run one after another with the same briefs. See [Stage Execution Modes Reference](#stage-execution-modes-reference).
 
@@ -269,9 +269,9 @@ stage-major order. A first design-stage review alone is not a working skeleton.
 The check is the intent's recorded, human-authorized `Construction Verification
 Command`, reused for every Unit/batch checkpoint. Delivery Planning proposes it
 from the project scan and asks you to approve it. Your approval of that question,
-in your own words or by picking **Approve**, is what sets it; **Request
-Changes**, an answer to some other question, or a reply from another chat does
-not. You may
+in your own words or by picking **Approve**, is what sets it, in the chat that
+asked or in a new one while it is the newest question asked; **Request
+Changes** or an answer to some other question does not. You may
 defer if no runnable check exists yet; the first checkpoint then asks before
 verification. A missing authorization or later command change always requires
 the [recorded-command flow](12-cli-commands.md#construction-verification-command-record-human-authorization),
@@ -285,9 +285,9 @@ already approved whose evidence is unchanged, so nothing runs again.
 
 At a Unit or skeleton checkpoint you are asked to **Approve** or **Request
 Changes**. Answer in your own words or pick an option: your reply to that
-checkpoint's question decides it, and an option you pick is the one recorded.
-A reply to a different question, or from another chat, does not count. A
-checkpoint whose work changed after it was asked is asked again. Checkpoints
+checkpoint's question decides it, in the chat that asked or in a new one while
+it is the newest question asked, and an option you pick is the one recorded.
+A reply to a different question does not count. A checkpoint whose work changed after it was asked is asked again. Checkpoints
 you chose to let run automatically are recorded without a question.
 
 The autonomy offer is **Continue automatically** / **Review each checkpoint**:

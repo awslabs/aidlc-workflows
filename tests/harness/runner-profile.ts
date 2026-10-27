@@ -238,9 +238,9 @@ export function parseRunnerArgs(
   if (!levelSelected) {
     out.runSmoke = out.runUnit = out.runIntegration = true;
   }
-  if (out.shard && (!out.runUnit || out.runSmoke || out.runIntegration || out.runE2e)) {
+  if (out.shard && (out.runSmoke || out.runE2e || out.runUnit === out.runIntegration)) {
     throw new RunnerArgsError(
-      "ERROR: --shard requires --unit with no other level or profile flags",
+      "ERROR: --shard requires --unit or --integration with no other level or profile flags",
     );
   }
   if (out.isolatedFiles && (out.runSmoke || out.runUnit || (!out.runIntegration && !out.runE2e))) {

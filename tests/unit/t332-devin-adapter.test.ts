@@ -59,6 +59,7 @@ import {
 import {
   auditBlockField,
   hooksHealthDir,
+  personsWordsText,
   readAuditShardEvents,
   readPlanApprovalChallenge,
   readPlanApprovalResponse,
@@ -73,7 +74,7 @@ import {
 } from "../../dist/devin/.devin/tools/aidlc-lib.ts";
 import {
   listMessages,
-  replyOfTheirs,
+  messageIsReply,
 } from "../../dist/devin/.devin/tools/aidlc-message-store.ts";
 import {
   approvalFingerprint,
@@ -1309,10 +1310,13 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       }
       const message = listMessages(dir).at(-1);
       expect(message?.source).toBe("picker");
-      expect(message?.text).toBe(
+      expect(message?.text && personsWordsText(message.text)).toBe(
         "Pick a colour: Green please, it matches the logo\nPick sizes: Small, Large",
       );
-      expect(message?.picker).toEqual([
+      expect(message?.picker?.map((entry) => ({
+        question: entry.question,
+        reply: entry.reply === null ? null : personsWordsText(entry.reply),
+      }))).toEqual([
         { question: "Pick a colour", reply: "Green please, it matches the logo" },
         { question: "Pick sizes", reply: "Small, Large" },
       ]);
@@ -1347,7 +1351,7 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
         expect(r.code).toBe(0);
         const message = listMessages(dir).at(-1);
         expect(message?.source).toBe("picker");
-        expect(message?.text).toBe("yes, but add a test");
+        expect(message?.text && personsWordsText(message.text)).toBe("yes, but add a test");
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
@@ -1414,9 +1418,9 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     }
   });
 
-  test("13p: a picker free-text answer is a reply replyOfTheirs can find", () => {
+  test("13p: a picker free-text answer is a reply the message store keeps", () => {
     // The status defect: the person's words never reached the message store, so
-    // replyOfTheirs could not prove a settings reply and /aidlc --status read
+    // the engine could not prove a settings reply and /aidlc --status read
     // Guard Policy/Plan Approval as "set by a command".
     const dir = scratchProject(true);
     try {
@@ -1449,7 +1453,12 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       );
       expect(r.code).toBe(0);
       const rows = readAuditShardEvents(dir);
-      expect(replyOfTheirs(dir, session, words, rows)).not.toBeNull();
+      const message = listMessages(dir).at(-1);
+      expect(message?.session).toBe(session);
+      expect(message?.words === null || message === undefined
+        ? null
+        : personsWordsText(message.words)).toBe(words);
+      expect(message !== undefined && messageIsReply(rows, message)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1490,8 +1499,11 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       expect(r.code).toBe(0);
       const message = listMessages(dir).at(-1);
       expect(message?.source).toBe("picker");
-      expect(message?.text).toBe("Pick a colour: Red");
-      expect(message?.picker).toEqual([
+      expect(message?.text && personsWordsText(message.text)).toBe("Pick a colour: Red");
+      expect(message?.picker?.map((entry) => ({
+        question: entry.question,
+        reply: entry.reply === null ? null : personsWordsText(entry.reply),
+      }))).toEqual([
         { question: "Pick a colour", reply: "Red" },
         { question: "Pick sizes", reply: null },
       ]);

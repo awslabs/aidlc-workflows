@@ -40,11 +40,17 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -229,6 +235,7 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
   test("1: a unit covered by required-only artifacts advances the iteration", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, ["alpha", "beta"]);
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED);
     const reviewOnly = runNext(proj);
     expect(reviewOnly.kind).toBe("run-stage");

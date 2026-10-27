@@ -57,6 +57,7 @@ PATH:
 
 ```text
 PASS installed AI-DLC X.Y.Z with all harness runtimes
+Plugin marketplace for Claude Code and Codex: /home/you/.local/share/aidlc/plugins (add it once; updates keep it current)
 Next: aidlc config
 ```
 
@@ -64,6 +65,7 @@ and like this when it is not:
 
 ```text
 PASS installed AI-DLC X.Y.Z with all harness runtimes
+Plugin marketplace for Claude Code and Codex: /home/you/.local/share/aidlc/plugins (add it once; updates keep it current)
 Add AI-DLC to PATH for this shell:
   export PATH="/home/you/.local/bin:$PATH"
 Then run: aidlc config
@@ -84,6 +86,9 @@ The SHA-256 checks always run; the GitHub CLI adds the signed-provenance check
 ([Release Authentication](18-install-and-lifecycle.md#release-authentication)).
 On Windows the installer's own result starts with `Installed AI-DLC X.Y.Z`, and
 the paths in later screens use Windows separators, such as `.claude\`.
+The plugin marketplace line is for AI-DLC's own plugins: add that path once in
+Claude Code or Codex ([Plugins](18-install-and-lifecycle.md#plugins)), or skip
+it if you do not use them.
 
 Prefer to manage the project files yourself, or cannot install a native
 executable? The manual-copy path is the one place Bun is needed: install
@@ -205,7 +210,7 @@ every default except the provider, where it chose Amazon Bedrock:
   Step 2 of 6 - Model provider
   No AWS credentials were detected.
     1. keep current     inherit the provider already configured in the harness (default)
-    2. amazon-bedrock   write the AWS region and profile to settings.json
+    2. amazon-bedrock   write the AWS region and profile to settings.local.json, just for you
   Provider [1]: 2
   AWS region [us-east-1]:
   AWS profile [default credential chain]:
@@ -255,7 +260,7 @@ What each step writes:
 | Step | Writes |
 | --- | --- |
 | 1. Harness | Which tool's files to set up (`.claude/` for Claude Code). |
-| 2. Model provider | `keep current` writes nothing. `amazon-bedrock` adds `CLAUDE_CODE_USE_BEDROCK` and `AWS_REGION` (and the profile, when you name one) to the `env` block of `.claude/settings.json`. |
+| 2. Model provider | `keep current` writes nothing. `amazon-bedrock` adds `CLAUDE_CODE_USE_BEDROCK` and `AWS_REGION` (and the profile, when you name one) to the `env` block of your own `.claude/settings.local.json` (git ignores it), never the shared `.claude/settings.json`; the project's record of the answer keeps no profile. |
 | 3. Model effort preset | The preset name in the file step 6 picks; `unchanged` records none. |
 | 4. Plugins | Which installed plugins are on. |
 | 5. MCP servers | `.mcp.json` with the shipped servers, or none. |
@@ -284,12 +289,13 @@ $ aidlc config --harness claude --mcp defaults --yes
 configured /home/you/ci-demo for Claude Code X.Y.Z; next: open Claude Code in this project (if it is already open in this folder, exit it and start it again) and run `/aidlc --doctor`
 ```
 
-On Kiro IDE, `--yes` also takes the recommended answer to the two questions
+On Kiro IDE, `--yes` also takes the recommended answer to the questions
 setup asks there about Kiro settings for all your projects: it turns Kiro's
-Workflows feature off (while it is on, AI-DLC's reviews and helpers do not run)
-and, when Command Prompt is Kiro's terminal on Windows, sets it to PowerShell.
-To turn Workflows back on, run
-`aidlc config trust --harness kiro-ide --kiro-workflows on --yes`.
+Workflows feature off in Kiro IDE and in Kiro CLI (while it is on, AI-DLC's
+reviews and helpers do not run) and, when Command Prompt is Kiro's terminal on
+Windows, sets it to PowerShell. To turn Workflows back on, run
+`aidlc config trust --harness kiro-ide --kiro-workflows on --yes` (Kiro IDE) or
+`aidlc config trust --harness kiro-ide --kiro-cli-workflows on --yes` (Kiro CLI).
 
 Without `--harness`, it stops before writing anything:
 
@@ -507,13 +513,15 @@ stage's questions:
 You choose once; later stages use the same answer and say so in one line
 ("Answering the way you chose earlier: Guide me. Say if you'd rather edit the
 file or chat."). With **Guide me**, the questions come a few at a time, each
-with its options. The top line lists them; after the last one, **Submit** shows
-your answers for review and **Submit answers** sends them:
+with its options and, in front of its text, who would usually answer it (this
+screen was captured before AI-DLC showed that label; `[Product owner]` is added
+to it to show where the label goes). The top line lists them; after the last
+one, **Submit** shows your answers for review and **Submit answers** sends them:
 
 ```text
  < [ ] Q1 Problem  [ ] Q2 Users  [ ] Q3 Success  [ ] Q4 Trigger  Submit >
- Q1. What business problem should the inventory API solve first? (If it's not defined yet, pick
- "Type something" and say so.)
+ Q1. [Product owner] What business problem should the inventory API solve first? (If it's not
+ defined yet, pick "Type something" and say so.)
  > 1. Stock counts drift
       A. We don't know accurately what stock we have (counts drift, spreadsheets go stale)
    2. Stock-outs / overstock
@@ -550,18 +558,9 @@ for one confirmation before it writes anything:
 
 Then it writes the stage's documents. When they rest on assumptions your
 answers did not settle, it asks whether to keep them as assumptions or turn
-them into questions. A reviewer agent reads the main document, and the last
-question before the approval is whether anything from this stage is worth
-remembering next time:
-
-```text
- Notes
- Anything to add for next time?
- > 1. Nothing to add
-      Move on to the approval for this step
-   2. Add a note
-      Record something AI-DLC should remember for future runs
-```
+them into questions. A reviewer agent reads the main document. Had you
+corrected the agent along the way, it would ask here whether to keep that
+correction for next time; you corrected nothing, so the approval comes next.
 
 Then the first approval (trimmed: the source-check lines, the review file's
 path and two of the three findings are left out):
@@ -587,8 +586,12 @@ Review outcome: Concerns remain for your decision.
   metric is sufficient, or ask a follow-up to add a data-accuracy or reliability metric before
   inception begins.
 
+Approve accepts the open review findings R-01 (...), R-02 (...) and R-03 (The table carries a
+single, binary success metric ("at least one real...) as risk; you can also approve and ask for
+one to be fixed, or reject one as not applying, saying why.
+
 Decision options:
-- Approve - continue with the open findings accepted.
+- Approve - continue.
 - Request Changes - return to the listed artifacts so the required actions can be addressed.
 
 Review: aidlc/spaces/default/intents/261013-inventory-rest-api/ideation/intent-capture/

@@ -62,6 +62,11 @@ import {
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
+
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
@@ -314,6 +319,7 @@ function seedOneUnitDag(proj: string, unit: string, kind?: string): void {
     state,
     readFileSync(state, "utf-8")
       .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation")
+      .replace(/^- \[ \] units-generation /m, "- [x] units-generation ")
       .replace(/^- \*\*Construction Autonomy Mode\*\*:.*$/m, "- **Construction Autonomy Mode**: autonomous")
       .replace(/^- \*\*Construction Iteration\*\*:.*$/m, "- **Construction Iteration**: stage-major")
       .replace(/^- \*\*Construction Checkpoints\*\*:.*$/m, "- **Construction Checkpoints**: disabled")

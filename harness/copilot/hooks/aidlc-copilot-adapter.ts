@@ -3,7 +3,8 @@
 // file; the aidlc-*.ts hook bodies beside it are PACKAGED core, byte-shared
 // with the Claude Code harness). Modeled on codex's aidlc-codex-adapter.ts:
 // ONE shim normalizes the harness payload to the ClaudeCodeHookInput shape
-// and subprocess-pipes into the named core hook, forwarding the result.
+// and hands it to the named core hook, forwarding the result. The four guards
+// run theirs inside this process (runGuard); the other hooks run as children.
 //
 // ONE dist serves BOTH Copilot surfaces (CLI 1.0.74+ and VS Code agent mode
 // 1.130+): the shipped .github/hooks/aidlc.json registers PascalCase event
@@ -15,12 +16,15 @@
 //   1. File-tool input keys differ: Copilot sends `path` + `file_text` /
 //      `old_str` / `new_str` where the core hooks read `file_path`. The shim
 //      re-keys. Tool NAMES already match (Bash/Write/Edit/Read).
-//   2. PreToolUse carries NO agent identity. SubagentStart/SubagentStop bracket
-//      each delegation, so the shim keeps a locked per-project ledger keyed by
-//      host session + subagent id. VS Code tool calls correlate through their
-//      ordinary session_id; CLI toolu_* calls use an exactly-one-active CLI
-//      fallback. Zero or several candidates forward no identity, so reviewer
-//      scope fails open rather than mis-attributing the call.
+//   2. PreToolUse may carry NO agent identity. SubagentStart/SubagentStop
+//      bracket each delegation, so the shim keeps a locked per-project ledger
+//      keyed by host session + subagent id. A call is attributed, in order: to
+//      the entry whose bound child session it arrives under (a CLI subagent's
+//      own session, bound at its brief); to a self-named entry whose own
+//      session it is (CLI events that carry agent_id and parent_agent_id);
+//      then by the older guesses, VS Code's correlated session or the CLI's
+//      exactly-one-active toolu_* fallback. Zero or several candidates forward
+//      no identity, so reviewer scope fails open rather than mis-attributing.
 //   3. SubagentStart arrives camelCase (agentName, sessionId — live-verified
 //      quirk) while every other PascalCase-registered event arrives
 //      snake_case. Field reads tolerate both casings.
@@ -72,6 +76,11 @@
 //      The shim hands the core hook the line rebuilt from that structure, and
 //      only when the installed file with those words equals the prompt's body
 //      byte for byte (copilotSkillInvocationLine).
+//  11. The CLI hands a Stop block's reason back to the agent as a new prompt,
+//      with the same keys as a typed one (live-captured on 1.0.103). The Stop
+//      case keeps a digest of the reason it sent for that chat and the chat's
+//      next prompt spends it: an exact match is the host's turn, never the
+//      person's message or reply (armStopNote, spendStopNote).
 //
 // Wiring (.github/hooks/aidlc.json, emitted by harness/copilot/emit.ts) is
 // matcher-FREE by design: VS Code parses but IGNORES matchers, so a matcher
@@ -121,10 +130,13 @@ import {
   recordPreWorkflowHeartbeat,
   resolveWorkflowSelection,
   noteHelperSession,
+  runHookHere,
+  sessionsDir,
   settleCopilotCommand,
   settleCopilotIntentBoundary,
   stateFilePath,
   stateFilePathForSelection,
+  validSessionId,
 } from "../tools/aidlc-lib.ts";
 import { appendCoordinationStoodAside, appendSubagentPromptUnmatched } from "../tools/aidlc-audit.ts";
 import { keptRestartRun } from "../tools/aidlc-question-store.ts";
@@ -152,6 +164,7 @@ interface CopilotHookInput {
   agentName?: string;
   agent_type?: string;
   agent_id?: string;
+  parent_agent_id?: string;
   agentId?: string;
   agent_display_name?: string;
   stop_reason?: string;
@@ -249,12 +262,14 @@ export async function run(
   // engine is told nothing and treats the call as it treats a command with no
   // chat, instead of binding a new "chat" for every tool call.
   const coreSessionId = sessionId.startsWith("toolu_") ? "" : sessionId;
-  const projectEnv = {
-    ...process.env,
+  // What a core hook is given on top of this process's environment, as a
+  // child or (runGuard) while it runs here.
+  const projectPins: Record<string, string> = {
     AIDLC_PROJECT_DIR: projectDir,
     CLAUDE_PROJECT_DIR: projectDir,
     ...(sessionId ? { AIDLC_COPILOT_SESSION_ID: sessionId } : {}),
   };
+  const projectEnv = { ...process.env, ...projectPins };
 
   // Tolerant field reads: PascalCase-registered events arrive snake_case on
   // both surfaces EXCEPT SubagentStart, which the CLI delivers camelCase
@@ -325,6 +340,8 @@ export async function run(
     "ask_questions",
     "askQuestion",
     "ask_question",
+    // ask_user as Copilot CLI hands it to the PascalCase hooks AI-DLC registers.
+    "AskUserQuestion",
   ]);
   const rawToolName = copilot.tool_name ?? copilot.toolName ?? "";
   const toolName = TOOL_ALIAS[rawToolName] ?? rawToolName;
@@ -410,6 +427,22 @@ export async function run(
     };
   }
 
+  // The four guards run their core hook inside this process, as on Codex: a
+  // child loads the whole engine again, so as children the four would cost a
+  // shell call five engine loads. A guard sees what its child saw (the same input and pins);
+  // one that cannot be imported runs as a child as before, and one that fails
+  // on its own still leaves its reason where doctor reads it.
+  async function runGuard(
+    hookFile: string,
+    stdin: string,
+  ): Promise<{ stdout: string; stderr: string; code: number }> {
+    const here = await runHookHere(join(HOOKS_DIR, hookFile), stdin, projectPins);
+    if (here === null) return runCoreWithStderr(hookFile, stdin);
+    const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+    failedCoreHookDrop(hook, here.code, null, here.stderr, forwardedSessionId(stdin));
+    return here;
+  }
+
   // The session a core hook ran for: the forwarded payload's (the prior
   // session for a reconciled session-end), else this event's.
   function forwardedSessionId(stdin: string): string {
@@ -436,7 +469,7 @@ export async function run(
   ): void {
     if (exitCode === 0 || exitCode === 2) return;
     const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
-    const line = (lines.find((entry) => entry.startsWith("error:")) ??
+    const line = (lines.find((entry) => /^(?:\w*Error|error):/.test(entry)) ??
       lines.filter((entry) => !/^Bun v\d/.test(entry)).at(-1) ?? "no error output")
       .replace(/\[(degraded|advisory)\]/gi, "($1)");
     const how = exitCode === null ? `was stopped by ${signalCode ?? "a signal"}` : `exited ${exitCode}`;
@@ -511,13 +544,16 @@ export async function run(
   const PLAIN_WORD = `(?:[A-Za-z0-9_./:=,+-]+${PLAIN_QUOTED}?|${PLAIN_QUOTED})`;
   const PLAIN_COMMAND = new RegExp(`^ *${PLAIN_WORD}(?: +${PLAIN_WORD})* *$`);
   // The shell the command runs in. A shell the call names wins, so Git Bash
-  // or WSL on Windows keeps the POSIX reading; a tool named for its shell
-  // (`powershell`, `bash`) is that shell; VS Code's terminal tool runs the
-  // terminal's default shell, PowerShell or cmd on Windows.
+  // or WSL on Windows keeps the POSIX reading; a tool named `powershell` is
+  // that shell; VS Code's terminal tool runs the terminal's default shell,
+  // PowerShell or cmd on Windows; and the CLI hands its shell tool to these
+  // hooks as `Bash` on every host, which on Windows is PowerShell (the CLI's
+  // own record names that tool `powershell`).
   const terminalShell = typeof nativeToolInput?.shell === "string" ? nativeToolInput.shell.trim() : "";
   const windowsTerminal = terminalShell
     ? /(?:^|[\\/])(?:pwsh|powershell|cmd)(?:\.exe)?$/i.test(terminalShell)
-    : /^(?:pwsh|powershell)$/i.test(rawToolName) || (VSCODE_SHELL_TOOLS.has(rawToolName) && platform() === "win32");
+    : /^(?:pwsh|powershell)$/i.test(rawToolName) ||
+      ((VSCODE_SHELL_TOOLS.has(rawToolName) || /^bash$/i.test(rawToolName)) && platform() === "win32");
   // PowerShell itself: cmd never splits a command line at `;`.
   const powerShellTerminal = windowsTerminal && !/(?:^|[\\/])cmd(?:\.exe)?$/i.test(terminalShell);
   // The plan-approval guard reads a PowerShell command the way PowerShell runs
@@ -578,7 +614,7 @@ export async function run(
   // names no shell on Windows), where they are checked as any other argument;
   // the file form, --person-words-file, is always a path.
   const PERSON_WORDS_FLAGS = new Set(["--person-words"]);
-  const TAKES_PERSON_WORDS = new Set(["config set", "intent create", "top-recompose recompose"]);
+  const TAKES_PERSON_WORDS = new Set(["config set", "intent create", "top-recompose recompose", "workspace reclassify"]);
   // A value is the next argument only when it does not start with `--`, as
   // parseArgs and the log reader take it (recompose refuses a value starting
   // with `-`), so no flag after it is hidden.
@@ -632,12 +668,14 @@ export async function run(
   }
 
   // "terminal": a simple AI-DLC command that is not claimed as coordination
-  // (a read-only `next` form or another AI-DLC project command). "attempt": a
-  // new call that already carries the attempt flag AI-DLC adds itself.
+  // (a read-only `next` form or another AI-DLC project command).
   // "unsupported" may carry the refusal that names what was not accepted.
+  // `uncopied`: the command without an attempt id the agent copied into it,
+  // present only when it carried one.
   type ParsedOrchestration =
-    | { status: "unrelated" | "unsupported" | "foreign" | "terminal" | "attempt"; reason?: string }
-    | { status: "recognized"; claim: CopilotCommandClaim; rewrite: (attemptId: string) => string; keepsPrompt: boolean };
+    | { status: "unsupported" | "foreign"; reason?: string }
+    | { status: "unrelated" | "terminal"; uncopied?: string }
+    | { status: "recognized"; claim: CopilotCommandClaim; rewrite: (attemptId: string) => string; uncopied?: string; keepsPrompt: boolean };
 
   // Doctor also checks the machine and may refresh the update cache over the
   // network, so it qualifies only with the flags the engine itself passes.
@@ -746,25 +784,31 @@ export async function run(
         return (verb === "reclassify" && !personSpoke()) ||
           (verb === "document-input" && hasFlag(rest, "--onboard"));
       // Switching the active intent or space redirects the work that follows.
-      case "intent": return !["", "list", "create", "unarchive"].includes(verb) || (verb === "create" && hasFlag(rest, "--skip"));
+      // Recording the checkout the code is in only widens what the review
+      // covers, a routine step the stage names; taking one out narrows it.
+      case "intent": return !["", "list", "create", "unarchive", "add-checkout"].includes(verb) || (verb === "create" && hasFlag(rest, "--skip"));
       case "space": return !["", "list", "create"].includes(verb);
       // Onboarding and sync run the extractor the project's harness names.
       case "knowledge": return verb === "onboard" || verb === "sync";
       // One of the person's checks switched as they asked runs click-free when
-      // the setter would carry it out (on always, off once they asked since the
-      // last decision), with or without their words beside it (--person-words, or
-      // --person-words-file for words in a file);
-      // any other setting keeps the prompt.
-      case "config":
+      // they asked since the last decision (on always), with or without the
+      // message they asked in beside it (--message, which the setter proves), or
+      // the words form from before it (--person-words, --person-words-file),
+      // and with the --verbatim an engine step ends it with; any other setting
+      // keeps the prompt.
+      case "config": {
+        const own = rest.at(-1) === "--verbatim" ? rest.slice(0, -1) : rest;
         return verb === "set" && !(
-          (rest.length === 2 || (rest.length === 4 && (rest[2] === "--person-words" || rest[2] === "--person-words-file"))) &&
-          personCheckSwitchAllowed(projectDir, rest[0], rest[1])
+          (own.length === 2 ||
+            (own.length === 4 && (own[2] === "--message" || own[2] === "--person-words" || own[2] === "--person-words-file"))) &&
+          personCheckSwitchAllowed(projectDir, own[0], own[1])
         );
+      }
       // Turning Construction checkpoints on or off runs click-free when the
       // setter's own check passes (the person asked for it since the last
       // decision, or chose it); without that it keeps the prompt.
       case "state-passthrough":
-        if (verb === "set-construction-checkpoints" && rest.length === 1 &&
+        if (verb === "set-construction-checkpoints" && (rest.length === 1 || (rest.length === 3 && rest[1] === "--message")) &&
           constructionPolicyChangeAllowed(projectDir, "Construction Checkpoints", rest[0])) return false;
         if (ENGINE_OWNED_STATE_TRANSITIONS.has(verb)) return stateTransitionStandsAside();
         return GATE_SETTERS_KEEP_PROMPT.has(verb);
@@ -1093,6 +1137,8 @@ export async function run(
       args = args.slice(2);
       verbWord += 2;
     }
+    // The `--resume` shorthand gains a `next` word the command does not have.
+    const firstArgWord = verbWord - (args[0] === "--resume" ? 1 : 0);
     if (args[0] === "--resume") args = ["next", "--resume", ...args.slice(1)];
     // The orchestrator's own reading says which tokens are its launcher
     // options, in front of the verb and after it, so a word of the person's
@@ -1101,10 +1147,16 @@ export async function run(
     const launcher = readOrchestratorLauncherOptions(args);
     verbWord += launcher.verbAt;
     const options = new Set(launcher.taken);
-    // The agent's own slip: an option it would take with nothing it can take
-    // after it. An attempt id is this adapter's to add, however it is written.
+    // An attempt id is this adapter's to add. Copilot shows the agent each
+    // command as rewritten, so the agent copies the flag into later calls;
+    // refusing those looped, the agent re-adding it on every retry (#2495).
+    // Before a call runs, a copied flag and its id are dropped from the
+    // command, and a claimed call gets its own id, as on any other call. The
+    // copied id never reaches the engine.
+    const copiedWords: number[] = [];
     if (launcher.dangling !== undefined && args[launcher.dangling] === ATTEMPT_FLAG) {
-      return { status: target === "guard-tool-call" ? "attempt" : "unsupported" };
+      if (target !== "guard-tool-call") return { status: "unsupported" };
+      copiedWords.push(firstArgWord + launcher.dangling);
     }
     if (launcher.dangling !== undefined && args[launcher.dangling] === "--project-dir") {
       return { status: "unsupported", reason: PROJECT_DIR_EMPTY };
@@ -1112,9 +1164,13 @@ export async function run(
     const normalized: string[] = [];
     let attemptId = safeAttemptId(copilot.tool_use_id);
     for (let i = 0; i < args.length; i++) {
+      if (target === "guard-tool-call" && i === launcher.dangling && args[i] === ATTEMPT_FLAG) continue;
       if (args[i] === ATTEMPT_FLAG && options.has(i)) {
         const carried = args[++i];
-        if (target === "guard-tool-call") return { status: "attempt" };
+        if (target === "guard-tool-call") {
+          copiedWords.push(firstArgWord + i - 1, firstArgWord + i);
+          continue;
+        }
         if (!safeAttemptId(carried) || (attemptId && attemptId !== carried)) return { status: "unsupported" };
         attemptId = carried;
         continue;
@@ -1136,13 +1192,29 @@ export async function run(
       try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, terminalPath(routed)))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "foreign" }; }
       catch { return { status: "unsupported", reason: PROJECT_DIR_MISSING }; }
     }
+    // The command as typed without the copied words, each taken with the
+    // space in front of it, so every other word, the person's quoted ones
+    // too, stays as the agent typed it. With an id, AI-DLC's own flag goes in
+    // at `at`, a place in the command as typed.
+    const respelled = (at: number, addedAttemptId?: string): string => {
+      let body = parsed.body;
+      for (const word of [...copiedWords].sort((a, b) => b - a)) {
+        const from = parsed.ends[word - 1];
+        const to = parsed.ends[word];
+        body = body.slice(0, from) + body.slice(to);
+        if (to <= at) at -= to - from;
+      }
+      const added = addedAttemptId === undefined ? "" : ` ${ATTEMPT_FLAG} ${addedAttemptId}`;
+      return `${lead}${body.slice(0, at)}${added}${body.slice(at)}${parsed.redirect ? ` ${parsed.redirect}` : ""}`;
+    };
+    const uncopied = copiedWords.length > 0 ? { uncopied: respelled(parsed.body.length) } : {};
     const commandKind = normalized[0];
     if (!(["next", "continue", "report", "park"] as string[]).includes(commandKind)) {
-      if (!routedOrchestrate && engineNamedDoctor(normalized)) return { status: "terminal" };
+      if (!routedOrchestrate && engineNamedDoctor(normalized)) return { status: "terminal", ...uncopied };
       const routeArgv = routedOrchestrate ? ["engine", "orchestrate", ...normalized] : normalized;
       return ownProjectRoute(routeArgv, viaDispatcher ? undefined : "aidlc-orchestrate.ts")
-        ? { status: "terminal" }
-        : { status: "unrelated" };
+        ? { status: "terminal", ...uncopied }
+        : { status: "unrelated", ...uncopied };
     }
     const subArgs = normalized.slice(1);
     // Read-only next returns a terminal print before workflow inspection and
@@ -1151,7 +1223,7 @@ export async function run(
     if (commandKind === "next" && isReadOnlyNextArgv(subArgs)) {
       // `next config set` changes a setting, as `engine config set` does.
       const vouched = !(subArgs[0] === "config" && subArgs[1] === "set") && argumentsStayInProject(subArgs);
-      return { status: vouched ? "terminal" : "unrelated" };
+      return { status: vouched ? "terminal" : "unrelated", ...uncopied };
     }
     // A bare `continue` (the receipt lost) is claimed too: the engine answers it
     // as `next`, as it does on every harness, instead of a shell-shape refusal.
@@ -1191,11 +1263,9 @@ export async function run(
       // On a `next` line right after the verb, ahead of the person's words,
       // where the engine reads it; behind them it would be one of their words.
       // The other verbs carry no words of theirs, so it goes at the end.
-      rewrite: (selectedAttemptId) => {
-        const at = commandKind === "next" ? parsed.ends[verbWord] : parsed.body.length;
-        return `${lead}${parsed.body.slice(0, at)} ${ATTEMPT_FLAG} ${selectedAttemptId}` +
-          `${parsed.body.slice(at)}${parsed.redirect ? ` ${parsed.redirect}` : ""}`;
-      },
+      rewrite: (selectedAttemptId) =>
+        respelled(commandKind === "next" ? parsed.ends[verbWord] : parsed.body.length, selectedAttemptId),
+      ...uncopied,
       claim: {
         sessionId,
         ...(attemptId ? { attemptId } : {}),
@@ -1404,12 +1474,15 @@ export async function run(
 
   // --- Active-subagent ledger (difference #2) ---------------------------------
   //
-  // VS Code carries a stable host session_id plus agent_id on SubagentStart /
-  // Stop, while ordinary PreToolUse carries only that host session_id. CLI
-  // lacks an explicit subagent id and identifies delegated tool calls with a
-  // toolu_* session id, so it retains a separate exactly-one-active fallback.
-  // Every entry is namespaced by host session plus subagent id; ambiguity
-  // always fails open rather than mis-attributing a reviewer.
+  // Copilot names a subagent in three ways, and activeSubagentCandidates reads
+  // them in this order. A CLI subagent with no identity fields runs under its
+  // own session, which the entry records as childSessionId when its brief is
+  // spent there. A CLI subagent whose events carry agent_id and parent_agent_id
+  // is self-named: matched by its own session, never guessed for a call that
+  // names no agent. The older guesses stay for hosts that send neither: VS
+  // Code's correlated host session_id, and the CLI's exactly-one-active
+  // toolu_* fallback. Every entry is namespaced by host session plus subagent
+  // id; ambiguity always fails open rather than mis-attributing a reviewer.
   // One project key for the ledger, its lock, and the brief record. VS Code
   // hooks spell the drive c:\ where its terminal spells C:\ (#811).
   const PROJECT_KEY = createHash("sha256").update(normalizeDriveLetter(projectDir)).digest("hex").slice(0, 16);
@@ -1427,6 +1500,18 @@ export async function run(
     name: string;
     hostCorrelated: boolean;
     ts: number;
+    // The session a CLI subagent's own calls arrive under (#2582). SubagentStart
+    // names only the parent chat; the subagent's first prompt, its brief, is the
+    // first event under its own session, so the id is bound when that brief is
+    // spent.
+    childSessionId?: string;
+    // The host names this subagent on each of its own events (Copilot CLI
+    // 1.0.98 sends agent_id, agent_type and parent_agent_id, the subagent's
+    // calls under its own session = agent_id). Such an entry is never a guess
+    // for a call that names no agent: that call is the conductor's, and
+    // reading it as the subagent's refused the conductor's own next and report
+    // until the entry lapsed (#2450).
+    selfNamed?: boolean;
   }
 
   interface LedgerLockOwner {
@@ -1556,7 +1641,9 @@ export async function run(
           typeof value.subagentId === "string" &&
           typeof value.name === "string" &&
           typeof value.hostCorrelated === "boolean" &&
-          typeof value.ts === "number";
+          typeof value.ts === "number" &&
+          (value.childSessionId === undefined || typeof value.childSessionId === "string") &&
+          (value.selfNamed === undefined || typeof value.selfNamed === "boolean");
       };
       if (strict && parsed.some(entry => !validEntry(entry))) throw new LedgerMutationError("read", "INVALID_LEDGER");
       return parsed.filter(
@@ -1633,9 +1720,14 @@ export async function run(
 
   function activeSubagentCandidates(): LedgerEntry[] {
     const entries = readLedger();
+    const bound = sessionId
+      ? entries.filter((entry) => entry.childSessionId === sessionId || (entry.selfNamed && entry.subagentId === sessionId))
+      : [];
+    if (bound.length > 0) return bound;
+    const guessable = entries.filter((entry) => !entry.selfNamed);
     return sessionId.startsWith("toolu_")
-      ? entries.filter((entry) => !entry.hostCorrelated)
-      : entries.filter(
+      ? guessable.filter((entry) => !entry.hostCorrelated)
+      : guessable.filter(
           (entry) => entry.hostCorrelated && entry.hostSessionId === sessionId,
         );
   }
@@ -1690,6 +1782,9 @@ export async function run(
     digests: string[];
     ts: number;
     session?: string;
+    // The dispatched agent, so a CLI brief spent in a new session names the
+    // ledger entry that session belongs to.
+    agent?: string;
   }
 
   function briefingDigest(text: string): string {
@@ -1724,6 +1819,7 @@ export async function run(
       (entry as BriefingEntry).digests.every((digest) => typeof digest === "string") &&
       typeof (entry as BriefingEntry).ts === "number" &&
       ((entry as BriefingEntry).session === undefined || typeof (entry as BriefingEntry).session === "string") &&
+      ((entry as BriefingEntry).agent === undefined || typeof (entry as BriefingEntry).agent === "string") &&
       (entry as BriefingEntry).ts >= cutoff);
   }
 
@@ -1768,7 +1864,7 @@ export async function run(
   }
 
   // A transient write failure is retried; a lock that stays busy is not.
-  function recordBriefings(prompts: unknown[], chat: string): boolean {
+  function recordBriefings(prompts: unknown[], chat: string, agent: string): boolean {
     const digests = [...new Set(
       prompts
         .filter((prompt): prompt is string => typeof prompt === "string" && prompt.trim().length > 0)
@@ -1777,7 +1873,7 @@ export async function run(
     if (digests.length === 0) return true;
     for (let attempt = 0; attempt < 3; attempt++) {
       const result = transactBriefings((entries) => {
-        entries.push({ digests, ts: Date.now(), ...(chat ? { session: chat } : {}) });
+        entries.push({ digests, ts: Date.now(), ...(chat ? { session: chat } : {}), ...(agent ? { agent } : {}) });
         return { value: true, changed: true };
       }, false);
       if (result.committed) return true;
@@ -1790,23 +1886,52 @@ export async function run(
   // "briefing" spends the matching launch's record; "unknown" means the
   // record could not be read even under the lock. A VS Code launch from
   // another chat never matches: its brief arrives under that chat's session.
+  // The record spent is kept in spentBriefing for the caller. When the prompt
+  // matched none, briefDueHere says whether a launch from this chat still waits
+  // for a brief that comes into it: only VS Code's runSubagent records name the
+  // chat. Null when the record was not read.
+  let spentBriefing: BriefingEntry | null = null;
+  let briefDueHere: boolean | null = null;
   function checkBriefing(prompt: unknown): "briefing" | "not-briefing" | "unknown" {
     if (typeof prompt !== "string" || prompt.trim().length === 0) return "not-briefing";
     const digest = briefingDigest(prompt);
     const matches = (entry: BriefingEntry): boolean =>
       entry.digests.includes(digest) && (!entry.session || !sessionId || entry.session === sessionId);
+    const dueHere = (entries: BriefingEntry[]): boolean =>
+      Boolean(sessionId) && entries.some((entry) => entry.session === sessionId);
     const spent = transactBriefings((entries) => {
       const index = entries.findIndex(matches);
-      if (index >= 0) entries.splice(index, 1);
+      if (index >= 0) spentBriefing = entries.splice(index, 1)[0];
+      else briefDueHere = dueHere(entries);
       return { value: index >= 0, changed: index >= 0 };
     }, true);
     if (spent.read) return spent.value ? "briefing" : "not-briefing";
     // The lock stayed busy or the read failed under it: one plain read.
     try {
-      return liveBriefings(true).some(matches) ? "briefing" : "not-briefing";
+      const entries = liveBriefings(true);
+      if (entries.some(matches)) return "briefing";
+      briefDueHere = dueHere(entries);
+      return "not-briefing";
     } catch {
       return "unknown";
     }
+  }
+
+  // A CLI brief spent from a session other than the chat that dispatched it
+  // arrived in the subagent's own session (#2582): bind that session to the
+  // oldest waiting entry for the dispatched agent, so its calls are its own and
+  // its SubagentStop (whose agent_id is that session) clears it. Two waiting
+  // entries for one agent are interchangeable for attribution.
+  function bindSubagentSession(spent: BriefingEntry | null): void {
+    if (!spent || spent.session || !spent.agent || !sessionId || sessionId.startsWith("toolu_")) return;
+    const agent = spent.agent;
+    updateLedger((entries) => {
+      if (entries.some((entry) => entry.childSessionId === sessionId)) return;
+      const waiting = entries
+        .filter((entry) => !entry.hostCorrelated && !entry.childSessionId && entry.name === agent && entry.hostSessionId !== sessionId)
+        .sort((a, b) => a.ts - b.ts)[0];
+      if (waiting) waiting.childSessionId = sessionId;
+    });
   }
 
   // The subagent that started in this chat within the last few seconds, if any.
@@ -1849,11 +1974,70 @@ export async function run(
     }
   }
 
+  // The Stop note record (difference #11): the digest of the last block reason
+  // sent to a chat, beside that chat's other per-session files. Only the digest
+  // is kept, never the text.
+  function stopNotePath(chat: string): string {
+    const valid = validSessionId(chat);
+    return valid ? join(sessionsDir(projectDir), `${valid}.copilot-stop-note`) : "";
+  }
+
+  // Without a record the note, when it comes back, counts as the person's.
+  function armStopNote(chat: string, reason: string): void {
+    const path = stopNotePath(chat);
+    if (!path) return;
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, briefingDigest(reason), "utf-8");
+    } catch {
+      // The Stop goes out as it is.
+    }
+  }
+
+  // Whether `prompt` is the note this chat's last Stop sent. Every prompt in the
+  // chat spends the record, matched or not. A record that cannot be read, or
+  // cannot be spent, is no match: the prompt is the person's.
+  function spendStopNote(chat: string, prompt: unknown): boolean {
+    const path = stopNotePath(chat);
+    if (!path) return false;
+    let recorded: string;
+    try {
+      recorded = readFileSync(path, "utf-8").trim();
+    } catch {
+      return false;
+    }
+    let spent = false;
+    try {
+      rmSync(path, { force: true });
+      spent = true;
+    } catch {
+      try {
+        writeFileSync(path, "", "utf-8");
+        spent = true;
+      } catch {
+        // Neither: the digest stays, so it must not count now either.
+      }
+    }
+    return spent && recorded.length > 0 && typeof prompt === "string" && prompt.trim().length > 0 &&
+      recorded === briefingDigest(prompt);
+  }
+
   // --- Targets ----------------------------------------------------------------
 
   switch (target) {
     case "session-start": {
       reconcilePriorSession();
+      // A chat that starts or resumes has no delegation still running from
+      // before, so an entry left under it (a chat that ended mid-delegation
+      // sends no SubagentStop) is dropped. Other chats' entries stay; two chats
+      // can run in one project at once.
+      if (sessionId && readLedger().some((entry) => entry.hostSessionId === sessionId)) {
+        updateLedger((entries) => {
+          for (let i = entries.length - 1; i >= 0; i--) {
+            if (entries[i].hostSessionId === sessionId) entries.splice(i, 1);
+          }
+        });
+      }
       // Copilot delivers source "new" for a fresh session (live-captured);
       // the core hook's emission map knows startup|clear|resume|compact —
       // forward "new" as "startup" so SESSION_STARTED and the per-session
@@ -1892,20 +2076,40 @@ export async function run(
     }
 
     case "record-human-turn": {
+      const delivered = copilot.prompt ?? copilot.user_prompt ?? copilot.message ?? "";
+      // The note this chat's last Stop sent, handed back by Copilot (difference
+      // #11): the host's turn, so the core hook keeps nothing of the person's,
+      // and the human sequence stays where it is.
+      if (spendStopNote(coreSessionId, delivered)) {
+        runCore(
+          "aidlc-record-human-turn.ts",
+          JSON.stringify({
+            hook_event_name: "UserPromptSubmit",
+            session_id: coreSessionId,
+            prompt: delivered,
+            origin: { kind: "host", reason: "copilot stop hook reason", source: "record" },
+          }),
+        );
+        return 0;
+      }
       // A skill the person invoked by its slash name is read as their own line
       // (copilotSkillInvocationLine) before anything else looks at the prompt.
-      const delivered = copilot.prompt ?? copilot.user_prompt ?? copilot.message ?? "";
       const prompt = copilotSkillInvocationLine(delivered, projectDir);
       // A subagent's briefing is the agent speaking (difference #8): no
       // HUMAN_TURN, no kept words, no answer, no typed switch, no human
       // sequence. A different prompt typed while the subagent runs still
-      // counts once the first few seconds after its start have passed.
+      // counts, in VS Code once the first few seconds after its start have
+      // passed. The CLI never sends a brief into the launching chat, so its
+      // launch records name no chat and a prompt there counts at once.
       const brief = checkBriefing(prompt);
-      if (brief === "briefing") return 0;
-      const started = justStartedSubagent();
+      if (brief === "briefing") {
+        bindSubagentSession(spentBriefing);
+        return 0;
+      }
+      const started = briefDueHere === false ? null : justStartedSubagent();
       if (started) {
         // A subagent has just started in this chat and this prompt matched
-        // none of its recorded briefs: the host changed the brief's text, or
+        // none of its recorded briefs: VS Code changed the brief's text, or
         // the record could not be read. It is almost certainly that subagent's
         // brief, so it is not counted. A message the person typed in those few
         // seconds is asked for again.
@@ -2004,7 +2208,7 @@ export async function run(
             // Malformed advisory output does not disable plan enforcement.
           }
         }
-        const planApproval = runCoreWithStderr(
+        const planApproval = await runGuard(
           "aidlc-plan-approval-guard.ts",
           JSON.stringify({
             hook_event_name: "PreToolUse",
@@ -2023,7 +2227,7 @@ export async function run(
         const delivered = hostInput(dispatchInput);
         // The subagent's first message is the brief as delivered (difference #8),
         // in this chat only for VS Code's runSubagent.
-        if (!recordBriefings([delivered.prompt, native.prompt], rawToolName === "runSubagent" ? sessionId : "")) {
+        if (!recordBriefings([delivered.prompt, native.prompt], rawToolName === "runSubagent" ? sessionId : "", dispatchTarget)) {
           process.stdout.write(denyJson(BRIEFING_BUSY));
           return 0;
         }
@@ -2044,7 +2248,7 @@ export async function run(
           process.stdout.write(denyJson("This AI-DLC command targets a different physical project. Run it from that project's own Copilot session."));
           return 0;
         }
-        const guard = runCoreWithStderr(
+        const guard = await runGuard(
           "aidlc-state-transition-guard.ts",
           withAgentType(canonicalInput, delegatedAgentType()),
         );
@@ -2052,7 +2256,7 @@ export async function run(
           process.stdout.write(denyJson(guard.stderr));
           return 0;
         }
-        const scope = runCoreWithStderr(
+        const scope = await runGuard(
           "aidlc-reviewer-scope.ts",
           withAgentType(canonicalInput),
         );
@@ -2060,7 +2264,7 @@ export async function run(
           process.stdout.write(denyJson(scope.stderr));
           return 0;
         }
-        const freeze = runCoreWithStderr(
+        const freeze = await runGuard(
           "aidlc-review-freeze.ts",
           canonicalInput,
         );
@@ -2068,7 +2272,7 @@ export async function run(
           process.stdout.write(denyJson(freeze.stderr));
           return 0;
         }
-        const planApproval = runCoreWithStderr(
+        const planApproval = await runGuard(
           "aidlc-plan-approval-guard.ts",
           withShellReading(canonicalInput),
         );
@@ -2078,13 +2282,6 @@ export async function run(
         }
         if (command.status === "unsupported") {
           process.stdout.write(denyJson(command.reason ?? "Use one simple direct, source-dispatcher, or compiled AI-DLC command without chaining, substitution, or redirection other than one terminal `2>&1`."));
-          return 0;
-        }
-        if (command.status === "attempt") {
-          // An id copied from an earlier command. The text is fixed: the
-          // command is never echoed back or edited here, and the same command
-          // without the flag gets this call's own id.
-          process.stdout.write(denyJson(`AI-DLC adds \`${ATTEMPT_FLAG}\` to its own commands, so a command that already carries it did not run. Run the same command again without \`${ATTEMPT_FLAG}\` and the id after it.`));
           return 0;
         }
         // A guard that crashed still fails open, but AI-DLC then does not vouch
@@ -2099,14 +2296,22 @@ export async function run(
             !(shellWords(bare)?.[0] === "aidlc" && projectSuppliesLauncher())
           ? ALLOW_DECISION
           : null;
-        if (command.status === "terminal") {
-          if (allow) {
-            process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...allow } })}\n`);
+        // A command passed on unclaimed still runs without a copied attempt id.
+        const passOn = (decision: typeof allow, uncopied: string | undefined): number => {
+          const modifiedArgs = uncopied === undefined ? null : { ...(nativeToolInput ?? {}), command: uncopied };
+          if (decision || modifiedArgs) {
+            process.stdout.write(`${JSON.stringify({ ...(modifiedArgs ? { modifiedArgs } : {}), hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              ...(decision ?? {}),
+              ...(modifiedArgs ? { updatedInput: modifiedArgs } : {}),
+            } })}\n`);
           }
           return 0;
-        }
+        };
+        if (command.status === "terminal") return passOn(allow, command.uncopied);
+        if (command.status === "unrelated") return passOn(null, command.uncopied);
         if (command.status === "recognized") {
-          if (!sessionId) return 0;
+          if (!sessionId) return passOn(null, command.uncopied);
           // When this check cannot find or trust its own record, it stands aside
           // instead of refusing. A refusal could only send the agent back to a
           // fresh `next`, which re-issues the same step, and a record the hook
@@ -2123,10 +2328,7 @@ export async function run(
               command: command.claim.commandKind,
               reason,
             });
-            if (allow && !command.keepsPrompt) {
-              process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...allow } })}\n`);
-            }
-            return 0;
+            return passOn(command.keepsPrompt ? null : allow, command.uncopied);
           };
           let claimed: ReturnType<typeof claimCopilotCommand>;
           try { claimed = claimCopilotCommand(projectDir, currentState(), command.claim); }
@@ -2219,7 +2421,7 @@ export async function run(
             tool_input: call.toolInput,
             ...(agentType ? { agent_type: agentType } : {}),
           });
-          const r = runCoreWithStderr("aidlc-reviewer-scope.ts", fwd);
+          const r = await runGuard("aidlc-reviewer-scope.ts", fwd);
           if (r.code === 2) {
             process.stdout.write(denyJson(r.stderr));
             return 0;
@@ -2227,7 +2429,7 @@ export async function run(
         }
         for (const call of toolCalls) {
           if (call.toolName === "Write" || call.toolName === "Edit") {
-            const freeze = runCoreWithStderr(
+            const freeze = await runGuard(
               "aidlc-review-freeze.ts",
               JSON.stringify({
                 hook_event_name: "PreToolUse",
@@ -2239,7 +2441,7 @@ export async function run(
               process.stdout.write(denyJson(freeze.stderr));
               return 0;
             }
-            const planApproval = runCoreWithStderr(
+            const planApproval = await runGuard(
               "aidlc-plan-approval-guard.ts",
               JSON.stringify({
                 hook_event_name: "PreToolUse",
@@ -2315,6 +2517,7 @@ export async function run(
           name: subagentName,
           hostCorrelated,
           ts: Date.now(),
+          ...(hostCorrelated && typeof copilot.parent_agent_id === "string" && copilot.parent_agent_id ? { selfNamed: true } : {}),
         };
         // The subagent's id beside the chat's session is the one fact the engine
         // cannot learn by itself: noted once, a payload or shell carrying the
@@ -2346,22 +2549,28 @@ export async function run(
         const updated = updateLedger((entries) => {
           let idx = -1;
           if (explicitSubagentId) {
+            // VS Code's correlated id, or the CLI subagent's own session
+            // (#2582: the CLI's SubagentStop names it as agent_id).
             idx = entries.findIndex(
               (entry) =>
-                entry.hostCorrelated &&
-                entry.hostSessionId === sessionId &&
-                entry.subagentId === explicitSubagentId,
+                (entry.hostCorrelated &&
+                  entry.hostSessionId === sessionId &&
+                  entry.subagentId === explicitSubagentId) ||
+                entry.childSessionId === explicitSubagentId,
             );
-          } else {
-            for (let i = entries.length - 1; i >= 0; i--) {
-              const entry = entries[i];
-              if (
-                !entry.hostCorrelated &&
-                entry.hostSessionId === sessionId &&
-                entry.name === subagentName
-              ) {
-                idx = i;
-                break;
+          }
+          // A CLI start whose brief was never matched is still this chat's
+          // entry for that agent; one not bound to another live subagent goes
+          // first.
+          if (idx < 0) {
+            const ownEntry = (entry: LedgerEntry, unboundOnly: boolean): boolean =>
+              !entry.hostCorrelated &&
+              entry.hostSessionId === sessionId &&
+              entry.name === subagentName &&
+              (!unboundOnly || !entry.childSessionId);
+            for (const unboundOnly of [true, false]) {
+              for (let i = entries.length - 1; i >= 0 && idx < 0; i--) {
+                if (ownEntry(entries[i], unboundOnly)) idx = i;
               }
             }
           }
@@ -2398,6 +2607,8 @@ export async function run(
           const parsed = JSON.parse(r.stdout) as Record<string, unknown>;
           const decision = parsed.decision;
           const reason = parsed.reason;
+          // Recorded before the block goes out: Copilot sends it back at once.
+          if (decision === "block" && typeof reason === "string" && reason.trim()) armStopNote(coreSessionId, reason);
           process.stdout.write(`${JSON.stringify({
             ...parsed,
             ...(typeof decision === "string"

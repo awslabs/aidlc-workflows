@@ -4,9 +4,14 @@
 // the second Unit's checkpoint the agent asks for another review, which the
 // stage's one review pass refuses. Nobody asked for it, so the way on is the
 // agent's own step, never a question for the person: the checkpoint again, with
-// the findings. The engine accepts that step, and the run reaches done. The
-// remedy wording is owned by t331; this run checks it against the real engine
-// and hooks.
+// the findings. The same request part way through that Unit's step, before its
+// completion is recorded, hands the agent finishing the step with the review it
+// has, and `next` then shows the Unit's checkpoint. The engine accepts both
+// steps, and the run reaches done. The remedy wording is owned by t331; this run
+// checks it against the real engine and hooks. A review the person asks for at
+// that checkpoint runs, and its verdict names `next`, which shows the checkpoint
+// again in the same turn, on the Claude Code and Kiro IDE trees (Kiro IDE ignores
+// the Stop hook, so there the verdict is the only thing that names the step).
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { cleanupTestProject } from "../harness/fixtures.ts";
@@ -18,6 +23,7 @@ import {
   PersonScript,
   SCOPE_RUN_TIMEOUT_MS,
 } from "../harness/scope-run.ts";
+import { createHostProject } from "../harness/scope-hosts.ts";
 
 const projects: string[] = [];
 afterAll(() => {
@@ -31,6 +37,9 @@ const SKIPPED = [
 
 /** The agent's request at extra's checkpoint, taken before the person answers it. */
 class SecondReviewAsked extends Error {}
+
+/** The agent's request after extra's review, before its step is finished. */
+class MidStepReviewAsked extends Error {}
 
 interface Remedy {
   op: string;
@@ -105,29 +114,147 @@ describe("a second review the review cap refuses at a Unit's checkpoint", () => 
       const refused = host.engine("log", "review", "--stage", "code-generation", "--reviewer", reviewer,
         "--iteration", "2", "--unit", "extra");
       expect(refused.status).not.toBe(0);
-      const ask = refusalAsk(refused.stdout + "\n" + refused.stderr);
-      expect(ask?.agent_work, refused.stdout + refused.stderr).toBe(true);
-      expect(ask!.remedies.map((remedy) => remedy.op)).toEqual(["present-findings-at-gate"]);
-      const gate = ask!.remedies[0];
-      expect(gate).toMatchObject({ executableNow: true, interaction: "external-work" });
-      expect(gate.label).toBeUndefined();
+      // Nothing was corrected, so no learnings question came between the
+      // review and the checkpoint, and the person has not spoken since the
+      // review was requested: the refusal's one way on is the agent's own step,
+      // put to nobody, the checkpoint again with the findings.
+      const said = refused.stdout + refused.stderr;
+      const ask = refusalAsk(said);
+      expect(ask?.agent_work, said).toBe(true);
+      expect(ask?.remedies.map((remedy) => [remedy.op, remedy.executableNow])).toEqual([["present-findings-at-gate", true]]);
+      expect(said).toContain("include the findings in the approval summary");
 
       // The agent takes the step with nothing put to the person.
       const saidBefore = person.said.length;
-      const named = /`(bun \.claude\/tools\/[^`]+)`/.exec(gate!.action)?.[1];
-      expect(named, gate!.action).toBeDefined();
-      const words = commandWords(named!);
-      expect(words).toContain("next");
-      expect(words).not.toContain("report");
-      const ran = host.bash(named!);
-      expect(ran.status, ran.stdout + ran.stderr).toBe(0);
-      const shown = JSON.parse(ran.stdout) as Directive;
-      expect(shown.kind, ran.stdout).toBe("run-stage");
+      const shown = agent.next();
+      expect(shown.kind, JSON.stringify(shown)).toBe("run-stage");
       expect((shown.construction_checkpoint as { unit?: string } | undefined)?.unit).toBe("extra");
       expect(host.refusals).toEqual([]);
       expect(person.said.length).toBe(saidBefore);
 
       // The person approves the checkpoint they are shown again.
+      const final = agent.drive(shown);
+      expect(final.kind).toBe("done");
+    }, SCOPE_RUN_TIMEOUT_MS);
+  }
+});
+
+describe("a second review the review cap refuses part way through a Unit's step", () => {
+  for (const policy of ["strict", "relaxed"] as const) {
+    test(`Guard Policy ${policy}: the refusal hands the agent finishing the step, and the run reaches done`, () => {
+      const { proj, host } = createScopeProject("empty");
+      projects.push(proj);
+      const person = new PersonScript(host);
+      const agent = new AgentStandIn(host, person, {
+        units: ["core", "extra"],
+        afterReview: (stage, unit) => {
+          if (stage === "code-generation" && unit === "extra") throw new MidStepReviewAsked();
+        },
+      });
+      const first = agent.begin("build the classic work", [
+        "--scope", "classic", "--skip", SKIPPED.join(","),
+        "--guard-policy", policy, "--review", "advisory", "--plan-approval", "on",
+      ]);
+      let midStep = false;
+      try {
+        agent.drive(first);
+      } catch (error) {
+        if (!(error instanceof MidStepReviewAsked)) throw error;
+        midStep = true;
+      }
+      expect(midStep).toBe(true);
+
+      const reviewer = agent.directives.find((d) => d.stage === "code-generation" && typeof d.reviewer === "string")
+        ?.reviewer as string;
+      const refused = host.engine("log", "review", "--stage", "code-generation", "--reviewer", reviewer,
+        "--iteration", "2", "--unit", "extra");
+      expect(refused.status).not.toBe(0);
+      const ask = refusalAsk(`${refused.stdout}\n${refused.stderr}`);
+      expect(ask?.agent_work, refused.stdout + refused.stderr).toBe(true);
+      expect(ask!.remedies.map((remedy) => remedy.op)).toEqual(["finish-unit-step"]);
+      const finish = ask!.remedies[0];
+      expect(finish).toMatchObject({ executableNow: true, interaction: "external-work" });
+      expect(finish.label).toBeUndefined();
+
+      // The agent takes the step with nothing put to the person.
+      const saidBefore = person.said.length;
+      const named = /`(bun \.claude\/tools\/[^`]+)`/.exec(finish.action)?.[1];
+      expect(named, finish.action).toBeDefined();
+      const words = commandWords(named!);
+      expect(words).toEqual(expect.arrayContaining(["unit", "complete", "--unit", "extra"]));
+      const ran = host.bash(named!);
+      expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+      const shown = agent.next();
+      expect(shown.kind).toBe("run-stage");
+      expect((shown.construction_checkpoint as { unit?: string } | undefined)?.unit).toBe("extra");
+      expect(host.refusals).toEqual([]);
+      expect(person.said.length).toBe(saidBefore);
+
+      // The person approves the checkpoint they are shown.
+      const final = agent.drive(shown);
+      expect(final.kind).toBe("done");
+    }, SCOPE_RUN_TIMEOUT_MS);
+  }
+});
+
+describe("another review the person asks for at a Unit's checkpoint", () => {
+  for (const tree of ["claude", "kiro-ide"] as const) {
+    test(`${tree}: its verdict names next, which shows the checkpoint again, and the run reaches done`, () => {
+      const { proj, host } = tree === "claude" ? createScopeProject("empty") : createHostProject(tree, "empty");
+      projects.push(proj);
+      const person = new PersonScript(host);
+      let asked = false;
+      const agent = new AgentStandIn(host, person, {
+        units: ["core", "extra"],
+        answers: {
+          checkpoint: (unit, kind) => {
+            if (unit === "extra" && kind === "unit" && !asked) {
+              asked = true;
+              throw new SecondReviewAsked();
+            }
+            return "Approve";
+          },
+        },
+      });
+      // Functional Design runs too, so Code Generation is a later per-Unit
+      // stage, whose own box is still pending at the checkpoint.
+      const first = agent.begin("build the classic work", [
+        "--scope", "classic", "--skip", SKIPPED.filter((stage) => stage !== "functional-design").join(","),
+        "--review", "advisory", "--plan-approval", "on",
+      ]);
+      try {
+        agent.drive(first);
+      } catch (error) {
+        if (!(error instanceof SecondReviewAsked)) throw error;
+      }
+      expect(asked).toBe(true);
+
+      const reviewer = agent.directives.find((d) => d.stage === "code-generation" && typeof d.reviewer === "string")
+        ?.reviewer as string;
+      person.say("Please review extra's code again before I approve it");
+      const review = ["log", "review", "--stage", "code-generation", "--reviewer", reviewer, "--iteration", "2", "--unit", "extra"];
+      // The agent names the message they asked in, as the hook's line names it.
+      const request = host.engine(...review, "--person-asked", "--message", agent.latestMessageId());
+      expect(request.status, request.stdout + request.stderr).toBe(0);
+      host.write(String((JSON.parse(request.stdout) as Directive).reviewFile),
+        `## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Date:** 2026-01-01T00:00:00Z\n**Iteration:** 2\n\n` +
+          "### Findings\n\n**Prior findings**\n\n| ID | Now | Severity | Note |\n|---|---|---|---|\n\n**New findings**\n\n" +
+          "| Severity | Location | Finding | Required action |\n|---|---|---|---|\n\n### Summary\n\nReady.\n");
+      const verdict = host.engine(...review, "--verdict", "READY");
+      expect(verdict.status, verdict.stdout + verdict.stderr).toBe(0);
+
+      // The agent takes the step the verdict names, once, with nothing put to the person.
+      const step = String((JSON.parse(verdict.stdout) as { agent_note?: string }).agent_note);
+      const named = /`(bun [^`]*orchestrate next)`/.exec(step)?.[1];
+      expect(named, step).toBeDefined();
+      const saidBefore = person.said.length;
+      const ran = host.bash(named!);
+      expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+      const shown = JSON.parse(ran.stdout) as Directive;
+      expect(shown.kind, ran.stdout).toBe("run-stage");
+      expect((shown.construction_checkpoint as { unit?: string } | undefined)?.unit).toBe("extra");
+      expect(person.said.length).toBe(saidBefore);
+
       const final = agent.drive(shown);
       expect(final.kind).toBe("done");
     }, SCOPE_RUN_TIMEOUT_MS);

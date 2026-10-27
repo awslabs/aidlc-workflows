@@ -27,6 +27,7 @@ import {
   rejectConstructionCheckpoint,
   resolveConstructionCheckpoint,
   verifyConstructionCheckpoint,
+  verificationTimeoutMs,
 } from "../../dist/claude/.claude/tools/aidlc-construction-checkpoints.ts";
 import {
   approvedConstructionUnits,
@@ -224,13 +225,13 @@ function recordCommand(project: string, command: string): string {
   return result.out;
 }
 
-function pass(project: string, kind: "unit" | "skeleton" = "unit", unit = "alpha") {
+async function pass(project: string, kind: "unit" | "skeleton" = "unit", unit = "alpha") {
   const command = writeCheck(project,
     "const fs = require('node:fs');\n" +
     "if (!fs.readFileSync('src/alpha.ts', 'utf8').includes('alpha')) process.exit(3);\n" +
     "console.log('integrated check passed');\n");
   recordCommand(project, command);
-  const result = verifyConstructionCheckpoint(project, unit, kind);
+  const result = await verifyConstructionCheckpoint(project, unit, kind);
   expect(result.errors).toEqual([]);
   expect(result.verified, JSON.stringify(result.verification)).toBe(true);
   return result;
@@ -241,9 +242,146 @@ function approvals(project: string) {
 }
 
 describe("t341 Construction checkpoint verification and evidence", () => {
-  test("routing evidence cannot carry approval across a different state or intent record", () => {
+  test("verification budgets are finite and retain the thirty-minute default", () => {
+    expect(verificationTimeoutMs()).toBe(1_800_000);
+    expect(verificationTimeoutMs(2_147_483_647)).toBe(2_147_483_647);
+    for (const value of [0, -1, 1.5, NaN, Infinity, 2_147_483_648]) {
+      expect(() => verificationTimeoutMs(value)).toThrow("--timeout-ms");
+    }
+  });
+
+  test("timeout retires a shell, runner and writing descendant before returning", async () => {
     const dir = project();
-    pass(dir, "skeleton");
+    const heartbeat = join(seededRecordDir(dir), "timeout-heartbeat.txt");
+    const sentinel = childProcess.spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    const leaf = `const fs = require('node:fs'); setInterval(() => fs.appendFileSync(${JSON.stringify(heartbeat)}, 'tick\\n'), 20);`;
+    const command = writeCheck(dir, `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(leaf)}], {stdio: 'inherit'}); setInterval(() => {}, 1000);`);
+    // A trailing builtin keeps Bash alive instead of replacing it with the runner.
+    recordCommand(dir, process.platform === "win32" ? command : `${command}; :`);
+    try {
+      const run = cli(dir, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "verify", "--timeout-ms", "1000"]);
+      expect(run.code, run.out).toBe(1);
+      const failed = JSON.parse(run.out);
+      expect(failed.verified).toBe(false);
+      expect(failed.verification!.error).toContain("timed out after 1000 ms");
+      expect(failed.verification!.error).toMatch(/cleanup (completed|incomplete)/);
+      const output = readFileSync(heartbeat, "utf8");
+      expect(output.length).toBeGreaterThan(0);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(readFileSync(heartbeat, "utf8")).toBe(output);
+      expect(sentinel.exitCode).toBe(null);
+      expect(() => process.kill(sentinel.pid!, 0)).not.toThrow();
+      expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint")).toThrow("Verify");
+    } finally {
+      sentinel.kill("SIGKILL");
+    }
+  });
+
+  test.skipIf(process.platform === "win32").each(["SIGINT", "SIGTERM", "SIGHUP", "SIGKILL", "SIGKILL-after-SIGTERM"] as const)(
+    "%s retires the owned group when verification is stopped", async (stop) => {
+      const signal = stop === "SIGKILL-after-SIGTERM" ? "SIGKILL" : stop;
+      const dir = project();
+      const root = seededRecordDir(dir);
+      const heartbeat = join(root, "signal-heartbeat.txt");
+      const received = join(root, "received-signal.txt");
+      const pids = join(root, "signal-pids.txt");
+      const leaf = `const fs = require('node:fs');
+        fs.appendFileSync(${JSON.stringify(pids)}, process.pid + '\\n');
+        for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => {
+          fs.appendFileSync(${JSON.stringify(received)}, sig + '\\n'); if (${stop !== "SIGKILL-after-SIGTERM"}) process.exit(0);
+        });
+        setInterval(() => fs.appendFileSync(${JSON.stringify(heartbeat)}, 'tick\\n'), 20);`;
+      const command = writeCheck(dir, `const fs = require('node:fs');
+        fs.appendFileSync(${JSON.stringify(pids)}, process.pid + '\\n');
+        for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => {});
+        require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(leaf)}], {stdio: 'inherit'});
+        setInterval(() => {}, 1000);`);
+      recordCommand(dir, `${command}; :`);
+      const sentinel = childProcess.spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+      const verifier = childProcess.spawn(process.execPath, [join(AIDLC_SRC, "tools/aidlc-bolt.ts"),
+        "checkpoint", "--unit", "alpha", "--action", "verify", "--timeout-ms", "10000", "--project-dir", dir],
+        { detached: true, stdio: ["ignore", "pipe", "pipe"] });
+      let output = "";
+      verifier.stdout!.on("data", (bytes) => { output += bytes.toString(); });
+      verifier.stderr!.on("data", (bytes) => { output += bytes.toString(); });
+      const finished = new Promise<number | null>((resolve) => verifier.on("close", resolve));
+      let ceiling: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const deadline = Date.now() + 5000;
+        while (!fs.existsSync(heartbeat) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(fs.existsSync(heartbeat)).toBe(true);
+        // TERM/KILL model a harness stopping its group; INT/HUP target the verifier itself.
+        if (stop === "SIGKILL-after-SIGTERM") {
+          process.kill(-verifier.pid!, "SIGTERM");
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        process.kill((signal === "SIGTERM" || signal === "SIGKILL") ? -verifier.pid! : verifier.pid!, signal);
+        const code = await Promise.race([finished, new Promise<never>((_, reject) => {
+          ceiling = setTimeout(() => reject(new Error("interrupted verifier did not return")), 5000);
+        })]);
+        if (signal === "SIGKILL") {
+          expect(code).toBe(null);
+          expect(verifier.signalCode).toBe("SIGKILL");
+        } else {
+          expect(code, output).toBe(1);
+          expect(readFileSync(received, "utf8")).toContain(signal);
+        }
+        const failed = resolveConstructionCheckpoint(dir, "alpha", "unit");
+        expect(failed.verified).toBe(false);
+        if (signal === "SIGKILL") expect(failed.verification!.finished_at).toBe(null);
+        else expect(failed.verification!.error).toContain(`interrupted by ${signal}`);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const before = readFileSync(heartbeat, "utf8");
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        expect(readFileSync(heartbeat, "utf8")).toBe(before);
+        expect(sentinel.exitCode).toBe(null);
+        expect(() => process.kill(sentinel.pid!, 0)).not.toThrow();
+      } finally {
+        if (ceiling !== undefined) clearTimeout(ceiling);
+        sentinel.kill("SIGKILL");
+        try { process.kill(-verifier.pid!, "SIGKILL"); } catch { /* already closed */ }
+        if (fs.existsSync(pids)) for (const pid of readFileSync(pids, "utf8").trim().split("\n")) {
+          try { process.kill(Number(pid), "SIGKILL"); } catch { /* already retired */ }
+        }
+      }
+    },
+  );
+
+  test.skipIf(process.platform === "win32")("cleanup failure is explicit and cannot verify the checkpoint", async () => {
+    const dir = project();
+    recordCommand(dir, "while :; do :; done");
+    const kill = process.kill.bind(process);
+    const denied = spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (pid < 0) throw Object.assign(new Error("group termination denied"), { code: "EPERM" });
+      return kill(pid, signal);
+    });
+    try {
+      const failed = await verifyConstructionCheckpoint(dir, "alpha", "unit", { timeoutMs: 500 });
+      expect(failed.verified).toBe(false);
+      expect(failed.verification!.error).toContain("Process cleanup incomplete");
+      expect(failed.verification!.error).toContain("group termination denied");
+    } finally {
+      denied.mockRestore();
+    }
+  });
+
+  test("the timeout override permits an approved check to finish", async () => {
+    const dir = project();
+    recordCommand(dir, writeCheck(dir, "setTimeout(() => console.log('finished'), 200);"));
+    const invalid = cli(dir, "bolt", ["checkpoint", "--unit", "alpha", "--action", "status", "--timeout-ms", "1500"]);
+    expect(invalid.code).not.toBe(0);
+    expect(invalid.out).toContain("goes with --action verify");
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    const listeners = signals.map((signal) => process.listenerCount(signal));
+    const result = await verifyConstructionCheckpoint(dir, "alpha", "unit", { timeoutMs: 1500 });
+    expect(signals.map((signal) => process.listenerCount(signal))).toEqual(listeners);
+    expect(result.verified).toBe(true);
+    expect(result.verification!.stdout_tail).toContain("finished");
+  });
+
+  test("routing evidence cannot carry approval across a different state or intent record", async () => {
+    const dir = project();
+    await pass(dir, "skeleton");
     human(dir, "skeleton");
     expect(approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint").approved).toBe(true);
     const evidence = loadConstructionEvidence(dir);
@@ -260,14 +398,14 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(approvedConstructionUnits(dir, changedState, evidence).has("alpha")).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("refreshing unchanged completion evidence or rerunning the same check preserves approval", () => {
+  test("refreshing unchanged completion evidence or rerunning the same check preserves approval", async () => {
     const dir = project();
-    pass(dir);
+    await pass(dir);
     human(dir);
     const approved = approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint");
     complete(dir, "alpha");
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").approved).toBe(true);
-    const repeated = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    const repeated = await verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(repeated.fingerprint).toBe(approved.fingerprint);
     expect(repeated.approved).toBe(true);
     // A new command keeps the approval given under the earlier one.
@@ -276,14 +414,14 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(kept.verified).toBe(true);
     expect(kept.approved).toBe(true);
     // Checking the Unit again with the new command asks for its approval again.
-    const differentCheck = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    const differentCheck = await verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(differentCheck.verified).toBe(true);
     expect(differentCheck.approved).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("revoking autonomy preserves completed approvals and restores future human gates", () => {
+  test("revoking autonomy preserves completed approvals and restores future human gates", async () => {
     const dir = project(true);
-    pass(dir, "unit", "alpha");
+    await pass(dir, "unit", "alpha");
     expect(approveConstructionCheckpoint(dir, "alpha", "unit").approved).toBe(true);
     const count = approvals(dir).length;
     expect(approveConstructionCheckpoint(dir, "alpha", "unit").approved).toBe(true);
@@ -295,7 +433,7 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(resolveConstructionCheckpoint(dir, "beta", "unit").human_required).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("exact policy opt-in, authoritative Unit, and complete in-scope stage set", () => {
+  test("exact policy opt-in, authoritative Unit, and complete in-scope stage set", async () => {
     expect(checkpointPolicyEnabled("")).toBe(false);
     expect(checkpointPolicyEnabled("- **Scope**: feature\n- **Construction Checkpoints**: enabled")).toBe(true);
     expect(checkpointPolicyEnabled("- **Scope**: infra\n- **Construction Checkpoints**: enabled")).toBe(false);
@@ -309,16 +447,16 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(resolved.approved).toBe(false);
     for (const unit of ["missing", "Alpha", "alpha ", "../alpha"]) {
       expect(() => resolveConstructionCheckpoint(dir, unit, "unit")).toThrow();
-      expect(() => verifyConstructionCheckpoint(dir, unit, "unit")).toThrow();
+      await expect(verifyConstructionCheckpoint(dir, unit, "unit")).rejects.toThrow();
     }
     writeFileSync(seededStateFile(dir), state().replace("- **Construction Checkpoints**: enabled\n", ""));
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").enabled).toBe(false);
-    expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow("not ready");
+    await expect(verifyConstructionCheckpoint(dir, "alpha", "unit")).rejects.toThrow("not ready");
   });
 
-  test("persists bounded diagnostics and full output digests, and a failed check revokes approval", () => {
+  test("persists bounded diagnostics and full output digests, and a failed check revokes approval", async () => {
     const dir = project();
-    const verified = pass(dir);
+    const verified = await pass(dir);
     const rawProof = readFileSync(verified.proof_path, "utf-8");
     const proof = JSON.parse(rawProof);
     const output = "integrated check passed\n";
@@ -342,7 +480,7 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     recordCommand(dir, writeCheck(dir,
       `process.stdout.write(${JSON.stringify(diagnostic)});\n` +
       `process.stderr.write(${JSON.stringify(diagnostic)}); process.exitCode = 7;\n`));
-    const failed = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    const failed = await verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(failed.verified).toBe(false);
     expect(failed.approved).toBe(false);
     expect(failed.verification!.exit_code).toBe(7);
@@ -366,9 +504,9 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test.each([1, 2, 3])("legacy v%i proofs revoke verification and prior approval without throwing", (version) => {
+  test.each([1, 2, 3])("legacy v%i proofs revoke verification and prior approval without throwing", async (version) => {
     const dir = project();
-    const verified = pass(dir);
+    const verified = await pass(dir);
     human(dir);
     expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
     const proof = { ...verified.verification!, version, stdout_tail: undefined, stderr_tail: undefined };
@@ -380,9 +518,9 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(current.verification).toBeNull();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("missing, non-string, and oversized proof tails invalidate verification", () => {
+  test("missing, non-string, and oversized proof tails invalidate verification", async () => {
     const dir = project();
-    const verified = pass(dir);
+    const verified = await pass(dir);
     for (const field of ["stdout_tail", "stderr_tail"]) {
       for (const value of [undefined, null, "x".repeat(2049)]) {
         writeFileSync(verified.proof_path, JSON.stringify({ ...verified.verification!, [field]: value }));
@@ -393,14 +531,14 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("output summaries bind captured bytes without lossy UTF-8 decoding", () => {
+  test("output summaries bind captured bytes without lossy UTF-8 decoding", async () => {
     const dir = project();
     const stdout = Buffer.from([0x61, 0xc3, 0xa9, 0xff, 0x00, 0x09, 0x0d, 0x7f, 0xc2, 0x85, 0x0a]);
     const stderr = Buffer.from([0xfe, 0x0a]);
     recordCommand(dir, writeCheck(dir,
       `process.stdout.write(Buffer.from(${JSON.stringify([...stdout])}));\n` +
       `process.stderr.write(Buffer.from(${JSON.stringify([...stderr])}));\n`));
-    const verified = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    const verified = await verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(verified.verified).toBe(true);
     expect(verified.verification!.stdout_bytes).toBe(stdout.length);
     expect(verified.verification!.stderr_bytes).toBe(stderr.length);
@@ -410,7 +548,7 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(verified.verification!.stderr_tail).toBe("\ufffd\n");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("tails truncate bytes at UTF-8 boundaries while preserving complete multibyte output", () => {
+  test("tails truncate bytes at UTF-8 boundaries while preserving complete multibyte output", async () => {
     const dir = project();
     const stdoutSuffix = "é".repeat(1022) + "\n";
     const stdout = "\u{1f642}" + stdoutSuffix;
@@ -418,7 +556,7 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     recordCommand(dir, writeCheck(dir,
       `process.stdout.write(${JSON.stringify(stdout)});\n` +
       `process.stderr.write(${JSON.stringify(stderr)});\n`));
-    const verified = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    const verified = await verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(verified.verified).toBe(true);
     expect(verified.verification!.stdout_tail).toBe(stdoutSuffix);
     expect(verified.verification!.stderr_tail).toBe(stderr);
@@ -428,13 +566,13 @@ describe("t341 Construction checkpoint verification and evidence", () => {
 
   test.skipIf(process.platform === "win32" || !fs.existsSync("/bin/bash"))(
     "Bash project checks verify, while a failed pipeline revokes prior approval",
-    () => {
+    async () => {
       const dir = project();
       const command = 'set -o pipefail; checks=(src/alpha.ts); ' +
         // biome-ignore lint/suspicious/noTemplateCurlyInString: Bash expands the array in the project check.
         '[[ -f "${checks[0]}" ]] && cat <(printf "%s\\n" "bash check passed")';
       recordCommand(dir, command);
-      const verified = verifyConstructionCheckpoint(dir, "alpha", "unit");
+      const verified = await verifyConstructionCheckpoint(dir, "alpha", "unit");
       expect(verified.verified).toBe(true);
       expect(verified.approved).toBe(false);
       expect(verified.verification!.command_sha256).toBe(createHash("sha256").update(command).digest("hex"));
@@ -446,7 +584,7 @@ describe("t341 Construction checkpoint verification and evidence", () => {
       human(dir);
       expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
       recordCommand(dir, "set -o pipefail; false | true");
-      const failed = verifyConstructionCheckpoint(dir, "alpha", "unit");
+      const failed = await verifyConstructionCheckpoint(dir, "alpha", "unit");
       expect(failed.verification!.exit_code).toBe(1);
       expect(failed.verification!.evidence_unchanged).toBe(true);
       expect(failed.verified).toBe(false);
@@ -456,17 +594,17 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
-  test.skipIf(process.platform === "win32")("falls back to sh when Bash is absent", () => {
+  test.skipIf(process.platform === "win32")("falls back to sh when Bash is absent", async () => {
     const dir = project();
     const existsSync = fs.existsSync;
     const bashAbsent = spyOn(fs, "existsSync").mockImplementation((path) =>
       path === "/bin/bash" ? false : existsSync(path));
-    const spawn = spyOn(childProcess, "spawnSync");
+    const spawn = spyOn(childProcess, "spawn");
     try {
       const command = 'test -f src/alpha.ts && printf "%s\\n" "POSIX fallback passed"';
       recordCommand(dir, command);
-      const verified = verifyConstructionCheckpoint(dir, "alpha", "unit");
-      expect(spawn).toHaveBeenCalledWith("/bin/sh", ["-c", command], expect.objectContaining({ cwd: dir }));
+      const verified = await verifyConstructionCheckpoint(dir, "alpha", "unit");
+      expect(spawn).toHaveBeenCalledWith("/bin/sh", ["-c", expect.any(String), "aidlc-check", "/bin/sh", "-c", command], expect.objectContaining({ cwd: dir }));
       expect(verified.verified).toBe(true);
       expect(verified.approved).toBe(false);
       expect(verified.verification!.exit_code).toBe(0);
@@ -479,12 +617,12 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("an edit during an otherwise passing check cannot mint a verification", () => {
+  test("an edit during an otherwise passing check cannot mint a verification", async () => {
     const dir = project();
     const command = writeCheck(dir,
       "require('node:fs').appendFileSync('src/alpha.ts', '// changed during verification\\n');\n");
     recordCommand(dir, command);
-    const result = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    const result = await verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(result.verification!.exit_code).toBe(0);
     expect(result.verification!.evidence_unchanged).toBe(false);
     expect(result.verified).toBe(false);
@@ -497,12 +635,12 @@ describe("t341 Construction checkpoint verification and evidence", () => {
         "Use a check that leaves the files as they are, then verify again.",
     );
     // The step it names works: a check that leaves the files alone verifies.
-    expect(pass(dir).verified).toBe(true);
+    expect((await pass(dir)).verified).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("an approved Unit keeps its approval when the person approves a new command, and the next Unit is checked with it", () => {
+  test("an approved Unit keeps its approval when the person approves a new command, and the next Unit is checked with it", async () => {
     const dir = project();
-    pass(dir);
+    await pass(dir);
     human(dir);
     expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
     const newCommand = `${writeCheck(dir, "console.log('new check passed');\n")} --new`;
@@ -511,20 +649,20 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     const kept = resolveConstructionCheckpoint(dir, "alpha", "unit");
     expect(kept.approved).toBe(true);
     expect(kept.verified).toBe(true);
-    const next = verifyConstructionCheckpoint(dir, "beta", "unit");
+    const next = await verifyConstructionCheckpoint(dir, "beta", "unit");
     expect(next.verified, JSON.stringify(next.verification)).toBe(true);
     expect(next.verification!.command_sha256).toBe(verificationCommandDetails(newCommand).sha256);
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").approved).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a check that formats the Unit's files once verifies on its second run", () => {
+  test("a check that formats the Unit's files once verifies on its second run", async () => {
     const dir = project();
     recordCommand(dir, writeCheck(dir,
       "const fs = require('node:fs');\n" +
       "const text = fs.readFileSync('src/alpha.ts', 'utf8');\n" +
       "if (!text.includes('// formatted')) fs.writeFileSync('src/alpha.ts', text + '// formatted\\n');\n" +
       "console.log('formatted and checked');\n"));
-    const result = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    const result = await verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(result.verified, JSON.stringify(result.verification)).toBe(true);
     expect(result.verification!.evidence_unchanged).toBe(true);
     expect(result.verification!.error).toBeNull();
@@ -533,26 +671,26 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(receipts.map((row) => auditBlockField(row.block, "Verified"))).toEqual(["false", "true"]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a fixer that fails once it fixed the Unit's files verifies on its second run", () => {
+  test("a fixer that fails once it fixed the Unit's files verifies on its second run", async () => {
     const dir = project();
     recordCommand(dir, writeCheck(dir,
       "const fs = require('node:fs');\n" +
       "const text = fs.readFileSync('src/alpha.ts', 'utf8');\n" +
       "if (!text.includes('// fixed')) { fs.writeFileSync('src/alpha.ts', text + '// fixed\\n'); process.exit(1); }\n" +
       "console.log('clean');\n"));
-    const result = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    const result = await verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(result.verified, JSON.stringify(result.verification)).toBe(true);
     expect(result.verification!.exit_code).toBe(0);
     const receipts = readAuditShardEvents(dir).filter((row) => row.event === "CHECKPOINT_VERIFICATION_RECORDED");
     expect(receipts.map((row) => auditBlockField(row.block, "Verified"))).toEqual(["false", "true"]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a fixer that changes the Unit's files and fails on both runs names the step that works", () => {
+  test("a fixer that changes the Unit's files and fails on both runs names the step that works", async () => {
     const dir = project();
     recordCommand(dir, writeCheck(dir,
       "require('node:fs').appendFileSync('src/alpha.ts', '// touched\\n');\n" +
       "process.exit(1);\n"));
-    const result = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    const result = await verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(result.verified).toBe(false);
     expect(result.verification!.exit_code).toBe(1);
     expect(result.verification!.error).toBe(
@@ -561,13 +699,13 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a passing check that prints more than a megabyte still verifies", () => {
+  test("a passing check that prints more than a megabyte still verifies", async () => {
     const dir = project();
     const size = 3 * 1024 * 1024;
     recordCommand(dir, writeCheck(dir,
       `process.stdout.write('a'.repeat(${size}) + '\\nverbose suite passed\\n');\n` +
       `process.stderr.write('w'.repeat(${size}));\n`));
-    const result = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    const result = await verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(result.verified, JSON.stringify({ ...result.verification })).toBe(true);
     const expected = `${"a".repeat(size)}\nverbose suite passed\n`;
     expect(result.verification!.exit_code).toBe(0);
@@ -579,35 +717,35 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(result.verification!.stderr_bytes).toBe(size);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("stage artifacts, claimed source, and manifest edits invalidate verification", () => {
+  test("stage artifacts, claimed source, and manifest edits invalidate verification", async () => {
     const dir = project();
-    pass(dir);
+    await pass(dir);
     const path = artifact(dir, "alpha", "functional-design");
     const original = readFileSync(path, "utf-8");
     writeFileSync(path, `${original}\nChanged requirement\n`);
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
     // A document changed after its stage completed is checked again as it is
     // now, and the person is asked about it (t-checkpoint-wave-edit).
-    expect(verifyConstructionCheckpoint(dir, "alpha", "unit")).toMatchObject({ verified: true, approved: false });
+    expect((await verifyConstructionCheckpoint(dir, "alpha", "unit"))).toMatchObject({ verified: true, approved: false });
     writeFileSync(path, original);
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
-    pass(dir);
+    await pass(dir);
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(true);
     writeFileSync(join(dir, "src", "alpha.ts"), "export const alpha = 2;\n");
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
-    pass(dir);
+    await pass(dir);
     const manifest = join(seededRecordDir(dir), "construction", "alpha", "code-generation", "source-manifest.json");
     writeFileSync(manifest, `${readFileSync(manifest, "utf-8")}\n`);
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("missing outputs, missing completion, and unbindable source fail closed", () => {
+  test("missing outputs, missing completion, and unbindable source fail closed", async () => {
     const dir = project();
     rmSync(artifact(dir, "alpha", "nfr-design"));
     const missing = resolveConstructionCheckpoint(dir, "alpha", "unit");
     expect(missing.ready).toBe(false);
     expect(missing.errors.join("\n")).toContain("required outputs");
-    expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow("not ready");
+    await expect(verifyConstructionCheckpoint(dir, "alpha", "unit")).rejects.toThrow("not ready");
     const other = project();
     appendAuditEntry("UNIT_STARTED", {
       Stage: "functional-design", Unit: "alpha",
@@ -621,7 +759,7 @@ describe("t341 Construction checkpoint verification and evidence", () => {
 });
 
 describe("t341 tool-owned checkpoint verification receipts", () => {
-  test("a hand-written v4 proof cannot approve a checkpoint without its verifier receipt", () => {
+  test("a hand-written v4 proof cannot approve a checkpoint without its verifier receipt", async () => {
     const dir = project();
     recordCommand(dir, "exit 0");
     const current = resolveConstructionCheckpoint(dir, "alpha", "unit");
@@ -645,7 +783,7 @@ describe("t341 tool-owned checkpoint verification receipts", () => {
       .toThrow("CHECKPOINT_VERIFICATION_RECORDED");
     expect(approvals(dir)).toEqual([]);
 
-    const verified = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    const verified = await verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(verified.verified).toBe(true);
     const receipt = readAuditShardEvents(dir).find((row) => row.event === "CHECKPOINT_VERIFICATION_RECORDED")!;
     for (const [key, value] of Object.entries({
@@ -661,9 +799,9 @@ describe("t341 tool-owned checkpoint verification receipts", () => {
     expect(auditBlockField(approvals(dir).at(-1)!.block, "Verification Id")).toBe(verified.verification!.id);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("the latest receipt must authorize this proof id, not a previous successful proof", () => {
+  test("the latest receipt must authorize this proof id, not a previous successful proof", async () => {
     const dir = project();
-    const verified = pass(dir);
+    const verified = await pass(dir);
     human(dir);
     expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
     appendAuditEntry("CHECKPOINT_VERIFICATION_RECORDED", {
@@ -679,10 +817,10 @@ describe("t341 tool-owned checkpoint verification receipts", () => {
       .toThrow("CHECKPOINT_VERIFICATION_RECORDED");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a failed verifier receipt cannot be upgraded by editing its proof JSON", () => {
+  test("a failed verifier receipt cannot be upgraded by editing its proof JSON", async () => {
     const dir = project();
     recordCommand(dir, "exit 7");
-    const failed = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    const failed = await verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(failed.verified).toBe(false);
     const receipt = readAuditShardEvents(dir).find((row) => row.event === "CHECKPOINT_VERIFICATION_RECORDED")!;
     expect(auditBlockField(receipt.block, "Verification Id")).toBe(failed.verification!.id);
@@ -694,9 +832,9 @@ describe("t341 tool-owned checkpoint verification receipts", () => {
       .toThrow("CHECKPOINT_VERIFICATION_RECORDED");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a proof written before an audit append failure remains unverified", () => {
+  test("a proof written before an audit append failure remains unverified", async () => {
     const dir = project();
-    const previous = pass(dir);
+    const previous = await pass(dir);
     const shard = readAuditShardEvents(dir)[0].shard;
     const originalOpen = fs.openSync;
     const failedAppend = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
@@ -706,7 +844,7 @@ describe("t341 tool-owned checkpoint verification receipts", () => {
       return originalOpen(path, flags, mode);
     });
     try {
-      expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow("Audit shard is not writable");
+      await expect(verifyConstructionCheckpoint(dir, "alpha", "unit")).rejects.toThrow("Audit shard is not writable");
     } finally {
       failedAppend.mockRestore();
     }
@@ -717,12 +855,12 @@ describe("t341 tool-owned checkpoint verification receipts", () => {
     expect(current.approved).toBe(false);
     expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint"))
       .toThrow("CHECKPOINT_VERIFICATION_RECORDED");
-    expect(verifyConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(true);
+    expect((await verifyConstructionCheckpoint(dir, "alpha", "unit")).verified).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a prior-attempt receipt cannot authorize a proof after a stage jump", () => {
+  test("a prior-attempt receipt cannot authorize a proof after a stage jump", async () => {
     const dir = project();
-    const verified = pass(dir);
+    const verified = await pass(dir);
     appendAuditEntry("STAGE_JUMPED", { Stage: "code-generation" }, dir);
     complete(dir, "alpha");
     const current = resolveConstructionCheckpoint(dir, "alpha", "unit");
@@ -735,7 +873,7 @@ describe("t341 tool-owned checkpoint verification receipts", () => {
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
     expect(() => approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint"))
       .toThrow("CHECKPOINT_VERIFICATION_RECORDED");
-    expect(verifyConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(true);
+    expect((await verifyConstructionCheckpoint(dir, "alpha", "unit")).verified).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("public audit append cannot mint a verifier receipt", () => {
@@ -890,7 +1028,7 @@ describe("t341 verification command consent", () => {
     expect(readAuditShardEvents(dir).some((row) => row.event === "DECISION_RECORDED" || row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // Like t137, this injects an append failure using a readable, unwritable shard.
+  // Like t47-failure-injection, this uses a readable, unwritable audit shard.
   // Native Windows does not enforce chmod's write denial.
   for (const choice of ["Approve", "Request Changes"] as const) {
     (process.platform === "win32" ? test.skip : test)(`an audit append failure preserves ${choice} for exactly one successful retry`, () => {
@@ -903,7 +1041,9 @@ describe("t341 verification command consent", () => {
       const challenge = readProtectedQuestion(dir, session);
       const response = readProtectedResponse(dir, session);
       expect(challenge).not.toBeNull();
-      expect(response?.choice).toBe(choice);
+      // A typed reply is kept as their words; the conductor records the choice it read.
+      expect(response?.words).toBe(choice);
+      expect(response?.choice).toBeUndefined();
       const shard = seededAuditShard(dir);
       const before = readFileSync(shard, "utf-8");
       const answer = ["answer", ...identity, "--details", choice];
@@ -931,22 +1071,22 @@ describe("t341 verification command consent", () => {
     }, 30_000);
   }
 
-  test("missing receipt, hand-written field, and mismatched command cannot execute or write proof", () => {
+  test("missing receipt, hand-written field, and mismatched command cannot execute or write proof", async () => {
     const dir = project();
     const path = resolveConstructionCheckpoint(dir, "alpha", "unit").proof_path;
-    const refused = () => {
-      expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow("VERIFICATION_COMMAND_RECORDED");
+    const refused = async () => {
+      await expect(verifyConstructionCheckpoint(dir, "alpha", "unit")).rejects.toThrow("VERIFICATION_COMMAND_RECORDED");
       expect(resolveConstructionCheckpoint(dir, "alpha", "unit").command_authorized).toBe(false);
       expect(fs.existsSync(path)).toBe(false);
     };
-    refused();
+    await refused();
     writeFileSync(seededStateFile(dir), readFileSync(seededStateFile(dir), "utf-8").replace(
       "## Runtime State", "## Runtime State\n- **Construction Verification Command**: exit 0",
     ));
-    refused();
+    await refused();
     recordCommand(dir, "exit 0");
     writeFileSync(seededStateFile(dir), setField(readFileSync(seededStateFile(dir), "utf-8"), "Construction Verification Command", "exit 1"));
-    refused();
+    await refused();
     const generic = cli(dir, "state", ["set", "Construction Verification Command=exit 0"], {
       ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
     });
@@ -965,18 +1105,15 @@ describe("t341 verification command consent", () => {
     const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--session", "t341-command"];
     const env = { ...process.env };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
-    submitCommandChoice(dir, "t341-command", "hello", env);
+    // The person typed their reply before the agent logged the question: no
+    // decision has used it, so it is the reply the answer stands on.
+    submitCommandChoice(dir, "t341-command", "Approve", env);
     const decision = cli(dir, "log", ["decision", ...identity, "--command", "exit 0", "--decision", "Use this command?", "--options", "Approve,Request Changes"], env);
     expect(decision.code, decision.out).toBe(0);
     const mismatch = cli(dir, "log", ["answer", ...identity, "--command", "exit 1", "--details", "Approve"], env);
     expect(mismatch.code).not.toBe(0);
     expect(mismatch.out).toContain("Command SHA-256");
-    const absent = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
-    expect(absent.code).not.toBe(0);
-    // The question is open and the reply came before it: none is on record yet.
-    expect(absent.out).toContain("none is on record yet");
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
-    submitCommandChoice(dir, "t341-command", "Approve", env);
     const approved = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
     expect(approved.code, approved.out).toBe(0);
     const receipts = readAuditShardEvents(dir).filter((row) => row.event === "VERIFICATION_COMMAND_RECORDED");
@@ -990,16 +1127,20 @@ describe("t341 verification command consent", () => {
     expect(cli(dir, "log", ["answer", ...identity, "--command", "exit 2", "--details", "Approve"], env).code).not.toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("Request Changes cannot be changed into Approve by the conductor", () => {
+  // A typed reply is the conductor's to read: its record of Request Changes
+  // authorizes nothing, and a choice the question did not offer is refused.
+  test("a typed Request Changes is recorded as the conductor read it, and authorizes no command", () => {
     const dir = project();
     const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0", "--session", "t341-command"];
     const env = { ...process.env };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
     expect(cli(dir, "log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"], env).code).toBe(0);
     submitCommandChoice(dir, "t341-command", "Request Changes", env);
-    const refused = cli(dir, "log", ["answer", ...identity, "--details", "Approve"], env);
-    expect(refused.code).not.toBe(0);
-    expect(refused.out).toContain('The person picked \\"Request Changes\\" for this question');
+    expect(readProtectedResponse(dir, "t341-command")?.choice).toBeUndefined();
+    expect(cli(dir, "log", ["answer", ...identity, "--details", "Maybe"], env).code).not.toBe(0);
+    const recorded = cli(dir, "log", ["answer", ...identity, "--details", "Request Changes"], env);
+    expect(recorded.code, recorded.out).toBe(0);
+    expect(recorded.out).not.toContain("The person picked");
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1019,7 +1160,7 @@ describe("t341 verification command consent", () => {
     expect(readProtectedResponse(dir, "t341-command")?.choice).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a choice sent from Kiro Crew binds the command; text ahead of Crew's request header does not", () => {
+  test("a reply sent from Kiro Crew is kept as its own turn; text ahead of Crew's request header is not", () => {
     // Kiro Crew delivers its context blocks and the person's turn as one prompt
     // (captured 2026-10-04). Only the text after the last request header is
     // the person's reply; a replayed "Approve" ahead of it must not bind.
@@ -1040,7 +1181,8 @@ describe("t341 verification command consent", () => {
     expect(readProtectedResponse(dir, "t341-command")?.choice).toBeUndefined();
     const answer = ["answer", ...identity, "--details", "Approve"];
     submitCommandChoice(dir, "t341-command", crew("Approve"), env);
-    expect(readProtectedResponse(dir, "t341-command")?.choice).toBe("Approve");
+    expect(readProtectedResponse(dir, "t341-command")?.words).toBe("What does this command do?\nApprove");
+    expect(readProtectedResponse(dir, "t341-command")?.choice).toBeUndefined();
     const approved = cli(dir, "log", answer, env);
     expect(approved.code, approved.out).toBe(0);
     expect(readAuditShardEvents(dir).filter((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toHaveLength(1);
@@ -1063,23 +1205,31 @@ describe("t341 verification command consent", () => {
     expect(cli(dir, "log", answer, env).code).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("re-minting the same command invalidates an earlier hook response, including replayed bytes", () => {
+  test("re-minting the same command takes the reply already typed; replayed hook bytes back nothing", () => {
     const dir = project();
-    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0", "--session", "t341-command"];
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--session", "t341-command"];
     const env = { ...process.env };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
-    const decision = ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"];
-    const answer = ["answer", ...identity, "--details", "Approve"];
-    expect(cli(dir, "log", decision, env).code).toBe(0);
+    const decision = (command: string) =>
+      ["decision", ...identity, "--command", command, "--decision", "Use this command?", "--options", "Approve,Request Changes"];
+    const answer = (command: string) => ["answer", ...identity, "--command", command, "--details", "Approve"];
+    const receipts = () => readAuditShardEvents(dir).filter((row) => row.event === "VERIFICATION_COMMAND_RECORDED");
+    expect(cli(dir, "log", decision("exit 0"), env).code).toBe(0);
     submitCommandChoice(dir, "t341-command", "Approve", env);
     const previous = readProtectedResponse(dir, "t341-command")!;
-    expect(cli(dir, "log", decision, env).code).toBe(0);
-    expect(cli(dir, "log", answer, env).code).not.toBe(0);
+    // Asked again, the question takes the Approve no decision has used: they are not asked twice.
+    expect(cli(dir, "log", decision("exit 0"), env).code).toBe(0);
+    const again = cli(dir, "log", answer("exit 0"), env);
+    expect(again.code, again.out).toBe(0);
+    expect(receipts()).toHaveLength(1);
+    // That Approve is used now: the hook's bytes replayed for the next question back nothing.
+    expect(cli(dir, "log", decision("exit 2"), env).code).toBe(0);
     writeProtectedResponse(dir, previous);
-    expect(cli(dir, "log", answer, env).code).not.toBe(0);
-    expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
+    expect(cli(dir, "log", answer("exit 2"), env).code).not.toBe(0);
+    expect(receipts()).toHaveLength(1);
     submitCommandChoice(dir, "t341-command", "Approve", env);
-    expect(cli(dir, "log", answer, env).code).toBe(0);
+    expect(cli(dir, "log", answer("exit 2"), env).code).toBe(0);
+    expect(receipts()).toHaveLength(2);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("decision and answer require the invoking session even with presence bypassed", () => {
@@ -1173,7 +1323,7 @@ describe("t341 verification command consent", () => {
     expect(cli(dir, "log", ["answer", ...identity, "--details", "Approve"], env).code).not.toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("canonical command bytes survive dollar substitutions without abbreviating the label", () => {
+  test("canonical command bytes survive dollar substitutions without abbreviating the label", async () => {
     const dir = project();
     recordCommand(dir, "exit 0");
     // Keep the dollar replacement patterns in the authorized command and its
@@ -1186,7 +1336,7 @@ describe("t341 verification command consent", () => {
     expect(authorization.command).toBe(command);
     expect(authorization.sha256).toBe(createHash("sha256").update(command).digest("hex"));
     expect(authorization.label).toBe(command);
-    const verified = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    const verified = await verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(verified.verified).toBe(true);
     expect(verified.verification!.stdout_sha256).toBe(createHash("sha256").update("$& $` $1 $$").digest("hex"));
     for (const invalid of ["echo a\necho b", "echo\rb", "echo\tb", "echo\u001bb"]) {
@@ -1196,7 +1346,7 @@ describe("t341 verification command consent", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("the full 300-character command is displayed before consent and retained in its receipt and proof", () => {
+  test("the full 300-character command is displayed before consent and retained in its receipt and proof", async () => {
     const dir = project();
     const command = `echo ${"benign".repeat(20)}${" ".repeat(166)}&& exit 0`;
     const sha256 = createHash("sha256").update(command).digest("hex");
@@ -1211,7 +1361,7 @@ describe("t341 verification command consent", () => {
     const receipt = readAuditShardEvents(dir).find((row) => row.event === "VERIFICATION_COMMAND_RECORDED")!;
     expect(auditBlockField(receipt.block, "Command Label")).toBe(command);
     expect(cli(dir, "state", ["set-construction-verification-command", command]).code).toBe(0);
-    const verified = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    const verified = await verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(verified.verified).toBe(true);
     expect(verified.verification!.command_label).toBe(command);
     expect(verified.verification_command).toBe(command);
@@ -1219,11 +1369,11 @@ describe("t341 verification command consent", () => {
     expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("1024-character commands work end to end; oversized legacy state and proofs fail closed", () => {
+  test("1024-character commands work end to end; oversized legacy state and proofs fail closed", async () => {
     const dir = project();
     const command = `echo ${"x".repeat(1019)}`;
     recordCommand(dir, command);
-    const verified = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    const verified = await verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(verified.verified).toBe(true);
     expect(verified.verification!.command_label).toBe(command);
     const oversized = `${command}x`;
@@ -1240,9 +1390,9 @@ describe("t341 verification command consent", () => {
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("display-spoofing characters are rejected by command input and persisted proof readers", () => {
+  test("display-spoofing characters are rejected by command input and persisted proof readers", async () => {
     const dir = project();
-    const verified = pass(dir);
+    const verified = await pass(dir);
     for (const character of ["\u200b", "\u202e", "\u2028", "\u2029", "\u00a0"]) {
       for (const command of [`echo${character}safe`, `${character}echo safe${character}`]) {
         expect(() => verificationCommandDetails(command)).toThrow("display-spoofing characters");
@@ -1291,15 +1441,12 @@ describe("t341 verification command consent", () => {
 });
 
 describe("t341 human authority, attempt boundaries, and scoped approval", () => {
-  test("skeleton always needs the person's reply and a fresh human, including under autonomy", () => {
+  test("skeleton always needs the person's reply and a fresh human, including under autonomy", async () => {
     const dir = project(true);
-    expect(pass(dir, "skeleton").human_required).toBe(true);
+    expect((await pass(dir, "skeleton")).human_required).toBe(true);
     expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton")).toThrow("requires the person's reply to this question");
     expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint")).toThrow();
     expect(approvals(dir)).toEqual([]);
-    // An exact pick is the person's: the conductor cannot record the other choice.
-    human(dir, "skeleton", "Request Changes");
-    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint")).toThrow('picked "Request Changes"');
     // The conductor read their approval; the receipt carries their own words.
     human(dir, "skeleton", "looks right, ship it");
     const approved = approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint");
@@ -1311,16 +1458,16 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
       "Gate Scope": "unit-end", Checkpoint: "walking-skeleton",
       Fingerprint: approved.fingerprint, "Run floor": approved.run_floor,
     })) expect(auditBlockField(gate.block, key)).toBe(value);
-    pass(dir, "skeleton");
+    await pass(dir, "skeleton");
     expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint")).toThrow("--action ask");
     expect(approvals(dir)).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // The person's reply to this question is their presence: a decision the
   // agent recorded after it never makes them answer the question again.
-  test("a reply on record for the question records the agent's reading without a second reply", () => {
+  test("a reply on record for the question records the agent's reading without a second reply", async () => {
     const dir = project();
-    pass(dir, "skeleton");
+    await pass(dir, "skeleton");
     human(dir, "skeleton", "looks right, ship it");
     appendAuditEntry("QUESTION_ANSWERED", { Stage: "code-generation", Details: "an unrelated answer" }, dir);
     const approved = approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint");
@@ -1328,9 +1475,38 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     expect(auditBlockField(approvals(dir).at(-1)!.block, "Person Reply")).toBe("looks right, ship it");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a question with no reply yet waits for one, and none open names the ask", () => {
+  // Two replies under the question: the decision's words are both, and its row names both messages, oldest first,
+  // ending with the latest, as a stage gate's row names its window.
+  const turnMessages = (dir: string) => readAuditShardEvents(dir).filter((row) => row.event === "HUMAN_TURN")
+    .map((row) => auditBlockField(row.block, "Message Id"));
+
+  test("an approval on two replies names both messages its words came in", async () => {
     const dir = project();
-    pass(dir, "skeleton");
+    await pass(dir, "skeleton");
+    human(dir, "skeleton", "looks right");
+    submitCommandChoice(dir, "t341-checkpoint", "ship it");
+    approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint");
+    const gate = approvals(dir).at(-1)!;
+    const ids = turnMessages(dir).slice(-2);
+    expect(auditBlockField(gate.block, "Message Ids")).toBe(ids.join(","));
+    expect(auditBlockField(gate.block, "Message Id")).toBe(ids[1]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a change request on two replies names both messages its words came in", async () => {
+    const dir = project();
+    await pass(dir, "skeleton");
+    human(dir, "skeleton", "not yet");
+    submitCommandChoice(dir, "t341-checkpoint", "the title should say Orders");
+    rejectConstructionCheckpoint(dir, "alpha", "skeleton", "Request Changes", "Rename the title to Orders", "t341-checkpoint");
+    const rejected = readAuditShardEvents(dir).filter((row) => row.event === "GATE_REJECTED").at(-1)!;
+    const ids = turnMessages(dir).slice(-2);
+    expect(auditBlockField(rejected.block, "Message Ids")).toBe(ids.join(","));
+    expect(auditBlockField(rejected.block, "Message Id")).toBe(ids[1]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a question with no reply yet waits for one, and none open names the ask", async () => {
+    const dir = project();
+    await pass(dir, "skeleton");
     expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint"))
       .toThrow("no such question is open");
     const asked = cli(dir, "bolt", ["checkpoint", "--action", "ask", "--unit", "alpha", "--kind", "skeleton", "--session", "t341-checkpoint"]);
@@ -1339,13 +1515,13 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
       .toThrow("none is on record yet");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("ordinary checkpoints autoapprove only under a recorded autonomous grant", () => {
+  test("ordinary checkpoints autoapprove only under a recorded autonomous grant", async () => {
     const dir = project(true);
-    expect(pass(dir).human_required).toBe(false);
+    expect((await pass(dir)).human_required).toBe(false);
     expect(approveConstructionCheckpoint(dir, "alpha", "unit").approved).toBe(true);
     expect(auditBlockField(approvals(dir).at(-1)!.block, "Autonomous")).toBe("true");
     const gated = project();
-    pass(gated);
+    await pass(gated);
     writeFileSync(seededStateFile(gated), setField(readFileSync(seededStateFile(gated), "utf-8"),
       "Construction Autonomy Mode", "autonomous"));
     expect(() => approveConstructionCheckpoint(gated, "alpha", "unit")).toThrow("requires the person's reply to this question");
@@ -1353,9 +1529,9 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     expect(approveConstructionCheckpoint(gated, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("later unrelated Unit source/artifact changes preserve prior approval", () => {
+  test("later unrelated Unit source/artifact changes preserve prior approval", async () => {
     const dir = project(true);
-    pass(dir);
+    await pass(dir);
     const approved = approveConstructionCheckpoint(dir, "alpha", "unit");
     writeFileSync(join(dir, "src", "beta.ts"), "export const beta = 42;\n");
     writeFileSync(artifact(dir, "beta", "functional-design"), "# Beta changed\n");
@@ -1367,9 +1543,9 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").approved).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("stage-major skeleton approval survives later stage starts", () => {
+  test("stage-major skeleton approval survives later stage starts", async () => {
     const dir = project(true, "stage-major");
-    pass(dir, "skeleton");
+    await pass(dir, "skeleton");
     human(dir, "skeleton");
     const approved = approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint");
     for (const Stage of STAGES) appendAuditEntry("STAGE_STARTED", { Stage }, dir);
@@ -1379,10 +1555,10 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     expect(current.approved).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("workflow restarts and jumps revoke proof even with identical artifacts", () => {
+  test("workflow restarts and jumps revoke proof even with identical artifacts", async () => {
     for (const event of ["WORKFLOW_STARTED", "STAGE_JUMPED"]) {
       const dir = project(true);
-      pass(dir);
+      await pass(dir);
       approveConstructionCheckpoint(dir, "alpha", "unit");
       appendAuditEntry(event, { Stage: "functional-design" }, dir);
       const current = resolveConstructionCheckpoint(dir, "alpha", "unit");
@@ -1394,18 +1570,17 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("rejection needs a human even in autonomy and resets only that Unit's stages", () => {
+  test("rejection needs a human even in autonomy and resets only that Unit's stages", async () => {
     const dir = project(true);
-    pass(dir);
+    await pass(dir);
     approveConstructionCheckpoint(dir, "alpha", "unit");
-    pass(dir, "unit", "beta");
+    await pass(dir, "unit", "beta");
     approveConstructionCheckpoint(dir, "beta", "unit");
     expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "Fix alpha", "t341-checkpoint")).toThrow();
     expect(readAuditShardEvents(dir).filter((entry) => entry.event === "GATE_REJECTED")).toEqual([]);
-    human(dir, "unit", "Approve");
-    expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "Fix alpha", "t341-checkpoint")).toThrow('picked "Approve"');
     human(dir, "unit", "Request Changes");
-    expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", " ", "t341-checkpoint")).toThrow("reason");
+    // With no reason passed, the person's own words are the reason; one on more than one line is refused.
+    expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "first\nsecond", "t341-checkpoint")).toThrow("reason");
     const priorFloor = latestMainWorkflowStageRunFloorForProject(dir, STAGES[0], true, "beta");
     const rejected = rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "Fix alpha", "t341-checkpoint");
     expect(rejected.approved).toBe(false);
@@ -1421,13 +1596,13 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     expect(resolveConstructionCheckpoint(dir, "beta", "unit").approved).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("proof and source manifest paths refuse symlink redirection", () => {
+  test("proof and source manifest paths refuse symlink redirection", async () => {
     const dir = project();
     const root = seededRecordDir(dir);
     const destination = join(root, "redirect");
     mkdirSync(destination);
     symlinkSync(destination, join(root, ".aidlc-construction-checkpoints"), process.platform === "win32" ? "junction" : "dir");
-    expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow();
+    await expect(verifyConstructionCheckpoint(dir, "alpha", "unit")).rejects.toThrow();
     // Unlink the junction itself; Bun's rmSync can fail on Windows junctions.
     fs.unlinkSync(join(root, ".aidlc-construction-checkpoints"));
     expect(fs.existsSync(destination)).toBe(true);
@@ -1480,13 +1655,13 @@ describe("t341 review evidence is independent of project check success", () => {
 
   for (const changeControl of ["strict", "relaxed", "off"]) {
     const edit = changeControl === "strict" ? "asks again" : "is accepted too";
-    test(`a later Unit's reviewed build of a shared file keeps an approved Unit approved; a person's edit ${edit} (${changeControl})`, () => {
+    test(`a later Unit's reviewed build of a shared file keeps an approved Unit approved; a person's edit ${edit} (${changeControl})`, async () => {
       const dir = project();
       writeFileSync(seededStateFile(dir), setField(setField(state(), "Review Override", "advisory"),
         "Change Control", changeControl));
       shareFile(dir);
       reviewUnit(dir, "alpha");
-      expect(pass(dir).ready).toBe(true);
+      expect((await pass(dir)).ready).toBe(true);
       human(dir);
       const approved = approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint");
       expect(approved.approved).toBe(true);
@@ -1514,11 +1689,11 @@ describe("t341 review evidence is independent of project check success", () => {
       expect(edited.errors).toEqual(["code-generation: current artifact/source-bound terminal review evidence is required."]);
       expect(edited.rereview).toMatchObject({ stage: "code-generation", iteration: 2 });
       expect(edited.rereview?.command).toContain("--unit alpha --iteration 2");
-      expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow(edited.rereview!.command);
+      await expect(verifyConstructionCheckpoint(dir, "alpha", "unit")).rejects.toThrow(edited.rereview!.command);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  test("requires current paired reviews; relaxed accepts a later edit of claimed source, strict re-checks it", () => {
+  test("requires current paired reviews; relaxed accepts a later edit of claimed source, strict re-checks it", async () => {
     const dir = project();
     writeFileSync(seededStateFile(dir), setField(state(), "Review Override", "advisory"));
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").ready).toBe(false);
@@ -1544,7 +1719,7 @@ describe("t341 review evidence is independent of project check success", () => {
         ...(fields["Source Fingerprint"] ? { "Request Source Fingerprint": fields["Source Fingerprint"] } : {}),
       }, dir);
     }
-    const verified = pass(dir);
+    const verified = await pass(dir);
     expect(verified.ready).toBe(true);
     human(dir);
     expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
@@ -1556,7 +1731,7 @@ describe("t341 review evidence is independent of project check success", () => {
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").approved).toBe(true);
     writeFileSync(seededStateFile(dir), setField(readFileSync(seededStateFile(dir), "utf-8"),
       "Change Control", "strict"));
-    expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow("review");
+    await expect(verifyConstructionCheckpoint(dir, "alpha", "unit")).rejects.toThrow("review");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
@@ -1565,7 +1740,7 @@ describe("t341 response-bound checkpoint decisions", () => {
   const env = { ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" };
   const route = (kind = "unit", id = session) => ["checkpoint", "--unit", "alpha", "--kind", kind, "--session", id];
 
-  test("an unverified checkpoint cannot ask or pre-collect consent for a later verification", () => {
+  test("an unverified checkpoint cannot ask or pre-collect consent for a later verification", async () => {
     const pd = project();
     recordCommand(pd, "exit 0");
     expect(resolveConstructionCheckpoint(pd, "alpha", "unit")).toMatchObject({ ready: true, verified: false });
@@ -1573,7 +1748,7 @@ describe("t341 response-bound checkpoint decisions", () => {
     expect(asked.code).not.toBe(0);
     expect(asked.out).toMatch(/verify.*first/i);
     submitCommandChoice(pd, session, "Approve", env);
-    expect(verifyConstructionCheckpoint(pd, "alpha", "unit").verified).toBe(true);
+    expect((await verifyConstructionCheckpoint(pd, "alpha", "unit")).verified).toBe(true);
     const approve = () => cli(pd, "bolt", [...route(), "--action", "approve", "--user-input", "Approve"], env);
     expect(approve().code).not.toBe(0);
     expect(approvals(pd)).toEqual([]);
@@ -1582,16 +1757,16 @@ describe("t341 response-bound checkpoint decisions", () => {
     expect(approve().code).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("re-verifying identical evidence withdraws every session's question and binds fresh consent to the new proof", () => {
+  test("re-verifying identical evidence withdraws every session's question and binds fresh consent to the new proof", async () => {
     const pd = project();
-    const first = pass(pd);
+    const first = await pass(pd);
     for (const id of [session, "another-checkpoint-session"]) {
       expect(cli(pd, "bolt", [...route("unit", id), "--action", "ask"], env).code).toBe(0);
       submitCommandChoice(pd, id, "Approve", env);
     }
     const previous = readProtectedQuestion(pd, session)!;
     const response = readProtectedResponse(pd, session)!;
-    const checked = verifyConstructionCheckpoint(pd, "alpha", "unit");
+    const checked = await verifyConstructionCheckpoint(pd, "alpha", "unit");
     expect(checked.verified).toBe(true);
     expect(checked.fingerprint).toBe(first.fingerprint);
     expect(checked.verification!.id).not.toBe(first.verification!.id);
@@ -1612,21 +1787,21 @@ describe("t341 response-bound checkpoint decisions", () => {
     expect(cli(pd, "bolt", [...route(), "--action", "approve", "--user-input", "Approve"], env).code).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a failed re-verification withdraws an unanswered checkpoint before it executes", () => {
+  test("a failed re-verification withdraws an unanswered checkpoint before it executes", async () => {
     const pd = project();
-    pass(pd);
+    await pass(pd);
     expect(cli(pd, "bolt", [...route(), "--action", "ask"], env).code).toBe(0);
     writeCheck(pd, "process.exit(1);\n");
-    expect(verifyConstructionCheckpoint(pd, "alpha", "unit").verified).toBe(false);
+    expect((await verifyConstructionCheckpoint(pd, "alpha", "unit")).verified).toBe(false);
     expect(readProtectedQuestion(pd, session)).toBeNull();
     submitCommandChoice(pd, session, "Approve", env);
     expect(readProtectedResponse(pd, session)).toBeNull();
     expect(cli(pd, "bolt", [...route(), "--action", "ask"], env).code).not.toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test.each(["unit", "skeleton"])("%s refuses a prompt from before the question, cross-session choices, and consumed responses", (kind) => {
+  test.each(["unit", "skeleton"])("%s refuses a prompt from before the question, cross-session choices, and consumed responses", async (kind) => {
     const pd = project();
-    pass(pd, kind as "unit" | "skeleton");
+    await pass(pd, kind as "unit" | "skeleton");
     submitCommandChoice(pd, session, "hello", env);
     const decide = (id = session) => cli(pd, "bolt", [...route(kind, id), "--action", "approve", "--user-input", "Approve"], env);
     expect(decide().code).not.toBe(0);
@@ -1649,9 +1824,9 @@ describe("t341 response-bound checkpoint decisions", () => {
     expect(approvals(pd)).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("re-presentation rotates consent and changed evidence must be presented again", () => {
+  test("re-presentation rotates consent and changed evidence must be presented again", async () => {
     const pd = project();
-    pass(pd);
+    await pass(pd);
     const ask = () => {
       const result = cli(pd, "bolt", [...route(), "--action", "ask"], env);
       expect(result.code, result.out).toBe(0);
@@ -1666,7 +1841,7 @@ describe("t341 response-bound checkpoint decisions", () => {
     submitCommandChoice(pd, session, "Approve", env);
     writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
     complete(pd, "alpha");
-    pass(pd);
+    await pass(pd);
     const stale = approve();
     expect(stale.code).not.toBe(0);
     expect(stale.out).toContain("--action ask");
@@ -1676,9 +1851,9 @@ describe("t341 response-bound checkpoint decisions", () => {
     expect(approve().code).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("an audit append failure retains the one-shot response for a safe retry", () => {
+  test("an audit append failure retains the one-shot response for a safe retry", async () => {
     const pd = project();
-    pass(pd);
+    await pass(pd);
     human(pd);
     const shard = readAuditShardEvents(pd)[0].shard;
     const originalOpen = fs.openSync;
@@ -1698,9 +1873,9 @@ describe("t341 response-bound checkpoint decisions", () => {
     expect(readProtectedResponse(pd, "t341-checkpoint")).toBeNull();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("presence bypass never replaces a response and rejection requires its own choice", () => {
+  test("presence bypass never replaces a response", async () => {
     const pd = project(true);
-    pass(pd);
+    await pass(pd);
     const bypass = { ...env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" };
     const reject = () => cli(pd, "bolt", [...route(), "--action", "reject", "--user-input", "Request Changes", "--reason", "Fix alpha"], bypass);
     expect(reject().code).not.toBe(0);
@@ -1708,8 +1883,6 @@ describe("t341 response-bound checkpoint decisions", () => {
     const autonomous = cli(pd, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "approve"], env);
     expect(autonomous.code, autonomous.out).toBe(0);
     expect(cli(pd, "bolt", [...route(), "--action", "ask"], env).code).toBe(0);
-    submitCommandChoice(pd, session, "Approve", env);
-    expect(reject().code).not.toBe(0);
     submitCommandChoice(pd, session, "Request Changes", env);
     expect(reject().code).toBe(0);
     expect(readProtectedResponse(pd, session)).toBeNull();
@@ -1730,7 +1903,7 @@ describe("t341 response-bound checkpoint decisions", () => {
     expect(readProtectedQuestion(pd, session)?.kind).toBe(activePolicy ? "construction-policy" : "verification-command");
     expect(readProtectedResponse(pd, session)).toBeNull();
     submitCommandChoice(pd, session, "Approve", env);
-    expect(readProtectedResponse(pd, session)?.choice).toBe("Approve");
+    expect(readProtectedResponse(pd, session)?.words).toBe("Approve");
     const answer = (identity: string[]) => cli(pd, "log", ["answer", ...identity, "--details", "Approve"], env);
     // Try the retired question both before and after consuming the active one.
     expect(answer(first).code).not.toBe(0);
@@ -1788,7 +1961,7 @@ describe("t341 protected question interleaving", () => {
     }
     expect(readProtectedQuestion(pd, session)).toBeNull();
     expect(readProtectedQuestion(pd, "other")?.challengeId ?? null).toBe(interleaving === "same-session" ? other.challengeId : null);
-    expect(readProtectedResponse(pd, "other")?.choice ?? null).toBe(interleaving === "same-session" ? "Approve" : null);
+    expect(readProtectedResponse(pd, "other")?.words ?? null).toBe(interleaving === "same-session" ? "Approve" : null);
     submitCommandChoice(pd, session, "Approve", env);
     expect(readProtectedResponse(pd, session)).toBeNull();
     const refused = answer(pd);
@@ -1923,12 +2096,12 @@ describe("t341 protected question interleaving", () => {
     expect(readPlanApprovalChallenge(pd, session)).toBeNull();
     expect(readPlanApprovalResponse(pd, session)).toBeNull();
     submitCommandChoice(pd, session, "Approve", env);
-    expect(readProtectedResponse(pd, session)?.choice).toBe("Approve");
+    expect(readProtectedResponse(pd, session)?.words).toBe("Approve");
     writePlanApprovalChallenge(pd, plan);
     expect(readProtectedQuestion(pd, session)).toBeNull();
     expect(readProtectedResponse(pd, session)).toBeNull();
     submitCommandChoice(pd, session, "Approve Plan", env);
-    expect(readPlanApprovalResponse(pd, session)?.choice).toBe("Approve Plan");
+    expect(readPlanApprovalResponse(pd, session)?.words).toBe("Approve Plan");
     // Ordinary decisions deliberately do not withdraw mature Plan Approval.
     const ordinary = cli(pd, "log", ["decision", "--stage", "code-generation", "--decision", "Another question?", "--session", session], env);
     expect(ordinary.code, ordinary.out).toBe(0);
@@ -1965,9 +2138,9 @@ describe("t341 a checkpoint finds the session it runs in", () => {
   const route = (action: string, ...extra: string[]) =>
     ["checkpoint", "--action", action, "--unit", "alpha", "--kind", "unit", ...extra];
 
-  test("asking and approving need no --session", () => {
+  test("asking and approving need no --session", async () => {
     const pd = project();
-    pass(pd);
+    await pass(pd);
     const asked = cli(pd, "bolt", route("ask"), inSession);
     expect(asked.code, asked.out).toBe(0);
     expect(readProtectedQuestion(pd, own)).not.toBeNull();
@@ -1977,17 +2150,17 @@ describe("t341 a checkpoint finds the session it runs in", () => {
     expect(approvals(pd).map((row) => auditBlockField(row.block, "Session"))).toEqual([own]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a blank --session is the same as none", () => {
+  test("a blank --session is the same as none", async () => {
     const pd = project();
-    pass(pd);
+    await pass(pd);
     const asked = cli(pd, "bolt", route("ask", "--session", " "), inSession);
     expect(asked.code, asked.out).toBe(0);
     expect(readProtectedQuestion(pd, own)).not.toBeNull();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a session that cannot be found is named in one line, and nothing is asked", () => {
+  test("a session that cannot be found is named in one line, and nothing is asked", async () => {
     const pd = project();
-    pass(pd);
+    await pass(pd);
     const { AIDLC_SESSION_OVERRIDE: _session, AIDLC_SESSION_OVERRIDE_SOURCE: _source, ...outside } = process.env;
     const asked = cli(pd, "bolt", route("ask"), outside);
     expect(asked.code).not.toBe(0);
@@ -1996,9 +2169,9 @@ describe("t341 a checkpoint finds the session it runs in", () => {
       auditBlockField(row.block, "Checkpoint") === "Construction Unit Approval")).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("two sessions claiming the process get the resolver's own way out, and nothing is asked", () => {
+  test("two sessions claiming the process get the resolver's own way out, and nothing is asked", async () => {
     const pd = project();
-    pass(pd);
+    await pass(pd);
     writeSessionPidEntry(pd, process.pid, "t341-owner");
     const { AIDLC_SESSION_OVERRIDE_SOURCE: _source, ...rest } = process.env;
     const asked = cli(pd, "bolt", route("ask"), { ...rest, AIDLC_SESSION_OVERRIDE: "t341-other" });
@@ -2015,9 +2188,9 @@ describe("t341 a checkpoint finds the session it runs in", () => {
   test.each([
     ["approve", "Approve", "GATE_APPROVED"],
     ["reject", "Request Changes", "GATE_REJECTED"],
-  ] as const)("with no session to find, a recorded reply to %s goes through on a retry with --session", (action, reply, event) => {
+  ] as const)("with no session to find, a recorded reply to %s goes through on a retry with --session", async (action, reply, event) => {
     const pd = project();
-    pass(pd);
+    await pass(pd);
     const { AIDLC_SESSION_OVERRIDE: _session, AIDLC_SESSION_OVERRIDE_SOURCE: _source, ...outside } = process.env;
     const named = "t341-named-session";
     const asked = cli(pd, "bolt", route("ask", "--session", named), outside);

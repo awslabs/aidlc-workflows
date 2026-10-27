@@ -129,7 +129,9 @@ and working-tree fingerprint before scanning. The fingerprint leaves out
 AI-DLC's own install, settings, and the root files it writes into, so an AI-DLC
 update or setting change does not make a store stale. The human may reuse a
 verified-current store whose coverage fits the intent; stale, unverified,
-legacy, or mismatched stores require a full or focused rescan. Full rescans
+legacy, or mismatched stores require a full or focused rescan. A store this
+run of the stage already scanned and published (a new chat picking the stage
+up) is not offered back: the stage goes on to its approval. Full rescans
 replace the store; focused rescans merge newly analyzed areas into it while
 preserving prior prose. For multi-repo intents, all decisions are resolved
 before one stage-level lifecycle report.
@@ -386,7 +388,7 @@ gate open and the stage incomplete.
 ### Notes
 
 - The promotion replaces each `team.md` section's body and keeps its heading
-  (`replaceSection` in `.claude/tools/aidlc-lib.ts`), so a re-run does not
+  (`replaceSection` in `.claude/tools/aidlc-markdown.ts`), so a re-run does not
   pile up duplicates the way `appendUnderHeading` would.
 - `org.md` and `team.md` share one Title Case heading set
   (`## Way of Working`, `## Walking Skeleton`, `## Testing Posture`,
@@ -490,7 +492,7 @@ large scope with significant unknowns.
    all six dimensions. Create
    `<record>/inception/requirements-analysis/requirements-analysis-questions.md`
    using the `[Answer]:` tag format. Include context-appropriate questions with
-   A-E options. Every ordinary clarifying question must end with `X. Other (please specify)` as
+   A-E options (A-D on Claude Code). Every ordinary clarifying question must end with `X. Other (please specify)` as
    the final option. All `[Answer]:` tags left blank.
 
    Offer the tri-mode question flow: Guide Me / Edit File / Chat.
@@ -529,9 +531,12 @@ large scope with significant unknowns.
     with :mag: emoji and review path. The approval gate has two variants:
 
     **If User Stories is set to SKIP in the execution state:** 3-option gate:
-    Approve / Request Changes / Add User Stories (include the currently
-    skipped User Stories stage). If "Add User Stories" is selected, run
-    `aidlc engine recompose --add user-stories`; do not edit the checkbox directly.
+    Approve / Request Changes / Approve, and add User Stories next (include the
+    currently skipped User Stories stage and start it). On that pick, run
+    `aidlc engine orchestrate next --add user-stories` and follow its step, which
+    names the report that records the approval; do not edit the checkbox directly.
+    A request to add User Stories with no approval in it is the same
+    `next --add`, with the gate asked once more.
 
     **If User Stories is NOT set to SKIP:** Standard 2-option gate: Approve /
     Request Changes.
@@ -544,13 +549,14 @@ All artifacts written to `<record>/inception/requirements-analysis/`:
 |--------------------------------------|---------------------------------------------------------|
 | `requirements.md`                    | Formal requirements: intent analysis, functional/non-functional requirements, constraints, assumptions, out-of-scope, open questions |
 | `requirements-analysis-questions.md` | Clarifying questions with `[Answer]:` tags (input artifact) |
+| `traceability.json`                  | The FR and NFR IDs `requirements.md` defines, spelled as it spells them, each with its `kind` and, for a sub-requirement, the requirement it belongs to (`of`); later stages trace from this list |
 
 ### Approval Gate
 
 Conditional gate format:
 
 - **If User Stories is skipped:** 3-option gate -- **Approve** / **Request
-  Changes** / **Add User Stories**
+  Changes** / **Approve, and add User Stories next**
 - **If User Stories is not skipped:** Standard 2-option gate -- **Approve** /
   **Request Changes**
 
@@ -910,9 +916,10 @@ dependencies; the aidlc-design-agent contributes UI component structure.
 6. **Present Completion & Request Approval** -- Display completion message
    with :building_construction: emoji, summary of design artifacts, key
    architectural decisions highlighted, and review path. 3-option approval
-   gate: Approve / Request Changes / Add Units Generation (if it was skipped
-   in execution plan). Selecting Add Units Generation runs
-   `aidlc engine recompose --add units-generation`; it never edits the state checkbox
+   gate: Approve / Request Changes / Approve, and add Units Generation next (if
+   it was skipped in execution plan). That pick runs
+   `aidlc engine orchestrate next --add units-generation` and its step, which
+   names the report that records the approval; it never edits the state checkbox
    directly.
 
 ### Outputs
@@ -937,9 +944,9 @@ Special 3-option gate:
 
 - **Approve** -- Continue to next stage
 - **Request Changes** -- Provide revision feedback
-- **Add Units Generation** -- Include the currently skipped Units Generation
-  stage (if it was skipped in the execution plan) via
-  `aidlc-utility.ts recompose --add units-generation`
+- **Approve, and add Units Generation next** -- Approve, and include the
+  currently skipped Units Generation stage (if it was skipped in the execution
+  plan) via `aidlc engine orchestrate next --add units-generation`
 
 ### Notes
 
@@ -1273,10 +1280,10 @@ All Inception phase artifacts:
    `--checkpoint verification-command --command-file verification-command.txt`
    and find the session they run in.
    Record the decision before asking and wait for the human's **Approve** /
-   **Request Changes** reply in that session. Record the answer with the same
-   stage/checkpoint/command/session; only **Approve** authorizes the receipt.
-   An unrelated reply, **Request Changes**, or a reply from another session does
-   not. Never write `--details "Approve"` unless the human chose it; only then run
+   **Request Changes** reply, in that chat or a new one while it is the newest
+   question asked. Record the answer with the same stage/checkpoint/command;
+   only **Approve** authorizes the receipt. An unrelated reply, **Request
+   Changes**, or a reply to another question does not. Never write `--details "Approve"` unless the human chose it; only then run
    `state set-construction-verification-command --command-file verification-command.txt`. **Request Changes** means
    propose another command. The receipt must precede the state field; never use
    generic `state set` or auto-approve. This command is reused for all Unit/batch

@@ -207,6 +207,8 @@ const manifest: HarnessManifest = {
           // (branch-era).
           "sha256:bd7a3a74e81cc207b899565bbb30da1da201d7b6fd0e99d332f25abc2c4a5d49",
           // The variant shipped upstream at the merge point (ffd75428).
+          // The variant whose Guards setters passed the person's words (--person-words);
+          // they now name the message the person asked in (--message <id>).
           "sha256:b87a3ec2c39cb24074c6fa37f626e9d150d435d18069fbd0c762fdbd70719c5c",
         ],
       },

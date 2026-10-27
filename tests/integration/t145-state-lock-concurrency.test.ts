@@ -26,10 +26,10 @@
 //   dist/claude/.claude/tools/aidlc-state.ts — handleSet / handleReject /
 //     handleApprove / handleSkip / handleSetSkeletonStance (+ the rest) open
 //     with `withAuditLock(pd, () => { ... })`.
-//   dist/claude/.claude/tools/aidlc-lib.ts:withAuditLock — reentrant per-pd
+//   dist/claude/.claude/tools/aidlc-locks.ts:withAuditLock — reentrant per-pd
 //     audit lock (the OS mutex is mkdir-based, so cross-process contention
 //     serialises through EEXIST + the retry budget).
-//   dist/claude/.claude/tools/aidlc-lib.ts:holdsAuditLock — the in-lock signal
+//   dist/claude/.claude/tools/aidlc-locks.ts:holdsAuditLock — the in-lock signal
 //     emitAudit() branches on to pick appendAuditEntryUnlocked (held lock) vs
 //     appendAuditEntry (no lock), so an in-transaction emit can't self-deadlock.
 //

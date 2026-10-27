@@ -1,7 +1,7 @@
 // covers: function:writeActiveDirectiveMarker, function:leaveCreationReceipt, function:writeWorkspaceSourceSnapshot, function:writeBaselineSourceSnapshot
 //
 // The records AI-DLC keeps under an intent's engine folder (the Stop hook's
-// block counter, the compaction breadcrumb, the active-directive marker, the
+// block counter, the compaction hook's heartbeat, the active-directive marker, the
 // source snapshots, the creation receipt) were written through whatever sat at
 // that path. A cloned repository can carry an in-progress intent whose engine
 // folder is a link, and then the person's next turn end, compaction or Plan
@@ -102,7 +102,7 @@ describe("t-record-writes-never-follow-links: records under the engine folder ar
     expect(lstatSync(join(record, ".aidlc-engine")).isSymbolicLink()).toBe(true);
   });
 
-  test.skipIf(!linksWork)("the compaction hook keeps no breadcrumb through a planted link and still exits cleanly", () => {
+  test.skipIf(!linksWork)("the compaction hook writes nothing through a planted link and still exits cleanly", () => {
     const { proj, record } = project();
     const outside = plantEngineLink(record);
     const result = runHook(proj, "aidlc-validate-state.ts", COMPACT);
@@ -127,11 +127,11 @@ describe("t-record-writes-never-follow-links: records under the engine folder ar
     expect(readdirSync(outside)).toEqual([]);
   });
 
-  test("without a link, the block counter and the breadcrumb land where they belong", () => {
+  test("without a link, the block counter and the compaction heartbeat land where they belong", () => {
     const { proj, record } = project();
     expect(runHook(proj, "aidlc-continue-workflow.ts", STOP).code).toBe(0);
     expect(existsSync(join(record, ".aidlc-engine", "stop-hook", "block-count.json"))).toBe(true);
     expect(runHook(proj, "aidlc-validate-state.ts", COMPACT).code).toBe(0);
-    expect(existsSync(join(record, ".aidlc-engine", "recovery.md"))).toBe(true);
+    expect(existsSync(join(record, ".aidlc-engine", "hooks-health", "validate-state.last"))).toBe(true);
   });
 });

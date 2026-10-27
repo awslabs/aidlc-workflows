@@ -14,22 +14,34 @@
 //       refused with that way past; after it both are admitted;
 //   (f) a call to one of the person's MCP servers runs, whatever the state.
 //
+// And before any `next`, a build step the chat compaction set aside: under
+// Guard Policy off its own work goes on in every shape; under strict and
+// relaxed each refusal names a way past that leads back to the build.
+//
 // The states and the seven shapes live in tests/harness/code-generation-states.ts.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { join } from "node:path";
-import { cleanupTestProject } from "../harness/fixtures.ts";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { cleanupTestProject, seededStateFile } from "../harness/fixtures.ts";
 import { refusalSignature } from "../harness/scope-run.ts";
 import {
   answer,
+  approvedBuildSetAside,
   auditEvents,
   type BuiltState,
   cleanupWorktreeFixtures,
+  copilotAdapter,
+  copilotRuns,
+  copilotStep,
   DEVELOPER,
   latestHumanTurnWords,
   namedCommands,
   next,
+  openCodeGenerationGate,
+  openRecoveryQuestion,
   reply,
   respell,
+  reviewText,
   runNamed,
   SESSION,
   shellWords,
@@ -42,6 +54,7 @@ import {
   type Verdict,
   writePlan,
 } from "../harness/code-generation-states.ts";
+import { stateDigest, writeActiveDirectiveMarker } from "../../dist/copilot/.aidlc/tools/aidlc-lib.ts";
 
 setDefaultTimeout(600_000);
 
@@ -224,6 +237,44 @@ describe("the Code Generation no-dead-end sweep", () => {
   }
 });
 
+describe("a build step the chat compaction set aside, before any next", () => {
+  const doors = (proj: string): ToolCall[] => [
+    { tool: "Bash", command: "bun .claude/tools/aidlc-testing-posture.ts brief --stage-level" },
+    { tool: "Task", agent: DEVELOPER, prompt: developerBrief(proj) },
+    { tool: "Write", path: join(proj, "src", "slugify.ts") },
+    { tool: "Bash", command: "echo built > src/slugify.ts" },
+  ];
+
+  test("Guard Policy off: every shape admits the build's brief, handoff, writes and shell", async () => {
+    const state = approvedBuildSetAside("off");
+    created.push(state.proj);
+    const problems: string[] = [];
+    for (const shape of SHAPES) {
+      shape.install(state.proj);
+      for (const door of doors(state.proj)) {
+        const verdict = await shape.call(state.proj, state.session, door);
+        if (verdict.code !== 0) problems.push(`[${shape.name}] refused: ${describeCall(door)} -> ${verdict.said}`);
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+
+  test.each(["strict", "relaxed"] as const)("%s: each refusal names a way past that leads back to the build", async (policy) => {
+    const state = approvedBuildSetAside(policy);
+    created.push(state.proj);
+    const problems: string[] = [];
+    for (const shape of SHAPES) {
+      shape.install(state.proj);
+      for (const door of doors(state.proj).slice(1)) {
+        const verdict = await shape.call(state.proj, state.session, door);
+        if (verdict.code === 0) continue;
+        await wayPastIsAdmitted(state, shape, door, verdict, problems, true);
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+});
+
 // The person's lookup while the plan is written ran into a refusal on Kiro IDE;
 // on every harness and in every state an MCP call they ask for is theirs to make,
 // and the host's own card asks them.
@@ -291,27 +342,72 @@ describe("the guard judges only the build: records and engine commands pass, the
     });
   }
 
-  test("S11a: at the open gate a record edit passes; the build waits for the next it names, which is admitted", async () => {
-    const state = STATES.find((builder) => builder.id === "S11a")!.build();
-    created.push(state.proj);
-    const edit = await claude.call(state.proj, state.session, {
-      tool: "Edit", path: join(stageDir(state.proj), "traceability.json"),
-    });
+  test("S11a strict: at the open gate a record edit passes; the build waits for the next it names, which is admitted", async () => {
+    const proj = openCodeGenerationGate("strict");
+    created.push(proj);
+    const edit = await claude.call(proj, SESSION, { tool: "Edit", path: join(stageDir(proj), "traceability.json") });
     expect(edit.code, edit.said).toBe(0);
     const doors: ToolCall[] = [
-      { tool: "Write", path: join(state.proj, "src", "slugify.ts") },
-      { tool: "Task", agent: DEVELOPER, prompt: developerBrief(state.proj) },
+      { tool: "Write", path: join(proj, "src", "slugify.ts") },
+      { tool: "Task", agent: DEVELOPER, prompt: developerBrief(proj) },
     ];
     for (const door of doors) {
-      const verdict = await claude.call(state.proj, state.session, door);
+      const verdict = await claude.call(proj, SESSION, door);
       expect(verdict.code, `${describeCall(door)} was admitted at the open gate`).toBe(2);
       const named = namedCommands(verdict.said).filter((command) => command.startsWith("bun ") && !/[<>]/.test(command));
       expect(named.length, `${describeCall(door)} refused with no way past: ${verdict.said}`).toBeGreaterThan(0);
       for (const command of named) {
-        const way = await claude.call(state.proj, state.session, { tool: "Bash", command: respell(command, ".claude") });
+        const way = await claude.call(proj, SESSION, { tool: "Bash", command: respell(command, ".claude") });
         expect(way.code, `${command} -> ${way.said}`).toBe(0);
       }
     }
+  });
+
+  // Under relaxed and off the opening retired the step, not the person's
+  // approval: the build's calls go on from it, each with one row. Another
+  // completion is the engine's own command, with no row: the gate it reports
+  // into stays open for the person.
+  test.each(["relaxed", "off"] as const)("S11a %s: at the open gate the build's calls go on from the approved plan, one row each", async (policy) => {
+    const proj = openCodeGenerationGate(policy);
+    created.push(proj);
+    const rows = () => auditEvents(proj).filter((event) => event.event === "GUARD_STOOD_ASIDE").length;
+    const before = rows();
+    const passes: ToolCall[] = [
+      { tool: "Write", path: join(proj, "src", "slugify.ts") },
+      { tool: "Task", agent: DEVELOPER, prompt: developerBrief(proj) },
+      { tool: "Bash", command: "bun -e 'console.log(1)'" },
+    ];
+    for (const call of passes) {
+      const verdict = await claude.call(proj, SESSION, call);
+      expect(verdict.code, `${describeCall(call)} -> ${verdict.said}`).toBe(0);
+    }
+    expect(rows() - before).toBe(passes.length);
+    const completed = "bun .claude/tools/aidlc-orchestrate.ts report --stage code-generation --result completed";
+    const admitted = await claude.call(proj, SESSION, { tool: "Bash", command: completed });
+    expect(admitted.code, admitted.said).toBe(0);
+    expect(rows() - before).toBe(passes.length);
+    // The engine, checking for the person's reply as in a run, keeps the gate open.
+    runNamed(proj, completed, { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(/^- \[\?\] code-generation /m);
+  });
+
+  // The gate's own report showing it again passes the guard under strict too;
+  // with the plan changed after its approval the engine's own plan check is all
+  // that follows: no code is written and the stage does not complete.
+  test("S11a strict, the plan changed after its approval: the gate's own report passes, and the engine's plan step is all that follows", async () => {
+    const proj = openCodeGenerationGate("strict");
+    created.push(proj);
+    writePlan(proj, "- [ ] Step 2: handle unicode\n");
+    const again = "bun .claude/tools/aidlc-orchestrate.ts report --stage code-generation --result awaiting-approval";
+    const admitted = await claude.call(proj, SESSION, { tool: "Bash", command: again });
+    expect(admitted.code, admitted.said).toBe(0);
+    const ran = runNamed(proj, again);
+    expect((JSON.parse(ran.stdout || "{}") as Step).message).toBe(
+      "The code plan is not approved yet: run `bun .claude/tools/aidlc-orchestrate.ts next` and follow the step it prints.",
+    );
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(/^- \[\?\] code-generation /m);
+    const write = await claude.call(proj, SESSION, { tool: "Write", path: join(proj, "src", "slugify.ts") });
+    expect(write.code, "a code write was admitted while the changed plan waits").toBe(2);
   });
 
   test("the recorded bypass switch waits for a person to have asked, then passes", async () => {
@@ -388,19 +484,28 @@ describe("the guard judges only the build: records and engine commands pass, the
       shape.install(state.proj);
       const refused = await shape.call(state.proj, state.session, { tool: "Write", path: planPath });
       expect(refused.code, `[${shape.name}] the plan file passed while the person's edit mode is open`).toBe(2);
-      const handBack = namedCommands(refused.said).find((command) => command.includes('--details "Request Changes"'));
+      const handBack = namedCommands(refused.said)
+        .find((command) => command.includes("--details") && command.includes("Request Changes: <what they asked of the plan>"))
+        ?.replace("<what they asked of the plan>", "finish the plan");
       expect(handBack, `[${shape.name}] the refusal names no answer: ${refused.said}`).toBeDefined();
-      const admitted = await shape.call(state.proj, state.session, { tool: "Bash", command: respell(handBack as string, ".claude") });
-      expect(admitted.code, `[${shape.name}] ${handBack} -> ${admitted.said}`).toBe(0);
+      // As the agent types it: opencode's shell on Windows is cmd.exe unless its settings name another, and in
+      // cmd.exe the skill puts the person's words in double quotes.
+      const typed = shape.name === "opencode" && process.platform === "win32" ? inCmd(handBack as string) : (handBack as string);
+      const admitted = await shape.call(state.proj, state.session, { tool: "Bash", command: respell(typed, ".claude") });
+      expect(admitted.code, `[${shape.name}] ${typed} -> ${admitted.said}`).toBe(0);
+      if (shape.name === "opencode") {
+        expect(await openCodeUnderCmd(state.proj, state.session, respell(inCmd(handBack as string), ".aidlc"))).toBe("");
+      }
     }
-    // The answer, the write, next: the plan is the agent's, with their words, and no second edit-mode question.
-    const recorded = runNamed(state.proj, 'bun .claude/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --details "Request Changes"');
+    // The answer, the write, next: the plan is the agent's, with what they asked as the agent read it, and no
+    // second edit-mode question.
+    const recorded = runNamed(state.proj, "bun .claude/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --details 'Request Changes: finish the plan'");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     const write = await claude.call(state.proj, state.session, { tool: "Write", path: planPath });
     expect(write.code, write.said).toBe(0);
     const step = next(state.proj);
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
-    expect(step.plan_approval, JSON.stringify(step)).toEqual({ status: "revise", feedback: "you finish it" });
+    expect(step.plan_approval, JSON.stringify(step)).toEqual({ status: "revise", feedback: "finish the plan" });
   });
 
   test("S6: while the person edits the plan files, the agent's write to them is refused with that sentence", async () => {
@@ -416,6 +521,27 @@ describe("the guard judges only the build: records and engine commands pass, the
     expect(notes.code, notes.said).toBe(0);
   });
 });
+
+// A command as the skills say to type it in cmd.exe, which does not group single quotes: the person's words in
+// double quotes instead.
+const inCmd = (command: string): string => command.replace(/'([^']*)'/g, '"$1"');
+
+// The shipped opencode plugin with cmd.exe as its shell: "" when it lets the command run, else its refusal.
+async function openCodeUnderCmd(proj: string, session: string, command: string): Promise<string> {
+  const { default: createAdapter } = await import("../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts");
+  const client = {
+    session: { get: async () => ({ data: {} }), prompt: async () => {} },
+    config: { get: async () => ({ data: { shell: "cmd.exe" } }) },
+  };
+  const adapter = await createAdapter({ client: client as never, directory: proj } as never);
+  const before = (adapter as Record<string, (a: unknown, b: unknown) => Promise<void>>)["tool.execute.before"];
+  try {
+    await before({ tool: "bash", sessionID: session, callID: "cmd-hand-back" }, { args: { command } });
+    return "";
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
 
 describe("the six plan-answer cases from the hook's gate, at the open question", () => {
   const cases: Array<{ words: string; followUp?: string; builds: boolean }> = [
@@ -490,4 +616,429 @@ describe("the six plan-answer cases from the hook's gate, at the open question",
         row.event === "PLAN_APPROVAL_RECORDED" || row.event === "PLAN_APPROVAL_SKIPPED")).toBe(true);
     });
   }
+});
+
+// A person at the open Code Generation gate asks to go back. The report that
+// opened the gate moved the state and wrote no step, so no step is current; the
+// jump the engine names for their request is still theirs once they have spoken
+// since the last decision (lastStepAdmitsPersonsMoves), under every Guard
+// Policy, with no `next` first and no gate shown again.
+const ASK = "Actually, go back to Requirements Analysis: I want slugify to cap the slug at 60 characters.";
+
+function jumpFor(proj: string, stage: string): string {
+  const step = next(proj, ["--stage", stage]);
+  const jump = namedCommands(String(step.message ?? "")).find((command) => command.includes("aidlc-jump.ts execute"));
+  expect(jump, JSON.stringify(step)).toBeDefined();
+  return jump as string;
+}
+
+/** Requirements Analysis, the step `next` gave after the jump, run to the person's approval; then the step after it. */
+async function requirementsAnalysisApproved(proj: string, step: Step): Promise<Step> {
+  const claude = SHAPES[0];
+  for (const rel of (step.produces as string[] | undefined) ?? []) {
+    const path = join(proj, rel);
+    const write = await claude.call(proj, SESSION, { tool: "Write", path });
+    expect(write.code, `${rel} -> ${write.said}`).toBe(0);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "# Requirements\n\n## Functional Requirements\n\n- FR-1: slugify caps the slug at 60 characters.\n", "utf-8");
+  }
+  const reviewer = String(step.reviewer);
+  const review = `bun .claude/tools/aidlc.ts engine log review --stage requirements-analysis --reviewer ${reviewer} --iteration 1`;
+  const requested = runNamed(proj, review);
+  const reviewFile = (JSON.parse(requested.stdout || "{}") as { reviewFile?: string }).reviewFile;
+  expect(reviewFile, requested.stdout + requested.stderr).toBeDefined();
+  mkdirSync(dirname(join(proj, reviewFile as string)), { recursive: true });
+  writeFileSync(join(proj, reviewFile as string), reviewText(reviewer), "utf-8");
+  expect(runNamed(proj, `${review} --verdict READY`).status).toBe(0);
+  const opened = runNamed(proj, "bun .claude/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result awaiting-approval");
+  expect(opened.status, opened.stdout + opened.stderr).toBe(0);
+  expect(reply(proj, "approve").status).toBe(0);
+  const approved = runNamed(proj, "bun .claude/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved --user-input Approve");
+  expect(approved.status, approved.stdout + approved.stderr).toBe(0);
+  return next(proj);
+}
+
+describe("the person's jump back from the open gate goes through on the first ask", () => {
+  const claude = SHAPES[0];
+
+  function gate(policy: "strict" | "relaxed" | "off", planApproval: "on" | "off"): string {
+    const proj = openCodeGenerationGate(policy, planApproval);
+    created.push(proj);
+    return proj;
+  }
+
+  // Each shape's adapter hands the jump to the guard, and the guard admits it,
+  // with the step as `next` and the report left it. Copilot's own settle after
+  // every engine command is driven in the recovery question's Copilot case.
+  test("stock poc: the jump is admitted in every harness shape", async () => {
+    const proj = gate("off", "off");
+    expect(reply(proj, ASK).status).toBe(0);
+    const jump = jumpFor(proj, "requirements-analysis");
+    const refused: string[] = [];
+    for (const shape of SHAPES) {
+      shape.install(proj);
+      const verdict = await shape.call(proj, SESSION, { tool: "Bash", command: jump });
+      if (verdict.code !== 0) refused.push(`[${shape.name}] ${verdict.said}`);
+    }
+    expect(refused).toEqual([]);
+  });
+
+  test.each(["strict", "relaxed", "off"] as const)("%s, plan approval on: the jump runs and Requirements Analysis is next", async (policy) => {
+    const proj = gate(policy, "on");
+    expect(reply(proj, ASK).status).toBe(0);
+    const jump = jumpFor(proj, "requirements-analysis");
+    const verdict = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
+    expect(verdict.code, verdict.said).toBe(0);
+    const ran = runNamed(proj, jump);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    const step = next(proj);
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    expect(step.stage).toBe("requirements-analysis");
+  });
+
+  // From a live Kiro CLI run: the agent recorded the person's re-entry choice
+  // first, its jump was refused, and it then read the gate shown again as
+  // Request Changes, which started a new attempt nobody asked for.
+  test("the resumed jump report first, as on Kiro CLI: the jump runs, Requirements Analysis is next, and nobody recorded a Request Changes", async () => {
+    const proj = gate("off", "off");
+    expect(reply(proj, ASK).status).toBe(0);
+    const resumed = runNamed(proj, "bun .claude/tools/aidlc.ts engine orchestrate report --result resumed --choice jump --target requirements-analysis");
+    expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
+    const jump = jumpFor(proj, "requirements-analysis");
+    const verdict = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
+    expect(verdict.code, verdict.said).toBe(0);
+    const ran = runNamed(proj, jump);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    const step = next(proj);
+    expect(step.stage, JSON.stringify(step)).toBe("requirements-analysis");
+    expect(auditEvents(proj).filter((row) => row.event === "GATE_REJECTED")).toHaveLength(0);
+  });
+
+  test("a redo asked for at the gate, as on Claude Code: the jump runs and Code Generation starts again", async () => {
+    const proj = gate("off", "off");
+    expect(reply(proj, "/aidlc --stage code-generation").status).toBe(0);
+    const jump = jumpFor(proj, "code-generation");
+    expect(jump).toContain("--direction redo");
+    const verdict = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
+    expect(verdict.code, verdict.said).toBe(0);
+    const ran = runNamed(proj, jump);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    const step = next(proj);
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    expect(step.stage, JSON.stringify(step)).toBe("code-generation");
+    expect(auditEvents(proj).filter((row) => row.event === "STAGE_JUMPED")).toHaveLength(1);
+  });
+
+  test("still refused: a jump nobody asked for, whose way past is admitted, and under strict the build's write after the person's ask", async () => {
+    const proj = gate("off", "off");
+    const jump = "bun .claude/tools/aidlc-jump.ts execute --target requirements-analysis --direction backward --scope poc";
+    const unasked = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
+    expect(unasked.code).toBe(2);
+    const named = namedCommands(unasked.said).filter((command) => command.startsWith("bun ") && !/[<>]/.test(command));
+    expect(named.length, unasked.said).toBeGreaterThan(0);
+    for (const command of named) {
+      const way = await claude.call(proj, SESSION, { tool: "Bash", command: respell(command, ".claude") });
+      expect(way.code, `${command} -> ${way.said}`).toBe(0);
+    }
+    // Under relaxed and off the approved plan stands at the open gate, so only
+    // strict holds the build's write there.
+    const strict = gate("strict", "on");
+    expect(reply(strict, ASK).status).toBe(0);
+    const write = await claude.call(strict, SESSION, { tool: "Write", path: join(strict, "src", "slugify.ts") });
+    expect(write.code, "the build's write was admitted at the open gate").toBe(2);
+  });
+
+  test("no loop: after the jump, Requirements Analysis runs to its approval and next moves on, the same twice", async () => {
+    const proj = gate("off", "off");
+    expect(reply(proj, ASK).status).toBe(0);
+    const jump = jumpFor(proj, "requirements-analysis");
+    expect((await claude.call(proj, SESSION, { tool: "Bash", command: jump })).code).toBe(0);
+    expect(runNamed(proj, jump).status).toBe(0);
+    const step = next(proj);
+    expect(step.stage, JSON.stringify(step)).toBe("requirements-analysis");
+    const after = await requirementsAnalysisApproved(proj, step);
+    expect(after.kind, JSON.stringify(after)).toBe("run-stage");
+    expect(["requirements-analysis", "code-generation"]).not.toContain(after.stage);
+    expect(next(proj).stage).toBe(after.stage);
+  });
+});
+
+describe("the person's jump at an open recovery question goes through on the first ask", () => {
+  const claude = SHAPES[0];
+  const copilot = SHAPES.find((shape) => shape.name === "copilot") as Shape;
+  const RESUMED = "bun .claude/tools/aidlc.ts engine orchestrate report --result resumed --choice jump --target requirements-analysis";
+
+  // The review was asked for and never finished, and the agent opened the gate
+  // twice: AI-DLC asks the person how to go on, with Request Changes the one
+  // choice. The person asks for a jump instead.
+  function question(policy: "strict" | "relaxed" | "off" = "off", planApproval: "on" | "off" = "off"): string {
+    const proj = openRecoveryQuestion(policy, planApproval);
+    created.push(proj);
+    return proj;
+  }
+
+  test("stock poc: the jump is admitted in every harness shape", async () => {
+    const proj = question();
+    expect(reply(proj, ASK).status).toBe(0);
+    const jump = jumpFor(proj, "requirements-analysis");
+    const refused: string[] = [];
+    for (const shape of SHAPES) {
+      shape.install(proj);
+      const verdict = await shape.call(proj, SESSION, { tool: "Bash", command: jump });
+      if (verdict.code !== 0) refused.push(`[${shape.name}] ${verdict.said}`);
+    }
+    expect(refused).toEqual([]);
+  });
+
+  test.each(["strict", "relaxed", "off"] as const)("%s, plan approval on: the jump runs and Requirements Analysis is next", async (policy) => {
+    const proj = question(policy, "on");
+    expect(reply(proj, ASK).status).toBe(0);
+    const jump = jumpFor(proj, "requirements-analysis");
+    const verdict = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
+    expect(verdict.code, verdict.said).toBe(0);
+    const ran = runNamed(proj, jump);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    const step = next(proj);
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    expect(step.stage).toBe("requirements-analysis");
+  });
+
+  test("the resumed jump report first: the jump runs, Requirements Analysis is next, and nobody recorded a Request Changes", async () => {
+    const proj = question();
+    expect(reply(proj, ASK).status).toBe(0);
+    const resumed = runNamed(proj, RESUMED);
+    expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
+    const jump = jumpFor(proj, "requirements-analysis");
+    const verdict = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
+    expect(verdict.code, verdict.said).toBe(0);
+    expect(runNamed(proj, jump).status).toBe(0);
+    expect(next(proj).stage).toBe("requirements-analysis");
+    expect(auditEvents(proj).filter((row) => row.event === "GATE_REJECTED")).toHaveLength(0);
+  });
+
+  // Copilot's adapter settles the step after every engine command, and a print
+  // (the jump `next --stage` names) leaves it superseded: the jump still goes
+  // through on the first ask, here and at the open gate.
+  test("Copilot, through its adapter: at the recovery question and at the open gate, the jump runs on the first ask", () => {
+    for (const open of [question, (policy: "off", planApproval: "off") => {
+      const proj = openCodeGenerationGate(policy, planApproval);
+      created.push(proj);
+      return proj;
+    }]) {
+      const proj = open("off", "off");
+      copilot.install(proj);
+      const said = copilotAdapter(proj, "record-human-turn", {
+        hook_event_name: "UserPromptSubmit", prompt: ASK, timestamp: new Date().toISOString(),
+      });
+      expect(said.code, said.stderr).toBe(0);
+      copilotStep(proj, "report --result resumed --choice jump --target requirements-analysis");
+      const step = copilotStep(proj, "next --stage requirements-analysis");
+      const jump = namedCommands(String(step.message ?? "")).find((command) => command.includes("aidlc-jump.ts execute"));
+      expect(jump, JSON.stringify(step)).toBeDefined();
+      const ran = copilotRuns(proj, jump as string);
+      expect(ran.refused).toBeNull();
+      expect(copilotStep(proj, "next").stage).toBe("requirements-analysis");
+    }
+  });
+
+  // After Copilot's settle the `next --stage` print leaves no sign of the
+  // question it replaced, so this reopen cannot be told from the person's own
+  // redo of a built Unit, which the same print names; and the person asked for
+  // it. It runs.
+  test("Copilot, through its adapter: the Unit reopen the person asked for runs after next --stage", () => {
+    const proj = question();
+    copilot.install(proj);
+    writeActiveDirectiveMarker(proj, {
+      kind: "ask", ask_type: "guard-recovery", stage: "code-generation",
+      state_sha256: stateDigest(readFileSync(seededStateFile(proj), "utf-8")),
+      remedies: [{
+        op: "reopen-unit-step", action: "Start code-generation again for unit api.", interaction: "command",
+        operation: { kind: "reopen-unit", stage: "code-generation", unit: "api" },
+      }],
+    } as never);
+    const said = copilotAdapter(proj, "record-human-turn", {
+      hook_event_name: "UserPromptSubmit", prompt: "Start Code Generation again for api, please.", timestamp: new Date().toISOString(),
+    });
+    expect(said.code, said.stderr).toBe(0);
+    copilotStep(proj, "next --stage code-generation");
+    const reopen = copilotRuns(proj, "bun .aidlc/tools/aidlc-jump.ts reopen --target code-generation --units api");
+    expect(reopen.refused, "the Unit reopen the person asked for was refused on Copilot").toBeNull();
+  });
+
+  test("still refused: a jump nobody asked for, whose way past is admitted, and a jump after their Request Changes is recorded", async () => {
+    const proj = question();
+    const jump = "bun .claude/tools/aidlc-jump.ts execute --target requirements-analysis --direction backward --scope poc";
+    const unasked = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
+    expect(unasked.code).toBe(2);
+    const named = namedCommands(unasked.said).filter((command) => command.startsWith("bun ") && !/[<>]/.test(command));
+    expect(named.length, unasked.said).toBeGreaterThan(0);
+    for (const command of named) {
+      const way = await claude.call(proj, SESSION, { tool: "Bash", command: respell(command, ".claude") });
+      expect(way.code, `${command} -> ${way.said}`).toBe(0);
+    }
+    expect(reply(proj, "Request Changes").status).toBe(0);
+    // The agent records the Request Changes it read from their reply.
+    const recorded = runNamed(proj, "bun .claude/tools/aidlc-log.ts answer --stage code-generation --checkpoint guard-recovery --details request-changes");
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    const picked = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
+    expect(picked.code, "a jump went through against the person's pick").toBe(2);
+  });
+
+  test("the person's next words after their recorded pick lift it: the jump they then ask for runs", async () => {
+    const proj = question();
+    expect(reply(proj, "Request Changes").status).toBe(0);
+    // The agent records the Request Changes it read from their reply.
+    const recorded = runNamed(proj, "bun .claude/tools/aidlc-log.ts answer --stage code-generation --checkpoint guard-recovery --details request-changes");
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    expect(reply(proj, ASK).status).toBe(0);
+    const verdict = await claude.call(proj, SESSION, { tool: "Bash", command: jumpFor(proj, "requirements-analysis") });
+    expect(verdict.code, verdict.said).toBe(0);
+  });
+
+  test("no loop: back to Requirements Analysis, run to its approval, next moves on, the same twice; the question never comes back", async () => {
+    const proj = question();
+    expect(reply(proj, ASK).status).toBe(0);
+    const jump = jumpFor(proj, "requirements-analysis");
+    expect((await claude.call(proj, SESSION, { tool: "Bash", command: jump })).code).toBe(0);
+    expect(runNamed(proj, jump).status).toBe(0);
+    const step = next(proj);
+    expect(step.stage, JSON.stringify(step)).toBe("requirements-analysis");
+    const after = await requirementsAnalysisApproved(proj, step);
+    expect(after.kind, JSON.stringify(after)).toBe("run-stage");
+    expect(["requirements-analysis", "code-generation"]).not.toContain(after.stage);
+    expect(next(proj).stage).toBe(after.stage);
+  });
+
+  test("forward past the unfinished review: the jump runs, says the skipped stage once, and Build and Test is next", async () => {
+    const proj = question();
+    expect(reply(proj, "Skip the review, I checked it myself: go on to Build and Test.").status).toBe(0);
+    const jump = jumpFor(proj, "build-and-test");
+    expect(jump).toContain("--direction forward");
+    const verdict = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
+    expect(verdict.code, verdict.said).toBe(0);
+    const ran = runNamed(proj, jump);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect((JSON.parse(ran.stdout) as { notice?: string }).notice).toBe(
+      "Moved to Build and Test; skipped Code Generation. You can go back to Code Generation any time.",
+    );
+    const step = next(proj);
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    expect(step.stage).toBe("build-and-test");
+    expect(next(proj).stage).toBe("build-and-test");
+  });
+});
+
+// A step gone out of date makes a jump wait for a fresh step. On Copilot a
+// fresh `next` comes back as a print, which the adapter's settle leaves out of
+// date again; the jump's way on there is its own `next --stage`, and the
+// refusal names it. On the other harnesses `next` delivers the step.
+describe("a jump the person asked for on a step gone out of date names the step that lets it through", () => {
+  const claude = SHAPES[0];
+  const copilot = SHAPES.find((shape) => shape.name === "copilot") as Shape;
+  const JUMP = "bun .aidlc/tools/aidlc-jump.ts execute --target requirements-analysis --direction backward --scope poc";
+  const engineCommands = (said: string) => namedCommands(said).filter((command) => command.startsWith("bun ") && !/[<>]/.test(command));
+
+  test.each([["off", "off"], ["strict", "on"]] as const)(
+    "Copilot, Guard Policy %s, plan approval %s: the jump run without next --stage is refused naming it, and one follow admits it",
+    (policy, planApproval) => {
+      const proj = openRecoveryQuestion(policy, planApproval);
+      created.push(proj);
+      copilot.install(proj);
+      const said = copilotAdapter(proj, "record-human-turn", {
+        hook_event_name: "UserPromptSubmit", prompt: ASK, timestamp: new Date().toISOString(),
+      });
+      expect(said.code, said.stderr).toBe(0);
+      copilotStep(proj, "report --result resumed --choice jump --target requirements-analysis");
+      const refused = copilotRuns(proj, JUMP).refused;
+      expect(refused, "the jump ran with the step out of date").not.toBeNull();
+      expect(engineCommands(refused as string)).toEqual(["bun .aidlc/tools/aidlc-orchestrate.ts next --stage requirements-analysis"]);
+      expect(copilotRuns(proj, "bun .aidlc/tools/aidlc-orchestrate.ts next --stage requirements-analysis").refused).toBeNull();
+      const ran = copilotRuns(proj, JUMP);
+      expect(ran.refused).toBeNull();
+      expect(copilotStep(proj, "next").stage).toBe("requirements-analysis");
+    },
+  );
+
+  test("Copilot: a jump nobody asked for keeps the plain next", () => {
+    const proj = openRecoveryQuestion();
+    created.push(proj);
+    copilot.install(proj);
+    copilotStep(proj, "next");
+    const refused = copilotRuns(proj, JUMP).refused;
+    expect(refused).not.toBeNull();
+    expect(engineCommands(refused as string)).toEqual(["bun .aidlc/tools/aidlc-orchestrate.ts next"]);
+  });
+
+  test("Claude Code, the build step set aside by a compaction under strict: the refusal names next, and one follow admits the jump", async () => {
+    const state = approvedBuildSetAside("strict");
+    created.push(state.proj);
+    expect(reply(state.proj, ASK).status).toBe(0);
+    const jump = respell(JUMP, ".claude");
+    const refused = await claude.call(state.proj, state.session, { tool: "Bash", command: jump });
+    expect(refused.code).toBe(2);
+    expect(engineCommands(refused.said)).toEqual(["bun .claude/tools/aidlc-orchestrate.ts next"]);
+    expect(runNamed(state.proj, "bun .claude/tools/aidlc-orchestrate.ts next").status).toBe(0);
+    const admitted = await claude.call(state.proj, state.session, { tool: "Bash", command: jump });
+    expect(admitted.code, admitted.said).toBe(0);
+  });
+});
+
+// The person's redo at the open gate goes through the re-entry report, whose
+// print names the jump itself. On Copilot the settle leaves that print out of
+// date like any other, and the jump it names runs on the first ask, as it does
+// on every other harness; only the jump that print named, on the state it was
+// named on, and only while it is the last step.
+describe("a redo the person asked for at the open gate runs on Copilot on the first ask", () => {
+  const copilot = SHAPES.find((shape) => shape.name === "copilot") as Shape;
+  const REDO = "Start Code Generation over from the beginning, please: redo it.";
+  const printedJump = (step: Step) =>
+    namedCommands(String(step.message ?? "")).find((command) => command.includes("aidlc-jump.ts execute"));
+
+  function redoAsked(policy: "strict" | "relaxed" | "off", planApproval: "on" | "off"): { proj: string; jump: string } {
+    const proj = openCodeGenerationGate(policy, planApproval);
+    created.push(proj);
+    copilot.install(proj);
+    const said = copilotAdapter(proj, "record-human-turn", {
+      hook_event_name: "UserPromptSubmit", prompt: REDO, timestamp: new Date().toISOString(),
+    });
+    expect(said.code, said.stderr).toBe(0);
+    const step = copilotStep(proj, "report --result resumed --choice redo");
+    const jump = printedJump(step);
+    expect(jump, JSON.stringify(step)).toContain("--direction redo");
+    return { proj, jump: jump as string };
+  }
+
+  test.each([["off", "off"], ["strict", "on"], ["relaxed", "on"]] as const)(
+    "Copilot, Guard Policy %s, plan approval %s: the jump the redo print names runs, and Code Generation starts again",
+    (policy, planApproval) => {
+      const { proj, jump } = redoAsked(policy, planApproval);
+      const ran = copilotRuns(proj, jump);
+      expect(ran.refused, "the redo the person asked for was refused on Copilot").toBeNull();
+      expect(auditEvents(proj).filter((row) => row.event === "PLAN_APPROVAL_BLOCKED")).toHaveLength(0);
+      expect(copilotStep(proj, "next").stage).toBe("code-generation");
+      expect(auditEvents(proj).filter((row) => row.event === "STAGE_JUMPED")).toHaveLength(1);
+    },
+  );
+
+  test("still refused: another jump than the one the print named", () => {
+    const { proj } = redoAsked("off", "off");
+    const other = "bun .aidlc/tools/aidlc-jump.ts execute --target requirements-analysis --direction backward --scope poc";
+    expect(copilotRuns(proj, other).refused, "a jump the print did not name ran").not.toBeNull();
+  });
+
+  test("still refused: the printed jump once the state has moved since the print", () => {
+    const { proj, jump } = redoAsked("off", "off");
+    const state = seededStateFile(proj);
+    const content = readFileSync(state, "utf-8");
+    const at = content.indexOf("\n") + 1;
+    writeFileSync(state, `${content.slice(0, at)}- **Moved**: since the print\n${content.slice(at)}`);
+    expect(copilotRuns(proj, jump).refused, "the printed jump ran on a state it was not named on").not.toBeNull();
+  });
+
+  test("still refused: the printed jump after another print that names none", () => {
+    const { proj, jump } = redoAsked("off", "off");
+    const resumed = copilotStep(proj, "report --result resumed --choice resume");
+    expect(printedJump(resumed), JSON.stringify(resumed)).toBeUndefined();
+    expect(copilotRuns(proj, jump).refused, "the redo's jump ran after a later print").not.toBeNull();
+  });
 });

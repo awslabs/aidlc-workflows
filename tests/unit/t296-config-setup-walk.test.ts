@@ -103,6 +103,11 @@ function scaffoldArgs(path: string, extra: string[] = []): string[] {
   ];
 }
 
+// The walk is offered to `aidlc config` without --yes; --yes asks nothing.
+function walkArgs(path: string): string[] {
+  return scaffoldArgs(path).filter((arg) => arg !== "--yes");
+}
+
 function run(
   args: string[],
   cwd: string,
@@ -140,7 +145,7 @@ describe("t296 first-run config setup walk", () => {
   test("fresh scaffold renders eight rows, one gate, and decline changes no section state", () => {
     const path = project("aidlc-t296-map-decline-");
     const result = run(
-      scaffoldArgs(path),
+      walkArgs(path),
       path,
       hookPathEnv(null, true),
       "n\n",
@@ -196,6 +201,37 @@ describe("t296 first-run config setup walk", () => {
     expect(records.trust).toBeNull();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("--yes at a terminal asks nothing: the map and what still needs the person, and no section answer chosen", () => {
+    // "y" would walk the sections if the question were put; it must not be.
+    const path = project("aidlc-t296-yes-asks-nothing-");
+    const codex = project("aidlc-t296-yes-asks-nothing-codex-");
+    const runs = [
+      { root: join(path, ".claude"), result: run(scaffoldArgs(path), path, hookPathEnv(null, true), "y\n") },
+      // The refresh `aidlc update` names: `aidlc config --yes` in a set-up project.
+      {
+        root: join(path, ".claude"),
+        result: run(["config", "--project-dir", path, "--from", CLAUDE_RELEASE, "--yes"], path, hookPathEnv(null, true), "y\n"),
+      },
+      {
+        root: join(codex, ".codex"),
+        result: run(
+          ["config", "--project-dir", codex, "--from", CODEX_RELEASE, "--harness", "codex", "--mcp", "none", "--yes"],
+          codex,
+          hookPathEnv(null, true),
+          "y\n",
+        ),
+      },
+    ];
+    for (const { root, result } of runs) {
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toMatch(/Setup check - \d of 8 sections need you\./);
+      expect(result.stdout).not.toContain("Fix the");
+      expect(result.stdout).toMatch(/Setup complete\. \d actions? still needs? you/);
+      expect(result.stdout).toMatch(/providers\s+bun \.\w+\/tools\/aidlc\.ts config providers/);
+      expect(readConfigDiagnosticRecords(root).providers).toBeNull();
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("a Bedrock-oriented harness defaults to keeping the current provider", () => {
     const path = project("aidlc-t296-walk-unchanged-");
     const env = hookPathEnv("aidlc", true, {
@@ -217,7 +253,7 @@ describe("t296 first-run config setup walk", () => {
       "1. keep current     inherit the provider already configured in the harness (default)",
     );
     expect(result.stdout).toContain(
-      "2. amazon-bedrock   write the AWS region and profile to settings.json",
+      "2. amazon-bedrock   write the AWS region and profile to settings.local.json, just for you",
     );
     expect(result.stdout).not.toContain("builtin");
     expect(readConfigDiagnosticRecords(join(path, ".claude")).providers)
@@ -584,7 +620,7 @@ describe("t296 first-run config setup walk", () => {
     // balanced. Providers follows with region and profile. Recording the preset
     // is the point of the walk: without it every agent inherits the session.
     const result = run(
-      scaffoldArgs(path),
+      walkArgs(path),
       path,
       env,
       "\nproject\n1\nbalanced\n2\nus-west-2\ndev\ny\n",
@@ -621,14 +657,17 @@ describe("t296 first-run config setup walk", () => {
     expect(records.providers).toEqual(expect.objectContaining({
       provider: "amazon-bedrock",
       region: "us-west-2",
-      profile: "dev",
       pendingActions: [
         { id: "bedrock-model-access", status: "done" },
       ],
     }));
-    const settings = readFileSync(join(path, ".claude", "settings.json"), "utf-8");
+    expect(records.providers).not.toHaveProperty("profile");
+    // The answer is the person's own (#2712): their git-ignored file, never the
+    // shared settings.json, and the shared record keeps no profile.
+    const settings = readFileSync(join(path, ".claude", "settings.local.json"), "utf-8");
     expect(settings).toContain('"AWS_REGION": "us-west-2"');
     expect(settings).toContain('"AWS_PROFILE": "dev"');
+    expect(readFileSync(join(path, ".claude", "settings.json"), "utf-8")).not.toContain("AWS_PROFILE");
 
     const rerun = run(
       [
@@ -654,7 +693,6 @@ describe("t296 first-run config setup walk", () => {
         path,
         "--from",
         CLAUDE_RELEASE,
-        "--yes",
       ],
       path,
       hookPathEnv(null, true),
@@ -713,7 +751,7 @@ describe("t296 first-run config setup walk", () => {
     );
     expect(walked.status, walked.stdout + walked.stderr).toBe(0);
     expect(walked.stdout).toContain(
-      "2. amazon-bedrock   write the AWS region and profile to settings.json (recorded: eu-west-1, team; default)",
+      "2. amazon-bedrock   write the AWS region and profile to settings.local.json, just for you (recorded: eu-west-1, team; default)",
     );
     expect(walked.stdout).toContain("Provider [2]:");
     expect(walked.stdout).toContain("AWS region [eu-west-1]:");
@@ -724,7 +762,9 @@ describe("t296 first-run config setup walk", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("non-TTY human output is byte-identical to the pre-walk completion", () => {
-    const path = project("aidlc-t296-nontty-snapshot-");
+    // A short name: on Windows a project folder 75 characters deep gets
+    // config's own warning that it is too deep for AI-DLC's records.
+    const path = project("aidlc-t296-nontty-");
     const result = run(
       scaffoldArgs(path),
       path,
@@ -796,10 +836,11 @@ describe("t296 first-run config setup walk", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("where the session sets every agent's model and effort, the Models row names it and is never walked", () => {
-    // These hosts cannot pin an agent's model or effort, so a recorded policy
-    // changes nothing there. The row says where the lever is, counts as done,
-    // and never sends the person into the models wizard or the closing list.
+  test("where a preset changes nothing, the Models row names the session and is never walked", () => {
+    // On these hosts a preset or group effort changes nothing (Kiro takes only
+    // one agent's own model and effort). The row says where the lever is,
+    // counts as done, and never sends the person into the models wizard or the
+    // closing list.
     const hosts = [
       ["copilot", ".aidlc", "GitHub Copilot"],
       ["cursor", ".cursor", "Cursor"],
@@ -817,7 +858,9 @@ describe("t296 first-run config setup walk", () => {
       const models = setupRows(fresh.stdout).find((line) => line.includes("Models"));
       expect(models, harness).toContain("[ok]");
       expect(models, harness).toContain(
-        `every agent uses your ${product} session's model and effort`,
+        `every agent uses your ${product} session's model and effort${
+          harness === "kiro-ide" ? " unless a model or effort is set for that agent" : ""
+        }`,
       );
       expect(models, harness).not.toContain("does not apply");
       // No provider answer on these hosts is the session's own model access,
@@ -849,8 +892,9 @@ describe("t296 first-run config setup walk", () => {
       expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
       expect(setupRows(rerun.stdout).find((line) => line.includes("Models")), harness)
         .toContain(
-          `[ok]     Models      every agent uses your ${product} session's model and effort; ` +
-            "the recorded balanced preset does not apply here",
+          `[ok]     Models      every agent uses your ${product} session's model and effort${
+            harness === "kiro-ide" ? " unless a model or effort is set for that agent" : ""
+          }; the recorded balanced preset does not apply here`,
         );
       expect(rerun.stdout, harness).not.toContain("config models");
       expect(readFileSync(join(path, dir, "tools", "data", "harness.json"), "utf-8"), harness)

@@ -16,7 +16,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { assignWeightedShards, parseShardSpec, type ShardConfig } from "../tests/lib/test-sharding.ts";
+import { assignWeightedShards, parseShardSpec, shardConfigForPlatform, type ShardConfig } from "../tests/lib/test-sharding.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const MACOS_NAMED = /darwin|macos/i;
@@ -46,7 +46,9 @@ export function changedUnitFiles(repoRoot: string, base: string): string[] | nul
 export function macosUnitSelection(repoRoot: string, changed: string[] | null, shard: string): MacosUnitSelection {
   const spec = parseShardSpec(shard);
   if (changed === null) return { mode: "full" };
-  const full = JSON.parse(readFileSync(join(repoRoot, "tests", "unit-shard-weights.json"), "utf8")) as ShardConfig;
+  const full = shardConfigForPlatform(
+    JSON.parse(readFileSync(join(repoRoot, "tests", "unit-shard-weights.json"), "utf8")) as ShardConfig, "darwin",
+  );
   const keep = new Set([...macosNamedUnitFiles(join(repoRoot, "tests", "unit")), ...changed]);
   if ([...keep].some((file) => !SAFE_NAME.test(file))) return { mode: "full" };
   // An affinity group runs whole, as in a full shard: a test that reads what

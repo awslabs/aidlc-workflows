@@ -30,7 +30,8 @@ import {
 } from "./aidlc-transaction.ts";
 import { aidlcInvocation } from "./aidlc-runtime-paths.ts";
 
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const CACHE_TTL_MS = 24 * HOUR_MS;
 
 export type UpdateCache = {
   schemaVersion: 1;
@@ -105,9 +106,28 @@ export function channelWays(follows: ReleaseChannel, running: ReleaseChannel, la
   return `${back} To keep getting ${kept}: aidlc config --channel ${running}.`;
 }
 
+// Doctor reads the cache without refreshing it off a terminal, and its report
+// gets copied on, so a version from an old check carries the check's age
+// rather than reading as today's latest.
+function checkedAgo(checkedAt: string, now = Date.now()): string {
+  const hours = Math.floor(Math.max(0, now - Date.parse(checkedAt)) / HOUR_MS);
+  const days = Math.floor(hours / 24);
+  return days > 0
+    ? `checked ${days} day${days === 1 ? "" : "s"} ago`
+    : hours > 0
+    ? `checked ${hours} hour${hours === 1 ? "" : "s"} ago`
+    : "checked less than an hour ago";
+}
+
+function latestKnown(channel: ReleaseChannel, latestVersion: string, checkedAt: string, now = Date.now()): string {
+  const channelWord = channel === STABLE_CHANNEL ? "" : `${channel} `;
+  return `latest known ${channelWord}${latestVersion}, ${checkedAgo(checkedAt, now)}`;
+}
+
 // The machine is "behind" only when the channel's newest release is newer than
 // the running binary: a plain `update` never installs an older one. A binary of
-// the other channel that is newer says so, with both ways on.
+// the other channel that is newer says so, with both ways on. An old check
+// still proves "behind" (releases only get newer), but not which one is newest.
 function cacheState(cache: UpdateCache, now = Date.now()): UpdateState {
   const channel = cache.channel ?? STABLE_CHANNEL;
   const binaryChannel = versionChannel(AIDLC_VERSION);
@@ -116,6 +136,7 @@ function cacheState(cache: UpdateCache, now = Date.now()): UpdateState {
   const behind = compareVersions(AIDLC_VERSION, cache.latestVersion) < 0;
   // Stable messages keep their pre-channel wording; preview names its channel.
   const channelWord = channel === STABLE_CHANNEL ? "" : `${channel} `;
+  const age = stale ? `, ${checkedAgo(cache.checkedAt, now)}` : "";
   return {
     state: behind ? "behind" : stale ? "stale" : "current",
     currentVersion: AIDLC_VERSION,
@@ -124,14 +145,14 @@ function cacheState(cache: UpdateCache, now = Date.now()): UpdateState {
     checkedAt: cache.checkedAt,
     stale,
     message: switching && behind
-      ? `binary ${AIDLC_VERSION} (${binaryChannel}), ${channel} channel newest ${cache.latestVersion}; update switches channels`
+      ? `binary ${AIDLC_VERSION} (${binaryChannel}), ${channel} channel newest${stale ? " known" : ""} ${cache.latestVersion}${age}; update switches channels`
       : switching
-      ? `You're on ${AIDLC_VERSION}, newer than the latest ${channel} ${cache.latestVersion}. ` +
-        channelWays(channel, binaryChannel, cache.latestVersion)
+      ? `You're on ${AIDLC_VERSION}, newer than the latest${stale ? " known" : ""} ${channel} ${cache.latestVersion}${age}. ` +
+        channelWays(channel, binaryChannel, stale ? undefined : cache.latestVersion)
+      : stale
+      ? `binary ${AIDLC_VERSION}, ${latestKnown(channel, cache.latestVersion, cache.checkedAt, now)}`
       : behind
       ? `binary ${AIDLC_VERSION}, latest ${channelWord}${cache.latestVersion}`
-      : stale
-      ? `binary ${AIDLC_VERSION}; update cache is stale`
       : `binary ${AIDLC_VERSION} is ${channelWord ? `the latest ${channelWord}release` : "latest"}`,
   };
 }
@@ -276,12 +297,16 @@ export async function refreshUpdateState(
     return cacheState(cache);
   } catch (error) {
     const previous = cachedUpdateState(channel);
-    if (previous.state === "behind" || previous.state === "current" || previous.state === "stale") {
+    if (
+      (previous.state === "behind" || previous.state === "current" || previous.state === "stale") &&
+      previous.latestVersion && previous.checkedAt
+    ) {
       return {
         ...previous,
         state: "unavailable",
-        message:
-          `update refresh unavailable; cached version ${previous.latestVersion} is stale or unverifiable`,
+        message: `could not check for a newer release; binary ${AIDLC_VERSION}, ${
+          latestKnown(previous.channel, previous.latestVersion, previous.checkedAt)
+        }`,
       };
     }
     // Parser and transport errors can contain mirror-controlled text. Preserve
