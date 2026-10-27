@@ -114,6 +114,25 @@ describe("the request is recorded in the person's own words", () => {
     expect(step.message).not.toContain(RETYPED);
   });
 
+  // #2401, live on Kiro IDE: the person named no plan, and the agent read one
+  // from their words and passed its own rewording under it. The plan stays the
+  // agent's call; the request is their whole line, not the rewording.
+  test("with no plan named, a plan the agent reads routes as passed and the request is their whole line", () => {
+    says(proj, `/aidlc I want to build "Northwind Mini Bank", a small demo of a bank's core money handling`);
+    create(proj, next(proj, ["--scope", "classic", "--", "Northwind Mini Bank: a small demo of a banks core money handling"]));
+    // The words as the engine's parse reads the line: the double quotes quote.
+    const theirs = "I want to build Northwind Mini Bank, a small demo of a bank's core money handling";
+    const record = recorded(proj);
+    expect(record.description).toBe(theirs);
+    expect(record.project).toBe(theirs);
+  });
+
+  test("with no plan named, a tail of their words under a plan the agent picked is not the request", () => {
+    says(proj, "/aidlc Build a demo bank named Northwind Mini Bank");
+    create(proj, next(proj, ["--scope", "classic", "--", "Northwind Mini Bank"]));
+    expect(recorded(proj).description).toBe("Build a demo bank named Northwind Mini Bank");
+  });
+
   // The plan's name typed before the task routes on that plan: the request is
   // the rest of the line, as they typed it.
   test("a plan named first, the agent routing on it: the request is the rest of their line", () => {

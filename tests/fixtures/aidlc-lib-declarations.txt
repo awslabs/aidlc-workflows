@@ -282,7 +282,6 @@ LEGACY_BOLT_NAME_REGEX
 LEGACY_HOOKS_HEALTH_DIR
 LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE
 LEGACY_PROJECT_DESCRIPTION_SOURCE
-LEGACY_REVIEW_RECORDS_DIR
 LEGACY_SENSORS_DIR
 LEGACY_SESSION_STEERING_TOKEN_KEY_FILE
 LEGACY_SOURCE_REVIEW_DIR
@@ -408,10 +407,6 @@ REVIEW_DICTATED_FIELD
 REVIEW_EDITED_FIELD
 REVIEW_FILE_ABSENT
 REVIEW_FILE_DIGEST_FIELD
-REVIEW_FINDINGS_REPORT_RETRY_MESSAGE
-REVIEW_FINDING_FIXED_STATUS_VALUES
-REVIEW_FINDING_REJECTED_PREFIX
-REVIEW_FINDING_STATUS_VALUES
 REVIEW_FINGERPRINT_RE
 REVIEW_FINISHED_FIELD
 REVIEW_KEPT_FIELD
@@ -420,11 +415,8 @@ REVIEW_MARK_OPEN
 REVIEW_NON_AUTHORITY
 REVIEW_RANK
 REVIEW_RECEIPT_EVENTS
-REVIEW_RECORDS_DIR
 REVIEW_RECORD_DIGEST_RE
 REVIEW_RECORD_MAX_BYTES
-REVIEW_RECORD_SEGMENT_RE
-REVIEW_REQUEST_ID_RE
 RUNNER_GEN_MARKER_KEY
 RUNNER_GEN_MARKER_VALUE
 ReScope
@@ -448,20 +440,11 @@ ReviewAttemptAccounting
 ReviewAttemptWindow
 ReviewClass
 ReviewCommandInput
-ReviewFinding
-ReviewFindingStatus
 ReviewFingerprintStage
-ReviewRecord
-ReviewRecordDerivedFinding
-ReviewRecordFinding
 ReviewRecordRef
 ReviewRecoveryCause
 ReviewRequestBinding
-ReviewVerdict
 ReviewVerdictDictated
-ReviewerFindingsReport
-ReviewerNewFindingReport
-ReviewerPriorFindingReport
 SAVED_SCOPE_NAME
 SAVED_SCOPE_NAME_MAX
 SAY_ONCE_NOTE_HARNESSES
@@ -574,9 +557,7 @@ UNIT_GATE_RHYTHM_FIELD
 UNIT_KINDS
 UNIT_LIFECYCLE_EVENTS
 UNIT_MERGE_DIR
-UNIT_NAME_MAX_LENGTH
 UNIT_NAME_PLACEHOLDER
-UNIT_NAME_REGEX
 UNIT_OWNERSHIP_FIELD
 UNIT_PARKED_FILE
 UNIT_PARTICIPANT_FILE
@@ -584,8 +565,6 @@ UNIT_RELEASE_PENDING_FILE
 UNIT_SCOPE_FILE
 UNIT_SOURCE_FINGERPRINT_RE
 UNIT_TERMINAL_EVENTS
-UNREADABLE_FINDINGS_TABLE_ID
-UNREADABLE_FINDINGS_TABLE_LOCATION
 UNSAVED_REASONS
 UNTRUSTED_AUDIT_NOTICE
 UTILITY_COMMANDS
@@ -960,8 +939,6 @@ findPlanApprovalLegacyOwner
 findStageByNumber
 findStageBySlug
 findSubagentInflight
-findingsReportUnreadable
-findingsReportUnreadableMessage
 finishUnitStepRemedy
 finishedBeforeSummaryOn
 finishedWork
@@ -1161,7 +1138,6 @@ isReplyTurn
 isRequestTurn
 isRetiredOnlyNextArgv
 isReviewRecord
-isReviewRecordRelativePath
 isSafeIntentRecordName
 isScopeName
 isScopedReviewCopy
@@ -1177,7 +1153,6 @@ isTeamUnitOwnership
 isTerminalConfigurationDispatch
 isTerminalUtilityNext
 isTrustedBindingSource
-isUnreadableFindingsTableFinding
 isValidRepoName
 isWalkingSkeletonUnitOnMain
 isWorkspaceNoun
@@ -1290,7 +1265,6 @@ markSelectedWork
 markStageWorkLogged
 markSubagentInflight
 markTurnEnd
-markdownRow
 matchSubagentInflight
 materializeCommitTree
 materializeRawGitTree
@@ -1408,8 +1382,6 @@ parseReScope
 parseRecordIntentKey
 parseRefsList
 parseReviewRecordBytes
-parseReviewSection
-parseReviewerFindingsReport
 parseSourceListing
 parseStageFrontmatter
 parseStateStageSuffixes
@@ -1526,7 +1498,6 @@ readBaselineSourceSnapshot
 readClaimGenerations
 readCommittedUnitSourceManifest
 readCurrentSessionId
-readFindingsTable
 readGateWords
 readGuardRefusalRecord
 readHeartbeats
@@ -1659,7 +1630,6 @@ repoIsWorkspace
 repoScopeAsked
 repoScopePassedOver
 reportResult
-reportTable
 requestChangesReportArgs
 requestChangesReportCommand
 requestChangesResetIsExecutable
@@ -1708,7 +1678,6 @@ reviewArtifactFingerprint
 reviewArtifactSnapshot
 reviewAttemptAccounting
 reviewAttemptEventMatchesCurrentClaim
-reviewAttemptId
 reviewAttemptWindow
 reviewCheckOffer
 reviewCompletionDictated
@@ -1717,12 +1686,9 @@ reviewCompletionEdited
 reviewCompletionMatchesRequest
 reviewCompletionWithoutReviewer
 reviewCopyRequest
-reviewDraftRelativePath
 reviewFileDigest
 reviewFileDigestOnDisk
 reviewFileSigner
-reviewFindingFingerprint
-reviewFindingsSectionLines
 reviewFreezeRefusalStands
 reviewInvalidationAttemptView
 reviewRecordAbsent
@@ -1732,14 +1698,12 @@ reviewRecordFindings
 reviewRecordMatchesCompletion
 reviewRecordNotHere
 reviewRecordRefFromBlock
-reviewRecordRelativePath
 reviewRequestAction
 reviewRequestArtifactsCurrent
 reviewRequestBindingFromBlock
 reviewRequestBindingIsModern
 reviewRequestReplaces
 reviewRoute
-reviewSectionVerdict
 reviewedArtifactUnit
 reviewedSourceEvidencePath
 reviewedSourceEvidenceRelPath
@@ -1895,7 +1859,6 @@ spacesRoot
 splitDoubleQuotedArgs
 splitFlagShapedArguments
 splitKiroCommandArgs
-splitMarkdownRow
 splitSlugList
 splitSourcePathKey
 stableFileSha256
@@ -2000,7 +1963,6 @@ terminalCommandFromWorkspaceCommand
 terminalCommandRelay
 terminalReviewAppendixBoundary
 terminalReviewVerdict
-toPosix
 touchTurnMarker
 transactActiveDirective
 transactActiveDirectiveTarget
@@ -2061,7 +2023,6 @@ unlistedRecordForQuestion
 unmergedRootSettingsNotices
 unmetProducerInPlan
 unquoteScalar
-unreadableFindingsTableFinding
 unrecordedKiroCliSteers
 unresolvedTeamGateRemedy
 unsavedOutputsMessage
@@ -2077,7 +2038,6 @@ validActiveDirectiveGuardRemedies
 validConstructionPolicyChange
 validGitRefName
 validPlanApprovalLegacyOfferCandidate
-validReviewFindingStatus
 validScopes
 validSessionId
 validSourceSnapshotFingerprint
@@ -2085,7 +2045,6 @@ validSpaceFlag
 validateBoltSlug
 validateLiveUnitScope
 validateReviewAppendix
-validateUnitName
 validateUnitSourceManifestBytes
 verificationCommandDetails
 verificationCommandRecovery

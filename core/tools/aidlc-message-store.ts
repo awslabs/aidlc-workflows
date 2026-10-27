@@ -569,7 +569,8 @@ function messageReach(
   const decisions = new Set<string>();
   let unnamed = false;
   // One jump over several Units is one decision, as one plan answer over
-  // several Units is.
+  // several Units is, and so is one Request Changes for a batch of Units built
+  // side by side (oneAnswerOf).
   let jump: { key: string; units: Set<string> } | null = null;
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index];
@@ -594,13 +595,13 @@ function messageReach(
       const backing = readMessage(pd, named);
       if (backing === null || backing.at < message.at || backing.session !== message.session) return "spent";
     }
-    const reopen = reopenOf(row);
+    const answer = oneAnswerOf(row);
     const unit = auditBlockField(row.block, "Unit") ?? "";
-    if (reopen !== null && jump !== null && jump.key === reopen && !jump.units.has(unit)) {
+    if (answer !== null && jump !== null && jump.key === answer && !jump.units.has(unit)) {
       jump.units.add(unit);
       continue;
     }
-    jump = reopen === null ? null : { key: reopen, units: new Set([unit]) };
+    jump = answer === null ? null : { key: answer, units: new Set([unit]) };
     decisions.add(row.event === "PLAN_APPROVAL_RECORDED" ? "plan" : String(index));
   }
   return decisions.size > 1 ? "spent" : unnamed ? "backed" : "stands";
@@ -615,6 +616,16 @@ function settingOnDecidedMessage(lowers: boolean): string {
       : "does not also stand for a setting. If their words asked for it, run the same command with no --message.");
 }
 
+// Rows that put a new question to the person: one the agent or a checkpoint
+// asked, or a gate opened. The plan question's "asked after it" (askedAfter)
+// and the window below read this one set.
+export const QUESTION_ASKED_EVENTS: ReadonlySet<string> = new Set(["DECISION_RECORDED", "STAGE_AWAITING_APPROVAL"]);
+
+// The follow-up a bare Request changes at the summary asks
+// (stage-protocol-summary.md): the summary answer records it itself, right
+// after the change request, and the window below takes it as part of that answer.
+export const SUMMARY_CHANGES_QUESTION = "What should change?";
+
 // A guard's refusal of an agent's action, one key per kind, so a new kind
 // fails the typecheck until it is listed here.
 const GUARD_REFUSALS: Record<GuardRefusalEvent, true> = {
@@ -626,36 +637,56 @@ const GUARD_REFUSALS: Record<GuardRefusalEvent, true> = {
 };
 
 // Whether the agent is still carrying out the reply that gave the latest
-// approval, so a setting that reply asked for stands when run after the
-// approval on that message, as it does riding the approval's own command
-// (settingsBesideDecision): live Copilot CLI and Kiro CLI runs recorded
-// "approve, and turn plan approval off" as the approval first, then lost the
-// setting. The reply is over, and its Approve stands for no setting
-// (messageReach), once the person has sent another message on this work (in
-// any chat: a resume is one), a later decision is on record (the run's own
-// approval included, which names no message), the message no longer stands as
-// a request does (onlyItsOwnDecisionAfter: a grant of autonomy uses it up), a
-// guard has refused the agent, or the next gate or the code plan question is
-// up. Ids, the engine's own rows and their places only, never words.
-function answeringItsApproval(pd: string, rows: readonly AuditShardEvent[], message: StoredMessage): boolean {
+// decision (an approval, a change request, or its answer to the summary, the
+// code plan, the Construction policy or the verification command), so a
+// setting that reply asked for stands when run after the answer on that
+// message, as it does riding the approval's own command
+// (settingsBesideDecision): live Claude Code, Copilot CLI, Kiro CLI and
+// opencode runs recorded "approve, and turn plan approval off" as the answer
+// first, then lost the setting. The reply is over, and the message stands for
+// no setting (messageReach), once the person has sent another message on this
+// work (in any chat: a resume is one), a later decision is on record (the
+// run's own approval included, which names no message), the message no longer
+// stands as a request does (onlyItsOwnDecisionAfter: a grant of autonomy uses
+// it up), a guard has refused the agent, or the next question is up: one asked
+// or a gate opened (a live Copilot CLI run asked the next questions, then
+// turned the summary confirmation off on the yes to the one before), other than
+// the "What should change?" a bare Request changes at the summary asks
+// (summaryFollowUpOf), or a code plan question shown since. The plan question
+// the reply answered still reads as waiting while its answer is being written,
+// so it counts by when it was shown (Kiro CLI ran the setter beside the plan
+// answer). Ids, the engine's own rows and their places only, never words.
+function answeringItsDecision(pd: string, rows: readonly AuditShardEvent[], message: StoredMessage): boolean {
   if (!onlyItsOwnDecisionAfter(pd, rows, message)) return false;
-  let approval: AuditShardEvent | null = null;
+  let decision: AuditShardEvent | null = null;
   for (const row of rows) {
     if (!MESSAGE_SPENDING_EVENTS.has(row.event) || auditBlockField(row.block, APPROVED_TOGETHER_WITH_FIELD) !== null) continue;
-    if (approval === null || rowAfter(row, approval, true)) approval = row;
+    if (decision === null || rowAfter(row, decision, true)) decision = row;
   }
-  if (
-    approval === null || (approval.event !== "GATE_APPROVED" && approval.event !== "PLAN_APPROVAL_RECORDED") ||
-    auditBlockField(approval.block, "Message Id") !== message.id
-  ) return false;
-  const since = approval;
+  if (decision === null || auditBlockField(decision.block, "Message Id") !== message.id) return false;
+  const since = decision;
+  const itsOwnFollowUp = summaryFollowUpOf(decision);
   const turn = rows.find((row) => row.event === "HUMAN_TURN" && auditBlockField(row.block, "Message Id") === message.id);
   const over = rows.some((row) =>
     (row.event === "HUMAN_TURN" && auditBlockField(row.block, "Message Id") !== message.id &&
       (turn === undefined ? row.timestamp > message.at : rowAfter(row, turn, true))) ||
-    ((Object.hasOwn(GUARD_REFUSALS, row.event) || row.event === "STAGE_AWAITING_APPROVAL") && rowAfter(row, since, true))
+    ((Object.hasOwn(GUARD_REFUSALS, row.event) || (QUESTION_ASKED_EVENTS.has(row.event) && !itsOwnFollowUp(row))) &&
+      rowAfter(row, since, true))
   );
-  return !over && sincePlanQuestion(pd) === null;
+  const plan = sincePlanQuestion(pd);
+  return !over && (plan === null || plan(since));
+}
+
+// The question a bare Request changes at the summary asks itself ("What should
+// change?", for the same stage and Unit): the reply that asked for the change
+// is still the one in hand, whether the summary answer or the agent logged it.
+function summaryFollowUpOf(decision: AuditShardEvent): (row: AuditShardEvent) => boolean {
+  if (decision.event !== "SUMMARY_CONFIRMATION_RECORDED") return () => false;
+  const stage = auditBlockField(decision.block, "Stage");
+  const unit = auditBlockField(decision.block, "Unit");
+  return (row) => row.event === "DECISION_RECORDED" &&
+    auditBlockField(row.block, "Decision") === SUMMARY_CHANGES_QUESTION &&
+    auditBlockField(row.block, "Stage") === stage && auditBlockField(row.block, "Unit") === unit;
 }
 
 // Whether the only decision recorded after `message` is one redo or jump back
@@ -677,6 +708,18 @@ function onlyItsReopenAfter(rows: readonly AuditShardEvent[], message: Pick<Stor
     reopen = key;
   }
   return reopen !== null;
+}
+
+// The one answer a GATE_REJECTED row belongs to when that answer writes a row
+// per Unit, one after another: a jump over several Units (reopenOf), or a
+// batch checkpoint's Request Changes (each Unit's row carries its batch). Null
+// for any other row. Only the spend rule groups by it: a batch's Request
+// Changes is no redo (onlyItsReopenAfter reads reopenOf alone).
+function oneAnswerOf(row: AuditShardEvent): string | null {
+  const reopen = reopenOf(row);
+  const batch = row.event === "GATE_REJECTED" ? auditBlockField(row.block, "Batch number") : null;
+  if (reopen !== null || batch === null) return reopen;
+  return `${auditBlockField(row.block, "Checkpoint") ?? ""}:${auditBlockField(row.block, "Stage") ?? ""}:${batch}`;
 }
 
 // The jump a GATE_REJECTED row belongs to, null for any other row: a jump over
@@ -767,7 +810,7 @@ function messageProof(
     : !(options.reopened === true && onlyItsReopenAfter(rows, message)) && spentAt !== null && message.at < spentAt
       ? "spent"
       : "stands";
-  if (reach === "backed" && !answeringItsApproval(pd, rows, message)) {
+  if (reach === "backed" && !answeringItsDecision(pd, rows, message)) {
     return { refusal: settingOnDecidedMessage(options.lowers === true) };
   }
   if (reach === "spent") {

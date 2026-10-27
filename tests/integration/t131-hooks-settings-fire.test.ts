@@ -284,6 +284,8 @@ function makeProject(withState: boolean): string {
     "aidlc-settings.ts",
     "aidlc-markdown.ts",
     "aidlc-locks.ts",
+    "aidlc-review-records.ts",
+    "aidlc-learned-date.ts",
     "aidlc-install-paths.ts",
     "aidlc-distribution.ts",
     "aidlc-channel.ts",

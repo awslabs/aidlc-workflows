@@ -7,8 +7,9 @@
 // files the project held when the work started, from the listing the gate's
 // compare reads, and a dispatched build's brief carries the same sentence word
 // for word. The code itself on existing code, AI-DLC's own files and files
-// added after the work started are not named; nothing is said when the listing
-// is not on this machine. Nothing changes on screen.
+// added after the work started are not named; a clone that does not hold the
+// listing takes its own (t-run-alone-and-clone-told-brought-files). Nothing
+// changes on screen.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -154,7 +155,7 @@ describe("the steps that plan and build Code Generation", () => {
     expect(String(build.brief_note)).toContain("and 4 more that were here before this work started.");
   });
 
-  test("no listing of the work's start on this machine (a teammate's clone): no note", () => {
+  test("no listing of the work's start on this machine (a teammate's clone): the files here when its plan step runs, less the code", () => {
     // A file added before the build, so the work's start and the build's own listings differ and only the first goes.
     const { proj } = atPlan({ brought: { "README.md": README }, later: { "CONTRIBUTING.md": "a teammate's\n" } });
     const audit = readdirSync(join(seededRecordDir(proj), "audit"))
@@ -166,7 +167,9 @@ describe("the steps that plan and build Code Generation", () => {
     const plan = next(proj);
     expect(plan.kind, JSON.stringify(plan).slice(0, 600)).toBe("run-stage");
     expect((plan.plan_approval as { status?: string } | undefined)?.status).toBe("plan");
-    expect(plan.brought_files_note).toBeUndefined();
+    expect(plan.brought_files_note).toBe(
+      `These files were in this project before this work started and are the person's: \`CONTRIBUTING.md\`, \`README.md\`. ${LEAVE}`,
+    );
   });
 
   test("the gate shown again, whose work does not run, carries no note; the build redone after Request Changes does", () => {

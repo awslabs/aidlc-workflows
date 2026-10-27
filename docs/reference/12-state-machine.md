@@ -194,7 +194,11 @@ for at that question for one listed stage is `next --stage <stage> --unit
 `Feedback`. While the gate stays open, `next` routes the reopened Units' steps
 first, then shows the same one question again, without the learnings module. A
 stage being revised never lists the learnings module again, and `report
---result awaiting-approval` on it names `report --result revised`.
+--result awaiting-approval` on it names `report --result revised`. At an open
+gate, `report --result revised` names `report --result awaiting-approval`, the
+re-check an open gate takes after a change, with the person's blocking-sensor
+override kept; at the one late gate for stages approved together it names
+`next`, which shows that one question again. Either changes nothing on record.
 
 | Transition | Trigger | Emitter |
 |---|---|---|
@@ -782,7 +786,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 | Event | Emitter | Notes |
 |---|---|---|
-| `STAGE_STARTED` | `tools/aidlc-state.ts`, `tools/aidlc-utility.ts`, `tools/aidlc-jump.ts`, `tools/aidlc-orchestrate.ts` | Internal route marks `[ ]` → `[-]`; isolated `next --single` rows carry `Workflow=single-stage:<slug>` and `Scope`, so completion uses that attempt's summary-confirmation policy rather than the main workflow's, and `Kept Copy`: the record folder, `<record>/archive/<time>-<slug>`, its start copied the stage's existing files to, or `none` when the work's record held none. An open attempt whose start has no `Kept Copy` (started by an earlier version, or its copy failed) makes the copy at its next `next --single`, in a folder named for that start, and appends nothing. Legacy isolated rows without Scope retain confirmation-on behavior. |
+| `STAGE_STARTED` | `tools/aidlc-state.ts`, `tools/aidlc-utility.ts`, `tools/aidlc-jump.ts`, `tools/aidlc-orchestrate.ts` | Internal route marks `[ ]` → `[-]`; isolated `next --single` rows carry `Workflow=single-stage:<slug>` and `Scope`, so completion uses that attempt's summary-confirmation policy rather than the main workflow's, and `Kept Copy`: the record folder, `<record>/archive/<time>-<slug>`, its start copied the stage's existing files to, or `none` when the work's record held none. An open attempt whose start has no `Kept Copy` (started by an earlier version, or its copy failed) makes the copy at its next `next --single`, in a folder named for that start, and appends nothing. With no work selected, the words typed with the run are kept, key shapes masked, in `single-stage-request/<slug>.json` in the space's own record (committed, as a piece of work's `project-description.json` is) and the row carries their `Request SHA-256`; `project-description` returns them while that run is open, and other words typed with the same stage start it over with them, as a setting typed differently does. Legacy isolated rows without Scope retain confirmation-on behavior. |
 | `STAGE_AWAITING_APPROVAL` | `tools/aidlc-state.ts` | Internal emitter for `report --result awaiting-approval` / `revised`; recovered rows carry `Recovered=true`; an authorized blocking-sensor override records sensor ids, optional detail paths, and evaluation reasons; a `revised` re-entry carries `Review Kept: <the rejection's timestamp>` when the person's Request Changes changed nothing of the stage (no review asked or recorded since, and the review it was made on still covers the documents and source byte for byte, `unchangedChangeRequest`): the gate comes back with that review as it stands, and the rejection starts no new review attempt (`keptReviewRejections`, read by the review window, its accounting and the brief's invalidation view). A change request that changed something starts the new attempt as before, so its review runs before the gate. |
 | `STAGE_COMPLETED` | `tools/aidlc-state.ts`, `tools/aidlc-utility.ts` | Internal emitter for a completed/approved report; never paired with a skipped report |
 | `STAGE_REVISING` | `tools/aidlc-state.ts` | Internal emitter paired with `GATE_REJECTED` after a rejected report |

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-log:link, subcommand:aidlc-state:reuse-artifact, function:developerHandoffPaths, audit:PIPELINE_LINK_COMPLETED, function:codekbStoreIsCurrent, function:codekbSourceRoot, function:latestPipelineLinkArtifactMtime, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:singleStageAttemptIsOpen, function:checkPipelineLinkEvidence, function:pipelineLinkWayOn
+// covers: subcommand:aidlc-log:link, subcommand:aidlc-log:decision, subcommand:aidlc-log:answers, subcommand:aidlc-state:reuse-artifact, function:developerHandoffPaths, audit:PIPELINE_LINK_COMPLETED, function:codekbStoreIsCurrent, function:codekbSourceRoot, function:latestPipelineLinkArtifactMtime, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:singleStageAttemptIsOpen, function:checkPipelineLinkEvidence, function:pipelineLinkWayOn
 //
 // Pipeline links are durable, ordered completion evidence. The log tool owns
 // each receipt; the engine and direct state transitions require the complete
@@ -2218,6 +2218,49 @@ describe("t315 an isolated run in a project with no work", () => {
     const refused = runLog(proj, FINAL, undefined, true);
     expect(refused.rc).not.toBe(0);
     expect(refused.out).toContain("No active workflow is selected");
+    expect(shards(proj)).toEqual(before);
+  });
+
+  // The run's own question, as the stage protocol logs it: no `--single`.
+  const QUESTION = ["decision", "--stage", RE_STAGE, "--decision", "Reuse it, or rescan?", "--options", "Reuse,Full rescan"];
+
+  function runLogWords(proj: string, words: string[]): { rc: number; out: string } {
+    const result = spawnSync(BUN, [LOG, ...words, "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: childEnv(),
+    });
+    return { rc: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  }
+
+  test("the run's own question records beside its start, and log answers reads it back", () => {
+    const proj = noWorkProject();
+    startIsolated(proj);
+    const asked = runLogWords(proj, QUESTION);
+    expect(asked.rc, asked.out).toBe(0);
+    const shard = Object.values(shards(proj));
+    expect(shard).toHaveLength(1);
+    expect(shard[0]).toContain("**Event**: DECISION_RECORDED");
+    const answers = runLogWords(proj, ["answers", "--stage", RE_STAGE]);
+    expect(answers.rc, answers.out).toBe(0);
+    expect(answers.out).toContain("Reuse it, or rescan?");
+    leavesNoWork(proj);
+  });
+
+  test("a question with no isolated run open, or after it closed, is refused and writes nothing", () => {
+    const proj = noWorkProject();
+    const refused = runLogWords(proj, QUESTION);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("No active workflow is selected");
+    expect(shards(proj)).toEqual({});
+    const current = writeCurrentCodekbStore(proj);
+    startIsolated(proj);
+    expect(reuseStore(proj, current.store).rc).toBe(0);
+    expect(finish(proj)?.kind).toBe("done");
+    const before = shards(proj);
+    const after = runLogWords(proj, QUESTION);
+    expect(after.rc).not.toBe(0);
+    expect(after.out).toContain("No active workflow is selected");
     expect(shards(proj)).toEqual(before);
   });
 });

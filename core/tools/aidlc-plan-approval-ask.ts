@@ -55,6 +55,7 @@ import {
   rejectionAtRunFloor,
   rejectionIsFreshAttempt,
   removePlanApprovalRuntimeRecord,
+  runStateContent,
   renderChangedPaths,
   sourceChangedOutsideAidlc,
   stalePlanApprovalReceiptsForTarget,
@@ -103,7 +104,7 @@ import {
   type CodeGenerationIssuance,
   type PlanApprovalPickerQuestion,
 } from "./aidlc-testing-posture.ts";
-import { readMessage } from "./aidlc-message-store.ts";
+import { QUESTION_ASKED_EVENTS, readMessage } from "./aidlc-message-store.ts";
 import { exactOptionPick, isNonAnswer, pickerOffersChoices } from "./aidlc-reply-reader.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
@@ -1326,12 +1327,8 @@ function currentPlanApprovalAsk(
   projectDir: string,
   answered: "none" | "some" | "all" = "none",
 ): { marker: ActiveDirectiveMarker; record: PlanApprovalAskRecord } | null {
-  let state: string;
-  try {
-    state = readFileSync(stateFilePath(projectDir), "utf-8");
-  } catch {
-    return null;
-  }
+  const state = runStateContent(projectDir);
+  if (state === null) return null;
   const marker = readActiveDirectiveMarker(projectDir, state);
   if (marker?.version !== 2 || marker.kind !== "ask" || marker.ask_type !== PLAN_APPROVAL_ASK_TYPE) return null;
   const record = readPlanApprovalAsk(projectDir, marker.intent_uuid ?? "bare-space");
@@ -1899,14 +1896,12 @@ interface OpenEngineQuestion {
   askedAt: string;
 }
 
-const LATER_QUESTION_EVENTS = new Set(["DECISION_RECORDED", "STAGE_AWAITING_APPROVAL"]);
-
 // Whether a question was asked after `since`, the second the one in hand was
 // shown: that later question is the open one. A routing answer can only follow
 // its question, so the same second counts for it.
 function askedAfter(projectDir: string, since: string): boolean {
   return readAuditShardEvents(projectDir).some((row) =>
-    LATER_QUESTION_EVENTS.has(row.event) ? row.timestamp > since
+    QUESTION_ASKED_EVENTS.has(row.event) ? row.timestamp > since
       : row.event === "REQUEST_ROUTED" && row.timestamp >= since);
 }
 
@@ -2328,12 +2323,8 @@ function atCompletionGate(projectDir: string, unit: string | null): boolean {
  */
 export function requestPlanApprovalReviewNow(projectDir: string): string | null {
   return withAuditLock(projectDir, () => {
-    let state: string;
-    try {
-      state = readFileSync(stateFilePath(projectDir), "utf-8");
-    } catch {
-      return null;
-    }
+    const state = runStateContent(projectDir);
+    if (state === null) return null;
     const marker = readActiveDirectiveMarker(projectDir, state);
     const current = marker?.version === 2 ? marker : null;
     if ((current?.stage ?? getField(state, "Current Stage")?.trim()) !== STAGE) return null;

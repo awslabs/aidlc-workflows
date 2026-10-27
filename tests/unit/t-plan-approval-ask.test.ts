@@ -1,6 +1,6 @@
 // covers: function:routeCodeGenerationPlanApproval, function:publishPlanApprovalAsk, function:notePlanApprovalAskReply, function:recordPlanApprovalAnswer, function:requestPlanApprovalReviewNow, function:codeGenerationPlanReadiness, function:planSummaryLines,
 // function:PLAN_APPROVAL_ASK_TYPE, function:planApprovalRuntimeFile, function:readPlanApprovalRuntimeRecord,
-// function:writePlanApprovalRuntimeRecord, function:removePlanApprovalRuntimeRecord, function:releaseTakenGuardRecoveryReply,
+// function:writePlanApprovalRuntimeRecord, function:removePlanApprovalRuntimeRecord, function:releaseTakenGuardRecoveryReply, function:runStateContent,
 // function:keepPlanApprovalAskOverStateWrite, function:planNote, function:preparePlanRecordFolders
 //
 // The engine asks for Plan Approval itself. These cases drive the real `next`,
@@ -49,6 +49,11 @@
 //   - the step that writes a plan (stage-level, a Unit's, a parallel batch's)
 //     makes each plan's record folder first, so a file tool that makes no
 //     folders writes the plan; a route check makes nothing.
+//   - an isolated Code Generation run in a project with no work: its plan
+//     question is asked and answered as inside work, PLAN_APPROVAL_RECORDED
+//     lands beside the run's start, and Approve Plan builds and the run
+//     finishes; Request Changes, editing the files and "review the plan" go as
+//     inside work.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -65,6 +70,7 @@ import {
   DEFAULT_RECORD_DIR,
   FIXTURES_DIR,
   intentsDirOf,
+  removeWorkspaceRecord,
   runOrchestrateNext,
   seedAidlcMemory,
   seedBoltDag,
@@ -2930,6 +2936,131 @@ describe("an isolated Code Generation run's plan steps name that run's own next"
     next(proj);
     reply(proj, "you finish it");
     expect(String(next(proj).plan_approval.note)).toEndWith(". Then run next.");
+  });
+});
+
+// An isolated Code Generation run in a project with no work: its start is in
+// the space's own record, and its plan question is the open step there, bound
+// to the empty state its step was issued on, so the person's answer records
+// (PLAN_APPROVAL_RECORDED beside the start) and the run builds and finishes as
+// it does inside work.
+describe("an isolated Code Generation run in a project with no work", () => {
+  const SINGLE = ["--stage", "code-generation", "--single", "--scope", "enterprise"];
+  const OWN_NEXT = "bun .claude/tools/aidlc-orchestrate.ts next";
+  const SPACE_RECORD = ["aidlc", "spaces", "default", "intents"];
+  const planDir = (proj: string) => join(proj, ...SPACE_RECORD, "construction", "code-generation");
+  // A project with code and no work, the harness installed, and the run started.
+  function noWork(start = true): string {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    removeWorkspaceRecord(proj);
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "base.ts"), "export const base = true;\n", "utf-8");
+    if (start) {
+      reply(proj, "/aidlc --stage code-generation --single");
+      expect(next(proj, SINGLE).plan_approval?.status).toBe("plan");
+    }
+    return proj;
+  }
+  function writeOwnPlan(proj: string, builds = "slugify for titles"): void {
+    mkdirSync(planDir(proj), { recursive: true });
+    writeFileSync(
+      join(planDir(proj), "code-generation-plan.md"),
+      `# Code Generation Plan\n\n## Summary\n\n- Builds: ${builds}\n- Touches: src/slugify.ts\n` +
+        "- Tests: 3 unit tests\n\n## Steps\n\n- [ ] Step 1: write slugify\n\n" +
+        renderTestingContract(resolveTestingPosture(proj)),
+      "utf-8",
+    );
+    writeFileSync(join(planDir(proj), "unit-test-instructions.md"),
+      "# Unit Test Instructions\n\nRun `bun test src/slugify.test.ts`.\n", "utf-8");
+  }
+  function asked(proj: string): Emitted {
+    const directive = next(proj, SINGLE);
+    expect(directive, JSON.stringify(directive)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    return directive;
+  }
+  function events(proj: string): string[] {
+    const dir = join(proj, ...SPACE_RECORD, "audit");
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir).flatMap((name) => readFileSync(join(dir, name), "utf-8").split("\n---\n"))
+      .flatMap((block) => /\*\*Event\*\*: (\S+)/.exec(block)?.[1] ?? []);
+  }
+  function builds(proj: string): void {
+    expect(next(proj, SINGLE)).toMatchObject({ kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" } });
+  }
+  function finishes(proj: string): void {
+    writeFileSync(join(proj, "src", "slugify.ts"), "export const slugify = (s: string) => s;\n", "utf-8");
+    const result = spawnSync(BUN, [
+      DISPATCHER, "engine", "orchestrate", "report", "--single", "--stage", "code-generation", "--result", "completed",
+      "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect((JSON.parse(result.stdout || "{}") as { kind?: string }).kind, result.stdout).toBe("done");
+    expect(events(proj).filter((event) => event === "STAGE_COMPLETED")).toHaveLength(1);
+    expect(existsSync(join(proj, ...SPACE_RECORD, "aidlc-state.md"))).toBe(false);
+    expect(existsSync(join(proj, ...SPACE_RECORD, "intents.json"))).toBe(false);
+  }
+
+  test("Approve Plan is recorded beside the run's start, and the run builds and finishes", () => {
+    const proj = noWork();
+    writeOwnPlan(proj);
+    asked(proj);
+    expect(existsSync(join(planDir(proj), "code-generation-questions.md"))).toBe(true);
+    replyAndRecord(proj, "approve", "Approve Plan");
+    expect(events(proj).filter((event) => event === "PLAN_APPROVAL_RECORDED")).toHaveLength(1);
+    builds(proj);
+    finishes(proj);
+  });
+
+  test("Request Changes: the revision names the run's own next, and the revised plan is asked about once", () => {
+    const proj = noWork();
+    writeOwnPlan(proj);
+    asked(proj);
+    replyAndRecord(proj, "rename slugify to toSlug", "Request Changes: rename slugify to toSlug");
+    expect(next(proj, SINGLE)).toMatchObject({
+      kind: "run-stage",
+      plan_approval: { status: "revise", feedback: "rename slugify to toSlug", next: `${OWN_NEXT} ${SINGLE.join(" ")}` },
+    });
+    writeOwnPlan(proj, "toSlug for titles");
+    expect(asked(proj).plan_approval.targets?.[0].summary[0]).toBe("Builds: toSlug for titles");
+    replyAndRecord(proj, "ok, approve", "Approve Plan");
+    builds(proj);
+  });
+
+  test("the person edits the files: after done, their approval builds", () => {
+    const proj = noWork();
+    writeOwnPlan(proj);
+    asked(proj);
+    replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
+    expect(asked(proj).plan_approval.editing).toBe(true);
+    writeFileSync(join(planDir(proj), "unit-test-instructions.md"),
+      "# Unit Test Instructions\n\nRun `bun test src`.\n", "utf-8");
+    replyAndRecord(proj, "done", "Approve Plan");
+    builds(proj);
+  });
+
+  test("review the plan first, said after approving: the plan is asked about again", () => {
+    const proj = noWork();
+    writeOwnPlan(proj);
+    asked(proj);
+    replyAndRecord(proj, "approve", "Approve Plan");
+    reply(proj, "wait, review the plan first");
+    const review = answer(proj, "Review the plan");
+    expect(review.code, review.message).toBe(0);
+    asked(proj);
+  });
+
+  test("with no run open the plan answer is refused as before and records nothing", () => {
+    const proj = noWork(false);
+    reply(proj, "approve");
+    const refused = answer(proj, "Approve Plan");
+    expect(refused.code).not.toBe(0);
+    expect(events(proj)).not.toContain("PLAN_APPROVAL_RECORDED");
   });
 });
 

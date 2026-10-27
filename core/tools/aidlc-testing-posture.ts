@@ -100,6 +100,7 @@ import {
   resolveProjectDir,
   stalePlanApprovalReceiptsForTarget,
   resolveWorkflowSelection,
+  runStateContent,
   stateFilePath,
   stateDigest,
   swarmConvergedUnits,
@@ -166,6 +167,7 @@ import {
   TESTING_POSTURE_SUBCOMMANDS,
 } from "./aidlc-lib.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
+import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { noReplySince, personTurnStands, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
 import { aidlcToolInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import {
@@ -534,7 +536,7 @@ interface ClassifiedPosture {
   components: TestingMethodology[];
 }
 
-const TESTING_HEADING = "## Testing Posture";
+export const TESTING_HEADING = "## Testing Posture";
 const TESTABLE_LAYERS = [
   "Data model / database behavior",
   "Repository / data access",
@@ -654,7 +656,7 @@ function normalizeMethodology(value: string): TestingMethodology | null {
 }
 
 function structuredMethodology(value: string): TestingMethodology {
-  const normalized = value
+  const normalized = withoutLearnedDate(value)
     .toLowerCase()
     .replace(/[`*_]/g, "")
     .trim();
@@ -2714,11 +2716,11 @@ function codeGenerationAuthority(
   issued?: CodeGenerationIssuance,
 ): CodeGenerationAuthority {
   const target = normalizeCodeGenerationTarget(requestedTarget);
-  const statePath = stateFilePath(projectDir);
-  if (!existsSync(statePath)) {
+  // With no work selected, an isolated run's: the empty state its step binds.
+  const state = runStateContent(projectDir);
+  if (state === null) {
     throw new Error("Code Generation approval authority requires an active workflow state");
   }
-  const state = readFileSync(statePath, "utf-8");
   // While `next` asks about the step it is about to issue, a state write since
   // the engine's last step (a Construction setting, the walking-skeleton
   // stance, the verification command) made that step out of date, not the

@@ -108,6 +108,8 @@ and the audit shard gets a row for it:
 **Source**: user_addition
 ```
 
+A kept line that sets a value AI-DLC reads (`Methodology: tdd` or `Ordering: ...` under `## Testing Posture`, `Mode: strict` under `## Guard Policy` or the retired `## Change Control`) carries its date as `<!-- learned 2026-10-13 -->` instead, so the value is exactly what you kept.
+
 The kept line is in force from the next stage on, as [Applies from the next applicable stage](#applies-from-the-next-applicable-stage) describes.
 
 ### Where a kept learning goes

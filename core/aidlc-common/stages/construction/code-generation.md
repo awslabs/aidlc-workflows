@@ -196,6 +196,22 @@ Built side by side, this Unit has its own copy of the project with none of
 the other Units of its batch in it: plan code and tests that pass with this
 Unit's code, the Units it depends on, and the project as it stands.
 
+A coverage floor set for the whole project (the Testing Contract's line
+floor, a team rule, or a threshold in the project's coverage configuration
+that applies to all measured source) is measured by Build and Test on the
+full test suite of the assembled project. A Unit-scoped run does not judge
+it: on one Unit's tests a runner's coverage threshold can fail on source that
+other Units' tests cover, with every selected test passing. Never change that
+threshold to make a Unit's run pass (setting it up when this work bootstraps
+the runner is part of the floor); under Expected coverage targets, name the
+floor and say Build and Test checks it on the full suite. When this file's
+command exits non-zero only on that floor's threshold with every selected
+test passing, record that with this Unit's test results; it is not a failed
+test. Put any run that floor's threshold can fail in a command of its own,
+with no step after it that the threshold exit would stop: Build and Test does
+not exempt a command whose exit stopped a later step. A coverage target set
+for this Unit or one of its paths still gets its own Unit-scoped check.
+
 Start the plan with a short `## Summary` section of three lines. The engine
 shows them to the person when it asks for approval:
 

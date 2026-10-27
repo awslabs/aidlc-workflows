@@ -469,6 +469,30 @@ describe("t299 (1) additive methodology resolution", () => {
     ).toThrow("Invalid Testing Posture Methodology");
   });
 
+  // The learnings tool once wrote its visible date after the text of every
+  // line it kept, a field line too. Such a line already in memory is read as
+  // its value; the Ordering, which takes any text, keeps it, and anything else
+  // after a Methodology value is still refused.
+  test("a Methodology the learnings tool wrote with its date is read as its value", () => {
+    const contract = resolve({
+      org: ORG,
+      project: [
+        "<!-- Project-specific specialisation. -->",
+        "",
+        "- Methodology: tdd (learned 2026-10-26) <!-- cid:unscoped:user-stories:5a3af90e -->",
+        "- Ordering: tests first (learned 2026-10-26) <!-- cid:unscoped:user-stories:620da805 -->",
+      ].join("\n"),
+    });
+    expect([contract.methodology, contract.source]).toEqual(["tdd", "project"]);
+    expect(contract.ordering).toBe("tests first (learned 2026-10-26)");
+
+    for (const value of ["tdd (learned yesterday)", "tdd (learned 2026-10-26) then bdd", "tdd(learned 2026-10-26)"]) {
+      expect(() => resolve({ org: ORG, project: `- Methodology: ${value}` })).toThrow(
+        "Invalid Testing Posture Methodology",
+      );
+    }
+  });
+
   test("structured TDD remains authoritative when Ordering contains before and after", () => {
     const contract = resolve({
       org: ORG,
