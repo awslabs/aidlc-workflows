@@ -298,7 +298,9 @@ the build goes on without it and its approval says what was left out, for
 example "Left out of this build: AC2.1.1, AC2.1.2 and AC2.2.1." The Unit's
 `traceability.json` keeps each of those items as `Deferred`, with your words.
 
-When the build changes or deletes a file you had before the work started (a
+Code Generation is told which files you had before the work started, and
+builds around them unless its plan changes one. When the build changes or
+deletes a file you had before the work started (a
 README, LICENSE, docs or configs; on existing code, any file it deletes and the
 changed files AI-DLC does not read as code or a build file by their name, so a
 README or `.env` but not `package.json`, a `Dockerfile` or a YAML config), its

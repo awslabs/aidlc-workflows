@@ -2454,6 +2454,16 @@ it and the stage gate the engine settles after the last Unit does not; when the
 person's reply to the checkpoint came while its review ran, so the question is
 not shown, the line rides the next step the agent speaks from.
 
+Before the build, the same work-start listing names those files to the agents:
+every Code Generation step whose body runs here (the plan step, a revision,
+the build, a Unit's) carries `brought_files_note`, and a dispatched build's
+`brief_note` carries the same sentence word for word. It names the files the
+project held when the work started, less the code itself on existing code and
+the files AI-DLC's install wrote whole and still holds as written (the same
+check the line uses), up to ten by name and then a count, and says to leave
+them as they are unless the work's plan changes one of them. It says nothing
+when the listing is not on this machine.
+
 ### `aidlc-testing-posture.ts` — Code Generation Testing Contract
 
 `resolve`/`render` read the active space's org/team/project Testing Posture

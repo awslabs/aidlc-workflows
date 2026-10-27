@@ -567,7 +567,7 @@ import {
   type ConstructionCheckpointKind,
   type ConstructionEvidence,
 } from "./aidlc-construction-checkpoints.ts";
-import { unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
+import { broughtFileNames, broughtFilesNote, unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
 import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
 import {
   cachedUnitClaimOverview,
@@ -1718,6 +1718,12 @@ function prepareEmission(directive: Directive): PreparedEmission {
   ) {
     const works = otherOpenWorkClaims(route.codekbCtx.projectDir, directive.stage);
     if (works.length > 0) directive.other_work_note = otherWorkNote(works);
+    // The plan writer and the builder are told which files were here when the
+    // work started, the ones the gate names if the build changes them.
+    if (directive.stage === "code-generation") {
+      const names = broughtFileNames(route.codekbCtx.projectDir, loadStateFileIfPresent(route.codekbCtx.projectDir));
+      if (names !== null) directive.brought_files_note = broughtFilesNote(names);
+    }
   }
   // A refusal does not carry on: it says why, and the kept words (below); a
   // warning that the mark could not be written stays.

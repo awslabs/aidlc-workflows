@@ -339,6 +339,9 @@ export interface RunStageDirective {
   // otherWorkNote(): on a stage that builds in the workspace, the files another
   // open piece of work in this folder claims, to leave as they are.
   other_work_note?: string;
+  // broughtFilesNote() (aidlc-brought-files.ts): on a Code Generation step, the
+  // files the project held when the work started, to leave as they are.
+  brought_files_note?: string;
   // briefNote(): the lines every agent brief carries on a dispatched topology.
   brief_note?: string;
   // ceremonyNote(): the summary confirmation, confirm when on, skip when off.
@@ -1017,6 +1020,7 @@ const RUN_STAGE_FIELDS = [
   "inputs_note",
   "plan_note",
   "other_work_note",
+  "brought_files_note",
   "brief_note",
   "ceremony_note",
   "unit_gate",
@@ -1594,13 +1598,14 @@ export function otherWorkNote(
 
 // A dispatched topology: the lines every agent brief carries, ready to paste,
 // so the agent copies a block instead of reading two fields into prose.
-export function briefNote(ceremony: Record<string, unknown>, modules: readonly string[], otherWork?: string): string {
+// `carried` are the step's notes about files to leave as they are.
+export function briefNote(ceremony: Record<string, unknown>, modules: readonly string[], carried: readonly string[] = []): string {
   const switches = CEREMONY_KEYS
     .filter((key) => typeof ceremony[key] === "string")
     .map((key) => `${CEREMONY_FIELDS[key]}: ${String(ceremony[key])}.`);
   return "Every agent brief for this stage carries these lines word for word: " +
     `${switches.join(" ")} Protocol modules: ${modules.length > 0 ? modules.join(", ") : "none"}.` +
-    (otherWork === undefined ? "" : ` ${otherWork}`);
+    carried.map((note) => ` ${note}`).join("");
 }
 
 // Both states are said: off left as an absence read as the ask on Kiro CLI,
@@ -1830,7 +1835,8 @@ export function withAgentNotes<T extends object>(
     }
     const dispatched = d.mode === "subagent" || d.mode === "pipeline" || d.mode === "mob" || "wave" in d;
     if (dispatched && isPlainObject(d.ceremony)) {
-      notes.brief_note = briefNote(d.ceremony, modules, typeof d.other_work_note === "string" ? d.other_work_note : undefined);
+      const carried = [d.other_work_note, d.brought_files_note].filter((note): note is string => typeof note === "string");
+      notes.brief_note = briefNote(d.ceremony, modules, carried);
     }
   }
   if (
@@ -1938,6 +1944,7 @@ export function validateDirective(obj: unknown): ValidationResult {
   checkAgentNote(o, "inputs_note", Array.isArray(o.consumes_absent) && o.consumes_absent.length > 0, kind, errors);
   checkAgentNote(o, "plan_note", "plan_approval" in o, kind, errors);
   checkAgentNote(o, "other_work_note", "stage_file" in o, kind, errors);
+  checkAgentNote(o, "brought_files_note", "stage_file" in o, kind, errors);
 
   // Rule 4-6: per-kind required-field presence + type checks, with specific,
   // kind-aware messages.
