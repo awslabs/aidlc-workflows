@@ -45,6 +45,7 @@ import {
   routeOptions,
   routePolicyFor,
   routePositionals,
+  SIMPLE_PUBLIC_GRAMMARS,
 } from "../../core/tools/aidlc.ts";
 import { validatePublicConfigArgs } from "../../core/tools/aidlc-init.ts";
 import { PUBLIC_LIFECYCLE_GRAMMARS } from "../../core/tools/aidlc-lifecycle.ts";
@@ -3204,11 +3205,25 @@ describe("t230 dispatcher help and errors", () => {
     }
   });
 
-  test("command help names every flag the lifecycle parser accepts", () => {
-    // `--project-dir` is dispatcher plumbing for tests and hooks: no route's
-    // usage forms spell it, so command help does not either.
+  test("command help names every flag either public parser accepts", () => {
+    // `--project-dir` is dispatcher plumbing for tests and hooks. Routes do
+    // spell it (`top-config`, `workspace-sync`), but no public command's help
+    // names it, so it is excluded here deliberately rather than by oversight.
     const plumbing = new Set(["--project-dir"]);
-    for (const [command, grammar] of Object.entries(PUBLIC_LIFECYCLE_GRAMMARS)) {
+    type PublicGrammar = { values: ReadonlySet<string>; bare: ReadonlySet<string> };
+    const grammars: Record<string, PublicGrammar> = {
+      ...PUBLIC_LIFECYCLE_GRAMMARS,
+      ...SIMPLE_PUBLIC_GRAMMARS,
+    };
+    // Both parsers, so neither can gain a flag help does not name.
+    expect(Object.keys(grammars).sort()).toEqual([
+      "doctor",
+      "uninstall",
+      "update",
+      "use",
+      "version",
+    ]);
+    for (const [command, grammar] of Object.entries(grammars)) {
       const rendered = renderCommandHelp(
         command as (typeof PUBLIC_COMMANDS)[number],
       );

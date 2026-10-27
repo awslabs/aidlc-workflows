@@ -1518,13 +1518,16 @@ export function renderHumanHelp(): string {
 // wording docs/guide/18-install-and-lifecycle.md uses, so command help and the
 // guide say the same thing. A flag reachable from a public route without an
 // entry here fails t230: the test is what stops a new flag shipping
-// undocumented.
+// undocumented. These lines name no command, because the invocation differs
+// per channel (`aidlc` natively, `bun .claude/tools/aidlc.ts` on a copy) and a
+// module constant cannot know which; a line that must name one belongs in
+// renderCommandHelp, where `invoke` is resolved.
 const FLAG_SUMMARIES: Readonly<Record<string, string>> = {
   "--allow-root": "Act as root where root is the only user (container, CI job, agent sandbox)",
   "--ca-bundle": "Verify the download against this CA bundle",
-  "--channel": "Take this run's release from the other channel; 'aidlc config --channel' sets the one this machine follows",
+  "--channel": "Take this run's release from this channel instead of the one the machine follows",
   "--check": "Refresh release metadata without installing; exits 5 when a newer release is available, 0 when current",
-  "--check-updates": "Also ask whether a newer release exists; without it doctor reads only its metadata cache",
+  "--check-updates": "Refresh release metadata on a run that is otherwise cache-only (--json, --quiet, or no terminal)",
   "--dry-run": "Work out the whole plan and print it without changing any bytes",
   "--export": "Also write a redacted diagnostic bundle",
   "--from": "Use release files already on this machine instead of downloading",
@@ -1532,14 +1535,37 @@ const FLAG_SUMMARIES: Readonly<Record<string, string>> = {
   "--no-color": "Disable color output",
   "--offline": "Do no network work; say so rather than fetching",
   "--output": "Write the --export bundle here instead of its default place in the project",
-  "--purge": "Also remove machine config, the update cache, pin registrations, and the default harness",
+  "--purge": "Also remove machine config, the update cache, pin registrations, the release channel, and the default harness",
   "--quiet": "Emit one summary or remediation line",
   "--release-api-url": "Read release metadata from this API instead of GitHub's",
   "--release-base-url": "Download releases from this mirror",
   "--verbose": "Expand every check instead of collapsing the healthy ones",
   "--version": "Install this exact release instead of the newest one",
-  "--yes": "Confirm without asking; needed when no terminal is attached",
+  "--yes": "Answer the questions a terminal would ask",
 };
+
+// A flag whose meaning really differs by command. `--yes` is the case that
+// matters: on uninstall it is what a run with no terminal needs in order to
+// remove anything, while update and use ask only about replacing an `aidlc`
+// in the bin directory that AI-DLC did not write. One shared line would be
+// wrong on two of the three.
+const COMMAND_FLAG_SUMMARIES: Readonly<
+  Partial<Record<PublicCommand, Readonly<Record<string, string>>>>
+> = {
+  update: {
+    "--yes": "Answer yes to replacing an aidlc in the bin directory that AI-DLC did not write (Windows); nothing else asks",
+  },
+  use: {
+    "--yes": "Answer yes to replacing an aidlc in the bin directory that AI-DLC did not write (Windows); nothing else asks",
+  },
+  uninstall: {
+    "--yes": "Confirm the removal; a run with no terminal needs it",
+  },
+};
+
+function flagSummary(command: PublicCommand, flag: string): string {
+  return COMMAND_FLAG_SUMMARIES[command]?.[flag] ?? FLAG_SUMMARIES[flag] ?? "";
+}
 
 // Options that only matter when a command reaches the network, and options
 // that only shape what it prints, read better under their own headings than
@@ -1564,6 +1590,7 @@ function optionForm(option: RouteOption): string {
 // Every group is rendered from one column width so the summaries line up
 // across headings, and a group with no options is left out entirely.
 function renderOptionGroups(
+  command: PublicCommand,
   options: readonly RouteOption[],
   out: typeof process.stdout,
 ): string[] {
@@ -1590,7 +1617,7 @@ function renderOptionGroups(
     lines.push("", heading(group.label, out));
     for (const option of group.members) {
       const form = optionForm(option);
-      lines.push(`  ${form}${" ".repeat(Math.max(2, width - form.length))}${FLAG_SUMMARIES[option.flag] ?? ""}`);
+      lines.push(`  ${form}${" ".repeat(Math.max(2, width - form.length))}${flagSummary(command, option.flag)}`);
     }
   }
   return lines;
@@ -1661,7 +1688,7 @@ export function renderCommandHelp(command: PublicCommand): string {
       heading("COMMON FLAGS", out),
       "  --pin <version>   Pin this project to an installed release",
       "  --download        Fetch and verify the release this project needs, if it is missing",
-      "  --channel [name]  Show or set the release channel this machine follows (stable, preview); 'aidlc update --channel' switches for one run only",
+      `  --channel [name]  Show or set the release channel this machine follows (stable, preview); ${invoke} update --channel switches for one run only`,
       "  --show            Show one section, or every section with no section named, without changing it",
       "  --dry-run         Print the transaction plan without writing",
       "  --yes             Confirm explicit choices; it never chooses values",
@@ -1681,7 +1708,7 @@ export function renderCommandHelp(command: PublicCommand): string {
     doctor: "Check this machine and project and show a fix for every problem",
     version: "Print binary and selected runtime versions",
     update: "Install and switch to a newer aidlc release",
-    use: "Switch to an exact installed aidlc release",
+    use: "Switch this machine to an exact aidlc release",
     uninstall: "Remove aidlc from this machine",
   };
   const examples: Partial<Record<Exclude<PublicCommand, "config">, string[]>> = {
@@ -1695,7 +1722,7 @@ export function renderCommandHelp(command: PublicCommand): string {
     uninstall: [`  ${invoke} uninstall`, `  ${invoke} uninstall --purge`, `  ${invoke} uninstall --allow-root`],
   };
   const argumentSummaries: Readonly<Record<string, string>> = {
-    "<version>": "The exact release to switch to; 'aidlc doctor' lists the installed ones",
+    "<version>": "The exact release to switch to, for example 2.10.0; downloaded first when this machine does not have it",
   };
   const positionals = routePositionals(route, command);
   const options = routeOptions(route, command);
@@ -1713,7 +1740,7 @@ export function renderCommandHelp(command: PublicCommand): string {
           ),
         ]
       : []),
-    ...renderOptionGroups(options, out),
+    ...renderOptionGroups(command, options, out),
     ...(examples[command]?.length
       ? [
           "",
@@ -3639,7 +3666,12 @@ type SimplePublicGrammar = {
   bare: ReadonlySet<string>;
 };
 
-const SIMPLE_PUBLIC_GRAMMARS: Readonly<
+// Exported alongside PUBLIC_LIFECYCLE_GRAMMARS so t230 reads BOTH parsers when
+// it proves help names every accepted flag. Public flag parsing is split in
+// two: the lifecycle commands have their own grammar in aidlc-lifecycle.ts,
+// and doctor and version are here. A check over one table would leave the
+// other free to drift.
+export const SIMPLE_PUBLIC_GRAMMARS: Readonly<
   Partial<Record<PublicCommand, SimplePublicGrammar>>
 > = {
   doctor: {

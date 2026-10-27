@@ -604,9 +604,12 @@ command accepts. `routeOptions` reads them, adds the launcher globals the
 route's own `outputModes` and `networkPolicy` admit, and both `aidlc <command>
 --help` and the shell-completion generator render that result, so help and
 completions cannot describe different flags. A flag reachable that way needs a
-one-line meaning in `FLAG_SUMMARIES`, and a flag the parser accepts needs a
-usage form; `tests/unit/t230-dispatcher-routes.test.ts` fails on either gap,
-which is what keeps a newly added option out of shipping undocumented.
+one-line meaning in `FLAG_SUMMARIES`, or a per-command one in
+`COMMAND_FLAG_SUMMARIES` where the meaning differs by command, and a flag
+either public parser accepts (`PUBLIC_LIFECYCLE_GRAMMARS` for the lifecycle
+commands, `SIMPLE_PUBLIC_GRAMMARS` for doctor and version) needs a usage form;
+`tests/unit/t230-dispatcher-routes.test.ts` fails on either gap, which is what
+keeps a newly added option out of shipping undocumented.
 
 ### Shared transaction engine
 
