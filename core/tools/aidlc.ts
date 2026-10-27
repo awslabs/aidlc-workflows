@@ -1524,8 +1524,8 @@ export function renderHumanHelp(): string {
 // renderCommandHelp, where `invoke` is resolved.
 const FLAG_SUMMARIES: Readonly<Record<string, string>> = {
   "--allow-root": "Act as root where root is the only user (container, CI job, agent sandbox)",
-  "--ca-bundle": "Verify the download against this CA bundle",
-  "--channel": "Take this run's release from this channel instead of the one the machine follows",
+  "--ca-bundle": "Trust this CA bundle when reaching the release host",
+  "--channel": "Take this run's release from this channel; config --channel sets the one this machine follows",
   "--check": "Refresh release metadata without installing; exits 5 when a newer release is available, 0 when current",
   "--check-updates": "Refresh release metadata on a run that is otherwise cache-only (--json, --quiet, or no terminal)",
   "--dry-run": "Work out the whole plan and print it without changing any bytes",
@@ -1538,7 +1538,7 @@ const FLAG_SUMMARIES: Readonly<Record<string, string>> = {
   "--purge": "Also remove machine config, the update cache, pin registrations, the release channel, and the default harness",
   "--quiet": "Emit one summary or remediation line",
   "--release-api-url": "Read release metadata from this API instead of GitHub's",
-  "--release-base-url": "Download releases from this mirror",
+  "--release-base-url": "Use this mirror for releases instead of GitHub",
   "--verbose": "Expand every check instead of collapsing the healthy ones",
   "--version": "Install this exact release instead of the newest one",
   "--yes": "Answer the questions a terminal would ask",
@@ -1567,10 +1567,11 @@ function flagSummary(command: PublicCommand, flag: string): string {
   return COMMAND_FLAG_SUMMARIES[command]?.[flag] ?? FLAG_SUMMARIES[flag] ?? "";
 }
 
-// Options that only matter when a command reaches the network, and options
-// that only shape what it prints, read better under their own headings than
-// mixed into one long list.
-const DOWNLOAD_FLAGS: ReadonlySet<string> = new Set([
+// Options that only say where a release comes from, and options that only
+// shape what a command prints, read better under their own headings than mixed
+// into one list. "Release source" rather than "download" because doctor takes
+// the same flags to read release information and never downloads a release.
+const RELEASE_SOURCE_FLAGS: ReadonlySet<string> = new Set([
   "--ca-bundle",
   "--from",
   "--offline",
@@ -1602,12 +1603,12 @@ function renderOptionGroups(
     {
       label: "OPTIONS",
       members: options.filter((option) =>
-        !DOWNLOAD_FLAGS.has(option.flag) && !OUTPUT_FLAGS.has(option.flag)
+        !RELEASE_SOURCE_FLAGS.has(option.flag) && !OUTPUT_FLAGS.has(option.flag)
       ),
     },
     {
-      label: "DOWNLOAD AND MIRRORS",
-      members: options.filter((option) => DOWNLOAD_FLAGS.has(option.flag)),
+      label: "RELEASE SOURCE",
+      members: options.filter((option) => RELEASE_SOURCE_FLAGS.has(option.flag)),
     },
     { label: "OUTPUT", members: options.filter((option) => OUTPUT_FLAGS.has(option.flag)) },
   ];
@@ -1722,7 +1723,7 @@ export function renderCommandHelp(command: PublicCommand): string {
     uninstall: [`  ${invoke} uninstall`, `  ${invoke} uninstall --purge`, `  ${invoke} uninstall --allow-root`],
   };
   const argumentSummaries: Readonly<Record<string, string>> = {
-    "<version>": "The exact release to switch to, for example 2.10.0; downloaded first when this machine does not have it",
+    "<version>": "The exact release to switch to, for example 2.10.0; downloaded first if this machine does not have it",
   };
   const positionals = routePositionals(route, command);
   const options = routeOptions(route, command);
