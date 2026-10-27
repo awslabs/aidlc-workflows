@@ -2269,7 +2269,7 @@ function checkpointMainMetadata(
     message,
   ]);
   if (!committed.ok) {
-    fail(`Failed to checkpoint main engine metadata: ${committed.stderr.trim()}.`);
+    fail(`Failed to checkpoint main engine metadata: ${committed.stderr.trim() || committed.stdout.trim() || `exit ${committed.code}`}.`);
   }
   return {
     parentOid,
@@ -2770,7 +2770,7 @@ function landGit(
     git(projectDir, ["merge", "--abort"]);
     working = rollbackMetadataCheckpoint(projectDir, working);
     writeUnitMergeTransaction(projectDir, working);
-    fail(`Pinned git merge commit failed: ${committed.stderr.trim()}.`);
+    fail(`Pinned git merge commit failed: ${committed.stderr.trim() || committed.stdout.trim() || `exit ${committed.code}`}.`);
   }
   const commitOid = gitOutput(
     projectDir,
