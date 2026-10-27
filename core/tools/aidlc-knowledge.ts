@@ -1161,7 +1161,7 @@ export function resolveSpaceFlag(raw: string | undefined, projectDir: string): s
   // The FALLBACK is validated exactly like an explicit flag, not trusted raw:
   // every downstream path in this file is a plain `join()` off `space`. The
   // cursor itself already reads as "default" unless it names a space this
-  // project has (activeSpace in aidlc-lib.ts), so this keeps one rule for both.
+  // project has (activeSpace in aidlc-locks.ts), so this keeps one rule for both.
   const raw_ = raw === undefined;
   const candidate = raw ?? resolveWorkflowSelection(projectDir).space;
   const valid = validSpaceFlag(candidate);

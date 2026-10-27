@@ -1,6 +1,6 @@
-// aidlc-brought-files.ts - the files the person brought that a build changed or
-// deleted, said once with the question that approves the build, each with its
-// way back.
+// aidlc-brought-files.ts - the files the person brought: named to the plan
+// writer and the builder before the build, and the ones a build changed or
+// deleted said once with the question that approves it, each with its way back.
 //
 // The engine lists the project's files with their content hashes when the work
 // starts (WORKFLOW_STARTED) and when Code Generation starts (STAGE_STARTED),
@@ -37,7 +37,7 @@ import {
 } from "./aidlc-lib.ts";
 
 const STAGE = "code-generation";
-// As many as the left-out line names before "and N more".
+// As many as the line, and the note for the build, name before "and N more".
 const NAMED_MAX = 10;
 // How far back a named file's history is searched for the content the build
 // replaced, when HEAD does not hold it (the build may have committed its own).
@@ -172,19 +172,30 @@ function markedPart(path: string, text: string, marker: string): { block: string
   return { block: text.slice(at, to + end.length), person };
 }
 
+// The file's bytes now, or null when it cannot be read.
+function bytesNow(projectDir: string, path: string): Buffer | null {
+  try {
+    return readFileSync(join(projectDir, path));
+  } catch {
+    return null;
+  }
+}
+
+// Whether this is a file AI-DLC's install wrote whole and it still holds what
+// the install record says was written.
+function wholeAsInstalled(record: InstallRecord, path: string, bytes: Buffer): boolean {
+  return (record.whole.get(path) ?? []).some((hash) => holdsRecordedWrite(bytes, hash));
+}
+
 // Whether AI-DLC's install wrote this file as it is now: the whole file, or in
 // a shared file its marked part, with the person's part as it was before the
 // build (git's copy of it). With no copy, which part changed cannot be told,
 // and the file is named.
 function writtenByInstall(projectDir: string, record: InstallRecord, file: BroughtFile): boolean {
   if (!record.whole.has(file.path) && !record.parts.has(file.path)) return false;
-  let bytes: Buffer;
-  try {
-    bytes = readFileSync(join(projectDir, file.path));
-  } catch {
-    return false;
-  }
-  if ((record.whole.get(file.path) ?? []).some((hash) => holdsRecordedWrite(bytes, hash))) return true;
+  const bytes = bytesNow(projectDir, file.path);
+  if (bytes === null) return false;
+  if (wholeAsInstalled(record, file.path, bytes)) return true;
   const text = bytes.toString("utf-8");
   for (const { marker, hash } of record.parts.get(file.path) ?? []) {
     const now = markedPart(file.path, text, marker);
@@ -193,6 +204,14 @@ function writtenByInstall(projectDir: string, record: InstallRecord, file: Broug
     if (copy !== null && markedPart(file.path, copy.blob.toString("utf-8"), marker)?.person === now.person) return true;
   }
   return false;
+}
+
+// A key of the source listing as the project's own file; null for a link's
+// target or a recorded checkout, which are listed beside the project's files.
+function listedFile(key: string): { repo: string; path: string } | null {
+  const parsed = splitSourcePathKey(key);
+  if (parsed === null || parsed.path.endsWith("@target") || /^[^/]*@checkout\//.test(parsed.path)) return null;
+  return parsed;
 }
 
 /**
@@ -220,9 +239,8 @@ export function broughtFilesChanged(
   for (const key of sourceListingChangedKeys(recorded, current.listing)) {
     const entry = recorded.get(key);
     if (entry === undefined || !brought.listing.has(key)) continue;
-    const parsed = splitSourcePathKey(key);
-    // A link's target and a recorded checkout are listed beside the project's own files.
-    if (parsed === null || parsed.path.endsWith("@target") || /^[^/]*@checkout\//.test(parsed.path)) continue;
+    const parsed = listedFile(key);
+    if (parsed === null) continue;
     const deleted = !current.listing.has(key);
     if (!deleted && !greenfield && isSourceFileName(basename(parsed.path))) continue;
     const file = { repo: parsed.repo, path: parsed.path, deleted, sha: entry.split(" ").at(-1) ?? "" };
@@ -237,14 +255,61 @@ export function broughtFilesChanged(
   return { files, attempt: sourceListingSha256(serializeSourceListing(before.listing)) };
 }
 
-// Each file with the commit that holds what the build replaced: HEAD for all of
-// them in one read per repo, then the history of the named ones HEAD does not hold.
-function withWayBack(projectDir: string, files: readonly BroughtFile[]): ChangedFile[] {
-  const ordered = [...files].sort((a, b) =>
+/**
+ * The files the project held when this work started, as the plan writer and
+ * the builder are told them (`brought_files_note`): the listing the gate
+ * compares, less the code itself on existing code and the files AI-DLC's
+ * install wrote whole and still holds as written, in the order the gate's line
+ * names them. Null when the listing is not on this machine or none is left.
+ */
+export function broughtFileNames(projectDir: string, stateContent: string | null): string[] | null {
+  try {
+    if (stateContent === null) return null;
+    const brought = workStartSourceBaseline(projectDir, STAGE);
+    if (brought.state !== "ready") return null;
+    const greenfield = declaredProjectType(getField(stateContent, "Project Type") ?? undefined) === "Greenfield";
+    let install: InstallRecord | undefined;
+    const files: BroughtFile[] = [];
+    for (const key of brought.listing.keys()) {
+      const parsed = listedFile(key);
+      if (parsed === null || (!greenfield && isSourceFileName(basename(parsed.path)))) continue;
+      if (parsed.repo === "") {
+        install ??= installRecord(projectDir);
+        const bytes = install.whole.has(parsed.path) ? bytesNow(projectDir, parsed.path) : null;
+        if (bytes !== null && wholeAsInstalled(install, parsed.path, bytes)) continue;
+      }
+      files.push({ ...parsed, deleted: false, sha: "" });
+    }
+    return files.length === 0 ? null : inLineOrder(files).map(shown);
+  } catch {
+    // A note the build may go without never stops the step.
+    return null;
+  }
+}
+
+/** The sentence for the plan writer and the builder, naming the first of `names` and counting the rest. */
+export function broughtFilesNote(names: readonly string[]): string {
+  const named = names.slice(0, NAMED_MAX).map((name) => `\`${name}\``).join(", ");
+  const more = names.length > NAMED_MAX
+    ? `, and ${names.length - NAMED_MAX} more that were here before this work started.`
+    : ".";
+  return `These files were in this project before this work started and are the person's: ${named}${more} ` +
+    "Leave them as they are unless this work's plan changes one of them.";
+}
+
+// The order the line names files in: deleted, then top-level, then by path.
+function inLineOrder<T extends BroughtFile>(files: readonly T[]): T[] {
+  return [...files].sort((a, b) =>
     Number(b.deleted) - Number(a.deleted) ||
     Number(shown(a).includes("/")) - Number(shown(b).includes("/")) ||
     (shown(a) < shown(b) ? -1 : shown(a) > shown(b) ? 1 : 0)
   );
+}
+
+// Each file with the commit that holds what the build replaced: HEAD for all of
+// them in one read per repo, then the history of the named ones HEAD does not hold.
+function withWayBack(projectDir: string, files: readonly BroughtFile[]): ChangedFile[] {
+  const ordered = inLineOrder(files);
   const atHead = new Set<BroughtFile>();
   for (const repo of new Set(ordered.map((file) => file.repo))) {
     const dir = repo === "" ? projectDir : repoDir(projectDir, repo);

@@ -24,7 +24,7 @@
 //     (releaseAuditLock). The hook takes the same lock through withAuditLock
 //     and appends with appendAuditEntryUnlocked. The block format is
 //     "\n## <heading>\n**Timestamp**: ...\n**Event**: ...\n<fields>\n---\n".
-//   dist/claude/.claude/tools/aidlc-lib.ts auditLockDir(projectDir) =
+//   dist/claude/.claude/tools/aidlc-locks.ts auditLockDir(projectDir) =
 //     join(tmpdir(), `.aidlc-audit-<8 hex of md5(auditLockIdentity)>.lock`), the
 //     mkdir-based mutex's directory (acquireAuditLock / releaseAuditLock); we
 //     ask the source for it via auditLockDir() rather than recompute the hash.
@@ -205,7 +205,7 @@ describe("t33 audit-logger lock contention under parallel writes (mechanism cli 
 
   test("the mkdir audit lock is released after all writes complete [.sh test 8]", async () => {
     await fireParallel(proj, 5);
-    // We ask the SOURCE for the lock dir via auditLockDir() (aidlc-lib.ts). The
+    // We ask the SOURCE for the lock dir via auditLockDir() (aidlc-locks.ts). The
     // hook's withAuditLock releases the lock after each append, so once every
     // process has exited the dir must be gone.
     const lockDir = auditLockDir(proj);
