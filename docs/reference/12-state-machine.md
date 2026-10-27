@@ -197,7 +197,8 @@ stage being revised never lists the learnings module again, and `report
 --result awaiting-approval` on it names `report --result revised`. At an open
 gate, `report --result revised` names `report --result awaiting-approval`, the
 re-check an open gate takes after a change, with the person's blocking-sensor
-override kept; it changes nothing on record.
+override kept; at the one late gate for stages approved together it names
+`next`, which shows that one question again. Either changes nothing on record.
 
 | Transition | Trigger | Emitter |
 |---|---|---|

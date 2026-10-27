@@ -19786,6 +19786,16 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // again after a change by the report that opened it, which runs this
     // block's own checks, so the step names that report before any of them.
     if (flags.result === "revised" && stageCheckbox.state === "awaiting-approval") {
+      // A joint late gate is shown again by `next` as the same one question,
+      // as `next` does after a change there: that report would show it as
+      // this stage's alone.
+      if (approvesTogetherArgs(pd, stateContent, node).length > 0) {
+        emit(printDirective(
+          `Stage "${slug}" is already awaiting approval with the stages approved together, so its gate is shown ` +
+            `again by \`${aidlcToolInvocation("orchestrate")} next\`: run it and show the gate it returns.`,
+        ));
+        return;
+      }
       const recheck = flags.overrideBlockingSensors
         ? blockingSensorOverrideReport(slug, "awaiting-approval")
         : gateReportCommand(slug, "awaiting-approval");
