@@ -28,6 +28,7 @@ import {
   freshReviewReceipts,
   loadStageGraph,
   resolveReviewClass,
+  reviewAttemptWindow,
   collectStalePlanApprovalReceipts,
   commitPlanApprovalBatch,
   planApprovalBatchCommitted,
@@ -2902,10 +2903,11 @@ export function reviewedTestingContract(projectDir: string): string | null {
 
 /**
  * Whether the target's build was finished under this contract: its review is
- * final and still covers the work, and the newest final review row for it was
- * recorded while this contract was in force. A practice kept at the gate (or any
- * other posture move) after that review is for the next build; a move before it
- * is not, so the build that ran under the old contract still waits.
+ * final and still covers the work and the source, and every final review of it
+ * in this attempt, read in the window the freshness check reads, was recorded
+ * while this contract was in force. A practice kept at the gate (or any other
+ * posture move) after the review is for the next build; a review recorded after
+ * a move, or one with no contract on record, keeps the build waiting.
  */
 function reviewedUnderContract(projectDir: string, authority: CodeGenerationAuthority, contractHash: string): boolean {
   try {
@@ -2913,14 +2915,20 @@ function reviewedUnderContract(projectDir: string, authority: CodeGenerationAuth
     if (!node?.reviewer) return false;
     const state = readFileSync(stateFilePath(projectDir), "utf-8");
     const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", getField(state, "Scope") ?? "", state);
-    const fresh = freshReviewReceipts(projectDir, state, node, { reviewClass });
-    if (authority.unit === null ? fresh.stageVerdict === null : !fresh.unitVerdicts.has(authority.unit)) return false;
-    const row = readAuditShardEvents(projectDir).findLast((event) =>
+    const window = reviewAttemptWindow(projectDir, state, node);
+    const fresh = freshReviewReceipts(projectDir, state, node, { reviewClass, attemptWindow: window });
+    const unit = authority.unit;
+    const covered = unit === null
+      ? fresh.stageVerdict !== null && !fresh.stageStale
+      : fresh.unitVerdicts.has(unit) && !fresh.unitStale.has(unit);
+    if (!covered || fresh.sourceStale) return false;
+    const reviews = window.events.slice(window.floorIdx + 1).filter((event) =>
       event.event === "REVIEW_COMPLETED" &&
       auditBlockField(event.block, "Stage") === CODE_GENERATION_STAGE &&
-      auditBlockField(event.block, "Unit") === authority.unit &&
+      auditBlockField(event.block, "Unit") === unit &&
       ["READY", "NOT-READY"].includes(auditBlockField(event.block, "Verdict") ?? ""));
-    return row !== undefined && auditBlockField(row.block, REVIEW_TESTING_CONTRACT_FIELD) === contractHash;
+    return reviews.length > 0 &&
+      reviews.every((event) => auditBlockField(event.block, REVIEW_TESTING_CONTRACT_FIELD) === contractHash);
   } catch {
     return false;
   }

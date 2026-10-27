@@ -158,8 +158,8 @@ describe("a Code Generation completion waits for its plan", () => {
     expect(step.ask_type).toBe("plan-approval");
     approvePlan(proj);
     expect(next(proj).plan_approval?.status).toBe("approved");
-    const opened = runNamed(proj, "bun .claude/tools/aidlc.ts engine orchestrate report --stage code-generation --result awaiting-approval");
-    console.log("DEBUG-OPEN", opened.status, opened.stdout.slice(0, 1500), opened.stderr.slice(0, 500));
+    const opened = report(proj, "awaiting-approval");
+    expect(opened.step.message, JSON.stringify(opened.step)).not.toBe(WAITS);
     expect(stageLine(proj)).toContain("[?] code-generation");
   });
 
@@ -375,6 +375,25 @@ describe("a testing practice kept at the gate is for the next build", () => {
     expect(gate.gate_only, JSON.stringify(gate)).toBe(true);
     expect(gate.plan_approval, JSON.stringify(gate)).toBeUndefined();
     expect(readFileSync(planFile(proj), "utf-8")).toBe(plan);
+  });
+
+  // The chat compacts between the learnings step and the gate, so `next` comes first.
+  test("strict: a next between the kept practice and the gate gives the step it gave before, and the gate then opens", () => {
+    const proj = inProgress("strict");
+    writePlan(proj);
+    next(proj);
+    approvePlan(proj);
+    next(proj);
+    built(proj);
+    const NEXT = "bun .claude/tools/aidlc.ts engine orchestrate next";
+    const before = lastStep(runNamed(proj, NEXT).stdout);
+    expect(before.plan_approval?.status, JSON.stringify(before)).toBe("approved");
+    keepTestingPractice(proj);
+    const after = lastStep(runNamed(proj, NEXT).stdout);
+    expect(after.kind, JSON.stringify(after)).toBe(before.kind);
+    expect(after.plan_approval, JSON.stringify(after)).toEqual(before.plan_approval);
+    expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message).not.toBe(WAITS);
+    expect(stageLine(proj)).toContain("[?] code-generation");
   });
 
   test("strict: moved before the review, while the build ran, the build still waits for the plan", () => {
