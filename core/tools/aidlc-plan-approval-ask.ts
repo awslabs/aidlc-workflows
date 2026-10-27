@@ -367,6 +367,26 @@ function pendingBuiltPlanReviews(projectDir: string, intentId: string): PendingP
   return pending;
 }
 
+/**
+ * Whether the person asked to see this target's plan again ("Review the
+ * plan"), for its current plan or the next one; false when the target cannot be
+ * named.
+ */
+export function codeGenerationPlanReviewRequested(
+  projectDir: string,
+  unit: string | null,
+  intentId: string = intentIdFor(projectDir),
+): boolean {
+  let targetId: string;
+  try {
+    targetId = codeGenerationTargetId({ unit });
+  } catch {
+    return false;
+  }
+  return planApprovalReviewRequested(projectDir, targetId, intentId) ||
+    planApprovalReviewRequested(projectDir, nextPlanReviewId(intentId), intentId);
+}
+
 export function planApprovalReviewRequested(projectDir: string, targetId: string, intentId: string): boolean {
   return reviewRequestAt(reviewRequestPath(projectDir, targetId, intentId), targetId, intentId) ||
     reviewRequestAt(legacyReviewRequestPath(projectDir, targetId), targetId, intentId);
@@ -902,14 +922,7 @@ function targetState(
   use: CodeGenerationApprovalUse = "build",
 ): TargetState {
   const approval = evaluateCodeGenerationApproval(projectDir, { unit }, issued, use);
-  let targetId: string | null = null;
-  try {
-    targetId = codeGenerationTargetId({ unit });
-  } catch {
-    targetId = null;
-  }
-  const reviewRequested = targetId !== null && (planApprovalReviewRequested(projectDir, targetId, intentId) ||
-    planApprovalReviewRequested(projectDir, nextPlanReviewId(intentId), intentId));
+  const reviewRequested = codeGenerationPlanReviewRequested(projectDir, unit, intentId);
   if (!reviewRequested && codeGenerationExecutionAllowed(projectDir, { unit }, approval, issued)) {
     return { unit, kind: "approved" };
   }

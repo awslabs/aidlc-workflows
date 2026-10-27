@@ -396,10 +396,29 @@ describe("a testing practice kept at the gate is for the next build", () => {
     expect(after.plan_approval, JSON.stringify(after)).toBeUndefined();
     const refused = guardOn(proj, "echo hi > src/y.ts");
     expect(refused).toStartWith("exit 2;");
-    expect(refused).toContain("it hands over the step that finishes this build");
-    expect(refused).not.toContain("approve");
+    expect(refused).toContain("it says what this build does next");
+    expect(refused).not.toContain("asks the person to approve");
     expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message).not.toBe(WAITS);
     expect(stageLine(proj)).toContain("[?] code-generation");
+  });
+
+  // The person asks to see the plan again after keeping the practice: `next`
+  // goes back to the plan (brought up to the moved contract, then asked), as it
+  // does on a plan whose contract moved, not on to the finish.
+  test("strict: a Review the plan after the kept practice goes back to the plan, not to the finish", () => {
+    const proj = inProgress("strict");
+    writePlan(proj);
+    next(proj);
+    approvePlan(proj);
+    next(proj);
+    built(proj);
+    keepTestingPractice(proj);
+    reply(proj, "review the plan first");
+    const review = answer(proj, "Review the plan");
+    expect(review.status, `${review.stdout}${review.stderr}`).toBe(0);
+    const step = next(proj);
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    expect(step.plan_approval?.status, JSON.stringify(step)).toBe("plan");
   });
 
   test("strict: moved before the review, while the build ran, the build still waits for the plan", () => {

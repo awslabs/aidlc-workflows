@@ -638,6 +638,7 @@ import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
 import {
   isPlanApprovalBeat,
+  codeGenerationPlanReviewRequested,
   keepRoutedPlanApprovalReply,
   legacyPlanApprovalOffNotice,
   noteOpenEngineQuestion,
@@ -13524,7 +13525,8 @@ function stageReviewStep(
 // answer, so the step goes on to the gate and never asks it twice. A
 // stage-level Code Generation build reviewed under its plan's contract, which
 // moved since (a practice kept after the review), gets this step too: its own
-// route would hand over the build again, which the guard then refuses.
+// route would hand over the build again, which the guard then refuses. When the
+// person asked to see the plan again, its own route shows them the plan.
 function finishedReviewStep(
   projectDir: string,
   node: GraphStage,
@@ -13532,11 +13534,9 @@ function finishedReviewStep(
   review: FreshReviewReceipts,
   reviewClass: ReviewClass,
 ): { text: string; endsTurn: boolean; finished: boolean } | null {
-  if (isPerUnit(node) && !(node.slug === "code-generation" && codeGenerationFinishedUnderPlanContract(projectDir, null))) {
-    return null;
-  }
   const box = parseCheckboxes(stateContent).find((row) => row.slug === node.slug)?.state;
   if (review.stageVerdict === null || (box !== "in-progress" && box !== "revising")) return null;
+  if (isPerUnit(node) && !(node.slug === "code-generation" && reviewedBuildFinishes(projectDir))) return null;
   if (openDecisionMenu(projectDir, node.slug, stageQuestionBoundary(box)).length > 0) return null;
   const learnings = learningsSinceStageStart(projectDir, node.slug, box);
   if (!learnings.settled) return null;
@@ -13553,6 +13553,18 @@ function finishedReviewStep(
   );
   // The step may end the turn at the learnings question or go on to the gate.
   return text === null ? null : { text, endsTurn: false, finished: true };
+}
+
+// A stage-level Code Generation build whose plan stands only as its finished
+// build reads it, with no request from the person to see the plan again. An
+// intent that cannot be read keeps the build's own route.
+function reviewedBuildFinishes(projectDir: string): boolean {
+  try {
+    return !codeGenerationPlanReviewRequested(projectDir, null) &&
+      codeGenerationFinishedUnderPlanContract(projectDir, null);
+  } catch {
+    return false;
+  }
 }
 
 // The stage's learnings question since the boundary openStageQuestion reads

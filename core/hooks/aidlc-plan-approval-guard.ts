@@ -665,14 +665,15 @@ export function mutationBlockReason(
     ? "run mutation-capable shell commands"
     : "modify workspace paths";
   // A build reviewed under its plan, whose contract moved after the review
-  // (codeGenerationFinishedUnderPlanContract): its way on is to finish, and the
-  // moved contract is for the next plan, so no approval is promised.
+  // (codeGenerationFinishedUnderPlanContract): the moved contract is for the
+  // next plan, so no approval is promised; `next` says what the build does now
+  // (its finish, or the plan when the person asked to see it again).
   if (finished) {
     return (
       `Code generation cannot ${action} for ${scope}: its build was reviewed under the approved plan, and ` +
       "the Testing Contract changed after that review, which applies from the next plan. Writes inside the " +
-      `selected code-generation record directory remain available. Run ${nextOnItsOwn()}: it hands over the ` +
-      "step that finishes this build."
+      `selected code-generation record directory remain available. Run ${nextOnItsOwn()}: it says what this ` +
+      "build does next."
     );
   }
   return (
