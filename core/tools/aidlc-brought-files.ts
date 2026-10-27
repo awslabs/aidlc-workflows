@@ -1,43 +1,56 @@
-// aidlc-brought-files.ts - the files the person brought that a build changed or
-// deleted, said once with the question that approves the build, each with its
-// way back.
+// aidlc-brought-files.ts - the files the person brought: named to the plan
+// writer and the builder before the build, and the ones a build changed or
+// deleted said once with the question that approves it, each with its way back.
 //
 // The engine lists the project's files with their content hashes when the work
 // starts (WORKFLOW_STARTED) and when Code Generation starts (STAGE_STARTED),
 // with or without git and on every harness; this compares those listings with
 // the files as they are now, so a write by a helper or a shell counts the same
-// as the lead's. Silent when a listing is not on this machine (AI-DLC's ignored
-// copy: a team clone that did not start the work), or cannot be read. A file
+// as the lead's. Those listings are AI-DLC's ignored copy, so a team clone that
+// did not start the work has none, and a stage run on its own keeps none: each
+// takes its own on this machine when its Code Generation first runs here
+// (broughtListing). Silent when no listing is here or one cannot be read. A file
 // AI-DLC's install or a refresh wrote, as its install record says it wrote it,
 // is AI-DLC's and not the build's change (an `aidlc update` and `aidlc config`
 // while the work was open rewrite them).
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { holdsRecordedWrite, managedBlockMarkers } from "./aidlc-distribution.ts";
+import { isReadOnlyEngineProbe, readRegularFileNoFollowOrThrow } from "./aidlc-locks.ts";
 import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
 import {
+  type AuditShardEvent,
+  auditBlockField,
   committedTextSha256,
   constructionCheckpointsApply,
   currentFingerprintForm,
   currentStageSourceBaseline,
   declaredProjectType,
+  engineDir,
   getField,
   isSourceFileName,
+  parseSourceListing,
   personLineHeard,
   readAuditShardEvents,
+  readUnitSourceManifest,
+  recordDir,
   recordedSourceListingForCompare,
   repoDir,
   serializeSourceListing,
+  sourceClaimCovers,
   sourceListingChangedKeys,
   sourceListingSha256,
   splitSourcePathKey,
   workStartSourceBaseline,
+  type WorkspaceSourceListing,
   workspaceSourceState,
+  writeEngineFileNoFollow,
 } from "./aidlc-lib.ts";
 
 const STAGE = "code-generation";
-// As many as the left-out line names before "and N more".
+// As many as the line, and the note for the build, name before "and N more".
 const NAMED_MAX = 10;
 // How far back a named file's history is searched for the content the build
 // replaced, when HEAD does not hold it (the build may have committed its own).
@@ -172,19 +185,30 @@ function markedPart(path: string, text: string, marker: string): { block: string
   return { block: text.slice(at, to + end.length), person };
 }
 
+// The file's bytes now, or null when it cannot be read.
+function bytesNow(projectDir: string, path: string): Buffer | null {
+  try {
+    return readFileSync(join(projectDir, path));
+  } catch {
+    return null;
+  }
+}
+
+// Whether this is a file AI-DLC's install wrote whole and it still holds what
+// the install record says was written.
+function wholeAsInstalled(record: InstallRecord, path: string, bytes: Buffer): boolean {
+  return (record.whole.get(path) ?? []).some((hash) => holdsRecordedWrite(bytes, hash));
+}
+
 // Whether AI-DLC's install wrote this file as it is now: the whole file, or in
 // a shared file its marked part, with the person's part as it was before the
 // build (git's copy of it). With no copy, which part changed cannot be told,
 // and the file is named.
 function writtenByInstall(projectDir: string, record: InstallRecord, file: BroughtFile): boolean {
   if (!record.whole.has(file.path) && !record.parts.has(file.path)) return false;
-  let bytes: Buffer;
-  try {
-    bytes = readFileSync(join(projectDir, file.path));
-  } catch {
-    return false;
-  }
-  if ((record.whole.get(file.path) ?? []).some((hash) => holdsRecordedWrite(bytes, hash))) return true;
+  const bytes = bytesNow(projectDir, file.path);
+  if (bytes === null) return false;
+  if (wholeAsInstalled(record, file.path, bytes)) return true;
   const text = bytes.toString("utf-8");
   for (const { marker, hash } of record.parts.get(file.path) ?? []) {
     const now = markedPart(file.path, text, marker);
@@ -193,6 +217,105 @@ function writtenByInstall(projectDir: string, record: InstallRecord, file: Broug
     if (copy !== null && markedPart(file.path, copy.blob.toString("utf-8"), marker)?.person === now.person) return true;
   }
   return false;
+}
+
+// A key of the source listing as the project's own file; null for a link's
+// target or a recorded checkout, which are listed beside the project's files.
+function listedFile(key: string): { repo: string; path: string } | null {
+  const parsed = splitSourcePathKey(key);
+  if (parsed === null || parsed.path.endsWith("@target") || /^[^/]*@checkout\//.test(parsed.path)) return null;
+  return parsed;
+}
+
+// The listings this machine took, in AI-DLC's ignored engine folder of the
+// record the run's audit is in (the space's own with no work).
+const TAKEN_DIR = "brought-files";
+
+interface Brought {
+  listing: WorkspaceSourceListing;
+  // Taken on this machine: an earlier build's code may be in it, so the files
+  // the walk reads as code by name are never named from it.
+  taken: boolean;
+}
+
+function inAuditOrder(rows: readonly AuditShardEvent[]): AuditShardEvent[] {
+  return [...rows].sort((a, b) =>
+    a.timestamp !== b.timestamp ? (a.timestamp < b.timestamp ? -1 : 1) : a.shardIndex - b.shardIndex || a.pos - b.pos);
+}
+
+// The name this machine's listing takes. For a stage run on its own: its run's
+// first isolated start since one last finished, so a run started over with
+// other settings is the same run, as its kept copy is. For the work: the start
+// listing this machine does not hold (the row workStartSourceBaseline reads).
+function takenName(rows: readonly AuditShardEvent[], single: boolean): string | null {
+  const ordered = inAuditOrder(rows);
+  if (!single) {
+    const started = ordered.filter((row) =>
+      row.event === "WORKFLOW_STARTED" && !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")).at(-1);
+    const baseline = started === undefined ? null : auditBlockField(started.block, "Source Baseline");
+    const hash = /^sha256:([0-9a-f]{64})$/.exec(baseline ?? "")?.[1];
+    return hash === undefined ? null : `work-${hash.slice(0, 12)}.tsv`;
+  }
+  let start: AuditShardEvent | null = null;
+  for (const row of ordered) {
+    if (auditBlockField(row.block, "Workflow") !== `single-stage:${STAGE}` || auditBlockField(row.block, "Stage") !== STAGE) continue;
+    if (row.event === "STAGE_COMPLETED") start = null;
+    else if (row.event === "STAGE_STARTED") start ??= row;
+  }
+  if (start === null) return null;
+  const id = createHash("sha256").update(`${start.timestamp}\n${basename(start.shard)}\n${start.pos}\n${start.block}`).digest("hex");
+  return `single-${id.slice(0, 12)}.tsv`;
+}
+
+// What the work's Units built before this machine picked the work up (each
+// Unit's source-manifest.json, kept with the record) is the work's own.
+function withoutUnitClaims(projectDir: string, listing: WorkspaceSourceListing): WorkspaceSourceListing {
+  const record = recordDir(projectDir);
+  let units: string[] = [];
+  try {
+    units = record === null ? [] : readdirSync(join(record, "construction"));
+  } catch {
+    // Nothing built yet.
+  }
+  const claims = units.flatMap((unit) => {
+    const read = readUnitSourceManifest(projectDir, STAGE, unit);
+    return read.ok ? [read] : [];
+  });
+  if (claims.length === 0) return listing;
+  return new Map([...listing].filter(([key]) => !claims.some((claim) => sourceClaimCovers(key, claim))));
+}
+
+// The listing the person's files are read from, by the note and the gate's
+// compare alike: the one the work kept when it started; for a stage run on its
+// own, or a clone that does not hold the work's, the one this machine took
+// when that run's Code Generation first ran here, as the files there then are
+// the person's. `take` lets that step take it, once; a read-only probe and the
+// gate only read it.
+function broughtListing(projectDir: string, rows: readonly AuditShardEvent[], single: boolean, take: boolean): Brought | null {
+  if (!single) {
+    const brought = workStartSourceBaseline(projectDir, STAGE, undefined, undefined, rows);
+    if (brought.state === "ready") return { listing: brought.listing, taken: false };
+    if (brought.state !== "missing") return null;
+  }
+  const name = takenName(rows, single);
+  if (name === null) return null;
+  const path = join(engineDir(projectDir), TAKEN_DIR, name);
+  let here = true;
+  try {
+    lstatSync(path);
+  } catch {
+    here = false;
+  }
+  if (here) {
+    const listing = parseSourceListing(readRegularFileNoFollowOrThrow(path, "the files listed when this run started").toString("utf-8"));
+    return listing === null ? null : { listing, taken: true };
+  }
+  if (!take || isReadOnlyEngineProbe()) return null;
+  const now = workspaceSourceState(projectDir);
+  if (now === null) return null;
+  const listing = single ? now.listing : withoutUnitClaims(projectDir, now.listing);
+  writeEngineFileNoFollow(projectDir, `${TAKEN_DIR}/${name}`, serializeSourceListing(listing));
+  return { listing, taken: true };
 }
 
 /**
@@ -207,24 +330,26 @@ export function broughtFilesChanged(
   stateContent: string,
 ): { files: BroughtFile[]; attempt: string } | null {
   const rows = readAuditShardEvents(projectDir);
-  const brought = workStartSourceBaseline(projectDir, STAGE, undefined, undefined, rows);
-  if (brought.state !== "ready") return null;
-  const before = currentStageSourceBaseline(projectDir, STAGE, false, undefined, undefined, rows);
-  if (before.state !== "ready") return null;
+  const brought = broughtListing(projectDir, rows, false, false);
+  if (brought === null) return null;
+  const stage = currentStageSourceBaseline(projectDir, STAGE, false, undefined, undefined, rows);
+  // An attempt begun on the machine the work started on starts, here, where
+  // this machine took its listing.
+  const before = stage.state === "ready" ? stage.listing : stage.state === "missing" && brought.taken ? brought.listing : null;
+  if (before === null) return null;
   const current = workspaceSourceState(projectDir);
   if (current === null) return null;
   const greenfield = declaredProjectType(getField(stateContent, "Project Type") ?? undefined) === "Greenfield";
-  const recorded = recordedSourceListingForCompare(projectDir, before.listing, current);
+  const recorded = recordedSourceListingForCompare(projectDir, before, current);
   const files: BroughtFile[] = [];
   let install: InstallRecord | undefined;
   for (const key of sourceListingChangedKeys(recorded, current.listing)) {
     const entry = recorded.get(key);
     if (entry === undefined || !brought.listing.has(key)) continue;
-    const parsed = splitSourcePathKey(key);
-    // A link's target and a recorded checkout are listed beside the project's own files.
-    if (parsed === null || parsed.path.endsWith("@target") || /^[^/]*@checkout\//.test(parsed.path)) continue;
+    const parsed = listedFile(key);
+    if (parsed === null) continue;
     const deleted = !current.listing.has(key);
-    if (!deleted && !greenfield && isSourceFileName(basename(parsed.path))) continue;
+    if ((brought.taken || (!deleted && !greenfield)) && isSourceFileName(basename(parsed.path))) continue;
     const file = { repo: parsed.repo, path: parsed.path, deleted, sha: entry.split(" ").at(-1) ?? "" };
     // AI-DLC installs at the project's root, never in a sibling repo.
     if (!deleted && file.repo === "") {
@@ -234,17 +359,66 @@ export function broughtFilesChanged(
     files.push(file);
   }
   if (files.length === 0) return null;
-  return { files, attempt: sourceListingSha256(serializeSourceListing(before.listing)) };
+  return { files, attempt: sourceListingSha256(serializeSourceListing(before)) };
+}
+
+/**
+ * The files the project held when this work started, as the plan writer and
+ * the builder are told them (`brought_files_note`): the listing the gate
+ * compares, less the code itself on existing code and the files AI-DLC's
+ * install wrote whole and still holds as written, in the order the gate's line
+ * names them. `single` is a stage run on its own. Called on a step whose body
+ * runs here, so it may take this machine's listing (broughtListing). Null when
+ * no listing is here or none is left.
+ */
+export function broughtFileNames(projectDir: string, stateContent: string | null, single = false): string[] | null {
+  try {
+    if (stateContent === null && !single) return null;
+    const brought = broughtListing(projectDir, readAuditShardEvents(projectDir), single, true);
+    if (brought === null) return null;
+    const code = brought.taken || declaredProjectType(getField(stateContent ?? "", "Project Type") ?? undefined) !== "Greenfield";
+    let install: InstallRecord | undefined;
+    const files: BroughtFile[] = [];
+    for (const key of brought.listing.keys()) {
+      const parsed = listedFile(key);
+      if (parsed === null || (code && isSourceFileName(basename(parsed.path)))) continue;
+      if (parsed.repo === "") {
+        install ??= installRecord(projectDir);
+        const bytes = install.whole.has(parsed.path) ? bytesNow(projectDir, parsed.path) : null;
+        if (bytes !== null && wholeAsInstalled(install, parsed.path, bytes)) continue;
+      }
+      files.push({ ...parsed, deleted: false, sha: "" });
+    }
+    return files.length === 0 ? null : inLineOrder(files).map(shown);
+  } catch {
+    // A note the build may go without never stops the step.
+    return null;
+  }
+}
+
+/** The sentence for the plan writer and the builder, naming the first of `names` and counting the rest. */
+export function broughtFilesNote(names: readonly string[]): string {
+  const named = names.slice(0, NAMED_MAX).map((name) => `\`${name}\``).join(", ");
+  const more = names.length > NAMED_MAX
+    ? `, and ${names.length - NAMED_MAX} more that were here before this work started.`
+    : ".";
+  return `These files were in this project before this work started and are the person's: ${named}${more} ` +
+    "Leave them as they are unless this work's plan changes one of them.";
+}
+
+// The order the line names files in: deleted, then top-level, then by path.
+function inLineOrder<T extends BroughtFile>(files: readonly T[]): T[] {
+  return [...files].sort((a, b) =>
+    Number(b.deleted) - Number(a.deleted) ||
+    Number(shown(a).includes("/")) - Number(shown(b).includes("/")) ||
+    (shown(a) < shown(b) ? -1 : shown(a) > shown(b) ? 1 : 0)
+  );
 }
 
 // Each file with the commit that holds what the build replaced: HEAD for all of
 // them in one read per repo, then the history of the named ones HEAD does not hold.
 function withWayBack(projectDir: string, files: readonly BroughtFile[]): ChangedFile[] {
-  const ordered = [...files].sort((a, b) =>
-    Number(b.deleted) - Number(a.deleted) ||
-    Number(shown(a).includes("/")) - Number(shown(b).includes("/")) ||
-    (shown(a) < shown(b) ? -1 : shown(a) > shown(b) ? 1 : 0)
-  );
+  const ordered = inLineOrder(files);
   const atHead = new Set<BroughtFile>();
   for (const repo of new Set(ordered.map((file) => file.repo))) {
     const dir = repo === "" ? projectDir : repoDir(projectDir, repo);

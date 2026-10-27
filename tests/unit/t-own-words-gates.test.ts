@@ -637,8 +637,10 @@ describe("the summary confirmation records the choice the agent read", () => {
     const r = answer("Request changes: rename the handler");
     expect(r.rc, r.out).toBe(0);
     expect(r.out).toContain("rename the handler");
-    // What to change is known, so the agent revises: the stage's work goes on.
-    expect(r.out).not.toContain("agent_note");
+    // What to change is known, so the agent revises: the stage's work goes on,
+    // and the revised summary's question is recorded before it is shown.
+    expect(r.out).not.toContain("What should change?");
+    expect(r.out).toMatch(/\blog(?:\.ts)? decision --checkpoint summary-confirmation --stage /);
     expect(turnEndIsOpen(proj)).toBe(false);
     expect(statSync(engineTouchMarkerPath(proj)).mtimeMs).toBeGreaterThan(statSync(humanTurnMarkerPath(proj)).mtimeMs);
   });

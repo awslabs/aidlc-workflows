@@ -23,8 +23,10 @@
 // asks about, a Construction policy question, and the summary confirmation
 // from its questions file, with one command for each of its choices, so a
 // Request changes that says nothing about what is recorded before they are
-// asked what should change. A Unit checkpoint's approval and a question the
-// questions file still holds come back through their own step.
+// asked what should change; what they ask to change names the revised
+// summary's question record, so their pick at it is recorded the first time.
+// A Unit checkpoint's approval and a question the questions file still holds
+// come back through their own step.
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -33,10 +35,10 @@ import {
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
-  runOrchestrateNext, seedAidlcMemory, seedBoltDag, seededRecordDir, seededStateFile,
+  runOrchestrateNext, seedAidlcMemory, seedBoltDag, seededAuditShard, seededRecordDir, seededStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { quoteCommandArgument } from "../../dist/claude/.claude/tools/aidlc-runtime-paths.ts";
@@ -772,7 +774,28 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
     const command = (choice: string) =>
       `answer --checkpoint summary-confirmation --stage ${stage}${unit ? ` --unit ${unit}` : ""} --questions-file ` +
       `${relative} --details ${quoteCommandArgument(choice)}\``;
-    return { p, stage, relative, identity, tag, command };
+    // The record of the revised summary's question, in full, as a receipt names it.
+    const revisedRecord = `decision --checkpoint summary-confirmation --stage ${stage}${unit ? ` --unit ${unit}` : ""} ` +
+      `--questions-file ${relative} --decision ${quoteCommandArgument("Does this all look correct?")} --options ` +
+      `${quoteCommandArgument("Looks correct,Request changes")}\``;
+    // The agent revises the summary, sets its tag back to blank, records the
+    // question as the receipt said and shows it; the person picks "1".
+    const confirmRevised = (session = NEW) => {
+      writeFileSync(file, readFileSync(file, "utf-8").replace("- Done items come back after a reload.",
+        "- Only deleted done items come back after a reload.").replace(/\[Answer\]: Request changes\n$/, "[Answer]:\n"));
+      const asked = tool(p, "log", ["decision", ...identity, "--session", session,
+        "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes"]);
+      expect(asked.status, asked.out).toBe(0);
+      person(p, "1", session);
+      tag("Looks correct");
+      // Recorded the first time: no refusal, so nobody asks them again.
+      const confirmed = tool(p, "log", ["answer", ...identity, "--session", session, "--details", "Looks correct"]);
+      expect(confirmed.status, confirmed.out).toBe(0);
+      const receipts = readAuditShardEvents(p).filter((row) => row.event === "SUMMARY_CONFIRMATION_RECORDED");
+      // Shards are read file by file, so the two receipts may come in either order.
+      expect(receipts.map((row) => auditBlockField(row.block, "Details")).sort()).toEqual(["Looks correct", "Request changes"]);
+    };
+    return { p, stage, relative, identity, tag, command, revisedRecord, confirmRevised };
   }
 
   for (const unit of [null, "alpha"] as const) {
@@ -796,7 +819,7 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
   // What they asked to change rides with the choice, so they are not asked
   // "What should change?" for words they already said.
   test("a Request changes reply to the summary shown again is recorded with what they asked to change", () => {
-    const { p, identity, tag } = openSummary(null);
+    const { p, identity, tag, revisedRecord, confirmRevised } = openSummary(null);
     const shown = bare(p, NEW);
     expect(shown.message).toContain("'Request changes: <what>'");
     const said = "Request changes: blank titles include whitespace-only ones";
@@ -807,6 +830,108 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
     expect(recorded.stdout).not.toContain("What should change?");
     const receipt = readAuditShardEvents(p).filter((row) => row.event === "SUMMARY_CONFIRMATION_RECORDED").at(-1);
     expect(auditBlockField(receipt!.block, "Feedback")).toBe("blank titles include whitespace-only ones");
+    // The agent revises at once, and the revised summary's question goes on record before it is shown.
+    expect(recorded.stdout).toContain(revisedRecord);
+    confirmRevised();
+  });
+
+  // Live (opencode): the revised summary was shown with no record of its
+  // question, so their "1" at it was refused and the same question asked again.
+  for (const unit of [null, "alpha"] as const) {
+    test(`after a Request changes at the summary shown again ${unit ? "for a Unit" : "at a stage"}, what they say to change names the revised summary's record, and their pick at it is recorded the first time`, () => {
+      const { p, stage, identity, tag, revisedRecord, confirmRevised } = openSummary(unit);
+      bare(p, NEW);
+      person(p, "2", NEW);
+      tag("Request changes");
+      const changes = tool(p, "log", ["answer", ...identity, "--session", NEW, "--details", "Request changes"]);
+      expect(changes.status, changes.out).toBe(0);
+      expect(changes.stdout).not.toContain(revisedRecord);
+      const said = "only done items that were deleted come back";
+      person(p, said, NEW);
+      const words = tool(p, "log", ["answer", "--stage", stage, ...(unit ? ["--unit", unit] : []), "--session", NEW,
+        "--details", said]);
+      expect(words.status, words.out).toBe(0);
+      expect(words.stdout).toContain(revisedRecord);
+      confirmRevised();
+      expect(readAuditShardEvents(p).filter((row) => row.event === "ERROR_LOGGED")).toHaveLength(0);
+    });
+  }
+
+  // A chat that picks the work up again at "What should change?" answers with
+  // the step it is given, which names no Unit, and a teammate's fresh clone
+  // holds the change request on the first clone's shard; the note still names
+  // the revised summary's record, with the Unit it was asked for.
+  for (const where of ["a third chat", "a teammate's fresh clone"] as const) {
+    test(`after a Request changes for a Unit, what they say to change in ${where} names the revised summary's record`, () => {
+      const { p, stage, identity, tag, revisedRecord, confirmRevised } = openSummary("alpha");
+      bare(p, NEW);
+      person(p, "2", NEW);
+      tag("Request changes");
+      expect(tool(p, "log", ["answer", ...identity, "--session", NEW, "--details", "Request changes"]).status).toBe(0);
+      if (where === "a teammate's fresh clone") {
+        const mine = seededAuditShard(p);
+        renameSync(mine, join(dirname(mine), `zz-teammate-${basename(mine)}`));
+        renameSync(join(p, "aidlc", ".aidlc-sessions"), join(p, "aidlc", ".aidlc-sessions-of-the-first-clone"));
+        // The record's times are whole seconds: two shards order by them alone.
+        Bun.sleepSync(1100);
+      }
+      const THIRD = "t-any-chat-third";
+      const shown = bare(p, THIRD);
+      expect(shown.message).toContain('"What should change?"');
+      expect(shown.message).toContain(`answer --stage ${stage} --details`);
+      const said = "only done items that were deleted come back";
+      person(p, said, THIRD);
+      const words = tool(p, "log", ["answer", "--stage", stage, "--session", THIRD, "--details", said]);
+      expect(words.status, words.out).toBe(0);
+      expect(words.stdout).toContain(revisedRecord);
+      confirmRevised(THIRD);
+    });
+  }
+
+  // The person switched the summary confirmation off after asking for changes:
+  // nothing tells the agent to show the summary again.
+  test("after a Request changes, with the summary confirmation then switched off, what they say to change names no summary record", () => {
+    const { p, stage, identity, tag, revisedRecord } = openSummary(null);
+    bare(p, NEW);
+    person(p, "2", NEW);
+    tag("Request changes");
+    expect(tool(p, "log", ["answer", ...identity, "--session", NEW, "--details", "Request changes"]).status).toBe(0);
+    writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
+      .replace("- **Change Control**: strict", "- **Change Control**: strict\n- **Summary Confirmation**: off (set by you)"));
+    const said = "only done items that were deleted come back";
+    person(p, said, NEW);
+    const words = tool(p, "log", ["answer", "--stage", stage, "--session", NEW, "--details", said]);
+    expect(words.status, words.out).toBe(0);
+    expect(words.stdout).not.toContain(revisedRecord);
+    expect(words.stdout).not.toContain("agent_note");
+  });
+
+  // The note is for the revised summary only: once its question is on record,
+  // or the summary is confirmed, an ordinary answer says nothing of it.
+  test("an answer once the revised summary is on record, or after Looks correct, names no summary record", () => {
+    const { p, stage, identity, tag, revisedRecord } = openSummary(null);
+    bare(p, NEW);
+    person(p, "Request changes: only deleted done items", NEW);
+    tag("Request changes");
+    expect(tool(p, "log", ["answer", ...identity, "--session", NEW, "--details",
+      "Request changes: only deleted done items"]).status).toBe(0);
+    const file = join(p, ...String(identity.at(-1)).split("/"));
+    writeFileSync(file, readFileSync(file, "utf-8").replace(/\[Answer\]: Request changes\n$/, "[Answer]:\n"));
+    expect(tool(p, "log", ["decision", ...identity, "--session", NEW,
+      "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes"]).status).toBe(0);
+    const ordinary = (words: string) => {
+      expect(tool(p, "log", ["decision", "--stage", stage, "--session", NEW, "--decision", "Which list?"]).status).toBe(0);
+      person(p, words, NEW);
+      const answered = tool(p, "log", ["answer", "--stage", stage, "--session", NEW, "--details", words]);
+      expect(answered.status, answered.out).toBe(0);
+      expect(answered.stdout).not.toContain(revisedRecord);
+      expect(answered.stdout).not.toContain("agent_note");
+    };
+    ordinary("the done list");
+    person(p, "Looks correct", NEW);
+    tag("Looks correct");
+    expect(tool(p, "log", ["answer", ...identity, "--session", NEW, "--details", "Looks correct"]).status).toBe(0);
+    ordinary("the archive");
   });
 
   // Live, a command whose --details named what they asked to change left a

@@ -33,6 +33,7 @@ import {
   readAuditShardEvents,
   readUnitSourceSnapshot,
   recordDir,
+  runRecordDir,
   reviewRecordDerivedFindings,
   resolveAuditProjectPath,
   resolveBoltDag,
@@ -2554,7 +2555,7 @@ export function renderSummaryConfirmationBrief(
   unit?: string,
 ): string {
   const absoluteQuestions = resolve(projectDir, questionsFile);
-  const record = recordDir(projectDir);
+  const record = runRecordDir(projectDir);
   if (
     record === null ||
     (

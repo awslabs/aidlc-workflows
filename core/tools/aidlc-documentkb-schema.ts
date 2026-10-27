@@ -184,7 +184,7 @@ export function isValidIsoTimestamp(raw: unknown): boolean {
 
 // Bounds for the LLM-authored `tags` field. The precedent where the engine
 // stores anything free-form (`EXTRACT_OUTPUT_CHAR_CAP` in aidlc-knowledge.ts,
-// `BOLT_SLUG_MAX_LENGTH`, `UNIT_NAME_MAX_LENGTH` in aidlc-lib.ts) is: cap it,
+// `BOLT_SLUG_MAX_LENGTH` in aidlc-lib.ts, `UNIT_NAME_MAX_LENGTH` in aidlc-review-records.ts) is: cap it,
 // don't trust the producer to self-limit. A tag is a short label, not prose,
 // so the per-tag cap is the same order of magnitude as those slug/name caps;
 // the count cap keeps a runaway generation from turning `tags` into an
