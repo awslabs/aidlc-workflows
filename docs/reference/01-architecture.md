@@ -875,9 +875,9 @@ binding then precede the two shared per-user cursors:
 
 - **Space** - precedence `explicit arg > session binding > aidlc/active-space
   cursor > "default"`
-  (`DEFAULT_SPACE`, `core/tools/aidlc-lib.ts:591`; resolver `activeSpace()`,
-  `aidlc-lib.ts:1300`). `listSpaces()` always reports `default` even with
-  nothing on disk (`aidlc-lib.ts:1973`).
+  (`DEFAULT_SPACE` and the resolver `activeSpace()` in
+  `core/tools/aidlc-locks.ts`). `listSpaces()` always reports `default` even
+  with nothing on disk (`core/tools/aidlc-lib.ts`).
 - **Intent** - precedence `explicit arg > session binding >
   aidlc/spaces/<space>/intents/active-intent cursor (if it names a real record
   holding aidlc-state.md) > lone-intent > null`. A `null` intent
