@@ -377,8 +377,10 @@ describe("a testing practice kept at the gate is for the next build", () => {
     expect(readFileSync(planFile(proj), "utf-8")).toBe(plan);
   });
 
-  // The chat compacts between the learnings step and the gate, so `next` comes first.
-  test("strict: a next between the kept practice and the gate gives the step it gave before, and the gate then opens", () => {
+  // The chat compacts between the learnings step and the gate, so `next` comes
+  // first: it hands over the finish of the reviewed build, not the build again,
+  // and a write the agent tries meanwhile is refused toward that finish.
+  test("strict: a next between the kept practice and the gate hands over the finish, and a write is refused toward it", () => {
     const proj = inProgress("strict");
     writePlan(proj);
     next(proj);
@@ -386,12 +388,16 @@ describe("a testing practice kept at the gate is for the next build", () => {
     next(proj);
     built(proj);
     const NEXT = "bun .claude/tools/aidlc.ts engine orchestrate next";
-    const before = lastStep(runNamed(proj, NEXT).stdout);
-    expect(before.plan_approval?.status, JSON.stringify(before)).toBe("approved");
+    expect(lastStep(runNamed(proj, NEXT).stdout).plan_approval?.status).toBe("approved");
     keepTestingPractice(proj);
     const after = lastStep(runNamed(proj, NEXT).stdout);
-    expect(after.kind, JSON.stringify(after)).toBe(before.kind);
-    expect(after.plan_approval, JSON.stringify(after)).toEqual(before.plan_approval);
+    expect(after.kind, JSON.stringify(after)).toBe("print");
+    expect(after.message, JSON.stringify(after)).toContain("report --stage code-generation --result awaiting-approval");
+    expect(after.plan_approval, JSON.stringify(after)).toBeUndefined();
+    const refused = guardOn(proj, "echo hi > src/y.ts");
+    expect(refused).toStartWith("exit 2;");
+    expect(refused).toContain("it hands over the step that finishes this build");
+    expect(refused).not.toContain("approve");
     expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message).not.toBe(WAITS);
     expect(stageLine(proj)).toContain("[?] code-generation");
   });
@@ -406,6 +412,29 @@ describe("a testing practice kept at the gate is for the next build", () => {
     built(proj);
     expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message).toBe(WAITS);
     expect(stageLine(proj)).toContain("[-] code-generation");
+  });
+
+  // The plan comes back after a mid-build move, is approved again, built and
+  // reviewed again: the review the gate reads is that last one, so the earlier
+  // review under the older contract does not count against a practice kept now.
+  test("strict: approved again after a mid-build move and reviewed again, a practice kept then lets the gate open", () => {
+    const proj = inProgress("strict");
+    writePlan(proj);
+    next(proj);
+    approvePlan(proj);
+    next(proj);
+    keepTestingPractice(proj);
+    built(proj);
+    expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message).toBe(WAITS);
+    expect(next(proj).plan_approval?.status).toBe("plan");
+    writePlan(proj);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    approvePlan(proj);
+    expect(next(proj).plan_approval?.status).toBe("approved");
+    built(proj, { iteration: 2, personAsked: true });
+    keepTestingPractice(proj);
+    expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message).not.toBe(WAITS);
+    expect(stageLine(proj)).toContain("[?] code-generation");
   });
 
   test("strict, a Unit: kept after its review, next names its completion and the Unit completes", () => {

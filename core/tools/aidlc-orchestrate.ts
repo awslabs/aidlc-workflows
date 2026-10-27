@@ -655,6 +655,7 @@ import {
 import {
   approvedPlanChangeLine,
   codeGenerationIssuance,
+  codeGenerationFinishedUnderPlanContract,
   codeGenerationPlanWaits,
   codeGenerationPlanWaitsStep,
   codeGenerationResume,
@@ -13520,7 +13521,10 @@ function stageReviewStep(
 // note the person picked at the learnings question not written yet (the step
 // can run again there). Past that, a learnings question asked since the stage
 // started (since its latest Request Changes, for a stage being revised) has its
-// answer, so the step goes on to the gate and never asks it twice.
+// answer, so the step goes on to the gate and never asks it twice. A
+// stage-level Code Generation build reviewed under its plan's contract, which
+// moved since (a practice kept after the review), gets this step too: its own
+// route would hand over the build again, which the guard then refuses.
 function finishedReviewStep(
   projectDir: string,
   node: GraphStage,
@@ -13528,7 +13532,9 @@ function finishedReviewStep(
   review: FreshReviewReceipts,
   reviewClass: ReviewClass,
 ): { text: string; endsTurn: boolean; finished: boolean } | null {
-  if (isPerUnit(node)) return null;
+  if (isPerUnit(node) && !(node.slug === "code-generation" && codeGenerationFinishedUnderPlanContract(projectDir, null))) {
+    return null;
+  }
   const box = parseCheckboxes(stateContent).find((row) => row.slug === node.slug)?.state;
   if (review.stageVerdict === null || (box !== "in-progress" && box !== "revising")) return null;
   if (openDecisionMenu(projectDir, node.slug, stageQuestionBoundary(box)).length > 0) return null;

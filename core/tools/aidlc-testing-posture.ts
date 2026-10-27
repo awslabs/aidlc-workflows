@@ -28,7 +28,6 @@ import {
   freshReviewReceipts,
   loadStageGraph,
   resolveReviewClass,
-  reviewAttemptWindow,
   collectStalePlanApprovalReceipts,
   commitPlanApprovalBatch,
   planApprovalBatchCommitted,
@@ -2902,33 +2901,27 @@ export function reviewedTestingContract(projectDir: string): string | null {
 }
 
 /**
- * Whether the target's build was finished under this contract: its review is
- * final and still covers the work and the source, and every final review of it
- * in this attempt, read in the window the freshness check reads, was recorded
- * while this contract was in force. A practice kept at the gate (or any other
- * posture move) after the review is for the next build; a review recorded after
- * a move, or one with no contract on record, keeps the build waiting.
+ * Whether the target's build was finished under this contract: the terminal
+ * review freshReviewReceipts keeps for it still covers the work, and was
+ * recorded while this contract was in force. A practice kept at the gate (or
+ * any other posture move) after that review is for the next build; a review
+ * recorded after a move, or one with no contract on record, keeps the build
+ * waiting. Whether the source still matches is the completion's own check.
+ * An isolated run reads as the main workflow's receipts never cover it.
  */
 function reviewedUnderContract(projectDir: string, authority: CodeGenerationAuthority, contractHash: string): boolean {
   try {
     const node = loadStageGraph().find((stage) => stage.slug === CODE_GENERATION_STAGE);
-    if (!node?.reviewer) return false;
+    if (!node?.reviewer || singleStageAttemptIsOpen(projectDir, CODE_GENERATION_STAGE)) return false;
     const state = readFileSync(stateFilePath(projectDir), "utf-8");
     const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", getField(state, "Scope") ?? "", state);
-    const window = reviewAttemptWindow(projectDir, state, node);
-    const fresh = freshReviewReceipts(projectDir, state, node, { reviewClass, attemptWindow: window });
+    const fresh = freshReviewReceipts(projectDir, state, node, { reviewClass });
     const unit = authority.unit;
     const covered = unit === null
       ? fresh.stageVerdict !== null && !fresh.stageStale
       : fresh.unitVerdicts.has(unit) && !fresh.unitStale.has(unit);
-    if (!covered || fresh.sourceStale) return false;
-    const reviews = window.events.slice(window.floorIdx + 1).filter((event) =>
-      event.event === "REVIEW_COMPLETED" &&
-      auditBlockField(event.block, "Stage") === CODE_GENERATION_STAGE &&
-      auditBlockField(event.block, "Unit") === unit &&
-      ["READY", "NOT-READY"].includes(auditBlockField(event.block, "Verdict") ?? ""));
-    return reviews.length > 0 &&
-      reviews.every((event) => auditBlockField(event.block, REVIEW_TESTING_CONTRACT_FIELD) === contractHash);
+    const block = covered ? fresh.verdictBlocks?.get(unit ?? "") : undefined;
+    return block !== undefined && auditBlockField(block, REVIEW_TESTING_CONTRACT_FIELD) === contractHash;
   } catch {
     return false;
   }
@@ -3337,6 +3330,24 @@ export function codeGenerationPlanWaits(projectDir: string, units: ReadonlyArray
       return false;
     }
   });
+}
+
+/**
+ * Whether the target's build is finished as its plan stands: the build reading
+ * refuses because the Testing Contract moved, while the completion reading
+ * holds because the build was reviewed under the plan's own contract (a
+ * practice kept after the review). Its next step is the finish, not more
+ * building, so `next` hands that over and a refused write names it.
+ */
+export function codeGenerationFinishedUnderPlanContract(projectDir: string, unit: string | null): boolean {
+  try {
+    const issued: CodeGenerationIssuance = unit === null ? { kind: "run-stage" } : { kind: "run-stage", unit };
+    const approval = evaluateCodeGenerationApproval(projectDir, { unit }, issued, "completion");
+    return approval.ok && !approval.contractValid &&
+      codeGenerationExecutionAllowed(projectDir, { unit }, approval, issued);
+  } catch {
+    return false;
+  }
 }
 
 /**

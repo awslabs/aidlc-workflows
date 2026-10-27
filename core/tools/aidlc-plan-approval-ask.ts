@@ -1007,11 +1007,14 @@ function routedPlanApproval(projectDir: string, directive: Directive): Directive
   // The plans asked about are the ones this directive builds, whatever the
   // engine said last (the question, a pause, or a directive a compacted chat
   // must re-read).
-  // Read as the completion reads it: the two differ only for a build already
-  // reviewed under its plan's own Testing Contract, whose plan a practice kept
-  // since (the learnings step, then a compaction before the gate) does not send
-  // back to the person.
-  const states = units.map((unit) => targetState(projectDir, unit, intentId, record, directive, planApprovalOff, "completion"));
+  // A Unit that owes only its completion receipt was built and reviewed: its
+  // plan is read as the completion reads it. A build directive keeps the build
+  // reading the guard and the brief use, so the plan `next` calls approved is
+  // one they admit (a reviewed stage-level build whose contract moved after its
+  // review gets its finish step instead: finishedReviewStep).
+  const use: CodeGenerationApprovalUse =
+    directive.kind === "run-stage" && directive.unit_record_step !== undefined ? "completion" : "build";
+  const states = units.map((unit) => targetState(projectDir, unit, intentId, record, directive, planApprovalOff, use));
   if (states.every((state) => state.kind === "approved")) {
     // Under a lowered Guard Policy an approved plan that changed still builds;
     // the person hears what changed and is asked whether to go back to it, or,

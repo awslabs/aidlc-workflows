@@ -168,6 +168,7 @@ import {
   beginCodeGeneration,
   beginCodeGenerationBatch,
   codeGenerationExecutionAllowed,
+  codeGenerationFinishedUnderPlanContract,
   type CodeGenerationIssuance,
   codeGenerationIssuance,
   codeGenerationPlanApprovalFence,
@@ -657,11 +658,23 @@ export function mutationBlockReason(
   opaqueShell = false,
   detail: string | null = null,
   planApprovalOff = false,
+  finished = false,
 ): string {
   const scope = unit === null ? "the zero-Unit stage-level implementation" : `unit ${unit}`;
   const action = opaqueShell
     ? "run mutation-capable shell commands"
     : "modify workspace paths";
+  // A build reviewed under its plan, whose contract moved after the review
+  // (codeGenerationFinishedUnderPlanContract): its way on is to finish, and the
+  // moved contract is for the next plan, so no approval is promised.
+  if (finished) {
+    return (
+      `Code generation cannot ${action} for ${scope}: its build was reviewed under the approved plan, and ` +
+      "the Testing Contract changed after that review, which applies from the next plan. Writes inside the " +
+      `selected code-generation record directory remain available. Run ${nextOnItsOwn()}: it hands over the ` +
+      "step that finishes this build."
+    );
+  }
   return (
     `Code generation cannot ${action} for ${scope} because ` +
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
@@ -2341,6 +2354,7 @@ async function evaluate(
     unit: string | null;
     opaqueShell: boolean;
     detail: string | null;
+    finished: boolean;
   } | null = null;
   const refusalFields = (): { tool: string; target: string; unit?: string } => {
     const unit = blockedMutation?.unit ?? (verdict.mentioned[0] === `stage:${GUARDED_STAGE}`
@@ -2740,6 +2754,7 @@ async function evaluate(
           unit: null,
           opaqueShell: mutation.targets.length === 0,
           detail: null,
+          finished: false,
         };
       } else if (activeDirective.kind !== "run-stage" && setAside === null) {
         authorityFailure =
@@ -2787,6 +2802,7 @@ async function evaluate(
             unit,
             opaqueShell: outsideRecord === undefined,
             detail: receiptDetail([evidence], verdict.mentioned),
+            finished: !approval.ok && codeGenerationFinishedUnderPlanContract(projectDir, unit),
           };
         }
       }
@@ -2825,6 +2841,7 @@ async function evaluate(
           blockedMutation.opaqueShell,
           detail ?? blockedMutation.detail,
           planApprovalOff,
+          blockedMutation.finished,
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)

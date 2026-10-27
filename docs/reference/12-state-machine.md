@@ -429,11 +429,14 @@ skip is recorded is not judged again, so a Testing Contract that reads stale
 since (an update) never holds the gate. Nor does a Testing Contract that moved
 after the build was reviewed, such as a testing practice the person kept at the
 learnings step: a Code Generation `REVIEW_COMPLETED` row records the contract in
-force (`Testing Contract`), and while the target's final review still covers the
-work and was recorded under the plan's own contract, the approval is read
-against that contract, for the completion and for the `next` that names a Unit's
-completion. A contract that moved before the review moved while the build ran,
-and under strict that build still waits for the plan. The person's answer at the open gate and
+force (`Testing Contract`), and while the target's terminal review (the one the
+freshness check keeps) still covers the work and was recorded under the plan's
+own contract, the completion reads the approval against that contract. `next`
+then hands over the finish, not the build: the step after the review for the
+zero-Unit target, the Unit's completion for a Unit. A write the build would make
+is still refused, and the refusal names that `next`. A contract that moved
+before the review moved while the build ran, and under strict that build still
+waits for the plan. The person's answer at the open gate and
 the remedy they picked at the recovery question are theirs and are not held. The
 check runs after the stage's own completion checks, so their refusals keep their
 words.
