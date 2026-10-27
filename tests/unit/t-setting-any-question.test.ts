@@ -19,7 +19,7 @@ import { join } from "node:path";
 import {
   type AnswersItem, env, exec, next, projectAt, recordByAgent, SESSION, say, templateProjects,
 } from "../harness/aidlc-answers-corpus.ts";
-import { AIDLC_SRC, cleanupTestProject, seededStateFile } from "../harness/fixtures.ts";
+import { AIDLC_SRC, cleanupTestProject, recordArtifactWriteViaHook, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
   auditBlockField, formatGuardPolicy, getField, readAuditShardEvents, setGuardPolicyLine,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -39,7 +39,7 @@ afterAll(() => {
   for (const template of templateProjects()) cleanupTestProject(template);
 });
 
-type Question = "construction-policy" | "summary-confirmation" | "code-plan" | "stage-gate";
+type Question = "construction-policy" | "summary-confirmation" | "code-plan" | "stage-gate" | "batch-checkpoint";
 
 async function at(question: Question, policy: "off" | "strict"): Promise<string> {
   const proj = await projectAt(question);
@@ -148,6 +148,37 @@ describe.each(["off", "strict"] as const)("Guard Policy %s: a setting asked besi
     expect(off.status, `${off.stdout}${off.stderr}`).toBe(0);
     theirs(proj, asked, ASKED);
     expect((await next(proj, [])).directive?.ask_type).not.toBe("plan-approval");
+  });
+
+  // Request changes with nothing said about what: the answer asks "What
+  // should change?" itself, and that question is part of the same answer.
+  test("the summary question: a bare Request changes recorded first, then plan approval off on it, theirs", async () => {
+    const proj = await at("summary-confirmation", policy);
+    const words = "request changes, and turn plan approval off for the rest of this work";
+    const asked = await said(proj, words);
+    const file = join(seededRecordDir(proj), "inception", "requirements-analysis", "requirements-analysis-questions.md");
+    writeFileSync(file, readFileSync(file, "utf-8").replace(/\[Answer\]: \n$/, "[Answer]: Request changes\n"), "utf-8");
+    recordArtifactWriteViaHook(proj, file, "Edit");
+    const recorded = await exec([process.execPath, join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--checkpoint",
+      "summary-confirmation", "--stage", "requirements-analysis", "--questions-file", file, "--details", "Request changes",
+      "--project-dir", proj], { cwd: proj, env: env(proj) });
+    expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
+    expect(rows(proj, "DECISION_RECORDED").at(-1)?.block).toContain("What should change?");
+    const off = await setter(proj, ["plan-approval", "off", "--message", asked]);
+    expect(off.status, `${off.stdout}${off.stderr}`).toBe(0);
+    theirs(proj, asked, words);
+  });
+
+  // One Request Changes for a batch of Units writes one row per Unit.
+  test("a batch checkpoint's Request Changes recorded first, then plan approval off on it, theirs", async () => {
+    const proj = await at("batch-checkpoint", policy);
+    const words = "request changes: log each failed save, and turn plan approval off for the rest of this work";
+    const asked = await said(proj, words);
+    await answered(proj, "batch-checkpoint", words, "Request Changes", "GATE_REJECTED");
+    expect(rows(proj, "GATE_REJECTED").length).toBeGreaterThan(1);
+    const off = await setter(proj, ["plan-approval", "off", "--message", asked]);
+    expect(off.status, `${off.stdout}${off.stderr}`).toBe(0);
+    theirs(proj, asked, words);
   });
 
   test("a stage gate's Request Changes recorded first, then learnings off on it, theirs", async () => {
