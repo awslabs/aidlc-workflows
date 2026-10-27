@@ -112,6 +112,7 @@ import {
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
 import { notePlanApprovalAskReply, openEngineQuestion } from "../tools/aidlc-plan-approval-ask.ts";
+import { openPlanQuestion } from "../tools/aidlc-question-store.ts";
 import { aidlcEntryWords, isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
 import { MESSAGE_PICKER_MAX_CHARS, MESSAGE_TEXT_MAX_CHARS, type NewMessage, saveMessage } from "../tools/aidlc-message-store.ts";
 
@@ -772,11 +773,35 @@ try {
       return null;
     }
   };
+  // The agent learns the id of the message it can name with --message, never
+  // its words: a reply typed or given in a question box, or a check the person
+  // asks in chat to change with nothing waiting on them (without the id, every
+  // such request met the setter's refusal first, and a setting asked in a box
+  // answer was recorded on the message typed before it). On the work, every
+  // such message gets it; outside the work or before any exists, only a reply
+  // to this chat's plan question for new work, so a setting asked beside the
+  // plan pick is recorded as theirs and no other prompt in a project with no
+  // AI-DLC work open carries the line. Once a turn. The setter's proof of the
+  // message still decides.
+  let idSaid = false;
+  const sayMessageId = (messageId: string | null, notAReply: boolean, onTheWork: boolean): void => {
+    if (idSaid || !(promptSubmitted || pickerQuestion !== undefined) || !messageId || notAReply || contextMayReachPerson) {
+      return;
+    }
+    try {
+      if (!onTheWork && (!sessionId || openPlanQuestion(projectDir, sessionId) === null)) return;
+    } catch {
+      return;
+    }
+    idSaid = true;
+    notes.push(`This message of the person's is on record as ${messageId}: a decision you record from it can ` +
+      `name it with --message ${messageId}.`);
+  };
   if (outside) {
     // A turn the host made (its notice or brief) is nobody's words here either:
     // kept, it would read as the person's prompt where their message is the
     // proof before any work exists (intent creation).
-    if (turnOrigin.kind !== "host") keepMessage();
+    if (turnOrigin.kind !== "host") sayMessageId(keepMessage(), typedParse?.command === true, false);
     sayIfKeyShaped();
     return 0;
   }
@@ -952,16 +977,7 @@ try {
       } catch {
         // Authority bookkeeping remains fail-open for the human's turn.
       }
-      // On the work, the agent learns the id of the message it can name with
-      // --message, never its words: a reply typed or given in a question box,
-      // or a check the person asks in chat to change with nothing waiting on
-      // them (without the id, every such request met the setter's refusal
-      // first, and a setting asked in a box answer was recorded on the message
-      // typed before it). The setter's proof of the message still decides.
-      if ((promptSubmitted || pickerQuestion !== undefined) && messageId && !notAReply && !contextMayReachPerson) {
-        notes.push(`This message of the person's is on record as ${messageId}: a decision you record from it can ` +
-          `name it with --message ${messageId}.`);
-      }
+      sayMessageId(messageId, notAReply, true);
       try {
         // The engine's guard-recovery ask keeps that the person replied; a
         // pick in a question box that offered its remedies is the host's own
@@ -986,6 +1002,8 @@ try {
       forThePerson.push(() => carryPendingPersonLines(projectDir, session));
     }
   }
+  // Before any work exists: the reply to this chat's plan question.
+  sayMessageId(messageId, typedParse?.command === true, false);
 } catch {
   // Non-fatal — a mint failure must never block the human's turn.
 }
