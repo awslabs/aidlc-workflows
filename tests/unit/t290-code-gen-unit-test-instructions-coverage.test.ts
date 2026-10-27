@@ -272,15 +272,29 @@ describe("t290 code-generation coverage requires per-unit test instructions", ()
         "command once on the assembled project with its own coverage configuration",
     );
     expect(buildAndTest).toContain(
-      "That run, never a unit-scoped one, is the Evidence for every project-wide coverage-floor row in the " +
-        "Target Verification Matrix.",
+      "That run, never a unit-scoped one, is the Evidence for a project-wide coverage-floor row in the Target " +
+        "Verification Matrix, and one repository's run is never the Evidence for another repository's floor.",
     );
     expect(buildAndTest).toContain(
-      "A unit-scoped command whose output shows all of its selected tests passed and the threshold of a floor " +
-        "set for the whole project (one that applies to all measured source, even when the runner checks it " +
-        "file by file) as the only cause of its non-zero exit counts as passed, from a new or an already-approved " +
-        "instructions file",
+      "In a multi-repo intent, run it once in each repository the floor applies to, with that repository's own " +
+        "command and coverage configuration",
     );
+    // A threshold exit stops a chained step before it runs; the exemption
+    // must not pass that step. The reference mirrors the stage rule.
+    const reference = readFileSync(
+      join(REPO_ROOT, "docs", "reference", "04-stages", "construction.md"),
+      "utf-8",
+    ).replace(/\s+/g, " ");
+    for (const prose of [buildAndTest, reference]) {
+      expect(prose).toContain(
+        "That covers only its test run: any applicable step the command did not reach (one chained after the " +
+          "tests, such as `… && <lint>`, including steps inside scripts and lifecycle hooks) has not passed. Run " +
+          "each such step on its own, from the directory and environment the command set up for it, and record its " +
+          "result; the command has not passed until those steps pass, and a non-zero exit there is a failed command.",
+      );
+      expect(prose).toContain("in each repository the floor applies to");
+      expect(prose).toContain("one repository's run is never the");
+    }
     expect(buildAndTest).toContain(
       "Any other non-zero exit (a failed or errored test, a threshold set for one path or Unit), or output that " +
         "does not show both, is a failed command.",

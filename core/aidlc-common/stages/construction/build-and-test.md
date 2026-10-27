@@ -158,20 +158,30 @@ Attempt to execute the build and test commands documented in the instruction fil
    Contract, a team rule, or a threshold in the project's coverage
    configuration for all measured source), run the project's full-suite
    coverage command once on the assembled project with its own
-   coverage configuration (an identical command already run in this step
-   counts), and record its command, exit code and report in `test-results.md`.
-   That run, never a unit-scoped one, is the Evidence for every project-wide
-   coverage-floor row in the Target Verification Matrix. A unit-scoped command
-   whose output shows all of its selected tests passed and the threshold of a
-   floor set for the whole project (one that applies to all measured source,
-   even when the runner checks it file by file) as the only cause of its
-   non-zero exit counts as passed, from a new or an already-approved
-   instructions file: record its exit code and this reason in
-   `test-results.md`. Any other non-zero exit (a failed or errored test, a
-   threshold set for one path or Unit), or output that does not show both, is
-   a failed command. A coverage target set for one Unit
-   needs its own check on that Unit's scope and its own evidence; a passing
-   full-suite run does not make it `Met`.
+   coverage configuration (an identical command already run in this step in
+   the same repository counts), and record its command, exit code and report
+   in `test-results.md`.
+   In a multi-repo intent, run it once in each repository the floor applies
+   to, with that repository's own command and coverage configuration, and
+   name the repository in the row's Evidence. That run, never a unit-scoped
+   one, is the Evidence for a project-wide coverage-floor row in the Target
+   Verification Matrix, and one repository's run is never the Evidence for
+   another repository's floor. A unit-scoped command whose output shows all
+   of its selected tests passed and the threshold of a floor set for the
+   whole project (one that applies to all measured source, even when the
+   runner checks it file by file) as the only cause of its non-zero exit
+   counts as passed, from a new or an already-approved instructions file:
+   record its exit code and this reason in `test-results.md`. That covers only
+   its test run: any applicable step the command did not reach (one chained
+   after the tests, such as `… && <lint>`, including steps inside scripts and
+   lifecycle hooks) has not passed. Run each such step on its own, from the
+   directory and environment the command set up for it, and record its result;
+   the command has not passed until those steps pass, and a non-zero exit
+   there is a failed command.
+   Any other non-zero exit (a failed or errored test, a threshold set for one
+   path or Unit), or output that does not show both, is a failed command. A
+   coverage target set for one Unit needs its own check on that Unit's scope
+   and its own evidence; a passing full-suite run does not make it `Met`.
 3. **Integration tests** (if applicable): Run integration test commands. Capture results.
 4. **Other applicable checks**: Run every applicable command from performance,
    security, contract, E2E, accessibility, and other generated instruction

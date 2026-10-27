@@ -1376,15 +1376,24 @@ with the aidlc-devsecops-agent providing security testing expertise.
        never once per unit. Report per-unit pass/fail without double counting.
        When a coverage floor is set for the whole project, the project's
        full-suite coverage command runs once with its own coverage
-       configuration, and that run is the evidence for every project-wide
-       floor row in the Target Verification Matrix. A unit-scoped command, from
-       a new or an already-approved file, whose output shows all its selected
+       configuration (in a multi-repo intent, once in each repository the
+       floor applies to, with the repository named in the row's Evidence),
+       and that run is the evidence for a project-wide floor row in the
+       Target Verification Matrix; one repository's run is never the
+       evidence for another repository's floor. A unit-scoped command, from a
+       new or an already-approved file, whose output shows all its selected
        tests passed and the project-wide floor's threshold (one for all
        measured source, even when the runner checks it file by file) as the
-       only cause of its non-zero exit counts as passed, with its exit and the reason recorded in
-       test-results.md; any other non-zero exit (including a threshold set for
-       one path or Unit) is a failure. A target set for one Unit needs its own
-       Unit-scoped evidence.
+       only cause of its non-zero exit counts as passed, with its exit and the
+       reason recorded in test-results.md. That covers only its test run: any
+       applicable step the command did not reach (one chained after the tests,
+       such as `… && <lint>`, including steps inside scripts and lifecycle
+       hooks) has not passed. Run each such step on its own, from the
+       directory and environment the command set up for it, and record its
+       result; the command has not passed until those steps pass, and a
+       non-zero exit there is a failed command. Any other non-zero exit
+       (including a threshold set for one path or Unit) is a failure. A
+       target set for one Unit needs its own Unit-scoped evidence.
     c. **Integration tests** (if applicable): Run integration test commands.
        Capture results.
     d. **Other applicable checks**: Run every applicable command from
