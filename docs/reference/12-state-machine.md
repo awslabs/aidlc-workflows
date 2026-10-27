@@ -194,7 +194,10 @@ for at that question for one listed stage is `next --stage <stage> --unit
 `Feedback`. While the gate stays open, `next` routes the reopened Units' steps
 first, then shows the same one question again, without the learnings module. A
 stage being revised never lists the learnings module again, and `report
---result awaiting-approval` on it names `report --result revised`.
+--result awaiting-approval` on it names `report --result revised`. At an open
+gate, `report --result revised` names `report --result awaiting-approval`, the
+re-check an open gate takes after a change, with the person's blocking-sensor
+override kept; it changes nothing on record.
 
 | Transition | Trigger | Emitter |
 |---|---|---|

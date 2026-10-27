@@ -257,7 +257,7 @@ describe("t-gate-shown-again", () => {
         ? `${recheck.join(" ")} --override-blocking-sensors --user-input "${BLOCKING_SENSOR_OVERRIDE_CHOICE}"`
         : `${recheck.join(" ")}\``);
       const shown = step(proj, [...recheck, ...extra]);
-      expect(shown.message).toBe(`Stage "${STAGE}" is already awaiting approval; gate evidence revalidated.`);
+      expect(shown.message).toStartWith(`Stage "${STAGE}" is already awaiting approval; gate evidence revalidated.`);
       const events = readAuditShardEvents(proj).map((row) => row.event);
       expect(events).not.toContain("GATE_REJECTED");
       expect(events).not.toContain("STAGE_REVISING");

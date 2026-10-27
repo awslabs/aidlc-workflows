@@ -19782,6 +19782,19 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
+    // `revised` re-enters a gate a rejection closed. An open gate is checked
+    // again after a change by the report that opened it, which runs this
+    // block's own checks, so the step names that report before any of them.
+    if (flags.result === "revised" && stageCheckbox.state === "awaiting-approval") {
+      const recheck = flags.overrideBlockingSensors
+        ? blockingSensorOverrideReport(slug, "awaiting-approval")
+        : gateReportCommand(slug, "awaiting-approval");
+      emit(printDirective(
+        `Stage "${slug}" is already awaiting approval, so its gate is checked again with \`${recheck}\`: ` +
+          "run it and show the gate with what it returns.",
+      ));
+      return;
+    }
     if (
       (flags.result === "awaiting-approval" || flags.result === "revised") &&
       stageCheckbox.state !== "completed"
