@@ -44,6 +44,7 @@ const LIB_SIBLINGS = [
   "aidlc-settings.ts",
   "aidlc-markdown.ts",
   "aidlc-locks.ts",
+  "aidlc-review-records.ts",
   "aidlc-install-paths.ts",
   "aidlc-distribution.ts",
   "aidlc-channel.ts",
