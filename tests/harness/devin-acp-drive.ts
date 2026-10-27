@@ -60,7 +60,7 @@
 //     config_option_update, current_mode_update, available_commands_update)
 //     are traced by name, not depended on.
 
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
@@ -1264,9 +1264,18 @@ verbs:
                                      exit 0 pending / 2 timeout / 3 ended
   answer <question-N|permission-N> <value> [--io DIR]
                                      write the answer file (question value is
-                                     DevinAnswer JSON, permission an optionId)
+                                     a DevinAnswer JSON, permission an optionId)
   say "<text>" [--io DIR]            write the next prompt-<N>.txt
   stop [--io DIR]                    write STOP as the next prompt
+
+question-N.answer.json is a DevinAnswer, one of:
+  {"action":"accept","answers":{"q0":"<option label or your own words>",
+                                "q1":["<label>"]}}
+  {"action":"decline"}
+  {"action":"cancel"}
+(the wire to Devin uses content, the answer file uses answers: a single
+question's reply is an option label or your own words, a multi-select's is
+an array of labels)
 
 The person sees chat.log (assistant prose + [tool] lines), pending files
 question-N.json / permission-N.json, and events.log. The project is left in
@@ -1289,13 +1298,24 @@ function humanArgs(argv: string[]): HumanArgs {
   return out;
 }
 
-function newestIoDir(): string | undefined {
+// The default io dir is the newest devin-acp-human-* BY MTIME, not by name:
+// a hand-named dir (devin-acp-human-issue6-B) sorts past a fresh timestamped
+// one, and lexical order would drive the stale session.
+export function newestIoDir(): string | undefined {
   const logs = join(REPO_ROOT, "tests", "logs");
   if (!existsSync(logs)) return undefined;
   const dirs = readdirSync(logs)
     .filter((d) => d.startsWith("devin-acp-human-"))
-    .sort();
-  return dirs.length > 0 ? join(logs, dirs[dirs.length - 1]!) : undefined;
+    .map((d) => {
+      try {
+        return { path: join(logs, d), mtimeMs: statSync(join(logs, d)).mtimeMs };
+      } catch {
+        return undefined;
+      }
+    })
+    .filter((d): d is { path: string; mtimeMs: number } => d !== undefined)
+    .sort((a, b) => a.mtimeMs - b.mtimeMs);
+  return dirs.length > 0 ? dirs[dirs.length - 1]!.path : undefined;
 }
 
 function humanIo(given: string | undefined): string {

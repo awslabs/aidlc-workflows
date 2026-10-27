@@ -7,18 +7,20 @@
 // 3000.11.3/3000.11.92 (run2 trace). No devin binary, no network, no credits.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   cleanDevinOutput,
   createFileHumanBridge,
   driveDevinAcp,
+  newestIoDir,
   storedPersonMessages,
   type DevinAcpProcess,
   type DevinAnswerer,
   type DevinPermissionAsk,
 } from "../harness/devin-acp-drive.ts";
+import { REPO_ROOT } from "../harness/fixtures.ts";
 
 type Packet = Record<string, unknown>;
 
@@ -642,4 +644,27 @@ describe("t-devin-acp-protocol — scripted fake ACP server", () => {
     expect(await bridge.nextPrompt(1)).toBe("build it");
     writeFileSync(join(io, "prompt-2.txt"), "STOP\n");
     expect(await bridge.nextPrompt(2)).toBe("STOP");
+  });
+
+  test("17. the human io default is the newest devin-acp-human-* by mtime, not by name", () => {
+    // A hand-named dir (issue6-B) sorts past a fresh timestamped one
+    // lexically; the resolver must follow modification time so a stale
+    // session is never driven.
+    const logs = join(REPO_ROOT, "tests", "logs");
+    const early = join(logs, "devin-acp-human-20000101T000000Z");
+    const lateNamed = join(logs, "devin-acp-human-zz-mtime-check");
+    mkdirSync(early, { recursive: true });
+    mkdirSync(lateNamed, { recursive: true });
+    scratch.push(early, lateNamed);
+    try {
+      const past = new Date("2020-01-01T00:00:00Z");
+      const now = new Date();
+      utimesSync(early, now, now);
+      utimesSync(lateNamed, past, past);
+      expect(lateNamed > early).toBe(true); // lexical order picks the stale dir
+      expect(newestIoDir()).toBe(early);
+    } finally {
+      rmSync(early, { recursive: true, force: true });
+      rmSync(lateNamed, { recursive: true, force: true });
+    }
   });
