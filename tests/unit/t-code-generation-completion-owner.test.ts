@@ -417,6 +417,8 @@ describe("a testing practice kept at the gate is for the next build", () => {
     reply(proj, "review the plan first");
     const review = answer(proj, "Review the plan");
     expect(review.status, `${review.stdout}${review.stderr}`).toBe(0);
+    expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message, "the gate waits for the plan they asked to see").toBe(WAITS);
+    expect(stageLine(proj)).toContain("[-] code-generation");
     const step = next(proj);
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
     expect(step.plan_approval?.status, JSON.stringify(step)).toBe("plan");

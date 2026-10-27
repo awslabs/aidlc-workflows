@@ -389,19 +389,25 @@ export function codeGenerationPlanReviewRequested(
 }
 
 /**
- * Whether the target's build is finished and its next step is the finish: its
- * plan stands only as its finished build reads it (a practice kept after its
- * review, codeGenerationFinishedUnderPlanContract), and the person has not
- * asked to see the plan again. `next` hands the finish over on it, and the
- * write guard's refusal reads it, so the two say the same. False when it cannot
- * be told.
+ * A target whose plan stands only as its finished build reads it (a practice
+ * kept after its review, codeGenerationFinishedUnderPlanContract): "finishes"
+ * when its next step is the finish, "plan-review" while the person asked to see
+ * the plan again, which the plan question answers first. Null for any other
+ * target, or when it cannot be told. `next`, the write guard's refusal and the
+ * completion hold all read it, so they say the same.
  */
-export function codeGenerationBuildFinishes(projectDir: string, unit: string | null): boolean {
+export function codeGenerationFinishedBuild(projectDir: string, unit: string | null): "finishes" | "plan-review" | null {
   try {
-    return !codeGenerationPlanReviewRequested(projectDir, unit) && codeGenerationFinishedUnderPlanContract(projectDir, unit);
+    if (!codeGenerationFinishedUnderPlanContract(projectDir, unit)) return null;
+    return codeGenerationPlanReviewRequested(projectDir, unit) ? "plan-review" : "finishes";
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** Whether the target's next step is the finish of its build (codeGenerationFinishedBuild). */
+export function codeGenerationBuildFinishes(projectDir: string, unit: string | null): boolean {
+  return codeGenerationFinishedBuild(projectDir, unit) === "finishes";
 }
 
 export function planApprovalReviewRequested(projectDir: string, targetId: string, intentId: string): boolean {

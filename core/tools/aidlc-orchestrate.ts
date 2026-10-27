@@ -639,6 +639,7 @@ import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operat
 import {
   isPlanApprovalBeat,
   codeGenerationBuildFinishes,
+  codeGenerationFinishedBuild,
   keepRoutedPlanApprovalReply,
   legacyPlanApprovalOffNotice,
   noteOpenEngineQuestion,
@@ -15356,7 +15357,10 @@ export function codeGenerationCompletionPlanWaits(
   } catch {
     return false;
   }
-  return codeGenerationPlanWaits(projectDir, units);
+  // A plan that stands only as its finished build reads it waits too while the
+  // person asked to see it again, so `next` shows it before the gate opens.
+  return codeGenerationPlanWaits(projectDir, units) ||
+    units.some((unit) => codeGenerationFinishedBuild(projectDir, unit) === "plan-review");
 }
 
 // The Code Generation targets a completion report covers: the Unit it names,

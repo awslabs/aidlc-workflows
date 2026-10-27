@@ -435,7 +435,8 @@ own contract, the completion reads the approval against that contract. `next`
 then hands over the finish, not the build: the step after the review for the
 zero-Unit target, the Unit's completion for a Unit. A write the build would make
 is still refused, and the refusal names that `next`. A "Review the plan" the
-person asks for before the gate still goes back to the plan. A contract that moved
+person asks for before the gate still goes back to the plan, and the completion
+waits for it. A contract that moved
 before the review moved while the build ran, and under strict that build still
 waits for the plan. The person's answer at the open gate and
 the remedy they picked at the recovery question are theirs and are not held. The
