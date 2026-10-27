@@ -34,6 +34,7 @@ import {
   guardOperationMatchesRemedy,
   isGuardRecoveryOperation,
 } from "./aidlc-guard-operation.ts";
+import { readsAlikeInDoubleQuotes } from "./aidlc-runtime-paths.ts";
 
 // --- Public types ---
 
@@ -1652,7 +1653,7 @@ export function numberedProseQuestion(prompt: string, options: readonly Pick<Ask
 // single quotes otherwise. The POSIX splice for an apostrophe ('"'"') reaches a
 // program as three arguments through PowerShell, and "I'll edit the files" has one.
 export function fixedLabelArg(label: string): string {
-  return /^[^"$`\\%!^&|<>\r\n]+$/.test(label) ? `"${label}"` : shellArg(label);
+  return readsAlikeInDoubleQuotes(label) ? `"${label}"` : shellArg(label);
 }
 
 // The choices of an engine question, from the routes it already carries. The

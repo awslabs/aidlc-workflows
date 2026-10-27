@@ -646,6 +646,20 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     expect(gi).toContain("# <<< aidlc workspace-sync managed <<<");
   });
 
+  test("a repo folder named with a space gets its own managed line, which git reads as that folder", () => {
+    const ws = freshWorkspace('{ "org": "acme", "repos": [{ "name": "my lib" }] }', ["my lib"]);
+    expect(runSync(ws).status).toBe(0);
+    expect(readFileSync(join(ws, ".gitignore"), "utf-8")).toContain("\n/my lib/\n");
+    git(ws, "init", "-q");
+    writeFileSync(join(ws, "my lib", "a.txt"), "x\n", "utf-8");
+    writeFileSync(join(ws, "my libs.txt"), "x\n", "utf-8");
+    const ignored = (path: string) => spawnSync("git", ["-C", ws, "check-ignore", "-q", path], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    }).status;
+    expect(ignored("my lib/a.txt")).toBe(0);
+    expect(ignored("my libs.txt")).toBe(1);
+  });
+
   test("is idempotent and preserves hand-owned lines outside the gates", () => {
     const ws = freshWorkspace(MANIFEST);
     expect(runSync(ws).status).toBe(0);
@@ -1181,11 +1195,11 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     const cases = [
       {
         repos: [{ name: "../escaped", url: "/does/not/matter" }],
-        message: "single path segment",
+        message: "its name is not one folder's name",
       },
       {
         repos: [{ name: "nested/repo", url: "/does/not/matter" }],
-        message: "single path segment",
+        message: "its name is not one folder's name",
       },
       {
         repos: [{ name: "same" }, { name: "same" }],

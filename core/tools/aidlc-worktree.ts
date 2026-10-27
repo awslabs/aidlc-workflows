@@ -88,7 +88,7 @@ import {
   worktreesDir,
   worktreeStateFilePath,
   writeFileAtomic,
-  REPO_NAME_REGEX,
+  repoNameRefusal,
   entrySkillInvocation,
   asksForHelp,
   printUsageAndExit,
@@ -3614,7 +3614,7 @@ function handleDiscard(args: string[]): void {
   const slug = validateSlug(flags.slug);
   const pd = resolveProjectDir(projectDir);
   if (flags.repo !== undefined && !isValidRepoName(flags.repo)) {
-    errorWithSlug(slug, `Invalid --repo "${flags.repo}": a repo name must be a single path segment matching ${REPO_NAME_REGEX}.`);
+    errorWithSlug(slug, repoNameRefusal("Invalid --repo", flags.repo));
   }
   const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
   const identity = resolveCommandBoltIdentity(pd, slug, selection);
