@@ -4945,7 +4945,11 @@ export function codeGenerationDiscardedBase(
 // the Unit's source.
 function unitPlanNamedPaths(parent: string, unit: string): string[] | null {
   try {
-    const ask = require("./aidlc-plan-approval-ask.ts") as typeof import("./aidlc-plan-approval-ask.ts");
+    // Typed by its one function, not `typeof import(...)`, which would load the
+    // plan question's whole module graph into every program that reads this one.
+    const ask = require("./aidlc-plan-approval-ask.ts") as {
+      codeGenerationPlanNamedPaths(projectDir: string, unit: string | null): string[] | null;
+    };
     return ask.codeGenerationPlanNamedPaths(parent, unit);
   } catch {
     return null;
