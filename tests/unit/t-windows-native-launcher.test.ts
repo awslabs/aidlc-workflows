@@ -1,0 +1,94 @@
+// covers: file:core/tools/aidlc-lifecycle.ts file:scripts/install.ps1
+//
+// A native Windows install puts a copy of the aidlc binary in its bin folder
+// as aidlc.exe, which PowerShell finds before aidlc.cmd and Git Bash finds
+// once the extensionless launcher is gone. Windows starts aidlc.cmd only
+// through cmd.exe, which reads & | < > ^ and %NAME% in the arguments whatever
+// the caller quoted, so `aidlc use 'R&D'` reached AI-DLC as `R` and cmd.exe
+// then ran `D`. The copy hands the arguments to the active release as given.
+
+import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { REPO_ROOT } from "../harness/fixtures.ts";
+import { gitBashPath, gitBashSkipReason } from "../harness/git-bash.ts";
+import { writeReleaseFixture } from "../harness/release-fixture.ts";
+import {
+  NATIVE_COMPILE_TIMEOUT_MS,
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+
+describe("a native Windows install hands aidlc's arguments on as typed", () => {
+  const values = ["R&D", "a^b", "%PATH%", "a|sort", "a>made-by-cmd"];
+
+  test.skipIf(process.platform !== "win32")(
+    "from PowerShell and Git Bash, & ^ %NAME% | > reach AI-DLC as typed, and nothing else runs",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "aidlc-native-launcher-"));
+      try {
+        const built = join(root, "aidlc.exe");
+        const compiled = spawnSync(process.execPath, [
+          "build", join(REPO_ROOT, "dist-release", "claude", ".claude", "tools", "aidlc.ts"), "--compile",
+          "--no-compile-autoload-dotenv", "--no-compile-autoload-bunfig", "--outfile", built,
+        ], { cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS) });
+        expect(compiled.status, `${compiled.stdout}\n${compiled.stderr}`).toBe(0);
+        const release = join(root, "release");
+        mkdirSync(release);
+        writeReleaseFixture({ root: release, repoRoot: REPO_ROOT, version: AIDLC_VERSION, binaryFrom: built });
+        const machine = join(root, "machine");
+        const bin = join(machine, "bin");
+        const work = join(root, "work");
+        mkdirSync(work);
+        // A missing gh: the fixture release has no real attestation to verify.
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          AIDLC_INSTALL_ROOT: machine,
+          AIDLC_BIN_DIR: bin,
+          AIDLC_GH_BIN: join(root, "no-gh", "gh.exe"),
+          NO_COLOR: "1",
+        };
+        const run = (file: string, args: string[]) => {
+          const r = spawnSync(file, args, {
+            cwd: work,
+            encoding: "utf-8",
+            env,
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          });
+          return { status: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+        };
+        const installed = run(process.execPath, [
+          join(REPO_ROOT, "core", "tools", "aidlc-lifecycle.ts"),
+          "update", "--version", AIDLC_VERSION, "--from", release,
+        ]);
+        expect(installed.status, installed.out).toBe(0);
+
+        // What the engine prints for PowerShell and Git Bash alike: single quotes.
+        for (const value of values) {
+          const quoted = `'${value}'`;
+          const ps = run("powershell.exe", [
+            "-NoProfile", "-NonInteractive", "-Command", `$env:Path = '${bin};' + $env:Path; aidlc use ${quoted}`,
+          ]);
+          expect(ps.out, `PowerShell ${value}`).toContain(`invalid version "${value}"`);
+          expect(ps.out, `PowerShell ${value}`).not.toContain("is not recognized");
+          if (gitBashSkipReason() === null) {
+            const sh = run(gitBashPath(), ["-c", `PATH="$(cygpath -u '${bin}'):$PATH"; aidlc use ${quoted}`]);
+            expect(sh.out, `Git Bash ${value}`).toContain(`invalid version "${value}"`);
+            expect(sh.out, `Git Bash ${value}`).not.toContain("is not recognized");
+          }
+        }
+        expect(readdirSync(work)).toEqual([]);
+        // bin\aidlc.exe carries them; Git Bash finds it once the extensionless launcher is gone.
+        expect(existsSync(join(bin, "aidlc.exe"))).toBe(true);
+        expect(existsSync(join(bin, "aidlc"))).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    NATIVE_COMPILE_TIMEOUT_MS + NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  );
+});
