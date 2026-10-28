@@ -133,6 +133,7 @@ import {
 import {
   compiledExecutable,
   discoverProjectHarnesses,
+  isCompiledExecutable,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
@@ -1071,11 +1072,12 @@ function projectDistribution(projectDir: string): string | null {
     .find((candidate) => candidate.harnessDir === harnessDir)?.distribution ?? null;
 }
 
-// bin\aidlc.exe is a copy of the running release's own binary, which knows
-// the launcher mode whatever version it activates. It is written when absent
-// or when the copy there is the one AI-DLC wrote; a file AI-DLC did not write
-// is left as it is. inPlace: one of AI-DLC's is there once the operations
-// commit, so Git Bash finds aidlc.exe itself and the extensionless launcher goes.
+// bin\aidlc.exe is a copy of the running binary, which knows the launcher mode
+// whatever version it activates (run from source there is none to copy, and the
+// install keeps aidlc.cmd and the Git Bash launcher). It is written when absent
+// or when the copy there is the one AI-DLC wrote; a file AI-DLC did not write is
+// left as it is. inPlace: one of AI-DLC's is there once the operations commit,
+// so Git Bash finds aidlc.exe itself and the extensionless launcher goes.
 function exeCommandPlan(root: string): {
   exe: string;
   replaces: boolean;
@@ -1084,8 +1086,8 @@ function exeCommandPlan(root: string): {
 } | null {
   const exe = windowsExeCommandPath();
   if (exe === null) return null;
-  const source = installedExecutablePath(AIDLC_VERSION);
-  const hash = existsSync(source) ? transactionSourceHash(source) : null;
+  const source = isCompiledExecutable() ? process.execPath : null;
+  const hash = source !== null ? transactionSourceHash(source) : null;
   const state = transactionState(exe);
   const write = hash !== null && state !== hash &&
     (state === "absent" || state === readWindowsExeCommandMarker());
@@ -1095,7 +1097,14 @@ function exeCommandPlan(root: string): {
     inPlace: write || (hash !== null && state === hash),
     operations: write
       ? [
-          { kind: "copy", path: relative(root, exe), source, sourceHash: hash as string, mode: 0o700, expected: "absent" },
+          {
+            kind: "copy",
+            path: relative(root, exe),
+            source: source as string,
+            sourceHash: hash as string,
+            mode: 0o700,
+            expected: "absent",
+          },
           writeOperation(
             relative(root, windowsExeCommandMarkerPath()),
             `${hash}\n`,

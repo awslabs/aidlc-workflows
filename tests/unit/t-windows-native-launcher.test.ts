@@ -81,11 +81,12 @@ describe("a native Windows install hands aidlc's arguments on as typed", () => {
           });
           return { status: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
         };
-        const installed = run(process.execPath, [
-          join(REPO_ROOT, "core", "tools", "aidlc-lifecycle.ts"),
-          "update", "--version", AIDLC_VERSION, "--from", release,
+        // The installer runs the release's own binary, which copies itself to bin.
+        const installed = run("powershell.exe", [
+          "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(release, "install.ps1"), "-From", release, "-NoModifyPath",
         ]);
         expect(installed.status, installed.out).toBe(0);
+        expect(installed.out).toContain(`Command: ${join(bin, "aidlc.exe")}`);
 
         const typed = () => {
           // What the engine prints for PowerShell and Git Bash alike: single quotes.
