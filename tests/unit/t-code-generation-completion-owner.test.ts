@@ -1,5 +1,5 @@
 // covers: function:codeGenerationPlanWaits, function:handleReport, function:handleUnit, function:engineCommandAdmitted,
-// function:reviewedUnderContract
+// function:reviewedUnderContract, function:codeGenerationPlanWaitsStep, function:codeGenerationFinishedBuild
 //
 // A Code Generation completion waits for the plan it builds from. Through the
 // real engine, with no hook in front: while the plan is not written, written and
@@ -12,8 +12,9 @@
 // gate shown again after a review (the step its opening retired) goes through.
 // A testing practice kept at the gate after the review moves the Testing
 // Contract for the next build only: under strict the gate opens, a Unit's
-// completion goes through and `next` names it; a contract that moved before the
-// review still holds the build that ran.
+// completion goes through and `next` names it, unless the person asked to see
+// the plan again, which holds the completion with a step that says so; a
+// contract that moved before the review still holds the build that ran.
 // The engine is the hold's one owner: the plan-approval guard in front of the
 // same commands, on every harness, admits them, says nothing and records nothing.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -464,7 +465,8 @@ describe("a testing practice kept at the gate is for the next build", () => {
     expect(stageLine(proj)).toContain("[?] code-generation");
   });
 
-  test("strict, a Unit: kept after its review, next names its completion and the Unit completes", () => {
+  // A Unit approved, started and reviewed, then a practice kept.
+  const keptAfterUnitReview = (): string => {
     const proj = perUnit("strict");
     expect(next(proj).ask_type).toBe("plan-approval");
     reply(proj, "approve");
@@ -473,6 +475,11 @@ describe("a testing practice kept at the gate is for the next build", () => {
     expect(runNamed(proj, "bun .claude/tools/aidlc.ts engine state unit start --stage code-generation --unit alpha").status).toBe(0);
     reviewed(proj, 1, { unit: "alpha" });
     keepTestingPractice(proj);
+    return proj;
+  };
+
+  test("strict, a Unit: kept after its review, next names its completion and the Unit completes", () => {
+    const proj = keptAfterUnitReview();
     const complete = "bun .claude/tools/aidlc.ts engine state unit complete --stage code-generation --unit alpha";
     const step = next(proj) as Step & { unit_record_step?: string };
     expect(step.plan_approval?.status, JSON.stringify(step)).toBe("approved");
@@ -480,6 +487,21 @@ describe("a testing practice kept at the gate is for the next build", () => {
     const completed = runNamed(proj, complete);
     expect(completed.status, completed.stdout + completed.stderr).toBe(0);
     expect(completed.stdout).toContain("UNIT_COMPLETED");
+  });
+
+  test("strict, a Unit: a Review the plan after the kept practice holds its completion and says so", () => {
+    const proj = keptAfterUnitReview();
+    reply(proj, "review the plan first");
+    const review = answer(proj, "Review the plan");
+    expect(review.status, `${review.stdout}${review.stderr}`).toBe(0);
+    const refused = runNamed(proj, "bun .claude/tools/aidlc.ts engine state unit complete --stage code-generation --unit alpha");
+    expect(refused.status, refused.stdout + refused.stderr).not.toBe(0);
+    expect((JSON.parse(refused.stderr || "{}") as { error?: string }).error).toBe(
+      'Refusing to complete unit "alpha" for "code-generation": The person asked to see the code plan again: ' +
+        "run `bun .claude/tools/aidlc-orchestrate.ts next` and follow the step it prints.");
+    expect(auditEvents(proj).some((row) => row.event === "UNIT_COMPLETED"), "nothing moved").toBe(false);
+    const step = next(proj);
+    expect(step.plan_approval?.status, JSON.stringify(step)).toBe("plan");
   });
 });
 
