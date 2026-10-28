@@ -1,12 +1,11 @@
 // covers: function:gitTextAt
 //
-// A Unit's audit shard outgrows 1 MiB in one long attempt. Every read of a
-// committed file under `aidlc unit` (publish's transportable projection, pin's
-// evidence, land and finish) went through a pipe that stops at the runtime's
-// buffer: a 1.19 MB shard came back cut at 1,113,841 characters, reported as
-// read when git exited first, and as "Pinned candidate is missing <shard>" when
-// it was killed. Git's output now goes to a file, and a committed file's bytes
-// are checked against its recorded size.
+// A Unit's audit shard outgrows 1 MiB in one long attempt. Pin's candidate
+// evidence and audit events read the committed shard through a pipe that stops
+// at the runtime's buffer: a 1.19 MB shard came back cut at 1,113,841
+// characters, reported as read when git exited first, and as "Pinned candidate
+// is missing <shard>" when it was killed. The read now lifts that cap, and a
+// committed file's bytes are checked against its recorded size.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";

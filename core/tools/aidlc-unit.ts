@@ -1,12 +1,10 @@
 // aidlc-unit.ts - atomic Unit claim registry and checkout-local scope binding.
 
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
-  closeSync,
   mkdtempSync,
   mkdirSync,
-  openSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -105,44 +103,27 @@ interface GitBytesResult {
   code: number;
 }
 
-// Git writes its output to files, never to a pipe: a pipe read stops at the
-// runtime's buffer (1 MiB under Bun) and hands back what it had, and a Unit's
-// audit shard outgrows that in one long attempt. The file holds everything git
-// wrote, read once it has exited. A run that could not start, was killed or
-// overflowed is a failed run, whatever its exit status.
+// Bun's spawnSync stops a pipe read at 1 MiB and hands back what it had, and a
+// Unit's audit shard outgrows that in one long attempt, so the cap is lifted
+// the way the other git readers lift it. A run that could not start, was killed
+// or overflowed is a failed run, whatever its exit status.
 function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitBytesResult {
-  const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-git-"));
-  try {
-    const outPath = join(scratch, "stdout");
-    const errPath = join(scratch, "stderr");
-    const out = openSync(outPath, "w");
-    const err = openSync(errPath, "w");
-    let result: SpawnSyncReturns<Buffer>;
-    try {
-      result = spawnSync("git", args, {
-        cwd: projectDir,
-        env: { ...process.env, ...env },
-        stdio: ["ignore", out, err],
-      });
-    } finally {
-      closeSync(out);
-      closeSync(err);
-    }
-    const stderr = readFileSync(errPath, "utf-8");
-    const failure = result.error
-      ? `${result.error.message}\n`
-      : result.signal
-        ? `git stopped by ${result.signal}\n`
-        : "";
-    return {
-      ok: result.status === 0 && !result.error && !result.signal,
-      stdout: readFileSync(outPath),
-      stderr: failure + stderr,
-      code: result.status ?? 1,
-    };
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
-  }
+  const result = spawnSync("git", args, {
+    cwd: projectDir,
+    env: { ...process.env, ...env },
+    maxBuffer: 512 * 1024 * 1024,
+  });
+  const failure = result.error
+    ? `${result.error.message}\n`
+    : result.signal
+      ? `git stopped by ${result.signal}\n`
+      : "";
+  return {
+    ok: result.status === 0 && !result.error && !result.signal,
+    stdout: result.stdout ?? Buffer.alloc(0),
+    stderr: failure + (result.stderr?.toString("utf-8") ?? ""),
+    code: result.status ?? 1,
+  };
 }
 
 function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitResult {
