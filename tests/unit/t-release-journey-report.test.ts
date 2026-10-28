@@ -106,9 +106,16 @@ describe("t-release-journey-report: a turn that has not ended when the journey's
     expect(() => atFile.workMs()).toThrow(TestBudgetExhaustedError);
     expect(atFile.screenMs()).toBeGreaterThan(80_000);
     expect(atFile.screenMs()).toBeLessThanOrEqual(90_000);
-    // With time left, work stops the screen's time before the screen does.
-    const roomy = journeyBudgets(() => Date.now() + 3_600_000, 2 * 3_600_000, 120_000, {});
-    expect(roomy.screenMs() - roomy.workMs()).toBeGreaterThanOrEqual(119_000);
+    // With an hour left (a 5-minute reserve), work runs to the screen's two
+    // minutes before the reserve, and the screen gets at most those two
+    // minutes, with or without a far file deadline.
+    const farFile = { [FILE_DEADLINE_ENV]: String(Date.now() + 7_200_000), [FILE_CLEANUP_ENV]: "300000" };
+    for (const env of [{}, farFile]) {
+      const roomy = journeyBudgets(() => Date.now() + 3_600_000, 2 * 3_600_000, 120_000, env);
+      expect(roomy.workMs()).toBeLessThanOrEqual(3_600_000 - 300_000 - 120_000);
+      expect(roomy.workMs()).toBeGreaterThan(3_600_000 - 300_000 - 120_000 - 1_000);
+      expect(roomy.screenMs()).toBe(120_000);
+    }
     // Both read the runner's file deadline as it is when they are asked, and refuse the same bad value.
     const live: NodeJS.ProcessEnv = {};
     const later = journeyBudgets(() => Date.now() + 3_600_000, 2 * 3_600_000, 120_000, live);

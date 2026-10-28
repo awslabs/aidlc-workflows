@@ -259,15 +259,16 @@ export function hooksRanProblems(checks: DoctorCheck[]): string[] {
 }
 
 /**
- * A live journey case's two budgets. Its work stops `screenMs` before the
- * cleanup reserve, on the case deadline and on the runner's file deadline
+ * A live journey case's two budgets. Its work stops `lastScreenMs` before
+ * the cleanup reserve, on the case deadline and on the runner's file deadline
  * alike (the runner stops the file at its own reserve), so a journey that
- * stalls still has that time for the last screen, which only `screenMs()`
- * spends. Cleanup keeps the case's `fileCleanupReserveMs` and the runner's
- * own file reserve; the screen's time is held back on top of each.
+ * stalls still has that time for the last screen, and `screenMs()` gives the
+ * last screen at most that time. Cleanup keeps the case's
+ * `fileCleanupReserveMs` and the runner's own file reserve; the screen's time
+ * is held back on top of each.
  */
 export function journeyBudgets(
-  caseDeadlineMs: () => number, totalMs: number, screenMs: number, env: NodeJS.ProcessEnv = process.env,
+  caseDeadlineMs: () => number, totalMs: number, lastScreenMs: number, env: NodeJS.ProcessEnv = process.env,
 ): { workMs: () => number; screenMs: () => number } {
   const reserveMs = fileCleanupReserveMs(totalMs);
   // The file layer's reserve is the runner's plus the screen's time. A value
@@ -275,13 +276,13 @@ export function journeyBudgets(
   const workEnv = (): NodeJS.ProcessEnv => {
     const cleanup = env[FILE_CLEANUP_ENV];
     if (env[FILE_DEADLINE_ENV] === undefined || (cleanup !== undefined && !/^\d+(?:\.\d+)?$/.test(cleanup))) return env;
-    return { ...env, [FILE_CLEANUP_ENV]: String(Number(cleanup ?? 0) + screenMs) };
+    return { ...env, [FILE_CLEANUP_ENV]: String(Number(cleanup ?? 0) + lastScreenMs) };
   };
   return {
     workMs: () => remainingOperationTimeoutMs(totalMs, {
-      deadlineMs: caseDeadlineMs(), reserveMs: reserveMs + screenMs, env: workEnv(), phase: "E2E live work",
+      deadlineMs: caseDeadlineMs(), reserveMs: reserveMs + lastScreenMs, env: workEnv(), phase: "E2E live work",
     })!,
-    screenMs: () => remainingOperationTimeoutMs(totalMs, {
+    screenMs: () => remainingOperationTimeoutMs(lastScreenMs, {
       deadlineMs: caseDeadlineMs(), reserveMs, env, phase: "E2E last screen",
     })!,
   };
