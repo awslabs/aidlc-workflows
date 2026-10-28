@@ -306,6 +306,10 @@ const VALID_EVENT_TYPES = new Set([
   "SWARM_BATON_RETURNED",
   "SWARM_COMPLETED",
   "SWARM_DEGRADED",
+  // The person asked for files in the main checkout to change while the Units
+  // are built in parallel: `aidlc-swarm.ts allow-change` records them with the
+  // message they asked in, and the guard and the landings read it.
+  "MAIN_CHECKOUT_CHANGE_ALLOWED",
   // Commit provenance -- emitted only by `aidlc-attest.ts anchor`: a workspace
   // commit observed to land reviewed unit claims. Enrichment ONLY: attest
   // resolve derives attribution purely from committed receipts + evidence and
@@ -443,6 +447,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   SWARM_STARTED: "Swarm Started",
   SWARM_UNIT_CONVERGED: "Swarm Unit Converged",
   SWARM_SOURCE_MERGED: "Swarm Source Merged",
+  MAIN_CHECKOUT_CHANGE_ALLOWED: "Main Checkout Change Allowed",
   SWARM_UNIT_FAILED: "Swarm Unit Failed",
   SWARM_BATON_RETURNED: "Swarm Baton Returned",
   SWARM_COMPLETED: "Swarm Completed",
@@ -565,6 +570,8 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "SWARM_STARTED",
   "SWARM_UNIT_CONVERGED",
   "SWARM_SOURCE_MERGED",
+  // The person's request a strict landing keeps; a forged one would keep a change nobody asked for.
+  "MAIN_CHECKOUT_CHANGE_ALLOWED",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
@@ -661,6 +668,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "PLAN_APPROVAL_SKIPPED",
   // The source-work check's own record opens the main checkout's gate.
   "SOURCE_WORK_NOT_FOUND",
+  "MAIN_CHECKOUT_CHANGE_ALLOWED",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",

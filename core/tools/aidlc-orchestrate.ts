@@ -20224,9 +20224,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     const session = resolveInvokingSessionId(pd);
     const reply = personsGateReply(pd, session, slug);
     // Several replies: the agent names the one that asked, so the setting
-    // carries their words for it and no other reply's.
+    // carries their words for it and no other reply's. Their choice is on
+    // record, so that is the agent's next step (stateRefusalDirective's
+    // person-decided print), never an error the person is shown.
     if (flags.message === undefined && reply.replies.length > 1) {
-      emit(errorDirective(
+      emit(printDirective(
         `Their replies since the last decision, oldest first: ${reply.replies.map((one) => `${one.id} (${one.at})`).join(", ")}. ` +
           "Run this report again with --message <id>, the one that asked for the setting; nothing was recorded.",
       ));

@@ -776,7 +776,7 @@ export const ROUTES: readonly Route[] = [
     group: "swarm",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["prepare", "check", "finalize"],
+    verbs: ["prepare", "check", "finalize", "allow-change"],
     tool: TOOLS.swarm,
     ...HIDDEN_ENGINE,
   },

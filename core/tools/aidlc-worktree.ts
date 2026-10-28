@@ -67,6 +67,7 @@ import {
   resolveWorkflowSelection,
   serializeSourceListing,
   sourceChangedOutsideAidlc,
+  sourceChangedOutsideAidlcSince,
   sourceListingEntriesEqual,
   sourceListingSha256,
   swarmUnitCheckpointRejections,
@@ -74,6 +75,7 @@ import {
   type WorkflowSelection,
   UNBINDABLE_FINGERPRINT,
   onlyAidlcFilesChangedSince,
+  mainCheckoutChangeAllowed,
   validateUnitName,
   workspaceSourceFailureSuffix,
   recordedSourceListingUnderCurrentBoundary,
@@ -93,6 +95,7 @@ import {
   asksForHelp,
   printUsageAndExit,
 } from "./aidlc-lib.js";
+import { mainCheckoutChangeStep } from "./aidlc-message-store.ts";
 import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
 import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
 
@@ -2017,17 +2020,26 @@ function assertAggregateSourceBeforeMerge(
   const current = workspaceSourceState(pd, intent, space);
   // Under relaxed or off the person's own edits to the main checkout during
   // the build are kept: the merge starts from the checkout as it is, and the
-  // change is recorded once so the merge chain stays readable.
-  const keepChange = (recorded: string, changed: string[] | null) => {
+  // change is recorded once so the merge chain stays readable. Under strict so
+  // are the files the person asked to change (swarm allow-change), recorded
+  // with the message they asked in; that step already told them.
+  const keepChange = (recorded: string, changed: string[] | null, asked: string[] | null = null) => {
     const notice = changed && changed.length > 0
-      ? `You changed ${renderChangedPaths(changed)} during the build; kept them and merged unit ${record.unit}.`
+      ? `You changed ${renderChangedPaths(changed)} during the build${asked ? ", as you asked" : ""}; kept them and merged unit ${record.unit}.`
       : `The main checkout changed during the build; kept it and merged unit ${record.unit}.`;
-    for (const line of recordAcceptedChanges(pd, [{
+    const said = recordAcceptedChanges(pd, [{
       checkpoint: "swarm-batch", stage: record.stage, unit: record.unit, changed,
-      recorded, current: current!.fingerprint, notice,
-    }], { intent, space })) process.stderr.write(`note: ${line}\n`);
+      recorded, current: current!.fingerprint, notice, ...(asked ? { messageIds: asked } : {}),
+    }], { intent, space });
+    if (asked === null) for (const line of said) process.stderr.write(`note: ${line}\n`);
     return { state: current!, openingFingerprint: current!.fingerprint };
   };
+  // Under strict, the step for the person's own changes: theirs to keep, with
+  // the message they asked in, or to undo.
+  const personDecides = (changed: string[] | null): string =>
+    changed && changed.length > 0
+      ? mainCheckoutChangeStep(pd, changed, PERSON_DECIDES_CHANGES, "run the merge again")
+      : PERSON_DECIDES_CHANGES;
   const acceptsChanges = current !== null && guardPolicyAcceptsChanges(pd, undefined, { selection: { intent, space } });
   if (current === null) {
     errorWithSlug(
@@ -2060,9 +2072,13 @@ function assertAggregateSourceBeforeMerge(
       !onlyAidlcFilesChangedSince(pd, record.stage, chain.listing, current, intent, space)
     ) {
       if (acceptsChanges) return keepChange(chain.fingerprint, null);
+      const changed = sourceChangedOutsideAidlcSince(pd, record.stage, chain.listing, current, intent, space);
+      const asked = mainCheckoutChangeAllowed(pd, changed, { intent, space });
+      if (asked !== null) return keepChange(chain.fingerprint, changed, asked);
       errorWithSlug(
         slug,
-        `refusing to merge: the main checkout source changed after the previous reviewed-source merge. ${PERSON_DECIDES_CHANGES}`,
+        "refusing to merge: the main checkout source changed after the previous reviewed-source merge" +
+          `${changed && changed.length > 0 ? ` (${renderChangedPaths(changed)})` : ""}. ${personDecides(changed)}`,
       );
     }
     return {
@@ -2093,12 +2109,14 @@ function assertAggregateSourceBeforeMerge(
     : [];
   if (changed.length > 0) {
     if (acceptsChanges) return keepChange(opening.fingerprint, changed);
+    const asked = mainCheckoutChangeAllowed(pd, changed, { intent, space });
+    if (asked !== null) return keepChange(opening.fingerprint, changed, asked);
     errorWithSlug(
       slug,
       (opening.source === "prior-accepted"
         ? "refusing to merge: the main checkout source does not match the prior attempt's final reviewed aggregate"
         : "refusing to merge: the main checkout source changed since the stage-entry baseline") +
-        ` (${renderChangedPaths(changed)}). ${PERSON_DECIDES_CHANGES}`,
+        ` (${renderChangedPaths(changed)}). ${personDecides(changed)}`,
     );
   }
   // A rejection an earlier release wrote kept no listing: compare fingerprints.
