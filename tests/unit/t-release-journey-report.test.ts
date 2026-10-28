@@ -109,6 +109,14 @@ describe("t-release-journey-report: a turn that has not ended when the journey's
     // With time left, work stops the screen's time before the screen does.
     const roomy = journeyBudgets(() => Date.now() + 3_600_000, 2 * 3_600_000, 120_000, {});
     expect(roomy.screenMs() - roomy.workMs()).toBeGreaterThanOrEqual(119_000);
+    // Both read the runner's file deadline as it is when they are asked, and refuse the same bad value.
+    const live: NodeJS.ProcessEnv = {};
+    const later = journeyBudgets(() => Date.now() + 3_600_000, 2 * 3_600_000, 120_000, live);
+    Object.assign(live, fileEnv);
+    expect(() => later.workMs()).toThrow(TestBudgetExhaustedError);
+    live[FILE_CLEANUP_ENV] = "1e5";
+    expect(() => later.workMs()).toThrow("Invalid test budget");
+    expect(() => later.screenMs()).toThrow("Invalid test budget");
   });
 
   test("a turn that ends, and an error that is not the budget, are left as they are", () => {

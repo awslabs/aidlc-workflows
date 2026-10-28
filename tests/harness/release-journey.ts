@@ -263,18 +263,23 @@ export function hooksRanProblems(checks: DoctorCheck[]): string[] {
  * cleanup reserve, on the case deadline and on the runner's file deadline
  * alike (the runner stops the file at its own reserve), so a journey that
  * stalls still has that time for the last screen, which only `screenMs()`
- * spends. Cleanup keeps its reserve as it was.
+ * spends. Cleanup's reserve is the case's `fileCleanupReserveMs`, which the
+ * screen's time never takes from.
  */
 export function journeyBudgets(
   caseDeadlineMs: () => number, totalMs: number, screenMs: number, env: NodeJS.ProcessEnv = process.env,
 ): { workMs: () => number; screenMs: () => number } {
   const reserveMs = fileCleanupReserveMs(totalMs);
-  const workEnv = env[FILE_DEADLINE_ENV] === undefined ? env : {
-    ...env, [FILE_CLEANUP_ENV]: String(Number(env[FILE_CLEANUP_ENV] ?? 0) + screenMs),
+  // The file layer's reserve is the runner's plus the screen's time. A value
+  // the budget reader refuses is passed as it is, so both budgets refuse it.
+  const workEnv = (): NodeJS.ProcessEnv => {
+    const cleanup = env[FILE_CLEANUP_ENV];
+    if (env[FILE_DEADLINE_ENV] === undefined || (cleanup !== undefined && !/^\d+(?:\.\d+)?$/.test(cleanup))) return env;
+    return { ...env, [FILE_CLEANUP_ENV]: String(Number(cleanup ?? 0) + screenMs) };
   };
   return {
     workMs: () => remainingOperationTimeoutMs(totalMs, {
-      deadlineMs: caseDeadlineMs(), reserveMs: reserveMs + screenMs, env: workEnv, phase: "E2E live work",
+      deadlineMs: caseDeadlineMs(), reserveMs: reserveMs + screenMs, env: workEnv(), phase: "E2E live work",
     })!,
     screenMs: () => remainingOperationTimeoutMs(totalMs, {
       deadlineMs: caseDeadlineMs(), reserveMs, env, phase: "E2E last screen",
