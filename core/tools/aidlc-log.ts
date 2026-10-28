@@ -13,7 +13,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
-import { prepareReviewCopy, removeReviewCopy } from "./aidlc-kiro-review-copy.ts";
+import { prepareReviewCopy, removeReviewCopy, sweepReviewCopies } from "./aidlc-kiro-review-copy.ts";
 import {
   chatsSince,
   latestMessage,
@@ -4471,8 +4471,10 @@ function handleReview(args: string[]): void {
     const swarmUnit = flags.stage === "code-generation" && flags.unit ? swarmWorkerWorktreeMeta(pd) : null;
     // On Kiro (kiro-ide), while the reviewer read-scope check holds, this
     // review's reviewer is dispatched as a copy that carries its read scope; a
-    // replaced request's copy goes with it.
+    // replaced request's copy goes with it, and so does the copy of any review
+    // that is over without its verdict.
     if (replaces !== null) removeReviewCopy(pd, replaces);
+    sweepReviewCopies(pd, { intent, space });
     const copy = requestId === null ? null : prepareReviewCopy(pd, {
       requestId,
       reviewer: flags.reviewer,
@@ -5189,8 +5191,12 @@ function handleReview(args: string[]): void {
   // the reviewer-scope hook reads it. Remove that one too, when it is this
   // review's own record; another Unit's review keeps its window.
   removeParentReviewerDispatch(pd, { reviewer: flags.reviewer, stage: flags.stage, unit: flags.unit });
-  // The verdict closes the request, so its reviewer copy (Kiro) goes too.
+  // The verdict closes the request, so its reviewer copy (Kiro) goes too, with
+  // the copy of any review that is over without its verdict.
+  // removeReviewCopy deletes by the request's name whatever the layout reads
+  // now; the sweep reads the ledger.
   removeReviewCopy(pd, fields["Request Id"]);
+  sweepReviewCopies(pd, { intent, space });
 
   const agentNote = recorded.context === undefined
     ? null

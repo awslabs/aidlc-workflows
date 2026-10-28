@@ -37019,7 +37019,7 @@ export function gateStagesFromBlock(block: string): string[] {
   return stage ? [stage] : [];
 }
 
-function gateEventMatchesUnit(
+export function gateEventMatchesUnit(
   block: string,
   slug: string,
   unit: string | undefined,
