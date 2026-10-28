@@ -85,10 +85,11 @@ describe("every chat enters by one door", () => {
     withShell(dir, ".claude", () => {
       expect(lib.readSessionBinding(dir, UNSEEN)).toBeNull();
       expect(lib.resolveWorkflowSelection(dir).intent).toBe(CURSOR_RECORD);
-      // First contact settled it, silently, the way SessionStart settles a new chat.
+      // First contact settled it, silently, the way SessionStart settles a new chat:
+      // on the work, its fences waiting for its first step there.
       const bound = lib.readSessionBinding(dir, UNSEEN);
       expect(bound?.intent).toBe(CURSOR_RECORD);
-      expect(bound?.source).toBe("cursor");
+      expect(bound?.source).toBe("cursor-followed");
       // Another chat switches the shared cursor; this chat stays on its work.
       lib.setActiveIntentCursor(dir, OTHER_RECORD);
       expect(lib.resolveWorkflowSelection(dir).intent).toBe(CURSOR_RECORD);

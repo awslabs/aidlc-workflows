@@ -128,6 +128,7 @@ import {
   boltName,
   boltSlugForUnit,
   canonicalPathKey,
+  chatAwaitsFirstStep,
   type CheckboxState,
   claudeNamedChat,
   clearSessionProcessTable,
@@ -7583,15 +7584,16 @@ export function hookStandsOutside(workflow: ReturnType<typeof enterHookWorkflow>
 }
 
 // Whether a gate may stand aside for this conversation: only when the selection
-// resolved and the conversation is known not to have joined it. Finished work
-// is not that case: the conversation did join it, so a gate keeps the path it
-// takes for a participant. A selection that failed to resolve, or a
+// resolved and the conversation is known not to have joined it, or followed the
+// cursor onto it and has taken no AI-DLC step there yet (chatAwaitsFirstStep).
+// Finished work is not that case: the conversation did join it, so a gate keeps
+// the path it takes for a participant. A selection that failed to resolve, or a
 // participation that cannot be decided (malformed or stale delegated worktree
 // metadata), does not lower a gate: the gate takes its ordinary path, which
 // fails closed on the same error.
 export function hookOutsideGate(workflow: ReturnType<typeof enterHookWorkflow>): boolean {
   if (workflow.selection === null || workflow.participation === "indeterminate") return false;
-  return conversationHasNotJoined(workflow);
+  return conversationHasNotJoined(workflow) || chatAwaitsFirstStep(workflow.projectDir, workflow.selection);
 }
 
 export function stateFilePathForSelection(

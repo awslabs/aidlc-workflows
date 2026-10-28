@@ -14,7 +14,7 @@ import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync,
 import { hostname } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
-import { runtimeHarnessDir, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
+import { runtimeHarnessDir, runtimeHarnessName, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import { validateUnitName } from "./aidlc-review-records.ts";
 import { activeSpace, assertNoSymlinkInChainOrThrow, engineDirFor, intentsDir, isPlainObject, listIntentDirs, readAppendOnlyFileNoFollowOrThrow, readRegularFileNoFollowOrThrow, refuseEngineObserverWrite, spaceRecordRoot, workspaceRoot, writeFileAtomic } from "./aidlc-locks.ts";
 import { escapeRegex } from "./aidlc-markdown.ts";
@@ -435,7 +435,8 @@ export const SESSION_BINDING_SOURCES = [
   "space-switch-none", // `space <name>`; no record resolved
   "worktree", // a validated delegated or local worktree names the record (re-checked each time)
   "unit-claim", // a Unit claimed on this machine names the record (re-checked each time)
-  "cursor", // SessionStart followed this machine's cursor
+  "cursor", // SessionStart followed this machine's cursor (on a host that names the chat, and it took a step since)
+  "cursor-followed", // SessionStart followed this machine's cursor; no AI-DLC step on that work yet
   "stamp", // on resume, the session's own UUID stamp named the record
   "unjoined", // the selection came only from the lone-record rule
   "none", // nothing resolved
@@ -445,9 +446,10 @@ export type SessionBindingSource = (typeof SESSION_BINDING_SOURCES)[number];
 // Sources that record a choice. Worktree and Unit-claim joins rest on evidence
 // that can go away, so the classifier re-checks that evidence instead. A stamp
 // counts because only a joined session is stamped: writers that bind without a
-// choice clear it.
+// choice clear it. A chat that followed the cursor is on that work as before;
+// only the work's fences wait for its first step there (chatAwaitsFirstStep).
 export const TRUSTED_BINDING_SOURCES: ReadonlySet<SessionBindingSource> = new Set([
-  "create", "migration", "switch", "space-switch-cursor", "cursor", "stamp",
+  "create", "migration", "switch", "space-switch-cursor", "cursor", "cursor-followed", "stamp",
 ]);
 
 export interface SessionBinding {
@@ -996,6 +998,8 @@ function rejoinedByThisMachine(
 // the binding's source; not joined binds to no record ("unjoined" when a record
 // was found, "none" when there was nothing). SessionStart adds its own stamp and
 // pre-existing-binding branches on top; resolveChat uses the rule as it is.
+// Joined by the cursor on a host whose commands name their chat is
+// "cursor-followed": the chat's own first step there is seen (chatTookStep).
 export function classifyFirstContact(
   projectDir: string,
   resolved: WorkflowSelection,
@@ -1003,7 +1007,9 @@ export function classifyFirstContact(
   const joined = workflowParticipation(projectDir, resolved) === "participant";
   const selection = joined ? resolved : { ...resolved, intent: null, binding: null };
   if (!joined) return { joined, selection, source: resolved.intent === null ? "none" : "unjoined" };
-  if (readActiveIntentCursor(projectDir, selection.space) === selection.intent) return { joined, selection, source: "cursor" };
+  if (readActiveIntentCursor(projectDir, selection.space) === selection.intent) {
+    return { joined, selection, source: CHAT_NAMING_HOSTS.has(runtimeHarnessName(projectDir)) ? "cursor-followed" : "cursor" };
+  }
   const unitScope = readUnitScopeStamp(projectDir);
   const source: SessionBindingSource =
     unitScope?.space === selection.space && unitScope.intent_uuid === intentUuidForSelection(projectDir, selection)
@@ -1040,6 +1046,13 @@ function hostNamedChat(projectDir: string): string | null {
       return null;
   }
 }
+
+// The hosts whose agent commands name the chat they run in, by tree: Claude
+// Code, Codex and Kiro CLI through hostNamedChat's variables, opencode through
+// the override its plugin hands each command. Cursor, Copilot and Kiro IDE
+// (Kiro CLI v3 runs its tree) find a command's chat only through the process
+// tree, which the chats of one window share.
+export const CHAT_NAMING_HOSTS: ReadonlySet<string> = new Set(["claude", "codex", "kiro", "opencode"]);
 
 export function claudeNamedChat(): { pid: number; session: string } | null {
   const pid = Number.parseInt(process.env.CLAUDE_PID ?? "", 10);
@@ -1190,20 +1203,52 @@ export function workflowParticipation(
       return "participant";
     }
   }
-  if (localWorktreeRecord(projectDir) === relativeRecordDirForSelection(selection)) {
-    return "participant";
-  }
-  // A Unit claimed on this machine names its space and intent.
-  const unitScope = readUnitScopeStamp(projectDir);
-  if (unitScope && unitScope.space === selection.space &&
-    unitScope.intent_uuid === intentUuidForSelection(projectDir, selection)) {
-    return "participant";
-  }
+  if (joinedByLocalEvidence(projectDir, selection)) return "participant";
   // The per-user cursor naming the record: covers bindings written before
   // sources were recorded, creations observed after the fact, and sessions that
   // reach hooks without a SessionStart binding.
   if (cursorNamesIt) return "participant";
   return "outsider";
+}
+
+// This checkout's own worktree record, or a Unit claimed on this machine, names
+// the selected record: evidence read again on every call, never kept as a source.
+function joinedByLocalEvidence(projectDir: string, selection: WorkflowSelection): boolean {
+  if (selection.intent === null) return false;
+  if (localWorktreeRecord(projectDir) === relativeRecordDirForSelection(selection)) return true;
+  // A Unit claimed on this machine names its space and intent.
+  const unitScope = readUnitScopeStamp(projectDir);
+  return unitScope !== null && unitScope.space === selection.space &&
+    unitScope.intent_uuid === intentUuidForSelection(projectDir, selection);
+}
+
+// A chat that followed this machine's cursor onto the selected work and has
+// taken no AI-DLC step on it yet. It is on that work as any chat there is (its
+// rows land in the record, and `next` carries the work on with nothing asked),
+// but the work's fences hold it only from its first step (chatTookStep), so a
+// chat opened in the same folder for something else is not held to another
+// chat's plan. A worktree of this checkout or a Unit claimed here holds it as before.
+export function chatAwaitsFirstStep(projectDir: string, selection: WorkflowSelection): boolean {
+  const binding = selection.binding;
+  if (binding?.source !== "cursor-followed" || binding.space !== selection.space || binding.intent !== selection.intent) {
+    return false;
+  }
+  return !joinedByLocalEvidence(projectDir, selection);
+}
+
+// The chat takes an AI-DLC step on the work it followed the cursor to (`next`,
+// a report, a recorded answer, a setting it changes there): from now on the
+// work's fences hold it. Returns the selection as the step goes on with it.
+export function chatTookStep(projectDir: string, selection: WorkflowSelection): WorkflowSelection {
+  const binding = selection.binding;
+  if (
+    selection.sessionId === null || binding?.source !== "cursor-followed" ||
+    binding.space !== selection.space || binding.intent !== selection.intent
+  ) {
+    return selection;
+  }
+  writeSessionBinding(projectDir, selection.sessionId, binding.space, binding.intent, "cursor");
+  return { ...selection, binding: { ...binding, source: "cursor" } };
 }
 
 export function relativeRecordDirForSelection(selection: WorkflowSelection): string | null {

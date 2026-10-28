@@ -314,6 +314,7 @@ import {
   reviewedTestingContract,
 } from "./aidlc-testing-posture.js";
 import { aidlcDispatcherInvocation, aidlcEngineCommand, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
+import { chatTookStep } from "./aidlc-record-core.ts";
 import {
   APPROVAL_GATE_CHOICES,
   SUMMARY_CONFIRMATION_CHOICES,
@@ -1137,6 +1138,15 @@ function withEachOption(args: string[], flags: Record<string, string>): void {
   flags.options = choices.some((choice) => choice.includes(",")) ? `|${choices.join("|")}` : choices.join(",");
 }
 
+// A recorded decision or answer is the chat's own step on its work (chatTookStep).
+function answerIsAStep(pd: string): void {
+  try {
+    chatTookStep(pd, resolveWorkflowSelection(pd));
+  } catch {
+    // The command says what is wrong with the selection; the fences wait for the next step.
+  }
+}
+
 function handleDecision(args: string[]): void {
   const { flags } = parseFlags(args);
   withEachOption(args, flags);
@@ -1170,6 +1180,7 @@ function handleDecision(args: string[]): void {
   }
   refusePlainSummaryConfirmation(flags, "decision");
   const pd = resolveActiveProjectDir(projectDir, flags.stage);
+  answerIsAStep(pd);
   if (flags.checkpoint === "plan-approval" && planApprovalAskIsOpen(pd)) {
     error(PLAN_APPROVAL_ASKED_BY_ENGINE);
   }
@@ -2147,6 +2158,7 @@ function handleAnswer(args: string[]): void {
     }
   }
   if (!flags.details) error("Missing --details <text> (or --details-file <file>)");
+  answerIsAStep(resolveProjectDir(projectDir));
   // The person's reply also asked something: the agent answers it and the
   // turn ends there, their next reply deciding (the stage protocol). That the
   // reply asks is the agent's reading (--ends-turn); the turn-end mark replaces

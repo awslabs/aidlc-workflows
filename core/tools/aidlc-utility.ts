@@ -510,6 +510,7 @@ import {
   declaredProjectType,
   installWithoutReplacing,
 } from "./aidlc-lib.ts";
+import { chatTookStep } from "./aidlc-record-core.ts";
 import { GUARD_POLICY_GLOSS, SCOPE_GLOSS } from "./aidlc-guard-fences.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
@@ -13248,6 +13249,8 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   const { lines, checkOffInTheirName } = writeSettings(projectDir, intent, space, intentSettingsFromFlags(flags), {
     sessionId: selection.sessionId, fail: die, ...named,
   });
+  // A setting the chat changed on its work is its step there (chatTookStep).
+  chatTookStep(projectDir, selection);
   // Only the agent reads this output, and on Copilot, Cursor and Kiro no hook
   // line reaches the person, so a check of theirs switched off from the chat is
   // said by the agent or not at all; the order says the lines are theirs. A step

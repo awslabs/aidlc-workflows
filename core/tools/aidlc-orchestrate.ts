@@ -560,6 +560,7 @@ import {
   optionsList,
   turnsPersonCheckOff,
 } from "./aidlc-lib.ts";
+import { chatTookStep } from "./aidlc-record-core.ts";
 import { readRequestFile, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
@@ -21630,7 +21631,14 @@ export function main(argv: string[]): void {
     spendRequestFile = withRequest.spend;
     restoreRequestFile = withRequest.restore;
   }
-  const resolvedSelection = engineWorkflowSelection(resolvedProjectDir);
+  // The chat's own step on the work it followed the cursor to puts it in that
+  // work's fences from now on (chatTookStep); a read-only `next` or a hook's
+  // own probe is no step.
+  const selected = engineWorkflowSelection(resolvedProjectDir);
+  const resolvedSelection = commandKind !== undefined && !isReadOnlyEngineProbe() &&
+      !(commandKind === "next" && isReadOnlyNextArgv(subArgs))
+    ? chatTookStep(resolvedProjectDir, selected)
+    : selected;
   engineProjectDir = resolvedProjectDir;
   engineSessionId = resolvedSelection.sessionId ?? undefined;
   engineSelections.clear();
