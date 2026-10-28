@@ -94,6 +94,7 @@ import {
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditFilePath,
+  beforeDelimiter,
   type ClaudeCodeHookInput,
   codeGenerationIsTheStep,
   composerProposalPath,
@@ -504,6 +505,12 @@ function promptCarriesReviewAppendix(
 // every call, since an adapter can run several calls through this module
 // (runHookHere), and the command is worked out only when a refusal names it.
 let judgedStep: { projectDir: string; marker: ActiveDirectiveMarker | null; next?: string } | null = null;
+// AI-DLC's own `next` in the call, when it carries the person's words in a
+// request file (mutationIntent): a refusal names it, flags and file whole, in
+// place of the step's `next`, so their words go on with it. Kept out of
+// stepNext, which also names the `next` run again after their answer, when the
+// file is gone. Reset with judgedStep.
+let judgedNext: EngineInvocation | null = null;
 
 function workflowNext(): string {
   return `${aidlcToolInvocation("orchestrate")} next`;
@@ -522,7 +529,8 @@ function stepNext(): string {
 // a held jump's wait names is the invocation its claim is hashed over
 // (nextStageInvocation).
 function nextOnItsOwn(wayOn: EngineInvocation | null = null): string {
-  const command = wayOn === null ? stepNext() : renderEngineInvocation(wayOn);
+  const step = wayOn ?? judgedNext;
+  const command = step === null ? stepNext() : renderEngineInvocation(step);
   return `\`${command}\` ${AS_ITS_OWN_COMMAND}`;
 }
 
@@ -1204,6 +1212,8 @@ interface MutationIntent {
   readable?: boolean;
   /** AI-DLC's own command that the shell reading or engineCommandAdmitted refuses. */
   engineRefused?: boolean;
+  /** AI-DLC's own `next` on the line that carries a request file, when its reading admits it. */
+  ownNext?: EngineInvocation;
 }
 
 function normalizedCommandName(name: string): string {
@@ -1765,6 +1775,13 @@ function configToolAdmitted(projectDir: string, rest: readonly string[]): boolea
   return !lowers || personAskedSinceGate(projectDir);
 }
 
+// What follows `next` in the engine's own arguments (`next` or `orchestrate
+// next`, `engine` in front or not); null for any other command.
+function nextArguments(engineArgs: readonly string[]): readonly string[] | null {
+  const args = engineArgs[0] === "engine" ? engineArgs.slice(1) : engineArgs;
+  return args[0] === "next" ? args.slice(1) : args[0] === "orchestrate" && args[1] === "next" ? args.slice(2) : null;
+}
+
 // What this guard still asks of AI-DLC's own command: a recorded switch that
 // turns a check off (`--bypass <switch>`, in any spelling) passes only once a
 // person has asked since the last decision, because its setter never refuses
@@ -1789,8 +1806,8 @@ function engineCommandAdmitted(
   // words ("add a --bypass option"), never a check turned off, as the engine's
   // own reading says (nextLineFlags). Every other command is read whole, as its
   // tool reads it.
-  const nextAt = args[0] === "next" ? 0 : args[0] === "orchestrate" && args[1] === "next" ? 1 : -1;
-  const switches = nextAt >= 0 ? nextLineFlags(args.slice(nextAt + 1)).map((flag) => flag.token) : args;
+  const after = nextArguments(args);
+  const switches = after !== null ? nextLineFlags(after).map((flag) => flag.token) : args;
   if (!switches.some((arg) => arg === "--bypass" || arg.startsWith("--bypass="))) return true;
   if (args[0] === "config" && args[1] === "flags") return recordedSwitchChangeAdmitted(projectDir, args);
   return personAskedSinceGate(projectDir);
@@ -1984,6 +2001,7 @@ async function mutationIntent(
   let shellCommand: string | null = null;
   let readable = true;
   let engineRefused = false;
+  let ownNext: EngineInvocation | undefined;
   if (toolName === "Bash") {
     const command = toolInput?.command;
     if (typeof command !== "string") {
@@ -2055,6 +2073,21 @@ async function mutationIntent(
       invocation.args.some((arg) => /^aidlc(?:-[A-Za-z0-9._-]+)?\.ts$/.test(basename(arg)))) ||
       (dynamic && (ENGINE_WORD.test(analysed) || (/\baidlc\b/i.test(analysed) && invocations.some(runsHiddenCommand))));
     engineRefused = looksLikeEngine && opaqueShell;
+    // Its `next` that carries a request file, read where the engine reads the
+    // flag (before `--`), however it was wrapped (judgedNext).
+    for (const invocation of invocations) {
+      const engineArgs = installedEngineArgs(
+        projectDir, from, invocation.executable ?? invocation.name, invocation.args, true, dialect.enginePaths,
+      );
+      const args = engineArgs && nextArguments(engineArgs);
+      if (
+        engineArgs && args && beforeDelimiter(args).includes("--request-file") &&
+        engineCommandAdmitted(projectDir, engineArgs, context)
+      ) {
+        ownNext = { route: "orchestrate", args: ["next", ...args] };
+        break;
+      }
+    }
     // An escaped operator (`\>`, `\&`) is read as the lexer decodes it, which
     // is not trusted here; a variable, substitution or backtick (`dynamic`) can
     // hide a command or a write target, and a shell script run by name hides
@@ -2085,6 +2118,7 @@ async function mutationIntent(
     shellCommand,
     ...(readable ? {} : { readable }),
     ...(engineRefused ? { engineRefused } : {}),
+    ...(ownNext ? { ownNext } : {}),
   };
 }
 
@@ -2241,6 +2275,7 @@ async function evaluate(
   workflow: ReturnType<typeof enterHookWorkflow>,
 ): Promise<number> {
   judgedStep = null;
+  judgedNext = null;
   // Runtime integrity is not a fence and cannot be disabled with this hook.
   if (refuseRuntimeIntegrityViolation(parsed)) return 2;
   // Kept whatever this guard then decides, in a chat that joined no work too:
@@ -2521,6 +2556,7 @@ async function evaluate(
             opaqueShell: true,
             shellCommand: `unknown mutation-capable tool: ${toolName}`,
           };
+    judgedNext = mutation.ownNext ?? null;
     if (!guardedDispatch && mutation.targets.length === 0 && !mutation.opaqueShell) {
       return 0;
     }
