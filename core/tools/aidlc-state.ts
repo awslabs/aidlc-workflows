@@ -291,7 +291,7 @@ import {
   mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
-import { generateFireId, recordUnfinishedFire, unfinishedFire } from "./aidlc-sensor.ts";
+import { generateFireId, recordUnfinishedFire, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
