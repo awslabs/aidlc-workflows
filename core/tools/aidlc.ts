@@ -4118,10 +4118,9 @@ export async function main(rawArgv: string[]): Promise<void> {
         replacePreviousWindowsShimHelper();
       }
       // An activation run by a release from before bin\aidlc.exe left none, or
-      // left the Git Bash launcher beside it; this release catches up once. A bin
-      // folder outside the install root (AIDLC_BIN_DIR) is read in lifecycle.
-      const bin = join(installRoot, "bin");
-      if (!existsSync(join(bin, "aidlc.exe")) || existsSync(join(bin, "aidlc"))) {
+      // left the Git Bash launcher beside it; this release catches up once.
+      const { binRoot } = await import("./aidlc-install-paths.ts");
+      if (!existsSync(join(binRoot(), "aidlc.exe")) || existsSync(join(binRoot(), "aidlc"))) {
         const { catchUpWindowsExeCommand } = await import("./aidlc-lifecycle.ts");
         catchUpWindowsExeCommand();
       }
@@ -4182,10 +4181,10 @@ if (import.meta.main) {
   // the dispatcher's front gate and the lean projections keep their import graph.
   if (process.platform === "win32" && existsSync(join(dirname(process.execPath), "aidlc.cmd"))) {
     import("./aidlc-native-launcher.ts")
-      .then((m) => {
-        if (!m.startNativeLauncher()) startDispatcher();
-      })
-      .catch(() => startDispatcher());
+      .then((m) => m.startNativeLauncher(), () => false)
+      .then((launched) => {
+        if (!launched) startDispatcher();
+      });
   } else {
     startDispatcher();
   }
