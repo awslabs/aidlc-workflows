@@ -179,7 +179,7 @@ describe("t327 top-level plugin authoring routes", () => {
     const notInstalled = run(["plugin", "test", "--install", missing, "--json"], plugins.clean);
     expect(notInstalled.status, notInstalled.stderr).toBe(1);
     expect(drops(notInstalled.stdout)).toEqual([
-      'plugin "test-pro" composed but is not enabled by tools/data/harness.json; this test composed it into a copy, so install test-pro in this project first, then run `bun .claude/tools/aidlc-utility.ts select-plugins aidlc,test-pro` to expose its stages, scopes, and runners',
+      'plugin "test-pro" composed but is not enabled by tools/data/harness.json; test-pro is not installed in this project yet: install it there first, then run `bun .claude/tools/aidlc-utility.ts select-plugins aidlc,test-pro` to expose its stages, scopes, and runners',
     ]);
     expect(utility(missing, ["select-plugins", "aidlc,test-pro"]).stderr).toContain("Unknown plugin name(s): test-pro");
 

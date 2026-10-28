@@ -138,9 +138,9 @@ const copyChannelTokens: ProjectTokens = (text, harnessDir) => text
 const projectPluginTokens: ProjectTokens = await import(join(HARNESS_DIR, "tools", "aidlc-command.ts"))
   .then((m) => typeof m.projectInvocationTokens === "function" ? m.projectInvocationTokens as ProjectTokens : copyChannelTokens)
   .catch(() => copyChannelTokens);
-// The person runs AI-DLC as `aidlc`: the compiled engine runs this compose, or
-// the installed tree was set up for it (`aidlc plugin test` runs compose as
-// Bun, in a copy of a native project).
+// The person runs AI-DLC as `aidlc`: the installed tree was set up for it
+// (`aidlc plugin test` runs compose as Bun, in a copy of a native project). A
+// tree from before projectInvocationTokens has only the compiled engine's word.
 const NATIVE_CHANNEL = Boolean(process.env.AIDLC_COMPILED_EXECUTABLE?.trim()) ||
   projectPluginTokens(tokenName("INVOKE"), HARNESS_LEAF) === "aidlc";
 
@@ -679,7 +679,7 @@ if (!pluginEnabledBySelection()) {
   // The plugin test tool composes into a copy and sets this when the project
   // it copied does not have the plugin: the select knows only installed plugins.
   const installFirst = process.env.AIDLC_PLUGIN_TEST_NOT_INSTALLED === "1"
-    ? `this test composed it into a copy, so install ${PLUGIN_NAME} in this project first, then `
+    ? `${PLUGIN_NAME} is not installed in this project yet: install it there first, then `
     : "";
   recordDrop(
     `plugin "${PLUGIN_NAME}" composed but is not enabled by tools/data/harness.json; ${installFirst}run \`${selectCommandForPlugin()}\` to expose its stages, scopes, and runners`,

@@ -181,7 +181,7 @@ describe("aidlc plugin test on a native install", () => {
     expect(result.status, result.stderr).toBe(1);
     const json = JSON.parse(result.stdout) as { drops: Array<{ message: string }> };
     expect(json.drops.map((drop) => drop.message)).toEqual([
-      'plugin "test-pro" composed but is not enabled by tools/data/harness.json; this test composed it into a copy, so install test-pro in this project first, then run `aidlc engine plugin select aidlc,test-pro` to expose its stages, scopes, and runners',
+      'plugin "test-pro" composed but is not enabled by tools/data/harness.json; test-pro is not installed in this project yet: install it there first, then run `aidlc engine plugin select aidlc,test-pro` to expose its stages, scopes, and runners',
     ]);
     // Why the line says so: the select knows only the plugins installed in the project.
     const refused = native(["engine", "plugin", "select", "aidlc,test-pro"], selected);
