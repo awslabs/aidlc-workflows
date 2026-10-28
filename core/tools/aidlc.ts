@@ -25,8 +25,6 @@ import {
   heading,
   tipLabel,
 } from "./aidlc-color.ts";
-import { binRoot } from "./aidlc-install-paths.ts";
-import { startNativeLauncher } from "./aidlc-native-launcher.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   aidlcInvocation,
@@ -4120,8 +4118,10 @@ export async function main(rawArgv: string[]): Promise<void> {
         replacePreviousWindowsShimHelper();
       }
       // An activation run by a release from before bin\aidlc.exe left none, or
-      // left the Git Bash launcher beside it; this release catches up once.
-      if (!existsSync(join(binRoot(), "aidlc.exe")) || existsSync(join(binRoot(), "aidlc"))) {
+      // left the Git Bash launcher beside it; this release catches up once. A bin
+      // folder outside the install root (AIDLC_BIN_DIR) is read in lifecycle.
+      const bin = join(installRoot, "bin");
+      if (!existsSync(join(bin, "aidlc.exe")) || existsSync(join(bin, "aidlc"))) {
         const { catchUpWindowsExeCommand } = await import("./aidlc-lifecycle.ts");
         catchUpWindowsExeCommand();
       }
@@ -4176,9 +4176,22 @@ export async function main(rawArgv: string[]): Promise<void> {
   process.exitCode = code;
 }
 
-// The bin copy on Windows hands the command to the active release instead of
-// running it.
-if (import.meta.main && !startNativeLauncher()) {
+if (import.meta.main) {
+  // The bin copy on Windows, the one binary with aidlc.cmd beside it, hands the
+  // command to the active release instead of running it. Loaded only there, so
+  // the dispatcher's front gate and the lean projections keep their import graph.
+  if (process.platform === "win32" && existsSync(join(dirname(process.execPath), "aidlc.cmd"))) {
+    import("./aidlc-native-launcher.ts")
+      .then((m) => {
+        if (!m.startNativeLauncher()) startDispatcher();
+      })
+      .catch(() => startDispatcher());
+  } else {
+    startDispatcher();
+  }
+}
+
+function startDispatcher(): void {
   // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
   // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
   // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only

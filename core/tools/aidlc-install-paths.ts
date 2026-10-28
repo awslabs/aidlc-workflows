@@ -135,7 +135,7 @@ export function commandPath(): string {
 }
 
 // A POSIX-shell launcher installed on Windows ALONGSIDE aidlc.cmd. CMD and
-// PowerShell resolve a bare `aidlc` through PATHEXT to aidlc.cmd, but Git Bash
+// PowerShell resolve a bare `aidlc` through PATHEXT (to aidlc.exe first), but Git Bash
 // and other MSYS shells use execvp PATH lookup and ignore PATHEXT, so a bare
 // `aidlc` there finds no .cmd. This extensionless sibling makes `aidlc`
 // resolve in those shells while aidlc.exe is not beside it (they find that one
@@ -173,8 +173,9 @@ export function readWindowsExeCommandMarker(): string | null {
 export const WINDOWS_EXE_COMMAND_ASIDE = /^aidlc\.exe\.old-[0-9a-f-]{36}$/;
 
 // The POSIX-shell launcher installed alongside aidlc.cmd on Windows so a bare
-// `aidlc` resolves in Git Bash / MSYS shells (which ignore PATHEXT). It simply
-// forwards to its sibling aidlc.cmd, which runs the same aidlc-shim.ps1 chain.
+// `aidlc` resolves in Git Bash / MSYS shells (which ignore PATHEXT) while
+// aidlc.exe is not there. It simply forwards to its sibling aidlc.cmd, which
+// runs the same aidlc-shim.ps1 chain.
 // The body is location-independent ($0's directory), so it is a constant both
 // the install-time ownership check and the uninstall plan compare against
 // verbatim, exactly like the other shims. Lives here (not in lifecycle) so the
