@@ -112,6 +112,7 @@ const BOUNDARY: Record<string, "clean" | "words" | "object"> = {
   isAidlcCommandPrompt: "clean",
   splitKiroCommandArgs: "words",
   withTypedSpacing: "words",
+  requestAsTyped: "words",
   parseNextFlags: "object",
   typedSettingModifiers: "clean",
   classifyTerminalCommand: "clean",
