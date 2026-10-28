@@ -147,6 +147,8 @@ export interface RecordedQuestion {
   unit: string | null;
   shows: string | null;
   chats: Set<string>;
+  /** The questions file it was asked from, when it was asked from one. */
+  questionsFile: string | null;
 }
 
 /** The question with this id on the record, with every chat it was asked or shown in. */
@@ -163,6 +165,7 @@ export function recordedQuestion(projectDir: string, id: string): RecordedQuesti
         unit: auditBlockField(row.block, "Unit"),
         shows: auditBlockField(row.block, QUESTION_SHOWS_FIELD),
         chats: new Set(),
+        questionsFile: auditBlockField(row.block, "Questions File"),
       };
     }
     if (found === null) continue;
@@ -277,6 +280,7 @@ export function shownAgainFields(
     ...(now ? { [QUESTION_SHOWS_FIELD]: now } : {}),
     ...(question.stage !== null ? { Stage: question.stage } : {}),
     ...(question.unit !== null ? { Unit: question.unit } : {}),
+    ...(question.questionsFile !== null ? { "Questions File": question.questionsFile } : {}),
   };
 }
 
@@ -326,10 +330,15 @@ function ledgerPath(projectDir: string, auditPath: string): string {
   return recordFile(projectDir, auditPath, "open-questions");
 }
 
-// The questions file of the stage the engine handed out last, from the project:
-// its own file, one writer (the step being handed out), no lock.
-function questionsFilePath(projectDir: string): string {
-  return recordFile(projectDir, auditFilePath(projectDir), "stage-questions");
+// The questions file of the stage the engine handed out last, or that a
+// question was asked or shown again from, from the project: its own file, no lock.
+function questionsFilePath(projectDir: string, auditPath = auditFilePath(projectDir)): string {
+  return recordFile(projectDir, auditPath, "stage-questions");
+}
+
+function writeQuestionsFile(projectDir: string, path: string, file: string): void {
+  if (readRecordFile<{ file?: string }>(path, "Stage questions file")?.file === file) return;
+  writePlanApprovalRuntimeRecord(projectDir, path, `${JSON.stringify({ version: 1, file })}\n`);
 }
 
 // A record not written yet is read as empty without waiting on it: the runtime
@@ -453,6 +462,9 @@ export function noteQuestionRow(projectDir: string, auditPath: string, event: st
     }
     // Written only when it changed: most rows leave it as it is.
     if (JSON.stringify(questions) !== before) writeLedger(projectDir, path, { ...ledger, questions });
+    if (id !== undefined && fields["Questions File"]) {
+      writeQuestionsFile(projectDir, questionsFilePath(projectDir, auditPath), fields["Questions File"]);
+    }
   } catch {
     // The ledger is bookkeeping for the hook's stamp; the row stands without it.
   }
@@ -461,9 +473,7 @@ export function noteQuestionRow(projectDir: string, auditPath: string, event: st
 /** The engine handed out a stage's step: its questions file is the one a turn's digest reads. */
 export function noteQuestionsFile(projectDir: string, file: string): void {
   try {
-    const path = questionsFilePath(projectDir);
-    if (readRecordFile<{ file?: string }>(path, "Stage questions file")?.file === file) return;
-    writePlanApprovalRuntimeRecord(projectDir, path, `${JSON.stringify({ version: 1, file })}\n`);
+    writeQuestionsFile(projectDir, questionsFilePath(projectDir), file);
   } catch {
     // Bookkeeping only.
   }

@@ -244,6 +244,32 @@ describe("the questions file", () => {
     expect(edited.Q2).not.toBe(before.Q2);
   });
 
+  test("a summary shown again in a new chat names its file, so the reply there carries the digest", async () => {
+    const questionEntryDigests = await digests();
+    const proj = inception(projects);
+    appendAuditEntry("STAGE_STARTED", { Stage: STAGE }, proj);
+    const file = join(seededRecordDir(proj), "inception", STAGE, `${STAGE}-questions.md`);
+    mkdirSync(join(file, ".."), { recursive: true });
+    const summary = `${QUESTIONS.replaceAll("[Answer]:", "[Answer]: A")}\n## Consolidated Summary Confirmation\n\n` +
+      "- Staff use it daily.\n\nLooks correct\nRequest changes\n\n[Answer]:\n";
+    writeFileSync(file, summary);
+    const relative = file.slice(proj.length + 1).replaceAll("\\", "/");
+    tool(proj, A, "log", ["decision", "--stage", STAGE, "--checkpoint", "summary-confirmation", "--questions-file", relative,
+      "--decision", "Does this summary look correct?", "--options", "Looks correct,Request changes"]);
+    const id = field(rows(proj, "DECISION_RECORDED").at(-1), "Question Id");
+    expect(field(rows(proj, "DECISION_RECORDED").at(-1), "Question Type")).toBe("summary-confirmation");
+    say(proj, B, "/aidlc --resume");
+    const again = step(proj, B, ["next", "--resume"]);
+    expect(again.question_id, String(again.message ?? again.kind)).toBe(id);
+    expect(rows(proj, "QUESTION_SHOWN").map((row) => [field(row, "Question Chat"), field(row, "Questions File")]))
+      .toEqual([[B, relative]]);
+    say(proj, B, "looks right");
+    const stamped = JSON.parse(field(lastTurn(proj), "Questions Digest") ?? "{}") as { file?: string; entries?: Record<string, string> };
+    expect(stamped.file).toBe(relative);
+    expect(stamped.entries).toEqual(questionEntryDigests(summary));
+    expect(openIn(proj)).toContain(id ?? "none");
+  });
+
   test("a turn carries the digest of each question in the stage's file the engine handed out", async () => {
     const questionEntryDigests = await digests();
     const proj = inception(projects);
