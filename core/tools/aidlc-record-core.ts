@@ -435,7 +435,7 @@ export const SESSION_BINDING_SOURCES = [
   "space-switch-none", // `space <name>`; no record resolved
   "worktree", // a validated delegated or local worktree names the record (re-checked each time)
   "unit-claim", // a Unit claimed on this machine names the record (re-checked each time)
-  "cursor", // SessionStart followed this machine's cursor (on a host that names the chat, and it took a step since)
+  "cursor", // SessionStart followed this machine's cursor (where commands name their chat, a step there since)
   "cursor-followed", // SessionStart followed this machine's cursor; no AI-DLC step on that work yet
   "stamp", // on resume, the session's own UUID stamp named the record
   "unjoined", // the selection came only from the lone-record rule

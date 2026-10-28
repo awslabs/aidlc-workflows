@@ -226,14 +226,17 @@ export async function run(input: string): Promise<number> {
   // A conversation that has not joined the selected workflow is not held to its review freeze.
   const workflow = enterHookWorkflow(projectDir, payloadSession);
   try {
-    if (hookOutsideGate(workflow)) return 0;
+    const standAside = hookOutsideGate(workflow);
+    if (standAside && workflow.participation !== "participant") return 0;
     // The heartbeat says the host ran this hook, so it comes before the off
     // switch: the freeze switched off never looks like a host running no hooks.
+    // A chat on the work that has taken no AI-DLC step there yet beats too.
     try {
       writeHookStatusFile(hooksHealthDir(projectDir), `${HOOK_NAME}.last`, isoTimestamp());
     } catch {
       // Heartbeat failure is non-fatal - never let it affect the decision.
     }
+    if (standAside) return 0;
     if (resolveProjectFlag("AIDLC_DISABLE_REVIEW_FREEZE_HOOK") === "1") return 0;
     return await checkFreeze(input, projectDir);
   } finally {

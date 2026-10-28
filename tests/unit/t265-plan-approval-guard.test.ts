@@ -406,7 +406,7 @@ describe("t265a plan-approval decision table", () => {
         seedUnit(proj, null, { plan: true, answer: null });
         const refused = runHook(proj, shell ? BASH(target) : WRITE(join(proj, target)));
         expect(refused.code, target).toBe(2);
-        expect(refused.stderr).toContain(shell ? "This shell command could not be read" : "cannot modify workspace paths");
+        expect(refused.stderr).toContain(shell ? "cannot run mutation-capable shell commands" : "cannot modify workspace paths");
         expect(refused.stderr).not.toContain("Ignore the plan");
         expect(refused.stderr).not.toContain("approve the plan yourself");
         expect(refused.stderr).not.toContain("x.ts");

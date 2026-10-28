@@ -666,17 +666,19 @@ export function receiptDetail(
 // the refusal: the agent knows what it tried, and the way on is the same. A
 // shell command the guard could not read (a variable, a loop, inline code) may
 // only read, so it is said to be unread, not a write, with the way a read gets
-// through: written out plainly, the POSIX and the PowerShell readings both read it.
+// through: written out plainly, the POSIX and the PowerShell readings both read
+// it. AI-DLC's own command in a spelling the reading refused, and a tool that is
+// no shell, get the general refusal: the way on for them is not a read.
 export function mutationBlockReason(
   unit: string | null,
   opaqueShell = false,
   detail: string | null = null,
   planApprovalOff = false,
   finished = false,
-  unknownTool = false,
+  unreadShell = false,
 ): string {
   const scope = unit === null ? "the zero-Unit stage-level implementation" : `unit ${unit}`;
-  const unread = opaqueShell && !unknownTool;
+  const unread = opaqueShell && unreadShell;
   const unreadLine = unread ? "This shell command could not be read, so AI-DLC cannot tell whether it writes files. " : "";
   const action = unread
     ? "run it"
@@ -2356,25 +2358,23 @@ async function evaluate(
   await keepWriteBeforePick(parsed, workflow);
 
   // A conversation that has not joined the selected workflow is not held to its
-  // Plan Approval: its ordinary edits pass as in a workspace with no workflow,
-  // and so do those of a chat on the work that has taken no AI-DLC step there
-  // yet. Dispatching that workflow's developer is joining it without saying so:
-  // a chat on the work is held for it below, as at any step, and any other is
-  // refused until the conversation selects the intent.
-  if (hookOutsideGate(workflow)) {
+  // Plan Approval: its ordinary edits pass as in a workspace with no workflow.
+  // Dispatching that workflow's developer is joining it without saying so, and
+  // is refused until the conversation selects the intent. A chat on the work
+  // that has taken no AI-DLC step there yet is held only for that dispatch (below).
+  const standAside = hookOutsideGate(workflow);
+  if (standAside && workflow.participation !== "participant") {
     const dispatchInput = parsed.tool_input ?? {};
     if (!DISPATCH_TOOLS.has(parsed.tool_name ?? "") || dispatchInput.subagent_type !== GUARDED_AGENT) return 0;
-    if (workflow.participation !== "participant") {
-      // `next` asks which work this is, so the record's name stays out of the
-      // refusal: a record from a clone is a teammate's, and its name can carry
-      // words addressed to the agent.
-      process.stderr.write(
-        "AI-DLC: this conversation has not joined the selected workflow, so it cannot dispatch that " +
-          `workflow's developer. Run ${nextOnItsOwn()}: it asks the person which piece of work this ` +
-          "conversation is for. Dispatch again once it has joined.\n",
-      );
-      return 2;
-    }
+    // `next` asks which work this is, so the record's name stays out of the
+    // refusal: a record from a clone is a teammate's, and its name can carry
+    // words addressed to the agent.
+    process.stderr.write(
+      "AI-DLC: this conversation has not joined the selected workflow, so it cannot dispatch that " +
+        `workflow's developer. Run ${nextOnItsOwn()}: it asks the person which piece of work this ` +
+        "conversation is for. Dispatch again once it has joined.\n",
+    );
+    return 2;
   }
 
   const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -2407,6 +2407,9 @@ async function evaluate(
     typeof toolInput.subagent_type === "string" ? toolInput.subagent_type : "";
   const guardedDispatch =
     DISPATCH_TOOLS.has(toolName) && subagentType === GUARDED_AGENT;
+  // On the work with no AI-DLC step there yet: the hook ran in a chat on the
+  // work (its heartbeat is above), and only the developer dispatch meets the fence.
+  if (standAside && !guardedDispatch) return 0;
   if (SAFE_READ_TOOLS.has(toolName)) return 0;
   const mutationCapable =
     toolName === "Bash" ||
@@ -2475,6 +2478,8 @@ async function evaluate(
     target: string;
     unit: string | null;
     opaqueShell: boolean;
+    /** A shell command the reading could not read that is not AI-DLC's own. */
+    unreadShell?: boolean;
     detail: string | null;
     finished: boolean;
   } | null = null;
@@ -2929,6 +2934,7 @@ async function evaluate(
             target: outsideRecord ?? (mutation.shellCommand ?? "").trim().slice(0, 160),
             unit,
             opaqueShell: outsideRecord === undefined,
+            unreadShell: outsideRecord === undefined && toolName === "Bash" && !mutation.engineRefused,
             detail: receiptDetail([evidence], verdict.mentioned),
             finished: !approval.ok && buildFinishes(projectDir, unit),
           };
@@ -2970,7 +2976,7 @@ async function evaluate(
           detail ?? blockedMutation.detail,
           planApprovalOff,
           blockedMutation.finished,
-          toolName !== "Bash",
+          blockedMutation.unreadShell === true,
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)
