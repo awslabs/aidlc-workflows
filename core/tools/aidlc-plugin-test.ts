@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // Offline compose-tier test for an authored AIDLC plugin.
 
+import { discoverInstalledPluginNames } from "./aidlc-config-diagnostics.ts";
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
 import { createHash } from "node:crypto";
@@ -601,6 +602,11 @@ export function testPluginComposition(
         "Pass an install root containing the selected harness tree.",
       );
     } else {
+      // The candidate is a copy, so the select line a compose drop names works
+      // in the project only for a plugin installed there; compose says so.
+      const installedThere = new Set(discoverInstalledPluginNames(installRoot, target.harnessLeaf));
+      const composeEnv = (name: string): NodeJS.ProcessEnv =>
+        installedThere.has(name) ? {} : { AIDLC_PLUGIN_TEST_NOT_INSTALLED: "1" };
       const templateHooksDir =
         options.templateHooksDir ?? bundledPluginHookTemplatesDir();
       const { pluginRoot: builtRoot } = buildPluginProjection({
@@ -622,6 +628,7 @@ export function testPluginComposition(
           harnessLeaf: target.harnessLeaf,
           projectDir: candidateRoot,
           pluginBuilt: baseBuilt,
+          env: composeEnv(pluginName(baseRoot)),
         });
         if (base.status !== 0) {
           addTestError(
@@ -648,6 +655,7 @@ export function testPluginComposition(
         harnessLeaf: target.harnessLeaf,
         projectDir: candidateRoot,
         pluginBuilt: builtRoot,
+        env: composeEnv(logicalPluginName),
       });
       if (first.status !== 0) {
         addTestError(
@@ -716,6 +724,7 @@ export function testPluginComposition(
         harnessLeaf: target.harnessLeaf,
         projectDir: candidateRoot,
         pluginBuilt: builtRoot,
+        env: composeEnv(logicalPluginName),
       });
       const secondDrops = readPluginDropEntries(
         candidateRoot,

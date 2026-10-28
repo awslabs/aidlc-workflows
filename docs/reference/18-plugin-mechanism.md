@@ -470,11 +470,16 @@ selection that already strands one.
 Composing a plugin does not auto-enable it when a selection already exists. The
 compose hook still copies the plugin's own files (stages, scopes, agents,
 knowledge, sensors, tools; its stages, scopes and runners are runtime-filtered, while its agents and knowledge stay loadable as above) and records an advisory drop
-naming the `select-plugins` command to expose that plugin, but it does NOT
+naming the select command that exposes that plugin, but it does NOT
 merge contributions into core stage source while disabled - merged
 contributions bypass the selection filter, and merging them would undo the
 disable-time strip on every session start. With no selection key, composed
-plugins are active immediately, preserving the original status quo.
+plugins are active immediately, preserving the original status quo. The drop
+names the select as the project runs AI-DLC (`aidlc engine plugin select` on a
+native install, `bun <harness-dir>/tools/aidlc-utility.ts select-plugins` on
+the copy channel). Under `aidlc plugin test`, which composes into a copy of the
+project, the drop also says to install the plugin in the project first when it
+is not installed there, since the select accepts only installed plugins.
 
 `bundle` is deliberately unused today. The word is reserved for a possible
 future collection-of-plugins concept; plugin ownership is always expressed with
