@@ -6,12 +6,12 @@
 // setting lowers it. Only AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1, which turns the
 // hook that calls it off, turns it off.
 //
-// The install runs when the person's turn stands with no decision after it
-// (their own request, or their go-ahead after the hold), and the row it leaves
-// names their message; or when a plan the person approved names it. Otherwise
-// the one step is to tell the person the command. Which program and verb, and
-// whether a turn stands, are read here; what the package is for and what the
-// person's reply meant are the agent's to say and read.
+// The install is let through when the person's turn stands with no decision
+// after it (their own request, or their go-ahead after the hold), and the row
+// it leaves names their message; or when a plan the person approved names it.
+// Otherwise the one step is to tell the person the command. Which program and
+// verb, and whether a turn stands, are read here; what the package is for and
+// what the person's reply meant are the agent's to say and read.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
@@ -162,7 +162,7 @@ function recordAllowed(
     reply = null;
   }
   if (!acquireAuditLock(projectDir, 5, 50)) {
-    recordHookDrop(projectDir, hook, "audit lock contended; SYSTEM_INSTALL_ALLOWED row dropped (the install ran)");
+    recordHookDrop(projectDir, hook, "audit lock contended; SYSTEM_INSTALL_ALLOWED row dropped (the install was let through)");
     return;
   }
   try {
@@ -173,7 +173,7 @@ function recordAllowed(
       ...(reply ? { "Person Reply": reply } : {}),
     }, projectDir);
   } catch (error) {
-    // The row is the record, never the decision: the install still runs.
+    // The row is the record, never the decision: the install is still let through.
     recordHookDrop(projectDir, hook, `SYSTEM_INSTALL_ALLOWED row not recorded: ${errorMessage(error)}`);
   } finally {
     releaseAuditLock(projectDir);

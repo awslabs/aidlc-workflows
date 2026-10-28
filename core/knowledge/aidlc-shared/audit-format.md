@@ -308,7 +308,7 @@ the active space's shared `codekb/<repo>/` tree.
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `SYSTEM_INSTALL_BLOCKED` | The agent ran an OS package manager install (`apt-get install`, `dnf install`, `brew install`, `winget install` and the like, with or without `sudo`) at any stage, with no turn of the person's standing since the last decision and no plan they approved naming it: the command waits until they say so | Timestamp, Guard (`plan-approval-guard`), Reason (`system-install`), Tool, Target (the command, on one line, cut at 160 characters), Stage; Session when the host names the chat | `hooks/aidlc-plan-approval-guard.ts` (PreToolUse), through `hooks/system-install.ts` |
-| `SYSTEM_INSTALL_ALLOWED` | The same kind of install ran because the person's turn stood behind it (their own request, or their go-ahead after the hold); the row says that turn stood, never that they approved | Timestamp, Stage, Command, Message Id (the turn's message), Person Reply (their words, when the record kept them); Session when the host names the chat | `hooks/aidlc-plan-approval-guard.ts` (PreToolUse), through `hooks/system-install.ts` |
+| `SYSTEM_INSTALL_ALLOWED` | The same kind of install was let through because the person's turn stood behind it (their own request, or their go-ahead after the hold); the row says that turn stood, never that they approved, and the host's own prompt or `sudo` can still stop the command | Timestamp, Stage, Command, Message Id (the turn's message), Person Reply (their words, when the record kept them); Session when the host names the chat | `hooks/aidlc-plan-approval-guard.ts` (PreToolUse), through `hooks/system-install.ts` |
 
 ### Documents (3 events)
 
