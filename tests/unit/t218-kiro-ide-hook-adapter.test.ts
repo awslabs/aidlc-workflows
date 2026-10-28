@@ -38,7 +38,7 @@ import {
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { canonicalWriteTool, isKiroShellTool, KIRO_HOOK_GROUPS } from "../../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 import {
   readAllAuditShards,
@@ -8451,6 +8451,32 @@ describe("t218 a chat on Kiro's Default agent hears once how to stop the approva
       expect(heard(join(workspaceRules, "permissions.yaml"), "rules:\n  - capability: shell\n    effect: allow\n    match: [bun *\n")).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A native install runs AI-DLC as `aidlc`, and Kiro's card writes `aidlc *`
+  // by default (the live run's own rule). Bun keeps the home it started with,
+  // so the reader runs in a process of its own.
+  test("a native install's Always allow, `aidlc *`, is read the same way", () => {
+    const home = mkdtempSync(join(tmpdir(), "t218-kiro-home-"));
+    const reader = pathToFileURL(join(KIRO_IDE_TREE, "tools", "aidlc-kiro-chat-record.ts")).href;
+    const agentName = (): string => spawnSync("bun", ["-e",
+      `import { kiroDefaultAgentName } from ${JSON.stringify(reader)};\n` +
+      'process.stdout.write(kiroDefaultAgentName("sess_native", "aidlc engine orchestrate next") || "-");',
+    ], {
+      encoding: "utf-8",
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    }).stdout;
+    try {
+      kiroChat(home, "sess_native", onAgent("vibe"));
+      expect(agentName()).toBe("Default");
+      const rules = join(home, ".kiro", "workspace-roots", WORKSPACE);
+      mkdirSync(rules, { recursive: true });
+      writeFileSync(join(rules, "permissions.yaml"), shellRule("aidlc *"), "utf-8");
+      expect(agentName()).toBe("-");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
   });
 });

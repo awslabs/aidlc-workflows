@@ -2123,11 +2123,12 @@ function notePromptCapability(sessionId: string): void {
 // chat the step that stops those cards. Nothing on any other agent, and nothing
 // when the person chose Always allow for AI-DLC's commands (kiroDefaultAgentName).
 function noteDefaultAgent(sessionId: string): void {
-  if (aidlcEntryWords(ide.prompt ?? "") === null) return;
+  const noted = join(terminalSessionDir(sessionId), "default-agent-noted");
+  if (aidlcEntryWords(ide.prompt ?? "") === null || existsSync(noted)) return;
   const name = kiroDefaultAgentName(ide.sessionId?.trim(), `${aidlcInvocation()} engine orchestrate next`);
   if (name === "") return;
   try {
-    writeFileSync(join(terminalSessionDir(sessionId), "default-agent-noted"), "", { flag: "wx" });
+    writeFileSync(noted, "", { flag: "wx" });
   } catch {
     return;
   }
