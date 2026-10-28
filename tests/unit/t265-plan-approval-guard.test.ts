@@ -2782,6 +2782,45 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // The step that carries the person's words (the pick in a team clone names
+  // `next --request-file <file>`) reaches the engine: on Windows the agent's
+  // Git Bash `cd /c/...` to the project is followed as `cd C:\...` is, and a
+  // `next` refused for its shape is named back with its own request file and
+  // flags, so the words go on with it.
+  test("a next that carries the person's request file is followed through Git Bash's /c/ and named back whole when refused", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      writeFileSync(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), "// installed tool fixture\n");
+      mkdirSync(join(proj, "other"), { recursive: true });
+      const file = "aidlc/.aidlc-request-text/pick-1.txt";
+      for (const [refused, named] of [
+        [`cd other && bun .claude/tools/aidlc.ts engine orchestrate next --request-file ${file}`, `next --request-file ${file}`],
+        [`cd other; bun .claude/tools/aidlc-orchestrate.ts next --resume --request-file ${file}`, `next --resume --request-file ${file}`],
+      ]) {
+        const result = runHook(proj, { ...BASH(refused), cwd: proj });
+        expect(result.code, refused).toBe(2);
+        const step = `bun .claude/tools/aidlc-orchestrate.ts ${named}`;
+        expect(result.stderr, refused).toContain(`Run \`${step}\` exactly as written, as a command of its own`);
+        expect(runHook(proj, { ...BASH(step), cwd: proj }).code, step).toBe(0);
+      }
+      const bare = runHook(proj, { ...BASH("cd other && bun .claude/tools/aidlc.ts engine orchestrate next"), cwd: proj });
+      expect(bare.stderr).toContain("Run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written");
+      if (process.platform === "win32") {
+        const gitBash = `/${proj[0].toLowerCase()}${proj.slice(2).replaceAll("\\", "/")}`;
+        for (const command of [
+          `cd ${gitBash}; bun .claude/tools/aidlc.ts engine orchestrate next --request-file ${file}`,
+          `cd "${gitBash}" && bun .claude/tools/aidlc.ts engine orchestrate next --request-file ${file}`,
+        ]) {
+          const result = runHook(proj, { ...BASH(command), cwd: proj });
+          expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+        }
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   test.skipIf(process.platform === "win32")(
     "a removed shell continuation cannot authorize a different cwd",
     () => {
