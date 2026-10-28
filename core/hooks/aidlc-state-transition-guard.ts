@@ -59,8 +59,9 @@ const DELEGATED_JUMP_VERBS = ["execute", "reopen"];
 // gate, and landing. merge-status and status are reads.
 const DELEGATED_UNIT_VERBS = ["adopt", "claim", "release", "participate", "publish", "pin", "gate", "land"];
 // Bolt and swarm lifecycle, the Construction autonomy grant, merge holds, and
-// checkpoint decisions; the referee's prepare and finalize belong to the
-// conductor. Its check records nothing and is admitted (DELEGATE_ADMITTED_VERBS).
+// checkpoint decisions; the referee's prepare and finalize, and the person's
+// request recorded by allow-change, belong to the conductor. Its check records
+// nothing and is admitted (DELEGATE_ADMITTED_VERBS).
 const DELEGATED_BOLT_VERBS = [
   "start",
   "complete",
@@ -73,7 +74,7 @@ const DELEGATED_BOLT_VERBS = [
   "hold-merge",
   "release-merge",
 ];
-const DELEGATED_SWARM_VERBS = ["prepare", "finalize"];
+const DELEGATED_SWARM_VERBS = ["prepare", "finalize", "allow-change"];
 // Question, review and pipeline-link receipts; answers is a read.
 const DELEGATED_LOG_VERBS = ["decision", "answer", "review", "link"];
 const DELEGATED_LEARNINGS_VERBS = ["persist"];

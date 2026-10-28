@@ -38112,6 +38112,167 @@ export function onlyAidlcFilesChangedInSwarmStage(
   }
 }
 
+// --- A change the person asked for in the main checkout ----------------------
+//
+// Under a strict Guard Policy the main checkout changes only by the Units'
+// landings while they are built in parallel, so each landing can check it. A
+// change the person asks for there is theirs: `swarm allow-change` proves the
+// message they asked in and records the files with their words
+// (MAIN_CHECKOUT_CHANGE_ALLOWED) for the current Code Generation attempt.
+// mainCheckoutChangeAllowed is the one read of that record, made only where
+// strict holds the change: the plan-approval guard lets the write in, and the
+// landing, the next batch's prepare and stage completion keep it. A strict the
+// team holds in memory keeps the main checkout as approved, read at use.
+
+const MAIN_CHECKOUT_CHANGE_STAGE = "code-generation";
+
+/** A file in the main checkout as the landing names it: project-relative, forward slashes; null outside the project. */
+export function mainCheckoutPathKey(projectDir: string, target: string): string | null {
+  const rel = relative(resolvePath(projectDir), resolvePath(projectDir, target));
+  if (rel === "" || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) return null;
+  return rel.split(sep).join("/");
+}
+
+const foldedPathKey = (key: string): string => process.platform === "win32" ? key.toLowerCase() : key;
+
+/**
+ * The files the person asked to change in the main checkout during the current
+ * Code Generation attempt, each with the message they asked in, keyed as
+ * mainCheckoutPathKey names them (case-folded on Windows); null when a strict
+ * the team holds in memory keeps the main checkout as approved, or the record
+ * cannot be read. `notNamedBy` leaves out the files a Unit's plan names (null:
+ * the plan could not be read, so none counts): a Unit that builds the file
+ * starts from it committed and approved, as on every Guard Policy.
+ */
+export function mainCheckoutChangesAsked(
+  projectDir: string,
+  selection: { intent?: string; space?: string } = {},
+  notNamedBy?: readonly string[] | null,
+): Map<string, string> | null {
+  if (notNamedBy === null) return null;
+  try {
+    if (resolveGuardPolicy(projectDir, undefined, { selection }).memoryStrict !== null) return null;
+    const rows = readAuditShardEvents(projectDir, selection.intent, selection.space);
+    const floor = latestMainWorkflowStageRunFloorForProject(
+      projectDir, MAIN_CHECKOUT_CHANGE_STAGE, false, undefined, rows, selection.intent, selection.space,
+    );
+    if (floor.startsWith("AMBIGUOUS:")) return null;
+    const asked = new Map<string, string>();
+    for (const row of rows) {
+      if (
+        row.event !== "MAIN_CHECKOUT_CHANGE_ALLOWED" ||
+        auditBlockField(row.block, "Stage") !== MAIN_CHECKOUT_CHANGE_STAGE ||
+        auditBlockField(row.block, "Run floor") !== floor
+      ) continue;
+      const message = auditBlockField(row.block, "Message Id");
+      let listed: unknown;
+      try {
+        listed = JSON.parse(auditBlockField(row.block, "Paths") ?? "");
+      } catch {
+        continue;
+      }
+      if (!message || !Array.isArray(listed)) continue;
+      for (const path of listed) {
+        if (typeof path === "string" && !plansNamePath(path, notNamedBy ?? [])) asked.set(foldedPathKey(path), message);
+      }
+    }
+    return asked;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The messages the person asked in for every one of `paths` to change in the
+ * main checkout during the current Code Generation attempt; null when one of
+ * them was not asked for (mainCheckoutChangesAsked).
+ */
+export function mainCheckoutChangeAllowed(
+  projectDir: string,
+  paths: readonly string[] | null,
+  selection: { intent?: string; space?: string } = {},
+  notNamedBy?: readonly string[] | null,
+): string[] | null {
+  if (paths === null || paths.length === 0) return null;
+  const asked = mainCheckoutChangesAsked(projectDir, selection, notNamedBy);
+  if (asked === null) return null;
+  const messages = paths.map((path) => asked.get(foldedPathKey(path)));
+  return messages.every((message) => message !== undefined) ? [...new Set(messages as string[])] : null;
+}
+
+/** Whether a listing key (`<repo>\0<path>`) is a file the person asked to change (mainCheckoutChangesAsked). */
+export function mainCheckoutChangeAskedKey(asked: ReadonlyMap<string, string> | null): (pathKey: string) => boolean {
+  return (pathKey) => {
+    if (asked === null || asked.size === 0) return false;
+    const parsed = splitSourcePathKey(pathKey);
+    return parsed !== null && asked.has(foldedPathKey(parsed.repo ? `${parsed.repo}/${parsed.path}` : parsed.path));
+  };
+}
+
+/** The attempt a MAIN_CHECKOUT_CHANGE_ALLOWED row is written for. */
+export function mainCheckoutChangeRunFloor(projectDir: string, selection: { intent?: string; space?: string } = {}): string {
+  return latestMainWorkflowStageRunFloorForProject(
+    projectDir, MAIN_CHECKOUT_CHANGE_STAGE, false, undefined, undefined, selection.intent, selection.space,
+  );
+}
+
+/** What a strict the team holds in memory says of the main checkout while the Units are built; null when none holds it. */
+export function mainCheckoutHeldByTeam(projectDir: string, selection: { intent?: string; space?: string } = {}): string | null {
+  try {
+    const held = resolveGuardPolicy(projectDir, undefined, { selection }).memoryStrict;
+    return held === null
+      ? null
+      : `Your team set Guard Policy to strict in ${held.path} (section: ${held.heading.replace(/^## /, "")}), ` +
+        "so the main checkout stays as approved while the Units are built. Changing that line there changes it.";
+  } catch {
+    return null;
+  }
+}
+
+/** The command that records the person's request for `paths`; the agent adds the message they asked in. */
+export function allowMainCheckoutChangeCommand(paths: readonly string[]): string {
+  return `${aidlcToolInvocation("swarm")} allow-change ${paths.map((path) => quoteCommandArgument(path)).join(" ")}`;
+}
+
+/**
+ * Why the person's request cannot cover one of `paths`; null when it covers
+ * every one. AI-DLC's own files change only through AI-DLC's steps, and a file
+ * a Unit being built names in its plan goes through that Unit.
+ */
+export function mainCheckoutChangeRefusal(
+  projectDir: string,
+  paths: readonly string[],
+  units: readonly string[],
+  planNamedPaths: (unit: string) => readonly string[] | null,
+): string | null {
+  const owned = aidlcOwnedSourceKey(projectDir);
+  for (const path of paths) {
+    if (owned(sourcePathKey("", path))) {
+      return `${path} is one of AI-DLC's own files, which change only through AI-DLC's own steps.`;
+    }
+    const unit = units.find((candidate) => plansNamePath(path, planNamedPaths(candidate) ?? []));
+    if (unit !== undefined) {
+      return `${path} is a file the plan for Unit ${unit} names, so a change to it goes through that Unit: ` +
+        "Request Changes at its checkpoint, or make it once Code Generation is over.";
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether the plans name a file (`rel`, project-relative with forward slashes):
+ * a named folder covers what is under it, and a bare file name covers that name
+ * anywhere.
+ */
+export function plansNamePath(rel: string, planPaths: readonly string[]): boolean {
+  const fold = (path: string): string => process.platform === "win32" ? path.toLowerCase() : path;
+  const file = fold(rel);
+  return planPaths.some((named) => {
+    const path = fold(named.replace(/\/+$/, ""));
+    return file === path || file.startsWith(`${path}/`) || (!path.includes("/") && file.split("/").at(-1) === path);
+  });
+}
+
 // The set of units the CURRENT attempt of an INLINE per-unit stage has
 // completion receipts for, from the UNIT_COMPLETED rows `aidlc-state.ts unit
 // complete` writes — the interactive-path twin of swarmConvergedUnits, with
@@ -41465,6 +41626,8 @@ export interface AcceptedChange {
   current: string;
   /** The one plain-language line the human hears. */
   notice: string;
+  /** The messages the person asked for the change in, when they did (swarm allow-change). */
+  messageIds?: readonly string[];
 }
 
 export interface GuardPolicyMemoryDeclaration {
@@ -43695,6 +43858,7 @@ export function acceptedChangeFields(change: AcceptedChange): Record<string, str
     Recorded: change.recorded,
     Current: change.current,
     Details: change.notice,
+    ...(change.messageIds && change.messageIds.length > 0 ? { "Message Id": change.messageIds.join(", ") } : {}),
   };
 }
 

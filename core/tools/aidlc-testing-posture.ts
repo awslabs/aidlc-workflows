@@ -42,6 +42,9 @@ import {
   legacyBoltName,
   legacyWorktreePath,
   maximalAttemptEvents,
+  mainCheckoutChangeAllowed,
+  mainCheckoutChangeAskedKey,
+  mainCheckoutChangesAsked,
   onlyAidlcFilesChangedInSwarmStage,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
   clearPlanApprovalChallenge,
@@ -4937,8 +4940,25 @@ export function codeGenerationDiscardedBase(
   return discardedWorktreeApproval(parentDir, unit, repoCwd, repoName, discardSha256)?.commit ?? null;
 }
 
+// The files a Unit's plan names, read where the plan question reads them; null
+// when that cannot be read, so no change the person asked for is left out of
+// the Unit's source.
+function unitPlanNamedPaths(parent: string, unit: string): string[] | null {
+  try {
+    // Typed by its one function, not `typeof import(...)`, which would load the
+    // plan question's whole module graph into every program that reads this one.
+    const ask = require("./aidlc-plan-approval-ask.ts") as {
+      codeGenerationPlanNamedPaths(projectDir: string, unit: string | null): string[] | null;
+    };
+    return ask.codeGenerationPlanNamedPaths(parent, unit);
+  } catch {
+    return null;
+  }
+}
+
 function approvedWorktreeSource(
   parent: string,
+  unit: string,
   approved: ReturnType<typeof parentWorktreeApproval>,
   repo: ReturnType<typeof resolveConstructionRepo>,
   discarded: DiscardedWorktreeApproval | null = null,
@@ -4958,13 +4978,19 @@ function approvedWorktreeSource(
   // and says it in one line. So is source that moved after the engine built a
   // plan with plan approval off (a skipped receipt): nobody approved it, and
   // `next` would never ask. An AI-DLC update the person took moves only
-  // AI-DLC's own files, which is no reason to approve the plan again.
+  // AI-DLC's own files, which is no reason to approve the plan again, and
+  // neither are files the person asked to change (swarm allow-change) that
+  // this Unit's plan does not name.
+  const named = unitPlanNamedPaths(parent, unit);
   if (
     !approved.continuing &&
     approved.receipt.skipped === undefined &&
     !sameWorkspaceSource(approved.receipt.certifiedSourceSha256, parentSource.fingerprint) &&
     !guardPolicyAcceptsChanges(parent) &&
-    !onlyAidlcFilesChangedInSwarmStage(parent, CODE_GENERATION_STAGE, parentSource)
+    !onlyAidlcFilesChangedInSwarmStage(parent, CODE_GENERATION_STAGE, parentSource) &&
+    mainCheckoutChangeAllowed(parent, workspaceSourceChangedPaths(
+      parent, CODE_GENERATION_STAGE, approved.receipt.certifiedSourceSha256, parentSource, true,
+    ), {}, named) === null
   ) {
     throw new Error("Parent source has changed since Plan Approval or cannot be bound. Re-present and approve the plan against the current parent source.");
   }
@@ -4972,10 +4998,15 @@ function approvedWorktreeSource(
   // them, so an update the person took need not be committed first. Nor is
   // what a link leads to outside the project, or to nothing: no commit holds
   // it, and the link itself is still compared. Nor are the files Git ignores
-  // and does not track in the parent's checkout.
+  // and does not track in the parent's checkout. Nor are the files the person
+  // asked to change while the Units are built (swarm allow-change) and this
+  // Unit's plan does not name: the landings keep them in the main checkout as
+  // they are.
   const owned = aidlcOwnedSourceKey(parent);
+  const asked = mainCheckoutChangeAskedKey(mainCheckoutChangesAsked(parent, {}, named));
   const theirs = (listing: ReadonlyMap<string, string>): string => serializeSourceListing(
-    new Map([...listing].filter(([key]) => !owned(`${repo.repo ?? ""}${key}`) && !isLinkTargetListingKey(listing, key))),
+    new Map([...listing].filter(([key]) =>
+      !owned(`${repo.repo ?? ""}${key}`) && !isLinkTargetListingKey(listing, key) && !asked(`${repo.repo ?? ""}${key}`))),
   );
   const prefix = `${repo.repo ?? ""}\0`;
   const expected = withoutGitIgnored(repo.cwd, repo.repo === null)(new Map([...parentSource.listing]
@@ -5007,7 +5038,7 @@ export function validateCodeGenerationForkApproval(
   }
   const discarded = discardedSha256 === undefined
     ? null : discardedWorktreeApproval(parent, unit, repoCwd, repoName, discardedSha256);
-  const { expectedBytes, theirs } = approvedWorktreeSource(parent, approved, repo, discarded);
+  const { expectedBytes, theirs } = approvedWorktreeSource(parent, unit, approved, repo, discarded);
   if (discarded) {
     const base = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "--end-of-options", `${baseCommit}^{commit}`]);
     if (base !== discarded.commit) {
@@ -5039,7 +5070,7 @@ function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: str
     provenance.parent, unit, provenance.repo.cwd, provenance.repo.repo, discardedSha256,
   );
   const { parentSource, expectedBytes, theirs } =
-    approvedWorktreeSource(provenance.parent, approved, provenance.repo, discarded);
+    approvedWorktreeSource(provenance.parent, unit, approved, provenance.repo, discarded);
   const childSource = workspaceSourceState(provenance.child);
   if (!childSource) throw new Error("Worktree source cannot be bound. Repair its source boundary before retrying.");
   // A worker's own ignored log is no source either, asked of the Unit's own
