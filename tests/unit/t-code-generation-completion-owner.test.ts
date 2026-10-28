@@ -436,10 +436,10 @@ describe("a testing practice kept at the gate is for the next build", () => {
     expect(refused).not.toContain("applies from the next plan");
   });
 
-  // A checkout the engine made for a Unit reads its own memory while its
-  // approval may read the parent's: its verdict records no contract, and a
-  // practice kept after it holds the gate as before.
-  test("strict: in a checkout the engine made for a Unit, the review records no contract and the gate still waits", () => {
+  // Only a swarm worker's checkout records no contract: a `.aidlc/worktree-meta.json`
+  // that names no worker (left over, or copied in) does not turn it off. (What
+  // such a file does to the rest of the engine is not this field's.)
+  test("strict: a stray worktree-meta.json does not stop the review recording its contract", () => {
     const proj = inProgress("strict");
     writePlan(proj);
     next(proj);
@@ -450,9 +450,7 @@ describe("a testing practice kept at the gate is for the next build", () => {
     built(proj);
     const review = auditEvents(proj).filter((row) => row.event === "REVIEW_COMPLETED").at(-1);
     expect(review?.block, "a review was recorded").toBeDefined();
-    expect(review?.block).not.toContain("**Testing Contract**");
-    keepTestingPractice(proj);
-    expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message).toBe(WAITS);
+    expect(review?.block).toContain(`**Testing Contract**: ${resolveTestingPosture(proj).contract_sha256}`);
   });
 
   test("strict: moved before the review, while the build ran, the build still waits for the plan", () => {

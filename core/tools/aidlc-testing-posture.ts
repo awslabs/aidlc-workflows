@@ -2976,8 +2976,9 @@ function codeGenerationApprovalArtifacts(
     embedded !== null &&
     current !== null &&
     embedded.contract_sha256 === current.contract_sha256;
-  // A delegated worker's approval reads its parent's contract while its review
-  // rows hold its own checkout's, so the exception is not read there.
+  // A delegated approval (validateWorktreeDelegation) reads the parent's
+  // contract while the review rows here are the worker checkout's, so the
+  // exception is not read for it; handleReview records none in a swarm worker.
   const builtUnderPlanContract = use === "completion" && !contractValid && embedded !== null &&
     contractProjectDir === projectDir && reviewedUnderContract(projectDir, authority, embedded.contract_sha256);
   const expectedFingerprint =
