@@ -115,8 +115,10 @@ describe("t-add-stages-finished-work: more stages for finished work reopen it on
     // classic runs nothing after Build and Test, and poc is the work's own plan.
     expect(said).not.toContain("classic (");
     expect(said).not.toContain("poc (");
-    // Their words beside the plan would start new work over finished work, so the pick runs it alone.
-    expect(said).toContain("next --scope <plan>` with nothing else");
+    // Their words beside the plan would start new work over finished work.
+    expect(said).toContain("next --scope <plan>` (their words beside it would start new work)");
+    // A stage they name with their pick goes with it as its own flag.
+    expect(said).not.toContain("with nothing else");
     // Nothing moved.
     expect(state(proj)).toBe(before);
   });

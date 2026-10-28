@@ -7240,7 +7240,7 @@ function finishedWorkComposeStep(stateContent: string): PrintDirective {
     `Run nothing yet. This work is finished, so its own plan takes no more stages. A plan that runs more after ${last} ` +
       `reopens it there, keeping what is done, and runs: ${listed}. Offer the person the plans that run what they ` +
       "asked for, in plain words, with what each adds, your recommendation first, then stop. On their pick, run " +
-      `\`${aidlcToolInvocation("orchestrate")} next --scope <plan>\` with nothing else (their words beside it would ` +
+      `\`${aidlcToolInvocation("orchestrate")} next --scope <plan>\` (their words beside it would ` +
       `start new work) and follow what it returns. When none of them runs it, tell them that in one line,${newWork}`,
   );
 }
