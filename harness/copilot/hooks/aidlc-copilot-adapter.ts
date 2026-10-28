@@ -156,8 +156,9 @@ interface CopilotHookInput {
   reason?: string;
   tool_name?: string;
   toolName?: string;
-  tool_input?: Record<string, unknown>;
-  toolInput?: Record<string, unknown>;
+  tool_input?: unknown;
+  toolInput?: unknown;
+  toolArgs?: unknown;
   tool_result?: unknown; toolResult?: unknown; tool_response?: unknown; toolResponse?: unknown;
   tool_use_id?: string; toolUseId?: string; tool_call_id?: string; toolCallId?: string;
   agent_name?: string;
@@ -236,6 +237,25 @@ function skillArguments(body: string, prompt: string): string | null {
   return pieces.join(args) === region ? args : null;
 }
 
+// The tool's input as an object. The CLI's own payload carries the arguments as
+// toolArgs, a JSON string. The Copilot runtime's apply_patch is a freeform tool
+// whose input is the patch text itself (the runtime's own reader takes a string
+// first, then {input} or {patch}), so text that is no JSON object travels as
+// `input`, where applyPatchTargets reads it.
+function toolInputOf(value: unknown): Record<string, unknown> | undefined {
+  const asObject = (v: unknown): Record<string, unknown> | undefined =>
+    v !== null && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : undefined;
+  if (typeof value !== "string") return asObject(value);
+  if (value.length === 0) return undefined;
+  try {
+    const parsed = asObject(JSON.parse(value));
+    if (parsed) return parsed;
+  } catch {
+    // Not JSON: the patch text itself.
+  }
+  return { input: value };
+}
+
 export async function run(
   target: string,
   input: string,
@@ -278,12 +298,15 @@ export async function run(
     copilot.agent_type ?? copilot.agent_name ?? copilot.agentName ?? "";
   const explicitSubagentId = copilot.agent_id ?? copilot.agentId ?? "";
   const subagentId = explicitSubagentId || sessionId;
-  const nativeToolInput = copilot.tool_input ?? copilot.toolInput;
+  const nativeToolInput = toolInputOf(copilot.tool_input ?? copilot.toolInput ?? copilot.toolArgs);
 
   // Canonicalize the tool name across the two surfaces. The CLI sends
   // Claude-style names (Bash/Write/Edit/Read — live-captured); VS Code agent
   // mode uses its own snake_case execution ids (extracted from the shipped
   // extension's equivalence sets — parser-verified, pending a live IDE run).
+  // The Copilot runtime's own names (powershell, pwsh, grep, view, glob,
+  // apply_patch) are the ones its agent sees, and what a host that does not
+  // rename them, such as the GitHub Copilot app, may send.
   // Unknown names pass through unmapped and fall out of the self-filters,
   // exactly like any foreign tool.
   const TOOL_ALIAS: Record<string, string> = {
@@ -292,6 +315,8 @@ export async function run(
     runTerminalCommand: "Bash",
     bash: "Bash",
     local_shell: "Bash",
+    powershell: "Bash",
+    pwsh: "Bash",
     // writes/creates
     create_file: "Write",
     createFile: "Write",
@@ -323,6 +348,7 @@ export async function run(
     file_search: "Glob",
     fileSearch: "Glob",
     glob: "Glob",
+    grep: "Grep",
     grep_search: "Grep",
     grepSearch: "Grep",
     semantic_search: "Grep",
@@ -1424,7 +1450,9 @@ export async function run(
     add(toolInput.path);
     add(toolInput.file_path);
     add(toolInput.filePath);
-    for (const key of ["files", "filePaths", "replacements"] as const) {
+    // The Copilot runtime's grep takes `paths`: one folder, or a list of them.
+    add(toolInput.paths);
+    for (const key of ["files", "filePaths", "paths", "replacements"] as const) {
       const values = toolInput[key];
       if (Array.isArray(values)) {
         for (const value of values) add(value);
@@ -1466,6 +1494,7 @@ export async function run(
       filePath: _camelFilePath,
       files: _files,
       filePaths: _filePaths,
+      paths: _paths,
       replacements: _replacements,
       ...rest
     } = toolInput;
@@ -2379,18 +2408,18 @@ export async function run(
             : [];
         // Path-shaped tools re-key `path` → `file_path`; the search tools
         // (LS/Glob/Grep) keep their native fields, which the core matcher
-        // reads directly (path/pattern/glob).
+        // reads directly (path/pattern/glob), one check per search root.
         const toolCalls: Array<{
           toolName: string;
           toolInput: Record<string, unknown>;
         }> =
           toolName === "LS" || toolName === "Glob" || toolName === "Grep"
-            ? [{
+            ? (filePaths.length > 0 ? filePaths : [undefined]).map((searchRoot) => ({
                 toolName,
                 toolInput: (() => {
                   const searchInput: Record<string, unknown> = {
                     ...withoutPathFields(ti),
-                    ...(filePaths[0] ? { path: filePaths[0] } : {}),
+                    ...(searchRoot ? { path: searchRoot } : {}),
                   };
                   if (
                     toolName === "Glob" &&
@@ -2402,7 +2431,7 @@ export async function run(
                   }
                   return searchInput;
                 })(),
-              }]
+              }))
             : toolName === "Write" || toolName === "Edit"
               ? mutationTargets.map((target) => ({
                   toolName: target.toolName,
