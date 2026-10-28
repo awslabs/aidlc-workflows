@@ -46,18 +46,23 @@ export function startNativeLauncher(): boolean {
     target = null;
     reason = error instanceof Error ? error.message : String(error);
   }
-  if (target === null) {
-    process.stderr.write(`aidlc: ${reason}. Rerun the AI-DLC installer (install.ps1) to repair the aidlc command.\n`);
+  const stop = (why: string): never => {
+    process.stderr.write(`aidlc: ${why}. Rerun the AI-DLC installer (install.ps1) to repair the aidlc command.\n`);
     process.exit(4);
-  }
+  };
+  if (target === null) stop(reason);
   // Ctrl+C reaches the release too; this copy waits for it to finish.
   process.on("SIGINT", () => {});
-  const child = Bun.spawn([target, ...process.argv.slice(2)], {
-    stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit",
-    env,
-  });
-  void child.exited.then((code) => process.exit(code));
+  try {
+    const child = Bun.spawn([target as string, ...process.argv.slice(2)], {
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+      env,
+    });
+    void child.exited.then((code) => process.exit(code));
+  } catch (error) {
+    stop(`the active executable ${target} could not start: ${error instanceof Error ? error.message : String(error)}`);
+  }
   return true;
 }
