@@ -192,8 +192,8 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
               report.problems.push(...hooksRanProblems(doctorChecks(project, { ...process.env, ...(process.platform === "linux" ? { HOME: kiroHome } : {}) })));
             }
             last = evidenceOf(() => lastScreen(session));
-            // Credits are read off the last screen; with no screen they are left out, never 0.
-            report.extra = { ...(typeof last === "string" ? { credits: sessionCredits(last) ?? 0 } : {}), "permission prompts": prompts };
+            // Credits are read off the last screen's credits line; without one they are left out.
+            report.extra = { credits: typeof last === "string" ? sessionCredits(last) : undefined, "permission prompts": prompts };
           }, () => {
             const final = last ?? evidenceOf(() => lastScreen(session));
             return { ...releaseJourneyEvidence(project.proj), screen: typeof final === "string" ? screenTail(final) : final };

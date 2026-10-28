@@ -263,8 +263,8 @@ export function hooksRanProblems(checks: DoctorCheck[]): string[] {
  * cleanup reserve, on the case deadline and on the runner's file deadline
  * alike (the runner stops the file at its own reserve), so a journey that
  * stalls still has that time for the last screen, which only `screenMs()`
- * spends. Cleanup's reserve is the case's `fileCleanupReserveMs`, which the
- * screen's time never takes from.
+ * spends. Cleanup keeps the case's `fileCleanupReserveMs` and the runner's
+ * own file reserve; the screen's time is held back on top of each.
  */
 export function journeyBudgets(
   caseDeadlineMs: () => number, totalMs: number, screenMs: number, env: NodeJS.ProcessEnv = process.env,
