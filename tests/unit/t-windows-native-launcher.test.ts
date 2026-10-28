@@ -9,9 +9,10 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { windowsPosixShim } from "../../core/tools/aidlc-lifecycle.ts";
 import { nativeLauncherRoot } from "../../core/tools/aidlc-native-launcher.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
@@ -86,24 +87,37 @@ describe("a native Windows install hands aidlc's arguments on as typed", () => {
         ]);
         expect(installed.status, installed.out).toBe(0);
 
-        // What the engine prints for PowerShell and Git Bash alike: single quotes.
-        for (const value of values) {
-          const quoted = `'${value}'`;
-          const ps = run("powershell.exe", [
-            "-NoProfile", "-NonInteractive", "-Command", `$env:Path = '${bin};' + $env:Path; aidlc use ${quoted}`,
-          ]);
-          expect(ps.out, `PowerShell ${value}`).toContain(`invalid version "${value}"`);
-          expect(ps.out, `PowerShell ${value}`).not.toContain("is not recognized");
-          if (gitBashSkipReason() === null) {
-            const sh = run(gitBashPath(), ["-c", `PATH="$(cygpath -u '${bin}'):$PATH"; aidlc use ${quoted}`]);
-            expect(sh.out, `Git Bash ${value}`).toContain(`invalid version "${value}"`);
-            expect(sh.out, `Git Bash ${value}`).not.toContain("is not recognized");
+        const typed = () => {
+          // What the engine prints for PowerShell and Git Bash alike: single quotes.
+          for (const value of values) {
+            const quoted = `'${value}'`;
+            const ps = run("powershell.exe", [
+              "-NoProfile", "-NonInteractive", "-Command", `$env:Path = '${bin};' + $env:Path; aidlc use ${quoted}`,
+            ]);
+            expect(ps.out, `PowerShell ${value}`).toContain(`invalid version "${value}"`);
+            expect(ps.out, `PowerShell ${value}`).not.toContain("is not recognized");
+            if (gitBashSkipReason() === null) {
+              const sh = run(gitBashPath(), ["-c", `PATH="$(cygpath -u '${bin}'):$PATH"; aidlc use ${quoted}`]);
+              expect(sh.out, `Git Bash ${value}`).toContain(`invalid version "${value}"`);
+              expect(sh.out, `Git Bash ${value}`).not.toContain("is not recognized");
+            }
           }
-        }
-        expect(readdirSync(work)).toEqual([]);
-        // bin\aidlc.exe carries them; Git Bash finds it once the extensionless launcher is gone.
-        expect(existsSync(join(bin, "aidlc.exe"))).toBe(true);
-        expect(existsSync(join(bin, "aidlc"))).toBe(false);
+          expect(readdirSync(work)).toEqual([]);
+          // bin\aidlc.exe carries them; Git Bash finds it once the extensionless launcher is gone.
+          expect(existsSync(join(bin, "aidlc.exe"))).toBe(true);
+          expect(existsSync(join(bin, "aidlc"))).toBe(false);
+        };
+        typed();
+
+        // What an update run by a release from before aidlc.exe leaves: aidlc.cmd,
+        // its helper and the Git Bash launcher. The release it made active writes
+        // aidlc.exe at its first command.
+        rmSync(join(bin, "aidlc.exe"));
+        rmSync(join(machine, "launcher-sha256"));
+        writeFileSync(join(bin, "aidlc"), windowsPosixShim());
+        const first = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `& '${join(bin, "aidlc.cmd")}' version`]);
+        expect(first.out).toContain(`aidlc ${AIDLC_VERSION}`);
+        typed();
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

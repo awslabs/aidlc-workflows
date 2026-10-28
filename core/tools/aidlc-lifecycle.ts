@@ -109,6 +109,7 @@ import {
 } from "./aidlc-release.ts";
 import {
   executePlan,
+  type TransactionOperation,
   transactionSourceHash,
   transactionState,
   type TransactionPlan,
@@ -1070,6 +1071,68 @@ function projectDistribution(projectDir: string): string | null {
     .find((candidate) => candidate.harnessDir === harnessDir)?.distribution ?? null;
 }
 
+// bin\aidlc.exe is a copy of the running release's own binary, which knows
+// the launcher mode whatever version it activates. It is written when absent
+// or when the copy there is the one AI-DLC wrote; a file AI-DLC did not write
+// is left as it is. inPlace: one of AI-DLC's is there once the operations
+// commit, so Git Bash finds aidlc.exe itself and the extensionless launcher goes.
+function exeCommandPlan(root: string): {
+  exe: string;
+  replaces: boolean;
+  inPlace: boolean;
+  operations: TransactionOperation[];
+} | null {
+  const exe = windowsExeCommandPath();
+  if (exe === null) return null;
+  const source = installedExecutablePath(AIDLC_VERSION);
+  const hash = existsSync(source) ? transactionSourceHash(source) : null;
+  const state = transactionState(exe);
+  const write = hash !== null && state !== hash &&
+    (state === "absent" || state === readWindowsExeCommandMarker());
+  return {
+    exe,
+    replaces: write && state !== "absent",
+    inPlace: write || (hash !== null && state === hash),
+    operations: write
+      ? [
+          { kind: "copy", path: relative(root, exe), source, sourceHash: hash as string, mode: 0o700, expected: "absent" },
+          writeOperation(
+            relative(root, windowsExeCommandMarkerPath()),
+            `${hash}\n`,
+            transactionState(windowsExeCommandMarkerPath()),
+            0o600,
+          ),
+        ]
+      : [],
+  };
+}
+
+function removeOwnedGitBashLauncher(root: string): TransactionOperation[] {
+  const path = windowsPosixCommandPath();
+  return path !== null && pathEntryExists(path) && windowsPosixLauncherOwnedByInstaller()
+    ? [{ kind: "remove", path: relative(root, path), expected: transactionState(path) }]
+    : [];
+}
+
+// After an update run by a release from before bin\aidlc.exe, the release it
+// made active writes the copy at its first command (aidlc.ts), as its own
+// activation would have.
+export function writeMissingWindowsExeCommand(): void {
+  try {
+    const exe = windowsExeCommandPath();
+    if (
+      exe === null || pathEntryExists(exe) || activeVersion() !== AIDLC_VERSION ||
+      resolve(installedExecutablePath(AIDLC_VERSION)).toLowerCase() !== resolve(process.execPath).toLowerCase()
+    ) return;
+    const root = machineTransactionRoot();
+    const plan = exeCommandPlan(root);
+    if (plan === null || plan.operations.length === 0) return;
+    executePlan({ schemaVersion: 1, root, operations: [...plan.operations, ...removeOwnedGitBashLauncher(root)] });
+  } catch {
+    // aidlc.cmd still starts aidlc; a later command retries.
+  }
+}
+
 function removeStoppedExeCommandAsides(bin: string): void {
   let names: string[] = [];
   try {
@@ -1100,18 +1163,9 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
   // so a foreign or directory bin/aidlc is named as itself.
   const posixCommand = windows ? windowsPosixCommandPath() : null;
   const posixShim = windowsPosixShim();
-  // bin\aidlc.exe is a copy of the running release's own binary, which knows
-  // the launcher mode whatever version it activates. It is written when absent
-  // or when the copy there is the one AI-DLC wrote; a file AI-DLC did not write
-  // is left as it is. With it in place Git Bash finds aidlc.exe itself, so the
-  // extensionless launcher goes.
-  const exe = windows ? windowsExeCommandPath() : null;
-  const exeSource = installedExecutablePath(AIDLC_VERSION);
-  const exeHash = exe !== null && existsSync(exeSource) ? transactionSourceHash(exeSource) : null;
-  const exeState = exe !== null ? transactionState(exe) : "absent";
-  const writeExe = exe !== null && exeHash !== null && exeState !== exeHash &&
-    (exeState === "absent" || exeState === readWindowsExeCommandMarker());
-  const exeInPlace = writeExe || (exeHash !== null && exeState === exeHash);
+  const exePlan = windows ? exeCommandPlan(root) : null;
+  const exe = exePlan?.exe ?? null;
+  const exeInPlace = exePlan?.inPlace ?? false;
   if (
     posixCommand !== null &&
     existsSync(posixCommand) &&
@@ -1179,24 +1233,7 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
                 0o700,
               )]
             : []),
-          ...(writeExe
-            ? [
-                {
-                  kind: "copy" as const,
-                  path: relative(root, exe as string),
-                  source: exeSource,
-                  sourceHash: exeHash as string,
-                  mode: 0o700,
-                  expected: "absent" as const,
-                },
-                writeOperation(
-                  relative(root, windowsExeCommandMarkerPath()),
-                  `${exeHash}\n`,
-                  transactionState(windowsExeCommandMarkerPath()),
-                  0o600,
-                ),
-              ]
-            : []),
+          ...(exePlan?.operations ?? []),
           ...(!exeInPlace
             ? [writeOperation(
                 relative(root, posixCommand as string),
@@ -1204,13 +1241,7 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
                 transactionState(posixCommand as string),
                 0o700,
               )]
-            : pathEntryExists(posixCommand as string)
-            ? [{
-                kind: "remove" as const,
-                path: relative(root, posixCommand as string),
-                expected: transactionState(posixCommand as string),
-              }]
-            : []),
+            : removeOwnedGitBashLauncher(root)),
         ]
       : [writeOperation(
           relative(root, commandPath()),
@@ -1236,7 +1267,7 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
       }),
   ];
   // Windows does not let a running program be replaced, only renamed.
-  const aside = writeExe && exeState !== "absent" ? `${exe}.old-${randomUUID()}` : null;
+  const aside = exePlan?.replaces ? `${exe}.old-${randomUUID()}` : null;
   if (aside !== null) renameSync(exe as string, aside);
   try {
     executePlan({
@@ -1841,7 +1872,8 @@ export function replacePreviousWindowsShimHelper(): void {
 // release wrote; a file of anyone else's stays, and doctor names it.
 function gitBashLauncherCatchUp(root: string): ReturnType<typeof writeOperation>[] {
   const path = windowsPosixCommandPath();
-  if (path === null || !windowsPosixLauncherOwnedByInstaller()) return [];
+  const exe = windowsExeCommandPath();
+  if (path === null || !windowsPosixLauncherOwnedByInstaller() || (exe !== null && pathEntryExists(exe))) return [];
   const body = windowsPosixShim();
   if (existsSync(path) && readFileSync(path, "utf-8") === body) return [];
   return [writeOperation(relative(root, path), body, transactionState(path), 0o700)];
