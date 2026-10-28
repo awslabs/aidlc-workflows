@@ -2943,8 +2943,8 @@ function handleUnit(args: string[]): void {
       }
     }
 
-    // A Unit's Code Generation completes only once the plan it builds from lets
-    // it build (approved, or plan approval off); the plan's question is
+    // A Unit's Code Generation completes only once its plan no longer holds it
+    // (codeGenerationCompletionPlanWaits says when); the plan's question is
     // `next`'s. The remedy the person picked at the recovery question is theirs.
     if (
       action === "complete" && slug === "code-generation" &&

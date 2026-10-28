@@ -15346,8 +15346,9 @@ function codeGenerationCompletionWaits(
  * only while plan approval is on for this work (read as `next` reads it, so the
  * scope, the person's switch and the trusted machine switch all count), and then
  * while a target has no approval that lets it build, or its plan stands only as
- * its finished build reads it and the person asked to see that plan again
- * (codeGenerationFinishedBuild). `unit complete` asks too.
+ * its finished build reads it while a plan review the person asked for is
+ * pending (codeGenerationFinishedBuild), so `next` shows them the plan first.
+ * `unit complete` asks too.
  */
 export function codeGenerationCompletionPlanWaits(
   projectDir: string,
