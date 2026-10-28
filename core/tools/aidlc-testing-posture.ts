@@ -2976,8 +2976,10 @@ function codeGenerationApprovalArtifacts(
     embedded !== null &&
     current !== null &&
     embedded.contract_sha256 === current.contract_sha256;
+  // A delegated worker's approval reads its parent's contract while its review
+  // rows hold its own checkout's, so the exception is not read there.
   const builtUnderPlanContract = use === "completion" && !contractValid && embedded !== null &&
-    reviewedUnderContract(projectDir, authority, embedded.contract_sha256);
+    contractProjectDir === projectDir && reviewedUnderContract(projectDir, authority, embedded.contract_sha256);
   const expectedFingerprint =
     planExists && instructionsExist && embedded !== null && (contractValid || builtUnderPlanContract)
       ? approvalFingerprint(

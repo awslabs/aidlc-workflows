@@ -5132,10 +5132,13 @@ function handleReview(args: string[]): void {
       fields["Review Record Digest"] = reviewRecordDigest(serialized);
       // The build this verdict covers was finished under the Testing Contract
       // in force now; the completion reads it to tell a practice kept at the
-      // gate from a contract that moved while the build ran. A swarm worker's
-      // checkout resolves its own memory while its approval reads the parent's,
-      // so its verdict records none and its completion reads as main's does.
-      const reviewedContract = flags.stage === "code-generation" && swarmWorkerWorktreeMeta(pd) === null
+      // gate from a contract that moved while the build ran. A checkout the
+      // engine made for a Unit (any `.aidlc/worktree-meta.json`, whatever release
+      // wrote it) resolves its own memory while its approval may read the
+      // parent's, so its verdict records none, and its completion is held for a
+      // moved contract as it was before this field existed.
+      const reviewedContract = flags.stage === "code-generation" &&
+          !existsSync(join(pd, ".aidlc", "worktree-meta.json"))
         ? reviewedTestingContract(pd)
         : null;
       if (reviewedContract !== null) fields[REVIEW_TESTING_CONTRACT_FIELD] = reviewedContract;
