@@ -4,10 +4,10 @@
 // The question record decides nothing yet, so the records it writes change no
 // outcome: a teammate on the release before reads past them, and so does this
 // release. Each case drives a window case through the engine, as a run records
-// it, up to the decision; then a twin of the project has everything the record
-// adds taken out (the QUESTION_ASKED and QUESTION_SHOWN rows, the question
-// fields, the turns' Open Questions and Questions Digest, the runtime index),
-// and the same decision runs in both. The exit, the step it prints (its
+// it, up to the decision, which runs twice in the same folder: once with
+// everything the record adds taken out (the QUESTION_ASKED and QUESTION_SHOWN
+// rows, the question fields, the turns' Open Questions and Questions Digest,
+// the runtime index), once on the record as it was. The exit, the step it prints (its
 // question_id aside) and the rows it writes are the same: the gate approved on
 // the reply after it was shown and refused on the one before the document, a
 // change request's own words, an answer's pairing with its question, an engine
@@ -16,7 +16,7 @@
 // that is not an authority row.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { cpSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -43,14 +43,11 @@ function files(dir: string): string[] {
   });
 }
 
-// The same project with what the question record adds taken out: the twin a
+// What the question record adds, taken out of the project: the record a
 // release that never wrote it would leave.
-function twinWithout(proj: string): string {
-  const twin = mkdtempSync(join(tmpdir(), "t-question-record-older-"));
-  projects.push(twin);
-  cpSync(proj, twin, { recursive: true });
-  for (const path of files(join(twin, "aidlc"))) {
-    const name = relative(twin, path).replaceAll("\\", "/");
+function stripRecord(proj: string): void {
+  for (const path of files(join(proj, "aidlc"))) {
+    const name = relative(proj, path).replaceAll("\\", "/");
     if (/\/audit\/[^/]+\.md$/.test(name)) {
       const blocks = readFileSync(path, "utf-8").split(/\n---\n/);
       const kept = blocks
@@ -65,7 +62,6 @@ function twinWithout(proj: string): string {
       writeFileSync(path, `${JSON.stringify(record)}\n`);
     }
   }
-  return twin;
 }
 
 const SKIPPED_FIELDS = new Set(["Timestamp", "Question Id", "Question Type", "Question Chat", "Question Shows",
@@ -76,8 +72,7 @@ const SKIPPED_FIELDS = new Set(["Timestamp", "Question Id", "Question Type", "Qu
 function outcome(proj: string, decide: (proj: string) => { status: number | null; stdout: string }) {
   const before = readAuditShardEvents(proj).length;
   const result = decide(proj);
-  // The project's own folder differs between the two; nothing else may.
-  const printed = result.stdout.replaceAll(proj, "<project>").trim().split("\n").at(-1) || "{}";
+  const printed = result.stdout.trim().split("\n").at(-1) || "{}";
   let step: unknown = printed;
   try {
     const parsed = JSON.parse(printed) as Record<string, unknown>;
@@ -94,12 +89,18 @@ function outcome(proj: string, decide: (proj: string) => { status: number | null
   return { status: result.status, step, written };
 }
 
-// The decision on the project as recorded and on its twin without the record.
+// The decision on the record without what the question record adds, then on
+// the record as it was, in the same folder: what a step prints names it.
 function sameOutcome(proj: string, decide: (proj: string) => { status: number | null; stdout: string }) {
   const recorded = readAuditShardEvents(proj);
   expect(recorded.some((row) => ADDED_ROWS.has(row.event) || auditBlockField(row.block, "Question Id") !== null)).toBe(true);
-  const twin = twinWithout(proj);
-  const theirs = outcome(twin, decide);
+  const saved = mkdtempSync(join(tmpdir(), "t-question-record-older-"));
+  projects.push(saved);
+  cpSync(proj, saved, { recursive: true });
+  stripRecord(proj);
+  const theirs = outcome(proj, decide);
+  rmSync(proj, { recursive: true, force: true });
+  cpSync(saved, proj, { recursive: true });
   const ours = outcome(proj, decide);
   expect(ours).toEqual(theirs);
   return ours;
