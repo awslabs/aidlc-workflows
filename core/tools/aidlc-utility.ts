@@ -8653,7 +8653,7 @@ function handleIntentCreateStateBuild(
   for (const stage of graph) {
     const action = planStages[stage.slug] || "SKIP";
     if (action === "EXECUTE") {
-      executeStages.push(stage.number);
+      executeStages.push(`${stage.number} (${stage.slug})`);
     } else {
       skipStages.push(`${stage.number} (${stage.slug})`);
     }
@@ -8666,7 +8666,7 @@ function handleIntentCreateStateBuild(
       adjustedMapping["reverse-engineering"] = "SKIP";
       const reStage = graph.find((s) => s.slug === "reverse-engineering");
       if (reStage) {
-        const idx = executeStages.indexOf(reStage.number);
+        const idx = executeStages.indexOf(`${reStage.number} (${reStage.slug})`);
         if (idx >= 0) executeStages.splice(idx, 1);
         skipStages.push(`${reStage.number} ${GREENFIELD_RE_SKIP_LABEL}`);
       }
@@ -8816,7 +8816,7 @@ ${flags.request ? `- **Question Id**: ${flags.request}\n` : ""}- **State Version
 - **Practices Affirmed Timestamp**:
 
 ## Scope Configuration
-- **Stages to Execute**: ${stagesToExecuteRow(graph, executeStages)}
+- **Stages to Execute**: ${executeStages.join(", ")}
 - **Stages to Skip**: ${skipStages.length > 0 ? skipStages.join(", ") : "none"}
 - **Depth**: ${effectiveDepth}
 - **Test Strategy**: ${effectiveTestStrategy}
@@ -12134,7 +12134,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       for (const stage of graph) {
         const action = adjustedMapping[stage.slug] || "SKIP";
         if (action === "EXECUTE") {
-          executeStages.push(stage.number);
+          executeStages.push(`${stage.number} (${stage.slug})`);
         } else {
           let reason = stage.slug;
           if (stage.slug === "reverse-engineering" && projectType.toLowerCase() === "greenfield" &&
@@ -12212,7 +12212,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       content = setField(content, "Scope", newScope);
       // The new scope's grid replaces any plan composed for this piece of work.
       content = removeField(content, PLAN_FIELD);
-      content = setField(content, "Stages to Execute", stagesToExecuteRow(graph, executeStages));
+      content = setField(content, "Stages to Execute", executeStages.join(", "));
       content = setField(content, "Stages to Skip", skipStages.length > 0 ? skipStages.join(", ") : "none");
       content = setField(content, "Total Stages", String(executeStages.length));
       // The person asked for a scope that runs a stage after the last one, and
@@ -12361,19 +12361,6 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
 // the verb is inert when unused.
 // ---------------------------------------------------------------------------
 
-// Render the Stages to Execute row: each stage number with its slug, in the
-// "<number> (<slug>)" shape the Stages to Skip row uses, so both rows name
-// their stages the same way.
-function stagesToExecuteRow(graph: readonly StageEntry[], numbers: readonly string[]): string {
-  const slugByNumber = new Map(graph.map((s) => [s.number, s.slug]));
-  return numbers
-    .map((n) => {
-      const slug = slugByNumber.get(n);
-      return slug ? `${n} (${slug})` : n;
-    })
-    .join(", ");
-}
-
 // Rebuild the plan's derived fields after stage suffix flips, against the
 // EFFECTIVE plan (suffix over scope grid): Stages to Execute / to Skip / Total
 // / Completed, the not-yet-reached Phase Progress rows, and Next Stage. Shared
@@ -12421,10 +12408,10 @@ function rebuildEffectivePlanFields(
     }
   }
   for (const s of graph) {
-    if (eff(s.slug) === "EXECUTE") executeStages.push(s.number);
+    if (eff(s.slug) === "EXECUTE") executeStages.push(`${s.number} (${s.slug})`);
     else if (!preservedSlugs.has(s.slug)) skipStages.push(skipLabel(s));
   }
-  let next = setField(content, "Stages to Execute", stagesToExecuteRow(graph, executeStages));
+  let next = setField(content, "Stages to Execute", executeStages.join(", "));
   next = setField(next, "Stages to Skip", skipStages.length > 0 ? skipStages.join(", ") : "none");
   next = setField(next, "Total Stages", String(executeStages.length));
   const completedCount = parseCheckboxes(next).filter(
