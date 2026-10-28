@@ -22,6 +22,10 @@
       "productName": "Cursor"
     },
     {
+      "name": "grok",
+      "productName": "Grok Build"
+    },
+    {
       "name": "kiro",
       "productName": "Kiro CLI"
     },

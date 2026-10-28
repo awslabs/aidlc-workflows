@@ -55,6 +55,7 @@ const EXPECTED: Record<
     claude: { model: string; effort: "medium" | null };
     codex: { model: string | null; effort: "medium" | null };
     cursor: { model: string | null };
+    grok: { model: string | null };
     kiro: { model: string | null };
     opencode: { model: string | null; variant: "medium" | null };
   }
@@ -63,6 +64,7 @@ const EXPECTED: Record<
     claude: { model: "inherit", effort: null },
     codex: { model: null, effort: null },
     cursor: { model: null },
+    grok: { model: null },
     kiro: { model: null },
     opencode: { model: null, variant: null },
   },
@@ -76,6 +78,9 @@ const EXPECTED: Record<
     // Cursor never pins a model either: model availability is Cursor-plan-
     // dependent (Free rejects every named id), so all tiers inherit.
     cursor: { model: null },
+    // Grok Build runs every agent on the session model. The grok flavor only
+    // nulls pins; it does not rewrite a cli.json.
+    grok: { model: null },
     // Kiro never pins a model (#601): shipped IDs resolve only when that
     // model is enabled on the user's install, so every Kiro tier inherits
     // the session model.
@@ -86,6 +91,7 @@ const EXPECTED: Record<
     claude: { model: "inherit", effort: null },
     codex: { model: null, effort: null },
     cursor: { model: null },
+    grok: { model: null },
     kiro: { model: null },
     opencode: { model: null, variant: null },
   },
@@ -127,7 +133,7 @@ describe("t220 tier projection module", () => {
 
   // --- projectTier: every tier x every projection flavor ---------------------
   for (const tier of TIERS) {
-    for (const flavor of ["claude", "codex", "cursor", "kiro", "opencode"] as const) {
+    for (const flavor of ["claude", "codex", "cursor", "grok", "kiro", "opencode"] as const) {
       test(`projectTier(${tier}, ${flavor}) matches the pinned policy`, () => {
         expect(projectTier(tier, flavor)).toEqual(EXPECTED[tier][flavor]);
       });

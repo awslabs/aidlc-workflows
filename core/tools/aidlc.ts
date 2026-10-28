@@ -1280,12 +1280,13 @@ function toolsDir(): string {
   return dispatcherDir();
 }
 
-type AdapterHarness = "codex" | "copilot" | "cursor" | "kiro" | "kiro-ide";
+type AdapterHarness = "codex" | "copilot" | "cursor" | "grok" | "kiro" | "kiro-ide";
 
 const ADAPTER_HARNESS_LEAF: Record<AdapterHarness, string> = {
   codex: ".codex",
   copilot: ".aidlc",
   cursor: ".cursor",
+  grok: ".grok",
   kiro: ".kiro",
   "kiro-ide": ".kiro",
 };
@@ -1298,6 +1299,7 @@ function adapterFile(harness: AdapterHarness): string {
   if (harness === "codex") return "aidlc-codex-adapter.ts";
   if (harness === "copilot") return "aidlc-copilot-adapter.ts";
   if (harness === "cursor") return "aidlc-cursor-adapter.ts";
+  if (harness === "grok") return "aidlc-grok-adapter.ts";
   return "aidlc-kiro-adapter.ts";
 }
 
@@ -2043,8 +2045,9 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
     // route (`aidlc engine hook cursor-adapter <target>`), and that wiring is
     // project-owned, so `aidlc update` alone cannot rewrite it. Resolve those
     // two shipped spellings to the adapter action they meant.
-    if (name === "cursor-adapter" || name === "copilot-adapter") {
-      const harness: AdapterHarness = name === "cursor-adapter" ? "cursor" : "copilot";
+    if (name === "cursor-adapter" || name === "copilot-adapter" || name === "grok-adapter") {
+      const harness: AdapterHarness =
+        name === "cursor-adapter" ? "cursor" : name === "copilot-adapter" ? "copilot" : "grok";
       const target = argv[2];
       if (!target) return nounError("adapter", undefined);
       if (!isSafeName(target)) return nounError("adapter", target);
@@ -3893,10 +3896,11 @@ async function standAsideInMachineRoot(argv: readonly string[]): Promise<number>
   if (
     action?.type === "adapter" &&
     ((action.harness === "copilot" && action.target === "guard-tool-call") ||
-      (action.harness === "cursor" && action.target === "guards"))
+      (action.harness === "cursor" && action.target === "guards") ||
+      (action.harness === "grok" && action.target === "guards"))
   ) {
     // Take the payload the host is still writing, so the answer does not meet
-    // a closed pipe.
+    // a closed pipe. Grok treats silence as allow, so it gets no permission JSON.
     await readStdin();
     if (action.harness === "cursor") text(1, `${JSON.stringify({ permission: "allow" })}\n`);
   }

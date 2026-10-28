@@ -552,6 +552,7 @@ export function runtimeHarnessName(
   if (harnessDir === ".codex") return "codex";
   if (harnessDir === ".kiro") return "kiro";
   if (harnessDir === ".cursor") return "cursor";
+  if (harnessDir === ".grok") return "grok";
   return "claude";
 }
 
@@ -648,6 +649,7 @@ const HOST_LABELS: Readonly<Record<string, string>> = {
   codex: "Codex CLI",
   copilot: "GitHub Copilot",
   cursor: "Cursor",
+  grok: "Grok Build",
   kiro: "Kiro CLI",
   "kiro-ide": "Kiro",
   opencode: "opencode",

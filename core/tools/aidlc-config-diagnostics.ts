@@ -82,6 +82,7 @@ import { personaTwinRels } from "./aidlc-plugin.ts";
 import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
 import {
   HARNESS_PRODUCT_NAMES,
+  isModelHarness,
   sessionSetsAgentModels,
   type ModelHarness,
 } from "./aidlc-model-policy.ts";
@@ -155,6 +156,8 @@ export function providerMenuCopy(
       return { bedrock: "record the manual Copilot BYOK provider setup" };
     case "cursor":
       return { bedrock: "record the manual Cursor provider setup" };
+    case "grok":
+      return { bedrock: "record the manual Grok Build provider setup" };
   }
 }
 export type ProviderPendingStatus = "pending" | "done";
@@ -337,6 +340,7 @@ const PENDING_ACTION_IDS = [
   "kiro-ide-chat-model",
   "copilot-byok-configuration",
   "cursor-provider-configuration",
+  "grok-provider-configuration",
   "non-bedrock-provider-configuration",
 ] as const;
 export type ProviderPendingActionId = (typeof PENDING_ACTION_IDS)[number];
@@ -377,6 +381,12 @@ export const PROVIDER_PENDING_ACTIONS: Record<
       "Configure the provider in Cursor and select it for the active chat session.",
     remediation:
       "Configure the provider in Cursor settings and select the intended model in the session model picker.",
+  },
+  "grok-provider-configuration": {
+    label:
+      "Configure the provider in Grok Build and select it for the active chat session.",
+    remediation:
+      "Configure the provider in Grok Build and select the intended model for the session.",
   },
   "non-bedrock-provider-configuration": {
     label:
@@ -552,15 +562,7 @@ export function readConfigDiagnosticRecords(harnessRoot: string): ConfigDiagnost
     );
   }
   const distribution = value.distribution;
-  if (
-    distribution !== "claude" &&
-    distribution !== "codex" &&
-    distribution !== "copilot" &&
-    distribution !== "cursor" &&
-    distribution !== "kiro" &&
-    distribution !== "kiro-ide" &&
-    distribution !== "opencode"
-  ) {
+  if (typeof distribution !== "string" || !isModelHarness(distribution)) {
     throw new Error(`${path}: distribution must name a supported harness`);
   }
   const providers = normalizeProvidersRecord(value.providers);
@@ -897,6 +899,11 @@ const HARNESS_CLI: Record<
     required: false,
     install: "Install the Cursor CLI and ensure `cursor --version` works; IDE-only installs may omit it.",
   },
+  grok: {
+    command: "grok",
+    required: false,
+    install: "Install Grok Build and ensure `grok --version` works.",
+  },
   // The 2.x line is where the hooks, skills and workspace default agent this
   // distribution relies on shipped; the guide asks for 2.6 or later.
   kiro: {
@@ -1202,6 +1209,7 @@ export function requiredProviderActions(
   if (harness === "codex") actions.push("codex-provider-configuration");
   if (harness === "copilot") actions.push("copilot-byok-configuration");
   if (harness === "cursor") actions.push("cursor-provider-configuration");
+  if (harness === "grok") actions.push("grok-provider-configuration");
   return actions;
 }
 
@@ -1219,6 +1227,7 @@ export function reconcileProviderActions(
       id === "codex-provider-configuration" ||
       id === "copilot-byok-configuration" ||
       id === "cursor-provider-configuration" ||
+      id === "grok-provider-configuration" ||
       id === "non-bedrock-provider-configuration";
     // Only an explicit acknowledgement of this mutation can complete a newly
     // required action; a stored generic acknowledgement is not sufficient.

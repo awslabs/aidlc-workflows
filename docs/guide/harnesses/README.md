@@ -17,10 +17,11 @@ Onboarding is installed in each harness's native instruction surface:
 | Kiro CLI and Kiro IDE | `.kiro/steering/aidlc-onboarding.md` |
 | Codex CLI | `.codex/onboarding.md` (also injected through `developer_instructions` in `.codex/config.toml` when the project is trusted) |
 | Cursor | `.cursor/rules/aidlc-onboarding.mdc` |
+| Grok Build | `.grok/rules/aidlc-onboarding.md` |
 | opencode | `.aidlc/onboarding.md` |
 | GitHub Copilot | Root `AGENTS.md` (full onboarding, including method imports) |
 
-Kiro, Kiro IDE, Codex, Cursor, and opencode share a harness-neutral root
+Kiro, Kiro IDE, Codex, Cursor, Grok Build, and opencode share a harness-neutral root
 `AGENTS.md` block with other installed harnesses. Their native setup stays in
 the files above. Copilot's full root block remains exclusive; distinct harnesses
 also need distinct engine directories to coexist.
@@ -57,6 +58,7 @@ Pick your harness:
 | **Kiro CLI** (≥ 2.6), listed in setup as Kiro CLI (V2) | `/aidlc` | [Running AI-DLC on Kiro CLI](kiro-cli.md) — the harness that pins no engine: prerequisites, install, what's different on Kiro. For Kiro's v3 engine on Kiro CLI ≥ 2.24.1, use Kiro above. |
 | **Codex CLI** (≥ 0.145.0) | `$aidlc` | [AI-DLC on Codex CLI](codex-cli.md) — prerequisites, trust pre-seed, Bedrock config, the git-repo requirement. |
 | **Cursor** | `/aidlc` | [AI-DLC on Cursor](cursor.md) — one tree for the Cursor IDE and CLI, native subagents and skills, the hooks.json adapter, what's different on Cursor. |
+| **Grok Build** | `/aidlc` | [AI-DLC on Grok Build](grok.md) — rules, native subagents, the hooks adapter, and what's different on Grok Build. |
 | **opencode** (≥ 1.17) | `/aidlc` | [AI-DLC on opencode](opencode.md) — the split `.aidlc/` + `.opencode/` layout, the adapter plugin, what's different on opencode. |
 | **GitHub Copilot** (CLI ≥ 1.0.74 / VS Code ≥ 1.130) | `/aidlc` | [AI-DLC on GitHub Copilot](copilot.md) — one install for both surfaces, the `.github/` merge, folder trust, what's different on Copilot. |
 

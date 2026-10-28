@@ -782,6 +782,7 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
       "AIDLC_CURSOR_RUN_LIVE",
       "AIDLC_KIRO_IDE_LIVE",
       "AIDLC_OPENCODE_RUN_LIVE",
+      "AIDLC_GROK_RUN_LIVE",
     ];
     writeFileSync(
       plant,

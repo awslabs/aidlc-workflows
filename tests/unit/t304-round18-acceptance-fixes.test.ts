@@ -260,6 +260,7 @@ function runWizard(
       codex: { found: false, probed: true },
       copilot: { found: false, probed: true },
       cursor: { found: false, probed: true },
+      grok: { found: false, probed: true },
       kiro: { found: false, probed: true },
       "kiro-ide": { found: false, probed: false },
       opencode: { found: false, probed: true },
@@ -1582,7 +1583,7 @@ describe("t304 first-run prompt and detection safety", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Kiro recommended defaults record no provider answer", () => {
-    const result = runWizard("5\n\n");
+    const result = runWizard("6\n\n");
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain(
       "no provider settings; model access comes with Kiro CLI",
@@ -1599,8 +1600,8 @@ describe("t304 first-run prompt and detection safety", () => {
   // access it never needed.
   test("changing the harness at the summary re-derives the provider answer", () => {
     // Claude Code first (1), customize (2), accept every step, then edit step 1
-    // to Kiro CLI (5) and apply.
-    const toKiro = runWizard("1\n2\n\n\n\n\n\n\n1\n5\n\n");
+    // to Kiro CLI (6) and apply. Grok is 5.
+    const toKiro = runWizard("1\n2\n\n\n\n\n\n\n1\n6\n\n");
     expect(toKiro.status, toKiro.stdout + toKiro.stderr).toBe(0);
     expect(toKiro.stdout).toContain("2. Provider     keep current");
     // On Kiro CLI the row is the session model (personal Kiro settings); Kiro
@@ -1614,11 +1615,11 @@ describe("t304 first-run prompt and detection safety", () => {
     );
     expect(kiro.providers).toBeUndefined();
 
-    // Kiro CLI first (5), customize (2), accept every step (step 2 asks nothing
+    // Kiro CLI first (6), customize (2), accept every step (step 2 asks nothing
     // when Kiro's settings cannot be read), then edit step 1 to Claude Code (1)
-    // and apply.
+    // and apply. Grok is 5.
     // Ending on Claude Code, setup then asks the status line question (#1407).
-    const toClaude = runWizard("5\n2\n\n\n\n\n\n1\n1\n\n\n");
+    const toClaude = runWizard("6\n2\n\n\n\n\n\n1\n1\n\n\n");
     expect(toClaude.status, toClaude.stdout + toClaude.stderr).toBe(0);
     expect(toClaude.stdout).not.toContain("Claude Code provides its own model access");
     expect(toClaude.stdout).toContain("2. Provider     keep current");

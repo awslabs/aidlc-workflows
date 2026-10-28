@@ -11,6 +11,7 @@ type ReviewerScopeRegistration =
   | "codex-hooks"
   | "copilot-hooks"
   | "cursor-hooks"
+  | "grok-hooks"
   | "kiro-agent-json"
   | "opencode-plugin"
   | "unsupported";
@@ -36,6 +37,7 @@ type HarnessCapabilities = {
     | "codex-engine"
     | "copilot-agents-md"
     | "cursor-rule"
+    | "grok-rule"
     | "kiro-resources"
     | "kiro-steering"
     | "opencode-instructions";
@@ -131,6 +133,27 @@ const HARNESS_CAPABILITIES = {
     kiroAgentJson: false,
     ideAgentTools: false,
     reviewerScopeRegistration: "cursor-hooks",
+  },
+  grok: {
+    harnessDir: ".grok",
+    onboarding: {
+      mode: "manifest",
+      fills: "onboarding.fills.ts",
+      dist: "AGENTS.md",
+      harnessDist: ".grok/rules/aidlc-onboarding.md",
+    },
+    rootFiles: [".gitignore", "AGENTS.md"],
+    skillsRoot: ".grok/skills",
+    plugin: {
+      kind: "store",
+      manifestDir: ".grok-plugin",
+      marketplaceDir: ".grok-plugin",
+      wiringFile: "hooks/hooks.json",
+    },
+    memoryInclude: "grok-rule",
+    kiroAgentJson: false,
+    ideAgentTools: false,
+    reviewerScopeRegistration: "grok-hooks",
   },
   "kiro-ide": {
     harnessDir: ".kiro",
@@ -293,7 +316,8 @@ function validateManifest(
         (file) => file.dst === "steering/aidlc-active-memory.md",
       ) ||
     (capabilities.memoryInclude === "claude-import") !==
-      manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.md") ||
+      (manifest.harnessDir === ".claude" &&
+        manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.md")) ||
     (capabilities.memoryInclude === "codex-engine") !==
       (manifest.orchestratorSkillPath === ".agents/skills/aidlc/SKILL.md") ||
     (capabilities.memoryInclude === "opencode-instructions") !==
@@ -304,7 +328,10 @@ function validateManifest(
         manifest.harnessDir === ".aidlc" &&
         manifest.skipRunnerGen === true) ||
     (capabilities.memoryInclude === "cursor-rule") !==
-      manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.mdc")
+      manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.mdc") ||
+    (capabilities.memoryInclude === "grok-rule") !==
+      (manifest.harnessDir === ".grok" &&
+        manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.md"))
   ) {
     fail(name, "memoryInclude does not agree with manifest-owned include surfaces");
   }

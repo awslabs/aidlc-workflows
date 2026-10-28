@@ -90,6 +90,7 @@ guide in the table below. The complete walkthrough is in
 | Kiro CLI (V2) >= 2.6 | `aidlc config --harness kiro` | `kiro-cli chat` | `/aidlc` | [Kiro CLI](docs/guide/harnesses/kiro-cli.md) |
 | Codex CLI >= 0.145.0 | `aidlc config --harness codex` | `codex` | `$aidlc` | [Codex CLI](docs/guide/harnesses/codex-cli.md) |
 | Cursor | `aidlc config --harness cursor` | Open Cursor or run `agent` | `/aidlc` | [Cursor](docs/guide/harnesses/cursor.md) |
+| Grok Build | `aidlc config --harness grok` | Open this project in Grok Build | `/aidlc` | [Grok Build](docs/guide/harnesses/grok.md) |
 | opencode >= 1.17 | `aidlc config --harness opencode` | `opencode` | `/aidlc` | [opencode](docs/guide/harnesses/opencode.md) |
 | GitHub Copilot CLI >= 1.0.74 / VS Code >= 1.130 | `aidlc config --harness copilot` | Copilot CLI or VS Code | `/aidlc` | [GitHub Copilot](docs/guide/harnesses/copilot.md) |
 

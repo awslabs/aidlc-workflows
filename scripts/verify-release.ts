@@ -23,6 +23,7 @@ const RELEASE_DISTRIBUTIONS = [
   "codex",
   "copilot",
   "cursor",
+  "grok",
   "kiro",
   "kiro-ide",
   "opencode",

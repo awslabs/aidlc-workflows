@@ -443,3 +443,9 @@ If `directive.reviewer` is present, invoke the reviewer as a sub-agent (via the 
 ### GitHub Copilot
 
 If `directive.reviewer` is present, invoke the reviewer as a sub-agent (delegate to the reviewer custom agent - the `.github/agents/` roster is exposed as callable agents).
+
+---
+
+### Grok
+
+If `directive.reviewer` is present, invoke the reviewer as a sub-agent (`spawn_subagent` with `subagent_type` set to the reviewer agent, `background: false`).

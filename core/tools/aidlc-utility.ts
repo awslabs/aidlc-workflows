@@ -4101,6 +4101,10 @@ export async function collectDoctorReport(
           hashes.every((hash) => seedText.includes(`trusted_hash = "${hash}"`));
       } else if (currentHarnessDir === ".cursor") {
         nativePermission = commands.includes(cursorTrustedShell());
+      } else if (currentHarnessDir === ".grok") {
+        // Grok Build does not ship a permission file. A missing aidlc allow
+        // entry stays the separate advisory. This row checks native hook wiring.
+        nativePermission = nativeHooks;
       } else if (currentHarnessName === "copilot") {
         // Copilot has no project command allowlist. Its folder-trust contract
         // is checked separately below; this row verifies native hook wiring.
@@ -4610,6 +4614,7 @@ export async function collectDoctorReport(
       );
     }
     if (harness === ".cursor") tsHooks.push("aidlc-cursor-adapter");
+    if (harness === ".grok") tsHooks.push("aidlc-grok-adapter");
     for (const h of tsHooks) {
       const hookPath = join(projectDir, harness, "hooks", `${h}.ts`);
       results.push({
@@ -4811,6 +4816,68 @@ export async function collectDoctorReport(
     // bash or edit map; the person's ask or deny is gone here, said once.
     const shortForm = openCodeGlobalShortFormNote();
     if (shortForm) results.push({ pass: true, severity: "warn", label: shortForm });
+  } else if (harness === ".grok") {
+    for (const [file, what] of [
+      ["hooks/aidlc.json", "hook wiring"],
+      ["hooks/aidlc-grok-adapter.ts", "hook shim"],
+      ["rules/aidlc.md", "standing method rule"],
+      ["rules/aidlc-phase-ideation.md", "Ideation phase rule"],
+      ["rules/aidlc-phase-inception.md", "Inception phase rule"],
+      ["rules/aidlc-phase-construction.md", "Construction phase rule"],
+      ["rules/aidlc-phase-operation.md", "Operation phase rule"],
+      ["skills/aidlc/SKILL.md", "/aidlc entry point"],
+    ] as const) {
+      results.push({
+        pass: existsSync(join(projectDir, harness, file)),
+        label: `${file} present (${what})`,
+        fix: projectedFileRepair("grok", `.grok/${file}`),
+      });
+    }
+    results.push({
+      pass: insideGitRepository(projectDir),
+      label: "project is in a git repository (Grok Build skips project hooks outside one)",
+      fix: "run `git init` in this project, then trust the folder in Grok Build",
+    });
+    const configPath = join(projectDir, harness, "config.toml");
+    let allowsAidlc = false;
+    if (existsSync(configPath)) {
+      try {
+        const parsed = Bun.TOML.parse(withoutBom(readFileSync(configPath, "utf-8"))) as {
+          permission?: { allow?: unknown };
+        };
+        const allow = parsed.permission?.allow;
+        allowsAidlc = Array.isArray(allow) &&
+          allow.some((entry) => typeof entry === "string" && /aidlc/i.test(entry));
+      } catch {
+        allowsAidlc = false;
+      }
+    }
+    // A native install runs the aidlc binary; the bun scripts are copy-channel only.
+    const grokAllow = aidlcInvocation() === "aidlc"
+      ? '["Bash(aidlc *)"]'
+      : '["Bash(aidlc *)", "Bash(bun .grok/tools/aidlc*)", "Bash(bun .grok/hooks/aidlc*)"]';
+    results.push(
+      allowsAidlc
+        ? { pass: true, label: ".grok/config.toml [permission] allow mentions aidlc" }
+        : {
+            pass: false,
+            severity: "warn",
+            label:
+              ".grok/config.toml has no [permission] allow entry mentioning aidlc (AI-DLC does not write this file)",
+            fix: `add allow = ${grokAllow} under [permission] in .grok/config.toml`,
+          },
+    );
+    const which = process.platform === "win32"
+      ? spawnSync("where.exe", ["grok"], { encoding: "utf-8" })
+      : spawnSync("/bin/sh", ["-c", "command -v grok"], { encoding: "utf-8" });
+    if (which.status !== 0 || !(which.stdout ?? "").trim()) {
+      results.push({
+        pass: false,
+        severity: "warn",
+        label: "grok is not on PATH",
+        fix: "install Grok Build and open this project in it",
+      });
+    }
   } else {
     const settingsPath = join(projectDir, harness, "settings.json");
     results.push({

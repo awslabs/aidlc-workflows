@@ -380,7 +380,7 @@ function expectWholeDeliveries(deliveries: Delivery[]): void {
 }
 
 describe("t-copilot-directive-budget: every Copilot directive fits VS Code's terminal result (#1411)", () => {
-  test("Copilot declares a directive budget under VS Code's cut; no other harness declares one", () => {
+  test("Copilot declares a directive budget under VS Code's cut; Grok Build declares 19000; no other harness declares one", () => {
     const budget = copilotBudget();
     expect(budget).toBeGreaterThan(0);
     // A UTF-8 byte count is never below the string's length, so the byte
@@ -388,6 +388,10 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
     expect(budget + 1).toBeLessThan(VSCODE_TERMINAL_RESULT_MAX_CHARS);
     for (const harness of HARNESS_MATRIX) {
       if (harness.name === "copilot") continue;
+      if (harness.name === "grok") {
+        expect(shippedHarnessData(harness.engineRoot).directiveMaxBytes, harness.name).toBe(19000);
+        continue;
+      }
       expect(Object.hasOwn(shippedHarnessData(harness.engineRoot), "directiveMaxBytes"), harness.name).toBe(false);
     }
   });

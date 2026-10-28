@@ -1,0 +1,3 @@
+When working in the Ideation phase of an AI-DLC workflow, read and follow:
+
+- aidlc/active-memory/phases/ideation.md

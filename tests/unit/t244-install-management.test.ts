@@ -114,6 +114,7 @@ const RELEASE_HARNESSES = [
   "codex",
   "copilot",
   "cursor",
+  "grok",
   "kiro",
   "kiro-ide",
   "opencode",

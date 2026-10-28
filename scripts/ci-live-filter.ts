@@ -23,6 +23,7 @@ export const FAMILIES = {
   codex: { env: { AIDLC_CODEX_EXEC_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
   opencode: { env: { AIDLC_OPENCODE_RUN_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
   cursor: { env: { AIDLC_CURSOR_RUN_LIVE: "1" }, platforms: [], hosting: "excluded", requireCoverage: true, reason: "no credential separation: vendor CLI reads the API key from the agent environment" },
+  grok: { env: { AIDLC_GROK_RUN_LIVE: "1" }, platforms: [], hosting: "excluded", requireCoverage: true, reason: "no credential separation: vendor CLI reads the signed-in account from the agent environment" },
   copilot: { env: { AIDLC_COPILOT_EXEC_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
   "claude-tui": { env: { AIDLC_TUI_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
   "claude-sdk": { env: { AIDLC_CLAUDE_SDK_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },

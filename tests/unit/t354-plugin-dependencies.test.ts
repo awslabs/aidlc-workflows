@@ -43,7 +43,7 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const TARGETS = readPluginTargets(join(TOOLS, "data", "plugin-targets.json"));
-const HARNESSES = ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"] as const;
+const HARNESSES = ["claude", "codex", "copilot", "cursor", "grok", "kiro", "kiro-ide", "opencode"] as const;
 const scratch = mkdtempSync(join(tmpdir(), "aidlc-t354-"));
 let counter = 0;
 

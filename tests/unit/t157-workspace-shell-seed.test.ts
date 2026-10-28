@@ -172,6 +172,12 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         expect(rule).toContain("alwaysApply: true");
         expect(rule).toContain("aidlc/active-memory/org.md");
         expect(existsSync(harness.onboardingDist)).toBe(true);
+      } else if (harness.capabilities.memoryInclude === "grok-rule") {
+        // Grok Build loads every rules/*.md file and does not expand @-imports.
+        // The standing rule is a plain-path pointer; there is no alwaysApply key.
+        const rule = readFileSync(join(harness.engineRoot, "rules", "aidlc.md"), "utf-8");
+        expect(rule).toContain("aidlc/active-memory/org.md");
+        expect(existsSync(harness.onboardingDist)).toBe(true);
       } else {
         // opencode: the instructions glob in the project-root opencode.json is
         // the native include surface; AGENTS.md is the auto-read rules file.
