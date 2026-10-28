@@ -4118,6 +4118,12 @@ export async function main(rawArgv: string[]): Promise<void> {
         const { replacePreviousWindowsShimHelper } = await import("./aidlc-lifecycle.ts");
         replacePreviousWindowsShimHelper();
       }
+      // An update run by a release from before bin\aidlc.exe left none; this
+      // release writes it once.
+      if (!existsSync(join(installRoot, "bin", "aidlc.exe"))) {
+        const { writeMissingWindowsExeCommand } = await import("./aidlc-lifecycle.ts");
+        writeMissingWindowsExeCommand();
+      }
     } catch {
       // A binary run from outside an install has no helper to replace.
     }
