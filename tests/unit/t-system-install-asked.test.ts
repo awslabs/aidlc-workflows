@@ -7,16 +7,20 @@
 // nobody asked for. The guard holds that one command and its only step is to
 // tell the person the command; the person's go-ahead lets it through and the
 // row it leaves names their message. What the person asks for themselves, and
-// an install the approved plan names (read as approved, not as edited since),
-// run at once. It is not a fence: Guard Policy off and plan approval off hold it too.
+// an install a plan they approved names (read as approved: not as edited since,
+// not from a reviewer's appendix, not pieced together from two plans), run at
+// once. It is not a fence: Guard Policy off and plan approval off hold it too,
+// and a plan nobody approved names nothing. An isolated run with no work is held
+// the same way.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { systemInstalls } from "../../dist/claude/.claude/hooks/system-install.ts";
+import { namedByOnePlan, systemInstalls } from "../../dist/claude/.claude/hooks/system-install.ts";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
   answer,
   createCodeGenerationProject,
@@ -26,7 +30,13 @@ import {
   stageDir,
   writePlan,
 } from "../harness/code-generation-states.ts";
-import { AIDLC_SRC, cleanupTestProject, seededStateFile } from "../harness/fixtures.ts";
+import {
+  AIDLC_SRC,
+  cleanupTestProject,
+  createOrchestrationTestProject,
+  removeWorkspaceRecord,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
 setDefaultTimeout(120_000);
@@ -152,17 +162,57 @@ describe("a system package install nobody asked for", () => {
     expect(held.stderr).toContain("Tell the person");
   });
 
-  test("Guard Policy off and plan approval off hold it too, and the plan built without asking names its own", () => {
+  // poc and express ship with plan approval off: the plan the agent wrote is
+  // built without anyone seeing it, so its install line is the agent's own.
+  test("Guard Policy off and plan approval off hold it too, and a plan nobody approved names nothing", () => {
     const proj = createCodeGenerationProject("off", "off");
     created.push(proj);
     writePlan(proj, `- [ ] Step 2: install the test library with \`${HYPOTHESIS}\`\n`);
     expect(next(proj).kind).toBe("run-stage");
     expect(rows(proj, "PLAN_APPROVAL_SKIPPED")).toHaveLength(1);
-    expect(guardBash(proj, HYPOTHESIS).code).toBe(0);
-    const held = guardBash(proj, PYTEST);
+    const held = guardBash(proj, HYPOTHESIS);
     expect(held.code, held.stderr).toBe(2);
-    expect(reply(proj, "ok, install pytest too").status).toBe(0);
+    expect(guardBash(proj, PYTEST).code).toBe(2);
+    expect(reply(proj, "ok, install both").status).toBe(0);
+    expect(guardBash(proj, HYPOTHESIS).code).toBe(0);
     expect(guardBash(proj, PYTEST).code).toBe(0);
+  });
+
+  test("a review appendix added to the approved plan names nothing", () => {
+    const proj = building();
+    const plan = join(stageDir(proj), "code-generation-plan.md");
+    writeFileSync(plan, `${readFileSync(plan, "utf-8").trimEnd()}\n\n## Review\n\nRun \`${HYPOTHESIS}\` before the tests.\n`, "utf-8");
+    const held = guardBash(proj, HYPOTHESIS);
+    expect(held.code, held.stderr).toBe(2);
+  });
+
+  test("an isolated run with no work is held the same way, and the go-ahead lets it through", () => {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    removeWorkspaceRecord(proj);
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "base.ts"), "export const base = true;\n", "utf-8");
+    const single = ["--stage", "code-generation", "--single", "--scope", "enterprise"];
+    expect(reply(proj, "/aidlc --stage code-generation --single").status).toBe(0);
+    expect(next(proj, single).plan_approval?.status).toBe("plan");
+    const dir = join(proj, "aidlc", "spaces", "default", "intents", "construction", "code-generation");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "code-generation-plan.md"),
+      "# Code Generation Plan\n\n## Summary\n\n- Builds: slugify for titles\n- Touches: src/slugify.ts\n" +
+        "- Tests: 3 unit tests\n\n## Steps\n\n- [ ] Step 1: write slugify\n\n" + renderTestingContract(resolveTestingPosture(proj)),
+      "utf-8",
+    );
+    writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test src/slugify.test.ts`.\n", "utf-8");
+    expect(next(proj, single).ask_type).toBe("plan-approval");
+    expect(reply(proj, "approve").status).toBe(0);
+    const recorded = answer(proj, "Approve Plan");
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    const held = guardBash(proj, HYPOTHESIS);
+    expect(held.code, held.stderr).toBe(2);
+    expect(reply(proj, "yes, install it").status).toBe(0);
+    expect(guardBash(proj, HYPOTHESIS).code).toBe(0);
   });
 
   test("the go-ahead counts in the chat the person gives it in, a later one included", () => {
@@ -184,6 +234,15 @@ describe("a system package install nobody asked for", () => {
     expect(long.code, long.stderr).toBe(2);
     expect(long.stderr.trim().split("\n")).toHaveLength(1);
     expect(long.stderr).toContain("...`");
+  });
+});
+
+describe("which plan names an install", () => {
+  const [install] = systemInstalls(HYPOTHESIS);
+  test("one plan naming the package manager and every package names it; two plans pieced together do not", () => {
+    expect(namedByOnePlan([new Set(["apt-get", "python3-hypothesis"])], install)).toBe(true);
+    expect(namedByOnePlan([new Set(["apt"]), new Set(["python3-hypothesis"])], install)).toBe(false);
+    expect(namedByOnePlan([new Set(["python3-hypothesis"])], install)).toBe(false);
   });
 });
 

@@ -26,7 +26,12 @@ import {
   releaseAuditLock,
 } from "../tools/aidlc-lib.ts";
 import { readMessage, standingPersonTurn } from "../tools/aidlc-message-store.ts";
-import { approvalFingerprint, codeGenerationRecordDir, readTestingContract } from "../tools/aidlc-testing-posture.ts";
+import {
+  approvalFingerprint,
+  codeGenerationRecordDir,
+  projectPlanApprovalContent,
+  readTestingContract,
+} from "../tools/aidlc-testing-posture.ts";
 import { shellCommandInvocationDetails } from "./review-freeze-command.ts";
 
 // The OS package managers, each with the names its family goes by (a plan that
@@ -101,19 +106,22 @@ export function systemInstalls(command: string): SystemInstall[] {
   return found;
 }
 
-// The words of every plan and test instructions the person approved on this
-// work, or that plan approval off built without asking, read as approved: the
-// committed files count only while `approvalFingerprint` over them still
-// equals the fingerprint the row recorded, so a line added after the approval
-// names nothing.
-function approvedPlanWords(projectDir: string): Set<string> {
+// The words of each plan and its test instructions the person approved on this
+// work, one set a plan, read as approved: the committed files count only while
+// `approvalFingerprint` over them still equals the fingerprint the row
+// recorded, so a line added after the approval names nothing, and the plan is
+// read through the approval's own projection, which leaves out a reviewer's
+// terminal appendix. A plan that plan approval off built without asking
+// (PLAN_APPROVAL_SKIPPED, the poc and express default) was the agent's own:
+// nobody saw it, so it names nothing.
+function approvedPlanWords(projectDir: string): Set<string>[] {
   // Loaded only once an install is seen: a plan's words end where its named files do.
   const { PLAN_WORD_BREAK } = require("../tools/aidlc-plan-approval-ask.ts") as {
     PLAN_WORD_BREAK: RegExp;
   };
-  const words = new Set<string>();
+  const plans: Set<string>[] = [];
   for (const row of readAuditShardEvents(projectDir)) {
-    if (row.event !== "PLAN_APPROVAL_RECORDED" && row.event !== "PLAN_APPROVAL_SKIPPED") continue;
+    if (row.event !== "PLAN_APPROVAL_RECORDED") continue;
     const targetId = auditBlockField(row.block, "Plan Target");
     const intentId = auditBlockField(row.block, "Intent");
     const runFloor = auditBlockField(row.block, "Run floor");
@@ -128,20 +136,23 @@ function approvedPlanWords(projectDir: string): Set<string> {
       if (!("contract" in contract)) continue;
       const current = approvalFingerprint(plan, instructions, contract.contract.contract_sha256, { targetId, intentId, runFloor });
       if (current !== fingerprint) continue;
-      for (const raw of `${plan}\n${instructions}`.split(new RegExp(`${PLAN_WORD_BREAK.source}+`))) {
+      const words = new Set<string>();
+      for (const raw of `${projectPlanApprovalContent(plan)}\n${instructions}`.split(new RegExp(`${PLAN_WORD_BREAK.source}+`))) {
         const word = raw.replace(/[.:!?]+$/, "").toLowerCase();
         if (word.length > 0) words.add(word);
       }
+      plans.push(words);
     } catch {
       // A plan that cannot be read names nothing; the person is asked.
     }
   }
-  return words;
+  return plans;
 }
 
-function planNames(words: ReadonlySet<string>, install: SystemInstall): boolean {
-  return install.family.some((name) => words.has(name)) &&
-    install.packages.every((name) => words.has(name.toLowerCase()));
+/** Whether one plan names the install: the package manager (any of its family's names) and every package. */
+export function namedByOnePlan(plans: readonly ReadonlySet<string>[], install: SystemInstall): boolean {
+  return plans.some((words) =>
+    install.family.some((name) => words.has(name)) && install.packages.every((name) => words.has(name.toLowerCase())));
 }
 
 // The go-ahead's row: the command, and the message whose turn stood behind it
@@ -200,8 +211,8 @@ export function unaskedSystemInstall(
     recordAllowed(projectDir, context.hook, command, turn, fields);
     return null;
   }
-  const words = approvedPlanWords(projectDir);
-  if (installs.every((install) => planNames(words, install))) return null;
+  const plans = approvedPlanWords(projectDir);
+  if (installs.every((install) => namedByOnePlan(plans, install))) return null;
   recordGuardBlockedRow(projectDir, {
     eventType: "SYSTEM_INSTALL_BLOCKED",
     hook: context.hook,
@@ -212,6 +223,6 @@ export function unaskedSystemInstall(
     stage: context.stage,
   });
   return `AI-DLC stopped this command: \`${shown}\` installs a system package on this machine, outside the project, ` +
-    "and the plan does not name it. Tell the person the command and what it is for. It runs once the person says " +
-    "so, or they can run it themselves.";
+    "and no plan the person approved names it. Tell the person the command and what it is for. It runs once the " +
+    "person says so, or they can run it themselves.";
 }
