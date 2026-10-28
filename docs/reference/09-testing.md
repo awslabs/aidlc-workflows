@@ -2093,7 +2093,10 @@ Linux it gives Kiro a scratch home and keeps the machine's sign-in, so
 follow the model Kiro CLI uses (about 33 each on `claude-opus-5.5` with Kiro
 CLI 2.32.0). It prints one line per tree, for example
 `Kiro CLI 2.32.0 (kiro-ide) release journey on <commit>: PASS (5.1 min of
-turns, 33.23 credits, 3 permission prompts)`, and both lines are recorded,
+turns, 33.23 credits, 3 permission prompts)`; `<commit>` reads
+`<commit> plus uncommitted changes` when the checkout had changes not in that
+commit (the run packages the checkout as it is), so run it from a clean checkout
+of the source commit. Both lines are recorded,
 including the full source SHA, in the selected preview's GitHub release notes
 before promotion. Existing results for that source are reused;
 the promotion workflow does not rerun the journey on its new metadata commit.

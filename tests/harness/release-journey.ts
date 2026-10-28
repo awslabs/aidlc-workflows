@@ -24,7 +24,7 @@ import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude
 import { REPO_ROOT } from "./fixtures.ts";
 import { auditRows, filesBeforePlanProblems, type GoldenRun, sourceListing } from "./golden-journey.ts";
 import { expectPersonFirst } from "./person-turns.ts";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs, TestBudgetExhaustedError } from "./test-budget.ts";
 
 export type ReleaseJourneyHarness = "copilot" | "kiro" | "kiro-ide";
 
@@ -223,11 +223,41 @@ export function releaseJourneyEvidence(proj: string): Record<string, unknown> {
   return { recordedLines: recordedPersonLines(proj), requests: requestRecords(proj), work: workRecords(proj), audit };
 }
 
-/** Doctor after the journey: it must not report that the hooks never ran. */
+// Doctor's failing hook-heartbeat rows. Its JSON carries no id for them, so
+// they are read by label; t-release-journey-report runs doctor to keep these
+// in step with its wording.
+const HOOK_HEARTBEAT_FAILURES = [
+  "AIDLC hooks have not run in this project yet",
+  "Hook heartbeat data",
+  "Hooks have never executed although",
+  "Hooks last fired ",
+];
+
+/**
+ * Doctor after the journey: it must not report that the hooks never ran, or
+ * that they stopped beating while the workflow went on. It reads the hooks'
+ * health at the end of the journey only.
+ */
 export function hooksRanProblems(checks: DoctorCheck[]): string[] {
-  return checks.filter((check) => !check.pass &&
-    (check.label.startsWith("AIDLC hooks have not run in this project yet") || check.label.startsWith("Hook heartbeat data")))
+  return checks.filter((check) => !check.pass && HOOK_HEARTBEAT_FAILURES.some((label) => check.label.startsWith(label)))
     .map((check) => `doctor says "${check.label}"`);
+}
+
+/**
+ * Wait for one turn to end: `poll` waits once and says whether it ended. The
+ * journey's time running out (its deadline, or a test budget a wait would
+ * spend) leaves the turn unfinished, so the journey still reports which line
+ * was running and what the screen showed, instead of stopping on the budget.
+ */
+export function waitForTurn(poll: () => boolean, deadlineMs: number): boolean {
+  try {
+    while (Date.now() < deadlineMs) {
+      if (poll()) return true;
+    }
+  } catch (error) {
+    if (!(error instanceof TestBudgetExhaustedError)) throw error;
+  }
+  return false;
 }
 
 export interface ReleaseJourneyReport {
@@ -247,7 +277,7 @@ export interface ReleaseJourneyReport {
  */
 export function writeReleaseJourneyReport(report: ReleaseJourneyReport): string {
   const minutes = (report.turns.reduce((sum, turn) => sum + turn.seconds, 0) / 60).toFixed(1);
-  const commit = sourceCommit();
+  const commit = JOURNEY_CHECKOUT;
   const tree = report.harness === "copilot" ? "" : ` (${report.harness})`;
   const line = `${TOOL_NAMES[report.harness]} ${report.toolVersion}${tree} release journey${commit ? ` on ${commit}` : ""}: ` +
     `${report.problems.length ? "FAIL" : "PASS"} (${minutes} min of turns${
@@ -261,27 +291,57 @@ export function writeReleaseJourneyReport(report: ReleaseJourneyReport): string 
   return line;
 }
 
+const firstLine = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0];
+
 /**
  * Run a journey and write its report, also when a step throws: the step that
  * stopped it becomes a problem first, so the pasted line never says PASS for
- * a journey that ended before its checks ran.
+ * a journey that ended before its checks ran. When the report has a problem,
+ * `evidence` (what AI-DLC recorded, the tool's last output) is kept in it,
+ * whether the journey threw or not; evidence that cannot be read never hides
+ * the error that stopped the journey.
  */
-export function runReleaseJourney(report: ReleaseJourneyReport, journey: () => void): void {
+export function runReleaseJourney(
+  report: ReleaseJourneyReport, journey: () => void, evidence?: () => Record<string, unknown>,
+): void {
   try {
     journey();
   } catch (error) {
-    report.problems.push(`the journey stopped: ${(error instanceof Error ? error.message : String(error)).split("\n")[0]}`);
+    report.problems.push(`the journey stopped: ${firstLine(error)}`);
     throw error;
   } finally {
+    if (report.problems.length && evidence) {
+      try {
+        report.extra.evidence = evidence();
+      } catch (error) {
+        report.extra.evidence = { unreadable: firstLine(error) };
+      }
+    }
     writeReleaseJourneyReport(report);
   }
 }
 
-// The commit the journey's AI-DLC tree was built from. A CI live leg runs in a
-// snapshot of the checkout whose HEAD is not the tested commit (the run names
-// that), so the line leaves it out there.
-function sourceCommit(): string | undefined {
+/**
+ * The checkout the journey ran from: its HEAD, and whether it had changes not
+ * in that commit (untracked files included, ignored ones not). The runner
+ * packages dist/ from the checkout as it is, so a line run with uncommitted
+ * changes says so. A CI live leg runs in a snapshot of the checkout whose HEAD
+ * is not the tested commit (the run names that), so the line leaves it out
+ * there.
+ */
+export function checkoutIdentity(root = REPO_ROOT): string | undefined {
   if (process.env.GITHUB_ACTIONS === "true") return undefined;
-  const result = spawnSync("git", ["rev-parse", "--short=12", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" });
-  return result.status === 0 ? result.stdout.trim() : undefined;
+  const git = (args: string[]) => spawnSync("git", ["--no-optional-locks", ...args], {
+    cwd: root, encoding: "utf8",
+    timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS, { phase: "release journey checkout" }),
+  });
+  const head = git(["rev-parse", "--short=12", "HEAD"]);
+  if (head.status !== 0) return undefined;
+  const status = git(["status", "--porcelain", "--untracked-files=normal"]);
+  if (status.status !== 0) return `${head.stdout.trim()} (git status failed)`;
+  return `${head.stdout.trim()}${status.stdout.trim() ? " plus uncommitted changes" : ""}`;
 }
+
+// Read when the journey file loads, just after the runner packaged dist/ from
+// the checkout, so an edit or a commit during the run does not change it.
+const JOURNEY_CHECKOUT = checkoutIdentity();
