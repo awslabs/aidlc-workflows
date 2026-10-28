@@ -1087,7 +1087,10 @@ except that on Kiro CLI a model or effort change applies from your next Kiro CLI
 session, since a running one keeps what it started with;
 a default scope applies to new work only, and a saved model profile changes
 nothing until `--from` loads it. The runtime, providers, and trust answers
-print no workflow line.
+print no workflow line, and neither does a command that records or clears a
+bypass no other settings file records while its variable is set in the
+environment the command runs in, whatever else it changes: open work reads the
+environment of the editor or CLI it runs in, which the command cannot see.
 
 A refresh that brings in release files (a plain `aidlc config`, `--from`,
 `--download`, `config project`, or the update a pinned project needs first)
