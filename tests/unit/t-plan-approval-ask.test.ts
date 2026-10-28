@@ -184,11 +184,11 @@ function stageDir(proj: string, unit: string | null = null): string {
   return join(seededRecordDir(proj), "construction", ...(unit ? [unit] : []), "code-generation");
 }
 
-function writePlan(proj: string, extra = "", unit: string | null = null): void {
+function writePlan(proj: string, extra = "", unit: string | null = null, touches = "src/slugify.ts"): void {
   mkdirSync(stageDir(proj, unit), { recursive: true });
   writeFileSync(
     join(stageDir(proj, unit), "code-generation-plan.md"),
-    "# Code Generation Plan\n\n## Summary\n\n- Builds: slugify for titles\n- Touches: src/slugify.ts\n" +
+    `# Code Generation Plan\n\n## Summary\n\n- Builds: slugify for titles\n- Touches: ${touches}\n` +
       `- Tests: 3 unit tests\n\n## Steps\n\n- [ ] Step 1: write slugify\n${extra}\n` +
       renderTestingContract(resolveTestingPosture(proj)),
     "utf-8",
@@ -3783,6 +3783,64 @@ describe("stopping for now at Code Generation", () => {
     expect(next(proj).kind).toBe("parked");
     otherWorkGoesOn("after next says parked");
   });
+
+  // A built Unit's files are not the parked build: with unit-a built and the
+  // work parked at unit-b's Code Generation, a file only unit-a's plan names is
+  // the person's other work, as it is at unit-b's plan question; unit-b's own
+  // file and the developer wait for the resume.
+  test.each(["at the plan question", "after approval"] as const)(
+    "parked %s of a later Unit, a file only a built Unit's plan names goes on and the parked Unit's waits",
+    (when) => {
+      const proj = unitProject("unit-a", "unit-b");
+      cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+      const state = seededStateFile(proj);
+      writeFileSync(state, readFileSync(state, "utf-8")
+        .replace("## Scope Configuration", "## Runtime State\n- **Revision Count**: 0\n\n## Scope Configuration")
+        .replace("### CONSTRUCTION PHASE", "### INCEPTION PHASE\n- [x] units-generation \u2014 EXECUTE\n\n### CONSTRUCTION PHASE"));
+      writePlan(proj, "", "unit-a", "src/a.ts");
+      expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+      replyAndRecord(proj, "1", "Approve Plan");
+      expect(next(proj)).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+      runInstalled(proj, "bun .claude/tools/aidlc-state.ts unit start --stage code-generation --unit unit-a");
+      expect(next(proj)).toMatchObject({ kind: "run-stage", unit: "unit-a" });
+      writeFileSync(join(proj, "src", "a.ts"), "export const a = 1;\n");
+      for (const name of ["code-summary", "traceability"]) {
+        writeFileSync(join(stageDir(proj, "unit-a"), artifactFilename(name)), `# ${name}\nBuilt unit-a.\n`);
+      }
+      const stage = findStageBySlug("code-generation")!;
+      const fields = {
+        Stage: stage.slug, Unit: "unit-a", Reviewer: stage.reviewer!, Iteration: "1",
+        "Artifact Fingerprint": reviewArtifactFingerprint(proj, stage, "unit-a")!,
+      };
+      appendAuditEntry("REVIEW_REQUESTED", fields, proj);
+      appendAuditEntry("REVIEW_COMPLETED", { ...fields, Verdict: "READY" }, proj);
+      next(proj);
+      runInstalled(proj, "bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit unit-a");
+      expect(unitCompletedReceipts(proj, "code-generation").has("unit-a")).toBe(true);
+      expect(next(proj)).toMatchObject({ kind: "run-stage", unit: "unit-b", plan_approval: { status: "plan" } });
+      writePlan(proj, "", "unit-b", "src/b.ts");
+      expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+      if (when === "after approval") {
+        reply(proj, "Approve the plan, but let's stop there for today");
+        expect(answer(proj, "Approve Plan", ["--park"]).message).toContain("parked");
+      } else {
+        reply(proj, "let's stop here for today");
+        expect(JSON.parse(runInstalled(proj, "bun .claude/tools/aidlc.ts engine orchestrate park --person-asked")).kind)
+          .toBe("parked");
+      }
+      const builtUnitsFilesGoOn = (point: string): void => {
+        const built = guardWrite(proj, join(proj, "src", "a.ts"));
+        expect(built.code, `${point}\n${built.stderr}`).toBe(0);
+        const parked = guardWrite(proj, join(proj, "src", "b.ts"));
+        expect(parked.code, point).toBe(2);
+        expect(parked.stderr, point).toContain(" next`");
+        expect(guardDispatch(proj, "AIDLC-UNIT: unit-b\n").code, point).toBe(2);
+      };
+      builtUnitsFilesGoOn("parked");
+      expect(next(proj).kind).toBe("parked");
+      builtUnitsFilesGoOn("after next says parked");
+    },
+  );
 });
 
 // From a live run under production guards: at the plan question the person
