@@ -2019,21 +2019,21 @@ function pinUnit(args: string[], projectDir?: string): void {
   const integration = fetchIntegration(pd);
   const ref = claimRef(identity.intentId8, unit);
   const claim = currentClaim(pd, integration.remote, ref);
-  const superseded = inFlight && approvalOutlivedByRepublish(pd, inFlight, claim)
-    ? inFlight
-    : null;
+  let superseded: UnitMergeTransaction | null = null;
   if (
     inFlight &&
-    !superseded &&
     inFlight.space === identity.space &&
     inFlight.intent_uuid === identity.intentUuid &&
     ["approved", "git-landed", "state-folded", "complete"].includes(
       inFlight.status,
     )
   ) {
-    fail(
-      `Unit "${unit}" already has a ${inFlight.status} merge transaction; recover it with aidlc unit land ${unit} instead of re-pinning.`,
-    );
+    if (!approvalOutlivedByRepublish(pd, inFlight, claim)) {
+      fail(
+        `Unit "${unit}" already has a ${inFlight.status} merge transaction; recover it with aidlc unit land ${unit} instead of re-pinning.`,
+      );
+    }
+    superseded = inFlight;
   }
   if (
     claim?.status !== "claimed" ||
