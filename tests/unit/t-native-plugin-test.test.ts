@@ -9,7 +9,8 @@
 // built on a base with and without --with; and it must leave the project as it
 // was. In the compiled binary the runner's children (the compose hook, the
 // candidate's graph compile) start from `aidlc` itself, so this is the check
-// that they still run as Bun there.
+// that they still run as Bun there, and that a compose drop's fix line still
+// names the native command.
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -167,6 +168,25 @@ describe("aidlc plugin test on a native install", () => {
     expect(without.verb.status).toBe(1);
     expect(without.runner.status).toBe(1);
     expect(comparablePluginTest(without.verb.stdout)).toEqual(comparablePluginTest(without.runner.stdout));
+  });
+
+  test("a project that leaves the plugin off and does not have it: the fix line is the native select, after installing it there", () => {
+    const selected = join(root, "selected");
+    mkdirSync(selected);
+    const configured = native(["config", "--project-dir", selected, "--harness", "claude", "--yes"], root);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const narrowed = native(["engine", "plugin", "select", "aidlc"], selected);
+    expect(narrowed.status, narrowed.stdout + narrowed.stderr).toBe(0);
+    const result = native(["plugin", "test", "--install", selected, "--json"], plugins.clean);
+    expect(result.status, result.stderr).toBe(1);
+    const json = JSON.parse(result.stdout) as { drops: Array<{ message: string }> };
+    expect(json.drops.map((drop) => drop.message)).toEqual([
+      'plugin "test-pro" composed but is not enabled by tools/data/harness.json; this test composed it into a copy, so install test-pro in this project first, then run `aidlc engine plugin select aidlc,test-pro` to expose its stages, scopes, and runners',
+    ]);
+    // Why the line says so: the select knows only the plugins installed in the project.
+    const refused = native(["engine", "plugin", "select", "aidlc,test-pro"], selected);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stdout + refused.stderr).toContain("Unknown plugin name(s): test-pro");
   });
 
   test("--help names exactly the options the verb takes, in the native invocation", () => {

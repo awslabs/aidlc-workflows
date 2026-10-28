@@ -143,6 +143,56 @@ describe("t327 top-level plugin authoring routes", () => {
     expect(comparablePluginTest(without.verb.stdout)).toEqual(comparablePluginTest(without.runner.stdout));
   });
 
+  function utility(project: string, args: string[]) {
+    const result = spawnSync(process.execPath, [join(project, ".claude", "tools", "aidlc-utility.ts"), ...args], {
+      cwd: project,
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    return { status: result.status, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
+  }
+
+  // A copy-channel project narrowed to core with its own select line; with
+  // `installed`, test-pro's compose hook installs the plugin there first, as a
+  // session start does.
+  function narrowedProject(name: string, installed: boolean): string {
+    const project = join(scratch, name);
+    cpSync(join(REPO_ROOT, "dist", "claude"), project, { recursive: true });
+    if (installed) {
+      const compose = spawnSync(process.execPath, [join(EXPECTED, "hooks", "compose.ts")], {
+        cwd: project,
+        encoding: "utf-8",
+        env: { ...process.env, CLAUDE_PLUGIN_ROOT: EXPECTED, CLAUDE_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" },
+      });
+      expect(compose.status, compose.stderr).toBe(0);
+    }
+    const narrowed = utility(project, ["select-plugins", "aidlc"]);
+    expect(narrowed.status, narrowed.stderr).toBe(0);
+    return project;
+  }
+
+  const drops = (stdout: string): string[] =>
+    (JSON.parse(stdout) as { drops: Array<{ message: string }> }).drops.map((drop) => drop.message);
+
+  test("plugin test on a project that leaves the plugin off names the copy channel's select line, after installing the plugin there only when it is not", () => {
+    const missing = narrowedProject("narrowed-missing", false);
+    const notInstalled = run(["plugin", "test", "--install", missing, "--json"], plugins.clean);
+    expect(notInstalled.status, notInstalled.stderr).toBe(1);
+    expect(drops(notInstalled.stdout)).toEqual([
+      'plugin "test-pro" composed but is not enabled by tools/data/harness.json; this test composed it into a copy, so install test-pro in this project first, then run `bun .claude/tools/aidlc-utility.ts select-plugins aidlc,test-pro` to expose its stages, scopes, and runners',
+    ]);
+    expect(utility(missing, ["select-plugins", "aidlc,test-pro"]).stderr).toContain("Unknown plugin name(s): test-pro");
+
+    const off = narrowedProject("narrowed-installed", true);
+    const installedOff = run(["plugin", "test", "--install", off, "--json"], plugins.clean);
+    expect(installedOff.status, installedOff.stderr).toBe(1);
+    expect(drops(installedOff.stdout)).toEqual([
+      'plugin "test-pro" composed but is not enabled by tools/data/harness.json; run `bun .claude/tools/aidlc-utility.ts select-plugins aidlc,test-pro` to expose its stages, scopes, and runners',
+    ]);
+    const enabled = utility(off, ["select-plugins", "aidlc,test-pro"]);
+    expect(enabled.status, enabled.stderr).toBe(0);
+  });
+
   test("plugin test --help names exactly its options, and a usage error exits 2 with the verb's usage", () => {
     const usage = "bun .claude/tools/aidlc.ts plugin test [path] --install <project-root> [--harness <name>] [--with <base-root>] [--json]";
     const help = run(["plugin", "test", "--help"]);
