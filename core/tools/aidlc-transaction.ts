@@ -21,6 +21,7 @@ import {
   symlinkSync,
   writeFileSync,
   writeSync,
+  type Stats,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
@@ -229,12 +230,18 @@ export function transactionState(path: string): string | "absent" {
   return sha256Bytes(readFileSync(path));
 }
 
+// What a transaction tree can hold: regular files and folders, never a link,
+// a junction or a special file.
+export function transactionCarries(stat: Stats): boolean {
+  return stat.isFile() || stat.isDirectory();
+}
+
 function validateTreeSource(path: string): void {
   const visit = (current: string): void => {
     for (const entry of readdirSync(current)) {
       const child = join(current, entry);
       const stat = lstatSync(child);
-      if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) {
+      if (!transactionCarries(stat)) {
         throw new Error(`${child}: transaction tree contains a link or special file`);
       }
       if (stat.isDirectory()) visit(child);
@@ -253,13 +260,14 @@ export function transactionSourceHash(path: string): string {
       const child = join(directory, entry);
       const rel = prefix ? `${prefix}/${entry}` : entry;
       const stat = lstatSync(child);
+      if (!transactionCarries(stat)) {
+        throw new Error(`${child}: transaction tree contains a link or special file`);
+      }
       if (stat.isDirectory()) {
         rows.push(`directory ${rel} ${stat.mode & 0o777}`);
         visit(child, rel);
-      } else if (stat.isFile()) {
-        rows.push(`file ${rel} ${stat.mode & 0o777} ${sha256Bytes(readFileSync(child))}`);
       } else {
-        throw new Error(`${child}: transaction tree contains a link or special file`);
+        rows.push(`file ${rel} ${stat.mode & 0o777} ${sha256Bytes(readFileSync(child))}`);
       }
     }
   };

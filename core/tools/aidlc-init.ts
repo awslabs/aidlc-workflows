@@ -121,6 +121,7 @@ import {
   TransactionFilesystemError,
   assertTransactionFilesystem,
   executePlan,
+  transactionCarries,
   transactionSourceHash,
   transactionState,
   validateTransactionPlan,
@@ -8677,12 +8678,55 @@ function firstRunMutationPaths(
   ].map((path) => resolve(path)))];
 }
 
+// What the rollback snapshot goes around inside a folder AI-DLC manages: a
+// link or special file, and a git checkout of the person's own (Claude Code
+// keeps its worktrees in .claude/worktrees/) at a path the release ships
+// nothing to. Setup writes neither, and a transaction cannot carry a link.
+function snapshotGoesAround(path: string, releaseHas: (path: string) => boolean): boolean {
+  const stat = lstatSync(path);
+  if (!transactionCarries(stat)) return true;
+  return stat.isDirectory() && pathPresent(join(path, ".git")) && !releaseHas(path);
+}
+
+// The folder whole when nothing in it is gone around, as every stock project
+// is; else each entry beside what is gone around, split the same way, and the
+// folders that were split.
+function snapshotUnits(
+  path: string,
+  releaseHas: (path: string) => boolean,
+): { units: string[]; split: string[] } {
+  if (!pathPresent(path) || !lstatSync(path).isDirectory()) return { units: [path], split: [] };
+  const units: string[] = [];
+  const split: string[] = [];
+  let around = false;
+  for (const entry of readdirSync(path).sort()) {
+    const child = join(path, entry);
+    if (snapshotGoesAround(child, releaseHas)) {
+      around = true;
+      continue;
+    }
+    const inner = snapshotUnits(child, releaseHas);
+    if (inner.split.length > 0) around = true;
+    units.push(...inner.units);
+    split.push(...inner.split);
+  }
+  return around ? { units, split: [path, ...split] } : { units: [path], split: [] };
+}
+
 function snapshotFirstRunMutationPaths(
   projectDir: string,
   choices: FirstRunChoices,
 ): FirstRunMutationSnapshot {
   const root = mkdtempSync(join(tmpdir(), "aidlc-first-run-rollback-"));
-  const snapshots = firstRunMutationPaths(projectDir, choices).map((path, index) => {
+  const releaseHas = (path: string): boolean =>
+    pathPresent(join(choices.candidate.root, relative(projectDir, path)));
+  const split: string[] = [];
+  const paths = [...new Set(firstRunMutationPaths(projectDir, choices).flatMap((path) => {
+    const taken = snapshotUnits(path, releaseHas);
+    split.push(...taken.split);
+    return taken.units;
+  }))];
+  const snapshots = paths.map((path, index) => {
     const backup = join(root, String(index));
     return {
       path,
@@ -8721,6 +8765,25 @@ function snapshotFirstRunMutationPaths(
       };
     },
     recordCommitted: (result) => {
+      // What setup made beside an entry the snapshot went around is new, so a
+      // rollback removes it, as it removes a folder setup created.
+      for (const directory of split) {
+        for (const entry of readdirSync(directory).sort()) {
+          const path = join(directory, entry);
+          if (
+            split.includes(path) ||
+            snapshots.some((snapshot) => snapshot.path === path) ||
+            snapshotGoesAround(path, releaseHas)
+          ) continue;
+          snapshots.push({
+            path,
+            backup: join(root, String(snapshots.length)),
+            existed: false,
+            committed: transactionState(path),
+            owned: true,
+          });
+        }
+      }
       const data = result.data;
       if (!data || typeof data !== "object" || !("actions" in data)) return;
       const actions = (data as { actions?: unknown }).actions;
