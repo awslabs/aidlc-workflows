@@ -390,6 +390,8 @@ describe("a testing practice kept at the gate is for the next build", () => {
     built(proj);
     const NEXT = "bun .claude/tools/aidlc.ts engine orchestrate next";
     expect(lastStep(runNamed(proj, NEXT).stdout).plan_approval?.status).toBe("approved");
+    const brief = runNamed(proj, `bun .claude/tools/aidlc.ts engine testing-posture brief --stage-level --project-dir ${proj}`);
+    expect(brief.status, brief.stderr).toBe(0);
     keepTestingPractice(proj);
     const after = lastStep(runNamed(proj, NEXT).stdout);
     expect(after.kind, JSON.stringify(after)).toBe("print");
@@ -400,6 +402,10 @@ describe("a testing practice kept at the gate is for the next build", () => {
     expect(refused).toContain("it says what this build does next");
     expect(refused).not.toContain("asks the person to approve");
     expect(refused).not.toContain("approve the plan");
+    const handoff = dispatchOn(proj, brief.stdout);
+    expect(handoff).toStartWith("exit 2;");
+    expect(handoff).toContain("it says what this build does next");
+    expect(handoff).not.toContain("asks the person to approve");
     expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message).not.toBe(WAITS);
     expect(stageLine(proj)).toContain("[?] code-generation");
   });
@@ -685,6 +691,20 @@ function guardOn(proj: string, command: string): string {
   return `exit ${ran.status}; stdout ${JSON.stringify(ran.stdout.trim())}; stderr ${JSON.stringify(ran.stderr.trim())}; rows ${rows() - before}`;
 }
 const ADMITTED = 'exit 0; stdout ""; stderr ""; rows 0';
+
+// The same guard on a developer handoff carrying this brief.
+function dispatchOn(proj: string, prompt: string): string {
+  const ran = spawnSync(process.execPath, [join(proj, ".claude", "hooks", "aidlc-plan-approval-guard.ts")], {
+    cwd: proj,
+    encoding: "utf-8",
+    input: JSON.stringify({
+      hook_event_name: "PreToolUse", session_id: SESSION, cwd: proj, tool_name: "Task",
+      tool_input: { subagent_type: "aidlc-developer-agent", prompt },
+    }),
+    env: { ...process.env, AIDLC_UNATTENDED: undefined, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj } as NodeJS.ProcessEnv,
+  });
+  return `exit ${ran.status}; stderr ${JSON.stringify(ran.stderr.trim())}`;
+}
 
 // The engine's own answer to the state's completion: whether it said the plan
 // step, and the state file after it.

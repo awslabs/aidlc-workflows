@@ -663,16 +663,9 @@ export function mutationBlockReason(
   const action = opaqueShell
     ? "run mutation-capable shell commands"
     : "modify workspace paths";
-  // A build reviewed under its plan, whose contract moved after the review,
-  // and whose plan the person has not asked to see again
-  // (codeGenerationBuildFinishes): the moved contract is for the next plan, so
-  // no approval is promised.
   if (finished) {
-    return (
-      `Code generation cannot ${action} for ${scope}: its build was reviewed under the approved plan, and ` +
-      "the Testing Contract changed after that review, which applies from the next plan. Writes inside the " +
-      `selected code-generation record directory remain available. Run ${nextOnItsOwn()}: it says what this ` +
-      "build does next."
+    return finishedBuildReason(
+      `${action} for ${scope}`, " Writes inside the selected code-generation record directory remain available.",
     );
   }
   return (
@@ -680,6 +673,18 @@ export function mutationBlockReason(
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
     `matching approval.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""} Writes inside the selected code-generation record directory remain ` +
     `available for planning. When the plan is ready, run ${nextOnItsOwn()}: ${nextAfterPlanClause(planApprovalOff, false)}`
+  );
+}
+
+// A build reviewed under its plan, whose contract moved after the review, and
+// whose plan the person has not asked to see again (codeGenerationBuildFinishes):
+// the moved contract is for the next plan, so no approval is promised and no
+// second handoff is asked for, whether a write or a developer handoff was refused.
+function finishedBuildReason(refused: string, still = ""): string {
+  return (
+    `Code generation cannot ${refused}: its build was reviewed under the approved plan, and the Testing ` +
+    `Contract changed after that review, which applies from the next plan.${still} Run ${nextOnItsOwn()}: it ` +
+    "says what this build does next."
   );
 }
 
@@ -2844,6 +2849,10 @@ async function evaluate(
       planApprovalOff = false;
     }
   }
+  // A refused developer handoff for one target whose build is finished as its
+  // plan stands (codeGenerationBuildFinishes): said as the write refusal says it.
+  const handoffFinished = (): boolean => verdict.mentioned.length === 1 &&
+    buildFinishes(projectDir, verdict.mentioned[0] === `stage:${GUARDED_STAGE}` ? null : verdict.mentioned[0]);
   const refusalProse = (detail: string | null): string =>
     authorityFailure
       ? authorityBlockReason(authorityFailure, standing, asked, editingReply, jumpWayOn, swarmHeldWayOn)
@@ -2859,6 +2868,8 @@ async function evaluate(
       ? appendixBlockReason(verdict.mentioned)
       : handoffDefect
       ? handoffBlockReason(verdict.mentioned, handoffDefect, briefTargets)
+      : handoffFinished()
+      ? finishedBuildReason(`start for ${verdict.mentioned[0] === `stage:${GUARDED_STAGE}` ? "the zero-Unit stage-level implementation" : `unit ${verdict.mentioned[0]}`}`)
       : blockReason(verdict.mentioned, detail ?? receiptDetail(units, verdict.mentioned), briefTargets, planApprovalOff);
 
   if (rulesArriving !== null) {
