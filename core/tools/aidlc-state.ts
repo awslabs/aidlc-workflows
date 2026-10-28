@@ -291,6 +291,7 @@ import {
   mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
+import { generateFireId, recordUnfinishedFire, unfinishedFire } from "./aidlc-sensor.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
@@ -3944,10 +3945,6 @@ function gateSensorDispatchTimeoutMs(): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-function diagnosticSnippet(value: string | null | undefined): string {
-  return (value ?? "").replace(/\s+/g, " ").trim().slice(0, 240);
-}
-
 function gateSensorMatchesOutput(
   sensor: NonNullable<
     NonNullable<ReturnType<typeof findStageBySlug>>["sensors_applicable"]
@@ -4091,6 +4088,7 @@ function fireGateSensors(
         });
         continue;
       }
+      const fireId = generateFireId();
       const args = [
         "fire",
         sensor.id,
@@ -4098,12 +4096,15 @@ function fireGateSensors(
         stage.slug,
         "--output-path",
         outputPath,
+        "--fire-id",
+        fireId,
         ...(choice?.unit ? ["--unit", choice.unit] : []),
         ...(fire.pathSet ? ["--paths-stdin", "json"] : []),
       ];
       const command = executable
         ? [executable, "engine", "sensor", ...args]
         : [process.execPath, sensorTool, ...args];
+      const startedAt = Date.now();
       const result = spawnSync(command[0], command.slice(1), {
         cwd: pd,
         encoding: "utf-8",
@@ -4115,8 +4116,26 @@ function fireGateSensors(
         },
         ...(fire.pathSet ? { input: JSON.stringify(fire.covered) } : {}),
       });
+      // A fire that gave no verdict is recorded whatever the check's severity,
+      // so the gate says it could not run; a blocking one still refuses below.
+      const outcome = unfinishedFire(result, parseSensorFireVerdict(result.stdout ?? ""));
+      if (outcome.unfinished !== null) {
+        try {
+          recordUnfinishedFire(pd, {
+            fireId,
+            sensorId: sensor.id,
+            stageSlug: stage.slug,
+            unit: choice?.unit ?? null,
+            outputPath,
+            durationMs: Date.now() - startedAt,
+            note: outcome.unfinished.note,
+          });
+        } catch (error) {
+          recordHookDrop(pd, "gate-sensors", `sensor ${sensor.id} at ${stage.slug} (Fire id ${fireId}) ${outcome.unfinished.reason}; its could-not-run row was not written: ${errorMessage(error)}`);
+        }
+      }
       if (sensor.default_severity !== "blocking") {
-        const verdict = parseSensorFireVerdict(result.stdout ?? "");
+        const { verdict } = outcome;
         if (verdict?.result === "failed" && verdict.detail_path !== null) failedFires.push(verdict.fire_id);
         continue;
       }
@@ -4130,42 +4149,16 @@ function fireGateSensors(
         });
         continue;
       }
-      if (result.error) {
-        const code = (result.error as NodeJS.ErrnoException).code ?? "unknown";
+      if (outcome.unfinished !== null) {
         issues.push({
           sensorId: sensor.id,
           outputPath,
           detailPath: null,
-          reason:
-            code === "ETIMEDOUT"
-              ? "dispatcher timeout"
-              : `dispatcher spawn failed (${code})`,
+          reason: outcome.unfinished.reason,
         });
         continue;
       }
-      if (result.status !== 0) {
-        const stderr = diagnosticSnippet(result.stderr);
-        issues.push({
-          sensorId: sensor.id,
-          outputPath,
-          detailPath: null,
-          reason:
-            result.status === null
-              ? `dispatcher terminated by ${result.signal ?? "unknown signal"}`
-              : `dispatcher exited ${result.status}${stderr ? `: ${stderr}` : ""}`,
-        });
-        continue;
-      }
-      const verdict = parseSensorFireVerdict(result.stdout ?? "");
-      if (verdict === null) {
-        issues.push({
-          sensorId: sensor.id,
-          outputPath,
-          detailPath: null,
-          reason: "dispatcher returned no valid verdict",
-        });
-        continue;
-      }
+      const { verdict } = outcome;
       let verdictOutputPath: string | null = null;
       try {
         verdictOutputPath = realpathSync(

@@ -6,8 +6,8 @@
 //   fire <id> --stage <slug>      — invoke a sensor against a stage output;
 //        --output-path <path>       emits SENSOR_FIRED then a paired terminal
 //        [--unit <name>]            row (PASSED | FAILED | COULD_NOT_RUN |
-//                                   BUDGET_OVERRIDE); the Unit, when named, is
-//                                   on every row.
+//        [--fire-id <8 hex>]        BUDGET_OVERRIDE); the Unit, when named, is
+//                                   on every row. The gate names the Fire id.
 //
 // The dispatcher is a thin routing surface (Q4/Q5 of the locked plan):
 //   1. Validate inputs + resolve graph + generate Fire id (no audit lock held).
@@ -61,7 +61,7 @@ import {
 	resolve as pathResolve,
 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { appendAuditEntries, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
 	frameworkTemplatesDir,
 	loadGraph,
@@ -76,6 +76,7 @@ import {
 import {
 	artifactFilename,
 	asksForHelp,
+	auditBlockField,
 	auditLockDir,
 	codekbDir,
 	errorMessage,
@@ -85,6 +86,7 @@ import {
 	isPlainObject,
 	KNOWN_CODEKB_STAGES,
 	printUsageAndExit,
+	readAuditShardEvents,
 	readRegularFileNoFollowOrThrow,
 	readStateFile,
 	recordDir,
@@ -398,8 +400,28 @@ const BUNDLED_SENSOR_IDS = new Set([
 
 // --- Fire id ---
 
-function generateFireId(): string {
+export function generateFireId(): string {
 	return randomBytes(4).toString("hex");
+}
+
+const FIRE_ID = /^[0-9a-f]{8}$/;
+
+// The fields every row of one fire carries, SENSOR_FIRED and its result alike.
+function fireRowFields(
+	fireId: string,
+	sensorId: string,
+	stageSlug: string,
+	unit: string | null,
+	outputPath: string,
+	projectDir: string,
+): Record<string, string> {
+	return {
+		"Fire id": fireId,
+		"Sensor ID": sensorId,
+		"Stage slug": stageSlug,
+		...(unit ? { Unit: unit } : {}),
+		"Output path": relativizePath(outputPath, projectDir),
+	};
 }
 
 // --- Subcommand: list ---
@@ -615,7 +637,13 @@ function handleFire(args: string[]): void {
 	const pathSet = flags["paths-stdin"] === undefined ? null : readPathSet(id, flags["paths-stdin"], outputPath, matches);
 
 	// --- 1e. Generate Fire id (8 hex chars) ---
-	const fireId = generateFireId();
+	// The gate names its own (`--fire-id`), so it can account for this fire
+	// when it gets no verdict back (recordUnfinishedFire).
+	const givenFireId = flags["fire-id"];
+	if (givenFireId !== undefined && !FIRE_ID.test(givenFireId)) {
+		dispatchError(`fire --fire-id expects 8 hex characters, got "${givenFireId}"`);
+	}
+	const fireId = givenFireId ?? generateFireId();
 
 	// Resolve the project dir once — used by the consume filter in step 2 and
 	// the detail-file path in step 3.
@@ -737,13 +765,7 @@ function handleFire(args: string[]): void {
 	withSensorAuditLock(projectDir, ctx, "fired", () => {
 		appendAuditEntryUnlocked(
 			"SENSOR_FIRED",
-			{
-				"Fire id": fireId,
-				"Sensor ID": id,
-				"Stage slug": stageSlug,
-				...(unit ? { Unit: unit } : {}),
-				"Output path": relativizePath(outputPath, projectDir),
-			},
+			fireRowFields(fireId, id, stageSlug, unit, outputPath, projectDir),
 			projectDir,
 		);
 	});
@@ -1145,14 +1167,7 @@ function emitTerminal(
 	projectDir: string,
 ): void {
 	const { sensor, stageSlug, unit, outputPath, fireId, detailPath } = ctx;
-	const id = sensor.id;
-	const baseFields: Record<string, string> = {
-		"Fire id": fireId,
-		"Sensor ID": id,
-		"Stage slug": stageSlug,
-		...(unit ? { Unit: unit } : {}),
-		"Output path": relativizePath(outputPath, projectDir),
-	};
+	const baseFields = fireRowFields(fireId, sensor.id, stageSlug, unit, outputPath, projectDir);
 
 	if (outcome.kind === "passed") {
 		const fields: Record<string, string> = {
@@ -1194,6 +1209,75 @@ function emitTerminal(
 		"Observed value": String(outcome.observedSeconds),
 	};
 	appendAuditEntryUnlocked("SENSOR_BUDGET_OVERRIDE", fields, projectDir);
+}
+
+// --- A fire that gave its caller no verdict ---
+//
+// unfinishedFire: what a fire that gave its caller no verdict comes to, from
+// the dispatcher's spawn result and the verdict the caller read off its stdout.
+// `reason` is what a blocking gate's refusal shows; `note` is the cause the
+// record keeps, in the words decideOutcome notes a script that could not run,
+// without the dispatcher's stderr, which can name paths on this machine. Null
+// when the dispatcher answered: it exited 0 and printed a verdict.
+export function unfinishedFire<V>(
+	result: { error?: Error; status: number | null; signal: NodeJS.Signals | null; stderr: string },
+	verdict: V | null,
+): { verdict: V; unfinished: null } | { verdict: V | null; unfinished: { reason: string; note: string } } {
+	const unfinished = (reason: string, note: string) => ({ verdict, unfinished: { reason, note: `dispatch-error: ${note}` } });
+	if (result.error) {
+		const code = (result.error as NodeJS.ErrnoException).code ?? "unknown";
+		return code === "ETIMEDOUT"
+			? unfinished("dispatcher timeout", "timeout")
+			: unfinished(`dispatcher spawn failed (${code})`, `spawn-failed: ${code}`);
+	}
+	if (result.status === null) {
+		return unfinished(`dispatcher terminated by ${result.signal ?? "unknown signal"}`, `signal-${result.signal ?? "unknown"}`);
+	}
+	if (result.status !== 0) {
+		const stderr = (result.stderr ?? "").replace(/\s+/g, " ").trim().slice(0, 240);
+		return unfinished(`dispatcher exited ${result.status}${stderr ? `: ${stderr}` : ""}`, `exit-${result.status}`);
+	}
+	return verdict === null
+		? unfinished("dispatcher returned no valid verdict", "bad-output")
+		: { verdict, unfinished: null };
+}
+
+// recordUnfinishedFire: the gate's account of one fire it started with its own
+// Fire id and got no verdict back from (the dispatcher could not start, timed
+// out, exited non-zero before its rows, or printed nothing it could read). That
+// fire checked nothing the gate can show, so it is recorded as could not run,
+// never left as a check that did not run or as an earlier pass. The dispatcher
+// has exited, so every row it wrote is on disk: a result row of this fire is
+// kept, a SENSOR_FIRED it left without one is closed, and a fire with neither
+// gets both rows, in one append. A row is this fire's by its Fire id, fresh for
+// each gate fire, with its check and stage; the output is not compared, as the
+// record may spell it another way (`<project-dir>/...` under a symlinked
+// project folder).
+export function recordUnfinishedFire(
+	projectDir: string,
+	fire: {
+		fireId: string;
+		sensorId: string;
+		stageSlug: string;
+		unit: string | null;
+		outputPath: string;
+		durationMs: number;
+		note: string;
+	},
+): void {
+	const fields = fireRowFields(fire.fireId, fire.sensorId, fire.stageSlug, fire.unit, fire.outputPath, projectDir);
+	const rows = readAuditShardEvents(projectDir).filter((row) =>
+		row.event.startsWith("SENSOR_") &&
+		["Fire id", "Sensor ID", "Stage slug"].every((name) => auditBlockField(row.block, name) === fields[name])
+	);
+	if (rows.some((row) => row.event !== "SENSOR_FIRED")) return;
+	appendAuditEntries([
+		...(rows.length === 0 ? [{ eventType: "SENSOR_FIRED", fields }] : []),
+		{
+			eventType: "SENSOR_COULD_NOT_RUN",
+			fields: { ...fields, "Duration ms": String(fire.durationMs), Note: fire.note },
+		},
+	], projectDir);
 }
 
 // --- Path-set fire ---
@@ -1305,7 +1389,8 @@ function sensorUsage(subcommand: string | undefined): string {
 		fire: [
 			sensorFireUsage(),
 			"  Fires a sensor against a stage output; emits SENSOR_FIRED and its paired result row.",
-			"  Required: <id>, --stage, --output-path. Options: --unit <name> (named on both rows)",
+			"  Required: <id>, --stage, --output-path. Options: --unit <name> (named on both rows),",
+			"  --fire-id <8 hex> (the fire's Fire id; the gate names its own)",
 		],
 	};
 	if (subcommand !== undefined && usage[subcommand]) return usage[subcommand].join("\n");

@@ -1253,10 +1253,10 @@ The sensor dispatcher emits the five `SENSOR_*` events and doctor emits the pair
 
 | Event | Emitter | Trigger |
 |---|---|---|
-| `SENSOR_FIRED` | `tools/aidlc-sensor.ts` `fire` | Dispatcher invoked a sensor against a stage output from a matching Write/Edit or gate-boundary dispatch |
+| `SENSOR_FIRED` | `tools/aidlc-sensor.ts` `fire` | Dispatcher invoked a sensor against a stage output from a matching Write/Edit or gate-boundary dispatch; for a gate fire whose dispatcher wrote no row and gave no verdict, the gate writes it with the paired `SENSOR_COULD_NOT_RUN` (`recordUnfinishedFire`) |
 | `SENSOR_PASSED` | `tools/aidlc-sensor.ts` `fire` | Sensor completed and reported no findings (also covers tool-unavailable and a failure whose detail file could not be written; `Note` field discriminates) |
 | `SENSOR_FAILED` | `tools/aidlc-sensor.ts` `fire` | Sensor completed and reported findings; detail file written at `<record>/.aidlc-engine/sensors/<stage-slug>/<sensor-id>-<fire-id>.md` (in the intent's record dir) |
-| `SENSOR_COULD_NOT_RUN` | `tools/aidlc-sensor.ts` `fire` | The check could not run: its script could not start, exited non-zero (not 127), was stopped by a signal, or printed no verdict; `Note` carries the reason. Never a pass and never a failure; the gate names it in one line |
+| `SENSOR_COULD_NOT_RUN` | `tools/aidlc-sensor.ts` `fire` | The check could not run: its script could not start, exited non-zero (not 127), was stopped by a signal, or printed no verdict; `Note` carries the reason. A gate fire whose dispatcher gave no verdict is recorded the same way by the gate (`recordUnfinishedFire`, `Note: dispatch-error: <reason>`). Never a pass and never a failure; the gate names it in one line |
 | `SENSOR_BUDGET_OVERRIDE` | `tools/aidlc-sensor.ts` `fire` | Sensor exceeded its configured cap (registry / binding / depth-derived per the three-layer cap model) and was terminated or skipped |
 | `GUARDRAIL_LOADED` | `tools/aidlc-utility.ts` | Guardrail loader resolved the scope-hierarchical guardrail set for the active workflow (org → project → phase → stage); doctor's paired-coverage check reads from this event |
 
