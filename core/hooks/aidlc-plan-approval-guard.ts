@@ -175,6 +175,7 @@ import {
   codeGenerationRulesArrivingReason,
   type CodeGenerationTarget,
   evaluateCodeGenerationApproval,
+  parkedWhereItStands,
   planReviewAppendix,
   promptTestingContractMarkers,
   setAsideBuildUnderOff,
@@ -1014,6 +1015,28 @@ function planApprovalPlanNamedPaths(projectDir: string, unit?: string | null): s
   } catch {
     return null;
   }
+}
+
+// The files any Code Generation plan of this work names as it is on disk, the
+// stage-level plan's and each known Unit's. Null when one cannot be read.
+function workPlansNamedPaths(projectDir: string): string[] | null {
+  const named: string[] = [];
+  for (const unit of [null, ...knownUnits(projectDir, docsRoot(projectDir))]) {
+    const paths = planApprovalPlanNamedPaths(projectDir, unit);
+    if (paths === null) return null;
+    named.push(...paths);
+  }
+  return named;
+}
+
+// While the build is not running, only the build waits: a call that is not
+// AI-DLC's own command the admission holds and whose every seen target is
+// beside the build against the plans `planPaths` reads (read only when there
+// is a target), so a command that names no file it writes passes.
+function besideTheBuild(projectDir: string, mutation: MutationIntent, planPaths: () => string[] | null): boolean {
+  if (mutation.engineRefused) return false;
+  const paths = mutation.targets.length > 0 ? planPaths() : null;
+  return mutation.targets.every((candidate) => isPlanWaitSideWrite(projectDir, candidate, paths));
 }
 
 // While the engine's Plan Approval question is open and the person has replied,
@@ -2590,6 +2613,14 @@ async function evaluate(
         judgedStep = { projectDir, marker: activeDirective };
       }
     }
+    // Work parked where it stands is not being built: as while its plan waits,
+    // only the build waits for the resume (the developer, the files any of its
+    // plans name, AI-DLC's own commands the admission holds), and what else the
+    // person asks for in the project runs, under every Guard Policy.
+    if (
+      !guardedDispatch && knownMutationTool && parkedWhereItStands(state) &&
+      besideTheBuild(projectDir, mutation, () => workPlansNamedPaths(projectDir))
+    ) return 0;
     rulesArriving = codeGenerationRulesArrivingReason(activeDirective, projectDir);
     if (
       activeDirective?.version !== 2 ||
@@ -2644,10 +2675,7 @@ async function evaluate(
         // plan names. What else the person asks for runs now: a commit, an
         // install, a test run, or a write to a file the plan does not name,
         // under every Guard Policy.
-        if (knownMutationTool && !mutation.engineRefused) {
-          const planPaths = mutation.targets.length > 0 ? planApprovalPlanNamedPaths(projectDir) : null;
-          if (mutation.targets.every((candidate) => isPlanWaitSideWrite(projectDir, candidate, planPaths))) return 0;
-        }
+        if (knownMutationTool && besideTheBuild(projectDir, mutation, () => planApprovalPlanNamedPaths(projectDir))) return 0;
         authorityFailure = PLAN_APPROVAL_ASK_OPEN;
         standing = planStanding(projectDir, activeDirective);
         // Loaded only here: the question's own record, read the way its owner

@@ -662,6 +662,7 @@ import {
   codeGenerationResumeNarration,
   codeGenerationStartNarration,
   notePlanApprovalOverrideOffered,
+  parkedWhereItStands,
   promotableTestingPosture,
   setTestingPostureRoute,
   stepNextCommand,
@@ -5529,14 +5530,6 @@ function workflowParkedDirective(
         parkedAt,
         narration,
       );
-}
-
-// Whether the workflow is parked where it stands. A park the workflow has
-// since moved past is stale and holds nothing.
-function parkedWhereItStands(stateContent: string): boolean {
-  const parkedAt = (getField(stateContent, "Parked At Stage") ?? "").trim();
-  return (getField(stateContent, "Parked") ?? "").trim().length > 0 && parkedAt.length > 0 &&
-    parkedAt === (getField(stateContent, "Current Stage") ?? "").trim();
 }
 
 // What the person hears after a change made over parked work.

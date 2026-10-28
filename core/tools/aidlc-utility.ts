@@ -2027,7 +2027,7 @@ To get started:
   // or the engine's own) stands where the cursor stands, whatever the checkbox
   // says, so it is read first; a park the work has since moved past is stale
   // and holds nothing, the same rule the router uses (parkedWhereItStands in
-  // aidlc-orchestrate.ts). The line carries the way back, in the harness's own
+  // aidlc-testing-posture.ts). The line carries the way back, in the harness's own
   // entry word. A live run read "Status: Running" over paused work and the
   // agent had to correct it.
   // Read for the work this status is for, the one named or the selected one.

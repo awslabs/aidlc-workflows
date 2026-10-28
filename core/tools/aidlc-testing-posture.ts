@@ -3178,6 +3178,14 @@ export function codeGenerationExecutionAllowed(
     (current.ok || codeGenerationContinuation(projectDir, target, issued) !== null);
 }
 
+// Whether the workflow is parked where it stands. A park the workflow has
+// since moved past is stale and holds nothing.
+export function parkedWhereItStands(stateContent: string): boolean {
+  const parkedAt = (getField(stateContent, "Parked At Stage") ?? "").trim();
+  return (getField(stateContent, "Parked") ?? "").trim().length > 0 && parkedAt.length > 0 &&
+    parkedAt === (getField(stateContent, "Current Stage") ?? "").trim();
+}
+
 /** Code Generation is the current stage and its gate is open, waiting for the person's answer. */
 export function codeGenerationGateHeld(state: string): boolean {
   return (getField(state, "Current Stage") ?? "").trim().toLowerCase().replace(/\s+/g, "-") === CODE_GENERATION_STAGE &&
