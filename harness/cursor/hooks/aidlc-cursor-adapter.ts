@@ -789,7 +789,7 @@ export async function run(
   function shellActiveText(command: string, flavor: PathFlavor): string | null {
     const singles = flavor === "win32" ? "'\u2018\u2019\u201a\u201b" : "'";
     const doubles = flavor === "win32" ? '"\u201c\u201d\u201e' : '"';
-    const escape = flavor === "win32" ? "`" : "\\";
+    const escapeChar = flavor === "win32" ? "`" : "\\";
     let active = "";
     let quote = "";
     for (let i = 0; i < command.length; i++) {
@@ -799,7 +799,7 @@ export async function run(
         else if (doubles.includes(ch)) quote = doubles;
         else {
           active += ch;
-          if (ch === escape) active += command[++i] ?? "";
+          if (ch === escapeChar) active += command[++i] ?? "";
         }
         continue;
       }
@@ -809,7 +809,7 @@ export async function run(
         else quote = "";
       } else if (quote === doubles) {
         if (ch === "$" || ch === "`") active += ch;
-        if (ch === escape) i++;
+        if (ch === escapeChar) i++;
       }
     }
     return quote === "" ? active : null;
