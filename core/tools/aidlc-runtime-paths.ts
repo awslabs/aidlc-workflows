@@ -308,10 +308,6 @@ export function repoNameProblem(name: string): string | null {
   // cmd.exe reads these again, however the command quotes them.
   const cmd = /[&^%]/.exec(name);
   if (cmd) return `has "${cmd[0]}", which breaks AI-DLC's commands on Windows`;
-  // Cursor's adapter stops a delegated agent's own AI-DLC command holding
-  // these, quoted or not (runsAdmittedAidlcCommand).
-  const cursor = /[()[\]{};$`]/.exec(name);
-  if (cursor) return `has "${cursor[0]}", which stops AI-DLC's commands on Cursor`;
   if (name.includes(",")) return 'has ",", which AI-DLC puts between repo names';
   if (name === "-") return 'is "-", which AI-DLC\'s records use for no repo';
   if (name.startsWith("--")) return 'starts with "--", which AI-DLC\'s commands read as an option';
@@ -320,7 +316,7 @@ export function repoNameProblem(name: string): string | null {
   // quotes read an apostrophe alike in both (quoteCommandArgument); these end
   // or act inside them.
   const apostrophe = /['\u2018-\u201b]/.exec(name);
-  const alongside = /[!\u201c-\u201e]/.exec(name);
+  const alongside = /[!$`\u201c-\u201e]/.exec(name);
   if (apostrophe && alongside) {
     return `has "${apostrophe[0]}" with "${alongside[0]}", which AI-DLC cannot quote one way for both PowerShell and Git Bash on Windows`;
   }
