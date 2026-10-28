@@ -2946,12 +2946,11 @@ function handleUnit(args: string[]): void {
     // A Unit's Code Generation completes only once its plan no longer holds it
     // (codeGenerationCompletionPlanWaits says when); the plan's question is
     // `next`'s. The remedy the person picked at the recovery question is theirs.
-    if (
-      action === "complete" && slug === "code-generation" &&
+    const planWaits = action === "complete" && slug === "code-generation" &&
       !guardRecoveryAnswerAdmits(readActiveDirectiveMarker(pd, content), ["engine", "state", "unit", ...args], pd) &&
-      codeGenerationCompletionPlanWaits(pd, content, [unit])
-    ) {
-      error(`Refusing to complete unit "${unit}" for "${slug}": ${codeGenerationPlanWaitsStep()}`);
+      codeGenerationCompletionPlanWaits(pd, content, [unit]);
+    if (planWaits) {
+      error(`Refusing to complete unit "${unit}" for "${slug}": ${codeGenerationPlanWaitsStep(undefined, planWaits === "plan-review")}`);
     }
 
     // UNIT_COMPLETED is receipt-plus-evidence: the receipt commits only when

@@ -3383,9 +3383,11 @@ export function stepNextCommand(projectDir: string, step: { single?: boolean; st
  * The step a completion gets while its plan waits: the plan's question is
  * `next`'s, and an isolated run's is its own (isolatedCodeGenerationNext).
  */
-export function codeGenerationPlanWaitsStep(isolated?: { scope: string }): string {
+export function codeGenerationPlanWaitsStep(isolated?: { scope: string }, reviewAsked = false): string {
   const next = isolated === undefined ? `${aidlcToolInvocation("orchestrate")} next` : isolatedCodeGenerationNext(isolated.scope);
-  return `The code plan is not approved yet: run \`${next}\` and follow the step it prints.`;
+  // An approved plan the person asked to see again is not "not approved".
+  const why = reviewAsked ? "The person asked to see the code plan again" : "The code plan is not approved yet";
+  return `${why}: run \`${next}\` and follow the step it prints.`;
 }
 
 function recordCodeGenerationContinuation(

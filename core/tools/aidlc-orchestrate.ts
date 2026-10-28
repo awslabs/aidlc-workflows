@@ -15334,10 +15334,11 @@ function codeGenerationCompletionWaits(
   if (node.slug !== "code-generation") return null;
   const marker = readActiveDirectiveMarker(projectDir, stateContent);
   if (guardRecoveryAnswerAdmits(marker, ["engine", "orchestrate", "report", ...args], projectDir)) return null;
-  return codeGenerationCompletionPlanWaits(
+  const waits = codeGenerationCompletionPlanWaits(
     projectDir, stateContent, isolated ? [null] : codeGenerationReportTargets(projectDir, node, scope, stateContent, unit),
-  )
-    ? printDirective(codeGenerationPlanWaitsStep(isolated ? { scope } : undefined))
+  );
+  return waits
+    ? printDirective(codeGenerationPlanWaitsStep(isolated ? { scope } : undefined, waits === "plan-review"))
     : null;
 }
 
@@ -15345,23 +15346,24 @@ function codeGenerationCompletionWaits(
  * Whether a Code Generation completion for these targets waits on the person:
  * only while plan approval is on for this work (read as `next` reads it, so the
  * scope, the person's switch and the trusted machine switch all count), and then
- * while a target has no approval that lets it build, or its plan stands only as
- * its finished build reads it while a plan review the person asked for is
- * pending (codeGenerationFinishedBuild), so `next` shows them the plan first.
+ * "plan" while a target has no approval that lets it build. It also waits,
+ * "plan-review", when a target's plan stands only as its finished build reads it
+ * and a plan review the person asked for is pending (codeGenerationFinishedBuild),
+ * so `next` shows them the plan first. False when it does not wait.
  * `unit complete` asks too.
  */
 export function codeGenerationCompletionPlanWaits(
   projectDir: string,
   stateContent: string,
   units: ReadonlyArray<string | null>,
-): boolean {
+): false | "plan" | "plan-review" {
   try {
     if (resolvePlanApprovalSetting(projectDir, stateContent).value === "off") return false;
   } catch {
     return false;
   }
-  return codeGenerationPlanWaits(projectDir, units) ||
-    units.some((unit) => codeGenerationFinishedBuild(projectDir, unit) === "plan-review");
+  if (codeGenerationPlanWaits(projectDir, units)) return "plan";
+  return units.some((unit) => codeGenerationFinishedBuild(projectDir, unit) === "plan-review") ? "plan-review" : false;
 }
 
 // The Code Generation targets a completion report covers: the Unit it names,
