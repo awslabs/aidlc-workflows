@@ -25,6 +25,7 @@ import {
   heading,
   tipLabel,
 } from "./aidlc-color.ts";
+import { startNativeLauncher } from "./aidlc-native-launcher.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   aidlcInvocation,
@@ -4168,7 +4169,9 @@ export async function main(rawArgv: string[]): Promise<void> {
   process.exitCode = code;
 }
 
-if (import.meta.main) {
+// The bin copy on Windows hands the command to the active release instead of
+// running it.
+if (import.meta.main && !startNativeLauncher()) {
   // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
   // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
   // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only

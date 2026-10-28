@@ -117,10 +117,14 @@ Invoke-WebRequest `
 Remove-Item -Recurse -Force $download
 ```
 
-Windows installs versions under `%LOCALAPPDATA%\aidlc\versions\` and keeps a
-stable `%LOCALAPPDATA%\aidlc\bin\aidlc.cmd` shim, with AI-DLC's own plugin
-catalogue in `%LOCALAPPDATA%\aidlc\plugins\`. After successful verification
-and installation, the installer registers that bin directory in the current
+Windows installs versions under `%LOCALAPPDATA%\aidlc\versions\` and keeps the
+`aidlc` command in `%LOCALAPPDATA%\aidlc\bin\`: `aidlc.exe`, a copy of the AI-DLC
+binary that starts the active version, and the `aidlc.cmd` shim beside it.
+PowerShell, CMD and Git Bash all run `aidlc.exe` for a bare `aidlc`, which
+hands the active version its arguments as your shell gave them, with no cmd.exe
+in between reading `&`, `^`, `|`, `<`, `>` or `%NAME%` in them. AI-DLC's own
+plugin catalogue is in `%LOCALAPPDATA%\aidlc\plugins\`. After successful
+verification and installation, the installer registers that bin directory in the current
 account's persistent User PATH, preserving existing entries and avoiding
 duplicates on reruns. It also updates the current PowerShell process and
 notifies Windows of the environment change, so programs started afterwards
@@ -153,7 +157,7 @@ To skip **both persistent and current-process PATH changes**, replace
 a direct command to run without PATH registration. For the default location:
 
 ```powershell
-& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" config
+& "$env:LOCALAPPDATA\aidlc\bin\aidlc.exe" config
 ```
 
 Use the printed command path if you changed the install location. Rerun the
@@ -175,7 +179,7 @@ Installation asks no harness question. Human and non-interactive runs install
 the same binary plus all harness runtimes.
 
 For temporary or isolated Windows installs, pass `-NoModifyPath` and invoke
-the reported `aidlc.cmd` path directly to keep the temporary bin directory out
+the reported command path directly to keep the temporary bin directory out
 of User PATH and the current process.
 
 PowerShell `-Json` emits one result with `schemaVersion: 1`, `ok`, `code`,
@@ -1852,8 +1856,8 @@ again (with `--purge` if the original used it):
   again from the files on disk, so a file edited after confirmation is kept.
 - If removal had begun, the same plan resumes. Files edited since are kept.
 
-The `aidlc` command itself (`aidlc.cmd`, its shim, the active-version pointers,
-and the active `aidlc.exe`) is removed last, after every other file and the
+The `aidlc` command itself (`aidlc.cmd` and `aidlc.exe` in bin, the shim, the
+active-version pointers, and the active `aidlc.exe`) is removed last, after every other file and the
 User PATH entry, so a failed cleanup still leaves a command to retry it. Because
 the PATH entry may already be gone, run that command by its full path, which
 `aidlc doctor` prints (by default
