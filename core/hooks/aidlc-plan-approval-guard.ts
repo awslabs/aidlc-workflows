@@ -126,8 +126,10 @@ import {
   personAskedSinceGate,
   plansNamePath,
   readActiveDirectiveMarker,
+  readApplicableTeamUnitScopeStamp,
   readIssuedDirectiveMarker,
   spacesRoot,
+  unitMajorConstructionStageSlugs,
   activeDirectiveOutOfDateReason,
   recordHookDrop,
   releaseAuditLock,
@@ -1657,6 +1659,19 @@ function isSelectedGuardRestartContinuation(
     checkboxes.filter((entry) => entry.slug === current).length !== 1 ||
     (parseStateStageSuffixes(state).get(target) ?? scope.stages[target]) !== "EXECUTE"
   ) return false;
+
+  // A checkout scoped to a team Unit restarts the Unit's step with the Unit's
+  // own reopen, the one jump it makes: for the Unit the question was about,
+  // which is this checkout's, over the stage and every later per-Unit stage.
+  if (continuation.direction === "reopen") {
+    const block = unitMajorConstructionStageSlugs(continuation.scope, state, true);
+    const from = block.indexOf(target);
+    return marker.unit !== undefined &&
+      continuation.unit === marker.unit &&
+      readApplicableTeamUnitScopeStamp(projectDir, state)?.unit === marker.unit &&
+      from >= 0 &&
+      continuation.stages?.join(",") === block.slice(from).join(",");
+  }
 
   // Match aidlc-jump resolve's graph-order calculation, not the caller's
   // claimed direction. A selection cannot turn a forward move into a reset.
