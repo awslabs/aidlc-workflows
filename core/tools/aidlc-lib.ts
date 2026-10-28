@@ -1757,7 +1757,7 @@ export function splitKiroCommandArgs(raw: string): string[] {
 // whitespace lies between one token's end and the next one's start.
 interface CommandArgSpan { text: string; start: number; end: number }
 
-function commandArgSpans(raw: string): CommandArgSpan[] {
+export function commandArgSpans(raw: string): CommandArgSpan[] {
   const tokens: CommandArgSpan[] = [];
   let current = "";
   let quote: "'" | '"' | null = null;
