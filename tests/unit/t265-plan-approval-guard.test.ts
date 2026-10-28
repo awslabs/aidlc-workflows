@@ -2216,7 +2216,10 @@ describe("t265b hook lifecycle", () => {
   // The person can stop for the day anywhere in Code Generation and come back
   // later. The engine names park and unpark itself, so both pass whether the
   // fence holds or stands aside; anything joined to them is still judged, and
-  // nothing is built while the plan waits.
+  // nothing is built while the plan waits. Parked where it stands, the work is
+  // not being built, so the person's other work goes on (#3227): a commit and a
+  // document (this project has no plan reader installed, so only a document is
+  // beside the build); a park the work has moved past holds nothing.
   for (const policy of ["strict", "off"] as const) {
     test(`park and unpark pass at every point of Code Generation (${policy})`, () => {
       const proj = scratchProject();
@@ -2225,10 +2228,14 @@ describe("t265b hook lifecycle", () => {
           writeFileSync(join(proj, ".claude", "tools", `aidlc-${tool}.ts`), "// installed tool\n");
         }
         const statePath = join(proj, RECORD_REL, "aidlc-state.md");
-        const seed = (opts: { approved?: boolean; parked?: boolean; kind?: "ask" | "parked" | "print"; ask_type?: string }) => {
+        const seed = (opts: {
+          approved?: boolean; parked?: boolean; parkedAt?: string; kind?: "ask" | "parked" | "print"; ask_type?: string;
+        }) => {
           seedState(proj);
           writeFileSync(statePath, `${readFileSync(statePath, "utf-8")}- **Guard Policy**: ${policy} (set by you)\n${
-            opts.parked ? "\n## Runtime State\n- **Parked**: 2026-10-01T00:00:00Z\n- **Parked At Stage**: code-generation\n" : ""
+            opts.parked
+              ? `\n## Runtime State\n- **Parked**: 2026-10-01T00:00:00Z\n- **Parked At Stage**: ${opts.parkedAt ?? "code-generation"}\n`
+              : ""
           }`);
           seedUnit(proj, null, { plan: true, answer: opts.approved ? "Approve Plan" : null });
           if (opts.kind) {
@@ -2246,6 +2253,7 @@ describe("t265b hook lifecycle", () => {
           ["while the engine asks for approval", { kind: "ask", ask_type: "plan-approval" }],
           ["once parked", { parked: true, kind: "parked" }],
           ["when next --resume names unpark", { parked: true, kind: "print" }],
+          ["after a park the work has moved past", { parked: true, parkedAt: "functional-design" }],
           ["while the approved plan is built", { approved: true }],
         ] as const) {
           seed(opts);
@@ -2266,6 +2274,17 @@ describe("t265b hook lifecycle", () => {
             expect(runHook(proj, BASH(command)).code, `${point}: ${command}`).toBe(2);
           }
           expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code, point).toBe(2);
+          if (!("parked" in opts)) continue;
+          // The commit the way the agent writes one, its message in a here-document.
+          const commit = "git commit -m \"$(cat <<'EOF'\nanother feature\nEOF\n)\"";
+          if ("parkedAt" in opts) {
+            expect(runHook(proj, BASH(commit)).code, point).toBe(2);
+            continue;
+          }
+          for (const payload of [BASH(commit), WRITE(join(proj, "README.md"))]) {
+            const result = runHook(proj, payload);
+            expect(result.code, `${point}: ${JSON.stringify(payload)}\n${result.stderr}`).toBe(0);
+          }
         }
       } finally {
         rmSync(proj, { recursive: true, force: true });

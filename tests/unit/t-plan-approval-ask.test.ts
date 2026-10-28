@@ -1,7 +1,7 @@
 // covers: function:routeCodeGenerationPlanApproval, function:publishPlanApprovalAsk, function:notePlanApprovalAskReply, function:recordPlanApprovalAnswer, function:requestPlanApprovalReviewNow, function:codeGenerationPlanReadiness, function:planSummaryLines,
 // function:PLAN_APPROVAL_ASK_TYPE, function:planApprovalRuntimeFile, function:readPlanApprovalRuntimeRecord,
 // function:writePlanApprovalRuntimeRecord, function:removePlanApprovalRuntimeRecord, function:releaseTakenGuardRecoveryReply, function:runStateContent,
-// function:keepPlanApprovalAskOverStateWrite, function:planNote, function:preparePlanRecordFolders
+// function:keepPlanApprovalAskOverStateWrite, function:planNote, function:preparePlanRecordFolders, function:parkedWhereItStands
 //
 // The engine asks for Plan Approval itself. These cases drive the real `next`,
 // the real human-turn hook, and the real plan-approval guard over one poc
@@ -36,7 +36,8 @@
 //     asks again; an answer typed after the chat compacts still counts;
 //   - stopping for now: the park and the unpark the engine names get through
 //     the guard, and coming back builds an approved plan or asks about the
-//     same plan again.
+//     same plan again; while the work is parked, the person's other work in
+//     the project goes on and the files the plan names and its developer wait.
 //   - the zero-Unit lockout reported in #1172 (refactor and bugfix, Brownfield,
 //     rules in parts): one approval reaches the build, each refusal while a
 //     part is the step names that part's `continue`, the stage-level handoff
@@ -3739,6 +3740,49 @@ describe("stopping for now at Code Generation", () => {
     expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
   });
+
+  // #3227: work parked at Code Generation is not being built, so the person's
+  // other work in the project goes on under every Guard Policy, before and
+  // after `next` says it is parked; the files the plan names and its developer
+  // wait for the resume.
+  test.each([
+    ["at the plan question", "strict"],
+    ["at the plan question", "relaxed"],
+    ["after approval", "strict"],
+    ["after approval", "off"],
+  ] as const)("parked %s, other work in the project goes on and the plan's own files wait (%s)", (when, policy) => {
+    const proj = project(policy);
+    cpSync(join(AIDLC_SRC, "tools"), join(proj, ".claude", "tools"), { recursive: true });
+    askFor(proj);
+    if (when === "after approval") {
+      reply(proj, "Approve the plan, but let's stop there for today");
+      expect(answer(proj, "Approve Plan", ["--park"]).message).toContain("parked");
+    } else {
+      reply(proj, "let's stop here for today");
+      const park = "bun .claude/tools/aidlc.ts engine orchestrate park --person-asked";
+      expect(JSON.parse(runInstalled(proj, park)).kind).toBe("parked");
+    }
+    const otherWorkGoesOn = (point: string): void => {
+      for (const command of [
+        `python3 -c "open('notes.txt','w').write('x')"`,
+        // The commit the way the agent writes one, its message in a here-document.
+        "git commit -m \"$(cat <<'EOF'\nanother feature\nEOF\n)\"",
+        "printf x > src/other.ts",
+      ]) {
+        const result = guardBash(proj, command);
+        expect(result.code, `${point}: ${command}\n${result.stderr}`).toBe(0);
+      }
+      const edit = guardWrite(proj, join(proj, "src", "inline.ts"));
+      expect(edit.code, `${point}\n${edit.stderr}`).toBe(0);
+      const planned = guardWrite(proj, join(proj, "src", "slugify.ts"));
+      expect(planned.code, point).toBe(2);
+      expect(planned.stderr, point).toContain(" next`");
+      expect(guardDispatch(proj, "AIDLC-STAGE: code-generation\n").code, point).toBe(2);
+    };
+    otherWorkGoesOn("parked");
+    expect(next(proj).kind).toBe("parked");
+    otherWorkGoesOn("after next says parked");
+  });
 });
 
 // From a live run under production guards: at the plan question the person
@@ -3988,9 +4032,9 @@ describe("the zero-Unit Code Generation lockout reported in #1172", () => {
       const parkAdmitted = guardBash(proj, park);
       expect(parkAdmitted.code, parkAdmitted.stderr).toBe(0);
       expect(JSON.parse(runInstalled(proj, park)).kind).toBe("parked");
-      // Parked, a write to the code is refused; the refusal names `next`, and
-      // `next --resume` names the unpark, which the guard lets through.
-      const parked = guardBash(proj, "printf changed > src/inline.ts");
+      // Parked, a write to a file the plan names waits; the refusal names
+      // `next`, and `next --resume` names the unpark, which the guard lets through.
+      const parked = guardBash(proj, "printf changed > src/slugify.ts");
       expect(parked.code).toBe(2);
       expect(parked.stderr).toContain(" next`");
       const unpark = resumeNamesUnpark(proj);
