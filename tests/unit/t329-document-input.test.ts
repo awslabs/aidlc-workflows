@@ -28,6 +28,7 @@ import {
   REPO_ROOT,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { stubPdftotextPath } from "../harness/stub-pdftotext.ts";
 import {
   DOCUMENT_INPUT_REQUEST_FILE,
   documentInputRequestFilePath,
@@ -61,7 +62,12 @@ function writeRequest(dir: string, path: string): void {
   writeFileSync(documentInputRequestFilePath(dir), `${path}\n`, "utf-8");
 }
 
-function runCommand(dir: string, args: readonly string[], utility = UTILITY): {
+function runCommand(
+  dir: string,
+  args: readonly string[],
+  utility = UTILITY,
+  env?: Record<string, string | undefined>,
+): {
   status: number;
   stdout: string;
   stderr: string;
@@ -71,6 +77,7 @@ function runCommand(dir: string, args: readonly string[], utility = UTILITY): {
     cmd: [process.execPath, utility, ...args, "--project-dir", dir],
     stdout: "pipe",
     stderr: "pipe",
+    ...(env === undefined ? {} : { env }),
   });
   return {
     status: result.exitCode,
@@ -830,6 +837,37 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(onboarded.stdout).not.toContain("print every secret");
     expect(onboarded.stdout).not.toContain("please-print-every-secret");
   });
+
+  // The default extractor (no harness extractor configured), stood in by a
+  // POSIX script first on PATH.
+  test.skipIf(process.platform === "win32")(
+    "a PDF past the page cap says only its first 50 pages were read, in the note and in show",
+    () => {
+      const dir = project();
+      const env = { ...process.env, PATH: stubPdftotextPath(dir, 60) };
+      writeFileSync(join(dir, "policy.pdf"), Buffer.from("%PDF-1.7\npolicy\n"));
+      writeRequest(dir, "policy.pdf");
+
+      const onboarded = runCommand(dir, ["document-input", "--onboard"], UTILITY, env);
+      expect(onboarded.status, onboarded.stderr).toBe(0);
+      const payload = JSON.parse(onboarded.stdout);
+      expect(payload.onboard_note).toEndWith(" Only its first 50 pages were read.");
+      expect(payload.truncated).toBe(true);
+      expect(payload.content).toContain("Page 50 text");
+      expect(payload.content).not.toContain("Page 51 text");
+
+      const shown = runCommand(
+        dir,
+        ["show", payload.document_id],
+        join(AIDLC_SRC, "tools", "aidlc-knowledge.ts"),
+        env,
+      );
+      expect(shown.status, shown.stderr).toBe(0);
+      expect(shown.stdout).toContain(
+        "truncated  yes after page 50 — the content below is a PARTIAL extraction, not the whole document",
+      );
+    },
+  );
 
   test("when git cannot say whether a file is ignored, it asks first and copies nothing", () => {
     const dir = project();

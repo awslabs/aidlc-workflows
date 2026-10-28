@@ -1774,7 +1774,11 @@ yes, and the file is kept beside it as `aidlc.bak-<time>`.
 
 `aidlc --help` prints exactly the six public commands. Each public command also
 has side-effect-free command help: `aidlc <command> --help` (or `-h`) for
-`config`, `doctor`, `version`, `update`, `use`, and `uninstall`. Config-level
+`config`, `doctor`, `version`, `update`, `use`, and `uninstall`. Command help
+names every option that command accepts, with a one-line meaning for each,
+grouped so download and mirror options and the options that only shape output
+read separately from the rest; `use` also describes the version it takes. The
+intent is that you can run a command correctly from its help alone. Config-level
 help names all six policy sections; `aidlc config <section> --help` keeps the
 section-specific help. `aidlc help --all` reveals the hidden `engine` and
 `system` namespaces and points to

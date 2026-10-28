@@ -12,7 +12,7 @@
 // this tool owns the convergence verdict + merge + audit (determinism); the human
 // grants autonomy and takes the baton on the envelope (judgement).
 //
-// THREE SUBCOMMANDS (no retry counter or retry cap):
+// FOUR SUBCOMMANDS (no retry counter or retry cap):
 //   prepare  --batch <n> --units <a,b,c> [--base <branch>] [--concurrency <n>]
 //            [--degraded-from <subagent|ultracode>] [--repo <name>] [--resume-existing]
 //       Fork an isolated git worktree per unit (aidlc-worktree create +
@@ -60,6 +60,11 @@
 //       budget-exhausted / cap-exhausted — recorded faithfully (the conductor
 //       judges WHY a unit gave up; the tool only records it, never for a claimed
 //       unit, whose reason is always the tool's own re-verify verdict).
+//   allow-change <file>... --message <id>
+//       The person asked for files in the main checkout to change while the
+//       Units are built, which a strict Guard Policy holds for the landings:
+//       proves the message, records MAIN_CHECKOUT_CHANGE_ALLOWED with their
+//       words for the current attempt, and prints the one line they hear.
 //
 // WHY STATELESS / NO CAP CONSTANT. "The cap" is three jobs on three concerns — the
 // verdict (determinism -> check), the retry decision (knowledge -> the conductor,
@@ -114,9 +119,14 @@ import {
   latestMainWorkflowStageRunFloor,
   latestMainWorkflowStageRunFloorForProject,
   legacyBoltIdentity,
+  mainCheckoutChangeRefusal,
+  mainCheckoutChangeRunFloor,
+  mainCheckoutHeldByTeam,
+  mainCheckoutPathKey,
   maximalAttemptEvents,
   parseArgs,
   parseRefsList,
+  personsWordsText,
   parseSourceListing,
   readAuditShardEvents,
   readActiveDirectiveMarker,
@@ -170,6 +180,9 @@ import {
   committedTextSha256,
   currentFingerprintForm,
 } from "./aidlc-lib.ts";
+import { proveMessage } from "./aidlc-message-store.ts";
+import { codeGenerationPlanNamedPaths } from "./aidlc-plan-approval-ask.ts";
+import { quoted } from "./aidlc-recorded-switches.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
   beginCodeGeneration,
@@ -3802,6 +3815,51 @@ function currentBranch(projectDir: string): string {
   return (r.stdout ?? "main").trim() || "main";
 }
 
+// The person asked for files in the main checkout to change while the Units
+// are built in parallel ("also fix the typo in the README"): the agent names
+// the message they asked in, the tool proves it and records the files with
+// their words, and the guard and the landings read that record
+// (mainCheckoutChangeAllowed). It reads no words.
+function handleAllowChange(rest: string[]): void {
+  const { flags, positional } = parseArgs(rest);
+  const projectDir = resolveProjectDir(flags["project-dir"]);
+  resolveSwarmSelection(projectDir, flags);
+  if (positional.length === 0) fail("allow-change requires the files the person asked to change: allow-change <file>... --message <id>");
+  if (!flags.message || flags.message === "true") fail("allow-change requires --message <id>: the person's message that asked for the change");
+  const state = readStateFile(projectDir);
+  if ((getField(state, "Current Stage") ?? "").trim().toLowerCase().replace(/\s+/g, "-") !== "code-generation") {
+    fail("Nothing holds a change in the main checkout now: allow-change is for while Code Generation builds the Units in parallel.");
+  }
+  const held = mainCheckoutHeldByTeam(projectDir);
+  if (held !== null) fail(held);
+  const paths: string[] = [];
+  for (const target of positional) {
+    const key = mainCheckoutPathKey(projectDir, target);
+    if (key === null) fail(`${target} is not a file in this project.`);
+    if (!paths.includes(key)) paths.push(key);
+  }
+  const marker = readActiveDirectiveMarker(projectDir, state);
+  const building = marker?.kind === "invoke-swarm" ? marker.units ?? [] : [];
+  const refusal = mainCheckoutChangeRefusal(projectDir, paths, building, (unit) => codeGenerationPlanNamedPaths(projectDir, unit));
+  if (refusal !== null) fail(refusal);
+  const proof = proveMessage(projectDir, flags.message, "request", { request: true });
+  if ("refusal" in proof) fail(proof.refusal);
+  const words = personsWordsText(proof.message.words ?? proof.message.text);
+  appendAuditEntry("MAIN_CHECKOUT_CHANGE_ALLOWED", {
+    Stage: "code-generation",
+    "Run floor": mainCheckoutChangeRunFloor(projectDir),
+    Paths: JSON.stringify(paths),
+    ...(words ? { "Person Reply": words } : {}),
+    "Message Id": proof.message.id,
+  }, projectDir);
+  const why = words ? `because you said: "${quoted(words)}"` : "as you asked in the chat";
+  console.log(JSON.stringify({
+    allowed: paths,
+    // Said once, while a batch is out or after the last landing: the landings or stage completion keep it.
+    notice: `${renderChangedPaths(paths)} can change during this Code Generation, ${why}. It is kept.`,
+  }));
+}
+
 function fail(msg: string): never {
   console.error(JSON.stringify({ error: msg }));
   process.exit(1);
@@ -3838,10 +3896,13 @@ export function main(argv: string[]): void {
     case "finalize":
       handleFinalize(rest);
       break;
+    case "allow-change":
+      handleAllowChange(rest);
+      break;
     default:
       console.error(
         JSON.stringify({
-          error: `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: prepare, check, finalize`,
+          error: `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: prepare, check, finalize, allow-change`,
         })
       );
       process.exit(1);

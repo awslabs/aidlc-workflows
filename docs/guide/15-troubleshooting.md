@@ -21,7 +21,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | I edited a file by hand; will the agent accept it? | Yes: edit, then say **done** (or carry on). An edit to a finished stage is used as is but not re-approved; to have it approved, jump back with `/aidlc --stage <name>`, which reopens that stage and every stage after it. See [Editing Files Yourself](07-interaction-modes.md#editing-files-yourself) for each case |
 | Claude hooks are restricted by policy | Ask the Claude Code administrator to lift managed `allowManagedHooksOnly`; project settings cannot override it |
 | Cursor: approvals are never recorded | If the project is not in a git repository, run `git init` in it, then fully restart Cursor and trust the folder (see [Cursor project outside a git repository](#cursor-project-outside-a-git-repository)) |
-| Kiro IDE: `deny fs_read matching ".kiro/"` | Run `/aidlc --doctor`; remove the `.kiro/` rule from the ignore file it names (see [Kiro IDE Read Denials](#kiro-ide-read-denials)) |
+| Kiro IDE or Kiro CLI v3: `deny fs_read matching ".kiro/"` | Run `/aidlc --doctor`; remove the `.kiro/` rule from the ignore file it names (see [Kiro Read Denials](#kiro-read-denials)) |
 | Kiro IDE: AI-DLC's reviews and helpers do not run, the chat shows **Approval needed in agent-aidlc-...** panels, or `/aidlc` is handed to a Kiro workflow | Kiro's Workflows feature is on. Ask the agent to turn it off, or run `aidlc config trust --kiro-workflows off --yes`, then **Developer: Reload Window** (see [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers)) |
 | Kiro CLI: AI-DLC's reviews and helpers do not run, and the agent says it has no tool to hand work to | Kiro CLI's Workflows feature is on. Ask the agent to turn it off, or run `aidlc config trust --kiro-cli-workflows off --yes`, then quit Kiro CLI and start `kiro-cli` again (see [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers)) |
 | Kiro IDE on Windows: command results end at an `AI-DLC reply:` line and steps take extra turns, or every command shows exit code -1 | Kiro's terminal is Command Prompt. Ask the agent to set it to PowerShell, or run `aidlc config trust --kiro-terminal powershell --yes`, then restart Kiro (see [Command Prompt as Kiro's terminal](harnesses/kiro-ide.md#command-prompt-as-kiros-terminal-on-windows)) |
@@ -394,9 +394,9 @@ Kiro lets you switch any project hook off in its Agent Hooks panel, and then wri
 
 ---
 
-## Kiro IDE Read Denials
+## Kiro Read Denials <a id="kiro-ide-read-denials"></a>
 
-### Kiro IDE denies every read under .kiro/ ("Rule: deny fs_read matching")
+### Kiro IDE or Kiro CLI v3 denies every read under .kiro/ ("deny fs_read matching")
 
 **Symptom**: Every stage, agent, and protocol read is denied, blocking the workflow:
 
@@ -404,20 +404,28 @@ Kiro lets you switch any project hook off in its Agent Hooks panel, and then wri
 Tool call denied by user's permissions. Rule: deny fs_read matching ".kiro/" Source: ~/.config/git/ignore
 ```
 
-[Kiro IDE honours](https://kiro.dev/docs/kiroignore/) git's global excludes file
-(in git repositories) and `~/.kiro/settings/kiroignore` automatically. Workspace
-ignore files apply only when the IDE's `kiroAgent.agentIgnoreFiles` setting names
-them (the default includes `.gitignore`; `[]` disables workspace sources).
-It evaluates each ignore file on its own: a project `!.kiro/` negation does not
+Kiro CLI v3 says it as:
+
+```text
+Blocked by a permission rule (deny fs_read matching ".kiro/"); the user did not reject it. Source: ~/.config/git/ignore.
+```
+
+[Kiro IDE and Kiro CLI v3 honour](https://kiro.dev/docs/kiroignore/) git's global
+excludes file (in git repositories) and `~/.kiro/settings/kiroignore`
+automatically. Kiro CLI v3 also applies the project `.kiroignore`, and not
+`.gitignore`. In Kiro IDE, workspace ignore files apply only when its
+`kiroAgent.agentIgnoreFiles` setting names them (the default includes
+`.gitignore`; `[]` disables workspace sources).
+Kiro evaluates each ignore file on its own: a project `!.kiro/` negation does not
 undo a global `.kiro/` rule, even when `git check-ignore` reports the path as not
 ignored. A `permissions.yaml` `fs_read` allow does **not** clear the denial:
 [Kiro applies deny-overrides across scopes](https://kiro.dev/docs/permissions/).
 
-Run `/aidlc --doctor`. For an IDE install (`.kiro/agents/aidlc-aidlc.md` present), it
+Run `/aidlc --doctor`. For a Kiro IDE or Kiro CLI v3 install (`.kiro/agents/aidlc-aidlc.md` present), it
 reports the offending source as:
 
 ```text
-Kiro IDE ignore sources: <source>:<line> hides .kiro/
+Kiro ignore sources: <source>:<line> hides .kiro/
 ```
 
 Doctor tests the reads the engine sends the agent to make through `fs_read`,
@@ -427,16 +435,18 @@ holds inline (at Standard and Minimal depth, within the directive's 8 KiB
 `inline_context_paths` cap), plus `stage-protocol.md` and its
 `stage-protocol-<name>.md` modules and the files beside each skill's `SKILL.md`.
 Plugins count however they were composed. Contributor-only protocol files such as
-`stage-definition.md` are not loaded. `SKILL.md` files, the IDE conductor agent (`agents/aidlc-aidlc.md`),
+`stage-definition.md` are not loaded. `SKILL.md` files, the conductor agent (`agents/aidlc-aidlc.md`),
 `aidlc-common/conductor.md`, and `tools/`, `sensors/`, `hooks/`, `scopes/`, and
-`steering/` are loaded by the IDE or the engine, not through `fs_read`, and are
+`steering/` are loaded by Kiro itself or the engine, not through `fs_read`, and are
 not counted. A rule that hides only some of them is
 reported with a count and the framework folders it touches, for example
 `hides 11 of 110 framework files (.kiro/agents/)`.
 
 Global-source matches fail doctor. Project `.gitignore` and `.kiroignore` matches
-warn instead, because doctor cannot read the IDE setting that governs whether
-those workspace files apply.
+warn instead, because doctor cannot tell which Kiro you run, and cannot read the
+IDE setting that governs whether those workspace files apply in Kiro IDE. The
+warning says where each applies: Kiro CLI v3 applies `.kiroignore`, so there a
+`.kiroignore` match denies those reads, and does not apply `.gitignore`.
 
 `<source>` is a fixed name: `~/.config/git/ignore` (or
 `$XDG_CONFIG_HOME/git/ignore`), `core.excludesFile` (run
@@ -998,7 +1008,7 @@ The `--doctor` utility command validates your setup. Run it whenever something s
 
 It checks: prerequisite (`bun`), hook availability (every framework hook wired by `settings.json` must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly; a valid custom non-AI-DLC `statusLine` intentionally exempts the unwired `aidlc-statusline.ts`), hooks-not-globally-disabled (a resolved `disableAllHooks: true` in any Claude Code settings layer fails loudly), managed project-hook policy (`allowManagedHooksOnly: true`), project structure (`settings.json`), workspace shell readiness (`.claude/` + `aidlc/spaces/default/memory/`), state/audit consistency (the workflow Status against a recorded `WORKFLOW_COMPLETED`, and each Stage Progress checkbox against the stage starts and completions the audit recorded for the current attempt. A stage the audit shows as started whose checkbox still reads `[ ]` is what makes the workflow refuse to finish it, and the warning names the exact line to change. Under team Unit Ownership the per-unit Construction checkboxes are derived from Unit Progress, so they are not compared), hook heartbeats, graph integrity (no cycles, every graph entry has a file), the **Composed plugin surface** (enabled plugin stages are compiled; contribution sidecars and targets are valid; recorded structural additions and prose fragments remain present and unchanged), selection-aware plugin-authored checks, scope validation across all 11 scopes, **Composed scope durability** (every composer-authored scope resolves to a real plan: a scope file with no grid column, a durable `aidlc/scopes/<name>.md` record not yet projected, or a runnable workflow naming an unresolvable scope all fail, with `graph compile` as the remedy wherever compile can reach the cause; a missing column with no record behind it is reported apart, since compile emits a column only for a scope some stage declares), stage schema + graph references, and keyword overlap across scopes. Passing advisory rows include **Duplicate producers** for consumed artifacts whose producer is ambiguous by graph load order, **Rule drift** (with lifecycle-stale overlaps reported separately as stale-suppressed), **Paired sensor coverage**, stage/gate ledgers with no `HUMAN_TURN`, approval gates waiting for a human for more than 24 hours, plugin advisory checks, uncommitted workspace records, fresh in-flight compose/background-subagent state, and, when `repos.json` exists, declared-repo and managed-`.gitignore` drift. A compose marker older than 24 hours or background-subagent entry older than 2 hours fails with the exact `rm aidlc/.aidlc-*` remediation; doctor never deletes either surface. **Hook drops** is conditional: a hook that silently degraded (e.g. a plugin compose that could not apply a contribution, or a failed recompile) records a severity-tagged line to `<hooks-health>/<hook>.drops`; a `[degraded]` drop **fails** doctor (so a CI gate catches a half-applied plugin), while any other drop is a passing row naming each hook's most frequent reasons (each up to its first colon; the detail stays in the file), raised to a `Hook failures, the latest within the last day` warning while the hook's latest failure is under 24 hours old (it clears a day later or when you delete the file; an `[advisory]` line never raises it). A hook's normal decisions, such as the Stop hook letting a turn end because you have to answer first, go to `<hook>.trace` and are never counted. The plugin compose hook rewrites its drops file each run, so fixing the cause and re-composing self-clears it. Clean and warnings-only reports exit 0; any failed check exits 1. Healthy rows collapse by section unless `--verbose` is present, while every warning and failure remains visible. The report writes to stdout either way. Core checks are **read-only**: on a fresh shell with no intent yet they create nothing, so the command is safe to run before the first intent is created. Plugin checks execute installed plugin code that is required by convention to be read-only, but the runtime cannot enforce that property. Once an intent exists doctor records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
 
-On Kiro IDE, it also checks each ignore source independently for rules hiding `.kiro/`, naming the file and line. Global-source matches fail; workspace-source matches warn because `kiroAgent.agentIgnoreFiles` governs whether they apply. See [Kiro IDE Read Denials](#kiro-ide-read-denials). On every harness but Cursor it also warns "AIDLC hooks have not run in this project yet" when no AI-DLC hook has run in the project. That is expected before your first chat message; after one, its fix names your tool's step (see, for example, [Kiro IDE hooks not running](#kiro-ide-hooks-not-running) or [GitHub Copilot hooks not running](#github-copilot-hooks-not-running)). On Kiro CLI, a workflow whose hooks never ran fails "Hooks have never executed" with the engine its hooks need; see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running).
+On Kiro IDE and Kiro CLI v3, it also checks each ignore source independently for rules hiding `.kiro/`, naming the file and line. Global-source matches fail; workspace-source matches warn because doctor cannot tell which Kiro you run: Kiro IDE's `kiroAgent.agentIgnoreFiles` governs whether they apply there, and Kiro CLI v3 applies `.kiroignore` but not `.gitignore`. See [Kiro Read Denials](#kiro-read-denials). On every harness but Cursor it also warns "AIDLC hooks have not run in this project yet" when no AI-DLC hook has run in the project. That is expected before your first chat message; after one, its fix names your tool's step (see, for example, [Kiro IDE hooks not running](#kiro-ide-hooks-not-running) or [GitHub Copilot hooks not running](#github-copilot-hooks-not-running)). On Kiro CLI, a workflow whose hooks never ran fails "Hooks have never executed" with the engine its hooks need; see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running).
 
 The **Workspace record visibility** advisory, beside the uncommitted-records
 row, catches user ignore rules added after config. It names the rule's file,

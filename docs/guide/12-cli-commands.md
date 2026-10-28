@@ -554,10 +554,12 @@ installing the tool and running `/aidlc knowledge sync`. Re-running `onboard` on
 same unchanged path reports `already` and does NOT retry extraction — only `sync`
 re-probes rows in this state. Nothing is silently skipped.
 
-**Extraction is capped**: 50 pages for PDF (`pdftotext -l 50`) and 200,000
+**Extraction is capped**: 50 pages for PDF with the default extractor
+(`pdftotext -l 50`, then a check for a page 51) and 200,000
 characters of extractor output. Past a cap the text is cut and the row records
-`truncated` — `show` prints a `truncated  yes` line above the content and the
-`--json` payload carries the flag inside `extraction`. Treat a truncated
+`truncated` — `show` prints a `truncated  yes` line above the content (`after
+page 50` when the page cap cut it) and the `--json` payload carries the flag
+inside `extraction`, with `pages_kept` for a page cut. Treat a truncated
 extraction as a partial view: "the document does not mention X" is not a safe
 conclusion from one.
 
@@ -846,7 +848,7 @@ When a workflow has issues, `--doctor` also lists the structured findings in its
 | Hooks enabled (Claude Code) | `disableAllHooks: true` is not the resolved value across Claude Code's settings layers (enterprise managed file plus alphabetical `managed-settings.d/` fragments → `.claude/settings.local.json` → `.claude/settings.json` → `~/.claude/settings.json`, highest-precedence definition wins). A resolved `true` silently skips every present hook, so it fails loudly and names the layer |
 | Project structure | `.claude/settings.json` exists (file presence only, no content validation) |
 | Kiro hooks switched off | On the Kiro harness: every AI-DLC hook file in `.kiro/hooks/` (`aidlc-*.json`) that carries `"enabled": false`, which Kiro writes when you switch a hook off under Agent Hooks. The guard hook (`aidlc-guard-tool-call`), the reply recorder (`aidlc-record-human-turn`) and the older guard files a project may still hold fail, each naming what is no longer protected; any other AI-DLC hook switched off is one warning. The fix is to turn the hook back on under Kiro's Agent Hooks |
-| Kiro IDE ignore sources | On the Kiro harness with the IDE conductor (`.kiro/agents/aidlc-aidlc.md`): evaluates git's global excludes file (in a git repo), `~/.kiro/settings/kiroignore`, the project `.gitignore`, and `.kiroignore` independently against the reads the engine sends the agent to make through `fs_read`: for every stage `harness.json` selects in the compiled graph, the stage file and the persona and knowledge the conductor holds inline (the engine's own roster at Standard and Minimal depth, within the directive's 8 KiB `inline_context_paths` cap), plus `stage-protocol.md` and its `stage-protocol-<name>.md` modules and the files beside each skill's `SKILL.md`. Contributor-only protocol files such as `stage-definition.md` are not loaded, so they are not counted. Plugins count however they were composed. `SKILL.md` files, the IDE conductor agent (`agents/aidlc-aidlc.md`), `aidlc-common/conductor.md`, and `tools/`, `sensors/`, `hooks/`, `scopes/`, and `steering/` are loaded by the IDE or the engine, not through `fs_read`, and are not counted. A rule that hides only some of them is reported with a count and the framework folders it touches. Global-source rules that hide `.kiro/` fail, naming the source and line, because the IDE's `fs_read` guard then denies every stage, agent, and protocol read. Workspace-source matches warn: they apply only when `kiroAgent.agentIgnoreFiles` names the file (the default includes `.gitignore`; `[]` disables workspace sources), and doctor cannot read that IDE setting. A source doctor cannot evaluate (for example, `git` is not on PATH, which in a git repository also hides a custom `core.excludesFile`, or git refuses a repository that exists on disk) warns as `not evaluated` rather than passing. Rows name sources by fixed names such as `~/.config/git/ignore` and `.gitignore`, never by path, rule text, or git error text. A `!.kiro/` in another file does not undo a deny |
+| Kiro ignore sources | On the Kiro harness with the Markdown conductor (`.kiro/agents/aidlc-aidlc.md`, used by Kiro IDE and Kiro CLI v3): evaluates git's global excludes file (in a git repo), `~/.kiro/settings/kiroignore`, the project `.gitignore`, and `.kiroignore` independently against the reads the engine sends the agent to make through `fs_read`: for every stage `harness.json` selects in the compiled graph, the stage file and the persona and knowledge the conductor holds inline (the engine's own roster at Standard and Minimal depth, within the directive's 8 KiB `inline_context_paths` cap), plus `stage-protocol.md` and its `stage-protocol-<name>.md` modules and the files beside each skill's `SKILL.md`. Contributor-only protocol files such as `stage-definition.md` are not loaded, so they are not counted. Plugins count however they were composed. `SKILL.md` files, the conductor agent (`agents/aidlc-aidlc.md`), `aidlc-common/conductor.md`, and `tools/`, `sensors/`, `hooks/`, `scopes/`, and `steering/` are loaded by Kiro itself or the engine, not through `fs_read`, and are not counted. A rule that hides only some of them is reported with a count and the framework folders it touches. Global-source rules that hide `.kiro/` fail, naming the source and line, because Kiro's `fs_read` guard (Kiro IDE and Kiro CLI v3) then denies every stage, agent, and protocol read. Workspace-source matches warn, because doctor cannot tell which Kiro runs: in Kiro IDE they apply only when `kiroAgent.agentIgnoreFiles` names the file (the default includes `.gitignore`; `[]` disables workspace sources), and doctor cannot read that IDE setting; Kiro CLI v3 applies `.kiroignore` (so a match there denies those reads) and not `.gitignore`, and the warning says which. A source doctor cannot evaluate (for example, `git` is not on PATH, which in a git repository also hides a custom `core.excludesFile`, or git refuses a repository that exists on disk) warns as `not evaluated` rather than passing. Rows name sources by fixed names such as `~/.config/git/ignore` and `.gitignore`, never by path, rule text, or git error text. A `!.kiro/` in another file does not undo a deny |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
 | Active space method copy | `aidlc/active-memory/` (the git-ignored copy every harness include reads) holds the active space's `memory/` files; the check writes it first, as every session start does, so a difference left is a file that cannot be written there (warn) |
 | VS Code agent request cap | Copilot only: `.vscode/settings.json` sets `chat.agent.maxRequests` to 100 or more. Unset (VS Code's default of 50), lower, not a number (a number in quotes included), or unreadable warns, because VS Code then stops a long stage to ask "Continue to iterate?" and the chat waits until someone answers. The fix names the line to write in the file |
@@ -2391,11 +2393,31 @@ batch status of `ready: true`. Only verified native passes
 receive `SWARM_UNIT_CONVERGED`, with the authorized `Command SHA-256` (rows
 from an earlier release may lack it). Land their source through the native worktree merge before `next`.
 Edits the person made to the main checkout while the batch built stop that merge
-under a strict Guard Policy (the refusal names the step: undo them and run the merge
-again, or say `guard policy relaxed` to keep them); under relaxed or off they are
-kept, recorded once as `CHANGE_ACCEPTED` (`swarm-batch`), and the merge prints one
-`note:` line. The same holds for edits made after the last merge when the stage
-completes.
+under a strict Guard Policy (the refusal names the step: when they asked for the
+change, `swarm allow-change` with their message, then the same merge keeps it;
+otherwise undo them and run the merge again, or say `guard policy relaxed` to keep
+them); under relaxed or off they are kept, recorded once as `CHANGE_ACCEPTED`
+(`swarm-batch`), and the merge prints one `note:` line. The same holds for edits
+made after the last merge when the stage completes.
+
+### `aidlc engine swarm allow-change` - a change the person asked for in the main checkout
+
+```bash
+aidlc engine swarm allow-change <file>... --message <id>
+```
+
+Under a strict Guard Policy, while the Units are built in parallel, the main
+checkout changes only by their landings, so each landing can check it. When the
+person asks for another file there ("also fix the typo in the README"), the
+plan-approval guard's refusal of that write names this command with the message
+they asked in. It proves the message, records the files with their words as
+`MAIN_CHECKOUT_CHANGE_ALLOWED` for the current Code Generation attempt, and prints
+one `notice` line for them; the write then goes in, and the landings, the next
+batch's prepare and stage completion keep the change, each recorded as
+`CHANGE_ACCEPTED` with that message. It refuses AI-DLC's own files and a file a
+Unit being built names in its plan (that change goes through the Unit's own
+checkpoint). Under a strict Guard Policy the team holds in memory it changes
+nothing and says in one line where that is set.
 
 ### `aidlc engine bolt swarm-checkpoint` - approve a completed batch
 

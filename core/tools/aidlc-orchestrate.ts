@@ -517,6 +517,7 @@ import {
   type WorkspaceNoun,
   type WorkflowSelection,
   withdrawProtectedReplyWords,
+  commandArgSpans,
   withTypedSpacing,
   writeActiveDirectiveMarker,
   writeEngineFileNoFollow,
@@ -9880,8 +9881,9 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 // word is also a plan's name, all of them when the agent routes on no plan and
 // the rest after that word when it routes on that plan. Any other reading keeps
 // the agent's words, and so does a line with a flag `next` does not take (a
-// mistyped one the agent corrected is not part of the request). Whichever
-// words stand, the spacing between them is the one their line typed
+// mistyped one the agent corrected is not part of the request). Their words
+// are the request as the line typed it, quote marks and spacing included
+// (requestAsTyped); words it cannot line up keep the spacing their line typed
 // (withTypedSpacing): Kiro CLI's call carries one argument per word, so the
 // parse joined their "Hello,  World!" with one space. Only the request's words
 // change: every other flag and the command's arguments stay the agent's.
@@ -9895,16 +9897,23 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
     if (typed === null || typed.length === 0 || lineHandedOut(pd, engineSessionId, message.id)) return null;
     if (loadStateFileIfPresent(pd) !== null && !turnIsLatestRow(pd, message.id)) return null;
     flags.intent = withTypedSpacing(flags.intent, typed);
-    const own = parseNextFlags(splitKiroCommandArgs(typed));
+    const argv = splitKiroCommandArgs(typed);
+    const own = parseNextFlags(argv);
     if (own.parseError || own.intent === undefined || own.untakenFlag !== undefined) return null;
     const plan = flags.scope ?? flags.positionalScope ?? null;
     const words = personsWordsText(message.words);
     const step = own.readingStep;
+    // A plan-word reading takes no flag and trims its line: the arguments' own
+    // join keeps an empty `""` that ends it.
+    const asTyped = requestAsTyped(step?.kind === "plan-word" ? argv.join(" ") : own.intent, typed);
     if (step === undefined) {
-      if (message.route.scope === plan || message.route.scope === null) flags.intent = words;
+      if (message.route.scope === plan || message.route.scope === null) flags.intent = asTyped ?? words;
     } else if (step.kind === "plan-word") {
-      if (plan === null) flags.intent = words;
-      else if (plan === step.scope) flags.intent = words.slice(step.scope.length).trim();
+      if (plan === null) flags.intent = asTyped ?? words;
+      else if (plan === step.scope) {
+        flags.intent = requestAsTyped(argv.join(" ").slice(step.scope.length + 1), typed) ??
+          words.slice(step.scope.length).trim();
+      }
     }
     return null;
   }
@@ -9952,11 +9961,53 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   // a question and marked the message) is not read again: the bare `next` the
   // agent runs after that step goes on from it.
   if (own.intent !== undefined && lineHandedOut(pd, engineSessionId, message.id)) return null;
-  // A plain-chat line went whole behind `--`, with the spacing it was typed with.
-  if (own.intent !== undefined && typed !== null) own.intent = withTypedSpacing(own.intent, typed);
+  // A plain-chat line went whole behind `--`; an `/aidlc` line's request is
+  // taken as it was typed.
+  if (own.intent !== undefined && typed !== null) {
+    const said = own.readingStep?.kind === "plan-word" ? argv.join(" ") : own.intent;
+    own.intent = requestAsTyped(said, typed) ?? withTypedSpacing(own.intent, typed);
+  }
   for (const key of Object.keys(flags)) delete (flags as unknown as Record<string, unknown>)[key];
   Object.assign(flags, own);
   return argv;
+}
+
+// The request as the person's line typed it. The split reads quote marks and
+// escapes as syntax, so the parse's words had lost them (`slugit "" prints`
+// came back as `slugit  prints`, the bug itself gone). `said` is the parse's
+// own join of the request's arguments, one space apart, untrimmed so an empty
+// `""` at either end still lines up; the one stretch of the line's arguments that
+// spells it comes back as typed, with the spaces and tabs typed between them and
+// any other gap one space, as withTypedSpacing keeps them. A request of one
+// argument is that argument: the quotes around it only made it one. Null when
+// no stretch, or more than one, spells it.
+export function requestAsTyped(said: string, typed: string): string | null {
+  const spans = commandArgSpans(typed);
+  let found: [number, number] | null = null;
+  for (let first = 0; first < spans.length; first++) {
+    // An argument reads no longer than it was typed, so a stretch cannot start
+    // where less of the line is left than `said` holds.
+    if (typed.length - spans[first].start < said.length) break;
+    for (let k = first, at = 0; k < spans.length && said.startsWith(spans[k].text, at); k++) {
+      at += spans[k].text.length;
+      if (at === said.length) {
+        if (found !== null) return null;
+        found = [first, k];
+        break;
+      }
+      if (said[at] !== " ") break;
+      at++;
+    }
+  }
+  if (found === null) return null;
+  const [first, last] = found;
+  if (first === last) return spans[first].text;
+  let request = typed.slice(spans[first].start, spans[first].end);
+  for (let k = first + 1; k <= last; k++) {
+    const gap = typed.slice(spans[k - 1].end, spans[k].start);
+    request += (/^[ \t]+$/.test(gap) ? gap : " ") + typed.slice(spans[k].start, spans[k].end);
+  }
+  return request;
 }
 
 // A settings-only line is handed out once, and `next`, which hands it out,
@@ -13464,6 +13515,25 @@ function approvalOverReview(
   }
 }
 
+// The class of the one stage-level request that reviews the stage, or null
+// when no such request does: per Unit with a Unit DAG the Unit routes own the
+// review (team ownership without a DAG is an error the route states, which a
+// review step must not hide), and a class that resolves to none has no review.
+function stageLevelReviewClass(
+  projectDir: string,
+  node: GraphStage,
+  scope: string,
+  stateContent: string,
+): ReviewClass | null {
+  if (!node.reviewer) return null;
+  if (
+    isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, stateContent) &&
+    (resolveBoltDag(projectDir).state !== "none" || isTeamUnitOwnership(stateContent))
+  ) return null;
+  const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent);
+  return reviewClass === "none" ? null : reviewClass;
+}
+
 // A stage that works on the whole project (not once per Unit) and whose review
 // is open: the step that gets it finished, in place of the stage body. Its
 // documents are written, since a request was made on them, so the body has
@@ -13478,13 +13548,8 @@ function stageReviewStep(
   stateContent: string | null,
 ): { text: string; endsTurn: boolean; finished: boolean } | null {
   if (stateContent === null || !node.reviewer || isReadOnlyEngineProbe()) return null;
-  if (isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, stateContent)) {
-    // Per Unit with a Unit DAG, the Unit routes own the review. Team ownership
-    // without a DAG is an error the route states, which a review step must not hide.
-    if (resolveBoltDag(projectDir).state !== "none" || isTeamUnitOwnership(stateContent)) return null;
-  }
-  const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent);
-  if (reviewClass === "none") return null;
+  const reviewClass = stageLevelReviewClass(projectDir, node, scope, stateContent);
+  if (reviewClass === null) return null;
   const review = freshReviewReceipts(projectDir, stateContent, node, { reviewClass });
   const pending = review.stagePending;
   if (pending === null || pending === undefined) {
@@ -17634,6 +17699,24 @@ function personsFeedbackSentence(theirs: boolean): string {
   return theirs ? " The feedback is on the record in the person's own words; revise from what they asked for." : "";
 }
 
+// After Request Changes the agent revises in the same turn and has the
+// reviewer look again before it reports revised, with no `next` in between,
+// so this reply is the step it has for that request, and the review log counts
+// passes again from the rejection. Named only where one stage-level request
+// reviews the stage.
+function reReviewRequestSentence(pd: string, node: GraphStage, scope: string): string {
+  try {
+    const state = loadStateFileIfPresent(pd);
+    if (state === null || stageLevelReviewClass(pd, node, scope, state) === null) return "";
+    const { attempt } = guardAttemptState(pd, state, node);
+    if (!attempt.requestReview) return "";
+    return ` When the revision changes the stage's outputs, request their review with \`${attempt.requestReview}\`.`;
+  } catch {
+    // Unreadable records leave the request to the review log's own answer.
+    return "";
+  }
+}
+
 /** A directive with the notices attached, or unchanged when there are none. */
 function withChangeNotices<T extends Directive>(directive: T, notices: string[]): T {
   return notices.length > 0 ? { ...directive, change_notices: notices } : directive;
@@ -19993,7 +20076,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           ? pipelineRejectedMessage(pd, node, slug) +
             personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout))
           : `Recorded ${flags.result} for "${slug}".` +
-            personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout)),
+            personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout)) +
+            (flags.result === "rejected" ? reReviewRequestSentence(pd, node, scope) : ""),
       ),
       changeNoticesFromToolOutput(res.stdout),
     );
@@ -20224,9 +20308,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     const session = resolveInvokingSessionId(pd);
     const reply = personsGateReply(pd, session, slug);
     // Several replies: the agent names the one that asked, so the setting
-    // carries their words for it and no other reply's.
+    // carries their words for it and no other reply's. Their choice is on
+    // record, so that is the agent's next step (stateRefusalDirective's
+    // person-decided print), never an error the person is shown.
     if (flags.message === undefined && reply.replies.length > 1) {
-      emit(errorDirective(
+      emit(printDirective(
         `Their replies since the last decision, oldest first: ${reply.replies.map((one) => `${one.id} (${one.at})`).join(", ")}. ` +
           "Run this report again with --message <id>, the one that asked for the setting; nothing was recorded.",
       ));

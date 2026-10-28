@@ -5,7 +5,7 @@ structured, verifiable software-delivery workflows. One harness-neutral core
 runs natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode,
 and GitHub Copilot.
 
-![version](https://img.shields.io/badge/version-2.11.1-blue)
+![version](https://img.shields.io/badge/version-2.11.2-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 
 The Quick Start below installs the latest stable AI-DLC release.
@@ -121,7 +121,7 @@ audited lifecycle:
 - 11 workflow profiles for features, bug fixes, infrastructure, security,
   proofs of concept, enterprise delivery, and other common work
 - Human approval gates and source-bound review evidence
-- 126-event audit trail plus persistent state, team knowledge, and learned rules
+- 127-event audit trail plus persistent state, team knowledge, and learned rules
 - The same deterministic engine across every supported harness
 
 Start with [Workflow Profiles](docs/guide/workflow-profiles.md) to compare
