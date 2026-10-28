@@ -1217,6 +1217,11 @@ export async function run(
         : { status: "unrelated", ...uncopied };
     }
     const subArgs = normalized.slice(1);
+    // A receipt can start with `-`, so the agent may mark it with `--`, as the
+    // engine reads it (handleContinue). The claim still hashes the line as
+    // typed, the line the engine hashes.
+    const marked = commandKind === "continue" && subArgs[0] === "--";
+    const receiptArgs = marked ? subArgs.slice(1) : subArgs;
     // Read-only next returns a terminal print before workflow inspection and
     // touches no engine marker on other harnesses. Claiming it here advanced
     // engine_sequence, so Stop demanded a fresh bare next after a query (#1258).
@@ -1227,7 +1232,7 @@ export async function run(
     }
     // A bare `continue` (the receipt lost) is claimed too: the engine answers it
     // as `next`, as it does on every harness, instead of a shell-shape refusal.
-    if (commandKind === "continue" && subArgs.length > 1) {
+    if (commandKind === "continue" && receiptArgs.length > 1) {
       return { status: "unsupported", reason: `\`continue\` takes only the receipt from the last step, so this did not run. Run \`${form("next")}\` to get the current step again.` };
     }
     // --person-asked (the person asked to stop) is the one park option.
@@ -1262,16 +1267,18 @@ export async function run(
         !argumentsStayInProject(runs),
       // On a `next` line right after the verb, ahead of the person's words,
       // where the engine reads it; behind them it would be one of their words.
-      // The other verbs carry no words of theirs, so it goes at the end.
+      // On a `continue` marked with `--` it goes there too: behind the mark
+      // the engine would not take it. The other lines carry no words of
+      // theirs, so it goes at the end.
       rewrite: (selectedAttemptId) =>
-        respelled(commandKind === "next" ? parsed.ends[verbWord] : parsed.body.length, selectedAttemptId),
+        respelled(commandKind === "next" || marked ? parsed.ends[verbWord] : parsed.body.length, selectedAttemptId),
       ...uncopied,
       claim: {
         sessionId,
         ...(attemptId ? { attemptId } : {}),
         commandKind: commandKind as CopilotCommandClaim["commandKind"],
         commandSha256: digest,
-        ...(commandKind === "continue" && subArgs.length === 1 ? { continueToken: subArgs[0] } : {}),
+        ...(commandKind === "continue" && receiptArgs.length === 1 ? { continueToken: receiptArgs[0] } : {}),
         ...(commandKind === "next" && nextTakes("--resume") ? { resumeRequest: true } : {}),
         ...(commandKind === "next" && (nextTakes("--stage") || nextTakes("--phase")) ? { jumpRequest: true } : {}),
         ...(commandKind === "next" && nextTakes("--new-intent") ? { startFreshRequest: true } : {}),
