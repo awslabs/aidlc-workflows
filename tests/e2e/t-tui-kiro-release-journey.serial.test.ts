@@ -59,23 +59,27 @@ const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
 let caseDeadlineMs: number;
 beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
+// The journey's work stops this long before the cleanup reserve, so a journey
+// that stalls (at startup or in a turn) still has time for the screen the
+// report keeps; only that capture spends it.
+const LAST_SCREEN_MS = 120_000;
 function remainingWorkMs(): number {
   return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
-    deadlineMs: caseDeadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "E2E live work",
+    deadlineMs: caseDeadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS) + LAST_SCREEN_MS, phase: "E2E live work",
+  })!;
+}
+function remainingScreenMs(): number {
+  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
+    deadlineMs: caseDeadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "E2E last screen",
   })!;
 }
 function remainingCleanupMs(): number {
   return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, { deadlineMs: caseDeadlineMs, phase: "E2E terminal cleanup" });
 }
 
-// A turn's wait stops this long before the work budget does, so a turn that
-// has not ended still has work time for the screen the report keeps.
-const LAST_SCREEN_MS = 120_000;
-function turnWaitMs(): number {
-  return remainingWorkMs() - LAST_SCREEN_MS;
-}
 function drive(args: string[]): { rc: number; stdout: string } {
-  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
+  const timeout = args[0] === "kill" ? remainingCleanupMs() : args[0] === "capture" ? remainingScreenMs() : remainingWorkMs();
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout, encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "" };
 }
 function screen(session: string): string {
@@ -179,7 +183,7 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
                   return false;
                 }
                 return (sessionCredits(now) ?? 0) > before;
-              }, turnWaitMs);
+              }, remainingWorkMs);
               if (!ended) report.problems.push(`"${line}" had not ended when the journey's time ran out`);
               report.turns.push({ line, seconds: Math.round((Date.now() - started) / 1000) });
               if (ended) checkReleaseJourneyTurn(report, project, index + 1, line);

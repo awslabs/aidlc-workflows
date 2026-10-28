@@ -328,13 +328,7 @@ export function runReleaseJourney(
     report.problems.push(`the journey stopped: ${firstLine(error)}`);
     throw error;
   } finally {
-    if (report.problems.length && evidence) {
-      try {
-        report.extra.evidence = evidence();
-      } catch (error) {
-        report.extra.evidence = { unreadable: firstLine(error) };
-      }
-    }
+    if (report.problems.length && evidence) report.extra.evidence = evidenceOf(evidence);
     writeReleaseJourneyReport(report);
   }
 }

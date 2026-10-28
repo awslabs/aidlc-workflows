@@ -72,7 +72,7 @@ describe("t-release-journey-report: the pasted line says FAIL when a journey sto
 // A Kiro turn that never ends waits on the terminal with the case's work
 // budget; once that is spent the wait's budget throws. The turn is then
 // unfinished, not the journey stopped, so the report names the line and keeps
-// the screen.
+// the screen, read with the time the journey keeps back for it.
 describe("t-release-journey-report: a turn that has not ended when the journey's time runs out", () => {
   test("a wait stops while there is still work time, and a wait whose work budget runs out leaves the turn unfinished", () => {
     // The turn's wait leaves the last part of the work time for the screen.
