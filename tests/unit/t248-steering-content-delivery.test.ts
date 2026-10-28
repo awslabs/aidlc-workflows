@@ -1330,7 +1330,7 @@ describe("t248 deterministic steering delivery", () => {
       mode: 0o600,
     });
     const dashReceipt = receiptFor(payload, key);
-    const env = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+    const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: proj };
     delete env.AIDLC_PROJECT_DIR;
     const run = (argv: string[]): WireDirective => {
       const res = spawnSync(BUN, argv, {
