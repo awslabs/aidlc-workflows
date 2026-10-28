@@ -301,13 +301,6 @@ function filesystemPreload(
       symlinkSync: observeMutation("symlinkSync", 1),
       unlinkSync: observeMutation("unlinkSync"),
       rmdirSync: observeMutation("rmdirSync"),
-      linkSync(source, destination) {
-        if (inProject(source) || inProject(destination)) {
-          record("link", { source: pathOf(source), destination: pathOf(destination), code: "EMLINK" });
-          throw Object.assign(new Error("simulated project hard-link failure"), { code: "EMLINK" });
-        }
-        return actual.linkSync(source, destination);
-      },
       openSync(path, flags, ...rest) {
         if (inProject(path)) {
           const append = typeof flags === "string"
@@ -578,9 +571,6 @@ function expectDirectoryTransaction(
 ): void {
   const lock = join(project, ".aidlc-transaction.lock");
   expect(events).toContainEqual(expect.objectContaining({
-    event: "link", pid, destination: lock, code: "EMLINK",
-  }));
-  expect(events).toContainEqual(expect.objectContaining({
     event: "directory-lock",
     pid,
     path: lock,
@@ -588,9 +578,18 @@ function expectDirectoryTransaction(
       schemaVersion: 1,
       pid,
       host: expect.any(String),
+      machine: expect.any(String),
       token: expect.any(String),
     }),
   }));
+}
+
+// The wizard's storage check makes its probe folders in the project; a
+// transaction makes none.
+function storageChecksBy(events: FilesystemTrace[], pid: number): FilesystemTrace[] {
+  return events.filter((event) =>
+    event.event === "mkdtemp" && event.pid === pid && basename(event.path!).startsWith(".aidlc-lock-probe-")
+  );
 }
 
 function expectFilesystemRemediation(message: string, remediation: string, fault: FilesystemFailure): void {
@@ -1825,8 +1824,7 @@ describe("t299 first-run setup wizard", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // First-run setup stops in plain words: before any question when the
-  // project's storage lacks an operation transactions need (a hard-link
-  // rejection alone now falls back to a directory lock), and after apply when a
+  // project's storage lacks an operation transactions need, and after apply when a
   // step fails, here on an AI-DLC file the user wrote over. The stop and its fix
   // wrap the same way; a fix that is a command stays whole.
   const firstRunStops = (env: NodeJS.ProcessEnv = {}) => ({
@@ -2023,7 +2021,7 @@ describe("t299 first-run setup wizard", () => {
     expect(treeSnapshot(result.project)).toEqual(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("recommended first-run and installed workflow writes succeed with project hardlinks refused in every config child", () => {
+  test("recommended first-run and installed workflow writes succeed on the directory lock in every config child", () => {
     const { preload, trace } = filesystemPreload();
     const result = runWizard("\n", { preload });
     const output = result.stdout + result.stderr;
@@ -2035,11 +2033,7 @@ describe("t299 first-run setup wizard", () => {
     expectConfiguredProject(result.project, "defaults", "current");
 
     const events = filesystemTrace(trace);
-    const probeLinks = events.filter((event) => event.event === "link" && event.pid === result.pid);
-    expect(probeLinks.length).toBeGreaterThan(0);
-    for (const link of probeLinks) {
-      expect(basename(dirname(link.destination!))).toMatch(/^\.aidlc-lock-probe-/);
-    }
+    expect(storageChecksBy(events, result.pid)).toHaveLength(1);
     const children = events.filter((event) =>
       event.event === "spawn" && event.pid === result.pid && event.args?.includes("config")
     );
@@ -2056,11 +2050,12 @@ describe("t299 first-run setup wizard", () => {
         event: "preload", pid: child.childPid,
       }));
       expectDirectoryTransaction(events, result.project, child.childPid!);
+      expect(storageChecksBy(events, child.childPid!)).toEqual([]);
     }
     expectInstalledWorkflowWrites(result, trace);
   }, 120_000);
 
-  test("noninteractive JSON apply and refresh keep settings, models, providers, and baseline valid without hardlinks", () => {
+  test("noninteractive JSON apply and refresh keep settings, models, providers, and baseline valid", () => {
     const { preload, trace } = filesystemPreload();
     const result = runWizard("", {
       preload,
@@ -2162,17 +2157,34 @@ describe("t299 first-run setup wizard", () => {
         expect(events).toContainEqual(expect.objectContaining({
           event: "refused", code: fault.code,
         }));
-        const links = events.filter((event) => event.event === "link");
-        expect(links).toHaveLength(1);
-        expect(basename(dirname(links[0].source!))).toMatch(/^\.aidlc-lock-probe-/);
-        expect(dirname(links[0].source!)).toBe(dirname(links[0].destination!));
-        expect(links[0].destination).not.toBe(join(result.project, ".aidlc-transaction.lock"));
+        expect(storageChecksBy(events, result.pid)).toHaveLength(1);
         expect(events.some((event) => event.event === "spawn")).toBe(false);
         expect(treeSnapshot(result.project)).toEqual(before);
       }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
 
-    for (const mode of ["json", "quiet", "human"] as const) {
+    // Scripted config runs no storage check of its own (the wizard's is the
+    // one, as on 2.11.2): storage that cannot rename files stops it at the
+    // first rename with the same storage line, and storage that lacks only
+    // what config never does sets the project up.
+    for (const mode of fault.operation === "file-rename" ? [] : ["json", "human"] as const) {
+      test(`noninteractive ${mode} config sets up a project on storage that refuses ${fault.operation}, which config does not use`, () => {
+        const { preload } = filesystemPreload(fault);
+        const result = runWizard("", {
+          preload,
+          configArgs: [
+            "--from", join(RUNTIME, "claude"), "--harness", "claude", "--mcp", "none", "--yes",
+            ...(mode === "json" ? ["--json"] : []),
+          ],
+          env: { AIDLC_TEST_CONFIG_TTY: undefined },
+        });
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(result.stdout).toContain(`configured ${result.project} for Claude Code`);
+        expect(existsSync(join(result.project, ".claude", "CLAUDE.md"))).toBe(true);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+    }
+
+    for (const mode of fault.operation === "file-rename" ? ["json", "quiet", "human"] as const : []) {
       test(`noninteractive ${mode} config preserves ${fault.operation} remediation without persistent writes`, () => {
         const { preload, trace } = filesystemPreload(fault);
         let before: Record<string, string> = {};
@@ -2218,14 +2230,18 @@ describe("t299 first-run setup wizard", () => {
           event: "refused", code: fault.code,
         }));
         expectDirectoryTransaction(events, result.project, result.pid);
-        expect(treeSnapshot(result.project)).toEqual(before);
+        // The plan's first folder is made before its first rename fails, and
+        // stays empty.
+        const { ".claude/": madeFolder, ...after } = treeSnapshot(result.project);
+        expect(madeFolder).toBe("");
+        expect(after).toEqual(before);
       }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
   }
 
   for (const fault of [undefined, ...REQUIRED_FILESYSTEM_FAILURES]) {
     for (const mode of ["human", "json"] as const) {
-      test(`${mode} dry-run does not probe or write with ${fault?.operation ?? "hardlinks"} refused`, () => {
+      test(`${mode} dry-run does not probe or write${fault ? ` with ${fault.operation} refused` : ""}`, () => {
         const { preload, trace } = filesystemPreload(fault);
         let before: Record<string, string> = {};
         const result = runWizard("", {

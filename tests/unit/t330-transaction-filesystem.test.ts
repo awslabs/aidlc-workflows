@@ -2,6 +2,9 @@
 //   function:processGeneration, function:processStartedAtMs
 // Real local IO with selected mount operations unavailable; this does not
 // certify the atomicity/durability of S3 drivers or exercise a live S3 mount.
+// The project lock is one owner-stamped folder on every storage: nothing here
+// needs a hard link, and a transaction no longer repeats the storage check the
+// first-run wizard runs.
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -48,14 +51,14 @@ type Fault = "append" | "append-lost" | "read" | "identity" | "exclusive"
   | "file-rename" | "directory-rename" | "chmod" | "workflow" | "lock-mkdir"
   | "directory-fsync" | "file-fsync" | "commit-fsync" | "commit-rename";
 type Options = {
-  fallback?: string; fault?: Fault; code?: string; mode?: "probe" | "apply";
-  failAfter?: number; warmup?: boolean; closeError?: boolean; cleanupError?: boolean;
+  fault?: Fault; code?: string; mode?: "probe" | "apply"; retaken?: boolean; noLinks?: boolean;
+  failAfter?: number; closeError?: boolean; cleanupError?: boolean;
   replaceOwner?: boolean; requestedRoot?: string; contender?: boolean; releaseRetry?: boolean;
   pause?: "acquire" | "locked" | "release"; letGo?: "lock" | "owner";
 };
 type Owner = {
-  schemaVersion: number; pid: number; host: string; token: string; staging: string;
-  processGeneration?: string;
+  schemaVersion: number; pid: number; host: string; machine?: string; boot?: string;
+  token: string; staging: string; processGeneration?: string;
 };
 type Observation = {
   error: null | {
@@ -63,9 +66,9 @@ type Observation = {
     remediation?: string; filesystem: boolean; lock: boolean; causeInjected: boolean;
     sameInjected: boolean; causes?: string[];
   };
-  backend?: "directory" | "hardlink"; owner?: Owner; replacement?: string;
-  faultHits: number; fallbackHits: number; probes: string[]; gates: string[];
-  publicationCopies: number; preflightCompleted: boolean; pendingGate?: boolean;
+  owner?: Owner; replacement?: string;
+  faultHits: number; linkHits: number; probes: string[]; gates: string[];
+  publicationCopies: number; pendingGate?: boolean;
   letGo: boolean; stderr: string;
 };
 function childEnv(): NodeJS.ProcessEnv {
@@ -75,8 +78,8 @@ function childEnv(): NodeJS.ProcessEnv {
 }
 
 // Isolate mocks from the runner's module cache. Every wrapper delegates to real
-// IO except its selected fault, scoped to the project mount. In particular,
-// hardlink rejection must never affect the dedicated local tmpdir gate.
+// IO except its selected fault, scoped to the project mount, so the dedicated
+// local tmpdir gate is never faulted.
 function childSource(root: string, options: Options): string {
   return `
     import { mock } from "bun:test";
@@ -86,16 +89,14 @@ function childSource(root: string, options: Options): string {
     const lock = join(root, ${JSON.stringify(LOCK)});
     const onMount = p => typeof p === "string" && (p === root || p.startsWith(root + sep));
     const inProbe = p => onMount(p) && p.split(sep).some(s => s.startsWith(".aidlc-lock-probe-"));
-    const injected = Object.assign(new Error("simulated " + (cfg.fault ?? "link") + " failure"),
-      { code: cfg.code ?? cfg.fallback ?? "EOPNOTSUPP" });
-    const linkError = cfg.fault
-      ? Object.assign(new Error("simulated link failure"), { code: cfg.fallback }) : injected;
+    const injected = Object.assign(new Error("simulated " + cfg.fault + " failure"),
+      { code: cfg.code ?? "EOPNOTSUPP" });
     const closeError = Object.assign(new Error("simulated close failure"), { code: "EIO" });
     const cleanupError = Object.assign(new Error("simulated cleanup failure"), { code: "EACCES" });
-    const out = { error: null, faultHits: 0, fallbackHits: 0, probes: [], gates: [],
-      publicationCopies: 0, preflightCompleted: false, letGo: false };
+    const out = { error: null, faultHits: 0, linkHits: 0, probes: [], gates: [],
+      publicationCopies: 0, letGo: false };
     const fds = new Map();
-    let armed = !cfg.warmup, paused = false, held = false;
+    let paused = false, held = false, lockMakes = 0;
     const fail = () => { out.faultHits++; throw injected; };
     // A holder outside the local gate lets the lock go while the waiter whose
     // attempt found it held is still looking at it.
@@ -129,12 +130,13 @@ function childSource(root: string, options: Options): string {
         if (inProbe(result)) out.probes.push(result);
         return result;
       },
+      // Storage without hard links (exFAT): every link on the mount is refused.
       linkSync(source, destination) {
-        if (armed && cfg.fallback && onMount(source) && onMount(destination)) {
-          out.fallbackHits++;
-          throw linkError;
+        if (cfg.noLinks && (onMount(source) || onMount(destination))) {
+          out.linkHits++;
+          throw Object.assign(new Error("simulated link failure"), { code: "EPERM" });
         }
-        return found(destination, () => fs.linkSync(source, destination));
+        return fs.linkSync(source, destination);
       },
       lstatSync(p, ...args) {
         if (p === join(lock, "owner.json")) letGo("owner");
@@ -145,15 +147,18 @@ function childSource(root: string, options: Options): string {
       mkdirSync(p, ...args) {
         if (!onMount(p) && /^\\.aidlc-.*\\.lock$/.test(basename(p)))
           out.gates.push(p);
-        if (armed && onMount(p) && cfg.fault === "lock-mkdir" && basename(p) === ${JSON.stringify(LOCK)}) fail();
+        if (onMount(p) && cfg.fault === "lock-mkdir" && basename(p) === ${JSON.stringify(LOCK)}) fail();
+        // A third command takes the lock between this one clearing a dead
+        // holder's and taking it.
+        if (p === lock && cfg.retaken && ++lockMakes === 2) fs.mkdirSync(lock);
         // The workflow lock is built under a private candidate name and renamed into place.
-        if (armed && inProbe(p) && cfg.fault === "workflow" && basename(p).startsWith("workflow-lock.candidate.")) fail();
+        if (inProbe(p) && cfg.fault === "workflow" && basename(p).startsWith("workflow-lock.candidate.")) fail();
         return found(p, () => fs.mkdirSync(p, ...args));
       },
       openSync(p, flags, ...args) {
-        if (dirname(String(p)) === root && basename(String(p)).startsWith(".aidlc-lock-")) pause("acquire");
-        if (armed && inProbe(p) && cfg.fault === "append" && flags === "a+") fail();
-        if (armed && inProbe(p) && cfg.fault === "exclusive" && flags === "wx" && fs.existsSync(p)) {
+        if (p === join(lock, "owner.json")) pause("acquire");
+        if (inProbe(p) && cfg.fault === "append" && flags === "a+") fail();
+        if (inProbe(p) && cfg.fault === "exclusive" && flags === "wx" && fs.existsSync(p)) {
           out.faultHits++;
           flags = "w";
         }
@@ -162,7 +167,7 @@ function childSource(root: string, options: Options): string {
         return fd;
       },
       writeSync(fd, ...args) {
-        if (armed && inProbe(fds.get(fd)?.path) && cfg.fault === "append-lost" && fds.get(fd)?.flags === "a+") {
+        if (inProbe(fds.get(fd)?.path) && cfg.fault === "append-lost" && fds.get(fd)?.flags === "a+") {
           out.faultHits++;
           return Buffer.byteLength(args[0]);
         }
@@ -170,7 +175,7 @@ function childSource(root: string, options: Options): string {
       },
       fstatSync(fd, ...args) {
         const stat = fs.fstatSync(fd, ...args);
-        if (armed && inProbe(fds.get(fd)?.path) && cfg.fault === "identity" && fds.get(fd)?.flags === "a+") {
+        if (inProbe(fds.get(fd)?.path) && cfg.fault === "identity" && fds.get(fd)?.flags === "a+") {
           out.faultHits++;
           // Windows file IDs exceed 2^53, where ino + 1 rounds back to ino, so
           // move the device too: the probe compares both.
@@ -180,7 +185,7 @@ function childSource(root: string, options: Options): string {
       },
       fsyncSync(fd) {
         const p = fds.get(fd)?.path;
-        if (armed && onMount(p)) {
+        if (onMount(p)) {
           const directory = fs.fstatSync(fd).isDirectory();
           if (cfg.fault === "directory-fsync" && directory) fail();
           if (cfg.fault === "file-fsync" && inProbe(p) && basename(p) === "candidate") fail();
@@ -189,22 +194,22 @@ function childSource(root: string, options: Options): string {
         return fs.fsyncSync(fd);
       },
       readFileSync(p, ...args) {
-        if (armed && cfg.fault === "read" && inProbe(p) && basename(p) === "candidate") fail();
+        if (cfg.fault === "read" && inProbe(p) && basename(p) === "candidate") fail();
         return fs.readFileSync(p, ...args);
       },
       renameSync(source, destination) {
         // A local gate lock is published by renaming its stamped candidate into place.
         if (!onMount(destination) && /^\\.aidlc-.*\\.lock$/.test(basename(destination)))
           out.gates.push(destination);
-        if (armed && inProbe(source) && fs.existsSync(source)) {
+        if (inProbe(source) && fs.existsSync(source)) {
           if (cfg.fault === "directory-rename" && fs.lstatSync(source).isDirectory()) fail();
           if (cfg.fault === "file-rename" && !fs.lstatSync(source).isDirectory()) fail();
         }
-        if (armed && cfg.fault === "commit-rename" && destination === join(root, "new.txt")) fail();
+        if (cfg.fault === "commit-rename" && destination === join(root, "new.txt")) fail();
         return fs.renameSync(source, destination);
       },
       chmodSync(p, ...args) {
-        if (armed && cfg.fault === "chmod" && inProbe(p)) fail();
+        if (cfg.fault === "chmod" && inProbe(p)) fail();
         return fs.chmodSync(p, ...args);
       },
       closeSync(fd) {
@@ -233,11 +238,6 @@ function childSource(root: string, options: Options): string {
     lib?._setAuditLockFaultHooksForTests({ failReleaseRename: () => { out.faultHits++; return true; } });
     const requested = cfg.requestedRoot ?? root;
     try {
-      if (cfg.warmup) {
-        tx.assertTransactionFilesystem(requested);
-        out.preflightCompleted = true;
-        armed = true;
-      }
       if (cfg.mode === "probe") tx.assertTransactionFilesystem(requested);
       else tx.executePlan({ schemaVersion: 1, root: requested, operations: [
         tx.writeOperation("existing.txt", cfg.contender ? "contender\\n" : "updated\\n",
@@ -249,8 +249,7 @@ function childSource(root: string, options: Options): string {
       ] }, {
         failAfter: cfg.failAfter,
         validateLocked() {
-          out.backend = fs.statSync(lock).isDirectory() ? "directory" : "hardlink";
-          out.owner = JSON.parse(fs.readFileSync(out.backend === "directory" ? join(lock, "owner.json") : lock, "utf8"));
+          out.owner = JSON.parse(fs.readFileSync(join(lock, "owner.json"), "utf8"));
           pause("locked");
         },
         validateCandidates() {
@@ -307,25 +306,25 @@ function expectFilesystem(out: Observation, root: string, code: string, operatio
 }
 
 describe("t330 transaction filesystem contract", () => {
-  for (const fallback of [undefined, "EMLINK", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EPERM"]) {
-    test(`${fallback ?? "native"} supports probe, update/create/remove, rollback and cleanup`, () => {
-      const root = project();
-      expect(observe(root, { fallback, mode: "probe" }).error).toBeNull();
-      expectProject(root);
-      const rolledBack = observe(root, { fallback, failAfter: 3 });
-      expect(rolledBack.error?.message).toContain("injected transaction failure after operation 3");
-      expectProject(root);
-      const applied = observe(root, { fallback });
-      expect(applied.error).toBeNull();
-      expect(applied.backend).toBe(fallback ? "directory" : "hardlink");
-      if (fallback) {
-        expect(applied.fallbackHits).toBeGreaterThan(0);
-        expect(applied.owner).toMatchObject({ pid: expect.any(Number),
-          host: expect.any(String), token: expect.any(String), staging: expect.stringMatching(/^\.aidlc-txn-/) });
-      } else expect(applied.probes).toHaveLength(0);
-      expectProject(root, true);
-    });
-  }
+  // exFAT and other storage without hard links: everything works on the one
+  // lock, and a transaction never repeats the wizard's storage check.
+  test("storage that refuses hard links supports probe, update/create/remove, rollback and cleanup", () => {
+    const root = project();
+    const probed = observe(root, { mode: "probe", noLinks: true });
+    expect(probed.error).toBeNull();
+    expect(probed.linkHits).toBe(0);
+    expectProject(root);
+    const rolledBack = observe(root, { failAfter: 3, noLinks: true });
+    expect(rolledBack.error?.message).toContain("injected transaction failure after operation 3");
+    expectProject(root);
+    const applied = observe(root, { noLinks: true });
+    expect(applied.error).toBeNull();
+    expect(applied.linkHits).toBe(0);
+    expect(applied.owner).toMatchObject({ schemaVersion: 1, pid: expect.any(Number), host: expect.any(String),
+      machine: expect.any(String), token: expect.any(String), staging: expect.stringMatching(/^\.aidlc-txn-/) });
+    expect(applied.probes).toHaveLength(0);
+    expectProject(root, true);
+  });
 
   for (const [fault, operation, code] of [
     ["append", /append/, "EOPNOTSUPP"], ["append-lost", /append/, "UNKNOWN"],
@@ -335,41 +334,24 @@ describe("t330 transaction filesystem contract", () => {
     ["workflow", /workflow lock/, "UNKNOWN"],
     ...(process.platform === "win32" ? [] : [["chmod", /permissions/, "EPERM"]]),
   ] as [Fault, RegExp, string][]) {
-    test(`fallback preflight rejects ${fault} before any project mutation`, () => {
+    test(`the storage check rejects ${fault} before any project mutation`, () => {
       const root = project();
-      const out = observe(root, { fallback: "EMLINK", fault, code });
+      const out = observe(root, { mode: "probe", fault, code });
       expect(out.faultHits).toBeGreaterThan(0);
       expectFilesystem(out, root, code, operation);
       expectProject(root);
     });
   }
 
-  test("execute rechecks the full probe when hardlinks become unavailable after preflight", () => {
-    const root = project();
-    const out = observe(root, { warmup: true, fallback: "EMLINK", fault: "append", code: "ENOSYS" });
-    expect(out.preflightCompleted).toBe(true);
-    expect(out.probes).toHaveLength(2);
-    expectFilesystem(out, root, "ENOSYS", /append/);
-    expectProject(root);
-  });
-
   for (const mode of ["probe", "apply"] as const) {
-    test(`${mode} diagnoses unavailable hardlink AND directory locking at the project root`, () => {
+    test(`${mode} names the project when its lock cannot be made`, () => {
       const root = project();
-      const out = observe(root, { mode, fallback: "EMLINK", fault: "lock-mkdir", code: "EACCES" });
+      const out = observe(root, { mode, fault: "lock-mkdir", code: "EACCES" });
       expect(out.error).toMatchObject({
-        name: "TransactionLockError", root, code: "EACCES", filesystem: true, lock: true,
+        name: "TransactionLockError", code: "EACCES", filesystem: true, lock: true,
       });
-      expect(out.error?.message).toMatch(/hard-link and directory locking/);
-      expectProject(root);
-    });
-  }
-
-  for (const code of ["EACCES", "EIO", "EXDEV"]) {
-    test(`unexpected native hardlink ${code} is preserved without attempting directory mode`, () => {
-      const root = project();
-      const out = observe(root, { fallback: code });
-      expect(out.error).toMatchObject({ code, sameInjected: true, filesystem: false, lock: false });
+      expect(out.error?.message).toMatch(/^Cannot create an AI-DLC transaction lock in .+ \(EACCES\)\.$/);
+      expect(out.error?.message).not.toMatch(/hard.?link/i);
       expectProject(root);
     });
   }
@@ -377,13 +359,13 @@ describe("t330 transaction filesystem contract", () => {
   for (const code of ["ENOSYS", "EOPNOTSUPP"]) {
     test(`${code} directory fsync is tolerated but file fsync is required`, () => {
       const root = project();
-      const probe = observe(root, { fallback: "EMLINK", fault: "file-fsync", code });
+      const probe = observe(root, { mode: "probe", fault: "file-fsync", code });
       expectFilesystem(probe, root, code, /synchronization/);
       expectProject(root);
-      const stage = observe(root, { fallback: "EMLINK", fault: "commit-fsync", code });
+      const stage = observe(root, { fault: "commit-fsync", code });
       expect(stage.error).toMatchObject({ code, sameInjected: true });
       expectProject(root);
-      const dirs = observe(root, { fallback: "EMLINK", fault: "directory-fsync", code });
+      const dirs = observe(root, { fault: "directory-fsync", code });
       expect(dirs.faultHits).toBeGreaterThan(0);
       expect(dirs.error).toBeNull();
       expectProject(root, true);
@@ -392,7 +374,7 @@ describe("t330 transaction filesystem contract", () => {
 
   test("a failed publication rename rolls back earlier changes without copy/delete publication", () => {
     const root = project();
-    const out = observe(root, { fallback: "EMLINK", fault: "commit-rename", code: "EXDEV" });
+    const out = observe(root, { fault: "commit-rename", code: "EXDEV" });
     expect(out.error).toMatchObject({ code: "EXDEV", sameInjected: true });
     expect(out.publicationCopies).toBe(0);
     expectProject(root);
@@ -427,20 +409,22 @@ describe("t330 transaction filesystem contract", () => {
 
   test("a missing project is probed in its ancestor and diagnostics name the requested root", () => {
     const root = project(), requestedRoot = join(root, "missing", "nested");
-    expect(observe(root, { mode: "probe", fallback: "EMLINK", requestedRoot }).error).toBeNull();
+    expect(observe(root, { mode: "probe", requestedRoot }).error).toBeNull();
     const out = observe(root, { mode: "probe", fault: "read", code: "EIO", requestedRoot });
     expectFilesystem(out, requestedRoot, "EIO", /append/);
     expectProject(root);
   });
 });
 
+const BUSY = "wait for it to finish, then run this command again.";
+const busyAt = (root: string) => `another AI-DLC command is still working in ${root}.`;
+
 describe("t330 lock ownership", () => {
-  test("a pending local-gate release is recovered before another native transaction in the same process", () => {
+  test("a pending local-gate release is recovered before another transaction in the same process", () => {
     const root = project(), out = observe(root, { releaseRetry: true });
     expect(out.faultHits).toBeGreaterThan(0);
     expect(out.pendingGate).toBe(true);
     expect(out.error).toBeNull();
-    expect(out.backend).toBe("hardlink");
     expect(out.probes).toHaveLength(0);
     expect(readFileSync(join(root, "second.txt"), "utf8")).toBe("second commit\n");
     expectProject(root, true, ["second.txt"]);
@@ -450,7 +434,7 @@ describe("t330 lock ownership", () => {
   function owner(): Owner {
     if (!deadOwner) {
       const root = project();
-      const out = observe(root, { fallback: "EMLINK", failAfter: 3 });
+      const out = observe(root, { failAfter: 3 });
       expect(out.error?.message).toContain("injected transaction failure");
       expectProject(root);
       deadOwner = out.owner!;
@@ -462,11 +446,21 @@ describe("t330 lock ownership", () => {
   // A live PID holds the lock only while it is still the process that wrote
   // it: the same generation, or, for an older release's lock that records no
   // generation, a process that started before the lock was written.
-  const RECLAIMED = new Set(["dead", "reused", "legacy-reused"]);
+  const RECLAIMED = new Set(["dead", "reused", "legacy-reused", "other-boot"]);
   const LONG_AGO = new Date("2001-01-01T00:00:00Z");
   const CLEARED = "an earlier AI-DLC command stopped before it finished, so its lock was cleared.";
-  for (const state of ["live", "dead", "reused", "legacy-live", "legacy-reused", "foreign", "missing", "malformed", "unknown-schema", "no-token", "invalid-pid", "out-of-range-pid"]) {
-    test(`directory owner ${state} is reclaimed only with proof of same-host death`, () => {
+  const ELSEWHERE = "an AI-DLC command on another computer is working in ";
+  const ELSEWHERE_OR_RESTART = "an AI-DLC command on another computer, or on this one before it restarted, is working in ";
+  // What each lock that is kept says: a holder still working (or still writing
+  // its stamp), another computer's, or a stamp that cannot be read.
+  const KEPT: Record<string, string> = {
+    live: "busy", "legacy-live": "busy", missing: "busy", malformed: "busy",
+    foreign: ELSEWHERE, "foreign-2.11.2": ELSEWHERE_OR_RESTART,
+    "unknown-schema": "unreadable", "no-token": "unreadable", "invalid-pid": "unreadable",
+    "out-of-range-pid": "unreadable",
+  };
+  for (const state of ["live", "dead", "reused", "legacy-live", "legacy-reused", "foreign", "foreign-2.11.2", "other-boot", "missing", "malformed", "unknown-schema", "no-token", "invalid-pid", "out-of-range-pid"]) {
+    test(`directory owner ${state} is reclaimed only with proof of same-computer death`, () => {
       const root = project(), lock = join(root, LOCK), stamp = owner();
       if (state === "live") Object.assign(stamp, { pid: process.pid, processGeneration: processGeneration(process.pid) });
       if (state === "reused") stamp.pid = process.pid;
@@ -474,7 +468,18 @@ describe("t330 lock ownership", () => {
         stamp.pid = process.pid;
         delete stamp.processGeneration;
       }
-      if (state === "foreign") stamp.host = `other-boot:${stamp.host}`;
+      if (state.startsWith("foreign") || state === "other-boot") {
+        Object.assign(stamp, { pid: process.pid, processGeneration: processGeneration(process.pid) });
+        stamp.host = `other:${stamp.host}`;
+      }
+      if (state === "foreign") stamp.machine = `other:${stamp.machine}`;
+      // 2.11.2 stamped no machine or boot.
+      if (state === "foreign-2.11.2") {
+        delete stamp.machine;
+        delete stamp.boot;
+      }
+      // The same computer before a restart: its holders died with that boot.
+      if (state === "other-boot") stamp.boot = "another-boot";
       if (state === "unknown-schema") stamp.schemaVersion = 2;
       if (state === "no-token") stamp.token = "";
       if (state === "invalid-pid") stamp.pid = 0;
@@ -484,19 +489,53 @@ describe("t330 lock ownership", () => {
       if (state !== "missing") writeFileSync(join(lock, "owner.json"), raw);
       if (state === "legacy-reused") utimesSync(join(lock, "owner.json"), LONG_AGO, LONG_AGO);
       const before = statSync(lock);
-      const out = observe(root, { fallback: "EMLINK" });
+      const out = observe(root);
       if (RECLAIMED.has(state)) {
         expect(out.error).toBeNull();
         expect(out.stderr).toContain(CLEARED);
         expectProject(root, true);
       } else {
         expect(out.stderr).not.toContain(CLEARED);
-        expect(out.error?.message).toMatch(/another AI-DLC mutation|cannot verify|another host or boot/);
+        const kept = KEPT[state];
+        if (kept === "busy") {
+          expect(out.error).toMatchObject({ name: "TransactionBusyError", message: busyAt(root), remediation: BUSY });
+        } else if (kept === "unreadable") {
+          expect(out.error).toMatchObject({
+            message: `${lock} cannot be read.`,
+            remediation: "if no AI-DLC command is running, delete that folder, then run this command again.",
+          });
+        } else {
+          expect(out.error?.message).toBe(`${kept}${root}${state === "foreign" ? ", or left its lock there." : " or left its lock there."}`);
+          expect(out.error?.remediation).toBe(
+            `wait for it to finish, then run this command again; if none is running there, delete the folder ${lock} first.`,
+          );
+        }
+        expect(out.error?.filesystem).toBe(true);
         expect(statSync(lock).ino).toBe(before.ino);
         expect(readdirSync(lock)).toEqual(state === "missing" ? [] : ["owner.json"]);
         if (state !== "missing") expect(readFileSync(join(lock, "owner.json"), "utf8")).toBe(raw);
         expectProject(root, false, [LOCK]);
       }
+    });
+  }
+
+  // A refusal names a step that works: the person deletes the folder it names
+  // and runs the command again.
+  for (const state of ["foreign", "unknown-schema"]) {
+    test(`following the ${state} lock's step lets the command run`, () => {
+      const root = project(), lock = join(root, LOCK), stamp = owner();
+      Object.assign(stamp, { pid: process.pid, host: `other:${stamp.host}`, machine: `other:${stamp.machine}` });
+      if (state === "unknown-schema") stamp.schemaVersion = 2;
+      mkdirSync(lock);
+      writeFileSync(join(lock, "owner.json"), JSON.stringify(stamp));
+      const refused = observe(root);
+      const named = /delete the folder (.+) first\.$/.exec(refused.error?.remediation ?? "")?.[1]
+        ?? /^(.+) cannot be read\.$/.exec(refused.error?.message ?? "")?.[1];
+      expect(named).toBe(lock);
+      rmSync(named!, { recursive: true, force: true });
+      const again = observe(root);
+      expect(again.error).toBeNull();
+      expectProject(root, true);
     });
   }
 
@@ -509,12 +548,12 @@ describe("t330 lock ownership", () => {
       mkdirSync(lock);
       if (state === "empty") writeFileSync(join(lock, "owner.json"), "");
       if (state === "cut-off") writeFileSync(join(lock, "owner.json"), '{"schemaVersion":1,"pid":');
-      const fresh = observe(root, { fallback: "EMLINK" });
-      expect(fresh.error?.message).toContain("cannot verify");
+      const fresh = observe(root);
+      expect(fresh.error).toMatchObject({ message: busyAt(root), remediation: BUSY });
       expect(fresh.stderr).not.toContain(CLEARED);
       expectProject(root, false, [LOCK]);
       utimesSync(lock, LONG_AGO, LONG_AGO);
-      const aged = observe(root, { fallback: "EMLINK" });
+      const aged = observe(root);
       expect(aged.error).toBeNull();
       expect(aged.stderr).toContain(CLEARED);
       expectProject(root, true);
@@ -526,20 +565,32 @@ describe("t330 lock ownership", () => {
     mkdirSync(lock);
     writeFileSync(join(lock, "owner.json"), raw);
     utimesSync(lock, LONG_AGO, LONG_AGO);
-    const out = observe(root, { fallback: "EMLINK" });
-    expect(out.error?.message).toContain("cannot verify incomplete directory transaction lock");
+    const out = observe(root);
+    expect(out.error?.message).toBe(`${lock} cannot be read.`);
     expect(out.stderr).not.toContain(CLEARED);
     expect(readFileSync(join(lock, "owner.json"), "utf8")).toBe(raw);
     expectProject(root, false, [LOCK]);
   });
 
-  test("fallback probe and acquisition preserve a live legacy file lock", () => {
+  test("a lock another command takes between a dead holder's clearing and this one's is busy", () => {
+    const root = project(), lock = join(root, LOCK);
+    mkdirSync(lock);
+    writeFileSync(join(lock, "owner.json"), JSON.stringify(owner()));
+    const out = observe(root, { retaken: true });
+    expect(out.stderr).toContain(CLEARED);
+    expect(out.error).toMatchObject({ name: "TransactionBusyError", message: busyAt(root), remediation: BUSY });
+    expectProject(root, false, [LOCK]);
+  });
+
+  // 2.11.2 took a file lock by hard link where the storage allowed it; a live
+  // one still holds the project, and a dead one is cleared.
+  test("the storage check and a transaction keep a live 2.11.2 file lock", () => {
     const root = project(), lock = join(root, LOCK);
     const raw = JSON.stringify({ pid: process.pid, staging: ".aidlc-txn-live" });
     writeFileSync(lock, raw);
     const before = statSync(lock);
-    expect(observe(root, { fallback: "EMLINK", mode: "probe" }).error).toBeNull();
-    expect(observe(root, { fallback: "EMLINK" }).error?.message).toContain("another AI-DLC mutation");
+    expect(observe(root, { mode: "probe" }).error).toBeNull();
+    expect(observe(root).error).toMatchObject({ message: busyAt(root), remediation: BUSY });
     expect(readFileSync(lock, "utf8")).toBe(raw);
     expect(statSync(lock).ino).toBe(before.ino);
     expect(statSync(lock).mtimeMs).toBe(before.mtimeMs);
@@ -547,7 +598,7 @@ describe("t330 lock ownership", () => {
   });
 
   for (const state of ["dead", "live", "reused", "legacy-live", "legacy-reused"]) {
-    test(`file owner ${state} is reclaimed only when its PID no longer runs its holder`, () => {
+    test(`2.11.2 file owner ${state} is reclaimed only when its PID no longer runs its holder`, () => {
       const root = project(), lock = join(root, LOCK), dead = owner();
       const stamp: Record<string, unknown> = { pid: process.pid, staging: ".aidlc-txn-held" };
       if (state === "dead") Object.assign(stamp, { pid: dead.pid, processGeneration: dead.processGeneration });
@@ -559,11 +610,11 @@ describe("t330 lock ownership", () => {
       const out = observe(root);
       if (RECLAIMED.has(state)) {
         expect(out.error).toBeNull();
-        expect(out.backend).toBe("hardlink");
+        expect(out.owner?.pid).toEqual(expect.any(Number));
         expect(out.stderr).toContain(CLEARED);
         expectProject(root, true);
       } else {
-        expect(out.error?.message).toContain("another AI-DLC mutation");
+        expect(out.error?.message).toBe(busyAt(root));
         expect(out.stderr).not.toContain(CLEARED);
         expect(readFileSync(lock, "utf8")).toBe(raw);
         expectProject(root, false, [LOCK]);
@@ -575,23 +626,20 @@ describe("t330 lock ownership", () => {
   // with another temp folder) can let its lock go while a waiter is still
   // looking at it. Gone by the waiter's next look, the lock is free: the waiter
   // takes it, as it would a moment later, and clears nothing.
-  for (const [fallback, moment] of [
-    [undefined, "lock"], ["EMLINK", "lock"], ["EMLINK", "owner"],
-  ] as const) {
+  for (const [kind, moment] of [["file", "lock"], ["directory", "lock"], ["directory", "owner"]] as const) {
     const when = moment === "lock" ? "after the waiter's first look" : "before its owner is read";
-    test(`a ${fallback ? "directory" : "file"} lock let go ${when} is taken`, () => {
+    test(`a ${kind} lock let go ${when} is taken`, () => {
       const root = project(), lock = join(root, LOCK);
       const live = { pid: process.pid, processGeneration: processGeneration(process.pid) };
-      if (fallback) {
+      if (kind === "directory") {
         mkdirSync(lock);
         writeFileSync(join(lock, "owner.json"), JSON.stringify({ ...owner(), ...live }));
       } else {
         writeFileSync(lock, `${JSON.stringify({ ...live, staging: ".aidlc-txn-held" })}\n`);
       }
-      const out = observe(root, { fallback, letGo: moment });
+      const out = observe(root, { letGo: moment });
       expect(out.letGo).toBe(true);
       expect(out.error).toBeNull();
-      expect(out.backend).toBe(fallback ? "directory" : "hardlink");
       expect(out.stderr).not.toContain(CLEARED);
       expectProject(root, true);
     });
@@ -616,7 +664,7 @@ describe("t330 lock ownership", () => {
 
   test("directory release preserves a replacement owner's directory", () => {
     const root = project();
-    const out = observe(root, { fallback: "EMLINK", replaceOwner: true });
+    const out = observe(root, { replaceOwner: true });
     expect(out.error?.message).toBe("replacement installed");
     expect(readFileSync(join(root, LOCK, "owner.json"), "utf8")).toBe(out.replacement!);
     expectProject(root, false, [LOCK]);
@@ -624,15 +672,13 @@ describe("t330 lock ownership", () => {
 });
 
 // Rendezvous with actual processes, not a guessed sleep: contender uses an
-// alias and the other backend while the holder is inside the local gate.
-for (const [pause, fallback, crash] of [
-  ["acquire", "EMLINK", false], ["locked", "EMLINK", true],
-  ["release", "EMLINK", false], ["locked", undefined, false],
-] as const) {
-  test(`local gate spans ${pause} (${fallback ?? "native"})${crash ? " and recovers after SIGKILL" : ""}`, async () => {
+// alias while the holder is inside the local gate. The contender reads the busy
+// line, and its step (run it again once the holder is done) works.
+for (const [pause, crash] of [["acquire", false], ["locked", true], ["release", false], ["locked", false]] as const) {
+  test(`local gate spans ${pause}${crash ? " and recovers after SIGKILL" : ""}`, async () => {
     const root = project(), alias = join(dirname(root), "alias");
     symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
-    const child = Bun.spawn([process.execPath, "--eval", childSource(root, { pause, fallback })], {
+    const child = Bun.spawn([process.execPath, "--eval", childSource(root, { pause })], {
       cwd: REPO_ROOT, env: childEnv(), stdout: "pipe", stderr: "pipe",
     });
     const stdout = new Response(child.stdout).text(), stderr = new Response(child.stderr).text();
@@ -640,15 +686,16 @@ for (const [pause, fallback, crash] of [
       const ready = join(dirname(root), "ready");
       expect(await waitForBarrierLine(ready, { writer: child, timeoutMs: 10_000 })).toBe(`${pause}\n`);
       const before = readdirSync(root).sort(), content = readFileSync(join(root, "existing.txt"), "utf8");
-      const blocked = observe(root, { requestedRoot: alias, contender: true, fallback: fallback ? undefined : "EMLINK" });
-      expect(blocked.error?.message).toContain("another AI-DLC mutation");
-      expect(blocked.backend).toBeUndefined();
+      const blocked = observe(root, { requestedRoot: alias, contender: true });
+      expect(blocked.error).toMatchObject({ name: "TransactionBusyError", remediation: BUSY });
+      expect(blocked.error?.message).toStartWith("another AI-DLC command is still working in ");
+      expect(blocked.owner).toBeUndefined();
       expect(readdirSync(root).sort()).toEqual(before);
       expect(readFileSync(join(root, "existing.txt"), "utf8")).toBe(content);
       if (crash) {
         child.kill("SIGKILL");
         await child.exited;
-        expect(observe(root, { fallback: "EMLINK" }).error).toBeNull();
+        expect(observe(root).error).toBeNull();
       } else {
         writeFileSync(join(dirname(root), "continue"), "");
         expect(await child.exited, await stderr).toBe(0);
@@ -657,6 +704,9 @@ for (const [pause, fallback, crash] of [
         for (const gate of completed.gates) expect(existsSync(gate)).toBe(false);
       }
       expectProject(root, true);
+      const again = observe(root, { requestedRoot: alias, contender: true });
+      expect(again.error).toBeNull();
+      expect(readFileSync(join(root, "existing.txt"), "utf8")).toBe("contender\n");
     } finally {
       if (child.exitCode === null) child.kill("SIGKILL");
       await Promise.all([child.exited, stdout, stderr]);

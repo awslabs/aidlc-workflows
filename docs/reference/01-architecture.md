@@ -628,38 +628,57 @@ preserves recovery evidence, and the next transaction quarantines abandoned
 staging rather than deleting it. Project init/refresh, machine lifecycle,
 project pins, plugin selection, and plugin sync all build plans for this engine.
 
-The root lock prefers hard-link publication and falls back automatically to an
-owner-stamped directory when hard links are unavailable. Both use
-`.aidlc-transaction.lock`, so a live legacy file owner still blocks the directory
-fallback. The receipt-managed `withAuditLock` helper supplies a dedicated local
-gate in the temporary directory, keyed by canonical root, around transaction
-execution, including
-acquisition, stale-owner recovery, and ownership-checked release. Recovery
-treats an owner as gone when its PID is dead or now runs a later process: both
-lock forms record the holder's process generation (the OS start record the
-gate's reaper also compares), and a lock from a release that recorded none is
-judged by whether the live process started more than 2 s after the lock was
-written. Each recovery prints one line on stderr. Directory recovery also
-requires a matching host/boot identity; a directory stamp that never finished
-(no owner file, an empty one, or one that does not parse) is cleared once the
-folder is past the workflow locks' unstamped grace (5 s by default), and unknown, foreign, or
-invalid directory owners are retained for manual diagnosis.
+The root lock is one owner-stamped directory, `.aidlc-transaction.lock`, made
+by `mkdir` (exclusive on every storage) and stamped with `owner.json` (`'wx'`,
+then `fsync`); a live file lock an older release took by hard link at the same
+path still blocks it. The receipt-managed `withAuditLock` helper supplies a
+dedicated local gate in the temporary directory, keyed by canonical root, around
+transaction execution, including acquisition, stale-owner recovery, and
+ownership-checked release. Recovery (`clearStaleLock`) treats an owner as gone
+when its PID is dead or now runs a later process: the stamp records the holder's
+process generation (the OS start record the gate's reaper also compares), and a
+lock from a release that recorded none is judged by whether the live process
+started more than 2 s after the lock was written. Each recovery prints one line
+on stderr. The stamp also records a host identity (platform, hostname, boot), a
+machine identity (platform, hostname) and the boot: a stamp from this machine
+under another boot is cleared, since its holder stopped with that boot; one
+from another machine, or one with no machine (an older release's) under another
+host identity, is retained with a `TransactionLockStateError` that names the
+folder to delete once nothing runs there. A stamp that never finished (no owner
+file, an empty one, or one that does not parse) reads as busy
+(`TransactionBusyError`) until the folder is past the workflow locks' unstamped
+grace (5 s by default), and is then cleared; a stamp that parses but names no
+valid owner is retained as unreadable. A live owner, and a lock taken again
+between a dead owner's clearing and this command's `mkdir`, read as busy;
+update's version reservation and plugin sync retry on that class.
 
-The coordination contract covers cooperating processes on one continuously
-running mount on one host with a common local temporary directory (`TMPDIR` on
-Unix), canonical root, and PID namespace. It provides no distributed locking
-between hosts or independent mounts. Moving the gate locally does not change
-the data contract: workflow append and descriptor identity must remain coherent,
-and transaction publication still depends on atomic file replacement and
-directory rename supplied by the filesystem. No copy-and-delete rename
-fallback is added.
+The gate serializes commands that share a local temporary directory; the
+project lock alone keeps apart commands with different temporary directories,
+WSL and Windows on one folder, and computers sharing a folder, because a foreign
+stamp is never cleared. Commands on one computer must share its PID namespace.
+It provides no distributed locking between independent mounts that do not
+share one view of the folder. The data contract is unchanged: workflow append
+and descriptor identity must remain coherent, and transaction publication still
+depends on atomic file replacement and directory rename supplied by the
+filesystem. No copy-and-delete rename fallback is added. A commit rename the
+storage does not support (`ENOTSUP`, `EOPNOTSUPP`, `ENOSYS`) fails as a
+`TransactionFilesystemError` naming the operation, after rollback.
+
+No engine code makes a hard link (`tests/unit/t-no-hard-links-lint.test.ts`).
+Where a name must not be replaced, `installWithoutReplacing` (aidlc-locks.ts)
+claims it with an exclusive create and renames the whole bytes over that claim
+through `replaceAtomically`'s Windows retry; a name taken meanwhile fails with
+`EEXIST`. The document copy and workspace sync's generated files use it, the
+first active-space cursor is one exclusive write, and a space switch renames
+its cursor into place.
 
 `assertTransactionFilesystem` probes exclusive creation, regular-file `fsync`,
 mutable append/readback and descriptor identity, file/directory rename, Unix
-`chmod`, and transaction and runtime workflow locking. The first-run wizard and
-transactions using the directory fallback invoke it; unsupported directory
-`fsync` is tolerated. Successful probes cannot establish crash durability or
-rename atomicity, nor certify a driver through simulated failures. Mountpoint's
+`chmod`, and transaction and runtime workflow locking. The first-run wizard
+invokes it before its first question, and transactions do not repeat it;
+unsupported directory `fsync` is tolerated. Successful probes cannot establish
+crash durability or rename atomicity, nor certify a driver through simulated
+failures. Mountpoint's
 missing directory rename/mutable-file support and s3fs's non-atomic rename
 remain outside the full transaction contract. See the [storage compatibility matrix](../guide/18-install-and-lifecycle.md#transactions-and-recovery).
 

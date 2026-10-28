@@ -778,6 +778,25 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     ]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a sync that meets another AI-DLC command's lock waits for it, then syncs", async () => {
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+    // A live holder: this process, under 2.11.2's file lock.
+    const lock = join(project, ".aidlc-transaction.lock");
+    writeFileSync(lock, `${JSON.stringify({ pid: process.pid, staging: ".aidlc-txn-held" })}\n`);
+    const letGo = setTimeout(() => rmSync(lock, { force: true }), 300);
+    try {
+      const result = await syncPlugins(project, [], ".claude");
+      expect(result.synced).toEqual(["test-pro"]);
+      expect(result.operations).toBeGreaterThan(0);
+    } finally {
+      clearTimeout(letGo);
+    }
+    expect(collectPluginStatus(project, ".claude").statuses).toEqual([
+      expect.objectContaining({ key: "test-pro", state: "current" }),
+    ]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("public JSON and doctor expose the shared exact comparator state", () => {
     const project = installedProject();
     withClaudeFixture(TEST_PRO);

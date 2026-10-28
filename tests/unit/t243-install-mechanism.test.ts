@@ -88,6 +88,7 @@ import {
 } from "../../core/tools/aidlc-release.ts";
 import {
   executePlan,
+  TransactionBusyError,
   transactionSourceHash,
   transactionState,
   writeOperation,
@@ -555,7 +556,7 @@ describe("t243 archive and transaction safety", () => {
       schemaVersion: 1,
       root,
       operations: [writeOperation("blocked.txt", "no", "absent")],
-    })).toThrow("another AI-DLC mutation holds");
+    })).toThrow(TransactionBusyError);
     expect(existsSync(join(root, "blocked.txt"))).toBe(false);
     expect(existsSync(join(root, ".aidlc-transaction.lock"))).toBe(true);
   });
@@ -615,14 +616,15 @@ describe("t243 archive and transaction safety", () => {
       operations: [writeOperation("blocked.txt", "no", "absent")],
     }, {
       validateCandidates() {
-        rmSync(lockPath);
-        writeFileSync(lockPath, replacement);
+        rmSync(lockPath, { recursive: true });
+        mkdirSync(lockPath);
+        writeFileSync(join(lockPath, "owner.json"), replacement);
         throw new Error("replacement installed");
       },
     })).toThrow("replacement installed");
-    expect(readFileSync(lockPath, "utf-8")).toBe(replacement);
+    expect(readFileSync(join(lockPath, "owner.json"), "utf-8")).toBe(replacement);
     expect(existsSync(join(root, "blocked.txt"))).toBe(false);
-    rmSync(lockPath);
+    rmSync(lockPath, { recursive: true });
   });
 
   test("route mutation policy blocks a plan before it creates destination bytes", () => {

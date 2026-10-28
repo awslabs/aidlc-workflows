@@ -396,7 +396,7 @@ directory `fsync` is tolerated. These checks detect unavailable operations;
 success cannot certify atomicity or crash durability. A failed probe stops
 setup with storage remediation and nothing written (a probe that cannot be
 removed is named instead); see
-[Config fails with a hard-link error](15-troubleshooting.md#config-fails-with-a-hard-link-error).
+[Config fails with a storage error](15-troubleshooting.md#config-fails-with-a-storage-error).
 
 Recommended defaults preserve the harness's current model provider.
 Customization walks Harness, Model provider, Model effort preset, Plugins, MCP
@@ -1809,32 +1809,36 @@ Abandoned owner-private staging is swept only after lock and ownership checks.
 Unsupported directory `fsync` is tolerated, so a successful command alone
 cannot promise metadata durability after a crash.
 
-Transaction locking prefers hard links and automatically falls back to an
-owner-stamped directory. Both occupy `.aidlc-transaction.lock`, preserving
-exclusion with live legacy file owners. A dedicated owner-stamped gate in the
-local temporary directory serializes transactions and ownership changes.
-This supports only cooperating processes on **one continuously running mount
-on one host**, sharing the same canonical project path, local temporary
-directory (`TMPDIR` on Unix), and PID namespace. It is not distributed locking
-across hosts or independent mounts, even when they access the same bucket.
+Transaction locking uses one owner-stamped directory, `.aidlc-transaction.lock`
+in the project, made with an exclusive create on every storage; it also keeps
+out a live file lock left by an older release. A dedicated owner-stamped gate in
+the local temporary directory serializes transactions and ownership changes
+among commands that share it. Commands with different temporary directories,
+WSL beside Windows on one folder, or two computers on a shared folder are kept
+apart by the project lock itself: a lock stamped by another computer is never
+cleared from this one, and the command names the folder to delete once nothing
+is running there. AI-DLC makes no hard links: a document copy or a generated
+file is put at its name with an exclusive create and a rename, and never
+replaces a file another command put there first. This is not distributed
+locking across independent mounts that do not share one view of the folder,
+even when they access the same bucket.
 
-The first-run probe is an early capability check; directory-lock transactions
-also probe before applying changes. Neither replaces validation or real lock
-acquisition, and passing calls cannot prove atomic rename or crash durability.
+The first-run probe is the capability check, and transactions do not repeat
+it. It does not replace validation or real lock acquisition, and passing calls
+cannot prove atomic rename or crash durability. A transaction whose commit
+rename the storage does not support stops with the same storage line and fix.
 Compatibility depends on the driver and its actual semantics:
 
 | Storage | Compatibility boundary |
 | --- | --- |
 | Local ext4 or XFS, including EC2 EBS volumes | Suitable project storage for the required filesystem operations. |
-| POSIX-like mount without hard links | Config and transactions can run with directory locking if all remaining requirements hold, within the single-mount scope above. |
+| Storage without hard links, such as exFAT, network shares, or WSL `/mnt/c` | Config and transactions run as on local storage when the remaining requirements hold; AI-DLC makes no hard links. |
 | Mountpoint for Amazon S3 | Full workflows remain incompatible: directory rename and general mutable-file updates are unavailable. S3 Express single-file rename does not remove those limits. See [Mountpoint filesystem semantics](https://github.com/awslabs/mountpoint-s3/blob/5e400f788f8cbca028f3314d84ef2df2c7fcf536/doc/SEMANTICS.md). |
 | s3fs-fuse | Rename uses copy then delete and is not atomic. Passing probes does not establish support for general crash-safe AI-DLC transactions. See [s3fs limitations](https://github.com/s3fs-fuse/s3fs-fuse/blob/fc5778fe83b533a9beed9383f3ce99de76207ef9/README.md#L153-L163). |
 
-The fallback removes the transaction lock's hard-link requirement; separate
-operations can still require hard links, including workspace sync when it
-publishes generated files. Upstream semantics and simulated failures are not
-live validation of a particular S3 mount. Use compatible local/EBS project
-storage when a mount cannot meet these requirements; see [filesystem troubleshooting](15-troubleshooting.md#config-fails-with-a-hard-link-error).
+Upstream semantics and simulated failures are not live validation of a
+particular S3 mount. Use compatible local/EBS project storage when a mount
+cannot meet these requirements; see [filesystem troubleshooting](15-troubleshooting.md#config-fails-with-a-storage-error).
 For foreign or incomplete lock owners, follow [Transaction lock ownership](15-troubleshooting.md#transaction-lock-ownership)
 before any manual recovery.
 

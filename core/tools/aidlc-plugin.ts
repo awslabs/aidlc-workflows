@@ -47,6 +47,7 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import {
   executePlan,
+  TransactionBusyError,
   transactionState,
   writeOperation,
   type TransactionOperation,
@@ -2547,8 +2548,7 @@ async function syncPluginsLocked(
     } catch (error) {
       if (
         lockRetry < 3 &&
-        error instanceof Error &&
-        error.message.includes("another AI-DLC mutation holds")
+        error instanceof TransactionBusyError
       ) {
         const lockPath = join(projectDir, ".aidlc-transaction.lock");
         for (

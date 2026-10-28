@@ -8,7 +8,6 @@ import {
   fstatSync,
   fsyncSync,
   lstatSync,
-  linkSync,
   mkdirSync,
   mkdtempSync,
   openSync,
@@ -396,9 +395,8 @@ function clearStaleLock(lockPath: string): void {
   } catch (error) {
     const absent = (error as NodeJS.ErrnoException).code === "ENOENT";
     if (absent && (!directory || !pathExists(lockPath))) return;
-    if (!absent || !unstampedPastGrace(lockPath)) {
-      throw new Error(`cannot verify transaction lock ${lockPath}`);
-    }
+    if (!absent) throw transactionLockUnreadable(lockPath, error);
+    if (!unstampedPastGrace(lockPath)) throw new TransactionBusyError(lockPath);
     raw = null;
     unfinished = true;
   }
@@ -406,6 +404,8 @@ function clearStaleLock(lockPath: string): void {
     schemaVersion?: unknown;
     pid?: unknown;
     host?: unknown;
+    machine?: unknown;
+    boot?: unknown;
     token?: unknown;
     processGeneration?: unknown;
   } = {};
@@ -423,6 +423,10 @@ function clearStaleLock(lockPath: string): void {
   // writer outside that gate, it is cleared like a dead owner's; the move and
   // verify below are the second look. A stamp that parses keeps every check.
   unfinished ||= directory && !parsed && unstampedPastGrace(lockPath);
+  // Within the grace a stamp that does not parse yet is a holder still writing
+  // it; one that parses with the wrong shape (a newer release's, or damaged)
+  // never changes by waiting.
+  if (directory && !unfinished && !parsed) throw new TransactionBusyError(lockPath);
   if (
     directory &&
     !unfinished &&
@@ -435,20 +439,21 @@ function clearStaleLock(lockPath: string): void {
       !lock.token
     )
   ) {
-    throw new Error(`cannot verify incomplete directory transaction lock ${lockPath}`);
+    throw transactionLockUnreadable(lockPath);
   }
-  if (directory && !unfinished && lock.host !== transactionHostIdentity()) {
-    throw new Error(
-      `transaction lock ${lockPath} belongs to another host or boot; ` +
-      "directory locking requires one host and one shared mount",
-    );
-  }
+  const foreign = directory && !unfinished && lock.host !== transactionHostIdentity().host;
+  // The same computer under another boot: its holder died with that boot, so
+  // no pid it names can still be the holder.
+  const diedWithBoot = foreign && typeof lock.boot === "string" &&
+    lock.machine === transactionHostIdentity().machine && lock.boot !== transactionHostIdentity().boot;
+  if (foreign && !diedWithBoot) throw transactionLockElsewhere(lockPath, typeof lock.machine === "string");
   if (
+    !diedWithBoot &&
     typeof lock.pid === "number" &&
     processIsAlive(lock.pid) &&
     !heldByLaterProcess(lock.pid, lock.processGeneration, ownerPath)
   ) {
-    throw new Error(`another AI-DLC mutation holds ${lockPath}`);
+    throw new TransactionBusyError(lockPath);
   }
   const moved = join(dirname(lockPath), `.aidlc-lock-dead-${randomUUID()}`);
   try {
@@ -471,7 +476,7 @@ function clearStaleLock(lockPath: string): void {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
-    throw new Error(`another AI-DLC mutation holds ${lockPath}`);
+    throw new TransactionBusyError(lockPath);
   }
   rmSync(moved, { recursive: directory, force: true });
   process.stderr.write(
@@ -479,9 +484,7 @@ function clearStaleLock(lockPath: string): void {
   );
 }
 
-type HeldLock =
-  | { kind: "hardlink"; descriptor: number; identity: string }
-  | { kind: "directory"; identity: string };
+type HeldLock = { identity: string };
 
 export class TransactionFilesystemError extends Error {
   readonly remediation =
@@ -505,28 +508,65 @@ export class TransactionFilesystemError extends Error {
 export class TransactionLockError extends TransactionFilesystemError {
   constructor(root: string, code: string, cause: unknown) {
     super(root, "transaction locking", code, cause);
-    this.message = `Cannot create an AI-DLC transaction lock in ${root}: hard-link and directory locking are unavailable (${code}).`;
+    this.message = `Cannot create an AI-DLC transaction lock in ${root} (${code}).`;
     this.name = "TransactionLockError";
   }
 }
 
-const DIRECTORY_FALLBACK_CODES = new Set(["EMLINK", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EPERM"]);
+// A lock this command cannot clear by itself, in the person's words, with the
+// way on. Its own message and fix replace the storage words of its parent,
+// whose branch in the config handler prints them.
+export class TransactionLockStateError extends TransactionFilesystemError {
+  override readonly remediation: string;
 
-function linkTransactionLock(root: string, candidate: string, lockPath: string): void {
-  try {
-    linkSync(candidate, lockPath);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code && DIRECTORY_FALLBACK_CODES.has(code)) {
-      throw new TransactionLockError(root, code, error);
-    }
-    throw error;
+  constructor(lockPath: string, message: string, remediation: string, cause?: unknown) {
+    super(dirname(lockPath), "transaction locking", "EEXIST", cause);
+    this.message = message;
+    this.remediation = remediation;
+    this.name = new.target.name;
   }
 }
 
-let transactionHost: string | undefined;
+// Another AI-DLC command holds the lock now; update and the plugin sync retry
+// on exactly this class.
+export class TransactionBusyError extends TransactionLockStateError {
+  constructor(lockPath: string, cause?: unknown) {
+    super(
+      lockPath,
+      `another AI-DLC command is still working in ${dirname(lockPath)}.`,
+      "wait for it to finish, then run this command again.",
+      cause,
+    );
+  }
+}
 
-function transactionHostIdentity(): string {
+// A stamp from another computer that shares this folder, or, for a stamp with
+// no machine (2.11.2's), from this computer before it restarted: nothing here
+// can prove its holder stopped.
+function transactionLockElsewhere(lockPath: string, machineRecorded: boolean): TransactionLockStateError {
+  return new TransactionLockStateError(
+    lockPath,
+    machineRecorded
+      ? `an AI-DLC command on another computer is working in ${dirname(lockPath)}, or left its lock there.`
+      : `an AI-DLC command on another computer, or on this one before it restarted, is working in ${dirname(lockPath)} or left its lock there.`,
+    `wait for it to finish, then run this command again; if none is running there, delete the folder ${lockPath} first.`,
+  );
+}
+
+function transactionLockUnreadable(lockPath: string, cause?: unknown): TransactionLockStateError {
+  return new TransactionLockStateError(
+    lockPath,
+    `${lockPath} cannot be read.`,
+    "if no AI-DLC command is running, delete that folder, then run this command again.",
+    cause,
+  );
+}
+
+let transactionHost: { host: string; machine: string; boot?: string } | undefined;
+
+// `host` is what every release stamps and compares; `machine` and `boot` tell a
+// restart of this computer apart from another computer.
+function transactionHostIdentity(): { host: string; machine: string; boot?: string } {
   if (transactionHost) return transactionHost;
   let boot = "";
   if (process.platform === "linux") {
@@ -536,7 +576,11 @@ function transactionHostIdentity(): string {
       // Without a boot identifier, conservatively retain PID-based ownership.
     }
   }
-  transactionHost = sha256Bytes(`${process.platform}\0${hostname()}\0${boot}`);
+  transactionHost = {
+    host: sha256Bytes(`${process.platform}\0${hostname()}\0${boot}`),
+    machine: sha256Bytes(`${process.platform}\0${hostname()}`),
+    ...(boot ? { boot: sha256Bytes(boot) } : {}),
+  };
   return transactionHost;
 }
 
@@ -551,7 +595,9 @@ function acquireDirectoryLock(root: string, lockPath: string, staging: string): 
     try {
       mkdirSync(lockPath, { mode: 0o700 });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST" && attempt === 0) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        // Taken again after a dead holder's was cleared: another command has it.
+        if (attempt > 0) throw new TransactionBusyError(lockPath, error);
         clearStaleLock(lockPath);
         continue;
       }
@@ -560,7 +606,7 @@ function acquireDirectoryLock(root: string, lockPath: string, staging: string): 
     const identity = `${JSON.stringify({
       schemaVersion: 1,
       pid: process.pid,
-      host: transactionHostIdentity(),
+      ...transactionHostIdentity(),
       token: randomUUID(),
       staging: basename(staging),
       ...processGenerationField(),
@@ -572,7 +618,7 @@ function acquireDirectoryLock(root: string, lockPath: string, staging: string): 
       fsyncSync(descriptor);
       closeSync(descriptor);
       descriptor = null;
-      return { kind: "directory", identity };
+      return { identity };
     } catch (error) {
       try {
         if (descriptor !== null) closeSync(descriptor);
@@ -588,11 +634,9 @@ function acquireDirectoryLock(root: string, lockPath: string, staging: string): 
 }
 
 function releaseTransactionLock(lockPath: string, lock: HeldLock): void {
-  if (lock.kind === "hardlink") closeSync(lock.descriptor);
-  const ownerPath = lock.kind === "directory" ? join(lockPath, "owner.json") : lockPath;
   try {
-    if (readFileSync(ownerPath, "utf-8") === lock.identity) {
-      rmSync(lockPath, { recursive: lock.kind === "directory", force: true });
+    if (readFileSync(join(lockPath, "owner.json"), "utf-8") === lock.identity) {
+      rmSync(lockPath, { recursive: true, force: true });
     }
   } catch {
     // A replacement lock is not ours. Leave uncertain ownership untouched.
@@ -613,7 +657,7 @@ function withTransactionLock(
     // recovered before the next transaction in this same process.
     withAuditLock(gate, () => {
       entered = true;
-      const lock = acquireLock(root, lockPath, staging);
+      const lock = acquireDirectoryLock(root, lockPath, staging);
       try {
         operation(lock);
       } finally {
@@ -622,11 +666,7 @@ function withTransactionLock(
     }, undefined, undefined, 0, 0);
   } catch (error) {
     if (entered) throw error;
-    throw new Error(
-      `another AI-DLC mutation holds ${lockPath}, or local transaction coordination is unavailable; ` +
-      "all processes must use the same local temporary directory",
-      { cause: error },
-    );
+    throw new TransactionBusyError(lockPath, error);
   }
 }
 
@@ -765,46 +805,6 @@ export function assertTransactionFilesystem(path: string): void {
   if (closeError !== undefined) throw closeError;
 }
 
-function acquireLock(root: string, lockPath: string, staging: string): HeldLock {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const candidate = join(root, `.aidlc-lock-${randomUUID()}`);
-    let descriptor: number | null = null;
-    try {
-      descriptor = openSync(candidate, "wx", 0o600);
-      const identity = `${JSON.stringify({
-        pid: process.pid,
-        staging: basename(staging),
-        ...processGenerationField(),
-      })}\n`;
-      writeSync(descriptor, identity);
-      fsyncSync(descriptor);
-      linkTransactionLock(root, candidate, lockPath);
-      rmSync(candidate, { force: true });
-      return { kind: "hardlink", descriptor, identity };
-    } catch (error) {
-      // Cleanup is best-effort: the acquisition error, which may carry the
-      // storage fix, is the one to report.
-      try {
-        if (descriptor !== null) closeSync(descriptor);
-      } catch {
-        // Keep the acquisition error.
-      }
-      try {
-        rmSync(candidate, { force: true });
-      } catch {
-        // Keep the acquisition error.
-      }
-      // A filesystem that rejects hard links falls back to a directory lock.
-      if (error instanceof TransactionLockError) {
-        return acquireDirectoryLock(root, lockPath, staging);
-      }
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || attempt > 0) throw error;
-      clearStaleLock(lockPath);
-    }
-  }
-  throw new Error(`cannot acquire ${lockPath}`);
-}
-
 function quarantineOrphanStaging(root: string, current: string): void {
   for (const entry of readdirSync(root)) {
     if (
@@ -919,6 +919,22 @@ function syncTree(path: string): void {
   syncPath(path);
 }
 
+// A rename the storage cannot do at all (Mountpoint for Amazon S3) is said as
+// the first-run storage check says it, with its storage fix; every other
+// failure stays as it is.
+const UNSUPPORTED_RENAME_CODES = new Set(["ENOTSUP", "EOPNOTSUPP", "ENOSYS"]);
+
+function commitRename(root: string, from: string, to: string): void {
+  try {
+    renameSync(from, to);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (!code || !UNSUPPORTED_RENAME_CODES.has(code)) throw error;
+    const directory = lstatSync(from, { throwIfNoEntry: false })?.isDirectory() ?? false;
+    throw new TransactionFilesystemError(root, directory ? "directory rename" : "file replacement by rename", code, error);
+  }
+}
+
 export function executePlan(
   plan: TransactionPlan,
   options: TransactionOptions = {},
@@ -933,7 +949,7 @@ export function executePlan(
   if (plan.operations.length === 0) return;
   mkdirSync(root, { recursive: true, mode: 0o700 });
   const staging = join(root, `.aidlc-txn-${randomUUID()}`);
-  withTransactionLock(root, staging, (lock) => {
+  withTransactionLock(root, staging, () => {
   let preserveStaging = false;
   // Every operation is in place: what is left in the staging folder is only
   // its scratch, and a failure to remove it never undoes or fails the plan.
@@ -946,7 +962,6 @@ export function executePlan(
   }> = [];
   try {
     failpoint(options, "after-lock");
-    if (lock.kind === "directory") assertTransactionFilesystem(root);
     if (
       !options.allowPendingWindowsUninstall &&
       pendingWindowsUninstallBlocks(root)
@@ -998,7 +1013,7 @@ export function executePlan(
         if (existed) {
           const removed = join(staging, "removed", rel);
           mkdirSync(dirname(removed), { recursive: true, mode: 0o700 });
-          renameSync(target, removed);
+          commitRename(root, target, removed);
         }
       } else {
         mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
@@ -1006,16 +1021,16 @@ export function executePlan(
         if (operation.kind === "tree" && existed) {
           const removed = join(staging, "removed", rel);
           mkdirSync(dirname(removed), { recursive: true, mode: 0o700 });
-          renameSync(target, removed);
+          commitRename(root, target, removed);
           try {
-            renameSync(candidate, target);
+            commitRename(root, candidate, target);
             displaced = true;
           } catch (error) {
             renameSync(removed, target);
             throw error;
           }
         } else {
-          renameSync(candidate, target);
+          commitRename(root, candidate, target);
         }
       }
       committed.push({

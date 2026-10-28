@@ -109,6 +109,7 @@ import {
 } from "./aidlc-release.ts";
 import {
   executePlan,
+  TransactionBusyError,
   type TransactionOperation,
   transactionSourceHash,
   transactionState,
@@ -372,7 +373,7 @@ const RESERVATION_RETRY_MS = 25;
 const DISPATCH_RESERVATION_WAIT_MS = 30_000;
 
 function machineLockBusy(error: unknown): boolean {
-  return error instanceof Error && error.message.startsWith("another AI-DLC mutation holds ");
+  return error instanceof TransactionBusyError;
 }
 
 function reserveVersion(

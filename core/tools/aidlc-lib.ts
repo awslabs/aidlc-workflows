@@ -5,7 +5,7 @@ import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { KIRO_SESSION_DIR_RE, kiroChatRecordPaths } from "./aidlc-kiro-chat-record.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
+import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -210,6 +210,7 @@ export {
   fileIdentity,
   type FileIdentity,
   holdsAuditLock,
+  installWithoutReplacing,
   intentsDir,
   isPidAlive,
   isPlainObject,
@@ -5425,26 +5426,16 @@ export function workflowDisplayName(space: string, intent: { dirName?: unknown; 
 
 // Materialize the active-space cursor without overwriting a concurrent explicit
 // switch. A clone does not carry this gitignored file, so SessionStart and any
-// active-intent write recreate the resolved pointer on first use. Publish a
-// fully-written staged file with link(), whose no-replace install is atomic: if
-// a space switch wins the race, its value stays untouched.
+// active-intent write recreate the resolved pointer on first use. The exclusive
+// create never replaces a cursor a space switch already wrote.
 export function ensureActiveSpaceCursor(projectDir: string): void {
   const space = activeSpace(projectDir);
   const root = workspaceRoot(projectDir);
-  const cursor = join(root, ACTIVE_SPACE_POINTER);
-  const staged = join(root, `.aidlc-active-space-${process.pid}-${randomUUID()}.tmp`);
   try {
     mkdirSync(root, { recursive: true });
-    writeFileSync(staged, `${space}\n`, { encoding: "utf-8", flag: "wx" });
-    linkSync(staged, cursor);
+    writeFileSync(join(root, ACTIVE_SPACE_POINTER), `${space}\n`, { encoding: "utf-8", flag: "wx" });
   } catch {
     /* existing cursor won, or per-user state is unwritable */
-  } finally {
-    try {
-      unlinkSync(staged);
-    } catch {
-      /* staging file was never created or is already gone */
-    }
   }
 }
 
@@ -5509,7 +5500,10 @@ export function clearActiveIntentCursor(
 export function setActiveSpaceCursor(projectDir: string, name: string): void {
   try {
     mkdirSync(workspaceRoot(projectDir), { recursive: true });
-    writeFileSync(join(workspaceRoot(projectDir), ACTIVE_SPACE_POINTER), `${name}\n`, "utf-8");
+    // Renamed into place, never written in place: a first cursor's exclusive
+    // create (ensureActiveSpaceCursor) that lands at the same moment cannot
+    // tear it or write over it.
+    writeFileAtomic(join(workspaceRoot(projectDir), ACTIVE_SPACE_POINTER), `${name}\n`);
   } catch {
     /* per-user cursor; best-effort */
   }
