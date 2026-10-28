@@ -134,7 +134,8 @@ async function windowsLauncherHelperCheck(): Promise<DoctorCheck | null> {
 }
 
 // Git Bash, where Claude Code runs its hooks on Windows, finds a bare `aidlc`
-// only through the extensionless launcher beside aidlc.cmd. Without it every
+// through aidlc.exe in bin or the extensionless launcher beside aidlc.cmd,
+// never aidlc.cmd itself. Without either every
 // hook that calls `aidlc` fails there, while PowerShell and CMD still find the
 // command, so the rest of doctor would read healthy.
 function windowsGitBashLauncherCheck(): DoctorCheck | null {
