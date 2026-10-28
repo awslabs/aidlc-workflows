@@ -148,6 +148,7 @@ import {
   fileIdentity,
   guardSwitchRefusal,
   type GuardSwitch,
+  hasRealGitEntry,
   normalizeProjectFlagsRecord,
   personAskedForThisLowering,
   RECORDABLE_PROJECT_BYPASSES,
@@ -7941,10 +7942,10 @@ function recordedFiles(path: string): string[] | null {
 }
 
 // A git checkout of the person's own inside a folder AI-DLC manages (Claude
-// Code keeps its worktrees in .claude/worktrees/): a folder holding a .git
+// Code keeps its worktrees in .claude/worktrees/): a folder with a real .git
 // entry where AI-DLC keeps none of its files, as `aidlcHas` answers.
 function personsCheckout(path: string, aidlcHas: (path: string) => boolean): boolean {
-  return lstatSync(path).isDirectory() && pathPresent(join(path, ".git")) && !aidlcHas(path);
+  return lstatSync(path).isDirectory() && hasRealGitEntry(path) && !aidlcHas(path);
 }
 
 function assertNoProjectLinks(
