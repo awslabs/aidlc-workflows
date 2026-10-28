@@ -237,8 +237,9 @@ function skillArguments(body: string, prompt: string): string | null {
   return pieces.join(args) === region ? args : null;
 }
 
-// The tool's input as an object. The CLI's own payload carries the arguments as
-// toolArgs, a JSON string. The Copilot runtime's apply_patch is a freeform tool
+// The tool's input as an object. The CLI's native camelCase hook payload carries
+// the arguments as toolArgs, a JSON string (the PascalCase hooks AI-DLC
+// registers get tool_input). The Copilot runtime's apply_patch is a freeform tool
 // whose input is the patch text itself (the runtime's own reader takes a string
 // first, then {input} or {patch}), so text that is no JSON object travels as
 // `input`, where applyPatchTargets reads it.
@@ -304,9 +305,9 @@ export async function run(
   // Claude-style names (Bash/Write/Edit/Read — live-captured); VS Code agent
   // mode uses its own snake_case execution ids (extracted from the shipped
   // extension's equivalence sets — parser-verified, pending a live IDE run).
-  // The Copilot runtime's own names (powershell, pwsh, grep, view, glob,
-  // apply_patch) are the ones its agent sees, and what a host that does not
-  // rename them, such as the GitHub Copilot app, may send.
+  // The Copilot runtime's own names (powershell, grep, view, glob, apply_patch)
+  // are the ones its agent sees, and what a host that does not rename them,
+  // such as the GitHub Copilot app, may send; pwsh is PowerShell 7's name.
   // Unknown names pass through unmapped and fall out of the self-filters,
   // exactly like any foreign tool.
   const TOOL_ALIAS: Record<string, string> = {
