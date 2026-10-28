@@ -3586,6 +3586,32 @@ function currentAttemptSwarmUnits(
   return [...obligations.units];
 }
 
+// The walking skeleton is built on the main checkout and approved at its own
+// checkpoint before the swarm starts, and the swarm leaves it out of its
+// batches, as it does a Unit the person skipped: no Bolt merge ever lands it,
+// so its approval is its authority and it owes no merge. A Unit a current
+// swarm batch started or converged still owes one, approved or not. Unreadable
+// evidence exempts nothing.
+function unitsOwingNoSwarmMerge(pd: string, slug: string): Set<string> {
+  try {
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(pd, undefined, undefined, unreadable);
+    const floor = latestMainWorkflowStageRunFloorForProject(pd, slug, false, undefined, rows);
+    if (unreadable.length > 0 || floor.startsWith("AMBIGUOUS:")) return new Set();
+    const built = new Set<string>();
+    for (const row of rows) {
+      if (auditBlockField(row.block, "Stage") !== slug || auditBlockField(row.block, "Run floor") !== floor) continue;
+      const names = row.event === "SWARM_STARTED" ? auditBlockField(row.block, "Unit names")
+        : row.event === "SWARM_UNIT_CONVERGED" ? auditBlockField(row.block, "Unit name")
+        : null;
+      for (const unit of (names ?? "").split(",")) if (unit.trim()) built.add(unit.trim());
+    }
+    return new Set([...approvedConstructionUnits(pd, readStateFile(pd))].filter((unit) => !built.has(unit)));
+  } catch {
+    return new Set();
+  }
+}
+
 function verifySettledSwarmSourceBinding(
   pd: string,
   stage: { slug: string; workspace_requires?: boolean },
@@ -3603,6 +3629,9 @@ function verifySettledSwarmSourceBinding(
       `${reviewerPreconditionPrefix(stage.slug, action)}: its settled swarm Unit obligations cannot be resolved for the current attempt.`,
     );
   }
+  const exempt = unitsOwingNoSwarmMerge(pd, stage.slug);
+  const owed = units.filter((unit) => !exempt.has(unit));
+  if (owed.length === 0) return;
   const chain = currentSwarmSourceMergeChain(pd, stage.slug);
   if (chain.state === "none") {
     error(
@@ -3614,7 +3643,7 @@ function verifySettledSwarmSourceBinding(
       `Refusing to complete "${stage.slug}": its post-merge main-checkout source binding chain is invalid (${chain.reason}). Re-run the affected source merge or restart the Bolt attempt.`,
     );
   }
-  const missing = units.filter((unit) => !chain.units.has(unit));
+  const missing = owed.filter((unit) => !chain.units.has(unit));
   if (missing.length > 0) {
     error(
       `Refusing to complete "${stage.slug}": ${missing.length} converged unit(s) have no current-attempt post-merge source binding (${missing.join(", ")}). Merge every reviewed source commit before approval.`,
