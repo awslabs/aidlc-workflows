@@ -1519,9 +1519,9 @@ export function renderHumanHelp(): string {
 // guide say the same thing. A flag reachable from a public route without an
 // entry here fails t230: the test is what stops a new flag shipping
 // undocumented. These lines name no command, because the invocation differs
-// per channel (`aidlc` natively, `bun .claude/tools/aidlc.ts` on a copy) and a
-// module constant cannot know which; a line that must name one belongs in
-// renderCommandHelp, where `invoke` is resolved.
+// per channel (`aidlc` natively, `bun <harness dir>/tools/aidlc.ts` on a copy)
+// and a module constant cannot know which; a line that must name one belongs
+// in renderCommandHelp, where `invoke` is resolved.
 const FLAG_SUMMARIES: Readonly<Record<string, string>> = {
   "--allow-root": "Act as root where root is the only user (container, CI job, agent sandbox)",
   "--ca-bundle": "Trust this CA bundle when reaching the release host",
@@ -1544,22 +1544,24 @@ const FLAG_SUMMARIES: Readonly<Record<string, string>> = {
   "--yes": "Answer the questions a terminal would ask",
 };
 
-// A flag whose meaning really differs by command. `--yes` is the case that
-// matters: on uninstall it is what a run with no terminal needs in order to
-// remove anything, while update and use ask only about replacing an `aidlc`
-// in the bin directory that AI-DLC did not write. One shared line would be
-// wrong on two of the three.
+// A flag whose meaning really differs by command. `--yes` is the clearest
+// case: uninstall needs it to remove anything without a terminal, while update
+// and use ask only about replacing an `aidlc` in the bin directory that AI-DLC
+// did not write. `--dry-run` is the other: on update the release is fetched
+// and unpacked before the plan is printed, which matters on a metered link,
+// and on config nothing is fetched at all.
 const COMMAND_FLAG_SUMMARIES: Readonly<
   Partial<Record<PublicCommand, Readonly<Record<string, string>>>>
 > = {
   update: {
+    "--dry-run": "Get and check the release, then print the plan without installing anything",
     "--yes": "Answer yes to replacing an aidlc in the bin directory that AI-DLC did not write (Windows); nothing else asks",
   },
   use: {
     "--yes": "Answer yes to replacing an aidlc in the bin directory that AI-DLC did not write (Windows); nothing else asks",
   },
   uninstall: {
-    "--yes": "Confirm the removal; a run with no terminal needs it",
+    "--yes": "Required when there is no terminal; at a terminal uninstall says what it removes, then proceeds without asking",
   },
 };
 
