@@ -682,7 +682,9 @@ If you are asked again, check what changed and which rule applies:
   to the developer in full, so they bind byte-exactly, and a section appended to
   them after approval reopens it when the plan-approval fence is on
 - the Testing Posture, scope, test strategy, or project type while the
-  plan-approval fence is on
+  plan-approval fence is on (a Testing Posture change made after the build's
+  review, such as a testing practice you keep at the learnings step, applies
+  from the next plan and does not reopen approval for that build)
 - the active intent, Unit, or stage target
 - the stage attempt: a backward jump, a Request Changes, a gate rejection, or a
   workflow restart

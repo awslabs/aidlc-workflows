@@ -92,7 +92,10 @@ evidence; it does not approve the edited content. Under `strict`, those edits
 reopen Plan Approval. Follow the stage's Step 3 for the engine path. Changes to
 Testing Posture, scope, test strategy, or project type use the same rule within
 the same intent, target, and attempt: refresh the current contract and
-instructions as needed and continue while the policy allows it. When plan
+instructions as needed and continue while the policy allows it. Under
+`strict`, a Testing Posture change made after the build's review (a practice
+kept at the learnings step) does not reopen approval for that build; it applies
+from the next plan. When plan
 approval is off for the piece of work, the engine routes straight to the build
 and there is no approval stop to add. Initial approval (while plan approval is
 on), explicit Request Changes, new attempts, and other gates retain their

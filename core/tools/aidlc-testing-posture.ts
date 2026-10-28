@@ -28,6 +28,9 @@ import {
   freshReviewReceipts,
   loadStageGraph,
   resolveReviewClass,
+  latestReviewRecordRefs,
+  reviewAttemptWindow,
+  setField,
   collectStalePlanApprovalReceipts,
   commitPlanApprovalBatch,
   planApprovalBatchCommitted,
@@ -2901,6 +2904,63 @@ export function reviewedTestingContract(projectDir: string): string | null {
 }
 
 /**
+ * The class the scope's review on record ran under, or null with none on record
+ * in this attempt. The review is the REVIEW_COMPLETED latestReviewRecordRefs
+ * names, inside the attempt window (for a legacy embedded review, the newest one
+ * there for the stage, reviewer and Unit); its class is the state's
+ * Scope and Review Override with every later REVIEW_CLASS_CHANGED and
+ * SCOPE_CHANGED row undone, since a setting changed after a review governs
+ * later work, not the review on record. The gate's retained review and the
+ * Code Generation completion both read it here.
+ */
+export function reviewClassOnRecord(
+  projectDir: string,
+  stateContent: string,
+  node: ReturnType<typeof loadStageGraph>[number],
+  unit: string | null,
+): "adversarial" | "advisory" | null {
+  if (!node.reviewer) return null;
+  const ref = latestReviewRecordRefs(projectDir, node).get(unit ?? "");
+  if (ref === undefined) return null;
+  const attempt = reviewAttemptWindow(projectDir, stateContent, node);
+  const completion = attempt.events.slice(attempt.floorIdx + 1).findLast((event) =>
+    event.event === "REVIEW_COMPLETED" &&
+    (ref !== null
+      ? event.block === ref.completion
+      : auditBlockField(event.block, "Stage") === node.slug &&
+        auditBlockField(event.block, "Reviewer") === node.reviewer &&
+        (auditBlockField(event.block, "Unit") ?? "") === (unit ?? "") &&
+        auditBlockField(event.block, "Workflow") === null)
+  );
+  if (!completion) return null;
+  return reviewClassAtReview(node, stateContent, attempt.allEvents, completion.block);
+}
+
+// A state edited by hand carries no setting-change row, and a review on record
+// still proves one ran, so a class that reads `none` there is the stage's
+// declared one.
+function reviewClassAtReview(
+  node: { review_class?: "adversarial" | "advisory" },
+  stateContent: string,
+  allEvents: AuditShardEvent[],
+  completionBlock: string,
+): "adversarial" | "advisory" {
+  let reviewState = stateContent;
+  for (const event of sortAttemptEvents(allEvents).reverse()) {
+    if (event.block === completionBlock) break;
+    if (event.event === "REVIEW_CLASS_CHANGED") {
+      const old = auditBlockField(event.block, "Old Override");
+      if (old !== null) reviewState = setField(reviewState, "Review Override", old === "none set" ? "" : old);
+    } else if (event.event === "SCOPE_CHANGED") {
+      const old = auditBlockField(event.block, "Old Scope");
+      if (old !== null) reviewState = setField(reviewState, "Scope", old);
+    }
+  }
+  const reviewClass = resolveReviewClass(node.review_class, getField(reviewState, "Scope") ?? "", reviewState);
+  return reviewClass === "none" ? node.review_class ?? "adversarial" : reviewClass;
+}
+
+/**
  * Whether the target's build was finished under this contract: the terminal
  * review freshReviewReceipts keeps for it still covers the work, and was
  * recorded while this contract was in force. A practice kept at the gate (or
@@ -2914,9 +2974,10 @@ function reviewedUnderContract(projectDir: string, authority: CodeGenerationAuth
     const node = loadStageGraph().find((stage) => stage.slug === CODE_GENERATION_STAGE);
     if (!node?.reviewer || singleStageAttemptIsOpen(projectDir, CODE_GENERATION_STAGE)) return false;
     const state = readFileSync(stateFilePath(projectDir), "utf-8");
-    const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", getField(state, "Scope") ?? "", state);
-    const fresh = freshReviewReceipts(projectDir, state, node, { reviewClass });
     const unit = authority.unit;
+    const reviewClass = reviewClassOnRecord(projectDir, state, node, unit);
+    if (reviewClass === null) return false;
+    const fresh = freshReviewReceipts(projectDir, state, node, { reviewClass });
     const covered = unit === null
       ? fresh.stageVerdict !== null && !fresh.stageStale
       : fresh.unitVerdicts.has(unit) && !fresh.unitStale.has(unit);

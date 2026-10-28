@@ -453,6 +453,24 @@ describe("a testing practice kept at the gate is for the next build", () => {
     expect(review?.block).toContain(`**Testing Contract**: ${resolveTestingPosture(proj).contract_sha256}`);
   });
 
+  // Reviews switched off after the review: the review on record is read with
+  // the class it ran under, so the kept practice still lets the gate open.
+  test("strict: reviews switched off after the review, a practice kept then still lets the gate open", () => {
+    const proj = inProgress("strict");
+    writePlan(proj);
+    next(proj);
+    approvePlan(proj);
+    next(proj);
+    built(proj);
+    const stateFile = seededStateFile(proj);
+    const state = readFileSync(stateFile, "utf-8");
+    expect(state).not.toContain("**Review Override**");
+    writeFileSync(stateFile, state.replace(/^(- \*\*Scope\*\*: .*)$/m, "$1\n- **Review Override**: none"), "utf-8");
+    keepTestingPractice(proj);
+    expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message).not.toBe(WAITS);
+    expect(stageLine(proj)).toContain("[?] code-generation");
+  });
+
   test("strict: moved before the review, while the build ran, the build still waits for the plan", () => {
     const proj = inProgress("strict");
     writePlan(proj);

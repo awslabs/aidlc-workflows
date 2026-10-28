@@ -276,7 +276,6 @@ import {
   latestMainWorkflowStageRunFloorForProject,
   unitLifecycleRunFloorForProject,
   unitScopedLifecycleFloors,
-  latestReviewRecordRefs,
   isAutonomousConstructionGate,
   isConstructionSwarmEnabled,
   installedHarnessName,
@@ -439,8 +438,6 @@ import {
   relativeRecordDirForSelection,
   relativeSpaceRecordPrefix,
   reviewArtifactEntries,
-  reviewAttemptWindow,
-  setField,
   settleConflictedState,
   isReadOnlyNextArgv,
   withoutEntryWord,
@@ -660,6 +657,7 @@ import {
   codeGenerationIssuance,
   codeGenerationPlanWaits,
   codeGenerationPlanWaitsStep,
+  reviewClassOnRecord,
   codeGenerationResume,
   codeGenerationResumeNarration,
   codeGenerationStartNarration,
@@ -12695,38 +12693,11 @@ function retainGateReview(
 ): void {
   const node = nodeForSlug(directive.stage);
   if (!node?.reviewer || !node.review_artifact) return;
-  const ref = latestReviewRecordRefs(projectDir, node).get(directive.unit ?? "");
-  if (ref === undefined) return;
-  const attempt = reviewAttemptWindow(projectDir, stateContent, node);
-  const completion = attempt.events.slice(attempt.floorIdx + 1).findLast((event) =>
-    event.event === "REVIEW_COMPLETED" &&
-    (ref !== null
-      ? event.block === ref.completion
-      : auditBlockField(event.block, "Stage") === node.slug &&
-        auditBlockField(event.block, "Reviewer") === node.reviewer &&
-        (auditBlockField(event.block, "Unit") ?? "") === (directive.unit ?? "") &&
-        auditBlockField(event.block, "Workflow") === null)
-  );
-  if (!completion) return;
-  let reviewState = stateContent;
-  for (const event of sortAttemptEvents(attempt.allEvents).reverse()) {
-    if (event.block === completion.block) break;
-    if (event.event === "REVIEW_CLASS_CHANGED") {
-      const old = auditBlockField(event.block, "Old Override");
-      if (old !== null) {
-        reviewState = setField(reviewState, "Review Override", old === "none set" ? "" : old);
-      }
-    } else if (event.event === "SCOPE_CHANGED") {
-      const old = auditBlockField(event.block, "Old Scope");
-      if (old !== null) reviewState = setField(reviewState, "Scope", old);
-    }
-  }
+  const reviewClass = reviewClassOnRecord(projectDir, stateContent, node, directive.unit ?? null);
+  if (reviewClass === null) return;
   directive.reviewer = node.reviewer;
   directive.review_artifact = node.review_artifact;
-  const reviewClass = resolveReviewClass(node.review_class, getField(reviewState, "Scope") ?? "", reviewState);
-  // Legacy/manual state edits may carry no setting-change row. A verified
-  // completion still proves review happened; retain the declared class then.
-  directive.review_class = reviewClass === "none" ? node.review_class ?? "adversarial" : reviewClass;
+  directive.review_class = reviewClass;
 }
 
 function applySettledSwarmShape(
