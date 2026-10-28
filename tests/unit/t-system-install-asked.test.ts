@@ -123,6 +123,24 @@ describe("a system package install nobody asked for", () => {
     expect(auditBlockField(allowed[0].block, "Person Reply")).toBe("yes, go ahead and install it");
   });
 
+  // The go-ahead the agent asks for is a question on the record with its own id
+  // (the question record): the person's reply carries it, their go-ahead closes it.
+  test("the go-ahead it asks for is on the record with its id, and the go-ahead closes it", () => {
+    const proj = buildAndTest();
+    expect(guardBash(proj, PYTEST).code).toBe(2);
+    const [asked] = rows(proj, "QUESTION_ASKED").filter((row) => auditBlockField(row.block, "Question Type") === "system-install");
+    const id = auditBlockField(asked?.block ?? "", "Question Id");
+    expect(id).toMatch(/^[0-9a-f]{8}$/);
+    expect(auditBlockField(asked.block, "Question Chat")).toBe(SESSION);
+    expect(auditBlockField(asked.block, "Stage")).toBe("build-and-test");
+    const open = () => (auditBlockField(rows(proj, "HUMAN_TURN").at(-1)?.block ?? "", "Open Questions") ?? "").split(", ");
+    expect(reply(proj, "yes, go ahead and install it").status).toBe(0);
+    expect(open()).toContain(id ?? "none");
+    expect(guardBash(proj, PYTEST).code).toBe(0);
+    expect(reply(proj, "thanks").status).toBe(0);
+    expect(open()).not.toContain(id ?? "none");
+  });
+
   test("at Code Generation the developer's install is held after the plan's approval", () => {
     const proj = building();
     const held = guardBash(proj, HYPOTHESIS);

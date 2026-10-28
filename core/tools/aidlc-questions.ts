@@ -43,7 +43,8 @@ export const QUESTION_SHOWN = "QUESTION_SHOWN";
 // verification-command, construction-policy) or its Question Kind (answer-mode,
 // learnings-note, assumption-confirmation), else `stage-question`;
 // `unit-checkpoint` and `swarm-batch`; an engine ask's ask type (plan-approval
-// for the code plan question).
+// for the code plan question); `system-install` for a go-ahead the install guard
+// has the agent ask for.
 
 // The engine's own asks other than the code plan question: one is the open
 // step at a time, so a newer one, or another step, takes its place.
@@ -418,6 +419,8 @@ function answered(event: string, fields: Record<string, string>): ((entry: Ledge
       const type = checkpoint === undefined ? undefined : CHECKPOINT_TYPES[checkpoint];
       return type === undefined ? null : typed([type]);
     }
+    case "SYSTEM_INSTALL_ALLOWED":
+      return (entry) => entry.type === "system-install";
     case "REQUEST_ROUTED":
       return (entry) => ENGINE_ASK_TYPES.has(entry.type);
     default:
