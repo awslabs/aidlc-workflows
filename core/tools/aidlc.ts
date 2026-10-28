@@ -995,17 +995,19 @@ export const ROUTES: readonly Route[] = [
   },
   {
     // The plugin AUTHORING surface (v2): `aidlc plugin validate` / `aidlc plugin
-    // build` run against a plugin checkout, which is usually NOT an installed
-    // project, so this route is public, unpinned, and carries no project
-    // requirement. The installed-plugin lifecycle (select/sync/list) stays on
-    // the engine `plugin` noun above.
+    // build` / `aidlc plugin test` run against a plugin checkout, which is
+    // usually NOT an installed project, so this route is public, unpinned, and
+    // carries no project requirement. The installed-plugin lifecycle
+    // (select/sync/list) stays on the engine `plugin` noun above. The `test`
+    // usage form is that verb's one list of options: its help and the flags
+    // its handler accepts are both read from it.
     id: "plugin-author",
     group: "plugin",
     kind: "noun-map",
     classification: "translation",
-    verbs: ["validate", "build"],
+    verbs: ["validate", "build", "test"],
     tool: TOOLS.utility,
-    targets: { validate: "plugin-validate", build: "plugin-build" },
+    targets: { validate: "plugin-validate", build: "plugin-build", test: "plugin-test" },
     namespace: "public",
     visibility: "hidden",
     projectRequirement: "none",
@@ -1013,7 +1015,11 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "none",
     outputModes: ["human", "json"],
-    all: ["validate [path] [--with <base-root>]", "build <harness> [outDir] [--plugin-root <path>]"],
+    all: [
+      "validate [path] [--with <base-root>]",
+      "build <harness> [outDir] [--plugin-root <path>]",
+      "test [path] --install <project-root> [--harness <name>] [--with <base-root>] [--json]",
+    ],
   },
   {
     // The DocumentKB noun. Unlike `plugin`, the verb IS the subcommand -- these
@@ -1593,7 +1599,7 @@ function optionForm(option: RouteOption): string {
 // Every group is rendered from one column width so the summaries line up
 // across headings, and a group with no options is left out entirely.
 function renderOptionGroups(
-  command: PublicCommand,
+  summary: (flag: string) => string,
   options: readonly RouteOption[],
   out: typeof process.stdout,
 ): string[] {
@@ -1620,7 +1626,7 @@ function renderOptionGroups(
     lines.push("", heading(group.label, out));
     for (const option of group.members) {
       const form = optionForm(option);
-      lines.push(`  ${form}${" ".repeat(Math.max(2, width - form.length))}${flagSummary(command, option.flag)}`);
+      lines.push(`  ${form}${" ".repeat(Math.max(2, width - form.length))}${summary(option.flag)}`);
     }
   }
   return lines;
@@ -1743,7 +1749,7 @@ export function renderCommandHelp(command: PublicCommand): string {
           ),
         ]
       : []),
-    ...renderOptionGroups(command, options, out),
+    ...renderOptionGroups((flag) => flagSummary(command, flag), options, out),
     ...(examples[command]?.length
       ? [
           "",
@@ -1755,6 +1761,42 @@ export function renderCommandHelp(command: PublicCommand): string {
       : []),
     "",
     dim(`Run '${invoke} --help' for the public command list.`, out),
+    "",
+  ].join("\n");
+}
+
+// `aidlc plugin test`: the route's usage form for the verb is its one list of
+// options. Its help renders from that form here, and its handler in
+// aidlc-utility.ts takes exactly the options routeOptions reads from it.
+const PLUGIN_TEST_FLAG_SUMMARIES: Readonly<Record<string, string>> = {
+  "--harness": "The harness to test, when the project has more than one",
+  "--install": "A project set up with AI-DLC; the test composes into a copy of it and never changes it",
+  "--with": "Your checkout of the base plugin this one builds on, composed into the copy first",
+};
+
+export function pluginTestCommand(): { usage: string; options: RouteOption[] } {
+  const route = ROUTES.find((candidate) => candidate.id === "plugin-author");
+  const form = route ? usageFormsFor(route, "test")[0] : undefined;
+  if (!route || !form) throw new Error("dispatcher route registry is missing plugin test");
+  return { usage: `${aidlcInvocation()} plugin ${form}`, options: routeOptions(route, "test") };
+}
+
+export function renderPluginTestHelp(): string {
+  const { usage, options } = pluginTestCommand();
+  const out = process.stdout;
+  return [
+    "Check that a plugin composes cleanly into a copy of a project, which is never changed",
+    "",
+    heading("USAGE", out),
+    `  ${cmd(usage, out)}`,
+    "",
+    heading("ARGUMENTS", out),
+    "  [path]  The plugin's folder, the one holding .aidlc-plugin/plugin.json; the current folder when left out",
+    ...renderOptionGroups(
+      (flag) => PLUGIN_TEST_FLAG_SUMMARIES[flag] ?? FLAG_SUMMARIES[flag] ?? "",
+      options,
+      out,
+    ),
     "",
   ].join("\n");
 }
@@ -2264,7 +2306,7 @@ function resolveSystem(argv: string[]): Action {
 }
 
 // Public noun routes (the v2 team/authoring surface): `aidlc unit <verb>` and
-// `aidlc plugin <validate|build>` resolve at the top level without the engine
+// `aidlc plugin <validate|build|test>` resolve at the top level without the engine
 // prefix. A head token whose verb does not match falls through to the public
 // unknown-command error rather than a noun error, so `aidlc plugin list`
 // remains "unknown command 'plugin'" (that engine surface is `aidlc engine

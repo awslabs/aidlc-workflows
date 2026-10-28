@@ -77,6 +77,7 @@ import {
 import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { droppedPluginRegistrations } from "./aidlc-plugin-emit.ts";
+import { main as pluginTestMain } from "./aidlc-plugin-test.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
   ARCHIVED_FROM_FIELD,
@@ -538,7 +539,7 @@ import {
   tomlFragmentText,
   withFileLineEndings,
 } from "./aidlc-plugin.ts";
-import { resolveHookPath } from "./aidlc.ts";
+import { pluginTestCommand, renderPluginTestHelp, resolveHookPath } from "./aidlc.ts";
 import { executePlan } from "./aidlc-transaction.ts";
 import {
   aidlcDispatcherInvocation,
@@ -1610,6 +1611,47 @@ function handlePluginBuild(
   ];
   if (flags.json === "true") args.push("--json");
   pluginAuthorCommandCode(pluginBuildMain(args));
+}
+
+function handlePluginTest(
+  positional: string[],
+  flags: Record<string, string>,
+  missingValueFlags: ReadonlySet<string>,
+): void {
+  const { usage, options } = pluginTestCommand();
+  if (
+    flags.help !== undefined ||
+    positional[1] === "-h" ||
+    positional[1] === "--help"
+  ) {
+    process.stdout.write(renderPluginTestHelp());
+    return;
+  }
+  const takesValue = new Map(
+    options.map((option) => [option.flag.slice(2), option.metavar !== undefined]),
+  );
+  const paths = positional.slice(1);
+  let reason: string | null = null;
+  for (const [name, value] of Object.entries(flags)) {
+    const valued = takesValue.get(name);
+    if (valued === undefined) reason ??= `unknown option "--${name}"`;
+    else if (valued && missingValueFlags.has(name)) reason ??= `--${name} requires a value`;
+    // The shared parser hands a bare option the word after it; that word is
+    // the plugin's folder.
+    else if (!valued && value !== "true") paths.push(value);
+  }
+  if (paths.length > 1) reason ??= `unexpected positional argument "${paths[1]}"`;
+  if (reason !== null) {
+    process.stderr.write(`Usage: ${usage}\n${reason}\n`);
+    process.exitCode = 2;
+    return;
+  }
+  const args = [paths[0] ?? process.cwd()];
+  if (flags.install !== undefined) args.push("--install", flags.install);
+  if (flags.harness !== undefined) args.push("--harness", flags.harness);
+  if (flags.with !== undefined) args.push("--with", flags.with);
+  if (flags.json !== undefined) args.push("--json");
+  pluginAuthorCommandCode(pluginTestMain(args, `Usage: ${usage}`));
 }
 
 // The sync doctor names for these plugins: where the host lists its plugins,
@@ -13803,6 +13845,9 @@ export async function main(argv: string[]): Promise<void> {
       break;
     case "plugin-build":
       handlePluginBuild(positional, flags, missingValueFlags);
+      break;
+    case "plugin-test":
+      handlePluginTest(positional, flags, missingValueFlags);
       break;
     // init / state-init are transition-only and intentionally absent from help.
     // Stale init callers get a loud error for this release; workflow start is

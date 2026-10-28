@@ -80,6 +80,7 @@ diagnostic and lifecycle routes.
 | `/aidlc plugin sync` | Compose installed plugin roots into the current install |
 | `/aidlc plugin validate [path]` | Validate an authored plugin (`--with <base-root>` checks a base plugin's agents; `--json` for structured findings) |
 | `/aidlc plugin build <harness> [outDir]` | Build a host plugin projection (`--plugin-root <path>` selects the source) |
+| `/aidlc plugin test [path] --install <project-root>` | Test that an authored plugin composes into a copy of a project, which is never changed (`--harness <name>`, `--with <base-root>`, `--json`) |
 | `/aidlc --version` | Print the framework version |
 | `/aidlc --help` | Display usage information |
 | `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Direct utility form of plugin selection |
@@ -2996,14 +2997,19 @@ applied again. Hosts with plugin SessionStart hooks (Claude, Codex, Cursor, and
 Kiro IDE) also self-heal on the next session start; Kiro CLI requires the
 explicit sync.
 
-`/aidlc plugin validate [path]` and
-`/aidlc plugin build <harness> [outDir]` expose the shipped standalone
-authoring tools through the top-level CLI. Validation defaults to the current
-directory. Build also defaults its plugin root to the current directory; pass
-`--plugin-root <path>` when invoking it elsewhere. Both accept `--json`.
-Validation of a plugin built on a base takes `--with <base-root>`, your own
-checkout of that base, so a stage led by the base's agent is checked instead of
-reported as not checked.
+`/aidlc plugin validate [path]`,
+`/aidlc plugin build <harness> [outDir]` and
+`/aidlc plugin test [path] --install <project-root>` expose the shipped
+standalone authoring tools through the top-level CLI. Validation and test
+default the plugin to the current directory. Build also defaults its plugin
+root to the current directory; pass `--plugin-root <path>` when invoking it
+elsewhere. All three accept `--json`. Validation and test of a plugin built on
+a base take `--with <base-root>`, your own checkout of that base, so a stage
+led by the base's agent is checked instead of reported as not checked. Test
+composes the plugin into a disposable copy of the project `--install` names
+(pass `--harness <name>` when that project has more than one harness) and
+exits `1` on a compose drop, a graph failure or a second compose that changes
+files; the project itself is never changed.
 
 ### `aidlc-utility recompose` - in-flight plan flips
 
