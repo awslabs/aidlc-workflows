@@ -40376,7 +40376,9 @@ export function scopeGridOnProject(def: { stages: Record<string, string> }, stat
 
 // The stage a scope change to `scope` starts on FINISHED work: the first stage
 // after the cursor that the scope runs and that is not already done or skipped
-// (with the greenfield reverse-engineering adjustment the plan grid applies).
+// (with the greenfield reverse-engineering adjustment the plan grid applies),
+// passing each stage in `skipped`: skips the person typed beside the switch,
+// which it takes off the plan before it starts a stage (skipsBeforeReopen).
 // Null for running work, and when nothing the scope runs follows the cursor.
 // Shared by the scope change, which starts that stage as it rewrites the plan,
 // and by `next`, which then carries on into it instead of ending the turn, so
@@ -40384,6 +40386,7 @@ export function scopeGridOnProject(def: { stages: Record<string, string> }, stat
 export function stageReopenedByScopeChange(
   stateContent: string,
   scope: string,
+  skipped: readonly string[] = [],
 ): StageEntry | null {
   if ((getField(stateContent, "Status") ?? "").trim() !== "Completed") return null;
   const cursor = (getField(stateContent, "Current Stage") ?? "").trim();
@@ -40400,7 +40403,7 @@ export function stageReopenedByScopeChange(
     const box = boxes.find((c) => c.slug === stage.slug)?.state;
     if (box === "completed" || box === "skipped") continue;
     if (stage.slug === "reverse-engineering" && greenfield) continue;
-    if (mapping.stages[stage.slug] === "EXECUTE") return stage;
+    if (mapping.stages[stage.slug] === "EXECUTE" && !skipped.includes(stage.slug)) return stage;
   }
   return null;
 }

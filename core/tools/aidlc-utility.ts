@@ -624,6 +624,8 @@ function validateIntentSettingsArgs(
 ): void {
   const allowed = new Set<string>([...CONFIG_KEYS, ...Object.keys(RETIRED_CONFIG_KEYS), "intent", "space", "project-dir"]);
   if (command === "scope-change") allowed.add("scope");
+  // The skips typed beside a switch that land before it reopens finished work.
+  if (command === "scope-change") allowed.add("skip");
   // The message the person asked in (--message), which the setter proves before
   // it records the setting as theirs; the words form from before it is taken as
   // the agent's own text.
@@ -12104,6 +12106,18 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     }
     const oldScope = getField(contentBefore, "Scope");
     if (!oldScope) die("Cannot read current Scope from state file.");
+    // The person's skips that land before the reopen picks a stage, the only
+    // ones `next` names here; recompose takes every other skip after the switch.
+    const typedSkips = splitSlugList(flags.skip);
+    const skippedFirst = oldScope === newScope ? [] : skipsBeforeReopen(contentBefore, newScope, typedSkips);
+    const strays = typedSkips.filter((slug) => !skippedFirst.includes(slug));
+    if (strays.length > 0) {
+      die(
+        `scope-change --skip takes only the stages the switch would reopen finished work at, and ${strays.join(", ")} ` +
+          `${strays.length === 1 ? "is" : "are"} not: run it without ${strays.length === 1 ? "that one" : "them"}, then ` +
+          `\`${aidlcDispatcherInvocation("recompose")} --skip ${strays.join(",")}\`.`,
+      );
+    }
     const requested = intentSettingsFromFlags(flags);
     let keptPolicyLine: string | null = null;
     if (oldScope !== newScope) {
@@ -12157,16 +12171,18 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     const auditEntries = update.audit;
     let outputLines = update.lines;
     // Finished work the new scope extends past its last stage is reopened at
-    // the first stage it adds (#2261); `next` reads the same predicate.
+    // the first stage it adds that the person did not skip with the switch
+    // (#2261); `next` reads the same predicate.
     let reopened: StageEntry | null = null;
     if (oldScope === newScope) {
       if (outputLines.length === 0) outputLines = [`Scope is already ${newScope}`];
     } else {
       const graph = loadStageGraph();
       const projectType = getField(content, "Project Type") || "Greenfield";
-      reopened = stageReopenedByScopeChange(contentBefore, newScope);
+      reopened = stageReopenedByScopeChange(contentBefore, newScope, skippedFirst);
 
       const adjustedMapping = scopeGridOnProject(newScopeDef, content);
+      for (const slug of skippedFirst) adjustedMapping[slug] = "SKIP";
 
       const executeStages: string[] = [];
       const skipStages: string[] = [];
@@ -12328,6 +12344,17 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
             "Skip Kind": "scope-change",
           },
         })),
+        // The person's skips this switch carried out, as recompose records one.
+        ...(skippedFirst.length === 0 ? [] : [{
+          eventType: "RECOMPOSED",
+          fields: {
+            Scope: newScope,
+            "Stages skipped": skippedFirst.join(", "),
+            "Stages added": "none",
+            "Stages in Scope": String(executeStages.length),
+            Reason: PERSON_ASKED_SKIP_REASON,
+          },
+        }]),
       );
       if (reopened) {
         auditEntries.push({
@@ -12510,6 +12537,20 @@ export function plansReopeningFinishedWork(stateContent: string): Array<{ scope:
       grid[s.slug] === "EXECUTE" && boxes.get(s.slug) !== "completed" && boxes.get(s.slug) !== "skipped");
     return [{ scope, stages }];
   });
+}
+
+// The skips typed beside a switch to `scope` on finished work that land before
+// its reopen picks a stage: each stage it would start, in turn, while the person
+// skipped it. Once a stage has started recompose can no longer skip it, so the
+// scope change takes these off the plan itself and starts the first stage after
+// them; `next` hands it these and every other typed skip to recompose.
+export function skipsBeforeReopen(stateContent: string, scope: string, skipped: readonly string[]): string[] {
+  const passed: string[] = [];
+  for (let at = stageReopenedByScopeChange(stateContent, scope); at !== null && skipped.includes(at.slug);
+    at = stageReopenedByScopeChange(stateContent, scope, passed)) {
+    passed.push(at.slug);
+  }
+  return passed;
 }
 
 // Recompose over finished work: its own plan takes no more stages, and a plan

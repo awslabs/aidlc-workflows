@@ -612,6 +612,7 @@ import {
   plansReopeningFinishedWork,
   projectTypeRecordedAsPersons,
   scanSummary,
+  skipsBeforeReopen,
 } from "./aidlc-utility.ts";
 import { checkboxIsUnitProjection, ledgerStageActivity } from "./aidlc-doctor-bundle.ts";
 import {
@@ -11671,13 +11672,17 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         ));
         return;
       }
+      // The skips typed with the switch of the stages it would reopen finished
+      // work at go with the change itself: once the switch has started a
+      // stage, recompose can no longer skip it.
+      const skippedFirst = planChanges ? skipsBeforeReopen(stateContent, flags.scope, planChanges.skip) : [];
       // On finished work the change starts the first stage the new scope adds
-      // after the last one (the tool reads the same predicate), so nothing
-      // waits on the person and the agent carries on into it (#2261). Over
-      // running work a setting's rule decides (see settingEndsTurn): a live
-      // run ended the turn after a switch made while the stage ran, and the
-      // agent asked the person to say go on.
-      const carriesOn = stageReopenedByScopeChange(stateContent, flags.scope) !== null ||
+      // after the last one, past those skips (the tool reads the same
+      // predicate), so nothing waits on the person and the agent carries on
+      // into it (#2261). Over running work a setting's rule decides (see
+      // settingEndsTurn): a live run ended the turn after a switch made while
+      // the stage ran, and the agent asked the person to say go on.
+      const carriesOn = stageReopenedByScopeChange(stateContent, flags.scope, skippedFirst) !== null ||
         (stillParked === null && !settingEndsTurn(pd, currentStateScope, stateContent));
       const keepsPlace = !carriesOn && scopeSwitchKeepsPlace(pd, currentStateScope, stateContent, flags.scope);
       // At the open gate of a stage the new scope still runs, the same reply
@@ -11696,8 +11701,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           ? `Run \`${command}\` to change scope${fill}, then print its output verbatim. ` +
             openGateAnswerStep(current, practicesApprovalHeld(pd, current, stateContent))
           : `Run \`${command}\` to change scope${fill}, then ${verbatimThenStop}`);
-      const switching = { ...plan, switchedTo: flags.scope, carriesOn };
-      emit(planChanges ? planChangeDirective(planChanges, command, switching, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
+      const switching = { ...plan, switchedTo: flags.scope, carriesOn, skippedFirst };
+      const withSkips = skippedFirst.length === 0 ? command : `${command} --skip ${skippedFirst.join(",")}`;
+      emit(planChanges ? planChangeDirective(planChanges, withSkips, switching, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
         keepsPlace ? withWorkPicksUpLine(switched, pd, currentStateScope, stateContent) : switched,
         planApprovalAskIsOpen(pd),
       ));
@@ -16589,9 +16595,11 @@ function planChangeDirective(
   // rebuilds the plan from that scope's grid and keeps every checkbox, so
   // `stateContent` says where the work stands and the grid what it runs.
   // `carriesOn`: the switch alone goes on with the work rather than ending the turn.
+  // `skippedFirst`: the skips `before` itself carries out, the stages the switch
+  // would have reopened finished work at (skipsBeforeReopen).
   plan: {
     scope: string; stateContent: string; walk?: PlanChangeWalk | null; together?: string[]; passedOver?: string[];
-    switchedTo?: string; carriesOn?: boolean;
+    switchedTo?: string; carriesOn?: boolean; skippedFirst?: string[];
   } | null,
   // The code plan's question is open: it stays the open step, so what the
   // person says next is kept as their answer to it.
@@ -16680,8 +16688,13 @@ function planChangeDirective(
     : walk.at === "paused" ? `paused on ${name(walk.stage)}`
     : walk.at === "checkpoint" ? "at its checkpoint"
     : `on ${name(walk.stage)}`;
+  // The skips the scope change carries out itself: the stage it reopens is the
+  // one after them, so they are behind the work, as a stage skipped where it
+  // stands is.
+  const skippedFirst = plan?.skippedFirst ?? [];
   const planSkip = skip.filter((slug) =>
-    slug !== started && slug !== firstStep && (unitStep === null || slug !== unitStep.stage || unitStep.others));
+    slug !== started && slug !== firstStep && !skippedFirst.includes(slug) &&
+    (unitStep === null || slug !== unitStep.stage || unitStep.others));
   // The walk's first step for every Unit from here, when another Unit still owes it.
   const firstSkip = firstStep === null || !unitStep?.others ? null
     : `${aidlcToolInvocation("orchestrate")} report --stage ${firstStep} --result skipped ` +
@@ -16881,7 +16894,7 @@ function planChangeDirective(
     : `${listed(notHere.map(name))} ${notHere.length === 1 ? "is a step" : "are steps"} each Unit takes, so this ` +
       "change covers every Unit. If the person's words mean one Unit only, run nothing and tell them in one line: " +
       `"${notNow(notHere)}" and stop. Otherwise: `;
-  const lead = `${aheadNote}${before === null ? run : `Run \`${before}\`${filled} and print its output verbatim, ${run}`}`;
+  const lead = `${aheadNote}${before === null ? run : `Run \`${before}\`${filled} and print its output verbatim${run === "" ? "" : `, ${run}`}`}`;
   // The way back: a plan flip is undone by the opposite flip while the work
   // runs; a stage skipped where it stood is run on its own, the route
   // recompose itself names for a skipped stage, and a Unit's step skipped for
@@ -16890,11 +16903,11 @@ function planChangeDirective(
   // (t-offers-are-plain-questions).
   const wayBack = unitStep !== null
     ? forTheUnit
-    : started === null
+    : started === null && skippedFirst.length === 0
       ? undoHolds()
       : ownForm(skip);
   const line = `"${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ${wayBack}${noted ? ` ${noted}` : ""}${parkedTail}"`;
-  const undo = `If they later ask to undo it, run \`${undone}\`.`;
+  const undo = planSkip.length === 0 && add.length === 0 ? "" : ` If they later ask to undo it, run \`${undone}\`.`;
   // The question named the stages after the skipped one too, and the same
   // reply can approve them: "skip Functional Design and approve the rest".
   const rest = started !== null && currentState === "awaiting-approval"
@@ -16905,11 +16918,13 @@ function planChangeDirective(
       `\`${aidlcToolInvocation("orchestrate")} report --stage ${rest[0]} --result approved --user-input Approve\`, ` +
       "which approves them together.";
   const message =
-    `${lead}, and do not show ${commands.length > 1 ? "their" : "its"} output: the one line below says what changed. ` +
+    `${lead}${commands.length === 0 ? "" : `, and do not show ${commands.length > 1 ? "their" : "its"} output: the one line below says what changed`}. ` +
     "If a command refuses, tell the person in plain words why it could not, and the way it names to do it " +
     "instead, then stop. " +
     `Otherwise tell the person in one line: ${line}${approveRest}`;
-  if (started !== null || unitStep !== null) {
+  // The scope change that took the skips reopens the work past them, so the
+  // work goes on into that stage, as it does after the switch alone.
+  if (started !== null || unitStep !== null || (skippedFirst.length > 0 && plan?.carriesOn === true)) {
     // Parked work stays parked: the line already says so and asks whether to
     // pick it back up, so the turn ends on that question instead of carrying
     // on with the work the person paused.
@@ -16922,17 +16937,17 @@ function planChangeDirective(
   // when the add comes before the approval.
   if (add.some((slug) => plan?.passedOver?.includes(slug))) {
     return kept(stillParked === null
-      ? printDirective(`${message} Then re-run \`next\` to carry on with the work. ${undo}`)
-      : turnEndingPrint(`${message}${end} ${undo}${resume}`));
+      ? printDirective(`${message} Then re-run \`next\` to carry on with the work.${undo}`)
+      : turnEndingPrint(`${message}${end}${undo}${resume}`));
   }
   if (gateOpen !== null) {
     // Practices Discovery's approval waits for the practices the person
     // approved to be saved (an approval report would be refused in engine
     // words), so there only a change request is handed over.
     const held = engineProjectDir !== undefined && practicesApprovalHeld(engineProjectDir, gateOpen, plan!.stateContent);
-    return kept(turnEndingPrint(`${message} ${openGateAnswerStep(gateOpen, held)} ${undo}${resume}`));
+    return kept(turnEndingPrint(`${message} ${openGateAnswerStep(gateOpen, held)}${undo}${resume}`));
   }
-  return kept(turnEndingPrint(`${message}${end} ${undo}${resume}`));
+  return kept(turnEndingPrint(`${message}${end}${undo}${resume}`));
 }
 
 // A jump to a stage the running plan skips. Ahead of the cursor, the jump
