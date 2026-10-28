@@ -20605,7 +20605,10 @@ function answerAsNext(
 // `next --scope <scope> --stage <stage>` instead of trusting the stored route.
 // Old receipts never skip parts, and a conductor that lost its parts restarts
 // from part one whenever the current route can be verified.
-function handleContinue(args: string[], projectDir: string | undefined): void {
+function handleContinue(line: string[], projectDir: string | undefined): void {
+  // A receipt can start with `-`, so the agent may mark it with `--`, as a
+  // shell expects; the mark is not part of the receipt.
+  const args = line[0] === "--" ? line.slice(1) : line;
   const receipt = (args[0] ?? "").trim();
   const pd = resolveProjectDir(projectDir);
   const liveState = loadStateFileIfPresent(pd);

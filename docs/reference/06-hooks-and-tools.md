@@ -1114,7 +1114,8 @@ existing v2 markers without that field remain readable for migration.
 the marker's current part in constant time, revalidates state and route from the
 stored payload, and atomically replaces the cursor with the prepared successor
 (the next part, or the run-stage) before writing stdout. Two processes racing the
-same receipt therefore have exactly one winner.
+same receipt therefore have exactly one winner. A receipt can start with `-`, so
+`continue -- <receipt>` reads the same as `continue <receipt>`.
 
 An unmatched `continue` normally answers as a bare `next`: a mistyped or
 consumed receipt, a receipt presented after the run-stage, a race loser, or
