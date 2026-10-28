@@ -15,7 +15,7 @@
 // is still said and recorded (off) and still stops the landing for them (strict).
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { verifyConstructionCheckpoint } from "../../dist/claude/.claude/tools/aidlc-construction-checkpoints.ts";
@@ -27,7 +27,7 @@ import {
 import { seedBoltDagBatches, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
-  approvePlan, CHECK, cleanupCheckpointFixtures, fixture, git, humanChoice, nextDirective, publish,
+  approvePlan, CHECK, cleanupCheckpointFixtures, fixture, fixtureWithSource, git, humanChoice, nextDirective, publish,
   reviewRevisedSource, runCheckpointTool, STAGE, swarm, writeUnitSource,
 } from "../harness/swarm-checkpoint.ts";
 
@@ -55,14 +55,21 @@ function report(pd: string, result: string, extra: string[] = []) {
 
 // Under the feature scope's Guard Policy (off unless given), with alpha as the
 // walking skeleton: alpha is built on the main checkout, each of its stages
-// recorded done, and its skeleton checkpoint verified, asked and approved by the person.
-async function skeletonApproved(batches: string[][], policy = "off"): Promise<string> {
-  const pd = fixture(["alpha"], CHECK, false, null, policy);
+// recorded done, and its skeleton checkpoint verified, asked and approved by the
+// person. `before` are files of the person's from before the stage; the skeleton
+// deletes those in `deletes` and its source manifest lists them, as the stage asks.
+async function skeletonApproved(
+  batches: string[][], policy = "off", { before = [], deletes = [] }: { before?: string[]; deletes?: string[] } = {},
+): Promise<string> {
+  const pd = before.length === 0 ? fixture(["alpha"], CHECK, false, null, policy) : fixtureWithSource((code) => {
+    for (const path of before) writeFileSync(join(code, path), `export const before = "${path}";\n`);
+  }, ["alpha"], policy);
   seedBoltDagBatches(pd, batches);
   const statePath = seededStateFile(pd);
   writeFileSync(statePath, setField(setField(readFileSync(statePath, "utf-8"),
     "Skeleton Stance", "on"), "Review Override", "none"));
   writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
+  for (const path of deletes) unlinkSync(join(pd, path));
   for (const stage of unitMajorConstructionStageSlugs("feature", readFileSync(statePath, "utf-8"), true)) {
     const definition = findStageBySlug(stage)!;
     const dir = join(seededRecordDir(pd), "construction", "alpha", stage);
@@ -73,7 +80,7 @@ async function skeletonApproved(batches: string[][], policy = "off"): Promise<st
     }
     if (definition.workspace_requires) {
       writeFileSync(join(dir, "source-manifest.json"), JSON.stringify({
-        stage, unit: "alpha", version: 1, writes: [{ path: "src/alpha.ts" }],
+        stage, unit: "alpha", version: 1, writes: [{ path: "src/alpha.ts" }, ...deletes.map((path) => ({ path }))],
       }));
     }
     appendAuditEntry("UNIT_COMPLETED", {
@@ -198,6 +205,36 @@ describe("the swarm's first landing after the approved walking skeleton", () => 
     expect(landed.err).toContain("note: You changed src/alpha.ts, src/mine.ts during the build; kept them and merged unit later.");
     const accepted = changesAccepted(pd);
     expect(accepted.map((row) => auditBlockField(row.block, "Changed"))).toEqual(["src/alpha.ts, src/mine.ts"]);
+  });
+
+  test.each(["off", "relaxed", "strict"])("under Guard Policy %s, a file the approved skeleton deleted is not read as their change", async (policy) => {
+    const pd = await skeletonApproved([["alpha"], ["later"]], policy, { before: ["src/old.ts"], deletes: ["src/old.ts"] });
+    const landed = ok(swarmLandsLater(pd));
+    expect(landed.err).not.toContain("You changed");
+    expect(changesAccepted(pd)).toEqual([]);
+  });
+
+  test("under Guard Policy off, their edit to a skeleton file names only it, not the file the skeleton deleted", async () => {
+    const pd = await skeletonApproved([["alpha"], ["later"]], "off", { before: ["src/old.ts"], deletes: ["src/old.ts"] });
+    const landed = ok(swarmLandsLater(pd, personChanges(pd, { "src/alpha.ts": "export const alpha = 3;\n" })));
+    expect(landed.err).toContain("note: You changed src/alpha.ts during the build; kept them and merged unit later.");
+    expect(changesAccepted(pd).map((row) => auditBlockField(row.block, "Changed"))).toEqual(["src/alpha.ts"]);
+  });
+
+  test("their own deletion beside the skeleton's is still said (off) and still stops the landing (strict), naming only theirs", async () => {
+    const files = { before: ["src/old.ts", "src/keep.ts"], deletes: ["src/old.ts"] };
+    const theirDeletion = (pd: string) => (): void => {
+      unlinkSync(join(pd, "src", "keep.ts"));
+      commit(pd, "the person's own deletion");
+    };
+    const off = await skeletonApproved([["alpha"], ["later"]], "off", files);
+    const said = ok(swarmLandsLater(off, theirDeletion(off)));
+    expect(said.err).toContain("note: You changed src/keep.ts during the build; kept them and merged unit later.");
+    expect(changesAccepted(off).map((row) => auditBlockField(row.block, "Changed"))).toEqual(["src/keep.ts"]);
+    const strict = await skeletonApproved([["alpha"], ["later"]], "strict", files);
+    const refused = swarmLandsLater(strict, theirDeletion(strict));
+    expect(refused.code).not.toBe(0);
+    expect(refused.err).toContain("the main checkout source changed since the stage-entry baseline (src/keep.ts).");
   });
 
   test("under strict, their own change after the skeleton's checkpoint still stops the landing, naming only theirs", async () => {
