@@ -663,9 +663,17 @@ export function mutationBlockReason(
   const action = opaqueShell
     ? "run mutation-capable shell commands"
     : "modify workspace paths";
+  // A build reviewed under its plan, whose contract moved after the review, and
+  // whose plan the person has not asked to see again (codeGenerationBuildFinishes):
+  // the moved contract is for the next plan, so no approval is promised. A
+  // developer handoff refused for such a build keeps main's refusal, which names
+  // `next` too (기현님 2026-10-28: two review passes read that line opposite ways).
   if (finished) {
-    return finishedBuildReason(
-      `${action} for ${scope}`, " Writes inside the selected code-generation record directory remain available.",
+    return (
+      `Code generation cannot ${action} for ${scope}: its build was reviewed under the approved plan, and ` +
+      "the Testing Contract changed after that review, which applies from the next plan. Writes inside the " +
+      `selected code-generation record directory remain available. Run ${nextOnItsOwn()}: it says what this ` +
+      "build does next."
     );
   }
   return (
@@ -673,18 +681,6 @@ export function mutationBlockReason(
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
     `matching approval.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""} Writes inside the selected code-generation record directory remain ` +
     `available for planning. When the plan is ready, run ${nextOnItsOwn()}: ${nextAfterPlanClause(planApprovalOff, false)}`
-  );
-}
-
-// A build reviewed under its plan, whose contract moved after the review, and
-// whose plan the person has not asked to see again (codeGenerationBuildFinishes):
-// the moved contract is for the next plan, so no approval is promised and no
-// second handoff is asked for, whether a write or a developer handoff was refused.
-function finishedBuildReason(refused: string, still = ""): string {
-  return (
-    `Code generation cannot ${refused}: its build was reviewed under the approved plan, and the Testing ` +
-    `Contract changed after that review, which applies from the next plan.${still} Run ${nextOnItsOwn()}: it ` +
-    "says what this build does next."
   );
 }
 
@@ -1023,9 +1019,8 @@ function isOutsideProject(projectDir: string, target: string): boolean {
 }
 
 // Whether the target's build is finished and `next` hands over its finish
-// (codeGenerationBuildFinishes), loaded only for a write or a developer handoff
-// already refused. False when that module cannot be read, which keeps the
-// ordinary refusal.
+// (codeGenerationBuildFinishes), loaded only for a write already refused. False
+// when that module cannot be read, which keeps the ordinary refusal.
 function buildFinishes(projectDir: string, unit: string | null): boolean {
   try {
     const ask = require("../tools/aidlc-plan-approval-ask.ts") as typeof import("../tools/aidlc-plan-approval-ask.ts");
@@ -2850,14 +2845,6 @@ async function evaluate(
       planApprovalOff = false;
     }
   }
-  // A refused developer handoff for the one target the current step builds,
-  // whose build is finished as its plan stands (codeGenerationBuildFinishes):
-  // said as the write refusal says it, before what the handoff itself carries.
-  const handoffFinished = (): boolean => {
-    if (!guardedDispatch || verdict.mentioned.length !== 1 || briefTargets === null) return false;
-    const unit = verdict.mentioned[0] === `stage:${GUARDED_STAGE}` ? null : verdict.mentioned[0];
-    return briefTargets.includes(unit) && buildFinishes(projectDir, unit);
-  };
   const refusalProse = (detail: string | null): string =>
     authorityFailure
       ? authorityBlockReason(authorityFailure, standing, asked, editingReply, jumpWayOn, swarmHeldWayOn)
@@ -2869,8 +2856,6 @@ async function evaluate(
           planApprovalOff,
           blockedMutation.finished,
         )
-      : handoffFinished()
-      ? finishedBuildReason(`start for ${verdict.mentioned[0] === `stage:${GUARDED_STAGE}` ? "the zero-Unit stage-level implementation" : `unit ${verdict.mentioned[0]}`}`)
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)
       : handoffDefect

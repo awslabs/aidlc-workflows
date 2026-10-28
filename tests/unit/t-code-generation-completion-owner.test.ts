@@ -402,10 +402,10 @@ describe("a testing practice kept at the gate is for the next build", () => {
     expect(refused).toContain("it says what this build does next");
     expect(refused).not.toContain("asks the person to approve");
     expect(refused).not.toContain("approve the plan");
+    // A developer handoff is refused as it is on main, naming `next` too.
     const handoff = dispatchOn(proj, brief.stdout);
     expect(handoff).toStartWith("exit 2;");
-    expect(handoff).toContain("it says what this build does next");
-    expect(handoff).not.toContain("asks the person to approve");
+    expect(handoff).toContain("bun .claude/tools/aidlc-orchestrate.ts next");
     expect(lastStep(runNamed(proj, OPEN_GATE).stdout).message).not.toBe(WAITS);
     expect(stageLine(proj)).toContain("[?] code-generation");
   });
