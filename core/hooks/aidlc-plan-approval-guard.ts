@@ -1023,8 +1023,9 @@ function isOutsideProject(projectDir: string, target: string): boolean {
 }
 
 // Whether the target's build is finished and `next` hands over its finish
-// (codeGenerationBuildFinishes), loaded only for a write already refused. False
-// when that module cannot be read, which keeps the ordinary refusal.
+// (codeGenerationBuildFinishes), loaded only for a write or a developer handoff
+// already refused. False when that module cannot be read, which keeps the
+// ordinary refusal.
 function buildFinishes(projectDir: string, unit: string | null): boolean {
   try {
     const ask = require("../tools/aidlc-plan-approval-ask.ts") as typeof import("../tools/aidlc-plan-approval-ask.ts");
@@ -2849,10 +2850,14 @@ async function evaluate(
       planApprovalOff = false;
     }
   }
-  // A refused developer handoff for one target whose build is finished as its
-  // plan stands (codeGenerationBuildFinishes): said as the write refusal says it.
-  const handoffFinished = (): boolean => verdict.mentioned.length === 1 &&
-    buildFinishes(projectDir, verdict.mentioned[0] === `stage:${GUARDED_STAGE}` ? null : verdict.mentioned[0]);
+  // A refused developer handoff for the one target the current step builds,
+  // whose build is finished as its plan stands (codeGenerationBuildFinishes):
+  // said as the write refusal says it, before what the handoff itself carries.
+  const handoffFinished = (): boolean => {
+    if (!guardedDispatch || verdict.mentioned.length !== 1 || briefTargets === null) return false;
+    const unit = verdict.mentioned[0] === `stage:${GUARDED_STAGE}` ? null : verdict.mentioned[0];
+    return briefTargets.includes(unit) && buildFinishes(projectDir, unit);
+  };
   const refusalProse = (detail: string | null): string =>
     authorityFailure
       ? authorityBlockReason(authorityFailure, standing, asked, editingReply, jumpWayOn, swarmHeldWayOn)
@@ -2864,12 +2869,12 @@ async function evaluate(
           planApprovalOff,
           blockedMutation.finished,
         )
+      : handoffFinished()
+      ? finishedBuildReason(`start for ${verdict.mentioned[0] === `stage:${GUARDED_STAGE}` ? "the zero-Unit stage-level implementation" : `unit ${verdict.mentioned[0]}`}`)
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)
       : handoffDefect
       ? handoffBlockReason(verdict.mentioned, handoffDefect, briefTargets)
-      : handoffFinished()
-      ? finishedBuildReason(`start for ${verdict.mentioned[0] === `stage:${GUARDED_STAGE}` ? "the zero-Unit stage-level implementation" : `unit ${verdict.mentioned[0]}`}`)
       : blockReason(verdict.mentioned, detail ?? receiptDetail(units, verdict.mentioned), briefTargets, planApprovalOff);
 
   if (rulesArriving !== null) {
