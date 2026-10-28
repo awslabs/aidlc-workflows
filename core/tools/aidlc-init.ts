@@ -7930,11 +7930,32 @@ class ProjectLinkError extends Error {
   }
 }
 
-function assertNoProjectLinks(projectDir: string, directory: string): void {
+// The files an install record names, or null when there is none to read.
+function recordedFiles(path: string): string[] | null {
+  try {
+    const record = readBaseline(path);
+    return record ? Object.keys(record.files) : null;
+  } catch {
+    return null;
+  }
+}
+
+// A git checkout of the person's own inside a folder AI-DLC manages (Claude
+// Code keeps its worktrees in .claude/worktrees/): a folder holding a .git
+// entry where AI-DLC keeps none of its files, as `aidlcHas` answers.
+function personsCheckout(path: string, aidlcHas: (path: string) => boolean): boolean {
+  return lstatSync(path).isDirectory() && pathPresent(join(path, ".git")) && !aidlcHas(path);
+}
+
+function assertNoProjectLinks(
+  projectDir: string,
+  directory: string,
+  passedOver: (rel: string) => boolean,
+): void {
   const visit = (rel: string): void => {
     for (const entry of readdirSync(join(projectDir, rel)).sort()) {
       const child = `${rel}/${entry}`;
-      if (hostToolPath(child)) continue;
+      if (passedOver(child)) continue;
       const stat = lstatSync(join(projectDir, child));
       if (stat.isDirectory()) visit(child);
       else if (!stat.isFile()) throw new ProjectLinkError(child, stat.isSymbolicLink());
@@ -7996,13 +8017,20 @@ function copiedProjectSource(
   validateProjectionDescriptor(projectDir, stamp, descriptor, {
     allowMissingRootIntegrations: true,
   });
+  // AI-DLC's own files are the ones the install record names; with no record
+  // to read, every checkout is read as it was.
+  const recorded = recordedFiles(join(dataDir, "aidlc-manifest.json"));
+  const passedOver = (rel: string): boolean =>
+    hostToolPath(rel) ||
+    (recorded !== null &&
+      personsCheckout(join(projectDir, rel), () => recorded.some((file) => file.startsWith(`${rel}/`))));
   for (const directory of descriptor.managedDirectories) {
     assertProjectionPathHasNoSymlinks(projectDir, directory);
     const source = join(projectDir, directory);
     if (!existsSync(source) || !lstatSync(source).isDirectory()) {
       throw new Error(`copied projection is missing managed directory ${directory}`);
     }
-    assertNoProjectLinks(projectDir, directory);
+    assertNoProjectLinks(projectDir, directory, passedOver);
   }
   const cleanup = mkdtempSync(join(tmpdir(), "aidlc-config-copy-source-"));
   try {
@@ -8011,12 +8039,13 @@ function copiedProjectSource(
   for (const directory of descriptor.managedDirectories) {
     const source = join(projectDir, directory);
     // What a host tool installed for itself (links in its node_modules
-    // included) is never release content, so it stays where it is and out of
-    // the source. Any other link was refused above.
+    // included) and the person's own checkouts are never release content, so
+    // they stay where they are and out of the source. Any other link was
+    // refused above.
     cpSync(source, join(root, directory), {
       recursive: true,
       preserveTimestamps: true,
-      filter: (path) => !hostToolPath(relative(projectDir, path).replaceAll("\\", "/")),
+      filter: (path) => !passedOver(relative(projectDir, path).replaceAll("\\", "/")),
     });
   }
   for (const integration of descriptor.rootIntegrations) {
@@ -8679,13 +8708,11 @@ function firstRunMutationPaths(
 }
 
 // What the rollback snapshot goes around inside a folder AI-DLC manages: a
-// link or special file, and a git checkout of the person's own (Claude Code
-// keeps its worktrees in .claude/worktrees/) at a path the release ships
-// nothing to. Setup writes neither, and a transaction cannot carry a link.
+// link or special file, and a git checkout of the person's own at a path the
+// release ships nothing to. Setup writes neither, and a transaction cannot
+// carry a link.
 function snapshotGoesAround(path: string, releaseHas: (path: string) => boolean): boolean {
-  const stat = lstatSync(path);
-  if (!transactionCarries(stat)) return true;
-  return stat.isDirectory() && pathPresent(join(path, ".git")) && !releaseHas(path);
+  return !transactionCarries(lstatSync(path)) || personsCheckout(path, releaseHas);
 }
 
 // The folder whole when nothing in it is gone around, as every stock project

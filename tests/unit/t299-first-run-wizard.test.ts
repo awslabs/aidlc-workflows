@@ -2365,6 +2365,8 @@ describe("t299 first-run setup wizard", () => {
 
   // #3212: the rollback snapshot took .claude whole and refused the first link
   // in a Claude Code worktree under it, so setup stopped after the menu.
+  // The menu's recommended preset is a record-only config step, which read the
+  // project's own copy and refused the worktree's link as well.
   test("setup beside Claude Code worktrees that hold links completes and leaves them as they were", () => {
     const trees: string[] = [];
     let before: Record<string, string>[] = [];
@@ -2372,14 +2374,31 @@ describe("t299 first-run setup wizard", () => {
     const result = runWizard("\n", {
       prepare: (project) => {
         trees.push(claudeWorktree(project, "example"), claudeWorktree(project, "clone", true));
+        // A clone the release writes into stays AI-DLC's to read.
+        mkdirSync(join(project, ".claude", "skills", ".git"), { recursive: true });
+        writeFileSync(join(project, ".claude", "skills", ".git", "HEAD"), "ref: refs/heads/main\n");
         before = trees.map(linkTree);
         inodes = trees.map((tree) => lstatSync(tree).ino);
       },
     });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Writing project files ... done");
-    expect(result.stdout).not.toContain("transaction tree");
-    expect(existsSync(join(result.project, ".claude", "tools", "data", "aidlc-manifest.json"))).toBe(true);
+    expect(result.stdout).toContain("Recording model preset ... done");
+    expect(result.stdout).not.toContain("is a link");
+    const manifestPath = join(result.project, ".claude", "tools", "data", "aidlc-manifest.json");
+    const recorded = (): string[] =>
+      Object.keys(JSON.parse(readFileSync(manifestPath, "utf-8")).files).sort();
+    const setUp = recorded();
+    expect(setUp.filter((rel) => rel.startsWith(".claude/worktrees/"))).toEqual([]);
+    expect(setUp).toContain(".claude/skills/aidlc/SKILL.md");
+
+    // A later model change reads the same copy.
+    const later = runCli(result, INIT, [
+      "config", "models", "--project", "--preset", "thorough", "--yes", "--json",
+    ]);
+    expect(later.status, later.stdout + later.stderr).toBe(0);
+    expect(recorded()).toEqual(setUp);
+    expect(existsSync(join(result.project, ".claude", "skills", "aidlc", "SKILL.md"))).toBe(true);
     expect(trees.map(linkTree)).toEqual(before);
     // A junction's lstat inode is not stable on Windows.
     if (process.platform !== "win32") {
