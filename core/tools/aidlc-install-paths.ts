@@ -144,6 +144,33 @@ export function windowsPosixCommandPath(): string | null {
   return platform() === "win32" ? join(binRoot(), "aidlc") : null;
 }
 
+// A copy of the aidlc binary installed on Windows beside aidlc.cmd. PowerShell
+// and cmd.exe find a bare `aidlc` here before aidlc.cmd (PATHEXT), and Git Bash
+// finds it once the extensionless launcher is gone. Windows starts a .cmd only
+// through cmd.exe, which reads & | < > ^ and %NAME% in the arguments however the
+// caller quoted them; this copy hands them on as given (aidlc-native-launcher.ts).
+export function windowsExeCommandPath(): string | null {
+  return platform() === "win32" ? join(binRoot(), "aidlc.exe") : null;
+}
+
+// The sha256 of the bin\aidlc.exe AI-DLC wrote, so a file there that is not
+// that copy is left as it is.
+export function windowsExeCommandMarkerPath(): string {
+  return join(installRoot(), "launcher-sha256");
+}
+
+export function readWindowsExeCommandMarker(): string | null {
+  try {
+    return readFileSync(windowsExeCommandMarkerPath(), "utf-8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+// A replaced bin\aidlc.exe that was still running (the command that replaced
+// it, mostly) is renamed aside under this name; it goes once it has stopped.
+export const WINDOWS_EXE_COMMAND_ASIDE = /^aidlc\.exe\.old-[0-9a-f-]{36}$/;
+
 // The POSIX-shell launcher installed alongside aidlc.cmd on Windows so a bare
 // `aidlc` resolves in Git Bash / MSYS shells (which ignore PATHEXT). It simply
 // forwards to its sibling aidlc.cmd, which runs the same aidlc-shim.ps1 chain.
@@ -232,8 +259,9 @@ export type WindowsGitBashLauncherState =
   | { ok: false; launcher: string; foreign: boolean; fix: string };
 
 // Whether Git Bash, where Claude Code runs its hooks on Windows, can run a bare
-// `aidlc` from this native install: only through the extensionless launcher
-// beside aidlc.cmd. Null off Windows and when there is no native command here.
+// `aidlc` from this native install: through the extensionless launcher beside
+// aidlc.cmd, or without it through aidlc.exe. Null off Windows and when there is
+// no native command here.
 export function windowsGitBashLauncherState(): WindowsGitBashLauncherState | null {
   const launcher = windowsPosixCommandPath();
   if (launcher === null || !existsSync(commandPath())) return null;
@@ -254,6 +282,7 @@ export function windowsGitBashLauncherState(): WindowsGitBashLauncherState | nul
     // Missing.
   }
   if (body !== null && windowsPosixLauncherBodyIsOwned(body)) return { ok: true };
+  if (!present && existsSync(join(binRoot(), "aidlc.exe"))) return { ok: true };
   return present
     ? { ok: false, launcher, foreign: true, fix: `move ${launcher} aside, then ${repair}` }
     : { ok: false, launcher, foreign: false, fix: repair };

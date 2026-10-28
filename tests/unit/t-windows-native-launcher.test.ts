@@ -1,4 +1,4 @@
-// covers: file:core/tools/aidlc-lifecycle.ts file:scripts/install.ps1
+// covers: file:core/tools/aidlc-native-launcher.ts function:nativeLauncherRoot function:startNativeLauncher file:core/tools/aidlc-lifecycle.ts file:scripts/install.ps1
 //
 // A native Windows install puts a copy of the aidlc binary in its bin folder
 // as aidlc.exe, which PowerShell finds before aidlc.cmd and Git Bash finds
@@ -12,6 +12,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { nativeLauncherRoot } from "../../core/tools/aidlc-native-launcher.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { gitBashPath, gitBashSkipReason } from "../harness/git-bash.ts";
@@ -22,6 +23,24 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+
+const cmdFor = (helper: string) =>
+  `@echo off\r\npowershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${
+    helper.replaceAll("%", "%%")
+  }" %*\r\nexit /b %ERRORLEVEL%\r\n`;
+
+describe("the bin copy reads its install from the aidlc.cmd beside it", () => {
+  test("the install root aidlc.cmd was written with, a % in it read once", () => {
+    expect(nativeLauncherRoot(cmdFor("C:\\Users\\a%b\\AppData\\Local\\aidlc\\aidlc-shim.ps1")))
+      .toBe("C:\\Users\\a%b\\AppData\\Local\\aidlc");
+  });
+
+  test("any other file beside it leaves the binary itself", () => {
+    expect(nativeLauncherRoot("@echo off\r\n")).toBeNull();
+    expect(nativeLauncherRoot(cmdFor("C:\\aidlc\\other.ps1"))).toBeNull();
+    expect(nativeLauncherRoot(`${cmdFor("C:\\aidlc\\aidlc-shim.ps1")}echo more\r\n`)).toBeNull();
+  });
+});
 
 describe("a native Windows install hands aidlc's arguments on as typed", () => {
   const values = ["R&D", "a^b", "%PATH%", "a|sort", "a>made-by-cmd"];
