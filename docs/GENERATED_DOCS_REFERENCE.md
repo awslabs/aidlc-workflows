@@ -36,15 +36,16 @@ aidlc-docs/
 │   │   ├── stories.md                                      # User stories following INVEST criteria with acceptance criteria
 │   │   └── personas.md                                     # User archetypes, characteristics, and persona-to-story mappings
 │   │
-│   └── application-design/                                 # Created only if Application Design and/or Units Generation execute
-│       ├── application-design.md                           # Consolidated design document (if Application Design executes)
-│       ├── components.md                                   # Component definitions, responsibilities, and interfaces
-│       ├── component-methods.md                            # Method signatures, purposes, and input/output types
-│       ├── services.md                                     # Service definitions, responsibilities, and orchestration patterns
-│       ├── component-dependency.md                         # Dependency matrix and communication patterns between components
-│       ├── unit-of-work.md                                 # Unit definitions and responsibilities (if Units Generation executes)
-│       ├── unit-of-work-dependency.md                      # Dependency matrix between units (if Units Generation executes)
-│       └── unit-of-work-story-map.md                       # Mapping of user stories to units (if Units Generation executes)
+│   ├── application-design/                                 # Created only if Application Design and/or Units Generation execute
+│   │   ├── components.yaml                                 # Structured component catalogue (machine-readable, source of truth)
+│   │   ├── components.md                                   # Human-readable view derived from components.yaml (diagram, summary, rationale)
+│   │   ├── unit-of-work.md                                 # Unit definitions and responsibilities (if Units Generation executes)
+│   │   ├── unit-of-work-dependency.md                      # Dependency matrix between units (if Units Generation executes). Contract Design adds Contract ID + Spec File columns.
+│   │   └── unit-of-work-story-map.md                       # Mapping of user stories to units (if Units Generation executes)
+│   │
+│   └── contract-design/                                    # Created only if Contract Design executes
+│       ├── contracts/                                      # One spec file per inter-unit boundary (OpenAPI, AsyncAPI, shared schema, gRPC, etc.)
+│       └── contract-summary.md                             # Human-readable overview — Contract ID, provider/consumer, mechanism, owner, versioning
 │
 ├── construction/                                           # 🟢 CONSTRUCTION PHASE — determines HOW to build it
 │   ├── plans/

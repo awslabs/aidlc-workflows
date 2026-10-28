@@ -50,18 +50,18 @@ The model considers these factors when determining appropriate detail:
 ## Example: Application Design Artifacts
 
 **All scenarios create the same artifacts**:
-- `application-design.md`
-- `component-diagram.md`
+- `components.yaml` (structured catalogue — source of truth)
+- `components.md` (human-readable view derived from the YAML)
 
 **Detail level varies by complexity**:
 
 ### Simple Scenario (Single Component)
-- **application-design.md**: Basic component description, key methods
-- **component-diagram.md**: Simple diagram with essential relationships
+- **components.yaml**: One component with its responsibilities, boundaries, owned entities, and external dependencies
+- **components.md**: Minimal diagram and summary; brief rationale
 
 ### Complex Scenario (Multi-Component System)
-- **application-design.md**: Detailed component responsibilities, all methods with signatures, design patterns, alternatives considered
-- **component-diagram.md**: Comprehensive diagram with all relationships, data flows, integration points
+- **components.yaml**: Multiple components with full dependency and dependent-component edges, cross-component entity references, external dependencies, and traceability (`Source`) to requirements and stories
+- **components.md**: Comprehensive diagram, full summary and entity-ownership tables, external-dependencies table, rationale per component, and an Alternatives Rejected section for any boundary decisions where more than one decomposition was viable
 
 ## Guiding Principle for Model
 

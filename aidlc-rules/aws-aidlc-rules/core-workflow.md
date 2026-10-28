@@ -89,9 +89,11 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - Reverse Engineering (CONDITIONAL - Brownfield only)
 - Requirements Analysis (ALWAYS - Adaptive depth)
 - User Stories (CONDITIONAL)
+- Working Wireframes (CONDITIONAL)
 - Workflow Planning (ALWAYS)
 - Application Design (CONDITIONAL)
 - Units Generation (CONDITIONAL)
+- Contract Design (CONDITIONAL)
 
 ---
 
@@ -226,6 +228,41 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 9. **Wait for Explicit Approval**: Follow approval format from user-stories.md detailed steps - DO NOT PROCEED until user confirms
 10. **MANDATORY**: Log user's response in audit.md with complete raw input
 
+## Working Wireframes (CONDITIONAL)
+
+**Purpose**: Build a working frontend wireframe in the user's chosen tech stack, with mock data, so the user can see-and-iterate on the UI before any backend work begins. The output is a runnable project under `<workspace-root>/wireframes/` AND a design document at `aidlc-docs/inception/working-wireframes/wireframes.md` that captures the final screen flow, data shape, and user-captured details.
+
+**Execute IF**:
+- User-facing UI is in scope
+- Greenfield project with a frontend component, OR major UI redesign of an existing product
+- User explicitly wants to see-and-iterate on the UI before committing to backend
+- Multiple user personas with distinct screen experiences
+- Requirements leave UI/UX details open and iteration will clarify them
+
+**Skip IF**:
+- Backend-only service, API-only service, or infrastructure change
+- No UI changes (pure backend refactor, data migration, etc.)
+- Internal tooling with no human-facing frontend
+- User explicitly declines (prefers to go straight to backend/API design)
+- Existing frontend is being lightly modified and no new screens are introduced
+
+**Default Decision Rule**: When in doubt, include Working Wireframes. Early visual iteration surfaces UX issues cheaply and gives the eventual backend design a concrete, user-approved target to serve.
+
+**Working Wireframes has two parts within one stage**:
+1. **Part 1 - Planning**: Confirm tech stack, screens, mock data shape, iteration preferences, and scope boundaries. Get user approval.
+2. **Part 2 - Generation**: Scaffold the project, build the screens, write `wireframes.md`, and iterate with the user as many times as needed.
+
+**Execution**:
+1. **MANDATORY**: Log any user input during this phase in audit.md
+2. Load all steps from `inception/working-wireframes.md`
+3. **MANDATORY**: Perform intelligent assessment (Step 1 in working-wireframes.md) and document the Execute/Skip decision in `aidlc-docs/inception/plans/working-wireframes-assessment.md`
+4. Load prior context (requirements, user stories, reverse-engineering artifacts if brownfield)
+5. **PART 1 - Planning**: Ask the tech-stack, screen, mock-data, iteration, and scope-boundary questions; collect answers; analyze for ambiguity; get approval
+6. **PART 2 - Generation**: Scaffold `<workspace-root>/wireframes/`, build the screens with mock data, verify it runs, write `aidlc-docs/inception/working-wireframes/wireframes.md`
+7. **ITERATE**: Present the running wireframe, collect feedback, apply changes, update the document, and loop. Expect multiple cycles. The stage is explicitly built around repeat iteration.
+8. **Wait for Explicit Approval**: Follow approval format from working-wireframes.md Step 20 - DO NOT PROCEED until user confirms the wireframe is locked
+9. **MANDATORY**: Log user's response in audit.md with complete raw input
+
 ## Workflow Planning (ALWAYS EXECUTE)
 
 1. **MANDATORY**: Log any user input during this phase in audit.md
@@ -285,6 +322,38 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 4. Execute at appropriate depth (minimal/standard/comprehensive)
 5. **Wait for Explicit Approval**: Present detailed completion message (see units-generation.md for message format) - DO NOT PROCEED until user confirms
 6. **MANDATORY**: Log user's response in audit.md with complete raw input
+
+## Contract Design (CONDITIONAL)
+
+**Purpose**: Define the contracts between units of work so teams can build in parallel with confidence. Each cross-unit boundary gets a formal spec (OpenAPI, AsyncAPI, shared schema, gRPC, etc.) that both the provider and the consumer code against. Contract decisions made here are expensive to reverse — the stage must be 90% right from the start.
+
+**Execute IF**:
+- Project has more than one unit of work AND those units interact
+- Any cross-unit boundary uses a protocol that benefits from a formal spec (HTTP, async events, gRPC, shared schema)
+- Multiple teams will build units in parallel (contracts prevent integration rework)
+- System integrates with external callers who need a stable spec
+
+**Skip IF**:
+- Single-unit project — no inter-unit boundaries exist
+- All interactions are intra-unit (handled by the component map in Application Design)
+- User explicitly declines (prefers to define contracts ad-hoc during Construction)
+
+**Default Decision Rule**: When in doubt, include Contract Design. The cost of writing a contract spec now is small; the cost of integration rework because two units made different assumptions is large.
+
+**Contract Design has two parts within one stage**:
+1. **Part 1 - Planning**: Walk every row of `unit-of-work-dependency.md`; ask mechanism, payload, operations, idempotency, error model, SLA, versioning, auth, and ownership per boundary; collect answers; resolve ambiguities; get approval.
+2. **Part 2 - Generation**: Generate one spec file per boundary in `aidlc-docs/inception/contract-design/contracts/`, write `contract-summary.md`, and update `components.yaml` + `unit-of-work-dependency.md` with the Contract IDs.
+
+**Execution**:
+1. **MANDATORY**: Log any user input during this phase in audit.md
+2. Load all steps from `inception/contract-design.md`
+3. **MANDATORY**: Perform intelligent assessment (Step 1 in contract-design.md) and document the Execute/Skip decision in `aidlc-docs/inception/plans/contract-design-assessment.md`
+4. Load prior context (`components.yaml`, `unit-of-work.md`, `unit-of-work-dependency.md`, `requirements.md`, `stories.md` if produced)
+5. **PART 1 - Planning**: Ask per-boundary questions on mechanism, payload shape, operations, idempotency, error model, SLA, versioning, auth, and ownership; collect answers; analyze for ambiguity; get approval
+6. **PART 2 - Generation**: Generate one spec file per inter-unit boundary in `contracts/`, write `contract-summary.md`, update `components.yaml` cross-unit interactions with Contract refs, update `unit-of-work-dependency.md` with Contract ID + Spec File columns
+7. **Validate**: Every inter-unit dependency has a contract; every spec validates against its format; every contract has one owner, a versioning rule, and an error model
+8. **Wait for Explicit Approval**: Follow approval format from contract-design.md Step 22 - DO NOT PROCEED until user confirms
+9. **MANDATORY**: Log user's response in audit.md with complete raw input
 
 ---
 
@@ -511,6 +580,8 @@ The Operations stage will eventually include:
 ```text
 <WORKSPACE-ROOT>/                   # ⚠️ APPLICATION CODE HERE
 ├── [project-specific structure]    # Varies by project (see code-generation.md)
+├── wireframes/                     # 🎨 Working wireframe project (if Working Wireframes stage ran)
+│                                   #    Real runnable frontend in the user's chosen tech stack
 │
 ├── aidlc-docs/                     # 📄 DOCUMENTATION ONLY
 │   ├── inception/                  # 🔵 INCEPTION PHASE
@@ -518,7 +589,11 @@ The Operations stage will eventually include:
 │   │   ├── reverse-engineering/    # Brownfield only
 │   │   ├── requirements/
 │   │   ├── user-stories/
-│   │   └── application-design/
+│   │   ├── working-wireframes/     # wireframes.md (screen flow, data shape, user decisions)
+│   │   ├── application-design/
+│   │   └── contract-design/        # Inter-unit contracts (if Contract Design executes)
+│   │       ├── contracts/          # One spec file per boundary (OpenAPI/AsyncAPI/schema/gRPC)
+│   │       └── contract-summary.md
 │   ├── construction/               # 🟢 CONSTRUCTION PHASE
 │   │   ├── plans/
 │   │   ├── {unit-name}/

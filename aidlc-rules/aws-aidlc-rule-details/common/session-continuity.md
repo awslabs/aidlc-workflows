@@ -29,7 +29,8 @@ B) Review a previous stage ([Show available stages])
    - **Reverse Engineering**: Read architecture.md, code-structure.md, api-documentation.md
    - **Requirements Analysis**: Read requirements.md, requirement-verification-questions.md
    - **User Stories**: Read stories.md, personas.md, story-generation-plan.md
-   - **Application Design**: Read application-design artifacts (components.md, component-methods.md, services.md)
+   - **Application Design**: Read application-design artifacts (components.yaml, components.md)
+   - **Contract Design**: Read contract-design artifacts (contract-summary.md and every spec in contracts/), plus the Contract refs now carried in components.yaml and unit-of-work-dependency.md
    - **Design (Units)**: Read unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map.md
    - **Per-Unit Design**: Per-unit artifacts live under `aidlc-docs/construction/{unit-name}/` in
      `functional-design/`, `nfr-requirements/`, `nfr-design/`, and `infrastructure-design/`
