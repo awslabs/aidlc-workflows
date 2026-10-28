@@ -1792,9 +1792,10 @@ question not yet asked: a file-tool or shell write to a file the plan on disk
 does not name (before any plan is written, only a document). Work parked at
 Code Generation is not being built either: while it is parked where it stands
 (`parkedWhereItStands`, the engine's own reading of the park), only the build
-(the developer, and a write to a file any of the work's plans name) waits for
-the resume, and what else the person asks for in the project runs, the same
-under every Guard Policy. The plan's own
+(the developer, and a write to a file named by the stage-level plan or by the
+plan of a Unit whose Code Generation is not recorded complete) waits for the
+resume, and what else the person asks for in the project runs, the same under
+every Guard Policy. The plan's own
 files are AI-DLC's records: the conductor can write the asked plan's plan and
 test instructions for what the person asked with their answer ("approve, but add
 a test for the empty cart") and then record their choice; the approval takes the

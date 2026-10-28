@@ -152,6 +152,7 @@ import {
   personLineHeardThisTurn,
   takeActiveDirectiveReleaseHeld,
   recordGuardBlockedRow,
+  unitCompletedReceipts,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
 import {
@@ -1017,11 +1018,20 @@ function planApprovalPlanNamedPaths(projectDir: string, unit?: string | null): s
   }
 }
 
-// The files any Code Generation plan of this work names as it is on disk, the
-// stage-level plan's and each known Unit's. Null when one cannot be read.
-function workPlansNamedPaths(projectDir: string): string[] | null {
+// The files the parked build's plans name as they are on disk: the stage-level
+// plan's and each known Unit's with no Code Generation completion on record. A
+// built Unit's files are beside the build, as they are at the next Unit's plan
+// question; a ledger that cannot be read leaves every Unit's plan waiting. Null
+// when a plan cannot be read.
+function parkedBuildPlansNamedPaths(projectDir: string): string[] | null {
+  let built = new Set<string>();
+  try {
+    built = unitCompletedReceipts(projectDir, GUARDED_STAGE);
+  } catch {
+    // Every Unit's plan waits.
+  }
   const named: string[] = [];
-  for (const unit of [null, ...knownUnits(projectDir, docsRoot(projectDir))]) {
+  for (const unit of [null, ...knownUnits(projectDir, docsRoot(projectDir)).filter((unit) => !built.has(unit))]) {
     const paths = planApprovalPlanNamedPaths(projectDir, unit);
     if (paths === null) return null;
     named.push(...paths);
@@ -2614,12 +2624,12 @@ async function evaluate(
       }
     }
     // Work parked where it stands is not being built: as while its plan waits,
-    // only the build waits for the resume (the developer, the files any of its
-    // plans name, AI-DLC's own commands the admission holds), and what else the
+    // only the build waits for the resume (the developer, the files its plans
+    // name, AI-DLC's own commands the admission holds), and what else the
     // person asks for in the project runs, under every Guard Policy.
     if (
       !guardedDispatch && knownMutationTool && parkedWhereItStands(state) &&
-      besideTheBuild(projectDir, mutation, () => workPlansNamedPaths(projectDir))
+      besideTheBuild(projectDir, mutation, () => parkedBuildPlansNamedPaths(projectDir))
     ) return 0;
     rulesArriving = codeGenerationRulesArrivingReason(activeDirective, projectDir);
     if (
