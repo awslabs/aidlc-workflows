@@ -127,6 +127,11 @@ const VALID_EVENT_TYPES = new Set([
   // Engine-owned: the person sent their words to separate new work or a
   // reshape, so they answer no question the work in progress has open.
   "REQUEST_ROUTED",
+  // Engine-owned: an engine question with no row of its own when asked (the
+  // code plan question, the questions `next` asks), and an open question shown
+  // in a chat it was not shown in before, each with its Question Id.
+  "QUESTION_ASKED",
+  "QUESTION_SHOWN",
   "SUMMARY_CONFIRMATION_RECORDED",
   "VERIFICATION_COMMAND_RECORDED",
   "CONSTRUCTION_POLICY_RECORDED",
@@ -367,6 +372,8 @@ const EVENT_HEADINGS: Record<string, string> = {
   QUESTION_ANSWERED: "Question Answered",
   QUESTION_UNANSWERED: "Question Unanswered",
   QUESTION_REPLIED: "Question Replied",
+  QUESTION_ASKED: "Question Asked",
+  QUESTION_SHOWN: "Question Shown",
   REQUEST_ROUTED: "Request Routed",
   SUMMARY_CONFIRMATION_RECORDED: "Summary Confirmation Recorded",
   VERIFICATION_COMMAND_RECORDED: "Verification Command Recorded",
@@ -564,6 +571,10 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "QUESTION_UNANSWERED",
   "QUESTION_REPLIED",
   "REQUEST_ROUTED",
+  // The engine's record of the questions it asked; what binds an answer to
+  // its question will read them.
+  "QUESTION_ASKED",
+  "QUESTION_SHOWN",
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
@@ -958,6 +969,26 @@ function tapAuditMetric(
   }
 }
 
+// Each row a record gains goes to the open-question ledger the human-turn hook
+// stamps turns from (noteQuestionRow, aidlc-questions.ts), under the lock the
+// append holds. Lazy, like the metrics tap: a fixture without the module, or a
+// ledger that cannot be written, never blocks the row.
+function tapQuestionLedger(
+  eventType: string,
+  fields: Record<string, string>,
+  projectDir: string,
+  shardPath: string,
+): void {
+  try {
+    const questions = require("./aidlc-questions.ts") as {
+      noteQuestionRow: (projectDir: string, auditPath: string, event: string, fields: Record<string, string>) => void;
+    };
+    questions.noteQuestionRow(projectDir, shardPath, eventType, fields);
+  } catch {
+    // Bookkeeping for the hook's stamp only.
+  }
+}
+
 // Core append logic — throws on error instead of exiting. Safe for library callers.
 // CLI caller (main) wraps this in try/catch and translates to jsonError.
 export function appendAuditEntry(
@@ -1054,13 +1085,15 @@ export function appendAuditEntryUnlocked(
   const entry = { eventType, fields };
   validateAuditEntry(entry);
   const ts = isoTimestamp();
+  const shardPath = auditFilePath(projectDir, intent, space);
   appendAuditBlockAtPath(
     projectDir,
-    auditFilePath(projectDir, intent, space),
+    shardPath,
     renderAuditBlock(entry, ts, projectDir),
   );
 
   tapAuditMetric(eventType, fields, projectDir);
+  tapQuestionLedger(eventType, fields, projectDir, shardPath);
 
   return { appended: true, event: eventType, timestamp: ts };
 }
@@ -1255,6 +1288,7 @@ export function appendAuditEntryAtPathUnlocked(
     renderAuditBlock(entry, ts, projectDir),
   );
   tapAuditMetric(eventType, fields, projectDir);
+  tapQuestionLedger(eventType, fields, projectDir, shardPath);
   return { appended: true, event: eventType, timestamp: ts };
 }
 
@@ -1281,9 +1315,11 @@ export function appendAuditEntries(
         renderAuditBlock(entry, timestamps[index], projectDir)
       )
       .join("");
-    appendAuditBlockAtPath(projectDir, auditFilePath(projectDir, intent, space), payload);
+    const shardPath = auditFilePath(projectDir, intent, space);
+    appendAuditBlockAtPath(projectDir, shardPath, payload);
     for (const entry of entries) {
       tapAuditMetric(entry.eventType, entry.fields, projectDir);
+      tapQuestionLedger(entry.eventType, entry.fields, projectDir, shardPath);
     }
     return {
       appended: true,

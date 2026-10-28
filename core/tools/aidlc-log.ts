@@ -15,6 +15,12 @@ import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { prepareReviewCopy, removeReviewCopy, sweepReviewCopies } from "./aidlc-kiro-review-copy.ts";
 import {
+  askedQuestionFields,
+  QUESTION_ID_FIELD,
+  questionEntryDigests,
+  questionShows,
+} from "./aidlc-questions.ts";
+import {
   chatsSince,
   latestMessage,
   latestSpendingTimestamp,
@@ -832,8 +838,13 @@ function handlePlanApprovalBatch(
   try {
     withAuditLock(pd, () => {
       if (action === "decision") {
+        let questionId = "";
         const challenge = recordPlanApprovalBatchChallenge(pd, flags["batch-file"], session, (batch) => {
           withdrawProtectedQuestions(pd, session);
+          const asked = askedQuestionFields(pd, {
+            type: "plan-approval", shows: questionShows([batch.bindingSha256]), chat: session,
+          });
+          questionId = asked[QUESTION_ID_FIELD];
           emitAudit(pd, "DECISION_RECORDED", {
             Stage: flags.stage,
             Checkpoint: PLAN_APPROVAL_CHECKPOINT,
@@ -844,12 +855,14 @@ function handlePlanApprovalBatch(
             Units: batch.members.map((member) => member.unit).join(", "),
             "Batch Binding SHA-256": batch.bindingSha256,
             "Batch Members": JSON.stringify(batch.members),
+            ...asked,
           });
         });
         console.log(JSON.stringify({
           emitted: "DECISION_RECORDED",
           checkpoint: "plan-approval",
           stage: flags.stage,
+          ...(questionId ? { question_id: questionId } : {}),
           batch: challenge.batch,
           options: challenge.options,
           challengeId: challenge.challengeId,
@@ -1258,6 +1271,13 @@ function handleDecision(args: string[]): void {
     fields["Message Id"] = proof.message.id;
   }
 
+  // The question this row asks, on the record (aidlc-questions.ts).
+  Object.assign(fields, askedQuestionFields(pd, {
+    type: flags.checkpoint ?? fields[QUESTION_KIND_FIELD] ?? "stage-question",
+    shows: decisionShows(pd, flags, fields),
+    ...(fields.Session ? { chat: fields.Session } : {}),
+  }));
+
   let protectedQuestion: ProtectedQuestion | null = null;
   try {
     protectedQuestion = withAuditLock(pd, () => {
@@ -1310,6 +1330,7 @@ function handleDecision(args: string[]): void {
     JSON.stringify({
       emitted: "DECISION_RECORDED",
       stage: flags.stage,
+      question_id: fields[QUESTION_ID_FIELD],
       ...(challenge !== null
         ? {
             challengeId: challenge.challengeId,
@@ -1329,6 +1350,25 @@ function handleDecision(args: string[]): void {
       ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
     })
   );
+}
+
+// What a logged question shows the person (aidlc-questions.ts): the command or
+// setting a checkpoint asks about, the plan's fingerprint, the summary's own
+// entry in its questions file with its answer blanked, else the question and
+// its choices as logged.
+function decisionShows(pd: string, flags: Record<string, string>, fields: Record<string, string>): string {
+  if (fields["Command SHA-256"]) return questionShows([fields["Command SHA-256"]]);
+  if (flags.checkpoint === "construction-policy") return questionShows([fields.Field, fields.Value]);
+  if (fields["Approval Fingerprint"]) return questionShows([fields["Approval Fingerprint"]]);
+  if (flags.checkpoint === "summary-confirmation" && fields["Questions File"]) {
+    try {
+      const entries = questionEntryDigests(readFileSync(join(pd, fields["Questions File"]), "utf-8"));
+      return questionShows([entries[SUMMARY_CONFIRMATION_CHECKPOINT] ?? "none"]);
+    } catch {
+      return questionShows(["none"]);
+    }
+  }
+  return questionShows([flags.decision, flags.options]);
 }
 
 // --- Subcommand: answers ---
@@ -2573,17 +2613,23 @@ function handleAnswer(args: string[]): void {
       // the next confirmation took it as its Person Reply.
       const asksWhat = !positive && summaryFeedback === null;
       let whatAsked = false;
+      let whatQuestionId: string | null = null;
       if (asksWhat) {
         rowEndsTurn = true;
         try {
+          const asked = askedQuestionFields(pd, {
+            type: "stage-question", shows: questionShows([SUMMARY_CHANGES_QUESTION, undefined]),
+          });
           emitAudit(pd, "DECISION_RECORDED", {
             Stage: flags.stage,
             Decision: SUMMARY_CHANGES_QUESTION,
             ...(fields.Unit !== undefined ? { Unit: fields.Unit } : {}),
             ...(fields["Attempt Generation"] !== undefined ? { "Attempt Generation": fields["Attempt Generation"] } : {}),
             ...(workflow !== undefined ? { Workflow: workflow } : {}),
+            ...asked,
           });
           whatAsked = true;
+          whatQuestionId = asked[QUESTION_ID_FIELD];
         } catch {
           // The change request is on record; the question is asked all the same.
         }
@@ -2601,6 +2647,7 @@ function handleAnswer(args: string[]): void {
           choice: flags.details,
           ...(positive ? { summary_authorization_id: authorization.id } : {}),
           ...(summaryFeedback !== null ? { feedback: summaryFeedback } : {}),
+          ...(whatQuestionId !== null ? { question_id: whatQuestionId } : {}),
           ...(asksWhat
             ? {
               agent_note: `Ask the free-text question "${SUMMARY_CHANGES_QUESTION}" and end the turn; ` +

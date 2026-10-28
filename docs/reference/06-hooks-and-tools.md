@@ -401,8 +401,13 @@ any earlier turn, so an answer or approval logged before the person replies
 again is refused, and the hook tells the agent to ask the same question again
 in its reply rather than in the box. A box that comes back with an answer, on
 Codex or Claude Code, also records one `QUESTION_REPLIED` row per question,
-with the question as shown and the reply as given. That row decides nothing
-and spends no turn. A Codex box the person submits with a question left
+with the question as shown and the reply as given, and the `Question Id` of the
+open question in that chat whose exact text the box showed. That row decides
+nothing and spends no turn. Each `HUMAN_TURN` also carries the ids of the
+questions open where the person replied (`Open Questions`) and a digest of
+each entry of the stage's questions file with its answers blanked (`Questions
+Digest`), read from one small index the audit writer keeps; nothing decides on
+them yet. A Codex box the person submits with a question left
 unanswered (Codex returns that question as an empty list) is still their reply
 when another question carries a pick: those picks are recorded, and the blank
 question gets no row. An answer the agent records with `log answer` carries the
@@ -2072,7 +2077,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Phase** | 4 | `PHASE_STARTED`, `PHASE_COMPLETED`, `PHASE_VERIFIED`, `PHASE_SKIPPED` | `aidlc-utility.ts intent-create`; lifecycle outcomes reported through `aidlc-orchestrate.ts` |
 | **Stage** | 9 | `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `STAGE_REVISING`, `STAGE_COMPLETED`, `STAGE_SKIPPED`, `STAGE_JUMPED`, `STAGE_DEFINITION_CHANGED`, `STAGE_OUTPUT_AMENDED`, `SOURCE_WORK_NOT_FOUND` | `aidlc-orchestrate.ts report` (internal state emitters), `aidlc-jump.ts`, `aidlc-orchestrate.ts` (`STAGE_DEFINITION_CHANGED`, `STAGE_OUTPUT_AMENDED`), `aidlc-state.ts` (`SOURCE_WORK_NOT_FOUND`, from Code Generation's source-work check) |
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` | `aidlc-utility.ts intent-create` |
-| **Interaction** | 13 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `QUESTION_REPLIED`, `QUESTION_UNANSWERED`, `REQUEST_ROUTED`, `SUMMARY_CONFIRMATION_RECORDED`, `PLAN_APPROVAL_RECORDED`, `PLAN_APPROVAL_SKIPPED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED` | `aidlc-log.ts`, `aidlc-state.ts`, `aidlc-plan-approval-ask.ts`, `aidlc-orchestrate.ts` (`REQUEST_ROUTED`), `aidlc-record-human-turn.ts` (hook) |
+| **Interaction** | 15 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `QUESTION_REPLIED`, `QUESTION_UNANSWERED`, `QUESTION_ASKED`, `QUESTION_SHOWN`, `REQUEST_ROUTED`, `SUMMARY_CONFIRMATION_RECORDED`, `PLAN_APPROVAL_RECORDED`, `PLAN_APPROVAL_SKIPPED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED` | `aidlc-log.ts`, `aidlc-state.ts`, `aidlc-plan-approval-ask.ts`, `aidlc-orchestrate.ts` (`REQUEST_ROUTED`, `QUESTION_ASKED`, `QUESTION_SHOWN`), `aidlc-record-human-turn.ts` (hook) |
 | **Navigation** | 9 | `SCOPE_CHANGED`, `SCOPE_DETECTED`, `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `RECOMPOSED`, `WORKSPACE_RECLASSIFIED`, `SCOPE_SAVED`, `PLUGIN_SELECTION_CHANGED` | `aidlc-utility.ts` |
 | **Guard Policy** | 5 | `GUARD_POLICY_SET`, `CHANGE_CONTROL_SET` (its retired name, read only), `CHANGE_ACCEPTED`, `GUARD_RESTORED`, `GUARD_STOOD_ASIDE` | `aidlc-utility.ts` builds `GUARD_POLICY_SET` batches for `config-change` / `scope-change` and the `GUARD_RESTORED` row for a fence switched back on, including an override above the policy word; `aidlc-lib.ts` observes effective memory changes through `appendGuardPolicySetRow`, records accepted changes at the three governed checkpoints, and writes `GUARD_STOOD_ASIDE` from `recordGuardStoodAside` when a fence stands aside |
 | **Ceremony** | 1 | `CEREMONY_SET` | `aidlc-utility.ts` builds changed-setting rows for `config-change` / `scope-change`, appended together through `appendAuditEntries` before the state write |

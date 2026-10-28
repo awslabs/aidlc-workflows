@@ -105,6 +105,16 @@ import {
   type PlanApprovalPickerQuestion,
 } from "./aidlc-testing-posture.ts";
 import { QUESTION_ASKED_EVENTS, readMessage } from "./aidlc-message-store.ts";
+import {
+  askedQuestionFields,
+  newQuestionId,
+  openSlotQuestionId,
+  QUESTION_TEXT_FIELD,
+  questionShows,
+  questionTextSha,
+  recordedQuestion,
+  shownAgainFields,
+} from "./aidlc-questions.ts";
 import { exactOptionPick, isNonAnswer, pickerOffersChoices } from "./aidlc-reply-reader.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
@@ -194,6 +204,8 @@ export interface PlanApprovalAskRecord {
   /** A grouped change request that named no Unit, waiting for "which one". */
   pendingChange?: string;
   results?: PlanApprovalAskResult[];
+  /** The question's id on the record (QUESTION_ASKED, aidlc-questions.ts); a record reopened for a fresh look keeps none. */
+  questionId?: string;
 }
 
 function askPath(projectDir: string, intentId: string): string {
@@ -1101,6 +1113,60 @@ function planApprovalAskDirective(
 // --- Publishing the question ---------------------------------------------------
 
 /**
+ * The id the code plan question goes out with. The question is its slot: while
+ * it is unanswered it keeps its id, its plans edited or not (what it shows is
+ * recorded beside it). A record answered, or reopened for a fresh look, asks a
+ * new question; in a clone, which keeps no record of its own, the committed
+ * record's open one is the question.
+ */
+export function planApprovalQuestionId(projectDir: string, _directive: PlanApprovalAskDirective): string | null {
+  try {
+    const existing = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
+    if (existing !== null) {
+      return existing.results === undefined && existing.questionId ? existing.questionId : newQuestionId(projectDir);
+    }
+    return openSlotQuestionId(projectDir, { type: PLAN_APPROVAL_ASK_TYPE, stage: STAGE }) ?? newQuestionId(projectDir);
+  } catch {
+    return null;
+  }
+}
+
+// The plan question goes on the record: QUESTION_ASKED the first time its id is
+// handed out, QUESTION_SHOWN in a chat that had not seen it or with its plans
+// changed. Record-only.
+function recordPlanQuestion(
+  projectDir: string,
+  directive: PlanApprovalAskDirective,
+  record: PlanApprovalAskRecord,
+  session: string | null,
+): void {
+  const id = record.questionId;
+  if (!id) return;
+  try {
+    const shows = questionShows(record.targets.map((target) => `${target.unit ?? ""}:${target.fingerprint}`));
+    if (recordedQuestion(projectDir, id) === null) {
+      const units = record.targets.map((target) => target.unit).filter((unit): unit is string => unit !== null);
+      appendAuditEntryUnlocked("QUESTION_ASKED", {
+        ...askedQuestionFields(projectDir, { type: PLAN_APPROVAL_ASK_TYPE, shows, chat: session, id }),
+        Stage: STAGE,
+        ...(units.length === 1 ? { Unit: units[0] } : units.length > 1 ? { Units: units.join(", ") } : {}),
+        "Ask Id": record.askId,
+        Options: JSON.stringify(record.choices),
+        [QUESTION_TEXT_FIELD]: questionTextSha(record.question),
+        ...(directive.plan_approval.targets[0]?.questions_path
+          ? { "Questions File": directive.plan_approval.targets[0].questions_path }
+          : {}),
+      }, projectDir);
+      return;
+    }
+    const shown = shownAgainFields(projectDir, id, session, shows);
+    if (shown !== null) appendAuditEntryUnlocked("QUESTION_SHOWN", { ...shown, "Ask Id": record.askId }, projectDir);
+  } catch {
+    // The question is asked either way; its record is bookkeeping.
+  }
+}
+
+/**
  * Called after the ask marker is published: record the question in the
  * protected store and write each target's questions file. The same unanswered
  * question for the same files keeps its id, so a restart or a new chat shows
@@ -1147,8 +1213,9 @@ export function publishPlanApprovalAsk(
       existing.question === directive.question && existing.targets.length === targets.length &&
       existing.targets.every((target) =>
         targets.some((current) => current.unit === target.unit && current.fingerprint === target.fingerprint));
+    const questionId = (same ? existing?.questionId : undefined) ?? directive.question_id ?? newQuestionId(projectDir);
     const record: PlanApprovalAskRecord = same && existing
-      ? { ...existing, bound: true, ...shownNow(existing, session) }
+      ? { ...existing, bound: true, ...shownNow(existing, session), questionId }
       : {
           version: 1,
           askId: randomBytes(16).toString("hex"),
@@ -1160,8 +1227,10 @@ export function publishPlanApprovalAsk(
           bound: true,
           ...shownNow(null, session),
           ...shownFromNow(projectDir),
+          questionId,
         };
     writePlanApprovalAsk(projectDir, record);
+    recordPlanQuestion(projectDir, directive, record, session ?? null);
     directive.plan_approval.targets.forEach((view, index) => {
       const path = join(projectDir, view.questions_path);
       const content = questionsFileContent(
@@ -2379,6 +2448,8 @@ export function requestPlanApprovalReviewNow(projectDir: string): string | null 
         ...asked, askId: randomBytes(16).toString("hex"), ...shownFromNow(projectDir), bound: true,
       };
       delete reopened.replies;
+      // A fresh question: the next showing records it under a new id.
+      delete reopened.questionId;
       if (results.length > 0) reopened.results = results; else delete reopened.results;
       writePlanApprovalAsk(projectDir, reopened);
       // The answer on each file's `[Answer]:` line was the engine's own record

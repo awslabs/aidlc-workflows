@@ -114,6 +114,7 @@ import {
 } from "../tools/aidlc-testing-posture.ts";
 import { notePlanApprovalAskReply, openEngineQuestion } from "../tools/aidlc-plan-approval-ask.ts";
 import { openPlanQuestion } from "../tools/aidlc-question-store.ts";
+import { boxQuestionId, QUESTION_ID_FIELD, turnQuestionFields } from "../tools/aidlc-questions.ts";
 import { aidlcEntryWords, isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
 import { MESSAGE_PICKER_MAX_CHARS, MESSAGE_TEXT_MAX_CHARS, type NewMessage, saveMessage } from "../tools/aidlc-message-store.ts";
 
@@ -925,6 +926,10 @@ try {
             ...(openQuestion !== null ? { [OPEN_QUESTION_FIELD]: openQuestion } : {}),
             ...(picked.length > 0 ? { Picked: JSON.stringify(picked) } : {}),
             ...(messageId ? { "Message Id": messageId } : {}),
+            // The questions open where they replied, and what the stage's
+            // questions file said then (aidlc-questions.ts): facts of this
+            // moment, read from one small file. Nothing decides on them here.
+            ...turnQuestionFields(projectDir, sessionId),
           }, projectDir);
           // Keep what the person typed in this chat (recordGateWords in
           // aidlc-lib.ts). A command to AIDLC instructs the framework; the one
@@ -970,9 +975,13 @@ try {
             for (const { question, reply } of pickerReplies(input).entries) {
               if (reply === null) continue; // a question left blank carried no pick
               const options = offered.get(question);
+              // The question it answered, by its id, when the box asked one
+              // open here in the question's own words.
+              const id = boxQuestionId(projectDir, sessionId, question);
               appendAuditEntryUnlocked("QUESTION_REPLIED", {
                 ...(sessionId ? { Session: sessionId } : {}),
                 Question: question,
+                ...(id !== null ? { [QUESTION_ID_FIELD]: id } : {}),
                 Reply: reply,
                 ...(options !== undefined ? { Options: JSON.stringify(options) } : {}),
               }, projectDir);

@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { proveMessage, readMessage } from "./aidlc-message-store.ts";
+import { askedQuestionFields, QUESTION_ID_FIELD, questionShows } from "./aidlc-questions.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { APPROVAL_GATE_CHOICES } from "./aidlc-reply-reader.ts";
 import {
@@ -1722,6 +1723,9 @@ export function askConstructionCheckpoint(
     // to read.
     const earlier = gateWordsSinceUnitReview(projectDir, session, unit, current.result.stages);
     withdrawProtectedQuestions(projectDir, session);
+    const asked = askedQuestionFields(projectDir, {
+      type: "unit-checkpoint", shows: questionShows([current.result.fingerprint]), chat: session,
+    });
     appendAuditEntryUnlocked("DECISION_RECORDED", {
       Checkpoint: "Construction Unit Approval", Unit: unit, Kind: kind,
       Stage: current.result.stages.at(-1)!, Fingerprint: current.result.fingerprint,
@@ -1729,6 +1733,7 @@ export function askConstructionCheckpoint(
       // What the person is shown, so a change before their answer is said
       // once instead of asking again (relaxed and off).
       "Asked Evidence": current.approvedEvidence, "Run floors": JSON.stringify(current.result.run_floors),
+      ...asked,
     }, projectDir);
     const question = mintProtectedQuestion(projectDir, {
       kind: "checkpoint-approval", session, target: approvalTarget(current), choices: APPROVAL_GATE_CHOICES,
@@ -1748,6 +1753,7 @@ export function askConstructionCheckpoint(
     if (changedFiles !== null && (earlier === null || carried)) markPersonLinesHeard(projectDir, session, [changedFiles.key]);
     const result = {
       ...current.result,
+      question_id: asked[QUESTION_ID_FIELD],
       ...(leftOut === null ? {} : { left_out: leftOut }),
       ...(changedFiles === null || carried ? {} : { changed_files: changedFiles.line }),
       ...(offer === null ? {} : { check_offer: offer.offer }),

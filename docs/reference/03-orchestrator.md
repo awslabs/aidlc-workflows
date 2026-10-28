@@ -1277,6 +1277,12 @@ when no summary comes before the question; the gate shown again by a later
 stage found are answered from those files first, then the approval question is
 asked again (the `next <words>` step says so before its new-work branch).
 
+The reply that opens or shows the gate, the gate-only step, every engine `ask`,
+and the JSON `log decision` and the checkpoint asks print, carry `question_id`:
+the id of that question on the record (its `Question Id` on the asking row,
+`tools/aidlc-questions.ts`). It is structure for the agent, never shown to the
+person; nothing reads it back yet.
+
 ### Conditional Approve-and-Add Gate (Ideation and Inception only)
 
 ```

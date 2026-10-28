@@ -628,6 +628,7 @@ import { terminalDispatcherArgv } from "./aidlc.ts";
 import {
   appendAuditEntries,
   appendAuditEntry,
+  appendAuditEntryUnlocked,
   type AuditEntryInput,
   maskSecretShapes,
   saySecretMaskedOnce,
@@ -635,6 +636,20 @@ import {
 } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { renderEngineInvocation, sameGuardOperation } from "./aidlc-guard-operation.ts";
+import { withAuditLock } from "./aidlc-locks.ts";
+import {
+  askedQuestionFields,
+  engineAskQuestionId,
+  QUESTION_ID_FIELD,
+  latestAskedQuestion,
+  newQuestionId,
+  noteQuestionsFile,
+  QUESTION_TEXT_FIELD,
+  questionShows,
+  questionTextSha,
+  recordedQuestion,
+  shownAgainFields,
+} from "./aidlc-questions.ts";
 import {
   isPlanApprovalBeat,
   keepRoutedPlanApprovalReply,
@@ -643,6 +658,7 @@ import {
   openPlanApprovalQuestion,
   planApprovalKeptReplyWaits,
   planApprovalOverrideOffers,
+  planApprovalQuestionId,
   withdrawPlanApprovalReplies,
   preparePlanRecordFolders,
   publishPlanApprovalAsk,
@@ -820,6 +836,8 @@ function loadStateFileIfPresent(projectDir: string): string | null {
 
 interface PreparedEmission {
   transported: Directive; serialized: string; resultSha256: string; projectDir?: string;
+  // The questions file of the stage a run-stage hands out, from the project.
+  questionsFile?: string;
   // Clears the person lines this step carries, once it is written.
   personLinesSaid?: () => void;
   // The agent stops after this step (see writePrepared).
@@ -1614,6 +1632,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
   }
   const route =
     directive.kind === "run-stage" ? runStageRoutes.get(directive) : undefined;
+  const questionsFile = directive.kind === "run-stage" ? runStageQuestionsFiles.get(directive) : undefined;
   const publication = publicationContexts.get(directive);
   const askState =
     directive.kind === "ask" && engineProjectDir
@@ -1833,6 +1852,11 @@ function prepareEmission(directive: Directive): PreparedEmission {
   const personLinesSaid = personLines.said;
   // The bytes the host's tool panel shows first are the person's words.
   transported = withPersonsWordsFirst(transported);
+  // A question for the person goes out with its id on the record (aidlc-questions.ts).
+  if (transported.kind === "ask" && transported.question_id === undefined && askState !== null && engineProjectDir) {
+    const id = askQuestionId(engineProjectDir, transported, askState);
+    if (id !== null) transported.question_id = id;
+  }
   const result = validateDirective(transported);
   if (!result.valid) {
     console.error(
@@ -2019,6 +2043,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
     transported,
     serialized,
     resultSha256: sha256(serialized),
+    ...(questionsFile !== undefined ? { questionsFile } : {}),
     ...(route
       ? { projectDir: route.codekbCtx.projectDir }
       : publication
@@ -2729,6 +2754,7 @@ function emit(requested: Directive): void {
           openQuestionMarkers.has(prepared.marker) &&
           !["copilot-committed", "generic-committed", "stale-attempt"].includes(publication)
         ) {
+          recordQuestionStep(prepared);
           writePrepared(prepared);
           return;
         }
@@ -2870,6 +2896,7 @@ function emit(requested: Directive): void {
         return;
       }
       if (prepared.marker !== undefined && openQuestionMarkers.has(prepared.marker)) {
+        recordQuestionStep(prepared);
         writePrepared(prepared);
         return;
       }
@@ -2898,7 +2925,71 @@ function emit(requested: Directive): void {
       recordHookDrop(engineProjectDir, "active-directive", errorMessage(e));
     }
   }
+  recordQuestionStep(prepared);
   writePrepared(prepared);
+}
+
+// The id an engine question goes out with: the code plan question's from its
+// own record; one stored with its request keeps that id (set where it is
+// built); any other is the same question while it asks the same thing over the
+// same state (the open engine question's rule), else a fresh id.
+function askQuestionId(projectDir: string, ask: AskDirective, state: string): string | null {
+  if ((ask as { agent_work?: unknown }).agent_work === true) return null;
+  if (ask.ask_type === PLAN_APPROVAL_ASK_TYPE) return planApprovalQuestionId(projectDir, ask);
+  try {
+    return engineAskQuestionId(projectDir, { type: ask.ask_type, stateDigest: stateDigest(state) }) ??
+      newQuestionId(projectDir);
+  } catch {
+    return null;
+  }
+}
+
+// What the step asks, or shows again, goes on the record (aidlc-questions.ts):
+// an engine question's QUESTION_ASKED, or QUESTION_SHOWN in a chat that had not
+// seen it; the open gate, or a question the agent asked, shown again; and, for
+// the human-turn hook's stamp, the questions file of the stage handed out. The
+// code plan question is recorded where it is published. Record-only: never in
+// a probe, and a failure costs only the record.
+function recordQuestionStep(prepared: PreparedEmission): void {
+  const projectDir = prepared.projectDir ?? engineProjectDir;
+  if (!projectDir || isReadOnlyEngineProbe() || !existsSync(engineStateFilePath(projectDir))) return;
+  const step = prepared.transported;
+  const chat = engineSessionId ?? null;
+  try {
+    if (step.kind === "ask" && step.question_id !== undefined && step.ask_type !== PLAN_APPROVAL_ASK_TYPE) {
+      const id = step.question_id;
+      const shows = questionShows([step.question, ...(step.choices ?? []).map((choice) => choice.label)]);
+      withAuditLock(projectDir, () => {
+        if (recordedQuestion(projectDir, id) === null) {
+          const asked = step as { stage?: unknown; unit?: unknown };
+          const stage = typeof asked.stage === "string" ? asked.stage : prepared.marker?.stage;
+          const unit = typeof asked.unit === "string" ? asked.unit : prepared.marker?.unit;
+          appendAuditEntryUnlocked("QUESTION_ASKED", {
+            ...askedQuestionFields(projectDir, { type: step.ask_type, shows, chat, id }),
+            ...(stage ? { Stage: stage } : {}),
+            ...(unit ? { Unit: unit } : {}),
+            ...(step.choices?.length ? { Options: JSON.stringify(step.choices.map((choice) => choice.label)) } : {}),
+            "State Digest": prepared.marker?.state_sha256 ?? "",
+            [QUESTION_TEXT_FIELD]: questionTextSha(step.question),
+          }, projectDir);
+          return;
+        }
+        const shown = shownAgainFields(projectDir, id, chat, shows);
+        if (shown !== null) appendAuditEntryUnlocked("QUESTION_SHOWN", shown, projectDir);
+      });
+    } else if (
+      ((step.kind === "run-stage" && step.gate_only === true) || step.kind === "print") && step.question_id !== undefined
+    ) {
+      const id = step.question_id;
+      withAuditLock(projectDir, () => {
+        const shown = shownAgainFields(projectDir, id, chat);
+        if (shown !== null) appendAuditEntryUnlocked("QUESTION_SHOWN", shown, projectDir);
+      });
+    }
+    if (prepared.questionsFile !== undefined) noteQuestionsFile(projectDir, prepared.questionsFile);
+  } catch {
+    // The step goes out either way.
+  }
 }
 
 // --- Composing sibling CLI tools ---
@@ -3498,6 +3589,8 @@ function scopeConfirmAskDirective(
     ask_type: "scope-confirm",
     response_route: "next",
     question,
+    // The stored request's id is its question's id.
+    question_id: stored.id,
     proposed_scope: proposedScope,
     confirm_command: confirmCommand,
     compose_command: composeCommand,
@@ -3589,6 +3682,7 @@ function composeOfferAskDirective(
     ask_type: "compose-offer",
     response_route: "next",
     question,
+    question_id: stored.id,
     ...(document === null ? {} : { document_note: document }),
     compose_command: `${tool} next compose --request ${stored.id}${carried}${stages.tailored}`,
     scope_commands: scopeCommands(`${tool} next`, stored.id, carried, projectDir, declaredType, stages),
@@ -4124,7 +4218,7 @@ function openQuestionAgainDirective(
   // Their reply is not in yet: whether it will be kept is read from the turn that ran this.
   const answer = openQuestionAnswer(stage, block, personsWordsKept(projectDir), alone, stateContent);
   const register = protectedQuestionHeldHere(projectDir, block) ? "" : registerAgainStep(stage, block, decision, choices);
-  return printDirective(
+  const reshown = printDirective(
     `Stage "${stage}" has a question you asked that the person has not answered yet. ${register}${shown} ` +
       `When they answer it, ${answer}, then ` +
       (afterAnswer ??
@@ -4132,6 +4226,11 @@ function openQuestionAgainDirective(
           "the next time you need the engine.") +
       " If they say something else, pass their words to `next` and follow what it returns.",
   );
+  // The same question shown again keeps its id; one asked again through its
+  // checkpoint gets a new one from its new row.
+  const questionId = auditBlockField(block, QUESTION_ID_FIELD);
+  if (register === "" && questionId !== null) reshown.question_id = questionId;
+  return reshown;
 }
 
 // Whether an answer to a question of `stage` is on record since the stage last
@@ -4708,6 +4807,7 @@ function newWorkRoutingAskDirective(
     ask_type: "new-work-routing",
     response_route: "next",
     question,
+    question_id: stored.id,
     numbered_prose_question: numberedProseQuestion(routing.prompt, options),
     // Each choice's command, in the rendering's order.
     choices: options.map((option, index) => {
@@ -7793,6 +7893,9 @@ type SteeringTokenPayload = {
 };
 
 const runStageRoutes = new WeakMap<RunStageDirective, RunStageRoute>();
+// The stage's `<slug>-questions.md` a run-stage is about, from the project, for
+// the human-turn hook's Questions Digest (noteQuestionsFile).
+const runStageQuestionsFiles = new WeakMap<RunStageDirective, string>();
 // Prints the agent stops after (turnEndingPrint).
 const turnEndingPrints = new WeakSet<Directive>();
 // A plan change the person asked for while the code plan's question is open:
@@ -8811,6 +8914,11 @@ function buildRunStageDirective(
   if (!singleRun && stateContent && codekbCtx) {
     const kept = answeredQuestionsFile(codekbCtx.projectDir, node, artifactUnit);
     if (kept !== null) directive.questions_answered = { path: kept };
+  }
+  if (codekbCtx) {
+    runStageQuestionsFiles.set(directive, toPosix(relative(
+      codekbCtx.projectDir, stageQuestionsFile(codekbCtx.projectDir, node.phase, node.slug, artifactUnit),
+    )));
   }
   if (inlineContext.warnings.length > 0) {
     directive.context_warnings = inlineContext.warnings;
@@ -12670,6 +12778,13 @@ function applyGateOnlyShape(
   retainGateReview(directive, projectDir, stateContent);
   directive.gate_only = true;
   directive.gate = true;
+  // The gate's own question, shown again (QUESTION_SHOWN is written when the
+  // step is handed out, in recordQuestionStep).
+  const gateQuestion = latestAskedQuestion(projectDir, {
+    event: "STAGE_AWAITING_APPROVAL", type: "gate", stage: directive.stage,
+    unit: directive.unit_gate ? directive.unit ?? null : null,
+  });
+  if (gateQuestion !== null) directive.question_id = gateQuestion.id;
   delete directive.reviewer_max_iterations;
   delete directive.narration;
   // The gate shown again says what the stage produced, as the reply that
@@ -18793,6 +18908,16 @@ function approvesTogetherArgs(pd: string, stateContent: string, node: GraphStage
   return together ? ["--approves-together", together.stages.map((s) => s.slug).join(",")] : [];
 }
 
+// The id of the gate question the state tool opened or showed again.
+function questionIdFromToolOutput(stdout: string): string | null {
+  try {
+    const parsed = JSON.parse(stdout.trim().split("\n").at(-1) ?? "") as { question_id?: unknown };
+    return typeof parsed.question_id === "string" ? parsed.question_id : null;
+  } catch {
+    return null;
+  }
+}
+
 function approvesTogetherFromToolOutput(stdout: string): string[] {
   try {
     const parsed = JSON.parse(stdout.trim().split("\n").at(-1) ?? "") as { approves_together?: unknown };
@@ -19782,6 +19907,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       const committed: string[] = [];
       const changeNotices: string[] = [];
       let personsFeedback = false;
+      let gateQuestionId: string | null = null;
       for (const subArgs of sequence) {
         const res = spawnState(pd, subArgs);
         if (res.exitCode !== 0) {
@@ -19801,6 +19927,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         committed.push(subArgs[0]);
         changeNotices.push(...changeNoticesFromToolOutput(res.stdout));
         personsFeedback ||= personsFeedbackFromToolOutput(res.stdout);
+        if (subArgs[0] === "gate-start") gateQuestionId = questionIdFromToolOutput(res.stdout) ?? gateQuestionId;
       }
       // A Unit approval where the person also asked to stop for now parks.
       const parked = flags.result === "approved" && flags.park === true &&
@@ -19835,6 +19962,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           failedCheckNotices(pd, node, unit).join(" "),
         ].filter(Boolean);
         if (lines.length > 0) unitReply.narration = lines.join("\n");
+        if (gateQuestionId !== null) unitReply.question_id = gateQuestionId;
       }
       const unitGate = withChangeNotices(unitReply, changeNotices);
       if (unitGate.kind === "print" && (flags.result === "awaiting-approval" || flags.result === "revised")) {
@@ -20130,6 +20258,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         const listed = approvesTogetherFromToolOutput(res.stdout);
         const next = nextInScopeStage(listed.at(-1) ?? slug, scope, loadStateFileIfPresent(pd) ?? undefined);
         gateReply.next_stage = next ? next.name : null;
+        const questionId = questionIdFromToolOutput(res.stdout);
+        if (questionId !== null) gateReply.question_id = questionId;
         // What the stage produced and where, said with the gate, so the person
         // sees it even when no summary comes before the question. A stage that
         // repeats per unit writes under the unit's folder, so without the unit
