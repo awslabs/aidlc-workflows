@@ -220,7 +220,19 @@ export function releaseJourneyEvidence(proj: string): Record<string, unknown> {
   } catch {
     // No audit yet.
   }
-  return { recordedLines: recordedPersonLines(proj), requests: requestRecords(proj), work: workRecords(proj), audit };
+  // A record the tool was still writing when the journey stopped is named, not
+  // allowed to drop the rest of the evidence.
+  const read = <T>(records: () => T): T | { unreadable: string } => {
+    try {
+      return records();
+    } catch (error) {
+      return { unreadable: firstLine(error) };
+    }
+  };
+  return {
+    recordedLines: read(() => recordedPersonLines(proj)), requests: read(() => requestRecords(proj)),
+    work: read(() => workRecords(proj)), audit,
+  };
 }
 
 // Doctor's failing hook-heartbeat rows. Its JSON carries no id for them, so
@@ -247,7 +259,7 @@ export function hooksRanProblems(checks: DoctorCheck[]): string[] {
  * Wait for one turn to end: `poll` waits once and says whether it ended. The
  * journey's time running out (its deadline, or a test budget a wait would
  * spend) leaves the turn unfinished, so the journey still reports which line
- * was running and what the screen showed, instead of stopping on the budget.
+ * had not ended and what the screen showed, instead of stopping on the budget.
  */
 export function waitForTurn(poll: () => boolean, deadlineMs: number): boolean {
   try {
@@ -277,7 +289,7 @@ export interface ReleaseJourneyReport {
  */
 export function writeReleaseJourneyReport(report: ReleaseJourneyReport): string {
   const minutes = (report.turns.reduce((sum, turn) => sum + turn.seconds, 0) / 60).toFixed(1);
-  const commit = JOURNEY_CHECKOUT;
+  const commit = journeyCheckout;
   const tree = report.harness === "copilot" ? "" : ` (${report.harness})`;
   const line = `${TOOL_NAMES[report.harness]} ${report.toolVersion}${tree} release journey${commit ? ` on ${commit}` : ""}: ` +
     `${report.problems.length ? "FAIL" : "PASS"} (${minutes} min of turns${
@@ -304,6 +316,9 @@ const firstLine = (error: unknown) => (error instanceof Error ? error.message : 
 export function runReleaseJourney(
   report: ReleaseJourneyReport, journey: () => void, evidence?: () => Record<string, unknown>,
 ): void {
+  // Read before the first journey, just after the runner packaged dist/ from
+  // the checkout, so an edit or a commit during the run does not change it.
+  journeyCheckout ??= checkoutIdentity();
   try {
     journey();
   } catch (error) {
@@ -342,6 +357,4 @@ export function checkoutIdentity(root = REPO_ROOT): string | undefined {
   return `${head.stdout.trim()}${status.stdout.trim() ? " plus uncommitted changes" : ""}`;
 }
 
-// Read when the journey file loads, just after the runner packaged dist/ from
-// the checkout, so an edit or a commit during the run does not change it.
-const JOURNEY_CHECKOUT = checkoutIdentity();
+let journeyCheckout: string | undefined;

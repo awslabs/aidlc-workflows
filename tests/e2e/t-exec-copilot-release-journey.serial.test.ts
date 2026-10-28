@@ -137,6 +137,7 @@ describe("t-exec-copilot-release-journey: a person's first day on Copilot CLI, b
       runReleaseJourney(report, () => {
         for (const [index, line] of RELEASE_JOURNEY_TURNS.entries()) {
           const started = Date.now();
+          lastOut = "";
           const turn = copilotTurn(project.proj, line, {
             copilotHome, sessionId, resume: index > 0, usageFile, timeoutMs: Math.max(1, deadline - Date.now()),
           });

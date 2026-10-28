@@ -6,7 +6,7 @@
 // longer parses) prints FAIL with the step that stopped it, never PASS, and
 // the error still fails the test. A journey whose agent changes the person's
 // files before their pick of a plan starts the work fails at that turn. A
-// turn still running when the journey's time runs out is named as such, and a
+// turn that had not ended when the journey's time runs out is named as such, and a
 // failed journey keeps what AI-DLC recorded and the tool's last screen. Doctor
 // after the journey fails it when the hooks never beat, or stopped beating
 // while the workflow went on. The line marks a checkout with uncommitted
@@ -26,7 +26,7 @@ import { PersonTurnError } from "../harness/person-turns.ts";
 import {
   aidlcCommand, checkoutIdentity, checkReleaseJourneyTurn, doctorChecks, expectPersonFirstInJourney, hooksRanProblems,
   RELEASE_JOURNEY_REQUEST, RELEASE_JOURNEY_TURNS, type ReleaseJourneyHarness, type ReleaseJourneyReport, type ReleaseJourneyStart,
-  runReleaseJourney, setupReleaseJourneyProject, waitForTurn,
+  releaseJourneyEvidence, runReleaseJourney, setupReleaseJourneyProject, waitForTurn,
 } from "../harness/release-journey.ts";
 import { remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
@@ -73,7 +73,7 @@ describe("t-release-journey-report: the pasted line says FAIL when a journey sto
 // budget; once that is spent the wait's budget throws. The turn is then
 // unfinished, not the journey stopped, so the report names the line and keeps
 // the screen.
-describe("t-release-journey-report: a turn still running when the journey's time runs out", () => {
+describe("t-release-journey-report: a turn that has not ended when the journey's time runs out", () => {
   test("a wait whose work budget runs out leaves the turn unfinished instead of stopping the journey", () => {
     const deadlineMs = Date.now() + 60_000;
     let polls = 0;
@@ -112,6 +112,14 @@ describe("t-release-journey-report: a turn still running when the journey's time
     })).toThrow("the status bar never showed aidlc");
     expect(unreadable.extra.evidence).toEqual({ unreadable: "the terminal session is gone" });
 
+    // A record the tool was still writing is named, and the rest is kept.
+    const proj = mkdtempSync(join(logDir, "half-written-"));
+    mkdirSync(join(proj, "aidlc", ".aidlc-sessions", "messages"), { recursive: true });
+    writeFileSync(join(proj, "aidlc", ".aidlc-sessions", "messages", "turn.json"), "{\"at\": \"2026-10-28T12:");
+    const kept = releaseJourneyEvidence(proj);
+    expect(kept.recordedLines).toEqual({ unreadable: expect.stringContaining("JSON") });
+    expect(kept.work).toEqual([]);
+
     const passed: ReleaseJourneyReport = { harness: "kiro", toolVersion: "2.32.0", turns: [], extra: {}, problems: [] };
     runReleaseJourney(passed, () => {}, () => ({ screen: "not kept" }));
     expect(passed.extra.evidence).toBeUndefined();
@@ -126,47 +134,32 @@ describe("t-release-journey-report: doctor's hook heartbeat after the journey", 
   afterAll(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
-  function picked(): ReturnType<typeof setupReleaseJourneyProject> {
+  function journeyProject(): ReturnType<typeof setupReleaseJourneyProject> {
     const project = setupReleaseJourneyProject("kiro");
     roots.push(project.root);
-    const made = aidlcCommand(project, ["engine", "intent", "create", "--scope", "bugfix", "--label", "greeter-name"]);
-    expect(made.status, made.out.slice(-1500)).toBe(0);
     return project;
   }
-  function beat(project: ReleaseJourneyStart, at: string): void {
+
+  test("a journey whose hooks never ran fails before the pick", () => {
+    expect(hooksRanProblems(doctorChecks(journeyProject()))).toEqual(['doctor says "AIDLC hooks have not run in this project yet"']);
+  });
+
+  test("after the pick, work with no hook beat fails, a stopped beat fails, and a beat as the workflow advanced passes", () => {
+    const project = journeyProject();
+    const made = aidlcCommand(project, ["engine", "intent", "create", "--scope", "bugfix", "--label", "greeter-name"]);
+    expect(made.status, made.out.slice(-1500)).toBe(0);
     const intents = join(project.proj, "aidlc", "spaces", "default", "intents");
     const health = join(intents, readFileSync(join(intents, "active-intent"), "utf8").trim(), ".aidlc-engine", "hooks-health");
-    mkdirSync(health, { recursive: true });
-    writeFileSync(join(health, "write-audit-log.last"), at);
-  }
-
-  test("a journey whose hooks never ran fails, before and after the pick", () => {
-    const fresh = setupReleaseJourneyProject("kiro");
-    roots.push(fresh.root);
-    expect(hooksRanProblems(doctorChecks(fresh))).toEqual(['doctor says "AIDLC hooks have not run in this project yet"']);
-    const project = picked();
-    const intents = join(project.proj, "aidlc", "spaces", "default", "intents");
-    mkdirSync(join(intents, readFileSync(join(intents, "active-intent"), "utf8").trim(), ".aidlc-engine", "hooks-health"), { recursive: true });
-    expect(hooksRanProblems(doctorChecks(project))).toEqual(['doctor says "Hook heartbeat data"']);
-  });
-
-  test("work that went on with no hook beat fails", () => {
-    expect(hooksRanProblems(doctorChecks(picked()))).toEqual([
+    expect(hooksRanProblems(doctorChecks(project))).toEqual([
       expect.stringMatching(/^doctor says "Hooks have never executed although this workflow has progressed \d+ stages?"$/),
     ]);
-  });
-
-  test("hooks that stopped beating long before the workflow last advanced fail", () => {
-    const project = picked();
-    beat(project, "2000-01-01T00:00:00Z");
+    mkdirSync(health, { recursive: true });
+    expect(hooksRanProblems(doctorChecks(project))).toEqual(['doctor says "Hook heartbeat data"']);
+    writeFileSync(join(health, "write-audit-log.last"), "2000-01-01T00:00:00Z");
     expect(hooksRanProblems(doctorChecks(project))).toEqual([
       expect.stringMatching(/^doctor says "Hooks last fired 2000-01-01T00:00:00Z, but the workflow last advanced /),
     ]);
-  });
-
-  test("hooks that beat as the workflow advanced pass", () => {
-    const project = picked();
-    beat(project, new Date().toISOString().replace(/\.\d{3}Z$/, "Z"));
+    writeFileSync(join(health, "write-audit-log.last"), new Date().toISOString().replace(/\.\d{3}Z$/, "Z"));
     expect(hooksRanProblems(doctorChecks(project))).toEqual([]);
   });
 });

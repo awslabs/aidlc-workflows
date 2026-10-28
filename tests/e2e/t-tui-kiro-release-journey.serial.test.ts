@@ -68,14 +68,15 @@ function remainingCleanupMs(): number {
 }
 
 // A capture still runs once the work budget is spent, so a stalled turn's
-// screen reaches the report; it takes at most half of the cleanup time left,
-// and the kill keeps the rest.
+// screen reaches the report, but only while the kill keeps its whole allowance.
 function captureMs(): number {
   try {
     return remainingWorkMs();
   } catch (error) {
     if (!(error instanceof TestBudgetExhaustedError)) throw error;
-    return Math.max(1, Math.floor(remainingCleanupMs() / 2));
+    return remainingOperationTimeoutMs(undefined, {
+      deadlineMs: caseDeadlineMs, reserveMs: NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, phase: "E2E evidence capture",
+    })!;
   }
 }
 function drive(args: string[]): { rc: number; stdout: string } {
@@ -185,7 +186,7 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
                 }
                 return (sessionCredits(now) ?? 0) > before;
               }, caseDeadlineMs);
-              if (!ended) report.problems.push(`"${line}" was still running when the journey's time ran out`);
+              if (!ended) report.problems.push(`"${line}" had not ended when the journey's time ran out`);
               report.turns.push({ line, seconds: Math.round((Date.now() - started) / 1000) });
               if (ended) checkReleaseJourneyTurn(report, project, index + 1, line);
               if (report.problems.length) break;
@@ -195,7 +196,15 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
             }
             last = screen(session);
             report.extra = { credits: sessionCredits(last) ?? 0, "permission prompts": prompts };
-          }, () => ({ ...releaseJourneyEvidence(project.proj), screen: (last ?? screen(session)).split("\n").slice(-60).join("\n") }));
+          }, () => {
+            const kept = releaseJourneyEvidence(project.proj);
+            try {
+              kept.screen = (last ?? screen(session)).split("\n").slice(-60).join("\n");
+            } catch (error) {
+              kept.screen = { unreadable: (error instanceof Error ? error.message : String(error)).split("\n")[0] };
+            }
+            return kept;
+          });
         } finally {
           assertTuiDriveKill(drive(["kill", "--session", session]), session);
         }
