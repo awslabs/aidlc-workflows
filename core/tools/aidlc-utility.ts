@@ -1619,11 +1619,8 @@ function handlePluginTest(
   missingValueFlags: ReadonlySet<string>,
 ): void {
   const { usage, options } = pluginTestCommand();
-  if (
-    flags.help !== undefined ||
-    positional[1] === "-h" ||
-    positional[1] === "--help"
-  ) {
+  // Help wherever it is asked, as the standalone tool reads it.
+  if (flags.help !== undefined || positional.slice(1).includes("-h")) {
     process.stdout.write(renderPluginTestHelp());
     return;
   }

@@ -159,6 +159,11 @@ describe("t327 top-level plugin authoring routes", () => {
       "--json",
       "--no-color",
     ]);
+    // -h after the plugin's folder is still a request for help, as the
+    // standalone tool reads it.
+    const short = run(["plugin", "test", ".", "-h"]);
+    expect(short.status, short.stderr).toBe(0);
+    expect(short.stdout).toBe(help.stdout);
     for (const [args, reason] of [
       [["plugin", "test"], "--install <project-root> is required"],
       [["plugin", "test", "--install", install, "--plugin-root", "."], 'unknown option "--plugin-root"'],
