@@ -31,7 +31,7 @@
 // the selected terminal backend, and --production-guards. Not a hosted family:
 // Kiro needs a signed-in identity. SPENDS KIRO CREDITS. Serial.
 
-import { fileCleanupReserveMs, liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, remainingCleanupTimeoutMs, remainingOperationTimeoutMs, TestBudgetExhaustedError } from "../harness/test-budget.ts";
+import { fileCleanupReserveMs, liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, remainingCleanupTimeoutMs, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
@@ -41,6 +41,7 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   checkReleaseJourneyTurn,
   doctorChecks,
+  evidenceOf,
   expectPersonFirstInJourney,
   hooksRanProblems,
   RELEASE_JOURNEY_TURNS,
@@ -67,21 +68,14 @@ function remainingCleanupMs(): number {
   return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, { deadlineMs: caseDeadlineMs, phase: "E2E terminal cleanup" });
 }
 
-// A capture still runs once the work budget is spent, so a stalled turn's
-// screen reaches the report, but only while the kill keeps its whole allowance.
-function captureMs(): number {
-  try {
-    return remainingWorkMs();
-  } catch (error) {
-    if (!(error instanceof TestBudgetExhaustedError)) throw error;
-    return remainingOperationTimeoutMs(undefined, {
-      deadlineMs: caseDeadlineMs, reserveMs: NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, phase: "E2E evidence capture",
-    })!;
-  }
+// A turn's wait stops this long before the work budget does, so a turn that
+// has not ended still has work time for the screen the report keeps.
+const LAST_SCREEN_MS = 120_000;
+function turnWaitMs(): number {
+  return remainingWorkMs() - LAST_SCREEN_MS;
 }
 function drive(args: string[]): { rc: number; stdout: string } {
-  const timeout = args[0] === "kill" ? remainingCleanupMs() : args[0] === "capture" ? captureMs() : remainingWorkMs();
-  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout, encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout: args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs(), encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "" };
 }
 function screen(session: string): string {
@@ -175,8 +169,8 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
               const started = Date.now();
               type(session, line);
               // The turn ends when Kiro prints its credits line again and waits for the person.
-              const ended = waitForTurn(() => {
-                if (!waitFor(session, `${IDLE}|${PROMPT.source}`, remainingWorkMs(), 1500)) return false;
+              const ended = waitForTurn((waitMs) => {
+                if (!waitFor(session, `${IDLE}|${PROMPT.source}`, waitMs, 1500)) return false;
                 const now = screen(session);
                 const bottom = now.split("\n").slice(-14).join("\n");
                 if (PROMPT.test(bottom) && !bottom.includes(IDLE)) {
@@ -185,7 +179,7 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
                   return false;
                 }
                 return (sessionCredits(now) ?? 0) > before;
-              }, caseDeadlineMs);
+              }, turnWaitMs);
               if (!ended) report.problems.push(`"${line}" had not ended when the journey's time ran out`);
               report.turns.push({ line, seconds: Math.round((Date.now() - started) / 1000) });
               if (ended) checkReleaseJourneyTurn(report, project, index + 1, line);
@@ -196,15 +190,10 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
             }
             last = screen(session);
             report.extra = { credits: sessionCredits(last) ?? 0, "permission prompts": prompts };
-          }, () => {
-            const kept = releaseJourneyEvidence(project.proj);
-            try {
-              kept.screen = (last ?? screen(session)).split("\n").slice(-60).join("\n");
-            } catch (error) {
-              kept.screen = { unreadable: (error instanceof Error ? error.message : String(error)).split("\n")[0] };
-            }
-            return kept;
-          });
+          }, () => ({
+            ...releaseJourneyEvidence(project.proj),
+            screen: evidenceOf(() => (last ?? screen(session)).split("\n").slice(-60).join("\n")),
+          }));
         } finally {
           assertTuiDriveKill(drive(["kill", "--session", session]), session);
         }

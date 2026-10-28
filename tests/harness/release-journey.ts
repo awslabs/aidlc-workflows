@@ -102,6 +102,7 @@ export function seedGreeter(proj: string): void {
 export function setupReleaseJourneyProject(
   harness: ReleaseJourneyHarness, env: NodeJS.ProcessEnv = process.env,
 ): ReleaseJourneyProject & ReleaseJourneyStart & { setup: string } {
+  journeyCheckout ??= { commit: checkoutIdentity() };
   const root = realpathSync(mkdtempSync(join(tmpdir(), `release-journey-${harness}-`)));
   const runtime = join(root, "runtime");
   const shipped = join(REPO_ROOT, "dist", harness);
@@ -220,19 +221,23 @@ export function releaseJourneyEvidence(proj: string): Record<string, unknown> {
   } catch {
     // No audit yet.
   }
-  // A record the tool was still writing when the journey stopped is named, not
-  // allowed to drop the rest of the evidence.
-  const read = <T>(records: () => T): T | { unreadable: string } => {
-    try {
-      return records();
-    } catch (error) {
-      return { unreadable: firstLine(error) };
-    }
-  };
   return {
-    recordedLines: read(() => recordedPersonLines(proj)), requests: read(() => requestRecords(proj)),
-    work: read(() => workRecords(proj)), audit,
+    recordedLines: evidenceOf(() => recordedPersonLines(proj)), requests: evidenceOf(() => requestRecords(proj)),
+    work: evidenceOf(() => workRecords(proj)), audit,
   };
+}
+
+/**
+ * One part of a failed journey's evidence. A part that cannot be read (a
+ * record the tool was still writing, a terminal already gone) is named, and
+ * never drops the other parts.
+ */
+export function evidenceOf<T>(read: () => T): T | { unreadable: string } {
+  try {
+    return read();
+  } catch (error) {
+    return { unreadable: firstLine(error) };
+  }
 }
 
 // Doctor's failing hook-heartbeat rows. Its JSON carries no id for them, so
@@ -256,15 +261,16 @@ export function hooksRanProblems(checks: DoctorCheck[]): string[] {
 }
 
 /**
- * Wait for one turn to end: `poll` waits once and says whether it ended. The
- * journey's time running out (its deadline, or a test budget a wait would
- * spend) leaves the turn unfinished, so the journey still reports which line
- * had not ended and what the screen showed, instead of stopping on the budget.
+ * Wait for one turn to end: `poll` waits up to the milliseconds it is given
+ * and says whether the turn ended. When `waitMs` has no time left, or a test
+ * budget a wait would spend runs out, the turn is left unfinished, so the
+ * journey still reports which line had not ended and what the screen showed,
+ * instead of stopping on the budget.
  */
-export function waitForTurn(poll: () => boolean, deadlineMs: number): boolean {
+export function waitForTurn(poll: (waitMs: number) => boolean, waitMs: () => number): boolean {
   try {
-    while (Date.now() < deadlineMs) {
-      if (poll()) return true;
+    for (let left = waitMs(); left >= 1; left = waitMs()) {
+      if (poll(left)) return true;
     }
   } catch (error) {
     if (!(error instanceof TestBudgetExhaustedError)) throw error;
@@ -289,7 +295,7 @@ export interface ReleaseJourneyReport {
  */
 export function writeReleaseJourneyReport(report: ReleaseJourneyReport): string {
   const minutes = (report.turns.reduce((sum, turn) => sum + turn.seconds, 0) / 60).toFixed(1);
-  const commit = journeyCheckout;
+  const commit = journeyCheckout?.commit;
   const tree = report.harness === "copilot" ? "" : ` (${report.harness})`;
   const line = `${TOOL_NAMES[report.harness]} ${report.toolVersion}${tree} release journey${commit ? ` on ${commit}` : ""}: ` +
     `${report.problems.length ? "FAIL" : "PASS"} (${minutes} min of turns${
@@ -316,9 +322,6 @@ const firstLine = (error: unknown) => (error instanceof Error ? error.message : 
 export function runReleaseJourney(
   report: ReleaseJourneyReport, journey: () => void, evidence?: () => Record<string, unknown>,
 ): void {
-  // Read before the first journey, just after the runner packaged dist/ from
-  // the checkout, so an edit or a commit during the run does not change it.
-  journeyCheckout ??= checkoutIdentity();
   try {
     journey();
   } catch (error) {
@@ -357,4 +360,7 @@ export function checkoutIdentity(root = REPO_ROOT): string | undefined {
   return `${head.stdout.trim()}${status.stdout.trim() ? " plus uncommitted changes" : ""}`;
 }
 
-let journeyCheckout: string | undefined;
+// Read once, as the first journey project is set up just after the runner
+// packaged dist/ from the checkout, so an edit or a commit during the run does
+// not change the line, and both Kiro trees name the same checkout.
+let journeyCheckout: { commit: string | undefined } | undefined;

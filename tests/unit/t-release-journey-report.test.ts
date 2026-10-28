@@ -74,26 +74,33 @@ describe("t-release-journey-report: the pasted line says FAIL when a journey sto
 // unfinished, not the journey stopped, so the report names the line and keeps
 // the screen.
 describe("t-release-journey-report: a turn that has not ended when the journey's time runs out", () => {
-  test("a wait whose work budget runs out leaves the turn unfinished instead of stopping the journey", () => {
+  test("a wait stops while there is still work time, and a wait whose work budget runs out leaves the turn unfinished", () => {
+    // The turn's wait leaves the last part of the work time for the screen.
+    const left = [90_000, 30_000, 0];
+    const given: number[] = [];
+    expect(waitForTurn((waitMs) => {
+      given.push(waitMs);
+      return false;
+    }, () => left.shift() ?? 0)).toBe(false);
+    expect(given).toEqual([90_000, 30_000]);
+    // A budget the wait spends that runs out first is the turn not ending, not the journey stopping.
     const deadlineMs = Date.now() + 60_000;
     let polls = 0;
-    const ended = waitForTurn(() => {
+    expect(waitForTurn(() => {
       polls++;
-      // The work budget keeps the case's last minute for cleanup, so it is already spent.
       remainingOperationTimeoutMs(1500, { deadlineMs, reserveMs: 60_000, phase: "E2E live work" });
       return false;
-    }, deadlineMs);
-    expect(ended).toBe(false);
+    }, () => 60_000)).toBe(false);
     expect(polls).toBe(1);
   });
 
   test("a turn that ends, and an error that is not the budget, are left as they are", () => {
     let polls = 0;
-    expect(waitForTurn(() => ++polls === 3, Date.now() + 60_000)).toBe(true);
+    expect(waitForTurn(() => ++polls === 3, () => 60_000)).toBe(true);
     expect(polls).toBe(3);
     expect(() => waitForTurn(() => {
       throw new Error("the terminal session is gone");
-    }, Date.now() + 60_000)).toThrow("the terminal session is gone");
+    }, () => 60_000)).toThrow("the terminal session is gone");
   });
 
   test("a failed journey keeps its evidence, also when it threw, and evidence that cannot be read keeps the error", () => {
