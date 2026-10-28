@@ -24,7 +24,10 @@ import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude
 import { REPO_ROOT } from "./fixtures.ts";
 import { auditRows, filesBeforePlanProblems, type GoldenRun, sourceListing } from "./golden-journey.ts";
 import { expectPersonFirst } from "./person-turns.ts";
-import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs, TestBudgetExhaustedError } from "./test-budget.ts";
+import {
+  FILE_CLEANUP_ENV, FILE_DEADLINE_ENV, fileCleanupReserveMs, NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs,
+  TestBudgetExhaustedError,
+} from "./test-budget.ts";
 
 export type ReleaseJourneyHarness = "copilot" | "kiro" | "kiro-ide";
 
@@ -215,15 +218,10 @@ export function releaseJourneyProblems(project: ReleaseJourneyStart, turn: numbe
 
 /** What AI-DLC recorded, kept in a failed run's report: the project goes with its temporary folder. */
 export function releaseJourneyEvidence(proj: string): Record<string, unknown> {
-  let audit: string[] = [];
-  try {
-    audit = readAuditShardEvents(proj).map((row) => `${row.event} ${auditBlockField(row.block, "Stage") ?? ""}`.trim());
-  } catch {
-    // No audit yet.
-  }
   return {
     recordedLines: evidenceOf(() => recordedPersonLines(proj)), requests: evidenceOf(() => requestRecords(proj)),
-    work: evidenceOf(() => workRecords(proj)), audit,
+    work: evidenceOf(() => workRecords(proj)),
+    audit: evidenceOf(() => readAuditShardEvents(proj).map((row) => `${row.event} ${auditBlockField(row.block, "Stage") ?? ""}`.trim())),
   };
 }
 
@@ -258,6 +256,30 @@ const HOOK_HEARTBEAT_FAILURES = [
 export function hooksRanProblems(checks: DoctorCheck[]): string[] {
   return checks.filter((check) => !check.pass && HOOK_HEARTBEAT_FAILURES.some((label) => check.label.startsWith(label)))
     .map((check) => `doctor says "${check.label}"`);
+}
+
+/**
+ * A live journey case's two budgets. Its work stops `screenMs` before the
+ * cleanup reserve, on the case deadline and on the runner's file deadline
+ * alike (the runner stops the file at its own reserve), so a journey that
+ * stalls still has that time for the last screen, which only `screenMs()`
+ * spends. Cleanup keeps its reserve as it was.
+ */
+export function journeyBudgets(
+  caseDeadlineMs: () => number, totalMs: number, screenMs: number, env: NodeJS.ProcessEnv = process.env,
+): { workMs: () => number; screenMs: () => number } {
+  const reserveMs = fileCleanupReserveMs(totalMs);
+  const workEnv = env[FILE_DEADLINE_ENV] === undefined ? env : {
+    ...env, [FILE_CLEANUP_ENV]: String(Number(env[FILE_CLEANUP_ENV] ?? 0) + screenMs),
+  };
+  return {
+    workMs: () => remainingOperationTimeoutMs(totalMs, {
+      deadlineMs: caseDeadlineMs(), reserveMs: reserveMs + screenMs, env: workEnv, phase: "E2E live work",
+    })!,
+    screenMs: () => remainingOperationTimeoutMs(totalMs, {
+      deadlineMs: caseDeadlineMs(), reserveMs, env, phase: "E2E last screen",
+    })!,
+  };
 }
 
 /**

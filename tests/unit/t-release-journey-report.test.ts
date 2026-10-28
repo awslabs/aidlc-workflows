@@ -25,10 +25,10 @@ import { sourceListing } from "../harness/golden-journey.ts";
 import { PersonTurnError } from "../harness/person-turns.ts";
 import {
   aidlcCommand, checkoutIdentity, checkReleaseJourneyTurn, doctorChecks, expectPersonFirstInJourney, hooksRanProblems,
-  RELEASE_JOURNEY_REQUEST, RELEASE_JOURNEY_TURNS, type ReleaseJourneyHarness, type ReleaseJourneyReport, type ReleaseJourneyStart,
+  journeyBudgets, RELEASE_JOURNEY_REQUEST, RELEASE_JOURNEY_TURNS, type ReleaseJourneyHarness, type ReleaseJourneyReport, type ReleaseJourneyStart,
   releaseJourneyEvidence, runReleaseJourney, setupReleaseJourneyProject, waitForTurn,
 } from "../harness/release-journey.ts";
-import { remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { FILE_CLEANUP_ENV, FILE_DEADLINE_ENV, remainingOperationTimeoutMs, TestBudgetExhaustedError } from "../harness/test-budget.ts";
 
 const logDir = mkdtempSync(join(tmpdir(), "aidlc-release-journey-report-"));
 const previousLogDir = process.env.AIDLC_TEST_LOG_DIR;
@@ -74,8 +74,7 @@ describe("t-release-journey-report: the pasted line says FAIL when a journey sto
 // unfinished, not the journey stopped, so the report names the line and keeps
 // the screen, read with the time the journey keeps back for it.
 describe("t-release-journey-report: a turn that has not ended when the journey's time runs out", () => {
-  test("a wait stops while there is still work time, and a wait whose work budget runs out leaves the turn unfinished", () => {
-    // The turn's wait leaves the last part of the work time for the screen.
+  test("a wait stops when its time is gone, and a wait whose work budget runs out leaves the turn unfinished", () => {
     const left = [90_000, 30_000, 0];
     const given: number[] = [];
     expect(waitForTurn((waitMs) => {
@@ -92,6 +91,24 @@ describe("t-release-journey-report: a turn that has not ended when the journey's
       return false;
     }, () => 60_000)).toBe(false);
     expect(polls).toBe(1);
+  });
+
+  test("the journey's work keeps the last screen's time back on the case deadline and on the runner's file deadline", () => {
+    // A 4-minute case keeps 1 minute for cleanup (fileCleanupReserveMs), and the work 2 more for the screen.
+    const total = 4 * 60_000;
+    const atCase = journeyBudgets(() => Date.now() + 150_000, total, 120_000, {});
+    expect(() => atCase.workMs()).toThrow(TestBudgetExhaustedError);
+    expect(atCase.screenMs()).toBeGreaterThan(80_000);
+    expect(atCase.screenMs()).toBeLessThanOrEqual(90_000);
+    // The runner's file deadline comes first: its own reserve, then the screen's time.
+    const fileEnv = { [FILE_DEADLINE_ENV]: String(Date.now() + 150_000), [FILE_CLEANUP_ENV]: "60000" };
+    const atFile = journeyBudgets(() => Date.now() + 3_600_000, 2 * 3_600_000, 120_000, fileEnv);
+    expect(() => atFile.workMs()).toThrow(TestBudgetExhaustedError);
+    expect(atFile.screenMs()).toBeGreaterThan(80_000);
+    expect(atFile.screenMs()).toBeLessThanOrEqual(90_000);
+    // With time left, work stops the screen's time before the screen does.
+    const roomy = journeyBudgets(() => Date.now() + 3_600_000, 2 * 3_600_000, 120_000, {});
+    expect(roomy.screenMs() - roomy.workMs()).toBeGreaterThanOrEqual(119_000);
   });
 
   test("a turn that ends, and an error that is not the budget, are left as they are", () => {
@@ -126,6 +143,7 @@ describe("t-release-journey-report: a turn that has not ended when the journey's
     const kept = releaseJourneyEvidence(proj);
     expect(kept.recordedLines).toEqual({ unreadable: expect.stringContaining("JSON") });
     expect(kept.work).toEqual([]);
+    expect(kept.audit).toEqual([]);
 
     const passed: ReleaseJourneyReport = { harness: "kiro", toolVersion: "2.32.0", turns: [], extra: {}, problems: [] };
     runReleaseJourney(passed, () => {}, () => ({ screen: "not kept" }));
@@ -147,12 +165,9 @@ describe("t-release-journey-report: doctor's hook heartbeat after the journey", 
     return project;
   }
 
-  test("a journey whose hooks never ran fails before the pick", () => {
-    expect(hooksRanProblems(doctorChecks(journeyProject()))).toEqual(['doctor says "AIDLC hooks have not run in this project yet"']);
-  });
-
-  test("after the pick, work with no hook beat fails, a stopped beat fails, and a beat as the workflow advanced passes", () => {
+  test("hooks that never ran fail before and after the pick, a stopped beat fails, and a beat as the workflow advanced passes", () => {
     const project = journeyProject();
+    expect(hooksRanProblems(doctorChecks(project))).toEqual(['doctor says "AIDLC hooks have not run in this project yet"']);
     const made = aidlcCommand(project, ["engine", "intent", "create", "--scope", "bugfix", "--label", "greeter-name"]);
     expect(made.status, made.out.slice(-1500)).toBe(0);
     const intents = join(project.proj, "aidlc", "spaces", "default", "intents");

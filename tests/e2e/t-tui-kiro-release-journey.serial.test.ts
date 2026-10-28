@@ -31,7 +31,7 @@
 // the selected terminal backend, and --production-guards. Not a hosted family:
 // Kiro needs a signed-in identity. SPENDS KIRO CREDITS. Serial.
 
-import { fileCleanupReserveMs, liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, remainingCleanupTimeoutMs, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, remainingCleanupTimeoutMs, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
@@ -44,6 +44,7 @@ import {
   evidenceOf,
   expectPersonFirstInJourney,
   hooksRanProblems,
+  journeyBudgets,
   RELEASE_JOURNEY_TURNS,
   type ReleaseJourneyReport,
   releaseJourneyEvidence,
@@ -59,32 +60,28 @@ const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
 let caseDeadlineMs: number;
 beforeEach(() => { caseDeadlineMs = Date.now() + TEST_TIMEOUT_MS; });
-// The journey's work stops this long before the cleanup reserve, so a journey
-// that stalls (at startup or in a turn) still has time for the screen the
-// report keeps; only that capture spends it.
-const LAST_SCREEN_MS = 120_000;
-function remainingWorkMs(): number {
-  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
-    deadlineMs: caseDeadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS) + LAST_SCREEN_MS, phase: "E2E live work",
-  })!;
-}
-function remainingScreenMs(): number {
-  return remainingOperationTimeoutMs(TEST_TIMEOUT_MS, {
-    deadlineMs: caseDeadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "E2E last screen",
-  })!;
-}
+// The journey's work keeps two minutes back for the screen a failed report
+// keeps, so a stall at startup or in a turn still shows what Kiro showed.
+const BUDGETS = journeyBudgets(() => caseDeadlineMs, TEST_TIMEOUT_MS, 120_000);
+const remainingWorkMs = BUDGETS.workMs;
 function remainingCleanupMs(): number {
   return remainingCleanupTimeoutMs(NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS, { deadlineMs: caseDeadlineMs, phase: "E2E terminal cleanup" });
 }
 
-function drive(args: string[]): { rc: number; stdout: string } {
-  const timeout = args[0] === "kill" ? remainingCleanupMs() : args[0] === "capture" ? remainingScreenMs() : remainingWorkMs();
+function drive(args: string[], timeout = args[0] === "kill" ? remainingCleanupMs() : remainingWorkMs()): { rc: number; stdout: string } {
   const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { timeout, encoding: "utf-8" });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "" };
 }
 function screen(session: string): string {
   return drive(["capture", "--session", session]).stdout;
 }
+/** The journey's last screen, read with the time kept back for it; a terminal already gone is an error. */
+function lastScreen(session: string): string {
+  const capture = drive(["capture", "--session", session], BUDGETS.screenMs());
+  if (capture.rc !== 0) throw new Error(`the terminal could not be read (tui-drive capture exit ${capture.rc})`);
+  return capture.stdout;
+}
+const screenTail = (text: string) => text.split("\n").slice(-60).join("\n");
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
   return drive(["wait", "--session", session, "--pattern", pattern, "--timeout-ms", String(timeoutMs), "--stable-ms", String(stableMs)]).rc === 0;
 }
@@ -159,7 +156,7 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
           : ["kiro-cli", "chat"];
         const report: ReleaseJourneyReport = { harness: tree, toolVersion: kiroVersion() ?? "?", turns: [], extra: {}, problems: [] };
         let prompts = 0;
-        let last: string | undefined;
+        let last: string | { unreadable: string } | undefined;
         try {
           runReleaseJourney(report, () => {
             expect(drive(["start", "--session", session, "--cwd", project.proj, "--width", "200", "--height", "50", "--", ...launch]).rc).toBe(0);
@@ -192,12 +189,12 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
             if (!report.problems.length) {
               report.problems.push(...hooksRanProblems(doctorChecks(project, { ...process.env, ...(process.platform === "linux" ? { HOME: kiroHome } : {}) })));
             }
-            last = screen(session);
-            report.extra = { credits: sessionCredits(last) ?? 0, "permission prompts": prompts };
-          }, () => ({
-            ...releaseJourneyEvidence(project.proj),
-            screen: evidenceOf(() => (last ?? screen(session)).split("\n").slice(-60).join("\n")),
-          }));
+            last = evidenceOf(() => lastScreen(session));
+            report.extra = { credits: typeof last === "string" ? sessionCredits(last) ?? 0 : 0, "permission prompts": prompts };
+          }, () => {
+            const final = last ?? evidenceOf(() => lastScreen(session));
+            return { ...releaseJourneyEvidence(project.proj), screen: typeof final === "string" ? screenTail(final) : final };
+          });
         } finally {
           assertTuiDriveKill(drive(["kill", "--session", session]), session);
         }
