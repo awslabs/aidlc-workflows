@@ -608,7 +608,7 @@ describe("a fresh start for the steps", () => {
     freshRunThenResume(proj);
   });
 
-  test("Request Changes under a lowered fence: the carried approval names the change, and its build clears the old ticks once", () => {
+  test("Request Changes under a lowered fence: its build clears the old ticks once", () => {
     const proj = project("relaxed");
     interrupted(proj, 1, 2, 3, 4);
     appendAuditEntry("GATE_REJECTED", {
@@ -621,8 +621,8 @@ describe("a fresh start for the steps", () => {
     const build = next(proj) as Emitted & { change_notices?: string[] };
     expect(build.kind).toBe("run-stage");
     expect(build.plan_approval?.status).toBe("approved");
-    // The person hears that the plan they approved changed, before the build.
-    expect((build.change_notices ?? []).some((line) => line.startsWith("Your approved plan changed"))).toBe(true);
+    // The change the person asked for is not offered back to them to undo.
+    expect((build.change_notices ?? []).some((line) => line.startsWith("Your approved plan changed"))).toBe(false);
     // The first start in this attempt clears the previous build's ticks.
     dispatch(proj, brief(proj));
     expect(readFileSync(planPath(proj), "utf-8")).not.toContain("- [x]");
