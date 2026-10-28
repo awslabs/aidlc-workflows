@@ -1022,6 +1022,29 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // The gate left revising by Request Changes is not open once the work is
+  // redone: its revised report puts it to the person again, and then their
+  // second Request Changes, and later their Approve, record.
+  test("a Unit gate rebuilt after Request Changes is reported revised before it is shown again", () => {
+    const proj = seedProject({ ownership: "team" }, ["alpha"]);
+    settleBody(proj, runNext(proj));
+    const args = ["--stage", "functional-design", "--unit", "alpha"];
+    expect(runReport(proj, [...args, "--result", "awaiting-approval"]).kind).toBe("print");
+    const requestChanges = [...args, "--result", "rejected", "--user-input", "Request Changes", "--reason", "Rename it"];
+    for (let round = 0; round < 2; round++) {
+      expect(runReport(proj, requestChanges).kind).toBe("print");
+      settleBody(proj, runNext(proj));
+      const step = runNext(proj);
+      expect(step.kind, JSON.stringify(step)).toBe("print");
+      expect(step.message).toContain("--unit alpha --result revised");
+      expect(runReport(proj, [...args, "--result", "revised"]).kind).toBe("print");
+      expect(runNext(proj)).toMatchObject({ stage: "functional-design", unit: "alpha", gate_only: true, unit_gate: "per-stage" });
+    }
+    expect(runReport(proj, [...args, "--result", "approved", "--user-input", "Approve"]))
+      .toMatchObject({ kind: "done" });
+    expect(unitGateStatus(proj, "functional-design", "alpha", "per-stage")).toBe("approved");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("unit-keyed rejection floors only the rejected unit's lifecycle and review receipts", () => {
     const proj = seedProject({ ownership: "team" });
     for (const unit of ["alpha", "beta"]) {

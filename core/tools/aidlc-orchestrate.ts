@@ -12654,6 +12654,13 @@ function gateOwesItsReport(projectDir: string, stateContent: string, node: Stage
   return changes.some((change) => !changeAlreadyAccepted(projectDir, change, events));
 }
 
+function revisedUnitGateStep(stage: GraphStage, unit: string): Directive {
+  return printDirective(
+    `Unit "${unit}"'s ${stage.name} is done again after the changes asked for: run \`${aidlcToolInvocation("orchestrate")} ` +
+      `report --stage ${shellArg(stage.slug)} --unit ${shellArg(unit)} --result revised\` and show the gate with what it returns.`,
+  );
+}
+
 // Reuse the settled run-stage surface without re-entering body or review work.
 // Unlike autonomous swarm bookkeeping, an open human gate keeps its approval.
 function applyGateOnlyShape(
@@ -15077,6 +15084,13 @@ function emitTeamUnitMajorRunStage(
           emit(preflight);
           return;
         }
+        // A gate the person's Request Changes or a reopen left revising is not
+        // open: the revision's report puts it to them again, as a solo stage's
+        // does, and only then does their answer record.
+        if (unitGateStatus(projectDir, stage.slug, unit, "per-stage", auditRows) === "revising") {
+          emit(revisedUnitGateStep(stage, unit));
+          return;
+        }
         emit(applyGateOnlyShape(directive, projectDir, refreshedState));
         return;
       }
@@ -15114,6 +15128,10 @@ function emitTeamUnitMajorRunStage(
       );
       if (preflight !== null) {
         emit(preflight);
+        return;
+      }
+      if (unitGateStatus(projectDir, finalStage.slug, unit, "unit-end", auditRows) === "revising") {
+        emit(revisedUnitGateStep(finalStage, unit));
         return;
       }
       emit(applyGateOnlyShape(directive, projectDir, refreshedState));
