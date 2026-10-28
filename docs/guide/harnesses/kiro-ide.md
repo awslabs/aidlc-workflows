@@ -299,6 +299,9 @@ and Kiro IDE does not read that file. So in each new Kiro IDE chat:
    uses. If the chat is still on **Default**, AI-DLC's first move on your
    first request is its own command, which Kiro asks you to approve, and then
    each command it runs asks. To avoid that, choose **aidlc** in the agent picker first (step 1).
+   On **Default** (or **Default v2**), AI-DLC says this once in the chat when you
+   type an `/aidlc` request, unless you already chose **Always allow** for
+   AI-DLC's commands on one of Kiro's approval cards.
    The `aidlc-...-agent` entries in the `/` menu are the specialists AI-DLC
    brings in during a workflow; you do not start them yourself.
 

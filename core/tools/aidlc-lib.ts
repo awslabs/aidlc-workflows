@@ -2,6 +2,7 @@ import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { lockFolderHeldGiveUpMs, lockFolderHeldLine } from "./aidlc-lock-line.ts";
 import { reviewManifestForms } from "./aidlc-review-manifest.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
+import { KIRO_SESSION_DIR_RE, kiroChatRecordPaths } from "./aidlc-kiro-chat-record.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
@@ -2403,21 +2404,6 @@ function newestUserEntry(
     if (entryText(content).trim() === want) return record;
   }
   return null;
-}
-
-// Kiro's own chat record (Kiro IDE and Kiro CLI v3 alike):
-// ~/.kiro/sessions/<workspace id>/<session id>/messages.jsonl, found by the
-// session id alone, so the workspace hash (which follows how the folder path is
-// spelled on Windows) is never computed.
-const KIRO_SESSION_DIR_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
-function kiroChatRecordPaths(sessionId: string | undefined): string[] {
-  if (!sessionId || !KIRO_SESSION_DIR_RE.test(sessionId)) return [];
-  const root = join(homedir(), ".kiro", "sessions");
-  try {
-    return readdirSync(root).map((workspace) => join(root, workspace, sessionId, "messages.jsonl")).filter(existsSync);
-  } catch {
-    return [];
-  }
 }
 
 // Each row is `{id, timestamp, payload}`, the entry in `payload`. A typed
