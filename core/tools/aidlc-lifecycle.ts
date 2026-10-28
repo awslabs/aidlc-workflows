@@ -1131,7 +1131,7 @@ export function catchUpWindowsExeCommand(): void {
   try {
     const exe = windowsExeCommandPath();
     if (
-      exe === null || activeVersion() !== AIDLC_VERSION ||
+      exe === null || activeVersion() !== AIDLC_VERSION || !windowsLauncherOwnedByInstaller() ||
       resolve(installedExecutablePath(AIDLC_VERSION)).toLowerCase() !== resolve(process.execPath).toLowerCase()
     ) return;
     const root = machineTransactionRoot();
@@ -1567,7 +1567,7 @@ function stableOnlyUnixShim(): string {
   return renderUnixShim(STABLE_ONLY_VALID_VERSION);
 }
 
-function windowsShim(): string {
+export function windowsShim(): string {
   const helper = windowsShimPath().replaceAll("%", "%%");
   return [
     "@echo off",

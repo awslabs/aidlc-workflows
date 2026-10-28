@@ -13,7 +13,7 @@ import { activeExecutablePath, readActiveExecutable } from "./aidlc-install-path
 // other file, so the binary run from anywhere else is itself.
 export function nativeLauncherRoot(cmd: string): string | null {
   const match =
-    /^@echo off\r\npowershell\.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "([^"\r\n]+)\\aidlc-shim\.ps1" %\*\r\nexit \/b %ERRORLEVEL%\r\n$/
+    /^@echo off\r\npowershell\.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "([^"\r\n]+)[\\/]aidlc-shim\.ps1" %\*\r\nexit \/b %ERRORLEVEL%\r\n$/
       .exec(cmd);
   return match ? match[1].replaceAll("%%", "%") : null;
 }

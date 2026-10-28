@@ -12,7 +12,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { windowsPosixShim } from "../../core/tools/aidlc-lifecycle.ts";
+import { windowsPosixShim, windowsShim } from "../../core/tools/aidlc-lifecycle.ts";
+import { installRoot } from "../../core/tools/aidlc-install-paths.ts";
 import { nativeLauncherRoot } from "../../core/tools/aidlc-native-launcher.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
@@ -31,6 +32,17 @@ const cmdFor = (helper: string) =>
   }" %*\r\nexit /b %ERRORLEVEL%\r\n`;
 
 describe("the bin copy reads its install from the aidlc.cmd beside it", () => {
+  test("the aidlc.cmd the install writes names its install root", () => {
+    const saved = process.env.AIDLC_INSTALL_ROOT;
+    process.env.AIDLC_INSTALL_ROOT = join(tmpdir(), "aidlc-native-launcher-root");
+    try {
+      expect(nativeLauncherRoot(windowsShim())).toBe(installRoot());
+    } finally {
+      if (saved === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = saved;
+    }
+  });
+
   test("the install root aidlc.cmd was written with, a % in it read once", () => {
     expect(nativeLauncherRoot(cmdFor("C:\\Users\\a%b\\AppData\\Local\\aidlc\\aidlc-shim.ps1")))
       .toBe("C:\\Users\\a%b\\AppData\\Local\\aidlc");
