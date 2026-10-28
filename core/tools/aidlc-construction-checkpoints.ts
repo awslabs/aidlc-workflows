@@ -84,6 +84,7 @@ import {
   reviewAttemptWindow,
   reviewRequestBindingFromBlock,
   setField,
+  stateFilePath,
   sortAttemptEvents,
   sourceListingChangedPaths,
   stageJumpReaches,
@@ -592,6 +593,8 @@ interface Snapshot {
   waivedStages: string[];
   /** The message the person said to go on without the review in, as the latest verification recorded it. */
   waiverMessage: string | null;
+  /** Each source stage's files as an approval of the Unit holds them, however many. */
+  approvedFiles: Map<string, WorkspaceSourceListing>;
 }
 
 interface ApprovedStageEvidence {
@@ -879,6 +882,7 @@ function snapshot(
   const recordedEvidence = askedEvidence ?? (gate?.event === "GATE_APPROVED" && auditBlockField(gate.block, "Unit") === unit
     ? readApprovedEvidence(gate.block) : null);
   const approvedEvidence: Record<string, [string | null, string | null] | [string | null, string, Record<string, string>]> = {};
+  const approvedFiles = new Map<string, WorkspaceSourceListing>();
   const verification = onlyLatest(rows.filter((row) =>
     row.event === "CHECKPOINT_VERIFICATION_RECORDED" &&
     auditBlockField(row.block, "Unit") === unit &&
@@ -1195,6 +1199,7 @@ function snapshot(
     }
     const files = source === null ? null
       : source === ownSource && claimed && listing ? restrictSourceListing(listing, claimed.model) : keptFiles;
+    if (files !== null && source !== null) approvedFiles.set(slug, files);
     approvedEvidence[slug] = files !== null && source !== null && files.size <= APPROVED_FILES_CAP
       ? [artifact, source, Object.fromEntries(files)]
       : [artifact, source];
@@ -1316,6 +1321,7 @@ function snapshot(
     root, rows, state, verificationCommand: shared.verificationCommand, accepted,
     waiverMessage: verification ? auditBlockField(verification.block, "Message Id") : null,
     approvedEvidence: JSON.stringify(approvedEvidence),
+    approvedFiles,
     overAllowed: rereview?.unfinished !== undefined && unfinishedMayGoOn && overAllowed(),
     waivedStages: notFinished,
     result: {
@@ -1347,6 +1353,35 @@ export function resolveConstructionCheckpoint(
   evidence?: ConstructionEvidence,
 ): ConstructionCheckpoint {
   return snapshot(projectDir, unit, kind, stateContent, evidence).result;
+}
+
+/**
+ * `listing` with the walking skeleton's files for `stage` laid over it, as the
+ * person approved them at its own checkpoint: the swarm builds the Units after
+ * the skeleton, so its first landing starts from it. `listing` as it is
+ * without a current approval, for another intent than the active one, or when
+ * the evidence cannot be read. Reads only; records nothing.
+ */
+export function afterApprovedSkeleton(
+  projectDir: string,
+  stage: string,
+  listing: WorkspaceSourceListing,
+  intent?: string,
+  space?: string,
+): WorkspaceSourceListing {
+  try {
+    if (stateFilePath(projectDir, intent, space) !== stateFilePath(projectDir)) return listing;
+    const state = readStateFile(projectDir);
+    if (!constructionSkeletonOn(state)) return listing;
+    const dag = resolveBoltDag(projectDir);
+    const skeleton = dag.state === "ok" ? dag.batches.flat()[0] : undefined;
+    if (skeleton === undefined) return listing;
+    const current = snapshot(projectDir, skeleton, "skeleton", state);
+    const files = current.result.approved ? current.approvedFiles.get(stage) : undefined;
+    return files === undefined ? listing : new Map([...listing, ...files]);
+  } catch {
+    return listing;
+  }
 }
 
 /**

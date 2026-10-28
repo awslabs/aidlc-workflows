@@ -95,6 +95,7 @@ import {
   asksForHelp,
   printUsageAndExit,
 } from "./aidlc-lib.js";
+import { afterApprovedSkeleton } from "./aidlc-construction-checkpoints.ts";
 import { mainCheckoutChangeStep } from "./aidlc-message-store.ts";
 import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
 import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
@@ -2100,9 +2101,18 @@ function assertAggregateSourceBeforeMerge(
     );
   }
   if (resuming) return { state: current, openingFingerprint: opening.fingerprint };
+  // The walking skeleton the person approved at its own checkpoint is where the
+  // swarm starts, never a change of theirs. The link this landing records still
+  // opens at the stage baseline: the chain's first link, as earlier releases
+  // recorded it, though the main checkout already held the skeleton.
   const openingListing = opening.listing === undefined
     ? undefined
-    : recordedSourceListingUnderCurrentBoundary(opening.listing, current.listing);
+    : recordedSourceListingUnderCurrentBoundary(
+      opening.source === "stage-baseline"
+        ? afterApprovedSkeleton(pd, record.stage, opening.listing, intent, space)
+        : opening.listing,
+      current.listing,
+    );
   // An AI-DLC update the person took changed only AI-DLC's own files: nobody's source.
   const changed = openingListing !== undefined
     ? sourceChangedOutsideAidlc(pd, openingListing, current.listing)
