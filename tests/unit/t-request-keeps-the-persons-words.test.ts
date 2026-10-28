@@ -224,6 +224,19 @@ describe("the request keeps the quote marks the person typed", () => {
     expect(recorded(proj).description).toBe(SLUGIT);
   });
 
+  test("a plan named first, a request that ends in an empty argument keeps it", () => {
+    const typed = `slugit should reject ""`;
+    says(proj, `/aidlc bugfix ${typed}`);
+    create(proj, next(proj, ["bugfix", typed]));
+    expect(recorded(proj).description).toBe(typed);
+  });
+
+  test("a plan's name opening their request, the agent routing on no plan: the whole line keeps an ending empty argument", () => {
+    says(proj, `/aidlc bugfix slugit should reject ""`);
+    const step = next(proj, [`bugfix slugit should reject ""`]);
+    expect(step.message).toMatch(/next -- ['"]bugfix slugit should reject ""['"]/);
+  });
+
   test("a plan named by its flag: the request keeps its quote marks", () => {
     says(proj, `/aidlc --scope bugfix ${SAVE}`);
     create(proj, next(proj, ["--scope", "bugfix", SAVE]));

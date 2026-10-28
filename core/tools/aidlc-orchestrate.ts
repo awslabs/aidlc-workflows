@@ -9897,18 +9897,21 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
     if (typed === null || typed.length === 0 || lineHandedOut(pd, engineSessionId, message.id)) return null;
     if (loadStateFileIfPresent(pd) !== null && !turnIsLatestRow(pd, message.id)) return null;
     flags.intent = withTypedSpacing(flags.intent, typed);
-    const own = parseNextFlags(splitKiroCommandArgs(typed));
+    const argv = splitKiroCommandArgs(typed);
+    const own = parseNextFlags(argv);
     if (own.parseError || own.intent === undefined || own.untakenFlag !== undefined) return null;
     const plan = flags.scope ?? flags.positionalScope ?? null;
     const words = personsWordsText(message.words);
     const step = own.readingStep;
-    const asTyped = requestAsTyped(own.intent, typed);
+    // A plan-word reading takes no flag and trims its line: the arguments' own
+    // join keeps an empty `""` that ends it.
+    const asTyped = requestAsTyped(step?.kind === "plan-word" ? argv.join(" ") : own.intent, typed);
     if (step === undefined) {
       if (message.route.scope === plan || message.route.scope === null) flags.intent = asTyped ?? words;
     } else if (step.kind === "plan-word") {
       if (plan === null) flags.intent = asTyped ?? words;
       else if (plan === step.scope) {
-        flags.intent = requestAsTyped(own.intent.slice(step.scope.length + 1), typed) ??
+        flags.intent = requestAsTyped(argv.join(" ").slice(step.scope.length + 1), typed) ??
           words.slice(step.scope.length).trim();
       }
     }
@@ -9961,7 +9964,8 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   // A plain-chat line went whole behind `--`; an `/aidlc` line's request is
   // taken as it was typed.
   if (own.intent !== undefined && typed !== null) {
-    own.intent = requestAsTyped(own.intent, typed) ?? withTypedSpacing(own.intent, typed);
+    const said = own.readingStep?.kind === "plan-word" ? argv.join(" ") : own.intent;
+    own.intent = requestAsTyped(said, typed) ?? withTypedSpacing(own.intent, typed);
   }
   for (const key of Object.keys(flags)) delete (flags as unknown as Record<string, unknown>)[key];
   Object.assign(flags, own);
@@ -9972,8 +9976,7 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
 // escapes as syntax, so the parse's words had lost them (`slugit "" prints`
 // came back as `slugit  prints`, the bug itself gone). `said` is the parse's
 // own join of the request's arguments, one space apart, untrimmed so an empty
-// `""` at either end still lines up (the plan-word reading trims its line, so a
-// `""` that ends it stays out); the one stretch of the line's arguments that
+// `""` at either end still lines up; the one stretch of the line's arguments that
 // spells it comes back as typed, with the spaces and tabs typed between them and
 // any other gap one space, as withTypedSpacing keeps them. A request of one
 // argument is that argument: the quotes around it only made it one. Null when
