@@ -627,4 +627,51 @@ describe("t-keep-records-kept-documents: Keep after going back records the kept 
     const { error } = work.refusal(work.requestReview());
     expect(error).toContain(SAVED_UNDER_ANOTHER);
   });
+
+  // Unit alpha's Functional Design is done in the walk; the person then runs
+  // that stage on its own, confirms its summary there and keeps alpha's
+  // documents. The isolated step names no Unit (or only {unit-name}), so the
+  // Keep names none, the placeholder, or the Unit itself; each binds the
+  // isolated confirmation, never the one the walk left for alpha. The last
+  // case first turns summary confirmation off for the main run, which the
+  // isolated run, asking its summary from its own scope, does not read.
+  for (const [named, unitFlag, mainOff] of [["no Unit", [], false],
+    ["the {unit-name} placeholder", ["--unit", "{unit-name}"], false], ["the Unit itself", ["--unit", "alpha"], false],
+    ["no Unit, summary confirmation off for the main run", [], true]] as const) {
+    test(`kiro-ide: in an isolated run of a stage that runs for each Unit, Keep with ${named} binds that Unit's documents and the review starts`, () => {
+      const work = new Work({ unitWalk: true, host: "kiro-ide" });
+      work.ok(work.tool("state", ["unit", "start", "--stage", UNIT_STAGE, "--unit", "alpha"]), "start alpha's step");
+      work.confirmSummary();
+      const walkId = work.authorization;
+      for (const name of UNIT_DOCUMENTS) work.write(join(work.stageDir, name), `# ${name}\n\nalpha\n`);
+      work.finishReview(work.requestReview());
+      work.ok(work.tool("state", ["unit", "complete", "--stage", UNIT_STAGE, "--unit", "alpha"]), "complete alpha's step");
+      work.next();
+      if (mainOff) work.typedSetting("/aidlc --summary-confirmation off", ["--summary-confirmation", "off"]);
+      work.said(`/aidlc --stage ${UNIT_STAGE} --single`);
+      const isolated = work.next(["--stage", UNIT_STAGE, "--single"]);
+      expect(isolated, JSON.stringify(isolated)).toMatchObject({ kind: "run-stage", stage: UNIT_STAGE, single: true });
+      expect(isolated.unit ?? "{unit-name}").toBe("{unit-name}");
+      // The isolated summary is recorded for its questions file with no Unit.
+      const single = ["--stage", UNIT_STAGE, "--checkpoint", "summary-confirmation", "--questions-file", work.questions, "--single"];
+      work.write(work.questions, withSummaryAnswer(readFileSync(work.questions, "utf-8"), ""));
+      work.json(work.tool("log", ["decision", ...single, "--decision", SUMMARY_QUESTION, "--options", "Looks correct,Request changes"]),
+        "record the isolated summary question");
+      work.picked(SUMMARY_QUESTION, ["Looks correct", "Request changes"], "Looks correct");
+      work.write(work.questions, withSummaryAnswer(readFileSync(work.questions, "utf-8"), "Looks correct"));
+      const receipt = work.json(work.tool("log", ["answer", ...single, "--details", "Looks correct"]), "record the isolated answer");
+      const isolatedId = String(receipt.summary_authorization_id);
+      const writes = work.writeRows();
+      work.keep(["--single", ...unitFlag]);
+      const row = work.keepRow().block;
+      expect(auditBlockField(row, "Summary Authorization Id")).toBe(isolatedId);
+      expect(isolatedId).not.toBe(walkId);
+      const kept = auditBlockField(row, "Kept Outputs") ?? "";
+      expect(kept).toContain(`construction/alpha/${UNIT_STAGE}/functional-spec.md`);
+      expect(kept).not.toContain("construction/beta/");
+      const request = work.tool("log", ["review", "--stage", UNIT_STAGE, "--reviewer", UNIT_REVIEWER, "--single", "--iteration", "1"]);
+      expect(request.code, `${request.stdout}\n${request.stderr}`).toBe(0);
+      expect(work.writeRows()).toBe(writes);
+    });
+  }
 });

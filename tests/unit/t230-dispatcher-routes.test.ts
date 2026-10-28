@@ -42,9 +42,13 @@ import {
   resolveAction,
   resolveHookPath,
   normalizeTopLevelConfigVerbs,
+  routeOptions,
   routePolicyFor,
+  routePositionals,
+  SIMPLE_PUBLIC_GRAMMARS,
 } from "../../core/tools/aidlc.ts";
 import { validatePublicConfigArgs } from "../../core/tools/aidlc-init.ts";
+import { PUBLIC_LIFECYCLE_GRAMMARS } from "../../core/tools/aidlc-lifecycle.ts";
 import { launcherRouteUsesPin } from "../../core/tools/aidlc-command.ts";
 import {
   projectPinTargetPath,
@@ -3154,6 +3158,86 @@ describe("t230 dispatcher help and errors", () => {
     }
     expect(entriesUnder(machineRoot)).toEqual([]);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("every option a public command accepts is listed with a summary", () => {
+    const optionRow = (
+      rendered: string,
+      form: string,
+    ): string | undefined =>
+      rendered.split("\n").find((line) =>
+        line.startsWith(`  ${form}`) &&
+        /^\s{2,}/.test(line.slice(form.length + 2))
+      );
+    for (const command of PUBLIC_COMMANDS) {
+      // `config` keeps hand-written help: its own flags span six sections and
+      // `aidlc config <section> --help` is the full per-section reference.
+      if (command === "config") continue;
+      const route = ROUTES.find((candidate) =>
+        candidate.namespace === "public" &&
+        candidate.group === "top" &&
+        candidate.verbs.includes(command)
+      );
+      expect(route, command).toBeDefined();
+      const rendered = renderCommandHelp(command);
+      const options = routeOptions(route as Route, command);
+      expect(options.length, `${command} options`).toBeGreaterThan(0);
+      for (const option of options) {
+        const form = option.metavar
+          ? `${option.flag} <${option.metavar}>`
+          : option.flag;
+        const row = optionRow(rendered, form);
+        expect(row, `${command} help is missing a row for ${form}`)
+          .toBeDefined();
+        expect(
+          (row as string).slice(form.length + 2).trim().length,
+          `${command} ${form} has no summary`,
+        ).toBeGreaterThan(0);
+      }
+      for (const placeholder of routePositionals(route as Route, command)) {
+        const row = optionRow(rendered, placeholder);
+        expect(row, `${command} help is missing an argument row for ${placeholder}`)
+          .toBeDefined();
+        expect(
+          (row as string).slice(placeholder.length + 2).trim().length,
+          `${command} ${placeholder} has no summary`,
+        ).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  test("command help names every flag either public parser accepts", () => {
+    // `--project-dir` is dispatcher plumbing for tests and hooks. Routes do
+    // spell it (`top-config`, `workspace-sync`), but no public command's help
+    // names it, so it is excluded here deliberately rather than by oversight.
+    const plumbing = new Set(["--project-dir"]);
+    type PublicGrammar = { values: ReadonlySet<string>; bare: ReadonlySet<string> };
+    const grammars: Record<string, PublicGrammar> = {
+      ...PUBLIC_LIFECYCLE_GRAMMARS,
+      ...SIMPLE_PUBLIC_GRAMMARS,
+    };
+    // Both parsers, so neither can gain a flag help does not name.
+    expect(Object.keys(grammars).sort()).toEqual([
+      "doctor",
+      "uninstall",
+      "update",
+      "use",
+      "version",
+    ]);
+    for (const [command, grammar] of Object.entries(grammars)) {
+      const rendered = renderCommandHelp(
+        command as (typeof PUBLIC_COMMANDS)[number],
+      );
+      const rows = rendered.split("\n");
+      for (const flag of [...grammar.values, ...grammar.bare]) {
+        if (plumbing.has(flag)) continue;
+        const listed = rows.some((line) =>
+          new RegExp(`^ {2}${flag}(\\s|$)`).test(line)
+        );
+        expect(listed, `${command} help omits the accepted flag ${flag}`)
+          .toBe(true);
+      }
+    }
+  });
 
   test("top-level config help consumes every root value flag without doing work", () => {
     const sandbox = mkdtempSync(join(tmpdir(), "aidlc-t230-config-help-"));

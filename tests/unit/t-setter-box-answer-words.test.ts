@@ -140,13 +140,16 @@ describe("t-setter-box-answer-words: a setting asked in a box answer is recorded
     expect(freeze.stdout).not.toContain(QUEUED);
   });
 
-  test("claude: a box pick the approval was recorded on stands for no setting afterwards", async () => {
+  // Right after the approval the pick is still the reply in hand
+  // (t-setting-rides-approval); once the person has said more it is not.
+  test("claude: a box pick the approval was recorded on stands for no setting once they have said more", async () => {
     const proj = await gateOpen();
     const box = await pick(proj, boxAnswer("Approve"), "claude");
     const boxId = namedId(box.stdout) as string;
     expect(boxId, box.stdout).toBe(latestId(proj));
     const approved = await recordByAgent(proj, { question: "stage-gate", input: "Approve", expected: { end: { parked: false } } } as unknown as AnswersItem, "Approve");
     expect(approved?.exec.status, `${approved?.exec.stdout}${approved?.exec.stderr}`).toBe(0);
+    await say(proj, QUEUED, "claude");
     const set = await run(proj, ["engine", "config", "set", "guard-policy", "off", "--message", boxId]);
     expect(set.status, set.stdout + set.stderr).not.toBe(0);
     expect(lastRow(proj, "GUARD_POLICY_SET")).toBeUndefined();

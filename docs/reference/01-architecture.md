@@ -299,7 +299,7 @@ builds, and release packaging regenerate before consuming either local root.
 
 ### Markdown structure
 
-`markdownBlocks` in `core/tools/aidlc-lib.ts` is the single Markdown block
+`markdownBlocks` in `core/tools/aidlc-markdown.ts` is the single Markdown block
 interpreter for visibility, containers, link reference definitions, claim
 splitting, and confirmation parsing. It is backed by `Bun.markdown`, the
 CommonMark/GFM renderer built into Bun and into every native `aidlc` binary, so
@@ -599,6 +599,18 @@ variables. Release acquisition and the transaction engine enforce the network
 and mutation boundaries, while a per-session fingerprint cache avoids repeating
 a full retained-version inspection without weakening pin validation.
 
+A route's `all` usage forms are also the one source for the options a public
+command accepts. `routeOptions` reads them, adds the launcher globals the
+route's own `outputModes` and `networkPolicy` admit, and both `aidlc <command>
+--help` and the shell-completion generator render that result, so help and
+completions cannot describe different flags. A flag reachable that way needs a
+one-line meaning in `FLAG_SUMMARIES`, or a per-command one in
+`COMMAND_FLAG_SUMMARIES` where the meaning differs by command, and a flag
+either public parser accepts (`PUBLIC_LIFECYCLE_GRAMMARS` for the lifecycle
+commands, `SIMPLE_PUBLIC_GRAMMARS` for doctor and version) needs a usage form;
+`tests/unit/t230-dispatcher-routes.test.ts` fails on either gap, which is what
+keeps a newly added option out of shipping undocumented.
+
 ### Shared transaction engine
 
 Install-mechanism mutations use `core/tools/aidlc-transaction.ts`. A plan is a
@@ -875,9 +887,9 @@ binding then precede the two shared per-user cursors:
 
 - **Space** - precedence `explicit arg > session binding > aidlc/active-space
   cursor > "default"`
-  (`DEFAULT_SPACE`, `core/tools/aidlc-lib.ts:591`; resolver `activeSpace()`,
-  `aidlc-lib.ts:1300`). `listSpaces()` always reports `default` even with
-  nothing on disk (`aidlc-lib.ts:1973`).
+  (`DEFAULT_SPACE` and the resolver `activeSpace()` in
+  `core/tools/aidlc-locks.ts`). `listSpaces()` always reports `default` even
+  with nothing on disk (`core/tools/aidlc-lib.ts`).
 - **Intent** - precedence `explicit arg > session binding >
   aidlc/spaces/<space>/intents/active-intent cursor (if it names a real record
   holding aidlc-state.md) > lone-intent > null`. A `null` intent
@@ -1016,7 +1028,7 @@ readers read the rows they share once (`copiedAuditBlocks` in
 
 11. **Phase boundary verification** -- Traceability checks run at the end of Ideation, Inception and Construction (the Initialization->Ideation transition has none), written by the phase's last stage to `<record>/verification/`. This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 126-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 127-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 

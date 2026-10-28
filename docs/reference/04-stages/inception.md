@@ -388,7 +388,7 @@ gate open and the stage incomplete.
 ### Notes
 
 - The promotion replaces each `team.md` section's body and keeps its heading
-  (`replaceSection` in `.claude/tools/aidlc-lib.ts`), so a re-run does not
+  (`replaceSection` in `.claude/tools/aidlc-markdown.ts`), so a re-run does not
   pile up duplicates the way `appendUnderHeading` would.
 - `org.md` and `team.md` share one Title Case heading set
   (`## Way of Working`, `## Walking Skeleton`, `## Testing Posture`,

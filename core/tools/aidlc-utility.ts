@@ -377,6 +377,7 @@ import {
   resolveAuditWorktreePath,
   resolveBoltIdentity,
   readProjectDescriptionAuthority,
+  singleRunRequest,
   repoDir,
   registerIntentRecord,
   leaveCreationReceipt,
@@ -10062,8 +10063,16 @@ function handleCodekbPath(projectDir: string, flags: Record<string, string>): vo
 // (see onboardDocumentInput). The stage says the line naming which file it read
 // or copied as soon as it gets it.
 function handleProjectDescription(projectDir: string): void {
-  const recordRoot = dirname(stateFilePath(projectDir));
-  const authority = readProjectDescriptionAuthority(recordRoot);
+  // With no work, a stage run on its own describes itself with the words typed
+  // with it, or with none: the agent then asks what it is for.
+  const isolated = existsSync(stateFilePath(projectDir)) ? null : singleRunRequest(projectDir);
+  if (isolated !== null && isolated.description === null) {
+    process.stdout.write(`${JSON.stringify({ description: null, source: null })}\n`);
+    return;
+  }
+  const authority = isolated !== null && isolated.description !== null
+    ? { description: isolated.description, source: `single-stage:${isolated.stage}` }
+    : readProjectDescriptionAuthority(dirname(stateFilePath(projectDir)));
   // A pasted document is split here, by the tool, so the stage never has to
   // find where the person's own words end.
   const split = authoritativeProjectDescription(authority.description);

@@ -2388,11 +2388,31 @@ batch status of `ready: true`. Only verified native passes
 receive `SWARM_UNIT_CONVERGED`, with the authorized `Command SHA-256` (rows
 from an earlier release may lack it). Land their source through the native worktree merge before `next`.
 Edits the person made to the main checkout while the batch built stop that merge
-under a strict Guard Policy (the refusal names the step: undo them and run the merge
-again, or say `guard policy relaxed` to keep them); under relaxed or off they are
-kept, recorded once as `CHANGE_ACCEPTED` (`swarm-batch`), and the merge prints one
-`note:` line. The same holds for edits made after the last merge when the stage
-completes.
+under a strict Guard Policy (the refusal names the step: when they asked for the
+change, `swarm allow-change` with their message, then the same merge keeps it;
+otherwise undo them and run the merge again, or say `guard policy relaxed` to keep
+them); under relaxed or off they are kept, recorded once as `CHANGE_ACCEPTED`
+(`swarm-batch`), and the merge prints one `note:` line. The same holds for edits
+made after the last merge when the stage completes.
+
+### `aidlc engine swarm allow-change` - a change the person asked for in the main checkout
+
+```bash
+aidlc engine swarm allow-change <file>... --message <id>
+```
+
+Under a strict Guard Policy, while the Units are built in parallel, the main
+checkout changes only by their landings, so each landing can check it. When the
+person asks for another file there ("also fix the typo in the README"), the
+plan-approval guard's refusal of that write names this command with the message
+they asked in. It proves the message, records the files with their words as
+`MAIN_CHECKOUT_CHANGE_ALLOWED` for the current Code Generation attempt, and prints
+one `notice` line for them; the write then goes in, and the landings, the next
+batch's prepare and stage completion keep the change, each recorded as
+`CHANGE_ACCEPTED` with that message. It refuses AI-DLC's own files and a file a
+Unit being built names in its plan (that change goes through the Unit's own
+checkpoint). Under a strict Guard Policy the team holds in memory it changes
+nothing and says in one line where that is set.
 
 ### `aidlc engine bolt swarm-checkpoint` - approve a completed batch
 

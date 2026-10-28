@@ -946,8 +946,10 @@ const READER = "core/tools/aidlc-reply-reader.ts";
 const AUDIT = "core/tools/aidlc-audit.ts";
 const UNIT_CP = "core/tools/aidlc-construction-checkpoints.ts";
 const SWARM_CP = "core/tools/aidlc-swarm-checkpoints.ts";
+const SWARM = "core/tools/aidlc-swarm.ts";
 const SWITCHES = "core/tools/aidlc-recorded-switches.ts";
 const GUARD_SWITCH = "core/tools/aidlc-guard-switch.ts";
+const LOCKS = "core/tools/aidlc-locks.ts";
 
 /**
  * The places that stay, by category, each with its reason. `use` is what the place may do with the words; a keeper
@@ -960,7 +962,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${HOOK}#pickedLabels`]: { use: "decides", why: "a question box's payload, host structure: the labels the box reports picked, for the HUMAN_TURN row's Picked", from: [`${HOOK}#respond`] },
   [`${HOOK}#carriesSeveralPicks`]: { use: "decides", why: "a question box's payload, host structure: whether the box reports more than one pick", from: [`${HOOK}#respond`] },
   [`${LIB}#emptyPickerResult`]: { use: "decides", why: "a question box's payload, host structure: whether a dismissed box carried any answer", from: [`${HOOK}#respond`] },
-  "core/tools/aidlc-audit.ts#maskSecretShapes": { use: "keeps", why: "key shapes only: whether the turn held one, for the one line about it (saySecretMaskedOnce); the words are kept whole in the message record", from: [`${HOOK}#respond`] },
+  "core/tools/aidlc-audit.ts#maskSecretShapes": { use: "keeps", why: "key shapes only: whether the turn held one, for the one line about it (saySecretMaskedOnce), and the isolated run's committed request kept masked; the words are kept whole in the message record", from: [`${HOOK}#respond`, `${ORCH}#ensureSingleStageStarted`] },
   [`${LIB}#boxPicksAddANote`]: { use: "decides", why: "a question box's pick, host structure (reading-lead, S7a answers Q3): the latest box reply's labels, never typed words" },
   [`${LIB}#recordGateWords`]: { use: "keeps", why: "the gate-words record's writer: keeps a typed message for the stage gate's record" },
   [`${LIB}#readGateWords`]: { use: "keeps", why: "the gate-words record's own read: checks the file's shape" },
@@ -972,7 +974,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${STORE}#messageIsReply`]: { use: "keeps", why: "the presence shape: a message with words or none (words === null)" },
   [`${STORE}#noReplySince`]: { use: "keeps", why: "the presence shape: a line of settings alone is no reply (words === null)" },
   [`${ORCH}#handOutSettingsLine`]: { use: "keeps", why: "the presence shape: a line of settings alone (words === null) is handed to its setter once" },
-  [UNWRAP]: { use: "keeps", why: "the brand's one way back to text, for the places below that read the message store or the gate-words record", from: [`${LIB}#gateWordsSinceUnitReview`, `${LIB}#personsGateReply`, `${LIB}#requireProtectedResponse`, `${LOG}#answerEnginePlanApproval`, `${ORCH}#takePersonsOwnLine`, `${STATE}#parkedWords`, `${STATE}#personsWordsFields`, `${GUARD_SWITCH}#saidInChat`, `${ORCH}#emit`, `${SWITCHES}#recordSwitchChange`, `${STATE}#requireHumanConstructionPolicyChange`, "core/tools/aidlc-utility.ts#handleReclassify", `${STATE}#handleReject`, `${LOG}#handleAnswer`, `${LIB}#keptRepliesSinceStageStart`, `${LIB}#latestReplyAfter`, `${UNIT_CP}#approveConstructionCheckpoint`, `${LIB}#personsWordsKept`] },
+  [UNWRAP]: { use: "keeps", why: "the brand's one way back to text, for the places below that read the message store or the gate-words record", from: [`${LIB}#gateWordsSinceUnitReview`, `${LIB}#personsGateReply`, `${LIB}#requireProtectedResponse`, `${LOG}#answerEnginePlanApproval`, `${ORCH}#takePersonsOwnLine`, `${STATE}#parkedWords`, `${STATE}#personsWordsFields`, `${GUARD_SWITCH}#saidInChat`, `${ORCH}#emit`, `${SWITCHES}#recordSwitchChange`, `${STATE}#requireHumanConstructionPolicyChange`, "core/tools/aidlc-utility.ts#handleReclassify", `${STATE}#handleReject`, `${LOG}#handleAnswer`, `${LIB}#keptRepliesSinceStageStart`, `${LIB}#latestReplyAfter`, `${UNIT_CP}#approveConstructionCheckpoint`, `${LIB}#personsWordsKept`, `${SWARM}#handleAllowChange`] },
   [`${LIB}#keptRepliesSinceStageStart`]: { use: "keeps", why: "the resume re-show: every reply since the stage started that nothing has used yet, a typed message's words and a box's replies, unpaired (R26: the agent pairs them)" },
   [`${LIB}#latestReplyAfter`]: { use: "keeps", why: "the audit writer: the plan override receipt's Person Reply, their latest reply since the offer, with its message" },
   [`${LIB}#protectedResponseFields`]: { use: "keeps", why: "the audit writer: a protected question's decision row, the response's words with every message they came in (Message Ids)" },
@@ -1004,7 +1006,8 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${STATE}#emitConstructionPolicySet`]: { use: "keeps", why: "the audit writer: the Construction policy row's Person Reply, the words of the message the setter names" },
   [`${SWITCHES}#recordSwitchChange`]: { use: "keeps", why: "the switch record keeps the words that switched a check off" },
   [`${SWITCHES}#switchOffLine`]: { use: "keeps", why: "status: says a check is off with the words that switched it off" },
-  [`${SWITCHES}#quoted`]: { use: "keeps", why: "status: quotes those words, cut", from: [`${GUARD_SWITCH}#askedSwitchLine`, `${SWITCHES}#switchOffLine`] },
+  [`${SWITCHES}#quoted`]: { use: "keeps", why: "status: quotes those words, cut", from: [`${GUARD_SWITCH}#askedSwitchLine`, `${SWITCHES}#switchOffLine`, `${SWARM}#handleAllowChange`] },
+  [`${SWARM}#handleAllowChange`]: { use: "keeps", why: "the audit writer: a change the person asked for in the main checkout while the Units are built, their words as the row's Person Reply and quoted in the one line they hear" },
   [`${SWITCHES}#switchesOffLines`]: { use: "keeps", why: "status: the lines above" },
   [`${SWITCHES}#switchOffNotices`]: { use: "keeps", why: "status: the lines above" },
   [`${ASK}#correctReadRequestChanges`]: { use: "keeps", why: "the audit writer: the replies kept since a Request Changes are the correction's words" },
@@ -1026,11 +1029,15 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${ORCH}#resumeWithWords`]: { use: "keeps", why: "a resume with words beside it: whether words are there, then the line read again without --resume" },
   [`${ORCH}#resumeAgain`]: { use: "decides", why: "the unpark step's re-run: the words typed with the resume, handed on as typed (wordsForNextStep)" },
   [`${ORCH}#wordsForNextStep`]: { use: "decides", why: "a step's command: the words go to a request file of their own as given, or quoted onto the line when that file cannot be written", from: [`${ORCH}#keptWordsStep`, `${ORCH}#resumeAgain`] },
-  [`${LIB}#writeRecordFileNoFollow`]: { use: "keeps", why: "writes a step's request file with the words as given", from: [`${ORCH}#wordsForNextStep`] },
-  [`${LIB}#writeBufferAtomic`]: { use: "keeps", why: "the atomic write under writeRecordFileNoFollow", from: [`${LIB}#writeRecordFileNoFollow`] },
+  [`${LIB}#writeRecordFileNoFollow`]: { use: "keeps", why: "writes a step's request file with the words as given, and the isolated run's request", from: [`${ORCH}#wordsForNextStep`, `${LIB}#keepSingleRunRequest`] },
+  [`${LOCKS}#writeBufferAtomic`]: { use: "keeps", why: "the atomic write under writeRecordFileNoFollow", from: [`${LIB}#writeRecordFileNoFollow`] },
   [`${ORCH}#emit`]: { use: "decides", why: "the words the person said belong to the work in progress are kept once as the code plan question's reply (keepRoutedPlanApprovalReply), and leave it by their message id" },
   [`${ORCH}#withParkedReply`]: { use: "keeps", why: "the resume re-show: the words they parked the work with" },
   [`${ORCH}#wordsAtPark`]: { use: "keeps", why: "the resume re-show: reads the park row's Person Reply" },
+  [`${ORCH}#emitSingleRunStage`]: { use: "decides", why: "a stage run on its own: hands the words typed with it to its start, which decides as below", from: [`${ORCH}#routeNext`] },
+  [`${ORCH}#ensureSingleStageStarted`]: { use: "decides", why: "a stage run on its own with no work: keeps the words typed with it as its request, and starts the run over when they are not the same bytes as the ones its start kept (their digest; identity, never meaning)", from: [`${ORCH}#emitSingleRunStage`] },
+  [`${LIB}#singleRunRequestDigest`]: { use: "keeps", why: "the isolated run's request: the digest that binds the kept words to their start", from: [`${LIB}#keepSingleRunRequest`, `${ORCH}#ensureSingleStageStarted`] },
+  [`${LIB}#keepSingleRunRequest`]: { use: "keeps", why: "the isolated run's request: the words typed with it, kept whole beside its start for project-description", from: [`${ORCH}#ensureSingleStageStarted`] },
   [`${READER}#stripRecommendedDecorator`]: { use: "keeps", why: "a cut of the agent's \"(Recommended)\" mark, given words by the places that compare (each listed)", from: [`${LIB}#isSummaryConfirmationChoice`, `${LIB}#offeredChoiceLabel`, `${READER}#exactOptionPick`, `${READER}#isOneOfChoices`, `${POSTURE}#recordPlanApprovalHumanResponse`] },
   [`${READER}#isOneOfChoices`]: { use: "decides", why: "a question box's pick, host structure: whether the box offered the protected question's own labels", from: [`${POSTURE}#pickerAsksProtectedQuestion`] },
   [`${POSTURE}#pickerAsksProtectedQuestion`]: { use: "decides", why: "a question box's pick, host structure (DESIGN 2.2 item 6: a box pick stays structure)", from: [`${POSTURE}#recordProtectedHumanResponse`] },

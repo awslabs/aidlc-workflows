@@ -217,6 +217,8 @@ import {
   readUnitSourceManifest,
   aidlcOwnedSourceKey,
   onlyAidlcFilesChangedSince,
+  mainCheckoutChangeAllowed,
+  sourceChangedOutsideAidlcSince,
   sourceBaselineAuditFields,
   sourceListingEntriesEqual,
   resolveProjectDir,
@@ -283,9 +285,10 @@ import {
   attemptEventDefinitelyBefore,
   resolveAuditProjectPath,
   swarmWorkerWorktreeMeta,
+  UNIT_NAME_PLACEHOLDER,
 } from "./aidlc-lib.js";
 import {
-  personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
+  mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
@@ -3633,9 +3636,29 @@ function verifySettledSwarmSourceBinding(
     if (notices.length > 0) console.log(JSON.stringify({ change_notices: notices }));
     return;
   }
+  // Under strict, files the person asked to change (swarm allow-change) stay
+  // too, recorded with the message they asked in; that step already told them.
+  const changed = moved && current !== null
+    ? sourceChangedOutsideAidlcSince(pd, stage.slug, chain.listing, current)
+    : null;
+  const asked = mainCheckoutChangeAllowed(pd, changed);
+  if (moved && current !== null && asked !== null) {
+    if (changeControlPreflight) return;
+    recordAcceptedChanges(pd, [{
+      checkpoint: "swarm-batch", stage: stage.slug, unit: null, changed,
+      recorded: chain.fingerprint, current: current.fingerprint,
+      notice: "Files in the main checkout changed after the last unit was merged, as you asked. Kept them.",
+      messageIds: asked,
+    }]);
+    return;
+  }
   if (current === null || moved) {
+    const undo = "Revert the unreviewed edit or restart and re-review the affected Bolt.";
     error(
-      `Refusing to complete "${stage.slug}": the main checkout source no longer matches the final reviewed swarm merge (source-fingerprint mismatch). Revert the unreviewed edit or restart and re-review the affected Bolt.`,
+      `Refusing to complete "${stage.slug}": the main checkout source no longer matches the final reviewed swarm merge ` +
+        (changed && changed.length > 0
+          ? `(${renderChangedPaths(changed)}). ${mainCheckoutChangeStep(pd, changed, undo, "run the same command again")}`
+          : `(source-fingerprint mismatch). ${undo}`),
     );
   }
 }
@@ -9566,7 +9589,9 @@ function handleReuseArtifact(args: string[]): void {
   const decision = getFlagValue(rest, "--decision");
   const artifacts = getFlagValue(rest, "--artifacts");
   const repoFlag = getFlagValue(rest, "--repo");
-  const unitFlag = getFlagValue(rest, "--unit");
+  // The engine's own {unit-name}, as an isolated step leaves it, names no Unit.
+  const unitGiven = getFlagValue(rest, "--unit");
+  const unitFlag = unitGiven === UNIT_NAME_PLACEHOLDER ? undefined : unitGiven;
   const singleRun = rest.includes("--single");
   if (unitFlag !== undefined && unitFlag !== null && !UNIT_NAME_REGEX.test(unitFlag)) error(`Invalid Unit name: ${unitFlag}`);
   if (!decision) error("Missing --decision <keep|modify|redo>");

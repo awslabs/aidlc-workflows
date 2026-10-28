@@ -1,11 +1,12 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { lockFolderHeldGiveUpMs, lockFolderHeldLine } from "./aidlc-lock-line.ts";
 import { reviewManifestForms } from "./aidlc-review-manifest.ts";
+import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
-import { basename, delimiter, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
 import { inflateSync } from "node:zlib";
@@ -20,7 +21,6 @@ import {
   discoverProjectHarnesses,
   isCompiledExecutable,
   type KiroLayout,
-  knownActiveSpace,
   kiroTreeLayout,
   quoteCommandArgument,
   resolveHarnessPath,
@@ -109,6 +109,159 @@ export {
   type ProjectFlagsRecord,
   type RecordableProjectBypass,
 } from "./aidlc-settings.ts";
+import {
+  isReviewRecordRelativePath,
+  REVIEW_RECORDS_DIR,
+  REVIEW_REQUEST_ID_RE,
+  type ReviewFinding,
+  reviewFindingFingerprint,
+  type ReviewRecord,
+  type ReviewVerdict,
+  toPosix,
+  UNIT_NAME_REGEX,
+  validateUnitName,
+  validReviewFindingStatus,
+} from "./aidlc-review-records.ts";
+export {
+  findingsReportUnreadableMessage,
+  isReviewRecordRelativePath,
+  isUnreadableFindingsTableFinding,
+  parseReviewerFindingsReport,
+  parseReviewSection,
+  readFindingsTable,
+  REVIEW_FINDING_STATUS_VALUES,
+  REVIEW_FINDINGS_REPORT_RETRY_MESSAGE,
+  REVIEW_RECORDS_DIR,
+  reviewAttemptId,
+  reviewDraftRelativePath,
+  type ReviewerFindingsReport,
+  type ReviewerNewFindingReport,
+  type ReviewerPriorFindingReport,
+  type ReviewFinding,
+  reviewFindingFingerprint,
+  reviewFindingsSectionLines,
+  type ReviewFindingStatus,
+  type ReviewRecord,
+  type ReviewRecordDerivedFinding,
+  type ReviewRecordFinding,
+  reviewRecordRelativePath,
+  reviewSectionVerdict,
+  type ReviewVerdict,
+  toPosix,
+  UNIT_NAME_MAX_LENGTH,
+  UNIT_NAME_REGEX,
+  unreadableFindingsTableFinding,
+  validateUnitName,
+  validReviewFindingStatus,
+} from "./aidlc-review-records.ts";
+import {
+  acquireActiveDirectiveLock,
+  acquireAuditLock,
+  ACTIVE_DIRECTIVE_LOCK,
+  ACTIVE_SPACE_POINTER,
+  activeDirectiveLockBudgetMs,
+  activeSpace,
+  assertNoSymlinkInChainOrThrow,
+  DEFAULT_SPACE,
+  ENGINE_DIR,
+  engineDirFor,
+  errorMessage,
+  intentsDir,
+  isPlainObject,
+  isReadOnlyEngineProbe,
+  listIntentDirs,
+  ownerReceiptMatches,
+  type OwnerStampedLockReceipt,
+  readAppendOnlyFileNoFollowOrThrow,
+  readAtomicReplacedFileNoFollowOrThrow,
+  readRegularFileNoFollowOrThrow,
+  reapSuffix,
+  refuseEngineObserverWrite,
+  releaseAuditLock,
+  releaseCanonicalOwnerStampedLock,
+  spaceRecordRoot,
+  withAuditLock,
+  workspaceRoot,
+  writeBufferAtomic,
+  writeFileAtomic,
+} from "./aidlc-locks.ts";
+export {
+  _posixGateLibraryCandidatesForTests,
+  _setAuditLockFaultHooksForTests,
+  acquireAuditLock,
+  ACTIVE_SPACE_POINTER,
+  activeSpace,
+  assertNoSymlinkInChainOrThrow,
+  auditLockDir,
+  type AuditLockFaultHooksForTests,
+  auditLockIdentity,
+  auditLockOwnedByProcess,
+  DEFAULT_LOCK_STALE_MS,
+  DEFAULT_SPACE,
+  detectLeakedLocks,
+  ENGINE_DIR,
+  engineDirFor,
+  EngineModeViolationError,
+  ensureDirSync,
+  errorMessage,
+  FILE_CHANGED_DURING_READ,
+  fileIdentity,
+  type FileIdentity,
+  holdsAuditLock,
+  intentsDir,
+  isPidAlive,
+  isPlainObject,
+  isReadOnlyEngineProbe,
+  isRouteCheckProbe,
+  isStopHookProbe,
+  type LeakedLock,
+  listIntentDirs,
+  type OwnerStampedLockRun,
+  processGeneration,
+  processStartedAtMs,
+  readAppendOnlyFileNoFollowOrThrow,
+  readAtomicReplacedFileNoFollowOrThrow,
+  readRegularFileNoFollowOrThrow,
+  refuseEngineObserverWrite,
+  releaseAuditLock,
+  removeTreeSync,
+  renameIntoPlace,
+  ROUTE_CHECK_ENV,
+  runWithOwnerStampedLock,
+  sameFileIdentity,
+  STOP_HOOK_PROBE_ENV,
+  unstampedPastGrace,
+  withAuditLock,
+  WORKSPACE_LOCK_SENTINEL,
+  writeBufferAtomic,
+  writeFileAtomic,
+} from "./aidlc-locks.ts";
+import {
+  appendUnderHeading,
+  escapeRegex,
+  markdownBlocks,
+  type MarkdownBlocks,
+  type MarkdownLine,
+  projectVisibleMarkdownLines,
+  restoreVisibleMarkdownMarkers,
+  stripInvisibleCommentMarkers,
+  visibleMarkdownLines,
+} from "./aidlc-markdown.ts";
+export {
+  appendUnderHeading,
+  escapeRegex,
+  extractMarkdownSection,
+  markdownBlocks,
+  type MarkdownBlocks,
+  type MarkdownContainer,
+  type MarkdownDefinition,
+  type MarkdownLine,
+  type MarkdownLineKind,
+  type MarkdownSpan,
+  normalizeMarkdownLabel,
+  replaceSection,
+  visibleMarkdownLines,
+} from "./aidlc-markdown.ts";
 // Type-only import for the lazy-loaded aidlc-graph.ts dependency. The
 // runtime require() below avoids the circular import (aidlc-graph.ts
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
@@ -117,17 +270,12 @@ import { jsoncDocumentValue, readRootIntegrations, withoutBom } from "./aidlc-di
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
-
-export const ENGINE_DIR = ".aidlc-engine";
 export const LEGACY_SENSORS_DIR = ".aidlc-sensors";
 const LEGACY_HOOKS_HEALTH_DIR = ".aidlc-hooks-health";
 const LEGACY_SUMMARY_AUTHORIZATION_DIR = ".aidlc-summary-authorization";
-const LEGACY_REVIEW_RECORDS_DIR = ".aidlc-reviews";
 const LEGACY_SOURCE_REVIEW_DIR = ".aidlc-source-review";
 const LEGACY_ACTIVE_DIRECTIVE_MARKER = ".aidlc-active-directive.json";
 const LEGACY_ACTIVE_DIRECTIVE_LOCK = ".aidlc-active-directive.lock";
-// Debris the pre-lock (#749-era) marker writer could leave at the record root.
-const LEGACY_ACTIVE_DIRECTIVE_TRANSACTION_FILE = ".aidlc-active-directive.json.transaction";
 
 // --- Types ---
 
@@ -993,10 +1141,6 @@ export function resolveProjectDirFromHook(importMetaUrl: string): string {
 
 // --- File paths ---
 
-export function toPosix(p: string): string {
-  return sep === "/" ? p : p.split(sep).join("/");
-}
-
 // Upper-case a leading Windows drive letter and leave every other character
 // alone. VS Code-based hosts (Kiro IDE) report written files as `c:\...` while
 // the project dir carries `C:\...`, and the drive letter is the one path
@@ -1008,33 +1152,7 @@ export function toPosix(p: string): string {
 export function normalizeDriveLetter(p: string): string {
   return /^[a-z]:(?:[\\/]|$)/.test(p) ? p[0].toUpperCase() + p.slice(1) : p;
 }
-
-// --- Workspace selectors: space + intent ---------------------------------------
-//
-// The record (state · audit · artifacts · diary) re-roots per INTENT under a
-// per-team SPACE: `aidlc/spaces/<space>/intents/<slug>-<id8>/…`. Two cursors
-// pick the active space/intent, both GITIGNORED (per-user, not shared truth):
-//   - `aidlc/active-space`                            → the active space
-//   - `aidlc/spaces/<space>/intents/active-intent`    → that space's active intent
-//
-// Resolution precedence (vision §5):
-//   space:  explicit arg > active-space pointer > "default" (NEVER errors).
-//   intent: explicit arg > active-intent pointer > lone-intent > null.
-//
-// NULL RESOLUTION (P9 end state — no flat root). When NO intent record resolves
-// (activeIntent() → null: a fresh SEED shell before auto-create, or a flat project
-// still awaiting migration), the absolute path helpers resolve to the bare SPACE
-// record root (aidlc/spaces/<space>/intents/ — see spaceRecordRoot). No
-// aidlc-state.md ever lives directly there, so existence-gated consumers
-// (loadStateFileIfPresent) read "no workflow yet" and the orchestrator either
-// creates an intent or reports an error. The ONLY surviving flat `aidlc-docs`
-// read is the one-time
-// migration's SOURCE (flatStateSource/flatMigrationSource below).
-// activeIntent() returning null IS that "no record yet" signal.
-
-export const ACTIVE_SPACE_POINTER = "active-space";
 export const ACTIVE_INTENT_POINTER = "active-intent";
-export const DEFAULT_SPACE = "default";
 
 // --- Terminal-command classification (the deterministic-dispatch seam) ---
 //
@@ -3629,12 +3747,6 @@ export function classifyRuntimeCompileCommand(
   return "pass";
 }
 
-// `aidlc/` — the harness-neutral workspace roof (memory · codekb · knowledge ·
-// intents live under spaces/<space>/ here; the engine stays in <harness>/).
-function workspaceRoot(projectDir: string): string {
-  return join(projectDir, "aidlc");
-}
-
 function canonicalPathKey(path: string): string {
   const resolved = resolvePath(path);
   try {
@@ -3642,26 +3754,6 @@ function canonicalPathKey(path: string): string {
   } catch {
     return resolved;
   }
-}
-
-// The active space for this project. Reads the `aidlc/active-space` cursor; a
-// missing cursor, or one that does not name a space this project has, is
-// "default". NEVER throws: the default space is always valid even when
-// nothing is on disk yet (the resolver tolerates an absent space dir).
-export function activeSpace(projectDir: string): string {
-  const ptr = join(workspaceRoot(projectDir), ACTIVE_SPACE_POINTER);
-  try {
-    return knownActiveSpace(workspaceRoot(projectDir), readFileSync(ptr, "utf-8"));
-  } catch {
-    // no cursor → default
-  }
-  return DEFAULT_SPACE;
-}
-
-// `aidlc/spaces/<space>/intents` — the intent registry + record root.
-export function intentsDir(projectDir: string, space?: string): string {
-  const sp = space ?? activeSpace(projectDir);
-  return join(workspaceRoot(projectDir), "spaces", sp, "intents");
 }
 
 // `aidlc/spaces/<space>/knowledge` — SPACE DOMAIN knowledge (durable, free-form,
@@ -3744,29 +3836,6 @@ export function parseTeamBoardArgs(args: string[]): TeamBoardArgs {
 
 export function validSpaceFlag(raw: string): string | null {
   return SPACE_NAME_REGEX.test(raw) ? raw : null;
-}
-
-// Enumerate the intent RECORD directories in a space (each `<slug>-<id8>/`
-// holding an aidlc-state.md). Returns the bare directory names, sorted; [] when
-// the space has no intents dir or no records yet. The intents.json registry is
-// the canonical list for humans/ordering — this on-disk scan is the cheap
-// "does any record exist?" signal the path resolver and migration detector need
-// (it must not depend on the registry being present).
-export function listIntentDirs(projectDir: string, space?: string): string[] {
-  const dir = intentsDir(projectDir, space);
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return [];
-  }
-  const records: string[] = [];
-  for (const name of entries) {
-    // A record dir holds aidlc-state.md; skip the active-intent cursor,
-    // intents.json, and any stray files.
-    if (existsSync(join(dir, name, "aidlc-state.md"))) records.push(name);
-  }
-  return records.sort();
 }
 
 // The record the per-user `active-intent` cursor names, when it names a real
@@ -4704,17 +4773,6 @@ export function scopePathCovered(incoming: string[], storePath: string): boolean
     const covering = normalizeScopePath(p);
     return covering === store || (covering !== "" && p.endsWith("/") && store.startsWith(`${covering}/`));
   });
-}
-
-// The bare SPACE record root: `aidlc/spaces/<space>/intents/`. The absolute path
-// helpers resolve here when no intent record exists (activeIntent → null) — a
-// fresh SEED shell before auto-create, or a flat project still awaiting migration.
-// No aidlc-state.md ever lives directly here, so existence-gated readers
-// (loadStateFileIfPresent) see "no workflow yet" and the orchestrator
-// creates an intent or reports an error. This is the P9 end state; there is no
-// flat `aidlc-docs/` root.
-function spaceRecordRoot(projectDir: string, space?: string): string {
-  return intentsDir(projectDir, space);
 }
 
 // The bare space-RELATIVE record prefix (posix slashes) — the relative analog of
@@ -6335,16 +6393,15 @@ export const PLAN_APPROVAL_ASKED_BY_ENGINE =
   "Plan Approval is asked by the engine now. Run next, show the person the question it returns, and end the turn.";
 
 // The engine's Plan Approval question while it is open for the selected work
-// (or the work named): its step marker, which names the Unit or Units it asks
-// about; null otherwise.
+// (or the work named, or with no work selected an isolated run's): its step
+// marker, which names the Unit or Units it asks about; null otherwise.
 export function openPlanApprovalAsk(projectDir: string, intent?: string, space?: string): ActiveDirectiveMarker | null {
   try {
-    const marker = readActiveDirectiveMarker(
-      projectDir,
-      readFileSync(stateFilePath(projectDir, intent, space), "utf-8"),
-      intent,
-      space,
-    );
+    const state = intent === undefined && space === undefined
+      ? runStateContent(projectDir)
+      : readFileSync(stateFilePath(projectDir, intent, space), "utf-8");
+    if (state === null) return null;
+    const marker = readActiveDirectiveMarker(projectDir, state, intent, space);
     return marker?.version === 2 && marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE ? marker : null;
   } catch {
     return null;
@@ -9498,7 +9555,6 @@ export type CopilotStopEvidence =
 
 const ACTIVE_DIRECTIVE_MAX_BYTES = 64 * 1024;
 const ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES = 2_000;
-const ACTIVE_DIRECTIVE_LOCK = "active-directive.lock";
 
 /** Bound diagnostic transport to 2,000 UTF-8 bytes without splitting a code point. */
 export function boundDirectiveMessage(message: string): string {
@@ -9562,31 +9618,6 @@ export function takeActiveDirectiveReleaseHeld(): boolean {
   const held = ACTIVE_DIRECTIVE_RELEASE_HELD;
   ACTIVE_DIRECTIVE_RELEASE_HELD = false;
   return held;
-}
-
-// Thrown when an engine observer reaches a durable write primitive. The
-// per-call-site suppressions below keep observers off those paths; this barrier
-// is what makes the guarantee a property of the code shape rather than of an
-// enumeration a future author has to remember. It THROWS rather than no-ops
-// because a silent no-op hides exactly the bug the barrier exists to expose, and
-// both producers already fail safe on a non-zero engine exit: the Stop hook
-// allows the stop and records a drop, and the route check surfaces the error
-// from `unit start` instead of corrupting authority.
-export class EngineModeViolationError extends Error {
-  constructor(readonly primitive: string) {
-    super(
-      `An engine observer (${
-        isStopHookProbe() ? STOP_HOOK_PROBE_ENV : ROUTE_CHECK_ENV
-      }) reached the durable write primitive "${primitive}". Observers read the ` +
-        "current directive and must change no project bytes. This is an engine defect, not a workflow problem.",
-    );
-    this.name = "EngineModeViolationError";
-  }
-}
-
-// The barrier itself. Call as the first statement of a durable write primitive.
-export function refuseEngineObserverWrite(primitive: string): void {
-  if (isReadOnlyEngineProbe()) throw new EngineModeViolationError(primitive);
 }
 
 function validPlanApprovalLegacyOfferCandidate(
@@ -14203,7 +14234,7 @@ export const REQUEST_TEXT_DIR = "aidlc/.aidlc-request-text";
  * through no link; nothing outside that folder is ever read.
  */
 export function readAnswerTextFile(projectDir: string, file: string): string {
-  const root = recordDir(projectDir);
+  const root = runRecordDir(projectDir);
   if (!root) throw new Error("An answer text file needs an active piece of work.");
   const inFolder = (name: string): boolean =>
     !name.split("/").some((part) => part === ".." || part === ".") &&
@@ -14394,25 +14425,6 @@ export const SUMMARY_CONFIRMATION_CHECKPOINT =
   "Consolidated Summary Confirmation";
 export const SUMMARY_CONFIRMATION_HASH_SCOPE = "confirmed-content-v2";
 const LEGACY_SUMMARY_CONFIRMATION_HASH_SCOPES: readonly string[] = ["confirmed-content-v1"];
-
-// Keep an opaque marker where an HTML comment was removed. It preserves the
-// required whitespace boundary in `##<!-- comment --> Heading` while allowing
-// comments inside a valid heading title.
-const INVISIBLE_COMMENT_MARKER = "\u0000";
-const INVISIBLE_LINE_MARKER = "\u0001";
-const RAW_INVISIBLE_COMMENT_MARKER_ESCAPE = "\u0002";
-
-function stripInvisibleCommentMarkers(line: string): string {
-  return line.replaceAll(INVISIBLE_COMMENT_MARKER, "");
-}
-
-function restoreVisibleMarkdownMarkers(line: string): string {
-  if (line.startsWith(INVISIBLE_LINE_MARKER)) return "";
-  return line
-    .replaceAll(INVISIBLE_COMMENT_MARKER, "")
-    .replaceAll(INVISIBLE_LINE_MARKER, "")
-    .replaceAll(RAW_INVISIBLE_COMMENT_MARKER_ESCAPE, INVISIBLE_COMMENT_MARKER);
-}
 
 
 interface VisibleMarkdownHeading {
@@ -14804,7 +14816,7 @@ function summaryQuestionFiles(
   stage: SummaryConfirmationStage,
   stateContent: string | null,
 ): SummaryQuestionFile[] {
-  const rec = recordDir(projectDir);
+  const rec = runRecordDir(projectDir);
   if (rec === null) return [];
   // Follow the approved plan's artifact placement. Without workflow state,
   // isolated per-unit stages retain their existing unit-directory discovery.
@@ -15067,25 +15079,45 @@ function keptOutputEntry(record: string, path: string): string | null {
  * write hook would stamp on them now. The Keep row that records them lets each
  * one descend from that confirmation while its bytes still match
  * (checkSummaryConfirmationEvidence), so keeping a document needs no save the
- * host may not record. Null when the stage owes no summary, no confirmation is
- * active for the scope, or a per-Unit stage names no Unit.
+ * host may not record. In an isolated run the scope is the one its own
+ * confirmation names (its questions file, on a per-Unit stage that Unit's), under
+ * that confirmation. Null when the stage owes no summary, no confirmation is
+ * active for the scope, or a per-Unit stage in the main run names no Unit.
  */
 export function keptSummaryOutputs(
   projectDir: string,
   stage: SummaryConfirmationStage,
   options: { stateContent: string | null; unit?: string; single?: boolean },
 ): { authorization: string; outputs: string[] } | null {
-  if (!summaryConfirmationOwed(stage, { stateContent: options.stateContent })) return null;
   const record = recordDir(projectDir);
   if (record === null) return null;
+  if (options.single) {
+    // Owed as the isolated completion reads it, from the run's own scope and
+    // not the main run's settings; and bound to this confirmation and its
+    // questions file, not the per-Unit one a walk may have left for the Unit.
+    if (!summaryConfirmationOwed(stage, { scope: singleStageAttemptScope(projectDir, stage.slug), stateContent: null })) {
+      return null;
+    }
+    const isolated = readSummaryAuthorization(projectDir, stage.slug, null);
+    if (isolated === null || isolated.workflow !== `single-stage:${stage.slug}`) return null;
+    const question = summaryQuestionFiles(projectDir, stage, null)
+      .find((candidate) => toPosix(relative(projectDir, candidate.path)) === isolated.questions_file);
+    if (question === undefined) return null;
+    if (options.unit !== undefined && question.unit !== null && question.unit !== options.unit) return null;
+    const outputs = summaryArtifactPaths(stage, question)
+      .map((path) => keptOutputEntry(record, path))
+      .filter((entry): entry is string => entry !== null);
+    return { authorization: isolated.id, outputs };
+  }
+  if (!summaryConfirmationOwed(stage, { stateContent: options.stateContent })) return null;
   const stageLevel = options.stateContent !== null &&
     usesStageLevelPerUnitArtifacts(getField(options.stateContent, "Scope"), options.stateContent);
   const unit = options.unit ?? null;
-  if (isPerUnitStage(stage) && !stageLevel && !options.single && unit === null) return null;
+  if (isPerUnitStage(stage) && !stageLevel && unit === null) return null;
   const stages = loadStageGraphAll();
   let authorization: string | null = null;
   const outputs: string[] = [];
-  const questions = summaryQuestionFiles(projectDir, stage, options.single ? null : options.stateContent)
+  const questions = summaryQuestionFiles(projectDir, stage, options.stateContent)
     .filter((question) => question.unit === unit);
   for (const question of questions) {
     for (const path of summaryArtifactPaths(stage, question)) {
@@ -15336,7 +15368,7 @@ export function summaryAuthorizationTargetOrThrow(
   stage: string,
   unit: string | null,
 ): string {
-  const record = recordDir(projectDir);
+  const record = runRecordDir(projectDir);
   if (record === null) throw new Error("Cannot resolve the active intent record.");
   return recordFileTargetOrThrow(record, summaryAuthorizationRelativePath(stage, unit));
 }
@@ -15345,7 +15377,7 @@ export function writeSummaryAuthorization(
   projectDir: string,
   authorization: SummaryAuthorization,
 ): void {
-  const record = recordDir(projectDir);
+  const record = runRecordDir(projectDir);
   if (record === null) throw new Error("Cannot resolve the active intent record.");
   writeRecordFileNoFollow(
     record,
@@ -15359,7 +15391,7 @@ export function clearSummaryAuthorization(
   stage: string,
   unit: string | null,
 ): void {
-  const record = recordDir(projectDir);
+  const record = runRecordDir(projectDir);
   if (record === null) return;
   const relativePath = summaryAuthorizationRelativePath(stage, unit);
   refuseEngineObserverWrite("clearSummaryAuthorization");
@@ -15375,7 +15407,7 @@ export function readSummaryAuthorization(
   stage: string,
   unit: string | null,
 ): SummaryAuthorization | null {
-  const record = recordDir(projectDir);
+  const record = runRecordDir(projectDir);
   if (record === null) return null;
   let parsed: unknown;
   try {
@@ -17432,8 +17464,6 @@ export function producesArtifactUnit(
   }
   return null;
 }
-
-export type ReviewVerdict = "READY" | "NOT-READY";
 export type ReviewRecoveryCause = "artifact" | "source" | "artifact+source";
 
 export function terminalReviewVerdict(
@@ -17765,7 +17795,7 @@ export function reviewArtifactEntries(
     );
   }
 
-  const record = recordDir(projectDir);
+  const record = runRecordDir(projectDir);
   if (record === null) return null;
   if (stage.for_each !== "unit-of-work") {
     return allArtifacts.map((artifact) => ({
@@ -18715,7 +18745,6 @@ function renderReviewMarkdownAuthority(
 
 const REVIEW_FINGERPRINT_RE = /^sha256:[0-9a-f]{64}$/;
 const REVIEW_APPENDIX_DIGEST_RE = /^(?:none|sha256:[0-9a-f]{64})$/;
-const REVIEW_REQUEST_ID_RE = /^review:[0-9a-f]{32}$/;
 const SOURCE_FINGERPRINT_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64}|unbindable)$/;
 const UNIT_SOURCE_FINGERPRINT_RE = /^(?:sha256:[0-9a-f]{64}|unbindable)$/;
 
@@ -19013,646 +19042,6 @@ export function reviewCompletionMatchesRequest(
   return true;
 }
 
-// --- Review records --------------------------------------------------------
-//
-// The review result lives in a framework-owned record under the intent record,
-// never inside the artifact it certifies. Only `aidlc-log.ts review --verdict`
-// writes one, in the same locked transaction that appends REVIEW_COMPLETED;
-// that row names the record and pins its bytes, so a record edited afterwards
-// stops being the review. Every field the reviewer protocol used to demand in
-// an appendix (verdict, reviewer, iteration, findings) is here, plus what binds
-// it: the request id, the artifact fingerprint the reviewer was dispatched on,
-// and the source fingerprints for workspace-writing stages.
-
-export const REVIEW_RECORDS_DIR = toPosix(join(engineDirFor(""), "reviews"));
-const REVIEW_RECORD_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-const REVIEW_FINDING_FIXED_STATUS_VALUES = [
-  "New",
-  "Unresolved",
-  "Resolved",
-  "Accepted risk",
-] as const;
-const REVIEW_FINDING_REJECTED_PREFIX = "Rejected: ";
-
-export type ReviewFindingStatus =
-  | (typeof REVIEW_FINDING_FIXED_STATUS_VALUES)[number]
-  | `${typeof REVIEW_FINDING_REJECTED_PREFIX}${string}`;
-
-export interface ReviewFinding {
-  artifact: string;
-  unit?: string;
-  id: string;
-  severity: string;
-  location: string;
-  finding: string;
-  requiredAction: string;
-  status: ReviewFindingStatus;
-  fingerprint: string;
-  decidedAtSeverity?: string;
-  reviewerNote?: string;
-  notRechecked?: boolean;
-  resolvedByReviewer?: boolean;
-  resolvedInReview?: boolean;
-  earlierDecision?: "Accepted risk" | `Rejected: ${string}`;
-  reopenedReason?: string;
-  relatedFindingId?: string;
-  introducedInReview?: boolean;
-  reviewRecord?: { path: string; digest: string };
-}
-
-/** One finding as stored in a review record (artifact and unit live on the record). */
-export interface ReviewRecordFinding {
-  id: string;
-  severity: string;
-  location: string;
-  finding: string;
-  required_action: string;
-  status: ReviewFindingStatus;
-}
-
-export interface ReviewRecordDerivedFinding extends ReviewRecordFinding {
-  decided_at_severity?: string;
-  reviewer_note?: string;
-  not_rechecked?: boolean;
-  resolved_by_reviewer?: boolean;
-  resolved_in_review?: boolean;
-  earlier_decision?: "Accepted risk" | `Rejected: ${string}`;
-  reopened_reason?: string;
-  related_finding_id?: string;
-  introduced_in_review?: boolean;
-}
-
-export interface ReviewRecord {
-  version: 1;
-  stage: string;
-  unit: string | null;
-  workflow: string | null;
-  attempt: string;
-  iteration: number;
-  reviewer: string;
-  verdict: ReviewVerdict;
-  request_id: string | null;
-  request_challenge: string | null;
-  artifact_fingerprint: string;
-  source_fingerprint: string | null;
-  unit_source_fingerprint: string | null;
-  findings: ReviewRecordFinding[];
-  derived_findings?: ReviewRecordDerivedFinding[];
-  body: string;
-  recorded_at: string;
-}
-
-function splitMarkdownRow(line: string): string[] {
-  const trimmed = line.trim();
-  const inner = trimmed.startsWith("|") ? trimmed.slice(1) : trimmed;
-  const body = inner.endsWith("|") ? inner.slice(0, -1) : inner;
-  const cells: string[] = [];
-  let cell = "";
-  let escaped = false;
-  for (const char of body) {
-    if (escaped) {
-      cell += char;
-      escaped = false;
-    } else if (char === "\\") {
-      escaped = true;
-    } else if (char === "|") {
-      cells.push(cell.trim());
-      cell = "";
-    } else {
-      cell += char;
-    }
-  }
-  if (escaped) cell += "\\";
-  cells.push(cell.trim());
-  return cells;
-}
-
-/** Human-readable form of the same values used by the type and predicate. */
-export const REVIEW_FINDING_STATUS_VALUES =
-  `${REVIEW_FINDING_FIXED_STATUS_VALUES.join(", ")}, or ` +
-  `"${REVIEW_FINDING_REJECTED_PREFIX}<reason>"`;
-
-export function validReviewFindingStatus(value: string): value is ReviewFindingStatus {
-  const rejectedReason = value.startsWith(REVIEW_FINDING_REJECTED_PREFIX)
-    ? value.slice(REVIEW_FINDING_REJECTED_PREFIX.length)
-    : null;
-  return (
-    REVIEW_FINDING_FIXED_STATUS_VALUES.some((status) => status === value) ||
-    (rejectedReason !== null && /^\S[\s\S]*$/.test(rejectedReason))
-  );
-}
-
-export function reviewFindingFingerprint(
-  finding: Pick<ReviewFinding, "id" | "location" | "finding" | "requiredAction">,
-): string {
-  return `sha256:${
-    createHash("sha256")
-      .update(
-        JSON.stringify([
-          finding.id,
-          finding.location,
-          finding.finding,
-          finding.requiredAction,
-        ]),
-      )
-      .digest("hex")
-  }`;
-}
-
-/** The canonical verdict line of one review section, or null when it has none. */
-export function reviewSectionVerdict(review: string): ReviewVerdict | null {
-  const verdictMatch = review.match(/^\*\*Verdict:\*\*\s*(READY|NOT-READY)\s*$/m);
-  return (verdictMatch?.[1] as ReviewVerdict | undefined) ?? null;
-}
-
-/** The lines under a review's `### Findings` heading, up to the next H3; null without one. */
-export function reviewFindingsSectionLines(review: string): string[] | null {
-  const lines = review.replace(/\r\n/g, "\n").split("\n");
-  const heading = lines.findIndex((line) => /^### Findings\s*$/.test(line));
-  if (heading === -1) return null;
-  let end = lines.length;
-  for (let i = heading + 1; i < lines.length; i++) {
-    if (/^### /.test(lines[i])) {
-      end = i;
-      break;
-    }
-  }
-  return lines.slice(heading + 1, end);
-}
-
-export interface ReviewerPriorFindingReport {
-  id: string;
-  now: "fixed" | "still-applies";
-  severity: string;
-  note: string;
-}
-
-export interface ReviewerNewFindingReport {
-  suppliedId?: string;
-  severity: string;
-  location: string;
-  finding: string;
-  requiredAction: string;
-}
-
-export interface ReviewerFindingsReport {
-  prior: ReviewerPriorFindingReport[];
-  newFindings: ReviewerNewFindingReport[];
-  /** The report left out its Prior findings table. A first review has no
-   *  prior findings, so there it reads as empty; a later review is refused. */
-  priorMissing?: true;
-}
-
-export const REVIEW_FINDINGS_REPORT_RETRY_MESSAGE =
-  "the findings report could not be read. Write the whole review again with the required Prior findings and New findings tables";
-
-// The same sentence with the fault named (the rule, the row and the cell), so
-// the reviewer fixes that cell on the retry instead of repeating the mistake
-// and spending the one retry on it. The opening is the generic message's.
-export function findingsReportUnreadableMessage(fault: string): string {
-  return `the findings report could not be read: ${fault}. Write the whole review again with the required Prior findings and New findings tables`;
-}
-
-function findingsReportUnreadable(fault: string): Error {
-  return new Error(findingsReportUnreadableMessage(fault));
-}
-
-function markdownRow(cells: readonly string[]): string {
-  return `| ${cells.join(" | ")} |`;
-}
-
-function reportTable(
-  lines: string[],
-  heading: string,
-  requiredHeaders: string[],
-  optionalHeaders: string[] = [],
-): { headers: string[]; rows: string[][] } {
-  const headingIndex = lines.findIndex((line) =>
-    line.trim().toLowerCase() === `**${heading.toLowerCase()}**`
-  );
-  if (headingIndex === -1) {
-    throw findingsReportUnreadable(`the ${heading} heading (**${heading}**) is missing`);
-  }
-  let tableStart = headingIndex + 1;
-  while (tableStart < lines.length && lines[tableStart].trim() === "") tableStart++;
-  if (
-    tableStart + 1 >= lines.length ||
-    !lines[tableStart].trim().startsWith("|") ||
-    !lines[tableStart + 1].trim().startsWith("|")
-  ) {
-    throw findingsReportUnreadable(
-      `no table follows the ${heading} heading; write its header row ${markdownRow(requiredHeaders)} ` +
-        `and the separator row ${markdownRow(requiredHeaders.map(() => "---"))}`,
-    );
-  }
-  const headers = splitMarkdownRow(lines[tableStart]);
-  const allowed = new Set([...requiredHeaders, ...optionalHeaders]);
-  if (
-    requiredHeaders.some((header) => !headers.includes(header)) ||
-    headers.some((header) => !allowed.has(header))
-  ) {
-    throw findingsReportUnreadable(
-      `the ${heading} table header is ${markdownRow(headers)}; it must be ${markdownRow(requiredHeaders)}` +
-        (optionalHeaders.length > 0 ? ` (an extra ${optionalHeaders.join(" or ")} column is allowed)` : ""),
-    );
-  }
-  const separator = splitMarkdownRow(lines[tableStart + 1]);
-  if (
-    separator.length !== headers.length ||
-    separator.some((cell) => !/^:?-{3,}:?$/.test(cell))
-  ) {
-    throw findingsReportUnreadable(
-      `the ${heading} table separator row must have one |---| cell per column (${headers.length})`,
-    );
-  }
-  const rows: string[][] = [];
-  for (let i = tableStart + 2; i < lines.length; i++) {
-    if (!lines[i].trim().startsWith("|")) break;
-    const cells = splitMarkdownRow(lines[i]);
-    // A row with nothing in any cell says nothing: the table reads as if the
-    // row were not there.
-    if (cells.every((cell) => cell.trim() === "")) continue;
-    if (cells.length > headers.length) {
-      throw findingsReportUnreadable(
-        `${heading} row ${rows.length + 1} has ${cells.length} cells for ${headers.length} columns; ` +
-          "escape | inside a cell as \\| (also inside a code span)",
-      );
-    }
-    rows.push([
-      ...cells,
-      ...Array.from({ length: headers.length - cells.length }, () => ""),
-    ]);
-  }
-  return { headers, rows };
-}
-
-/**
- * Parse the engine-owned findings report. Null means the review uses the
- * transition six-column format instead.
- */
-export function parseReviewerFindingsReport(
-  review: string,
-): ReviewerFindingsReport | null {
-  const section = reviewFindingsSectionLines(review);
-  if (section === null) return null;
-  const visible = visibleMarkdownLines(section.join("\n"));
-  const hasPrior = visible.some((line) =>
-    line.trim().toLowerCase() === "**prior findings**"
-  );
-  const hasNew = visible.some((line) =>
-    line.trim().toLowerCase() === "**new findings**"
-  );
-  if (!hasPrior && !hasNew) return null;
-  if (!hasNew) {
-    throw findingsReportUnreadable("the New findings heading (**New findings**) is missing");
-  }
-  const priorTable = hasPrior
-    ? reportTable(
-      visible,
-      "Prior findings",
-      ["ID", "Now", "Severity", "Note"],
-    )
-    : { headers: ["ID", "Now", "Severity", "Note"], rows: [] };
-  const newTable = reportTable(
-    visible,
-    "New findings",
-    ["Severity", "Location", "Finding", "Required action"],
-    ["ID"],
-  );
-  const priorIndex = new Map(
-    priorTable.headers.map((header, index) => [header, index]),
-  );
-  const newIndex = new Map(
-    newTable.headers.map((header, index) => [header, index]),
-  );
-  const prior = priorTable.rows.map((cells, index): ReviewerPriorFindingReport => {
-    const value = (header: string): string =>
-      cells[priorIndex.get(header) ?? -1]?.trim() ?? "";
-    const now = value("Now").toLowerCase();
-    if (
-      now !== "fixed" &&
-      now !== "resolved" &&
-      now !== "still applies" &&
-      now !== "open" &&
-      now !== "unresolved"
-    ) {
-      throw findingsReportUnreadable(
-        `Prior findings row ${index + 1} has Now "${value("Now")}"; write Fixed or Still applies`,
-      );
-    }
-    const id = value("ID");
-    if (!/^R-[0-9]+$/.test(id)) {
-      throw findingsReportUnreadable(
-        `Prior findings row ${index + 1} has ID "${id}"; use the engine's R-<n> id from the review context`,
-      );
-    }
-    return {
-      id,
-      now: now === "fixed" || now === "resolved"
-        ? "fixed"
-        : "still-applies",
-      severity: value("Severity"),
-      note: value("Note"),
-    };
-  });
-  const newFindings = newTable.rows.map(
-    (cells, index): ReviewerNewFindingReport => {
-      const value = (header: string): string =>
-        cells[newIndex.get(header) ?? -1]?.trim() ?? "";
-      // A placeholder row (blank or dash cells, or "No findings") is refused:
-      // an empty table is how a review says there is nothing new.
-      if (
-        ["Severity", "Location", "Finding", "Required action"].some((header) =>
-          /^(?:-*|n\/?a|none)$/i.test(value(header))
-        ) ||
-        value("Finding").toLowerCase() === "no findings"
-      ) {
-        throw findingsReportUnreadable(
-          `New findings row ${index + 1} is a placeholder; leave the table empty when there is nothing new`,
-        );
-      }
-      return {
-        ...(newIndex.has("ID") && value("ID").length > 0
-          ? { suppliedId: value("ID") }
-          : {}),
-        severity: value("Severity"),
-        location: value("Location"),
-        finding: value("Finding"),
-        requiredAction: value("Required action"),
-      };
-    },
-  );
-  return { prior, newFindings, ...(hasPrior ? {} : { priorMissing: true as const }) };
-}
-
-/**
- * Parse one review section (a record body, or the text under a legacy `## Review`
- * heading): the canonical verdict line and the `### Findings` table. Throws on a
- * malformed finding row so a bad review is refused rather than half-rendered.
- */
-export function parseReviewSection(
-  review: string,
-  artifact: string,
-  unit?: string,
-): {
-  verdict: ReviewVerdict | null;
-  findings: ReviewFinding[];
-  // Whether a findings TABLE was present at all. A reviewer that wrote prose
-  // under the heading is a different case from one that wrote the canonical
-  // table and no rows, and the caller refuses only the second.
-  tablePresent: boolean;
-} {
-  const verdict = reviewSectionVerdict(review);
-  const section = reviewFindingsSectionLines(review);
-  if (section === null) return { verdict, findings: [], tablePresent: false };
-  const table = section.filter((line) => line.trim().startsWith("|"));
-  if (table.length < 2) return { verdict, findings: [], tablePresent: false };
-  const headers = splitMarkdownRow(table[0]);
-  // Every cell the record schema needs is addressed by column name, so a
-  // renamed or dropped column is refused rather than read as "no findings":
-  // returning an empty list here records the reviewer's verdict while dropping
-  // the rows it rests on. Name both headers so the review can be rewritten.
-  const expected = ["ID", "Severity", "Location", "Finding", "Required action", "Status"];
-  const missing = expected.filter((name) => !headers.includes(name));
-  if (missing.length > 0) {
-    throw new Error(
-      `${artifact}: findings table header declares ${headers.join(" | ")}. ` +
-        `Expected columns: ${expected.join(" | ")}. Missing: ${missing.join(", ")}`,
-    );
-  }
-  const index = new Map(headers.map((name, position) => [name, position]));
-  const findings: ReviewFinding[] = [];
-  for (const line of table.slice(2)) {
-    const cells = splitMarkdownRow(line);
-    // Check arity before positional reads: a missing cell can shift later
-    // values left, but its intended column cannot be recovered reliably.
-    // Show the expected order and offer a hint when a trailing status fits.
-    if (cells.length !== headers.length) {
-      const rowId = cells[index.get("ID") ?? 0]?.trim() || "?";
-      if (cells.length < headers.length) {
-        const lastCell = cells.at(-1) ?? "";
-        const hint = headers.at(-1) === "Status" && validReviewFindingStatus(lastCell)
-          ? `The last cell ${JSON.stringify(lastCell)} looks like Status; check earlier cells for a missing value or "|" separator`
-          : 'Check for a missing cell or "|" separator';
-        throw new Error(
-          `${artifact}#${rowId}: row has ${cells.length} cells, header declares ${headers.length}. ` +
-            `Expected columns: ${headers.join(" | ")}. ${hint}`,
-        );
-      }
-      throw new Error(
-        `${artifact}#${rowId}: row has ${cells.length} cells, header declares ${headers.length}: ${
-          cells.length - headers.length
-        } unexpected extra cell(s)`,
-      );
-    }
-    const value = (name: string): string =>
-      cells[index.get(name) ?? -1]?.trim() ?? "";
-    const id = value("ID");
-    if (!/^R-[0-9]+$/.test(id)) {
-      throw new Error(`${artifact}: invalid finding ID ${JSON.stringify(id)}`);
-    }
-    const status = value("Status");
-    if (!validReviewFindingStatus(status)) {
-      // Name the accepted set: "Fixed" is the word a reviewer reaches for once a
-      // human has fixed something, so the rejected value alone leaves them
-      // guessing at an enum that is right here.
-      throw new Error(
-        `${artifact}#${id}: invalid finding status ${JSON.stringify(status)}. ` +
-          `Valid statuses: ${REVIEW_FINDING_STATUS_VALUES}.`,
-      );
-    }
-    const finding: ReviewFinding = {
-      artifact,
-      ...(unit ? { unit } : {}),
-      id,
-      severity: value("Severity"),
-      location: value("Location"),
-      finding: value("Finding"),
-      requiredAction: value("Required action"),
-      status,
-      fingerprint: "",
-    };
-    finding.fingerprint = reviewFindingFingerprint(finding);
-    findings.push(finding);
-  }
-  return { verdict, findings, tablePresent: true };
-}
-
-const UNREADABLE_FINDINGS_TABLE_ID = "R-00";
-const UNREADABLE_FINDINGS_TABLE_LOCATION = "review findings table";
-
-/**
- * The one finding that stands in for a findings table that could not be read.
- * The reviewer's rows are not guessed at: this names why the table is
- * unreadable, and the gate shows the reviewer's findings section as written
- * beside it. `R-00` is outside the reviewer's own `R-01`.. numbering, so it
- * never collides with the rows it stands in for, here or carried forward.
- */
-export function unreadableFindingsTableFinding(
-  artifact: string,
-  reason: string,
-  unit?: string,
-): ReviewFinding {
-  const finding: ReviewFinding = {
-    artifact,
-    ...(unit ? { unit } : {}),
-    id: UNREADABLE_FINDINGS_TABLE_ID,
-    severity: "Major",
-    location: `${artifact} > ${UNREADABLE_FINDINGS_TABLE_LOCATION}`,
-    // The parser joins column names with " | "; commas keep this one cell if
-    // a reviewer carries the finding forward without the table escaping.
-    finding: `The reviewer's findings table could not be read, so its rows are not listed here: ${
-      reason.replace(/\s*\|\s*/g, ", ")
-    }`,
-    requiredAction: "Address the reviewer's findings as written below this table.",
-    status: "Unresolved",
-    fingerprint: "",
-  };
-  finding.fingerprint = reviewFindingFingerprint(finding);
-  return finding;
-}
-
-export function isUnreadableFindingsTableFinding(
-  finding: Pick<ReviewFinding, "id" | "location">,
-): boolean {
-  return (
-    finding.id === UNREADABLE_FINDINGS_TABLE_ID &&
-    finding.location.endsWith(` > ${UNREADABLE_FINDINGS_TABLE_LOCATION}`)
-  );
-}
-
-/**
- * Read a review's findings table the way a record admits it: its rows, or why
- * it cannot be read (a header missing a column the record addresses, a
- * malformed row, or a canonical table with no rows under NOT-READY, where the
- * gate would render "No findings" over a rejection). Prose under the heading,
- * or no heading at all, is not unreadable here: the reviewer protocol already
- * classifies that shape as an incomplete review, and refusing it would reject
- * bodies that predate the table contract.
- */
-export function readFindingsTable(
-  review: string,
-  artifact: string,
-  verdict: ReviewVerdict | null,
-  unit?: string,
-): {
-  findings: ReviewFinding[];
-  unreadable: string | null;
-  report?: ReviewerFindingsReport;
-} {
-  try {
-    const report = parseReviewerFindingsReport(review);
-    if (report !== null) {
-      if (
-        verdict === "NOT-READY" &&
-        report.prior.length === 0 &&
-        report.newFindings.length === 0
-      ) {
-        return {
-          findings: [],
-          unreadable:
-            "a NOT-READY review with a findings report must record at least one finding in it",
-        };
-      }
-      const findings = report.newFindings.map((row, index) => {
-        const finding: ReviewFinding = {
-          artifact,
-          ...(unit ? { unit } : {}),
-          id: `R-${String(index + 1).padStart(2, "0")}`,
-          severity: row.severity,
-          location: row.location,
-          finding: row.finding,
-          requiredAction: row.requiredAction,
-          status: "New",
-          fingerprint: "",
-        };
-        finding.fingerprint = reviewFindingFingerprint(finding);
-        return finding;
-      });
-      return { findings, unreadable: null, report };
-    }
-    const parsed = parseReviewSection(review, artifact, unit);
-    if (verdict === "NOT-READY" && parsed.tablePresent && parsed.findings.length === 0) {
-      return {
-        findings: [],
-        unreadable:
-          "a NOT-READY review with a findings table must record at least one finding in it",
-      };
-    }
-    return { findings: parsed.findings, unreadable: null };
-  } catch (parseError) {
-    return { findings: [], unreadable: errorMessage(parseError) };
-  }
-}
-
-/** A stable, path-safe name for a review attempt, derived from its floor identity. */
-export function reviewAttemptId(floor: string): string {
-  return createHash("sha256").update(floor.length === 0 ? "unstarted" : floor).digest("hex").slice(0, 16);
-}
-export function reviewRecordRelativePath(
-  stage: string,
-  unit: string | undefined,
-  attemptId: string,
-  iteration: number,
-): string {
-  if (!REVIEW_RECORD_SEGMENT_RE.test(stage)) throw new Error(`Invalid stage slug "${stage}".`);
-  const unitProblem = unit === undefined ? null : validateUnitName(unit);
-  if (unitProblem !== null) throw new Error(unitProblem);
-  return unit === undefined
-    ? `${REVIEW_RECORDS_DIR}/${stage}/stage/${attemptId}/${iteration}.json`
-    : `${REVIEW_RECORDS_DIR}/${stage}/units/${unit}/${attemptId}/${iteration}.json`;
-}
-
-/**
- * Where the reviewer writes its review for one request: the scratch slot the
- * request opens (deleting any earlier draft) and the verdict consumes. The
- * record beside it is the review; the draft is the reviewer's input to it.
- * A request with an id has a slot of its own, so a reviewer of a replaced
- * request that writes late never fills the replacement's slot; a request
- * recorded before request ids keeps the pass's shared slot.
- */
-export function reviewDraftRelativePath(
-  stage: string,
-  unit: string | undefined,
-  attemptId: string,
-  iteration: number,
-  requestId: string | null = null,
-): string {
-  if (!REVIEW_RECORD_SEGMENT_RE.test(stage)) throw new Error(`Invalid stage slug "${stage}".`);
-  const unitProblem = unit === undefined ? null : validateUnitName(unit);
-  if (unitProblem !== null) throw new Error(unitProblem);
-  if (requestId !== null && !REVIEW_REQUEST_ID_RE.test(requestId)) {
-    throw new Error(`Invalid review request id "${requestId}".`);
-  }
-  const name = requestId === null
-    ? `${iteration}.review.md`
-    : `${iteration}.${requestId.slice("review:".length)}.review.md`;
-  return unit === undefined
-    ? `${REVIEW_RECORDS_DIR}/${stage}/stage/${attemptId}/${name}`
-    : `${REVIEW_RECORDS_DIR}/${stage}/units/${unit}/${attemptId}/${name}`;
-}
-
-/** Whether `path` has exactly one supported stage or Unit record shape. */
-export function isReviewRecordRelativePath(path: string): boolean {
-  // Audit rows keep their original path and digest across an upgrade.
-  const prefix = [REVIEW_RECORDS_DIR, LEGACY_REVIEW_RECORDS_DIR]
-    .find((dir) => path.startsWith(`${dir}/`));
-  if (prefix === undefined) return false;
-  const parts = [prefix, ...path.slice(prefix.length + 1).split("/")];
-  if (!REVIEW_RECORD_SEGMENT_RE.test(parts[1] ?? "")) return false;
-  if (parts[2] === "stage") {
-    return parts.length === 5 &&
-      /^[0-9a-f]{16}$/.test(parts[3]) &&
-      /^[1-9][0-9]*\.json$/.test(parts[4]);
-  }
-  return parts.length === 6 &&
-    parts[2] === "units" &&
-    REVIEW_RECORD_SEGMENT_RE.test(parts[3]) &&
-    /^[0-9a-f]{16}$/.test(parts[4]) &&
-    /^[1-9][0-9]*\.json$/.test(parts[5]);
-}
-
 /** Canonical bytes: fixed key order, two-space indent, one trailing newline. */
 // --- Who writes the review -----------------------------------------------------
 //
@@ -19712,6 +19101,49 @@ export function openReviewRequests(events: ReadonlyArray<AuditShardEvent>): Open
     });
   }
   return [...open.values()];
+}
+
+/**
+ * The open review requests of each side-by-side Unit of the record a chat
+ * works in from `projectDir`, with the Unit's own record. A Unit's review is
+ * recorded in its worktree (stage-protocol-swarm.md, the reviewer boundary)
+ * and its reviewer writes the review file in that worktree's record, while the
+ * reviewer runs from `projectDir`, whose hooks record its finish. The
+ * worktrees are the folders `prepare` made under `.aidlc/worktrees/` whose own
+ * metadata (swarmWorkerWorktreeMeta) names this folder and this record; each
+ * is read with this record's names, never resolved on its own. Evidence only:
+ * a worktree that cannot be read is left out.
+ */
+export function swarmUnitOpenReviews(
+  projectDir: string,
+  intent: string,
+  space: string,
+): Array<{ record: string; requests: OpenReviewRequest[] }> {
+  const reviews: Array<{ record: string; requests: OpenReviewRequest[] }> = [];
+  const root = worktreesDir(projectDir);
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return reviews;
+  }
+  const record = relativeRecordDir(projectDir, intent, space);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || parseBoltName(entry.name) === null) continue;
+    const worktree = join(root, entry.name);
+    try {
+      const worker = swarmWorkerWorktreeMeta(worktree);
+      if (worker === null || worker.intentRecord !== record ||
+        canonicalPathKey(worker.parent) !== canonicalPathKey(projectDir)) continue;
+      reviews.push({
+        record: join(worktree, ...worker.intentRecord.split("/")),
+        requests: openReviewRequests(readAuditShardEvents(worktree, intent, space)),
+      });
+    } catch {
+      // Not readable as a Unit's worktree: no evidence from it.
+    }
+  }
+  return reviews;
 }
 
 /**
@@ -19963,7 +19395,7 @@ function isReviewRecord(value: unknown): value is ReviewRecord {
  */
 function reviewRecordAbsent(projectDir: string, relativePath: string): boolean {
   if (!isReviewRecordRelativePath(relativePath)) return false;
-  const record = recordDir(projectDir);
+  const record = runRecordDir(projectDir);
   if (record === null) return true;
   let at = record;
   for (const part of relativePath.split("/")) {
@@ -19998,7 +19430,7 @@ export function readReviewRecord(
   ref: { path: string; digest: string },
 ): ReviewRecord | null {
   if (!isReviewRecordRelativePath(ref.path)) return null;
-  const record = recordDir(projectDir);
+  const record = runRecordDir(projectDir);
   if (record === null) return null;
   let bytes: Buffer;
   try {
@@ -20215,6 +19647,16 @@ export function subagentDispatchesShowNoReviewer(
  * (its heartbeat newer than every completion row since), or a failure that
  * hook recorded since (its drops file). The caller holds the audit lock, so
  * neither the rows nor the ledger move while this reads.
+ *
+ * A side-by-side Unit's review is recorded in its worktree while its reviewer
+ * runs from the main folder, whose hooks record the finish there (with the
+ * Unit's digest, swarmUnitOpenReviews), so the same checks run over the main
+ * folder's rows, ledger and hook health too; a worker naming another record,
+ * or a chat outside the main folder's workflow, is a doubt. The host records
+ * the finish before the conductor sees the reviewer's result, so those rows
+ * do not move under this read either. A row names an agent type, not a
+ * review: with two Units reviewed side by side by one reviewer type, either
+ * reviewer finishing reads as both, and the other Unit's line is not said.
  */
 export function noReviewerFinishedSinceReview(
   projectDir: string,
@@ -20228,34 +19670,52 @@ export function noReviewerFinishedSinceReview(
     if (selection.intent === null || workflowParticipation(projectDir, selection) !== "participant") return false;
     const requested = Date.parse(request.row.timestamp);
     if (!Number.isFinite(requested)) return false;
-    const ledger = subagentInflightMarkerPath(projectDir);
-    if (existsSync(ledger)) {
-      if (lstatSync(ledger).mtimeMs >= requested) return false;
-      const inflight = inspectSubagentInflight(projectDir);
-      if (inflight.malformed || inflight.freshCount > 0) return false;
+    const ledgers: Array<{ dir: string; events: ReadonlyArray<AuditShardEvent> }> = [{ dir: projectDir, events }];
+    const worker = swarmWorkerWorktreeMeta(projectDir);
+    if (worker !== null) {
+      if (worker.intentRecord !== relativeRecordDirForSelection(selection)) return false;
+      const main = resolveWorkflowSelection(worker.parent, {
+        intent: selection.intent, space: selection.space, bind: false,
+      });
+      if (workflowParticipation(worker.parent, main) !== "participant") return false;
+      // The two ledgers' shard files can share a name: the main folder's rows
+      // carry its path, so only their time orders them against the request.
+      ledgers.push({
+        dir: worker.parent,
+        events: readAuditShardEvents(worker.parent, selection.intent, selection.space, undefined, false)
+          .map((row) => ({ ...row, shard: `${worker.parent}:${row.shard}` })),
+      });
     }
-    const since = events.filter((row) =>
-      row.event === "SUBAGENT_COMPLETED" && !attemptEventDefinitelyBefore(row, request.row));
-    for (const row of since) {
-      const agent = auditBlockField(row.block, "Agent Type");
-      if (agent === null || agent === "" || agent === "unknown") return false;
-      if (agent === request.reviewer && recordedReviewFileDigest(row.block, request.reviewFile) !== null) return false;
-    }
-    const health = hooksHealthReadDir(projectDir, selection.intent, selection.space);
-    const heartbeat = join(health, "log-subagent.last");
-    if (existsSync(heartbeat)) {
-      const beat = Date.parse(readFileSync(heartbeat, "utf-8").trim());
-      if (!Number.isFinite(beat)) return false;
-      // The hook beats, then appends its row in the same run: a beat since the
-      // request with no completion row at or after it is a run that left none.
-      if (beat >= requested && !since.some((row) => Date.parse(row.timestamp) >= beat)) return false;
-    }
-    const drops = join(health, "log-subagent.drops");
-    if (existsSync(drops)) {
-      for (const line of readFileSync(drops, "utf-8").split("\n")) {
-        if (line.trim() === "") continue;
-        const at = Date.parse(line.split("\t", 1)[0]);
-        if (!Number.isFinite(at) || at >= requested) return false;
+    for (const { dir, events: rows } of ledgers) {
+      const ledger = subagentInflightMarkerPath(dir);
+      if (existsSync(ledger)) {
+        if (lstatSync(ledger).mtimeMs >= requested) return false;
+        const inflight = inspectSubagentInflight(dir);
+        if (inflight.malformed || inflight.freshCount > 0) return false;
+      }
+      const since = rows.filter((row) =>
+        row.event === "SUBAGENT_COMPLETED" && !attemptEventDefinitelyBefore(row, request.row));
+      for (const row of since) {
+        const agent = auditBlockField(row.block, "Agent Type");
+        if (agent === null || agent === "" || agent === "unknown") return false;
+        if (agent === request.reviewer && recordedReviewFileDigest(row.block, request.reviewFile) !== null) return false;
+      }
+      const health = hooksHealthReadDir(dir, selection.intent, selection.space);
+      const heartbeat = join(health, "log-subagent.last");
+      if (existsSync(heartbeat)) {
+        const beat = Date.parse(readFileSync(heartbeat, "utf-8").trim());
+        if (!Number.isFinite(beat)) return false;
+        // The hook beats, then appends its row in the same run: a beat since the
+        // request with no completion row at or after it is a run that left none.
+        if (beat >= requested && !since.some((row) => Date.parse(row.timestamp) >= beat)) return false;
+      }
+      const drops = join(health, "log-subagent.drops");
+      if (existsSync(drops)) {
+        for (const line of readFileSync(drops, "utf-8").split("\n")) {
+          if (line.trim() === "") continue;
+          const at = Date.parse(line.split("\t", 1)[0]);
+          if (!Number.isFinite(at) || at >= requested) return false;
+        }
       }
     }
     return true;
@@ -29401,7 +28861,7 @@ export function writeWorkspaceSourceSnapshot(
   state: WorkspaceSourceState,
 ): boolean {
   const path = workspaceSourceSnapshotPath(projectDir, stageSlug, state.fingerprint);
-  const record = recordDir(projectDir);
+  const record = runRecordDir(projectDir);
   if (path === null || record === null) return false;
   const serialized =
     `${WORKSPACE_SNAPSHOT_HEADER}\t${state.fingerprint}\t-\n${serializeSourceListing(state.listing)}`;
@@ -30141,10 +29601,6 @@ export function engineDir(projectDir: string, intent?: string, space?: string): 
   return engineDirFor(docsRoot(projectDir, intent, space));
 }
 
-export function engineDirFor(recordRoot: string): string {
-  return join(recordRoot, ENGINE_DIR);
-}
-
 function engineReadDirFor(recordRoot: string, current: string, legacyName: string): string {
   const legacy = join(recordRoot, legacyName);
   // An existing but malformed new entry is not absence. In particular, do not
@@ -30709,44 +30165,6 @@ export function engineTouchMarkerPath(projectDir: string, intent?: string, space
 // this marker is how the Stop hook knows.
 export function turnEndMarkerPath(projectDir: string, intent?: string, space?: string): string {
   return join(engineDir(projectDir, intent, space), "turn-end");
-}
-
-// The env marker that identifies the Stop hook's OWN read-only `next` probe.
-// Set by aidlc-continue-workflow.ts on its spawn; read by aidlc-orchestrate.ts
-// to suppress the engine touch. Without this the carve-out can never fire (see
-// above).
-export const STOP_HOOK_PROBE_ENV = "AIDLC_STOP_HOOK_PROBE";
-
-// The env marker that identifies the route check `aidlc-state.ts unit start`
-// runs to learn which Unit the engine would route. Like the Stop-hook probe it
-// consults the engine and reads only the directive off stdout.
-export const ROUTE_CHECK_ENV = "AIDLC_ROUTE_CHECK";
-
-// --- Engine observer mode -----------------------------------------------------
-//
-// An OBSERVER is an engine invocation whose whole purpose is to LEARN the
-// current directive: the Stop hook's `next` probe and the route check's
-// `next`/`continue` pair. Both read the prepared directive off stdout and never
-// consult the durable marker afterwards, so publishing from one buys nothing and
-// costs correctness: a publication rotates the directive's issuance identity and
-// used to delete the plan-approval runtime dir, which destroyed a human's
-// in-flight approval between the turn that offered it and the turn that recorded
-// their answer.
-//
-// The predicates are deliberately env-only and read the LIVE environment on
-// every call: a module-level snapshot would ignore a test that sets the variable
-// after import, and the cost of a property read is irrelevant beside a spawn.
-// Queries are read-only for every Unit Ownership, not only team-owned Units.
-export function isStopHookProbe(): boolean {
-  return process.env[STOP_HOOK_PROBE_ENV] === "1";
-}
-
-export function isRouteCheckProbe(): boolean {
-  return process.env[ROUTE_CHECK_ENV] === "1";
-}
-
-export function isReadOnlyEngineProbe(): boolean {
-  return isStopHookProbe() || isRouteCheckProbe();
 }
 
 // Touch a turn-shape marker. Only the mtime carries meaning, so the body is a
@@ -33391,40 +32809,6 @@ export function worktreeRuntimeGraphPath(wtPath: string, recordPrefix?: string |
 // regex.
 export const BOLT_SLUG_REGEX = /^[a-z][a-z0-9-]*$/;
 export const BOLT_SLUG_MAX_LENGTH = 64;
-// New workflows author lowercase kebab-case names, but pre-lifecycle DAGs
-// accepted other filesystem-safe names. Keep those existing identifiers
-// routable while still excluding separators, traversal, whitespace, and
-// control characters.
-export const UNIT_NAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-export const UNIT_NAME_MAX_LENGTH = 64;
-
-// --- Error helpers (catch-block discipline) ---
-//
-// TypeScript 4.4+ types `catch (e)` as `unknown` under --useUnknownInCatchVariables.
-// These two helpers replace the old `e as Error` pattern in throw-sites and
-// log-sites uniformly. Use:
-//
-//   try { ... } catch (e) {
-//     throw new Error(`failed: ${errorMessage(e)}`);
-//   }
-//
-// Both helpers are total (never throw) and stable on any thrown value
-// — string throws, plain objects, Error instances, primitives.
-
-export function errorMessage(e: unknown): string {
-  if (e instanceof Error) {
-    return e.message;
-  }
-  if (typeof e === "string") {
-    return e;
-  }
-  // TS 4.9+ narrows `e.message` to `unknown` after the `in` check — no cast needed.
-  if (typeof e === "object" && e !== null && "message" in e) {
-    const msg: unknown = e.message;
-    return typeof msg === "string" ? msg : String(msg);
-  }
-  return String(e);
-}
 
 export function errorStack(e: unknown): string | undefined {
   if (e instanceof Error) {
@@ -33435,22 +32819,6 @@ export function errorStack(e: unknown): string | undefined {
     return typeof stack === "string" ? stack : undefined;
   }
   return undefined;
-}
-
-// --- JSON.parse type guards ---
-//
-// JSON.parse returns `any` (TypeScript design choice). These guards narrow
-// `unknown` to a concrete shape so consumers don't need property-access
-// casts. Each guard is structural and total — it returns false for malformed
-// input rather than throwing, so callers can decide how to fail.
-
-/**
- * Generic "is plain object" predicate. After this guard, the value is typed
- * `Record<string, unknown>` so caller can do `if ("x" in v) { v.x ... }`
- * with TS narrowing carrying through.
- */
-export function isPlainObject(x: unknown): x is Record<string, unknown> {
-  return typeof x === "object" && x !== null && !Array.isArray(x);
 }
 
 /**
@@ -33555,25 +32923,6 @@ export function validateBoltSlug(slug: string): string | null {
   }
   if (!BOLT_SLUG_REGEX.test(slug)) {
     return `Invalid Bolt slug "${slug}" — must match ${BOLT_SLUG_REGEX} (lowercase letter, then lowercase letters/digits/hyphens)`;
-  }
-  return null;
-}
-
-// Unit names become path components under construction/<unit>/ and are also
-// mirrored into single-line state fields. Keep one canonical validator for the
-// authored DAG, cached runtime graph, and lifecycle CLI. Lowercase kebab-case is
-// the authoring convention; leading digits, uppercase letters, underscores,
-// and dots remain accepted for safe legacy DAG names.
-export function validateUnitName(name: string): string | null {
-  if (!name) return "Unit name is empty";
-  if (name.length > UNIT_NAME_MAX_LENGTH) {
-    return `Unit name "${name.slice(0, 32)}..." is ${name.length} chars; max is ${UNIT_NAME_MAX_LENGTH}`;
-  }
-  if (!UNIT_NAME_REGEX.test(name)) {
-    return (
-      `Invalid Unit name "${name}" - must match ${UNIT_NAME_REGEX} ` +
-      "(ASCII letter/digit, then ASCII letters/digits/dot/underscore/hyphen)"
-    );
   }
   return null;
 }
@@ -36674,2292 +36023,6 @@ export function countCheckboxes(
   return checkboxes.filter((c) => c.state === state).length;
 }
 
-// --- Audit locking (per-intent, reaper-guarded) -------------------------------
-//
-// The audit lock is a cross-process mutex: a bare mkdir-EEXIST dir in tmpdir().
-// It is keyed PER INTENT so two intents (or two Bolts in different intents) run
-// truly in parallel without false serialization. Two keying invariants (P4's
-// auto-create depends on them):
-//
-//  (1) intent-OMITTED hashes a RESERVED sentinel `__workspace__` bucket, distinct
-//      from every per-intent bucket, and does NOT resolve activeIntent() (during
-//      intent creation there is no active intent; resolving would throw or bucket on
-//      "default", and two concurrent first-runs would key different/empty
-//      buckets and both create intents). EVERY intents.json mutation takes this
-//      workspace
-//      bucket; only intent-scoped state/audit writes take a per-intent bucket.
-//  (2) the composite identity (projectDir + space + intent | sentinel) keys the
-//      lock dir. In-process receipt/depth/handler maps use a stable lexical
-//      request key, while each receipt retains the acquisition-bound identity.
-//
-// REAPER: acquire stamps owner PID + acquisition generation + a random token
-// into owner.json. Automatic recovery is fail-closed: stamps that name no valid
-// owner, unreadable stamps and live owners are never reaped. A recoverable
-// owner-stamped reap gate blocks acquisition while a provably-dead generation
-// (or an old stamp that never finished) is moved, verified, deleted, or restored.
-
-// The reserved bucket for workspace-level mutations (intents.json, intent creation).
-export const WORKSPACE_LOCK_SENTINEL = "__workspace__";
-
-// Default stale-lock age threshold (ms). Doctor uses this to surface a
-// live-but-old owner for manual diagnosis; automatic acquisition never reaps a
-// live stamped owner. Tunable via AIDLC_LOCK_STALE_MS for tests/ops.
-export const DEFAULT_LOCK_STALE_MS = 10 * 60 * 1000;
-
-function lockStaleMs(): number {
-  const raw = process.env.AIDLC_LOCK_STALE_MS;
-  if (raw) {
-    const n = Number(raw);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return DEFAULT_LOCK_STALE_MS;
-}
-
-// The composite lock IDENTITY string — keys the dir hash AND the in-process
-// maps. intent-omitted → the workspace sentinel (invariant 1). When intent is
-// given, the space is default-resolved (a per-intent lock is meaningless without
-// its space) but activeIntent() is NEVER consulted here.
-export function auditLockIdentity(projectDir: string, intent?: string, space?: string): string {
-  let canonicalProjectDir = resolvePath(projectDir);
-  // The native path, as in activeDirectiveContext: here it is only a name, and
-  // Bun's realpathSync would give a hook spelling the folder 8.3 short and the
-  // engine spelling it long two different locks.
-  try {
-    canonicalProjectDir = realpathSync.native(canonicalProjectDir);
-  } catch {
-    // Creation and diagnostics can lock before the project exists. The absolute
-    // lexical path is stable until realpath can resolve filesystem aliases.
-  }
-  if (process.platform === "win32") {
-    canonicalProjectDir = canonicalProjectDir.toLowerCase();
-  }
-  if (intent === undefined) {
-    return `${canonicalProjectDir}\x00${WORKSPACE_LOCK_SENTINEL}`;
-  }
-  const sp = space ?? activeSpace(projectDir);
-  return `${canonicalProjectDir}\x00${sp}\x00${intent}`;
-}
-
-// Stable call-site key for process-local receipt/depth/handler maps. Unlike the
-// filesystem identity, it deliberately does not read realpath or active-space,
-// so release remains bound to the acquisition even if a previously-missing path
-// becomes a symlink/real directory or the active-space cursor changes.
-function auditLockRequestKey(projectDir: string, intent?: string, space?: string): string {
-  const lexicalProjectDir = process.platform === "win32"
-    ? resolvePath(projectDir).toLowerCase()
-    : resolvePath(projectDir);
-  if (intent === undefined) {
-    return JSON.stringify([lexicalProjectDir, "workspace"]);
-  }
-  return JSON.stringify([
-    lexicalProjectDir,
-    "intent",
-    space === undefined ? null : space,
-    intent,
-  ]);
-}
-
-export function auditLockDir(projectDir: string, intent?: string, space?: string): string {
-  const identity = auditLockIdentity(projectDir, intent, space);
-  const hash = createHash("md5").update(identity).digest("hex").slice(0, 8);
-  return join(tmpdir(), `.aidlc-audit-${hash}.lock`);
-}
-
-// Owner stamp written into the lock dir on acquire. The random token identifies
-// the lock generation; processGeneration binds the PID to its OS creation time
-// where the platform exposes one (Linux procfs and Windows GetProcessTimes).
-interface LockOwner {
-  pid: number;
-  startedAtMs: number;
-  reapLiveOwnerAfterStale: boolean;
-  token?: string;
-  processGeneration?: string;
-}
-
-type OwnerStampRead =
-  | { status: "ok"; owner: LockOwner }
-  | { status: "missing" }
-  | { status: "invalid" }
-  | { status: "unreadable"; code: string };
-
-export interface AuditLockFaultHooksForTests {
-  afterReleaseOwnerCheck?: (lockDir: string) => void;
-  beforeReleaseRename?: (retiredPath: string, attempt: number) => void;
-  failReleaseRename?: (retiredPath: string, attempt: number) => boolean;
-  afterSuccessfulReap?: (lockDir: string) => void;
-  afterReapFinalCheck?: (lockDir: string) => void;
-  failReapRename?: (privatePath: string, attempt: number) => boolean;
-  beforeAcquirerOwnerStamp?: (
-    candidateDir: string,
-    canonicalDir: string,
-    token: string,
-  ) => void;
-  beforeGateOwnerStamp?: (
-    candidateDir: string,
-    canonicalDir: string,
-    token: string,
-  ) => void;
-  failGateReleaseRename?: (retiredPath: string, attempt: number) => boolean;
-  afterReleasableGateCheck?: (gateDir: string) => void;
-  posixGateLibraryCandidates?: string[];
-  processProbe?: (pid: number) => { alive: boolean; generation: string | null } | undefined;
-  failNativeGateMutex?: (lockDir: string) => boolean;
-  selfProcessGeneration?: () => string | null;
-}
-
-let AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS: AuditLockFaultHooksForTests | null = null;
-
-export function _setAuditLockFaultHooksForTests(
-  hooks: AuditLockFaultHooksForTests | null,
-): void {
-  AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS = hooks;
-  POSIX_GATE_API = undefined;
-}
-
-function ownerStampPath(lockDir: string): string {
-  return join(lockDir, "owner.json");
-}
-
-const LOCK_GENERATION_TOKEN_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-
-function lockGenerationTokenDir(lockDir: string, token: string): string | null {
-  if (!LOCK_GENERATION_TOKEN_REGEX.test(token)) return null;
-  const root = resolvePath(lockDir);
-  const tokenDir = resolvePath(root, token);
-  const lexicalChild = relative(root, tokenDir);
-  if (
-    lexicalChild === "" ||
-    lexicalChild === ".." ||
-    lexicalChild.startsWith(`..${sep}`) ||
-    isAbsolute(lexicalChild)
-  ) return null;
-  try {
-    const rootStat = lstatSync(root);
-    const tokenStat = lstatSync(tokenDir);
-    if (
-      !rootStat.isDirectory() ||
-      rootStat.isSymbolicLink() ||
-      !tokenStat.isDirectory() ||
-      tokenStat.isSymbolicLink()
-    ) return null;
-    const realChild = relative(realpathSync(root), realpathSync(tokenDir));
-    if (
-      realChild === "" ||
-      realChild === ".." ||
-      realChild.startsWith(`..${sep}`) ||
-      isAbsolute(realChild)
-    ) return null;
-    return tokenDir;
-  } catch {
-    return null;
-  }
-}
-
-function loadWindowsProcessApi() {
-  return dlopen("kernel32.dll", {
-    CreateFileW: {
-      args: [
-        FFIType.ptr,
-        FFIType.u32,
-        FFIType.u32,
-        FFIType.ptr,
-        FFIType.u32,
-        FFIType.u32,
-        FFIType.ptr,
-      ],
-      returns: FFIType.ptr,
-    },
-    LockFileEx: {
-      args: [
-        FFIType.ptr,
-        FFIType.u32,
-        FFIType.u32,
-        FFIType.u32,
-        FFIType.u32,
-        FFIType.ptr,
-      ],
-      returns: FFIType.bool,
-    },
-    UnlockFileEx: {
-      args: [
-        FFIType.ptr,
-        FFIType.u32,
-        FFIType.u32,
-        FFIType.u32,
-        FFIType.ptr,
-      ],
-      returns: FFIType.bool,
-    },
-    OpenProcess: {
-      args: [FFIType.u32, FFIType.bool, FFIType.u32],
-      returns: FFIType.ptr,
-    },
-    GetProcessTimes: {
-      args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr],
-      returns: FFIType.bool,
-    },
-    CloseHandle: {
-      args: [FFIType.ptr],
-      returns: FFIType.bool,
-    },
-  });
-}
-
-function muslArchitecture(): string {
-  const mapping: Record<string, string> = {
-    arm64: "aarch64",
-    ia32: "i386",
-    ppc64: "powerpc64le",
-    x64: "x86_64",
-  };
-  return mapping[process.arch] ?? process.arch;
-}
-
-function posixGateLibraryCandidates(): string[] {
-  if (AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.posixGateLibraryCandidates) {
-    return AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS.posixGateLibraryCandidates;
-  }
-  if (process.platform === "darwin") {
-    return ["/usr/lib/libSystem.B.dylib"];
-  }
-  const arch = muslArchitecture();
-  const candidates = [
-    "libc.so.6",
-    `/lib/ld-musl-${arch}.so.1`,
-    `/usr/lib/ld-musl-${arch}.so.1`,
-    `/lib/libc.musl-${arch}.so.1`,
-    `/usr/lib/libc.musl-${arch}.so.1`,
-    `libc.musl-${arch}.so.1`,
-    "libc.so",
-  ];
-  for (const dir of ["/lib", "/usr/lib", "/lib64", "/usr/lib64"]) {
-    try {
-      for (const entry of readdirSync(dir)) {
-        if (/^(?:ld-musl-|libc\.musl-).+\.so\.1$/.test(entry)) {
-          candidates.push(join(dir, entry));
-        }
-      }
-    } catch {
-      // Directory absent or unreadable; explicit candidates still apply.
-    }
-  }
-  return [...new Set(candidates)];
-}
-
-export function _posixGateLibraryCandidatesForTests(): string[] {
-  return posixGateLibraryCandidates();
-}
-
-function loadPosixGateApi() {
-  let lastError: unknown;
-  for (const library of posixGateLibraryCandidates()) {
-    try {
-      return dlopen(library, {
-      flock: {
-        args: [FFIType.i32, FFIType.i32],
-        returns: FFIType.i32,
-      },
-      });
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError ?? new Error("No POSIX flock library candidate could be loaded");
-}
-
-function loadMacProcessApi() {
-  return dlopen("/usr/lib/libproc.dylib", {
-    proc_pidinfo: {
-      args: [FFIType.i32, FFIType.i32, FFIType.u64, FFIType.ptr, FFIType.i32],
-      returns: FFIType.i32,
-    },
-  });
-}
-
-let WINDOWS_PROCESS_API:
-  | ReturnType<typeof loadWindowsProcessApi>
-  | null
-  | undefined;
-let MAC_PROCESS_API:
-  | ReturnType<typeof loadMacProcessApi>
-  | null
-  | undefined;
-let POSIX_GATE_API:
-  | ReturnType<typeof loadPosixGateApi>
-  | null
-  | undefined;
-let SELF_PROCESS_GENERATION: string | null | undefined;
-
-function windowsProcessGeneration(pid: number): string | null {
-  try {
-    if (WINDOWS_PROCESS_API === undefined) {
-      WINDOWS_PROCESS_API = loadWindowsProcessApi();
-    }
-    if (WINDOWS_PROCESS_API === null) return null;
-    const handle = WINDOWS_PROCESS_API.symbols.OpenProcess(0x1000, false, pid);
-    if (!handle) return null;
-    const creation = new Uint32Array(2);
-    const exit = new Uint32Array(2);
-    const kernel = new Uint32Array(2);
-    const user = new Uint32Array(2);
-    try {
-      if (!WINDOWS_PROCESS_API.symbols.GetProcessTimes(
-        handle,
-        creation,
-        exit,
-        kernel,
-        user,
-      )) return null;
-      return `${creation[1].toString(16)}:${creation[0].toString(16)}`;
-    } finally {
-      WINDOWS_PROCESS_API.symbols.CloseHandle(handle);
-    }
-  } catch {
-    WINDOWS_PROCESS_API = null;
-    return null;
-  }
-}
-
-function linuxProcessGeneration(pid: number): string | null {
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
-    const close = stat.lastIndexOf(")");
-    if (close < 0) return null;
-    const fields = stat.slice(close + 1).trim().split(/\s+/);
-    return fields[19] || null; // procfs field 22: process start time in ticks
-  } catch {
-    return null;
-  }
-}
-
-function macProcessGeneration(pid: number): string | null {
-  try {
-    if (MAC_PROCESS_API === undefined) {
-      MAC_PROCESS_API = loadMacProcessApi();
-    }
-    if (MAC_PROCESS_API === null) return null;
-    const PROC_PIDTBSDINFO = 3;
-    const buffer = new Uint8Array(136);
-    const read = MAC_PROCESS_API.symbols.proc_pidinfo(
-      pid,
-      PROC_PIDTBSDINFO,
-      0n,
-      buffer,
-      buffer.byteLength,
-    );
-    if (read < 136) return null;
-    const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-    return `${view.getBigUint64(120, true)}:${view.getBigUint64(128, true)}`;
-  } catch {
-    MAC_PROCESS_API = null;
-    return null;
-  }
-}
-
-type NativeGateMutexReceipt =
-  | { kind: "posix"; fd: number }
-  | {
-      kind: "windows";
-      handle: Pointer;
-      overlapped: Uint8Array;
-    };
-
-function nativeGateMutexPath(lockDir: string): string {
-  return `${lockDir}.gate-mutex`;
-}
-
-function invalidWindowsHandle(handle: Pointer | bigint | null): boolean {
-  if (handle === null) return true;
-  return BigInt.asIntN(64, BigInt(handle)) === -1n;
-}
-
-function tryAcquireNativeGateMutex(
-  lockDir: string,
-): NativeGateMutexReceipt | null {
-  const path = nativeGateMutexPath(lockDir);
-  if (process.platform === "win32") {
-    try {
-      if (WINDOWS_PROCESS_API === undefined) {
-        WINDOWS_PROCESS_API = loadWindowsProcessApi();
-      }
-      if (WINDOWS_PROCESS_API === null) return null;
-      const widePath = Buffer.from(`${win32.toNamespacedPath(resolvePath(path))}\0`, "utf16le");
-      const rawHandle = WINDOWS_PROCESS_API.symbols.CreateFileW(
-        widePath,
-        0xc0000000,
-        3,
-        null,
-        4,
-        0x80,
-        null,
-      );
-      if (invalidWindowsHandle(rawHandle)) return null;
-      const handle = rawHandle as Pointer;
-      const overlapped = new Uint8Array(32);
-      if (!WINDOWS_PROCESS_API.symbols.LockFileEx(
-        handle,
-        3,
-        0,
-        1,
-        0,
-        overlapped,
-      )) {
-        WINDOWS_PROCESS_API.symbols.CloseHandle(handle);
-        return null;
-      }
-      return {
-        kind: "windows",
-        handle,
-        overlapped,
-      };
-    } catch {
-      return null;
-    }
-  }
-  try {
-    if (POSIX_GATE_API === undefined) {
-      POSIX_GATE_API = loadPosixGateApi();
-    }
-    if (POSIX_GATE_API === null) return null;
-    const fd = openSync(path, "a+", 0o600);
-    if (POSIX_GATE_API.symbols.flock(fd, 2 | 4) !== 0) {
-      closeSync(fd);
-      return null;
-    }
-    return { kind: "posix", fd };
-  } catch {
-    POSIX_GATE_API = null;
-    return null;
-  }
-}
-
-function acquireNativeGateMutex(
-  lockDir: string,
-  maxRetries = 100,
-  retryMs = 5,
-): NativeGateMutexReceipt | null {
-  if (AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.failNativeGateMutex?.(lockDir)) return null;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const receipt = tryAcquireNativeGateMutex(lockDir);
-    if (receipt) return receipt;
-    if (attempt < maxRetries) Bun.sleepSync(retryMs);
-  }
-  return null;
-}
-
-function releaseNativeGateMutex(receipt: NativeGateMutexReceipt): void {
-  if (receipt.kind === "posix") {
-    try { POSIX_GATE_API?.symbols.flock(receipt.fd, 8); } catch { /* closing also unlocks */ }
-    try { closeSync(receipt.fd); } catch { /* already closed */ }
-    return;
-  }
-  try {
-    WINDOWS_PROCESS_API?.symbols.UnlockFileEx(
-      receipt.handle,
-      0,
-      1,
-      0,
-      receipt.overlapped,
-    );
-  } catch { /* closing also unlocks */ }
-  try { WINDOWS_PROCESS_API?.symbols.CloseHandle(receipt.handle); } catch { /* already closed */ }
-}
-
-// Exported so the transaction lock proves a reused PID with the same record.
-// Locks persist this string: a format change makes a live holder from another
-// release look like a reused PID.
-export function processGeneration(pid: number): string | null {
-  if (pid === process.pid && AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.selfProcessGeneration) {
-    return AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS.selfProcessGeneration();
-  }
-  if (pid === process.pid && SELF_PROCESS_GENERATION !== undefined) {
-    return SELF_PROCESS_GENERATION;
-  }
-  const generation = process.platform === "win32"
-    ? windowsProcessGeneration(pid)
-    : process.platform === "linux"
-      ? linuxProcessGeneration(pid)
-      : process.platform === "darwin"
-        ? macProcessGeneration(pid)
-        : null;
-  if (pid === process.pid) SELF_PROCESS_GENERATION = generation;
-  return generation;
-}
-
-// When a live process started, in epoch ms, read from its generation record;
-// null when the platform cannot say. For locks written by releases that
-// recorded no generation. A wall-clock step can shift it, so callers compare
-// with a margin.
-export function processStartedAtMs(pid: number): number | null {
-  const generation = processGeneration(pid);
-  if (!generation) return null;
-  let started = Number.NaN;
-  try {
-    if (process.platform === "win32") {
-      // FILETIME as "high:low" hex: 100 ns intervals since 1601-01-01.
-      const [high, low] = generation.split(":");
-      const filetime = (BigInt(`0x${high}`) << 32n) | BigInt(`0x${low}`);
-      started = Number(filetime / 10_000n) - 11_644_473_600_000;
-    } else if (process.platform === "darwin") {
-      const [seconds, micros] = generation.split(":").map(Number);
-      started = seconds * 1000 + micros / 1000;
-    } else if (process.platform === "linux") {
-      // procfs counts USER_HZ ticks since boot; USER_HZ is 100 wherever Bun runs.
-      const boot = /^btime (\d+)$/m.exec(readFileSync("/proc/stat", "utf-8"));
-      if (boot) started = Number(boot[1]) * 1000 + Number(generation) * 10;
-    }
-  } catch {
-    return null;
-  }
-  return Number.isFinite(started) ? started : null;
-}
-
-function writeOwnerStamp(
-  lockDir: string,
-  reapLiveOwnerAfterStale = true,
-  token?: string,
-): LockOwner | null {
-  const generation = processGeneration(process.pid);
-  const owner: LockOwner = {
-    pid: process.pid,
-    startedAtMs: lockAcquireEpochMs(),
-    reapLiveOwnerAfterStale,
-    ...(token ? { token } : {}),
-    ...(generation ? { processGeneration: generation } : {}),
-  };
-  try {
-    writeFileSync(ownerStampPath(lockDir), JSON.stringify(owner), {
-      encoding: "utf-8",
-      mode: 0o600,
-      ...(token ? { flag: "wx" } : {}),
-    });
-    return owner;
-  } catch {
-    // Acquisition treats a missing stamp as failure and abandons its directory.
-    return null;
-  }
-}
-
-// "missing" means no owner ever finished its stamp: no owner.json, an empty one,
-// or one JSON.parse rejects. That is what a process killed between creating the
-// file and writing it leaves (releases before the stamp was written privately
-// stamped the lock in place), so it is judged like an unstamped folder: reaped
-// once older than the grace, under the gate. A live writer is never seen that
-// way: it stamps a private folder renamed into place, while holding the gate
-// the reaper must take. A stamp that parses but names no valid owner is
-// "invalid" and an OS error reading it is "unreadable"; both stay fail-closed.
-function inspectOwnerStamp(lockDir: string): OwnerStampRead {
-  let raw: string;
-  try {
-    raw = readFileSync(ownerStampPath(lockDir), "utf-8");
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException)?.code ?? "UNKNOWN";
-    return code === "ENOENT"
-      ? { status: "missing" }
-      : { status: "unreadable", code };
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { status: "missing" };
-  }
-  if (!isPlainObject(parsed) || typeof parsed.pid !== "number" || typeof parsed.startedAtMs !== "number") {
-    return { status: "invalid" };
-  }
-  let token: string | undefined;
-  if (parsed.token !== undefined) {
-    if (
-      typeof parsed.token !== "string" ||
-      lockGenerationTokenDir(lockDir, parsed.token) === null
-    ) return { status: "invalid" };
-    token = parsed.token;
-  }
-  return {
-    status: "ok",
-    owner: {
-      pid: parsed.pid,
-      startedAtMs: parsed.startedAtMs,
-      reapLiveOwnerAfterStale: parsed.reapLiveOwnerAfterStale !== false,
-      ...(token ? { token } : {}),
-      ...(typeof parsed.processGeneration === "string" && parsed.processGeneration.length > 0
-        ? { processGeneration: parsed.processGeneration }
-        : {}),
-    },
-  };
-}
-
-function readOwnerStamp(lockDir: string): LockOwner | null {
-  const result = inspectOwnerStamp(lockDir);
-  return result.status === "ok" ? result.owner : null;
-}
-
-// A monotonic-ish epoch for the owner stamp. performance.timeOrigin + now()
-// gives a wall-clock-equivalent without the bare `Date.now()` the lint forbids;
-// it is used only for AGE comparison (a relative delta), so origin drift is
-// irrelevant — both stamps come from the same clock family across processes
-// because timeOrigin is anchored to the unix epoch by the runtime.
-function lockAcquireEpochMs(): number {
-  return Math.floor(performance.timeOrigin + performance.now());
-}
-
-// Is a PID still alive? signal 0 probes liveness without delivering a signal:
-// ESRCH ⇒ gone, EPERM ⇒ alive-but-not-ours (still alive), success ⇒ alive.
-// EXPORTED so a caller outside the lock mechanism
-// (e.g. a staged-transaction collector distinguishing a live writer's staging
-// dir from a crashed one's) can ask the same question this module already
-// answers for the lock reaper, rather than re-deriving it.
-export function isPidAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    // EPERM ⇒ the process exists but is owned by another user → still alive.
-    return (e as NodeJS.ErrnoException)?.code === "EPERM";
-  }
-}
-
-type OwnerProcessState = "dead" | "same" | "different" | "unknown";
-
-function ownerProcessState(owner: LockOwner): OwnerProcessState {
-  const injected = AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.processProbe?.(owner.pid);
-  const alive = injected?.alive ?? isPidAlive(owner.pid);
-  if (!alive) return "dead";
-  const observedGeneration = injected
-    ? injected.generation
-    : processGeneration(owner.pid);
-  if (!owner.processGeneration || !observedGeneration) return "unknown";
-  return owner.processGeneration === observedGeneration ? "same" : "different";
-}
-
-// A monotonic per-process counter for the steal-rename suffix (no Math.random /
-// Date.now — scripts/forbid). Combined with the PID it is unique enough that two
-// waiters never collide on the same `.dead.<suffix>` name, and only one wins the
-// rename anyway (the second gets ENOENT).
-let _reapCounter = 0;
-function reapSuffix(): string {
-  _reapCounter += 1;
-  return `${process.pid}-${_reapCounter}`;
-}
-
-// Grace window (ms) before a lock folder whose stamp never finished (see
-// inspectOwnerStamp) counts as a leak. The gate is the real fence: a live
-// writer stamps while holding it, and the reaper must take it first. The grace
-// is the second one, for a folder an older release stamped in place and for
-// any writer outside the gate. Measured from the folder's mtime, which moves
-// when owner.json is created. Tunable via AIDLC_LOCK_UNSTAMPED_GRACE_MS.
-function unstampedGraceMs(): number {
-  const raw = process.env.AIDLC_LOCK_UNSTAMPED_GRACE_MS;
-  if (raw) {
-    const n = Number(raw);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return 5000;
-}
-
-// The lock dir's own mtime epoch (ms), or null if it can't be stat'd. Used as the
-// age anchor for an UNSTAMPED dir (no finished owner.json). statSync mtime is a
-// wall-clock ms, comparable to lockAcquireEpochMs()'s epoch family.
-function lockDirMtimeMs(lockDir: string): number | null {
-  try {
-    return statSync(lockDir).mtimeMs;
-  } catch {
-    return null;
-  }
-}
-
-// True when a lock folder whose stamp never finished is past the grace, so it
-// counts as a leak. The one reader of the grace: the workflow locks' reaper and
-// doctor, and the transaction lock's directory form (aidlc-transaction.ts
-// clearStaleLock).
-export function unstampedPastGrace(lockDir: string): boolean {
-  const mtime = lockDirMtimeMs(lockDir);
-  return mtime !== null && lockAcquireEpochMs() - mtime > unstampedGraceMs();
-}
-
-function ownerStampsEqual(now: LockOwner, judged: LockOwner): boolean {
-  return (
-    now.pid === judged.pid &&
-    now.startedAtMs === judged.startedAtMs &&
-    now.reapLiveOwnerAfterStale === judged.reapLiveOwnerAfterStale &&
-    now.token === judged.token &&
-    now.processGeneration === judged.processGeneration
-  );
-}
-
-function stampMatches(dir: string, judged: LockOwner): boolean {
-  const current = inspectOwnerStamp(dir);
-  return current.status === "ok" && ownerStampsEqual(current.owner, judged);
-}
-
-interface ReapCandidate {
-  owner: LockOwner | null;
-  unstampedIdentity: string | null;
-}
-
-function unstampedIdentity(lockDir: string): string | null {
-  try {
-    const stat = statSync(lockDir);
-    return createHash("sha256")
-      .update(`${stat.dev}\x00${stat.ino}\x00${stat.birthtimeMs}\x00${stat.mtimeMs}`)
-      .digest("hex")
-      .slice(0, 24);
-  } catch {
-    return null;
-  }
-}
-
-function reapCandidate(lockDir: string): ReapCandidate | null {
-  const inspected = inspectOwnerStamp(lockDir);
-  if (inspected.status === "invalid" || inspected.status === "unreadable") {
-    return null;
-  }
-  if (inspected.status === "missing") {
-    if (!unstampedPastGrace(lockDir)) return null;
-    const identity = unstampedIdentity(lockDir);
-    return identity === null
-      ? null
-      : {
-          owner: null,
-          unstampedIdentity: identity,
-        };
-  }
-  const processState = ownerProcessState(inspected.owner);
-  if (processState === "same" || processState === "unknown") {
-    // Integrity first: automatic acquisition never reaps the same or
-    // generation-unknown live process.
-    return null;
-  }
-  return {
-    owner: inspected.owner,
-    unstampedIdentity: null,
-  };
-}
-
-function reapCandidateStillMatches(lockDir: string, candidate: ReapCandidate): boolean {
-  if (candidate.owner !== null) {
-    const current = inspectOwnerStamp(lockDir);
-    const state = current.status === "ok"
-      ? ownerProcessState(current.owner)
-      : "unknown";
-    return (
-      current.status === "ok" &&
-      ownerStampsEqual(current.owner, candidate.owner) &&
-      (state === "dead" || state === "different")
-    );
-  }
-  return (
-    inspectOwnerStamp(lockDir).status === "missing" &&
-    unstampedIdentity(lockDir) === candidate.unstampedIdentity
-  );
-}
-
-function reapClaimDir(lockDir: string): string {
-  return `${lockDir}.reap`;
-}
-
-function reapPrivateDir(lockDir: string, claimToken: string): string {
-  return `${lockDir}.dead.${claimToken}`;
-}
-
-// The one way an owner-stamped folder (a lock or its coordination gate) is
-// published: built and stamped under a private name, then renamed into place,
-// so it appears with its stamp complete or not at all. A process killed on the
-// way leaves only its private candidate folder, which nothing reads. The caller
-// holds what excludes other publishers (the gate for a lock, the native mutex
-// for a gate), so the name cannot be taken between the check and the rename;
-// the check makes a taken name a lost round on every platform, since POSIX
-// rename replaces an empty directory and Windows refuses any existing one.
-function tryCreateOwnerStampedDir(
-  dir: string,
-  reapLiveOwnerAfterStale: boolean,
-  kind: "gate" | "lock",
-): OwnerStampedLockReceipt | null {
-  const candidate = `${dir}.candidate.${randomUUID()}`;
-  try {
-    mkdirSync(candidate, { mode: 0o700 });
-  } catch {
-    return null;
-  }
-  const token = randomUUID();
-  const candidateTokenDir = join(candidate, token);
-  try {
-    mkdirSync(candidateTokenDir, { mode: 0o700 });
-    if (kind === "gate") {
-      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.beforeGateOwnerStamp?.(candidate, dir, token);
-    } else {
-      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.beforeAcquirerOwnerStamp?.(candidate, dir, token);
-    }
-    const owner = writeOwnerStamp(candidate, reapLiveOwnerAfterStale, token);
-    if (!owner?.token) throw new Error("owner stamp failed");
-    if (existsSync(dir)) throw new Error("the name is taken");
-    renameSync(candidate, dir);
-    return {
-      lockDir: dir,
-      tokenDir: join(dir, token),
-      owner: owner as LockOwner & { token: string },
-    };
-  } catch {
-    try { rmSync(candidate, { recursive: true, force: true }); } catch { /* private debris */ }
-    return null;
-  }
-}
-
-function restoreReapPrivate(
-  lockDir: string,
-  privateDir: string,
-): boolean {
-  if (!existsSync(privateDir)) return true;
-  if (existsSync(lockDir)) return false;
-  for (let attempt = 0; attempt <= 100; attempt++) {
-    try {
-      renameSync(privateDir, lockDir);
-      return true;
-    } catch {
-      if (existsSync(lockDir)) return false;
-      if (!existsSync(privateDir)) return true;
-      if (attempt < 100) Bun.sleepSync(5);
-    }
-  }
-  return false;
-}
-
-// Every try at moving the lock or released gate folder of a provably dead owner,
-// or this process's own gate, was refused: on Windows, a program holds that
-// folder open (aidlc-lock-line.ts).
-// A plain null from the gate (a mutex miss, a live owner, an invalid gate) and
-// an owner of unknown generation are not one.
-let HELD_FOLDER_RENAME_FAILURES = 0;
-
-function retireReapClaim(claimDir: string): boolean {
-  for (let attempt = 0; attempt <= 100; attempt++) {
-    const retired = `${claimDir}.retired.${randomUUID()}`;
-    try {
-      renameSync(claimDir, retired);
-      try { rmSync(retired, { recursive: true, force: true }); } catch { /* private debris */ }
-      return true;
-    } catch {
-      if (!existsSync(claimDir)) return true;
-      if (attempt < 100) Bun.sleepSync(5);
-    }
-  }
-  return false;
-}
-
-function recoverReapClaim(lockDir: string, owner: LockOwner): boolean {
-  const claimDir = reapClaimDir(lockDir);
-  const privateDir = owner.token ? reapPrivateDir(lockDir, owner.token) : "";
-  if (privateDir && existsSync(privateDir) && !existsSync(lockDir)) {
-    // The stale gate still excludes every canonical mutation. Restore first,
-    // regardless of whether the displaced generation is dead, live, or
-    // unreadable; the next gate owner will classify it from the canonical path.
-    if (!restoreReapPrivate(lockDir, privateDir)) return false;
-  }
-  return retireReapClaim(claimDir);
-}
-
-const PENDING_REAP_GATE_RELEASES = new Map<string, {
-  receipt: OwnerStampedLockReceipt;
-  handler: () => void;
-}>();
-
-type ReapGateReleaseState = "held" | "releasable" | "invalid";
-
-function reapGateReleasablePath(
-  claimDir: string,
-  owner: LockOwner & { token: string },
-): string | null {
-  const tokenDir = lockGenerationTokenDir(claimDir, owner.token);
-  return tokenDir === null ? null : join(tokenDir, "releasable");
-}
-
-function reapGateReleaseState(
-  claimDir: string,
-  owner: LockOwner,
-): ReapGateReleaseState {
-  if (typeof owner.token !== "string") return "invalid";
-  const path = reapGateReleasablePath(
-    claimDir,
-    owner as LockOwner & { token: string },
-  );
-  if (path === null) return "invalid";
-  try {
-    return lstatSync(path).isFile() ? "releasable" : "invalid";
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT"
-      ? "held"
-      : "invalid";
-  }
-}
-
-function markReapGateReleasable(receipt: OwnerStampedLockReceipt): boolean {
-  const path = reapGateReleasablePath(receipt.lockDir, receipt.owner);
-  if (path === null) return false;
-  for (let attempt = 0; attempt <= 100; attempt++) {
-    try {
-      writeFileSync(path, "", { flag: "wx", mode: 0o600 });
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-        return reapGateReleaseState(receipt.lockDir, receipt.owner) === "releasable";
-      }
-      if (!ownerReceiptMatches(receipt)) return false;
-      if (attempt < 100) Bun.sleepSync(5);
-    }
-  }
-  return false;
-}
-
-function clearPendingReapGateRelease(claimDir: string): void {
-  const pending = PENDING_REAP_GATE_RELEASES.get(claimDir);
-  if (!pending) return;
-  process.off("exit", pending.handler);
-  PENDING_REAP_GATE_RELEASES.delete(claimDir);
-}
-
-function retryPendingReapGateRelease(claimDir: string): boolean {
-  const pending = PENDING_REAP_GATE_RELEASES.get(claimDir);
-  if (!pending) return true;
-  if (!existsSync(claimDir)) {
-    clearPendingReapGateRelease(claimDir);
-    return true;
-  }
-  if (!markReapGateReleasable(pending.receipt)) return false;
-  const outcome = releaseOwnerStampedLock(pending.receipt, false, true);
-  if (outcome === "retryable") {
-    // Our own gate folder could not be moved: part of our own release.
-    HELD_FOLDER_RENAME_FAILURES++;
-    return false;
-  }
-  clearPendingReapGateRelease(claimDir);
-  return true;
-}
-
-function acquireReapClaim(lockDir: string): OwnerStampedLockReceipt | null {
-  const claimDir = reapClaimDir(lockDir);
-  const mutex = acquireNativeGateMutex(lockDir);
-  if (!mutex) return null;
-  try {
-    if (!retryPendingReapGateRelease(claimDir)) return null;
-    for (let attempt = 0; attempt <= 3; attempt++) {
-      const created = tryCreateOwnerStampedDir(claimDir, false, "gate");
-      if (created) return created;
-      const inspected = inspectOwnerStamp(claimDir);
-      if (inspected.status === "ok") {
-        const releaseState = reapGateReleaseState(claimDir, inspected.owner);
-        if (releaseState === "invalid") return null;
-        if (releaseState === "releasable") {
-          AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterReleasableGateCheck?.(
-            claimDir,
-          );
-          if (!retireReapClaim(claimDir)) {
-            // Only a gate whose owner is provably gone: a live owner may still
-            // be retrying its own release.
-            const owner = ownerProcessState(inspected.owner);
-            if (owner === "dead" || owner === "different") HELD_FOLDER_RENAME_FAILURES++;
-            return null;
-          }
-          continue;
-        }
-        const state = ownerProcessState(inspected.owner);
-        if (state === "same" || state === "unknown") return null;
-        if (!recoverReapClaim(lockDir, inspected.owner)) return null;
-      } else if (inspected.status === "missing") {
-        if (!unstampedPastGrace(claimDir)) return null;
-        if (!retireReapClaim(claimDir)) return null;
-      } else {
-        // Invalid/unreadable claim ownership is ambiguous and remains fail-closed.
-        return null;
-      }
-    }
-    return null;
-  } finally {
-    releaseNativeGateMutex(mutex);
-  }
-}
-
-function releaseReapClaim(receipt: OwnerStampedLockReceipt): boolean {
-  const lockDir = receipt.lockDir.endsWith(".reap")
-    ? receipt.lockDir.slice(0, -".reap".length)
-    : receipt.lockDir;
-  const mutex = acquireNativeGateMutex(lockDir);
-  let outcome: LockReleaseOutcome = "retryable";
-  if (mutex) {
-    try {
-      const marked = markReapGateReleasable(receipt);
-      outcome = marked
-        ? releaseOwnerStampedLock(receipt, false, true)
-        : "retryable";
-    } finally {
-      releaseNativeGateMutex(mutex);
-    }
-  }
-  if (outcome !== "retryable") {
-    clearPendingReapGateRelease(receipt.lockDir);
-    return true;
-  }
-  if (!PENDING_REAP_GATE_RELEASES.has(receipt.lockDir)) {
-    const handler = () => {
-      releaseReapClaim(receipt);
-    };
-    PENDING_REAP_GATE_RELEASES.set(receipt.lockDir, { receipt, handler });
-    process.on("exit", handler);
-  }
-  return false;
-}
-
-// Reclaim only a provably-dead stamped owner, a generation-mismatched reused
-// PID, or an old folder whose stamp never finished. The fixed owner-stamped reap
-// gate blocks acquisition while canonical ownership is moved or restored.
-function reapStaleLock(lockDir: string, reapUnstamped = true): boolean {
-  // A live/ambiguous owner cannot be reaped. Avoid taking and publishing the
-  // coordination gate merely to rediscover that fact: blocked contenders can
-  // otherwise starve the owner's release. This read authorizes no mutation;
-  // re-read and validate the candidate under the gate below.
-  const observed = reapCandidate(lockDir);
-  if (observed === null || (!reapUnstamped && observed.owner === null)) return false;
-  const claim = acquireReapClaim(lockDir);
-  if (!claim) return false;
-  let releaseClaim = true;
-  const dead = reapPrivateDir(lockDir, claim.owner.token);
-  let moved = false;
-  try {
-    const candidate = reapCandidate(lockDir);
-    if (
-      candidate === null ||
-      (!reapUnstamped && candidate.owner === null)
-    ) return false;
-    if (!reapCandidateStillMatches(lockDir, candidate)) return false;
-    AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterReapFinalCheck?.(lockDir);
-    for (let attempt = 0; attempt <= 100; attempt++) {
-      if (AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.failReapRename?.(dead, attempt)) {
-        if (attempt < 100) Bun.sleepSync(5);
-        continue;
-      }
-      try {
-        renameSync(lockDir, dead);
-        moved = true;
-        break;
-      } catch {
-        if (!reapCandidateStillMatches(lockDir, candidate)) return false;
-        if (attempt < 100) Bun.sleepSync(5);
-      }
-    }
-    if (!moved) {
-      HELD_FOLDER_RENAME_FAILURES++;
-      return false;
-    }
-    if (!reapCandidateStillMatches(dead, candidate)) {
-      if (!restoreReapPrivate(lockDir, dead)) releaseClaim = false;
-      return false;
-    }
-    try {
-      rmSync(dead, { recursive: true, force: true });
-    } catch {
-      // Private dead-generation debris never aliases the canonical lock path.
-    }
-    AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterSuccessfulReap?.(lockDir);
-    return true;
-  } finally {
-    if (releaseClaim && !releaseReapClaim(claim)) {
-      // A valid claim left behind is recoverable by a later contender.
-    }
-  }
-}
-
-interface OwnerStampedLockReceipt {
-  lockDir: string; tokenDir: string; owner: LockOwner & { token: string };
-  // The contention budget the lock was acquired with; release retries within it.
-  releaseBudgetMs?: number;
-  // A release already spent its budget once, or gave up on a held folder (the
-  // 10 s give-up). Later retries (at exit, at the next transaction) make one
-  // short try: a second budget only holds the person's tool call, and the next
-  // process reaps a dead owner's lock anyway.
-  releaseSpent?: boolean;
-}
-
-interface AuditLockReceipt extends OwnerStampedLockReceipt {
-  identityKey: string;
-  releasePending: boolean;
-}
-
-function ownerReceiptMatches(receipt: OwnerStampedLockReceipt): boolean {
-  return stampMatches(receipt.lockDir, receipt.owner);
-}
-
-type LockReleaseOutcome = "released" | "not-owner" | "retryable";
-
-function releaseOwnerStampedLock(
-  receipt: OwnerStampedLockReceipt,
-  applyFaultHooks = true,
-  applyGateFaultHooks = false,
-): LockReleaseOutcome {
-  let checked = false;
-  for (let attempt = 0; attempt <= 100; attempt++) {
-    const current = inspectOwnerStamp(receipt.lockDir);
-    if (current.status === "missing" && !existsSync(receipt.lockDir)) return "not-owner";
-    if (current.status !== "ok") {
-      if (attempt < 100) Bun.sleepSync(5);
-      continue;
-    }
-    if (!ownerStampsEqual(current.owner, receipt.owner)) return "not-owner";
-    if (!checked && applyFaultHooks) {
-      checked = true;
-      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterReleaseOwnerCheck?.(receipt.lockDir);
-    }
-    const retired = `${receipt.lockDir}.released.${receipt.owner.token}.${randomUUID()}`;
-    if (applyFaultHooks) {
-      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.beforeReleaseRename?.(retired, attempt);
-    }
-    if (
-      applyFaultHooks &&
-      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.failReleaseRename?.(retired, attempt)
-    ) {
-      if (attempt < 100) Bun.sleepSync(5);
-      continue;
-    }
-    if (
-      applyGateFaultHooks &&
-      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.failGateReleaseRename?.(
-        retired,
-        attempt,
-      )
-    ) {
-      if (attempt < 100) Bun.sleepSync(5);
-      continue;
-    }
-    try {
-      renameSync(receipt.lockDir, retired);
-      try { rmSync(retired, { recursive: true, force: true }); } catch { /* private debris */ }
-      return "released";
-    } catch {
-      if (attempt < 100) Bun.sleepSync(5);
-    }
-  }
-  return "retryable";
-}
-
-function releaseCanonicalOwnerStampedLock(
-  receipt: OwnerStampedLockReceipt,
-): LockReleaseOutcome {
-  // A contender can briefly own the coordination gate while discovering our
-  // still-live canonical lock, and Windows can refuse the retirement rename
-  // while a peer reads the owner stamp. Retry the whole release within the
-  // budget the lock was acquired with, never less than half a second, before
-  // deferring it to process exit: callers such as sensors run subprocesses
-  // between audit windows and must not retain the first window's lock across
-  // that work.
-  const budgetMs = Math.max(500, receipt.releaseSpent ? 0 : receipt.releaseBudgetMs ?? 0);
-  const deadline = process.hrtime.bigint() + BigInt(Math.ceil(budgetMs)) * 1_000_000n;
-  // Rounds whose rename of our own folder, or of a dead owner's gate, was refused.
-  let heldSince: bigint | null = null;
-  for (;;) {
-    const failures = HELD_FOLDER_RENAME_FAILURES;
-    const gate = acquireReapClaim(receipt.lockDir);
-    let refused = false;
-    if (gate) {
-      try {
-        const outcome = releaseOwnerStampedLock(receipt);
-        if (outcome !== "retryable") return outcome;
-        refused = true;
-      } finally {
-        releaseReapClaim(gate);
-      }
-    }
-    const now = process.hrtime.bigint();
-    heldSince = refused || HELD_FOLDER_RENAME_FAILURES > failures ? heldSince ?? now : null;
-    if (now >= deadline || heldTooLong(heldSince, now)) {
-      receipt.releaseSpent = true;
-      return "retryable";
-    }
-    Bun.sleepSync(5);
-  }
-}
-
-function acquireOwnerStampedLock(
-  lockDir: string,
-  maxRetries: number,
-  retryMs: number,
-  reapLiveOwnerAfterStale = true,
-): OwnerStampedLockReceipt | null {
-  return acquireOwnerStampedLockFor(lockDir, maxRetries, retryMs, reapLiveOwnerAfterStale).receipt;
-}
-
-interface OwnerStampedLockAcquisition {
-  receipt: OwnerStampedLockReceipt | null;
-  // The rounds that ran out the budget were stopped by a dead owner's folder
-  // that could not be moved, not by a live owner.
-  folderHeld: boolean;
-}
-
-function acquireOwnerStampedLockFor(
-  lockDir: string,
-  maxRetries: number,
-  retryMs: number,
-  reapLiveOwnerAfterStale: boolean,
-): OwnerStampedLockAcquisition {
-  const create = (): OwnerStampedLockReceipt | null => {
-    // Negative fast path only. A missing name still goes through the complete
-    // coordinated create/recovery protocol and its re-check before the rename.
-    if (existsSync(lockDir)) return null;
-    const gate = acquireReapClaim(lockDir);
-    if (!gate) return null;
-    try {
-      const created = tryCreateOwnerStampedDir(lockDir, reapLiveOwnerAfterStale, "lock");
-      return created ? { ...created, releaseBudgetMs: maxRetries * retryMs } : null;
-    } finally {
-      releaseReapClaim(gate);
-    }
-  };
-  // The budget is time as well as a count: a round that waits out refused
-  // renames (about 0.5 s, 1.5 s on Windows) would otherwise stretch it a
-  // hundredfold. Never less than half a second, as the release, so a small
-  // explicit count still gets its rounds. `heldSince` is when the rounds
-  // started meeting a held folder.
-  const deadline = process.hrtime.bigint() + BigInt(Math.ceil(Math.max(500, maxRetries * retryMs))) * 1_000_000n;
-  let heldSince: bigint | null = null;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const failures = HELD_FOLDER_RENAME_FAILURES;
-    const acquired = create();
-    if (acquired) return { receipt: acquired, folderHeld: false };
-    if (reapStaleLock(lockDir)) {
-      const afterReap = create();
-      if (afterReap) return { receipt: afterReap, folderHeld: false };
-    }
-    retryOwnDeferredGateRelease(lockDir);
-    const now = process.hrtime.bigint();
-    heldSince = HELD_FOLDER_RENAME_FAILURES > failures ? heldSince ?? now : null;
-    if (attempt >= maxRetries || now >= deadline || heldTooLong(heldSince, now)) break;
-    Bun.sleepSync(retryMs);
-  }
-  return { receipt: null, folderHeld: heldSince !== null };
-}
-
-// Waiting longer does not free a folder a program holds; only stopping it does.
-function heldTooLong(heldSince: bigint | null, now: bigint): boolean {
-  return heldSince !== null && now - heldSince >= BigInt(lockFolderHeldGiveUpMs()) * 1_000_000n;
-}
-
-// A gate release that could not get the native mutex stays deferred, and only
-// the next acquireReapClaim retries it. A waiter that took the gate as another
-// process created the lock never calls that while the lock exists, so the
-// owner could not take the gate to release and both waited out their budgets
-// (t46 on Windows). Retry our own deferred release while we wait.
-function retryOwnDeferredGateRelease(lockDir: string): void {
-  const claimDir = reapClaimDir(lockDir);
-  if (!PENDING_REAP_GATE_RELEASES.has(claimDir)) return;
-  const mutex = acquireNativeGateMutex(lockDir);
-  if (!mutex) return;
-  try {
-    retryPendingReapGateRelease(claimDir);
-  } finally {
-    releaseNativeGateMutex(mutex);
-  }
-}
-
-export type OwnerStampedLockRun<T> =
-  | { acquired: false }
-  | { acquired: true; value: T };
-
-export function runWithOwnerStampedLock<T>(
-  lockDir: string,
-  maxRetries: number,
-  retryMs: number,
-  action: () => T,
-): OwnerStampedLockRun<T> {
-  const receipt = acquireOwnerStampedLock(lockDir, maxRetries, retryMs);
-  if (!receipt) return { acquired: false };
-  const onExit = () => {
-    releaseCanonicalOwnerStampedLock(receipt);
-  };
-  process.on("exit", onExit);
-  try {
-    return { acquired: true, value: action() };
-  } finally {
-    const outcome = releaseCanonicalOwnerStampedLock(receipt);
-    if (outcome !== "retryable") process.off("exit", onExit);
-  }
-}
-
-// This wait protects required marker publication, not a best-effort probe.
-// A caller can request a short/zero contention budget without changing the
-// ownership, stale-owner, or unstamped-grace rules.
-function activeDirectiveLockBudgetMs(): number {
-  const raw = process.env.AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS;
-  const configured = raw?.trim() ? Number(raw) : NaN;
-  return Number.isSafeInteger(configured) && configured >= 0
-    ? configured
-    : DEFAULT_SUBPROCESS_TIMEOUT_MS;
-}
-
-function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockAcquisition {
-  return acquireOwnerStampedLockFor(lockDir, Math.floor(activeDirectiveLockBudgetMs() / 10), 10, true);
-}
-
-// Receipts, reentrancy, and exit handlers are keyed by the acquisition-bound
-// canonical lock identity. Stable lexical request bindings preserve that
-// identity across path materialization/active-space changes, while an
-// equivalent existing symlink or Windows-case alias resolves directly to the
-// same canonical identity.
-const AUDIT_LOCK_RECEIPTS = new Map<string, AuditLockReceipt>();
-const AUDIT_LOCK_REQUEST_BINDINGS = new Map<string, string>();
-
-function unregisterAuditLockHandler(identityKey: string): void {
-  const handler = AUDIT_LOCK_EXIT_HANDLERS.get(identityKey);
-  if (!handler) return;
-  process.off("exit", handler);
-  AUDIT_LOCK_EXIT_HANDLERS.delete(identityKey);
-}
-
-function removeAuditRequestBindings(identityKey: string): void {
-  for (const [requestKey, boundIdentity] of AUDIT_LOCK_REQUEST_BINDINGS) {
-    if (boundIdentity === identityKey) AUDIT_LOCK_REQUEST_BINDINGS.delete(requestKey);
-  }
-}
-
-function releaseAuditReceipt(identityKey: string): boolean {
-  const receipt = AUDIT_LOCK_RECEIPTS.get(identityKey);
-  if (!receipt) {
-    unregisterAuditLockHandler(identityKey);
-    removeAuditRequestBindings(identityKey);
-    return true;
-  }
-  const outcome = releaseCanonicalOwnerStampedLock(receipt);
-  if (outcome === "retryable") {
-    receipt.releasePending = true;
-    return false;
-  }
-  AUDIT_LOCK_RECEIPTS.delete(identityKey);
-  unregisterAuditLockHandler(identityKey);
-  removeAuditRequestBindings(identityKey);
-  return true;
-}
-
-function auditLockBoundIdentity(
-  projectDir: string,
-  intent?: string,
-  space?: string,
-): { requestKey: string; identityKey: string } {
-  const requestKey = auditLockRequestKey(projectDir, intent, space);
-  return {
-    requestKey,
-    identityKey:
-      AUDIT_LOCK_REQUEST_BINDINGS.get(requestKey) ??
-      auditLockIdentity(projectDir, intent, space),
-  };
-}
-
-export function acquireAuditLock(
-  projectDir: string,
-  maxRetries?: number,
-  retryMs = 100,
-  intent?: string,
-  space?: string,
-  reapLiveOwnerAfterStale = true,
-): boolean {
-  const { requestKey, identityKey } = auditLockBoundIdentity(
-    projectDir,
-    intent,
-    space,
-  );
-  const existing = AUDIT_LOCK_RECEIPTS.get(identityKey);
-  if (existing) {
-    if (!existing.releasePending || !releaseAuditReceipt(identityKey)) return false;
-  }
-  const lockDir = auditLockDir(projectDir, intent, space);
-  // Explicit retry counts win. The timeout override also lets a CLI caller
-  // deliberately calibrate contention without retuning the production default
-  // or changing any owner/reaper predicate.
-  const raw = process.env.AIDLC_AUDIT_LOCK_TIMEOUT_MS;
-  const configured = raw?.trim() ? Number(raw) : NaN;
-  const timeoutMs = Number.isSafeInteger(configured) && configured >= 0
-    ? configured
-    : DEFAULT_SUBPROCESS_TIMEOUT_MS;
-  const receipt = acquireOwnerStampedLock(
-    lockDir,
-    maxRetries ?? Math.floor(timeoutMs / Math.max(1, retryMs)),
-    retryMs,
-    reapLiveOwnerAfterStale,
-  );
-  if (!receipt) return false;
-  AUDIT_LOCK_RECEIPTS.set(identityKey, {
-    ...receipt,
-    identityKey,
-    releasePending: false,
-  });
-  AUDIT_LOCK_REQUEST_BINDINGS.set(requestKey, identityKey);
-  return true;
-}
-
-export function releaseAuditLock(projectDir: string, intent?: string, space?: string): void {
-  const { requestKey, identityKey } = auditLockBoundIdentity(
-    projectDir,
-    intent,
-    space,
-  );
-  if (AUDIT_LOCK_RECEIPTS.has(identityKey)) {
-    AUDIT_LOCK_REQUEST_BINDINGS.set(requestKey, identityKey);
-  }
-  releaseAuditReceipt(identityKey);
-}
-
-/** True only while `ownerPid` is the live process stamped into this lock.
- *  Used by synchronous child tools whose parent deliberately keeps the
- *  workspace lock held across the child's work. */
-export function auditLockOwnedByProcess(
-  projectDir: string,
-  ownerPid: number,
-  intent?: string,
-  space?: string,
-): boolean {
-  if (!Number.isInteger(ownerPid) || ownerPid <= 0) return false;
-  const owner = readOwnerStamp(auditLockDir(projectDir, intent, space));
-  if (owner?.pid !== ownerPid) return false;
-  const state = ownerProcessState(owner);
-  return state === "same" || state === "unknown";
-}
-
-// Tracks per-identity exit handlers that release the audit lock if a caller
-// process.exit()s while still holding it. Bun's process.exit skips `finally`
-// blocks, so a tool that wraps locked work in try/finally and then calls
-// errorWithSlug → emitError → process.exit will leak the lock dir without
-// this safety net. Lock acquire registers a handler; release deregisters.
-// Keyed on the canonical acquisition identity; lexical request bindings route
-// path/active-space drift back to that identity.
-const AUDIT_LOCK_EXIT_HANDLERS = new Map<string, () => void>();
-
-// Per-IDENTITY reentrancy depth. Equivalent aliases therefore share depth while
-// a materialized-path request remains bound to the identity it acquired.
-// Same-process nested withAuditLock calls would otherwise self-deadlock — the inner mkdir hits
-// EEXIST against the lock the outer caller already holds, and burns the
-// acquisition backstop before throwing. The depth counter makes the
-// primitive reentrant: the outer call performs the OS-level lock acquire/release;
-// inner calls just bump depth and return. Cross-process locking is unaffected —
-// different processes still serialise via mkdir EEXIST. Keyed on the composite
-// identity so two intents/explicit spaces in one process don't share a depth.
-const AUDIT_LOCK_DEPTH = new Map<string, number>();
-
-// writeFileAtomic — non-corrupting variant of writeFileSync. Writes to a
-// writer-unique sibling temp then POSIX-renames into place atomically. Readers
-// of <path> see either the previous version or the new one — never a
-// half-written file. Pair with withAuditLock when concurrent writers
-// must serialise (rename alone defeats half-writes but not lost updates).
-//
-// Sibling temp keeps the rename on the same filesystem so it's a true
-// atomic rename (cross-fs renames degrade to copy-then-unlink). A unique,
-// exclusively-created temp prevents concurrent unlocked writers from
-// truncating or renaming each other's in-flight data. Cleans up only the temp
-// owned by this invocation on write/rename failure.
-// Windows refuses a rename over a file another process has open, and Bun's own
-// reads hold a file open that way: on Windows Server 2025, a second Bun process
-// reading the target in a loop refused 1,879 of 2,000 renames (Bun 1.4.2). The
-// caller's lock serialises writers, so both atomic writers retry the
-// replacement until a bounded deadline instead of losing a completed
-// read-modify-write. POSIX replaces the entry regardless of readers.
-const ATOMIC_RENAME_RETRY_MS = 10_000;
-const ATOMIC_RENAME_RETRY_CODES = new Set(["EACCES", "EBUSY", "EEXIST", "ENOTEMPTY", "EPERM"]);
-
-function replaceAtomically(tmp: string, path: string): void {
-  if (process.platform !== "win32") {
-    renameSync(tmp, path);
-    return;
-  }
-  const deadline = Date.now() + ATOMIC_RENAME_RETRY_MS;
-  for (;;) {
-    try {
-      renameSync(tmp, path);
-      return;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code ?? "";
-      if (!ATOMIC_RENAME_RETRY_CODES.has(code) || Date.now() >= deadline) throw error;
-      Bun.sleepSync(5);
-    }
-  }
-}
-
-export function writeFileAtomic(path: string, data: string): void {
-  refuseEngineObserverWrite("writeFileAtomic");
-  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  let fd: number | undefined;
-  let ownsTmp = false;
-  try {
-    fd = openSync(tmp, "wx");
-    ownsTmp = true;
-    writeFileSync(fd, data, "utf-8");
-    closeSync(fd);
-    fd = undefined;
-    replaceAtomically(tmp, path);
-    ownsTmp = false;
-  } catch (err) {
-    if (fd !== undefined) {
-      try { closeSync(fd); } catch { /* preserve the original error */ }
-    }
-    if (ownsTmp) {
-      try { unlinkSync(tmp); } catch { /* temp may already be gone */ }
-    }
-    throw err;
-  }
-}
-
-// writeBufferAtomic — the byte-exact twin of writeFileAtomic for binary
-// payloads: a captured PDF, an image, any non-text source. Same exclusive-create
-// sibling-temp-then-rename discipline, deliberately sharing writeFileAtomic's
-// shape so the two cannot drift; the only difference is no utf-8 coercion, so
-// the bytes round-trip identical to the source and stay sha256-verifiable.
-export function writeBufferAtomic(path: string, data: Buffer | Uint8Array): void {
-  refuseEngineObserverWrite("writeBufferAtomic");
-  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  let fd: number | undefined;
-  let ownsTmp = false;
-  try {
-    fd = openSync(tmp, "wx");
-    ownsTmp = true;
-    writeFileSync(fd, data);
-    closeSync(fd);
-    fd = undefined;
-    replaceAtomically(tmp, path);
-    ownsTmp = false;
-  } catch (err) {
-    if (fd !== undefined) {
-      try { closeSync(fd); } catch { /* preserve the original error */ }
-    }
-    if (ownsTmp) {
-      try { unlinkSync(tmp); } catch { /* temp may already be gone */ }
-    }
-    throw err;
-  }
-}
-
-// ensureDirSync / renameIntoPlace / removeTreeSync — the three raw
-// mkdir/rename/rm primitives, re-exported so a caller that has NO reason to
-// import node:fs's mutating names directly still can. This module already
-// calls mkdirSync/renameSync/rmSync internally (its own lock/atomic-write
-// mechanism has no funnel above it — it IS the funnel); these thin wrappers
-// exist for callers like aidlc-knowledge.ts, whose linter override forbids
-// binding any node:fs name outside the small read-only allowlist, so every
-// directory-create, rename, and recursive-remove in that file must come from
-// here instead. No added behavior beyond the raw primitive — the point is the
-// IMPORT BOUNDARY, not a new atomicity guarantee (mkdir/rename/rm already are
-// what they are).
-export function ensureDirSync(dir: string): void {
-  mkdirSync(dir, { recursive: true });
-}
-
-export function renameIntoPlace(from: string, to: string): void {
-  renameSync(from, to);
-}
-
-export function removeTreeSync(path: string): void {
-  rmSync(path, { recursive: true, force: true });
-}
-
-// Parse an anchor-relative boundary path into components without first
-// normalizing away `..`. win32.parse recognises both slash families on every
-// host and preserves Windows drive/UNC roots, so a POSIX slash cannot hide a
-// component from a native Windows walk and a Windows root cannot become a
-// relative filename on POSIX.
-function boundaryRelativePartsOrThrow(anchorReal: string, rel: string): string[] {
-  if (win32.parse(rel).root !== "") {
-    throw new Error(`path escapes its anchor lexically: ${rel}`);
-  }
-
-  const parts: string[] = [];
-  let cursor = rel;
-  while (cursor !== "" && cursor !== ".") {
-    const parsed = win32.parse(cursor);
-    if (parsed.root !== "") {
-      throw new Error(`path escapes its anchor lexically: ${rel}`);
-    }
-    if (parsed.base !== "" && parsed.base !== ".") {
-      parts.unshift(parsed.base);
-    }
-    if (parsed.dir === "" || parsed.dir === ".") break;
-    if (parsed.dir === cursor) {
-      throw new Error(`path escapes its anchor lexically: ${rel}`);
-    }
-    cursor = parsed.dir;
-  }
-
-  if (parts.some((part) => part === "..")) {
-    throw new Error(`path component ".." escapes its anchor ${anchorReal}: ${rel}`);
-  }
-  return parts;
-}
-
-// Walk `rel` one component at a time from a REAL anchor and refuse if ANY
-// component is a symlink or junction, returning the joined native path when the
-// whole chain is clean. Both slash families delimit components. Throws (does
-// not exit) so each caller attaches its own message and code.
-//
-// Why per-COMPONENT rather than one realpath of the leaf: a containment check on
-// the fully-resolved leaf answers "does this land inside?" but not "did we travel
-// through something that could be repointed later". Checking each component is
-// what makes the guard hold for a directory that does not exist yet, too — a
-// missing component cannot redirect anything, so it is skipped rather than failed.
-//
-// This is the primitive behind "every leaf is checked, not just the dir": a walk
-// that validates the container and then trusts its contents will happily read a
-// symlinked file inside an already-trusted directory. Callers must run this for
-// each leaf they touch, not once for the parent.
-export function assertNoSymlinkInChainOrThrow(anchorReal: string, rel: string): string {
-  if (rel === "") return anchorReal;
-  const parts = boundaryRelativePartsOrThrow(anchorReal, rel);
-  let current = anchorReal;
-  for (const part of parts) {
-    if (part.length === 0) continue;
-    const child = join(current, part);
-    let isSymlink = false;
-    try {
-      isSymlink = lstatSync(child).isSymbolicLink();
-    } catch {
-      // Does not exist yet — nothing to redirect through.
-    }
-    if (isSymlink) {
-      throw new Error(
-        `${child} is a symlink, and no path component may be a symlink here. ` +
-          `A redirected container directory is refused exactly like a symlink found ` +
-          `INSIDE an already-trusted one.`,
-      );
-    }
-    current = child;
-  }
-  return current;
-}
-
-/** A file's identity as exact integers. NTFS file IDs keep a sequence number in
- *  their top 16 bits, so they exceed 2^53 and a JS number rounds them: two files
- *  created one after the other can read as the same number. */
-export interface FileIdentity {
-  readonly dev: bigint;
-  readonly ino: bigint;
-}
-
-/** The exact identity of the file at a path, or behind an open descriptor. */
-export function fileIdentity(target: string | number): FileIdentity {
-  const st = typeof target === "number"
-    ? fstatSync(target, { bigint: true })
-    : statSync(target, { bigint: true });
-  return { dev: st.dev, ino: st.ino };
-}
-
-export function sameFileIdentity(
-  left: FileIdentity,
-  right: FileIdentity,
-): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
-}
-
-// THE read boundary for any path that came from OUTSIDE the workspace — a CLI
-// flag, a value-transport file, a committed ledger row. Returns the contents of a
-// REGULAR file or throws; it never blocks indefinitely and never follows a link.
-//
-// It lives here, shared, because scoping this check to one tool is what let the
-// same defect ship twice. Two properties, both load-bearing:
-//
-//   TYPE. Only a regular file is read. Rejecting symlinks alone is a denylist
-//   that admits every other kind: a FIFO with no writer blocks forever (and if
-//   the caller holds a lock, it blocks the whole workspace with it), and a
-//   character device such as /dev/zero never reaches EOF, so the read grows a
-//   buffer until the process dies of ENOMEM.
-//
-//   TIME. `lstat(path)` then `readFileSync(path)` validates one file and reads
-//   another if something swapped the name in between — and readFileSync follows
-//   symlinks, so the swap can redirect the read to any file this process can
-//   read. Opening ONCE with O_NOFOLLOW and fstat-ing THAT descriptor makes the
-//   final-component identity checked the identity read. A caller that validated
-//   parent-chain containment first passes an expected identity or real path as
-//   well, binding the opened descriptor to the file observed while that
-//   containment held.
-//
-// Throws (does not exit) so each caller can attach its own flag name and exit
-// code. `what` names the thing in the message: "--text-file", "source", ….
-export function readRegularFileNoFollowOrThrow(
-  path: string,
-  what: string,
-  maxBytes?: number,
-  expected?: FileIdentity | string,
-): Buffer;
-
-export function readRegularFileNoFollowOrThrow(
-  path: string,
-  what: string,
-  maxBytes: number | undefined,
-  expected: FileIdentity | string | undefined,
-  withSnapshot: true,
-): { bytes: Buffer; mtimeMs: number };
-
-export function readRegularFileNoFollowOrThrow(
-  path: string,
-  what: string,
-  maxBytes?: number,
-  expected?: FileIdentity | string,
-  withSnapshot = false,
-): Buffer | { bytes: Buffer; mtimeMs: number } {
-  const expectedIdentity = typeof expected === "object" ? expected : undefined;
-  const expectedRealPath = typeof expected === "string" ? expected : undefined;
-  let fd: number;
-  try {
-    // O_NONBLOCK matters as much as O_NOFOLLOW here, and for a non-obvious
-    // reason: opening a FIFO for reading BLOCKS IN open() until a writer appears,
-    // so without it the process hangs before fstat can report the kind and reject
-    // it. (Measured: the fix looked complete while a FIFO still hung, and a stack
-    // sample showed the process parked in open(), not read().) O_NONBLOCK is
-    // harmless for a regular file — it does not make reads short — and the
-    // descriptor is rejected below anyway if it is not a regular file.
-    const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
-    fd = openSync(path, fsConstants.O_RDONLY | noFollow | fsConstants.O_NONBLOCK);
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === "ELOOP") {
-      throw new Error(`${what} is a symlink, which is not followed: ${path}`);
-    }
-    // Preserve the errno so callers (the atomic-replace retry wrapper, shard
-    // readers distinguishing a vanished file) can dispatch on it.
-    const err = new Error(`${what} could not be opened: ${path} (${errorMessage(e)})`);
-    (err as NodeJS.ErrnoException).code = code;
-    throw err;
-  }
-  try {
-    const st = fstatSync(fd);
-    const identity = fileIdentity(fd);
-    if (
-      expectedIdentity !== undefined &&
-      !sameFileIdentity(identity, expectedIdentity)
-    ) {
-      throw changedDuringReadError(
-        `${what} changed after project-containment validation: ${path}`,
-      );
-    }
-    if (!st.isFile()) {
-      const kind = st.isFIFO()
-        ? "a FIFO / named pipe"
-        : st.isSocket()
-          ? "a socket"
-          : st.isCharacterDevice()
-            ? "a character device"
-            : st.isBlockDevice()
-              ? "a block device"
-              : st.isDirectory()
-                ? "a directory"
-                : "not a regular file";
-      throw new Error(
-        `${what} is not a regular file (${kind}): ${path}. ` +
-          `Only regular files are read — a FIFO, socket, or device file can block ` +
-          `forever or never reach EOF, so it is refused before any read.`,
-      );
-    }
-    // No links left means an atomic replace or unlink landed after the open:
-    // the file changed, it is not a hardlink.
-    if (st.nlink === 0) {
-      throw changedDuringReadError(`${what} was replaced while it was being read: ${path}`);
-    }
-    if (st.nlink !== 1) {
-      throw new Error(
-        `${what} is multiply linked (a hardlink) and is not trusted: ${path}. ` +
-          `A hardlink can alias content from elsewhere on the filesystem into this ` +
-          `directory. Replace it with an independent copy — ` +
-          `cp <file> <file>.copy && mv <file>.copy <file> — and re-run.`,
-      );
-    }
-    if (maxBytes !== undefined && st.size > maxBytes) {
-      throw new Error(
-        `${what} is ${st.size} bytes, above the ${maxBytes}-byte limit: ${path}. ` +
-          `Reduce the file before retrying.`,
-      );
-    }
-    // Fallback for platforms without O_NOFOLLOW, and a pathname/descriptor
-    // identity check for races on every platform.
-    if (lstatSync(path).isSymbolicLink()) {
-      throw new Error(`${what} is a symlink, which is not followed: ${path}`);
-    }
-    const currentRealPath = realpathSync(path);
-    if (
-      expectedRealPath !== undefined &&
-      currentRealPath !== expectedRealPath
-    ) {
-      throw new Error(
-        `${what} resolved outside its prevalidated path: ${path} -> ${currentRealPath}. ` +
-          `No path component may be replaced by a symlink while the file is read.`,
-      );
-    }
-    if (!sameFileIdentity(fileIdentity(currentRealPath), identity)) {
-      throw changedDuringReadError(`${what} changed while opening: ${path}`);
-    }
-    let bytes: Buffer;
-    if (maxBytes === undefined) {
-      bytes = readFileSync(fd);
-    } else {
-      // The stat check rejects files already over the cap. Bound the descriptor
-      // read as well so a file that grows concurrently cannot force an
-      // allocation beyond its original size plus one detection byte.
-      const bounded = Buffer.alloc(Math.min(maxBytes + 1, st.size + 1));
-      let length = 0;
-      while (length < bounded.length) {
-        const count = readSync(
-          fd,
-          bounded,
-          length,
-          bounded.length - length,
-          length,
-        );
-        if (count === 0) break;
-        length += count;
-      }
-      if (length > maxBytes) {
-        const currentSize = fstatSync(fd).size;
-        throw new Error(
-          `${what} is ${currentSize} bytes, above the ${maxBytes}-byte limit: ${path}. ` +
-            "Reduce the file before retrying.",
-        );
-      }
-      bytes = bounded.subarray(0, length);
-    }
-    const afterRealPath = realpathSync(path);
-    if (
-      expectedRealPath !== undefined &&
-      afterRealPath !== expectedRealPath
-    ) {
-      throw new Error(
-        `${what} resolved outside its prevalidated path while being read: ${path} -> ${afterRealPath}. ` +
-          `No path component may be replaced by a symlink while the file is read.`,
-      );
-    }
-    const afterFd = fstatSync(fd);
-    if (!sameFileIdentity(fileIdentity(afterRealPath), identity) ||
-        afterFd.nlink !== 1 || afterFd.size !== st.size ||
-        afterFd.mtimeMs !== st.mtimeMs || afterFd.ctimeMs !== st.ctimeMs ||
-        bytes.length !== st.size) {
-      throw changedDuringReadError(`${what} changed while reading: ${path}`);
-    }
-    return withSnapshot ? { bytes, mtimeMs: st.mtimeMs } : bytes;
-  } finally {
-    closeSync(fd);
-  }
-}
-
-/** The identity/equality throws above carry a typed code so callers can tell
- *  "the name changed inodes under me" (retryable when the writer is a known
- *  atomic-replacer) from a symlink/kind/permission refusal (never retried). */
-export const FILE_CHANGED_DURING_READ = "AIDLC_FILE_CHANGED_DURING_READ";
-function changedDuringReadError(message: string): Error {
-  const err = new Error(message);
-  (err as NodeJS.ErrnoException).code = FILE_CHANGED_DURING_READ;
-  return err;
-}
-
-// The read boundary for FRAMEWORK-OWNED files whose ONLY writer is
-// writeFileAtomic/writeBufferAtomic (tmp + rename) — documentkb/index.json,
-// per-document metadata.json, derived content.md, the sources alias map.
-//
-// An atomic replace swaps the inode behind the name, which the strict
-// reader's identity check cannot distinguish from a hostile name-swap — so a
-// read racing a legitimate concurrent writer threw "changed while opening"
-// and killed the whole command (measured: 2-3 of 24 concurrent onboards
-// under load). The swap is instantaneous, so the fix is a bounded retry:
-// each attempt re-runs the FULL boundary check from open, a hostile swap
-// (symlink, wrong kind) throws a NON-retryable refusal on its next attempt,
-// and a replace-storm that outlasts every retry propagates the original
-// error honestly.
-export function readAtomicReplacedFileNoFollowOrThrow(
-  path: string,
-  what: string,
-  attempts = 8,
-): Buffer {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return readRegularFileNoFollowOrThrow(path, what);
-    } catch (e) {
-      // ENOENT is retryable here too, not only the identity code: mid-swap,
-      // realpath of the just-unlinked inode can surface as a transient
-      // ENOENT (measured on Bun as a literal "<path> (deleted)" statx). For
-      // a file whose writer is atomic-replace, "briefly absent" IS the swap
-      // window; a file that is genuinely gone still propagates once the
-      // retries are exhausted.
-      const code = (e as NodeJS.ErrnoException).code;
-      if ((code !== FILE_CHANGED_DURING_READ && code !== "ENOENT") ||
-          attempt >= attempts) {
-        throw e;
-      }
-      // 5ms × attempt backoff: the rename itself is instantaneous; the wait
-      // only needs to outlast the writer's tmp-write + rename window.
-      Bun.sleepSync(5 * attempt);
-    }
-  }
-}
-
-// The read boundary for FRAMEWORK-OWNED APPEND-ONLY files — audit shards.
-// Same open-once O_NOFOLLOW|O_NONBLOCK discipline as
-// readRegularFileNoFollowOrThrow (TYPE and TIME both hold: only a regular
-// file is read, and the identity fstat-ed is the identity read), with two
-// deliberate relaxations the strict reader must not make and a shard reader
-// must:
-//
-//   GROWTH IS NORMAL. A live ledger is being appended to by hooks and verbs
-//   while readers scan it. The strict reader's size/mtime/ctime equality
-//   check therefore threw on the ledger's NORMAL state — measured: under a
-//   concurrent appender ~88% of strict reads failed — and every consumer's
-//   catch then dropped the ENTIRE shard, silently erasing history from
-//   graph rebuilds, review-budget counts, receipt freshness, and the
-//   human-presence gate. A torn TAIL block is harmless by construction:
-//   every audit parser requires a complete block (Event + Timestamp + the
-//   `\n---\n` terminator) and discards a partial one.
-//
-//   NLINK IS NOT A TRUST SIGNAL HERE. rsync --link-dest and cp -al backup
-//   snapshots leave live project files with nlink 2; refusing them made one
-//   backup run brick every later audit read. Hardlinks cannot redirect a
-//   contained, symlink-chain-checked path — they alias the same inode — so
-//   the strict reader keeps its nlink refusal only where the CONTENT is
-//   untrusted (customer documents) or the operation is an explicit
-//   fork/merge snapshot.
-export function readAppendOnlyFileNoFollowOrThrow(path: string, what: string): Buffer {
-  let fd: number;
-  try {
-    const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
-    fd = openSync(path, fsConstants.O_RDONLY | noFollow | fsConstants.O_NONBLOCK);
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === "ELOOP") {
-      throw new Error(`${what} is a symlink, which is not followed: ${path}`);
-    }
-    const err = new Error(`${what} could not be opened: ${path} (${errorMessage(e)})`);
-    (err as NodeJS.ErrnoException).code = code;
-    throw err;
-  }
-  try {
-    const st = fstatSync(fd);
-    if (!st.isFile()) {
-      throw new Error(`${what} is not a regular file: ${path}`);
-    }
-    // Fallback for platforms without O_NOFOLLOW, and a pathname/descriptor
-    // identity check for races on every platform.
-    if (lstatSync(path).isSymbolicLink()) {
-      throw new Error(`${what} is a symlink, which is not followed: ${path}`);
-    }
-    const current = statSync(realpathSync(path));
-    if (current.dev !== st.dev || current.ino !== st.ino) {
-      throw new Error(`${what} changed while opening: ${path}`);
-    }
-    return readFileSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-}
-
-// withAuditLock — atomic locked-section helper. Acquires the audit lock,
-// installs an exit-handler safety net (so a process.exit inside `fn` still
-// releases the lock dir), runs `fn`, releases the lock. Use this when you
-// need to hold the lock across multiple reads/writes (e.g., audit-first
-// state mutations that emit audit + write state atomically).
-//
-// Reentrant within a single process for the same projectDir: nested calls
-// just bump depth and run `fn`; only the outermost call performs OS-level
-// acquire/release. Cross-process locking is unchanged.
-//
-// SYNC ONLY. The return type excludes Promise so a caller can't pass an
-// async function that releases the lock before its work settles. Today's
-// callers are all sync (compile, state.ts fork/merge); future async-locked
-// transactions need a separate `withAuditLockAsync` that awaits before
-// release. The compile-time guard catches the footgun at the call site.
-export function withAuditLock<T>(
-  projectDir: string,
-  fn: () => T extends Promise<unknown> ? never : T,
-  intent?: string,
-  space?: string,
-  // Shared acquire backstop. A caller that legitimately waits behind a
-  // long-lived holder (select-plugins behind a full plugin compose: compile +
-  // runner regeneration) passes a larger budget; dead holders are reaped
-  // immediately regardless, so a big budget only ever waits on live work.
-  maxRetries?: number,
-  retryMs = 100,
-  // Long external operations can opt out of over-age doctor classification.
-  // Automatic acquisition never reaps a live owner regardless of this flag;
-  // provably-dead owners remain immediately reclaimable.
-  reapLiveOwnerAfterStale = true,
-): T extends Promise<unknown> ? never : T {
-  const requestKey = auditLockRequestKey(projectDir, intent, space);
-  let key =
-    AUDIT_LOCK_REQUEST_BINDINGS.get(requestKey) ??
-    auditLockIdentity(projectDir, intent, space);
-  const currentDepth = AUDIT_LOCK_DEPTH.get(key) ?? 0;
-  if (currentDepth === 0) {
-    if (
-      !acquireAuditLock(
-        projectDir,
-        maxRetries,
-        retryMs,
-        intent,
-        space,
-        reapLiveOwnerAfterStale,
-      )
-    ) {
-      throw new Error(`Failed to acquire audit lock for ${key} after retries`);
-    }
-    key = AUDIT_LOCK_REQUEST_BINDINGS.get(requestKey) ?? key;
-    const receipt = AUDIT_LOCK_RECEIPTS.get(key);
-    if (!receipt) {
-      throw new Error(`Audit lock receipt missing after acquire for ${key}`);
-    }
-    // Safety net: if the body calls process.exit (Bun skips `finally` in that
-    // case), the on-exit handler releases the lock dir so the project isn't
-    // left waiting for the acquisition backstop on the next invocation.
-    const onExit = () => { releaseCanonicalOwnerStampedLock(receipt); };
-    AUDIT_LOCK_EXIT_HANDLERS.set(key, onExit);
-    process.on("exit", onExit);
-  }
-  AUDIT_LOCK_DEPTH.set(key, currentDepth + 1);
-  try {
-    return fn();
-  } finally {
-    const depth = AUDIT_LOCK_DEPTH.get(key) ?? 0;
-    if (depth <= 1) {
-      AUDIT_LOCK_DEPTH.delete(key);
-      releaseAuditLock(projectDir, intent, space);
-    } else {
-      AUDIT_LOCK_DEPTH.set(key, depth - 1);
-    }
-  }
-}
-
-// True iff THIS process currently holds the audit lock for the given request
-// via an outer withAuditLock. The lock-acquire path registers a per-request exit
-// handler and the release path removes it (see
-// AUDIT_LOCK_EXIT_HANDLERS), so the handler's presence is the in-lock signal.
-// emitError (below) already branches on this to pick appendAuditEntryUnlocked
-// vs appendAuditEntry; the state tool's emitAudit helper uses it for the same
-// reason — an audit emit issued from inside a held lock MUST use the unlocked
-// variant or it self-deadlocks against the lock it is already holding
-// (appendAuditEntry calls acquireAuditLock, which is NOT reentrant — only
-// withAuditLock's depth counter is — so it would burn the full acquisition
-// budget and then throw).
-export function holdsAuditLock(projectDir: string, intent?: string, space?: string): boolean {
-  const { identityKey } = auditLockBoundIdentity(projectDir, intent, space);
-  return AUDIT_LOCK_EXIT_HANDLERS.has(identityKey);
-}
-
-// --- Doctor probe: leaked audit locks ----------------------------------------
-//
-// Doctor surfaces provably-dead, old never-finished-stamp, over-age live,
-// invalid, and unreadable locks. Automatic clear is restricted to dead valid
-// owners and old stamps that never finished; every ambiguous/live case remains
-// fail-closed.
-// We can't enumerate tmpdir() hashes back to
-// projects, so we probe the buckets THIS project would use: the workspace
-// sentinel bucket + every intent record across every space (the same identities
-// the writers key on). A leaked lock is reported with its bucket + owner PID.
-
-export interface LeakedLock {
-  bucket: string; // "__workspace__" or "<space>/<intent>"
-  lockDir: string; ownerPid: number | null;
-  reason:
-    | "dead-owner"
-    | "over-age"
-    | "unstamped"
-    | "invalid-owner"
-    | "unreadable-owner"
-    | "generation-unavailable"
-    | "released-gate"
-    | "legacy-transaction";
-  kind:
-    | "audit"
-    | "active-directive"
-    | "coordination-gate"
-    | "legacy-active-directive-transaction";
-  cleared: boolean;
-}
-
-function clearCoordinationGate(
-  lockDir: string,
-  expectedOwner: LockOwner,
-  reason: "released-gate" | "dead-owner",
-): boolean {
-  const mutex = acquireNativeGateMutex(lockDir);
-  if (!mutex) return false;
-  try {
-    const gateDir = reapClaimDir(lockDir);
-    const current = inspectOwnerStamp(gateDir);
-    if (
-      current.status !== "ok" ||
-      !ownerStampsEqual(current.owner, expectedOwner)
-    ) return false;
-    if (reason === "released-gate") {
-      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterReleasableGateCheck?.(gateDir);
-      return (
-        reapGateReleaseState(gateDir, current.owner) === "releasable" &&
-        retireReapClaim(gateDir)
-      );
-    }
-    const state = ownerProcessState(current.owner);
-    return (
-      (state === "dead" || state === "different") &&
-      recoverReapClaim(lockDir, current.owner)
-    );
-  } finally {
-    releaseNativeGateMutex(mutex);
-  }
-}
-
-// Detect (and safely clear eligible) leaked locks for this project. Returns the
-// findings and whether each was cleared. Pure-read when clear=false.
-export function detectLeakedLocks(projectDir: string, clear = false): LeakedLock[] {
-  const leaks: LeakedLock[] = [];
-  const probeCoordinationGate = (
-    bucketLabel: string,
-    lockDir: string,
-  ): void => {
-    const gateDir = reapClaimDir(lockDir);
-    if (!existsSync(gateDir)) return;
-    const inspected = inspectOwnerStamp(gateDir);
-    if (inspected.status === "invalid" || inspected.status === "unreadable") {
-      leaks.push({
-        bucket: bucketLabel,
-        lockDir: gateDir,
-        ownerPid: null,
-        reason: inspected.status === "invalid" ? "invalid-owner" : "unreadable-owner",
-        kind: "coordination-gate",
-        cleared: false,
-      });
-      return;
-    }
-    if (inspected.status === "ok") {
-      const releaseState = reapGateReleaseState(gateDir, inspected.owner);
-      if (releaseState === "invalid") {
-        leaks.push({
-          bucket: bucketLabel,
-          lockDir: gateDir,
-          ownerPid: inspected.owner.pid,
-          reason: "invalid-owner",
-          kind: "coordination-gate",
-          cleared: false,
-        });
-        return;
-      }
-      if (releaseState !== "releasable") {
-        const state = ownerProcessState(inspected.owner);
-        if (state === "dead" || state === "different") {
-          const cleared = clear
-            ? clearCoordinationGate(lockDir, inspected.owner, "dead-owner")
-            : false;
-          leaks.push({
-            bucket: bucketLabel,
-            lockDir: gateDir,
-            ownerPid: inspected.owner.pid,
-            reason: "dead-owner",
-            kind: "coordination-gate",
-            cleared,
-          });
-        }
-        return;
-      }
-      const cleared = clear
-        ? clearCoordinationGate(lockDir, inspected.owner, "released-gate")
-        : false;
-      leaks.push({
-        bucket: bucketLabel,
-        lockDir: gateDir,
-        ownerPid: inspected.owner.pid,
-        reason: "released-gate",
-        kind: "coordination-gate",
-        cleared,
-      });
-      return;
-    }
-  };
-  const probe = (bucketLabel: string, intent?: string, space?: string): void => {
-    const lockDir = auditLockDir(projectDir, intent, space);
-    probeCoordinationGate(bucketLabel, lockDir);
-    if (!existsSync(lockDir)) return;
-    const inspected = inspectOwnerStamp(lockDir);
-    const owner = inspected.status === "ok" ? inspected.owner : null;
-    let reason: LeakedLock["reason"] | null = null;
-    if (inspected.status === "invalid") {
-      reason = "invalid-owner";
-    } else if (inspected.status === "unreadable") {
-      reason = "unreadable-owner";
-    } else if (inspected.status === "missing") {
-      // Unstamped (no finished stamp): only a leak once older than the grace.
-      if (unstampedPastGrace(lockDir)) {
-        reason = "unstamped";
-      }
-    } else if (inspected.status === "ok") {
-      const state = ownerProcessState(inspected.owner);
-      if (state === "dead" || state === "different") {
-        reason = "dead-owner";
-      } else if (state === "unknown") {
-        reason = "generation-unavailable";
-      } else if (
-        inspected.owner.reapLiveOwnerAfterStale &&
-        lockAcquireEpochMs() - inspected.owner.startedAtMs > lockStaleMs()
-      ) {
-        reason = "over-age";
-      }
-    }
-    if (reason === null) return; // a live, fresh, stamped lock is legitimately held
-    const cleared = clear && (reason === "dead-owner" || reason === "unstamped")
-      ? reapStaleLock(lockDir)
-      : false;
-    leaks.push({ bucket: bucketLabel, lockDir, ownerPid: owner?.pid ?? null, reason, kind: "audit", cleared });
-  };
-  const probeActiveDirective = (bucketLabel: string, root: string): void => {
-    const lockDir = join(engineDirFor(root), ACTIVE_DIRECTIVE_LOCK);
-    probeCoordinationGate(bucketLabel, lockDir);
-    if (existsSync(lockDir)) {
-      const inspected = inspectOwnerStamp(lockDir);
-      const owner = inspected.status === "ok" ? inspected.owner : null;
-      let reason: LeakedLock["reason"] | null = null;
-      if (inspected.status === "invalid") {
-        reason = "invalid-owner";
-      } else if (inspected.status === "unreadable") {
-        reason = "unreadable-owner";
-      } else if (inspected.status === "missing") {
-        if (unstampedPastGrace(lockDir)) reason = "unstamped";
-      } else if (inspected.status === "ok") {
-        const state = ownerProcessState(inspected.owner);
-        if (state === "dead" || state === "different") {
-          reason = "dead-owner";
-        } else if (state === "unknown") {
-          reason = "generation-unavailable";
-        } else if (
-          inspected.owner.reapLiveOwnerAfterStale &&
-          lockAcquireEpochMs() - inspected.owner.startedAtMs > lockStaleMs()
-        ) {
-          reason = "over-age";
-        }
-      }
-      if (reason !== null) {
-        const cleared = clear && (reason === "dead-owner" || reason === "unstamped")
-          ? reapStaleLock(lockDir)
-          : false;
-        leaks.push({ bucket: bucketLabel, lockDir, ownerPid: owner?.pid ?? null, reason,
-          kind: "active-directive", cleared });
-      }
-    }
-    const legacy = join(root, LEGACY_ACTIVE_DIRECTIVE_TRANSACTION_FILE);
-    if (existsSync(legacy)) {
-      leaks.push({ bucket: bucketLabel, lockDir: legacy, ownerPid: null, reason: "legacy-transaction",
-        kind: "legacy-active-directive-transaction", cleared: false });
-    }
-  };
-  // Workspace sentinel bucket.
-  probe(WORKSPACE_LOCK_SENTINEL);
-  // Every intent record across every space.
-  const spacesRoot = join(workspaceRoot(projectDir), "spaces");
-  let spaces: string[] = [];
-  try { spaces = readdirSync(spacesRoot); } catch { /* no spaces dir */ }
-  spaces = [...new Set([...spaces, activeSpace(projectDir)])];
-  for (const sp of spaces) {
-    probeActiveDirective(`${sp}/bare-space`, spaceRecordRoot(projectDir, sp));
-    for (const intent of listIntentDirs(projectDir, sp)) {
-      probe(`${sp}/${intent}`, intent, sp);
-      probeActiveDirective(`${sp}/${intent}`, join(intentsDir(projectDir, sp), intent));
-    }
-  }
-  // The flat-legacy project also keys on the workspace bucket for its writes, so
-  // the sentinel probe above already covers it.
-  return leaks;
-}
-
 // --- Audit event correlation ---
 //
 // Doctor (and future sensors / observers) need to walk audit blocks and
@@ -39329,6 +36392,94 @@ export function isolatedRunIsOpen(projectDir: string, selection: WorkflowSelecti
     if (stage && auditBlockField(entry.block, "Workflow") === `single-stage:${stage}`) stages.add(stage);
   }
   return [...stages].some((stage) => singleStageAttemptOpenIn(events, stage));
+}
+
+// With no work selected, an isolated run keeps its record in the space's own,
+// where `next --single` records its start: the person's turns and answers, its
+// summary confirmation and its review land there too, while the run is open.
+// A project with no run open keeps its pre-work behaviour.
+export function isolatedRunWithoutWork(
+  projectDir: string,
+  selection: WorkflowSelection = resolveWorkflowSelection(projectDir),
+): boolean {
+  return selection.intent === null && isolatedRunIsOpen(projectDir, selection);
+}
+
+// The record a stage's run writes in: the selected work's, or with no work
+// selected, the space's own while an isolated run is open there. Null
+// otherwise, as recordDir.
+export function runRecordDir(projectDir: string): string | null {
+  return recordDir(projectDir) ?? (isolatedRunWithoutWork(projectDir) ? docsRoot(projectDir) : null);
+}
+
+// The state a stage's run is issued on: the selected work's state file, or with
+// no work selected and an isolated run open, none, which that run's steps bind
+// as the empty state (activeDirectiveContext). Null otherwise; a state file
+// that exists but cannot be read is never taken for none.
+export function runStateContent(projectDir: string): string | null {
+  try {
+    return readFileSync(stateFilePath(projectDir), "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+  }
+  return isolatedRunWithoutWork(projectDir) ? "" : null;
+}
+
+// The words typed after the flags of a stage run on its own with no work: its
+// description, where a piece of work keeps project-description.json. Kept
+// in the space's own record with key shapes masked as that file masks them,
+// one file a stage, committed as that file is (so a team clone has them), and
+// bound to the start that kept them by their digest on its STAGE_STARTED row.
+const SINGLE_RUN_REQUEST_DIR = "single-stage-request";
+export const SINGLE_RUN_REQUEST_FIELD = "Request SHA-256";
+
+export function singleRunRequestDigest(words: string): string {
+  return createHash("sha256").update(words, "utf-8").digest("hex");
+}
+
+/** Keep an isolated start's words; returns the digest its STAGE_STARTED row records. */
+export function keepSingleRunRequest(projectDir: string, slug: string, words: string): string {
+  const root = docsRoot(projectDir);
+  mkdirSync(root, { recursive: true });
+  writeRecordFileNoFollow(root, `${SINGLE_RUN_REQUEST_DIR}/${slug}.json`, `${JSON.stringify(words)}\n`);
+  return singleRunRequestDigest(words);
+}
+
+// The request of the latest isolated run open with no work: its stage, and the
+// words its start kept, or null when it kept none (nothing was typed, or the
+// file no longer matches the start). Null when no such run is open.
+export function singleRunRequest(projectDir: string): { stage: string; description: string | null } | null {
+  const selection = resolveWorkflowSelection(projectDir);
+  if (!isolatedRunWithoutWork(projectDir, selection)) return null;
+  let events: OrderedPipelineEvidenceEvent[];
+  try {
+    events = orderedPipelineEvidenceEvents(projectDir, undefined, selection.space);
+  } catch {
+    return null;
+  }
+  let start: OrderedPipelineEvidenceEvent | null = null;
+  for (const entry of events) {
+    const stage = auditBlockField(entry.block, "Stage");
+    if (
+      entry.event === "STAGE_STARTED" && stage !== null &&
+      auditBlockField(entry.block, "Workflow") === `single-stage:${stage}` && singleStageAttemptOpenIn(events, stage)
+    ) {
+      start = entry;
+    }
+  }
+  const stage = start === null ? null : auditBlockField(start.block, "Stage");
+  if (start === null || stage === null) return null;
+  const digest = auditBlockField(start.block, SINGLE_RUN_REQUEST_FIELD);
+  if (digest === null) return { stage, description: null };
+  try {
+    const path = recordFileTargetOrThrow(docsRoot(projectDir), `${SINGLE_RUN_REQUEST_DIR}/${stage}.json`);
+    const words: unknown = JSON.parse(readRegularFileNoFollowOrThrow(path, "isolated run request").toString("utf-8"));
+    return typeof words === "string" && singleRunRequestDigest(words) === digest
+      ? { stage, description: words }
+      : { stage, description: null };
+  } catch {
+    return { stage, description: null };
+  }
 }
 
 function singleStageAttemptOpenIn(
@@ -40960,6 +38111,167 @@ export function onlyAidlcFilesChangedInSwarmStage(
   } catch {
     return false;
   }
+}
+
+// --- A change the person asked for in the main checkout ----------------------
+//
+// Under a strict Guard Policy the main checkout changes only by the Units'
+// landings while they are built in parallel, so each landing can check it. A
+// change the person asks for there is theirs: `swarm allow-change` proves the
+// message they asked in and records the files with their words
+// (MAIN_CHECKOUT_CHANGE_ALLOWED) for the current Code Generation attempt.
+// mainCheckoutChangeAllowed is the one read of that record, made only where
+// strict holds the change: the plan-approval guard lets the write in, and the
+// landing, the next batch's prepare and stage completion keep it. A strict the
+// team holds in memory keeps the main checkout as approved, read at use.
+
+const MAIN_CHECKOUT_CHANGE_STAGE = "code-generation";
+
+/** A file in the main checkout as the landing names it: project-relative, forward slashes; null outside the project. */
+export function mainCheckoutPathKey(projectDir: string, target: string): string | null {
+  const rel = relative(resolvePath(projectDir), resolvePath(projectDir, target));
+  if (rel === "" || isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`)) return null;
+  return rel.split(sep).join("/");
+}
+
+const foldedPathKey = (key: string): string => process.platform === "win32" ? key.toLowerCase() : key;
+
+/**
+ * The files the person asked to change in the main checkout during the current
+ * Code Generation attempt, each with the message they asked in, keyed as
+ * mainCheckoutPathKey names them (case-folded on Windows); null when a strict
+ * the team holds in memory keeps the main checkout as approved, or the record
+ * cannot be read. `notNamedBy` leaves out the files a Unit's plan names (null:
+ * the plan could not be read, so none counts): a Unit that builds the file
+ * starts from it committed and approved, as on every Guard Policy.
+ */
+export function mainCheckoutChangesAsked(
+  projectDir: string,
+  selection: { intent?: string; space?: string } = {},
+  notNamedBy?: readonly string[] | null,
+): Map<string, string> | null {
+  if (notNamedBy === null) return null;
+  try {
+    if (resolveGuardPolicy(projectDir, undefined, { selection }).memoryStrict !== null) return null;
+    const rows = readAuditShardEvents(projectDir, selection.intent, selection.space);
+    const floor = latestMainWorkflowStageRunFloorForProject(
+      projectDir, MAIN_CHECKOUT_CHANGE_STAGE, false, undefined, rows, selection.intent, selection.space,
+    );
+    if (floor.startsWith("AMBIGUOUS:")) return null;
+    const asked = new Map<string, string>();
+    for (const row of rows) {
+      if (
+        row.event !== "MAIN_CHECKOUT_CHANGE_ALLOWED" ||
+        auditBlockField(row.block, "Stage") !== MAIN_CHECKOUT_CHANGE_STAGE ||
+        auditBlockField(row.block, "Run floor") !== floor
+      ) continue;
+      const message = auditBlockField(row.block, "Message Id");
+      let listed: unknown;
+      try {
+        listed = JSON.parse(auditBlockField(row.block, "Paths") ?? "");
+      } catch {
+        continue;
+      }
+      if (!message || !Array.isArray(listed)) continue;
+      for (const path of listed) {
+        if (typeof path === "string" && !plansNamePath(path, notNamedBy ?? [])) asked.set(foldedPathKey(path), message);
+      }
+    }
+    return asked;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The messages the person asked in for every one of `paths` to change in the
+ * main checkout during the current Code Generation attempt; null when one of
+ * them was not asked for (mainCheckoutChangesAsked).
+ */
+export function mainCheckoutChangeAllowed(
+  projectDir: string,
+  paths: readonly string[] | null,
+  selection: { intent?: string; space?: string } = {},
+  notNamedBy?: readonly string[] | null,
+): string[] | null {
+  if (paths === null || paths.length === 0) return null;
+  const asked = mainCheckoutChangesAsked(projectDir, selection, notNamedBy);
+  if (asked === null) return null;
+  const messages = paths.map((path) => asked.get(foldedPathKey(path)));
+  return messages.every((message) => message !== undefined) ? [...new Set(messages as string[])] : null;
+}
+
+/** Whether a listing key (`<repo>\0<path>`) is a file the person asked to change (mainCheckoutChangesAsked). */
+export function mainCheckoutChangeAskedKey(asked: ReadonlyMap<string, string> | null): (pathKey: string) => boolean {
+  return (pathKey) => {
+    if (asked === null || asked.size === 0) return false;
+    const parsed = splitSourcePathKey(pathKey);
+    return parsed !== null && asked.has(foldedPathKey(parsed.repo ? `${parsed.repo}/${parsed.path}` : parsed.path));
+  };
+}
+
+/** The attempt a MAIN_CHECKOUT_CHANGE_ALLOWED row is written for. */
+export function mainCheckoutChangeRunFloor(projectDir: string, selection: { intent?: string; space?: string } = {}): string {
+  return latestMainWorkflowStageRunFloorForProject(
+    projectDir, MAIN_CHECKOUT_CHANGE_STAGE, false, undefined, undefined, selection.intent, selection.space,
+  );
+}
+
+/** What a strict the team holds in memory says of the main checkout while the Units are built; null when none holds it. */
+export function mainCheckoutHeldByTeam(projectDir: string, selection: { intent?: string; space?: string } = {}): string | null {
+  try {
+    const held = resolveGuardPolicy(projectDir, undefined, { selection }).memoryStrict;
+    return held === null
+      ? null
+      : `Your team set Guard Policy to strict in ${held.path} (section: ${held.heading.replace(/^## /, "")}), ` +
+        "so the main checkout stays as approved while the Units are built. Changing that line there changes it.";
+  } catch {
+    return null;
+  }
+}
+
+/** The command that records the person's request for `paths`; the agent adds the message they asked in. */
+export function allowMainCheckoutChangeCommand(paths: readonly string[]): string {
+  return `${aidlcToolInvocation("swarm")} allow-change ${paths.map((path) => quoteCommandArgument(path)).join(" ")}`;
+}
+
+/**
+ * Why the person's request cannot cover one of `paths`; null when it covers
+ * every one. AI-DLC's own files change only through AI-DLC's steps, and a file
+ * a Unit being built names in its plan goes through that Unit.
+ */
+export function mainCheckoutChangeRefusal(
+  projectDir: string,
+  paths: readonly string[],
+  units: readonly string[],
+  planNamedPaths: (unit: string) => readonly string[] | null,
+): string | null {
+  const owned = aidlcOwnedSourceKey(projectDir);
+  for (const path of paths) {
+    if (owned(sourcePathKey("", path))) {
+      return `${path} is one of AI-DLC's own files, which change only through AI-DLC's own steps.`;
+    }
+    const unit = units.find((candidate) => plansNamePath(path, planNamedPaths(candidate) ?? []));
+    if (unit !== undefined) {
+      return `${path} is a file the plan for Unit ${unit} names, so a change to it goes through that Unit: ` +
+        "Request Changes at its checkpoint, or make it once Code Generation is over.";
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether the plans name a file (`rel`, project-relative with forward slashes):
+ * a named folder covers what is under it, and a bare file name covers that name
+ * anywhere.
+ */
+export function plansNamePath(rel: string, planPaths: readonly string[]): boolean {
+  const fold = (path: string): string => process.platform === "win32" ? path.toLowerCase() : path;
+  const file = fold(rel);
+  return planPaths.some((named) => {
+    const path = fold(named.replace(/\/+$/, ""));
+    return file === path || file.startsWith(`${path}/`) || (!path.includes("/") && file.split("/").at(-1) === path);
+  });
 }
 
 // The set of units the CURRENT attempt of an INLINE per-unit stage has
@@ -44315,6 +41627,8 @@ export interface AcceptedChange {
   current: string;
   /** The one plain-language line the human hears. */
   notice: string;
+  /** The messages the person asked for the change in, when they did (swarm allow-change). */
+  messageIds?: readonly string[];
 }
 
 export interface GuardPolicyMemoryDeclaration {
@@ -45358,7 +42672,7 @@ export function memoryGuardPolicyDeclarations(
       if (!body.trim()) continue;
       const raw = structuredField(body, "Mode");
       if (raw === null) continue;
-      const value = parseGuardPolicy(raw);
+      const value = parseGuardPolicy(withoutLearnedDate(raw));
       const section = heading.replace(/^## /, "");
       if (value === null) {
         throw new Error(
@@ -46545,6 +43859,7 @@ export function acceptedChangeFields(change: AcceptedChange): Record<string, str
     Recorded: change.recorded,
     Current: change.current,
     Details: change.notice,
+    ...(change.messageIds && change.messageIds.length > 0 ? { "Message Id": change.messageIds.join(", ") } : {}),
   };
 }
 
@@ -46676,12 +43991,6 @@ export function governedGuardPolicy(
 /** Retired alias of governedGuardPolicy. */
 export const governedChangeControl = governedGuardPolicy;
 
-// --- Helpers ---
-
-export function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 // --- CLI argument parsing ---
 
 // `--` ends option parsing: every later token is literal and lands in
@@ -46746,1081 +44055,6 @@ export function parseFieldArgs(args: string[]): Record<string, string> {
     }
   }
   return fields;
-}
-
-// --- Markdown section helpers ---
-// Used by practices-discovery affirmation (copy under ## Mandated /
-// ## Forbidden) and the orchestrator (reads aidlc-team.md sections for
-// stance lookup). Pure string operations against well-formed markdown.
-// Caller is responsible for code-fence-free input — rules/aidlc-*.md
-// never contain fenced ## lines per spec.
-//
-// Heading-match rules:
-//   - Pass the full marker form ("## Walking Skeleton") as `heading`.
-//   - Trailing whitespace on the actual heading line is tolerated.
-//   - Sub-headings (`### Walking Skeleton`) never match `## Walking Skeleton`.
-//   - On multiple matches of the same heading, the first wins.
-//   - When the heading is absent, extract returns "" and append throws.
-
-export function extractMarkdownSection(content: string, heading: string): string {
-  // Returns the prose between `heading` (e.g. "## Walking Skeleton") and the
-  // next `## ` heading at the same level (or end of file). The heading line
-  // itself is not included in the output. Returns "" if heading is absent.
-  // Headings inside fenced code blocks (```) are skipped — a teaching example
-  // that contains `## Walking Skeleton` should not be mistaken for the actual
-  // section.
-  const stripped = stripFencedCodeBlocks(content);
-  const headingRegex = new RegExp(
-    `^${escapeRegex(heading)}[ \\t]*$`,
-    "m",
-  );
-  const startMatch = headingRegex.exec(stripped);
-  if (!startMatch) return "";
-  const afterHeading = startMatch.index + startMatch[0].length;
-  // Skip the newline immediately after the heading line, if any.
-  const bodyStart = stripped[afterHeading] === "\n" ? afterHeading + 1 : afterHeading;
-  // Find the next `## ` heading at the same level (not `### ` or deeper).
-  const nextHeading = /^## [^\n]*$/m;
-  nextHeading.lastIndex = bodyStart;
-  const remainder = stripped.slice(bodyStart);
-  const nextMatch = nextHeading.exec(remainder);
-  const bodyEnd = nextMatch ? bodyStart + nextMatch.index : stripped.length;
-  return stripped.slice(bodyStart, bodyEnd);
-}
-
-// Replace fenced-code contents with blank lines while preserving all other
-// text. This is the long-standing extraction contract: HTML comments remain
-// part of the returned section for callers that inspect them directly.
-function stripFencedCodeBlocks(content: string): string {
-  const lines = content.split("\n");
-  let inFence = false;
-  for (let i = 0; i < lines.length; i++) {
-    if (/^```/.test(lines[i])) {
-      inFence = !inFence;
-      lines[i] = "";
-      continue;
-    }
-    if (inFence) lines[i] = "";
-  }
-  return lines.join("\n");
-}
-
-
-export type MarkdownContainer =
-  | { kind: "blockQuote" }
-  | { kind: "listItem"; ordered: boolean; start: number | null; id: number };
-
-export type MarkdownLineKind =
-  | "blank" | "paragraph" | "heading" | "thematicBreak" | "codeFenced" | "codeIndented"
-  | "htmlFlow" | "definition" | "table" | "unknown";
-
-export interface MarkdownSpan {
-  start: number;
-  end: number;
-  kind: "codeText" | "htmlText" | "htmlComment";
-  tokenStartLine: number;
-  tokenEndLine: number;
-}
-
-export interface MarkdownLine {
-  kind: MarkdownLineKind;
-  // Lines of one rendered block share this id (and their containers array);
-  // -1 for lines outside any block the renderer produced.
-  block: number;
-  containers: MarkdownContainer[];
-  htmlKind: 1 | 2 | 3 | 4 | 5 | 6 | 7 | null;
-  contentStart: number;
-  invisible: MarkdownSpan[];
-}
-
-export interface MarkdownDefinition {
-  label: string;
-  startLine: number;
-  endLine: number;
-}
-
-export interface MarkdownBlocks {
-  lines: MarkdownLine[];
-  definitions: MarkdownDefinition[];
-  // Normalized label of every link reference definition in the document.
-  labels: string[];
-}
-
-// Delimiters that serialize Bun.markdown.render output into a tree. The
-// rendered source never contains them, so a document cannot forge structure.
-const MARKDOWN_TREE_OPEN = "\u0001";
-const MARKDOWN_TREE_META = "\u0002";
-const MARKDOWN_TREE_BODY = "\u0003";
-const MARKDOWN_TREE_CLOSE = "\u0004";
-// biome-ignore lint/suspicious/noControlCharactersInRegex: these control characters are the tree delimiters being removed.
-const MARKDOWN_TREE_DELIMITERS = /[\u0001-\u0004]/g;
-
-interface RenderedMarkdownNode {
-  tag: string;
-  meta: string[];
-  kids: Array<RenderedMarkdownNode | string>;
-  parent: RenderedMarkdownNode | null;
-  id: number;
-}
-
-// Bun.markdown hands inline raw HTML to the text callback as its own chunk.
-// This only recognizes such a chunk; the renderer already decided it is HTML.
-const RAW_HTML_CHUNK =
-  /^<(?:[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*\/?>|\/[A-Za-z][A-Za-z0-9-]*\s*>|!--(?:-?>|[\s\S]*?-->)|\?[\s\S]*?\?>|![A-Za-z][^>]*>|!\[CDATA\[[\s\S]*?\]\]>)$/;
-
-// GFM task lists stay off: Bun.markdown (1.3.14 through at least 1.4.2) lets
-// an empty task item such as `- [x]` swallow the next line, even a heading
-// after a blank line. Checkboxes carry no meaning for any consumer.
-const MARKDOWN_RENDER_OPTIONS = { tasklists: false } as const;
-
-function renderMarkdownTree(source: string): RenderedMarkdownNode {
-  const clean = (value: unknown): string => String(value ?? "").replace(MARKDOWN_TREE_DELIMITERS, "x");
-  const open = (tag: string, ...meta: unknown[]): string =>
-    MARKDOWN_TREE_OPEN + [tag, ...meta.map(clean)].join(MARKDOWN_TREE_META) + MARKDOWN_TREE_BODY;
-  const node = (tag: string) => (children: string): string => open(tag) + children + MARKDOWN_TREE_CLOSE;
-  const inline = (children: string): string => children;
-  const serialized = Bun.markdown.render(source, {
-    heading: (children, meta) => open("H", meta.level) + children + MARKDOWN_TREE_CLOSE,
-    paragraph: node("P"),
-    blockquote: node("Q"),
-    list: (children, meta) => open("LIST", meta.ordered ? 1 : 0, meta.start ?? "") + children + MARKDOWN_TREE_CLOSE,
-    listItem: node("L"),
-    code: (children, meta) => open("C", meta?.language ?? "") + children + MARKDOWN_TREE_CLOSE,
-    html: node("X"),
-    hr: () => open("HR") + MARKDOWN_TREE_CLOSE,
-    table: node("T"),
-    thead: inline,
-    tbody: inline,
-    tr: node("TR"),
-    th: node("TD"),
-    td: node("TD"),
-    strong: inline,
-    emphasis: inline,
-    strikethrough: inline,
-    link: (children, meta) => open("A", meta.href, meta.title ?? "") + children + MARKDOWN_TREE_CLOSE,
-    image: (children, meta) => open("I", meta.src, meta.title ?? "") + children + MARKDOWN_TREE_CLOSE,
-    codespan: node("c"),
-    text: (text) => {
-      const chunk = clean(text);
-      return RAW_HTML_CHUNK.test(chunk) ? open("x") + chunk + MARKDOWN_TREE_CLOSE : chunk;
-    },
-  }, MARKDOWN_RENDER_OPTIONS);
-  const root: RenderedMarkdownNode = { tag: "root", meta: [], kids: [], parent: null, id: 0 };
-  let current = root;
-  let nextId = 1;
-  for (let index = 0; index < serialized.length;) {
-    const character = serialized[index];
-    if (character === MARKDOWN_TREE_OPEN) {
-      const body = serialized.indexOf(MARKDOWN_TREE_BODY, index);
-      const [tag, ...meta] = serialized.slice(index + 1, body).split(MARKDOWN_TREE_META);
-      const child: RenderedMarkdownNode = { tag, meta, kids: [], parent: current, id: nextId++ };
-      current.kids.push(child);
-      current = child;
-      index = body + 1;
-    } else if (character === MARKDOWN_TREE_CLOSE) {
-      current = current.parent ?? root;
-      index++;
-    } else {
-      let end = index;
-      while (end < serialized.length && serialized[end] !== MARKDOWN_TREE_OPEN && serialized[end] !== MARKDOWN_TREE_CLOSE) end++;
-      current.kids.push(serialized.slice(index, end));
-      index = end;
-    }
-  }
-  return root;
-}
-
-function renderedMarkdownText(node: RenderedMarkdownNode): string {
-  return node.kids.map((kid) => typeof kid === "string" ? kid : renderedMarkdownText(kid)).join("");
-}
-
-interface MarkdownProbe {
-  id: number;
-  line: number;
-  column: number;
-  insert: string;
-  core: string;
-  role: "primary" | "comment" | "html" | "code";
-}
-
-interface MarkdownProbeHit {
-  probe: MarkdownProbe;
-  node: RenderedMarkdownNode;
-  meta: boolean;
-}
-
-const MARKDOWN_CONTAINER_PREFIX = /^(?:[ \t]{0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)))*[ \t]*/;
-const MARKDOWN_FENCE = /^(`{3,}|~{3,})/;
-const MARKDOWN_THEMATIC_BREAK = /^[ \t]{0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/;
-const MARKDOWN_SETEXT_UNDERLINE = /^(?:=+|-+)[ \t]*$/;
-
-// A column where inserting a probe word cannot change block structure: after
-// the first letter or digit outside container markers, tags, entities and
-// escapes. A line whose text is all inside brackets takes the probe after a
-// closing bracket (a reference label must stay intact), then inside a label,
-// then inside a link destination. The render comparison in probeMarkdown
-// proves the choice for each document.
-function markdownProbeColumn(line: string, from: number): number | null {
-  let inTag = false;
-  let inEntity = false;
-  let brackets = 0;
-  let destination = 0;
-  let afterLabel: number | null = null;
-  let inLabel: number | null = null;
-  let inDestination: number | null = null;
-  for (let index = from; index < line.length;) {
-    const character = String.fromCodePoint(line.codePointAt(index)!);
-    const next = index + character.length;
-    if (inTag) {
-      if (character === ">") inTag = false;
-    } else if (character === "<") {
-      inTag = true;
-    } else if (character === "\\") {
-      index = next < line.length ? next + String.fromCodePoint(line.codePointAt(next)!).length : next;
-      continue;
-    } else if (character === "&") {
-      inEntity = true;
-    } else if (inEntity && /[A-Za-z0-9#]/.test(character)) {
-      // An entity name is not source text.
-    } else {
-      inEntity = false;
-      if (destination > 0) {
-        if (character === "(") destination++;
-        else if (character === ")") destination--;
-        else if (inDestination === null && /[\p{L}\p{N}]/u.test(character)) inDestination = next;
-      } else if (character === "[") {
-        brackets++;
-      } else if (character === "]") {
-        brackets = Math.max(0, brackets - 1);
-        if (line[next] === "(") {
-          destination = 1;
-          index = next + 1;
-          continue;
-        }
-        if (brackets === 0 && (next === line.length || /[ \t]/.test(line[next]))) afterLabel ??= next;
-      } else if (/[\p{L}\p{N}]/u.test(character)) {
-        if (brackets === 0) return next;
-        inLabel ??= next;
-      }
-    }
-    index = next;
-  }
-  return afterLabel ?? inLabel ?? inDestination;
-}
-
-// Block syntax whose shape a probe word would change: rules, setext
-// underlines, fences and table delimiter rows.
-const MARKDOWN_STRUCTURE_LINE =
-  /^(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|=+[ \t]*|-+[ \t]*|`{3,}.*|~{3,}.*|\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*)$/;
-
-// A line with no letter or digit outside markup (punctuation, emoji, entities)
-// takes its probe where its content starts: inside a table row's first cell,
-// or after a closing tag, whose block start condition still holds.
-function markdownFallbackProbeColumn(line: string, start: number): number | null {
-  const content = line.slice(start).trimEnd();
-  if (content === "" || MARKDOWN_STRUCTURE_LINE.test(content)) return null;
-  if (content.startsWith("|")) return start + /^\|[ \t]*/.exec(content)![0].length;
-  if (content.startsWith("<")) return start + content.length;
-  return start;
-}
-
-function markdownProbes(source: string[], prefix: string): MarkdownProbe[] {
-  const probes: MarkdownProbe[] = [];
-  const add = (line: number, column: number, role: MarkdownProbe["role"], shape: (core: string) => string): void => {
-    const core = `${prefix}${probes.length}z`;
-    probes.push({ id: probes.length, line, column, insert: shape(core), core, role });
-  };
-  source.forEach((line, index) => {
-    const start = MARKDOWN_CONTAINER_PREFIX.exec(line)![0].length;
-    const atx = /^#{1,6}(?=[ \t]|$)[ \t]*/.exec(line.slice(start));
-    // Raw HTML that opens a line, and any HTML heading tag, carries a probe
-    // inside the construct where every HTML block start condition still holds.
-    const opening = /^<(?:([A-Za-z][A-Za-z0-9-]*)(?=[\s/>]|$)|\?|![A-Za-z]|!\[CDATA\[)/.exec(line.slice(start));
-    if (atx) {
-      // A word at the start of heading content keeps the heading, and any
-      // block containing it, intact.
-      const rest = line.length > start + atx[0].length;
-      add(index, start + atx[0].length, "primary", (core) =>
-        !/[ \t]$/.test(atx[0]) ? ` ${core}` : rest ? `${core} ` : core);
-    } else {
-      const column = markdownProbeColumn(line, start);
-      const next = source[index + 1];
-      if (column !== null) {
-        add(index, column, "primary", (core) => core);
-      } else if (line.trim() !== "" && next !== undefined &&
-        MARKDOWN_SETEXT_UNDERLINE.test(next.slice(/^(?:[ \t]{0,3}>[ \t]?)*[ \t]{0,3}/.exec(next)![0].length))) {
-        // Setext heading text without a letter or digit: probe before any
-        // trailing whitespace, which the heading content drops.
-        add(index, line.trimEnd().length, "primary", (core) => core);
-      } else if (!opening) {
-        const fallback = markdownFallbackProbeColumn(line, start);
-        if (fallback !== null) add(index, fallback, "primary", (core) => core);
-      }
-    }
-    for (let offset = line.indexOf("<!--"); offset >= 0; offset = line.indexOf("<!--", offset + 4)) {
-      // `<!-->` and `<!--->` are complete comments that a probe would reopen.
-      if (!/^<!---?>/.test(line.slice(offset))) add(index, offset + 4, "comment", (core) => core);
-    }
-    // After every backtick run (and one padding space), so each code span
-    // carries a probe and gets exact columns; a fence line would take it as
-    // an info string.
-    if (!MARKDOWN_FENCE.test(line.slice(start))) {
-      for (const run of line.matchAll(/`+ ?/g)) add(index, run.index + run[0].length, "code", (core) => core);
-    }
-    if (opening) {
-      const column = start + opening[0].length;
-      add(index, column, "html", (core) => opening[1] ? ` ${core}` : core);
-    }
-    for (const tag of line.matchAll(/<h[1-6](?=[\s/>]|$)/gi)) {
-      if (tag.index !== start) add(index, tag.index + tag[0].length, "html", (core) => ` ${core}`);
-    }
-  });
-  return probes;
-}
-
-function withMarkdownProbes(source: string[], probes: MarkdownProbe[]): string {
-  const byLine = new Map<number, MarkdownProbe[]>();
-  for (const probe of probes) byLine.set(probe.line, [...(byLine.get(probe.line) ?? []), probe]);
-  return source.map((line, index) => {
-    let probed = line;
-    for (const probe of (byLine.get(index) ?? []).sort((a, b) => b.column - a.column || b.id - a.id)) {
-      probed = probed.slice(0, probe.column) + probe.insert + probed.slice(probe.column);
-    }
-    return probed;
-  }).join("\n");
-}
-
-function withoutMarkdownProbes(text: string, prefix: string, probes: MarkdownProbe[]): string {
-  return text.replace(new RegExp(`( ?)${prefix}(\\d+)z( ?)`, "g"), (match, before: string, id: string, after: string) => {
-    const probe = probes[Number(id)];
-    if (!probe) return match;
-    return (probe.insert.startsWith(" ") ? "" : before) + (probe.insert.endsWith(" ") ? "" : after);
-  });
-}
-
-function locateMarkdownProbes(
-  tree: RenderedMarkdownNode,
-  prefix: string,
-  probes: MarkdownProbe[],
-  hits: Map<number, MarkdownProbeHit>,
-): void {
-  const pattern = new RegExp(`${prefix}(\\d+)z`, "g");
-  const record = (id: number, node: RenderedMarkdownNode, meta: boolean): void => {
-    if (probes[id]) hits.set(id, { probe: probes[id], node, meta });
-  };
-  const visit = (node: RenderedMarkdownNode): void => {
-    for (const value of node.meta) {
-      for (const match of value.matchAll(pattern)) record(Number(match[1]), node, true);
-    }
-    for (const kid of node.kids) {
-      if (typeof kid !== "string") visit(kid);
-      else for (const match of kid.matchAll(pattern)) record(Number(match[1]), node, false);
-    }
-  };
-  visit(tree);
-}
-
-const MARKDOWN_PROBE_RENDER_BUDGET = 256;
-
-// Keep only probes whose insertion leaves Bun.markdown's HTML byte-identical,
-// then read where each one rendered.
-function probeMarkdown(source: string[], prefix: string): {
-  probes: MarkdownProbe[];
-  accepted: Set<number>;
-  hits: Map<number, MarkdownProbeHit>;
-} {
-  const probes = markdownProbes(source, prefix);
-  const original = Bun.markdown.html(source.join("\n"), MARKDOWN_RENDER_OPTIONS);
-  // Past this many renders a group that changes the rendering is dropped
-  // whole, which leaves its lines unclassified rather than slow.
-  let budget = MARKDOWN_PROBE_RENDER_BUDGET;
-  const neutral = (subset: MarkdownProbe[]): boolean => {
-    budget--;
-    return withoutMarkdownProbes(Bun.markdown.html(withMarkdownProbes(source, subset), MARKDOWN_RENDER_OPTIONS), prefix, probes) === original;
-  };
-  // Bisect to the probes that change the rendering, so one bad probe costs a
-  // logarithmic number of renders rather than one render per probe.
-  const groups: MarkdownProbe[][] = [];
-  const settle = (subset: MarkdownProbe[]): void => {
-    if (subset.length === 0 || budget <= 0) return;
-    if (neutral(subset)) {
-      groups.push(subset);
-    } else if (subset.length > 1) {
-      const half = Math.ceil(subset.length / 2);
-      settle(subset.slice(0, half));
-      settle(subset.slice(half));
-    }
-  };
-  settle(probes);
-  const kept = groups.flat();
-  const hits = new Map<number, MarkdownProbeHit>();
-  const accepted = new Set(kept.map((probe) => probe.id));
-  // Groups that are neutral apart may still interact; then read each alone.
-  const renders = groups.length <= 1 || neutral(kept) ? [kept] : groups;
-  for (const group of renders) {
-    locateMarkdownProbes(renderMarkdownTree(withMarkdownProbes(source, group)), prefix, probes, hits);
-  }
-  return { probes, accepted, hits };
-}
-
-/** CommonMark label matching: collapse whitespace, then Unicode case-fold. */
-export function normalizeMarkdownLabel(label: string): string {
-  return label.replace(/[\t\n\r ]+/g, " ").replace(/^ | $/g, "").toLowerCase().toUpperCase();
-}
-
-// Every bracketed label is referenced ahead of the document, each in its own
-// paragraph so no inline construct can span two of them; the ones the
-// renderer turns into links are defined somewhere in the document.
-function markdownDefinedLabels(source: string, rendered: string): string[] {
-  const candidates = [...new Set(
-    [...source.matchAll(/\[((?:\\.|[^\\[\]])+)\]/g)]
-      .map((match) => match[1].replace(/[\t\n\r ]+/g, " ").trim())
-      .filter((label) => label.length > 0 && label.length <= 999),
-  )];
-  if (candidates.length === 0) return [];
-  let prefix = "aidlclabel";
-  while (source.includes(prefix) || rendered.includes(prefix)) prefix += "x";
-  const references = candidates.map((label, index) => `[${label}]${prefix}${index}z`).join("\n\n");
-  const tree = renderMarkdownTree(`${references}\n\n${source}`);
-  const marker = new RegExp(`^${prefix}(\\d+)z`);
-  const defined = new Set<string>();
-  // The marker prefix is absent from the document and from its rendering
-  // (entities cannot spell it), so only reference paragraphs match.
-  for (const paragraph of tree.kids) {
-    if (typeof paragraph === "string" || paragraph.tag !== "P") continue;
-    paragraph.kids.forEach((kid, index) => {
-      const match = typeof kid === "string" ? marker.exec(kid) : null;
-      const previous = paragraph.kids[index - 1];
-      if (match && Number(match[1]) < candidates.length && typeof previous !== "string" && previous?.tag === "A") {
-        defined.add(normalizeMarkdownLabel(candidates[Number(match[1])]));
-      }
-    });
-  }
-  return [...defined].sort();
-}
-
-// Only classify a block the renderer already produced: its extent and whether
-// it can interrupt a paragraph come from Bun.markdown, not this tag list.
-const MARKDOWN_HTML_BLOCK_TAG =
-  /^<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:[\t >]|\/>|$)/i;
-
-function markdownHtmlKind(firstLine: string): NonNullable<MarkdownLine["htmlKind"]> {
-  if (/^<(?:script|pre|style|textarea)(?:[\t >]|$)/i.test(firstLine)) return 1;
-  if (firstLine.startsWith("<!--")) return 2;
-  if (firstLine.startsWith("<?")) return 3;
-  if (/^<![A-Za-z]/.test(firstLine)) return 4;
-  if (firstLine.startsWith("<![CDATA[")) return 5;
-  if (MARKDOWN_HTML_BLOCK_TAG.test(firstLine)) return 6;
-  return 7;
-}
-
-// Content that opens an ATX heading, a fence, or an HTML block of any kind
-// (kind 7 is a complete tag alone on its line).
-const MARKDOWN_TABLE_BREAK = new RegExp([
-  /^#{1,6}(?:[ \t]|$)/.source,
-  /^(?:`{3,}|~{3,})/.source,
-  /^<(?:(?:script|pre|style|textarea)(?:[\t >]|$)|!--|\?|![A-Za-z]|!\[CDATA\[)/.source,
-  MARKDOWN_HTML_BLOCK_TAG.source,
-  /^<\/?[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*\/?>[ \t]*$/.source,
-].join("|"), "i");
-
-// Column after the line's container prefixes and indentation. A list item's
-// marker appears only on its first line; later lines carry indentation.
-function markdownContentStart(line: string, containers: Array<"quote" | "marker" | "indent">): number {
-  let position = 0;
-  for (const container of containers) {
-    const prefix = container === "quote" ? /^[ \t]{0,3}>[ \t]?/
-      : container === "marker" ? /^[ \t]{0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)/
-      : /^[ \t]*/;
-    position += prefix.exec(line.slice(position))?.[0].length ?? 0;
-  }
-  return position + /^[ \t]*/.exec(line.slice(position))![0].length;
-}
-
-const MARKDOWN_RAW_BLOCKS: ReadonlySet<string> = new Set(["C", "X"]);
-const MARKDOWN_LEAF_BLOCKS: ReadonlySet<string> = new Set(["H", "P", "C", "X", "TD", "L"]);
-const MARKDOWN_INLINE_SPANS: ReadonlySet<string> = new Set(["x", "c", "C", "X"]);
-
-/**
- * CommonMark/GFM source structure as Bun.markdown renders it; all positions
- * index BOM/CRLF-normalized raw lines. The renderer reports no source
- * positions, so each line carries a probe word placed where it cannot change
- * block structure (the rendered HTML proves it); where a probe renders
- * locates the line's block, containers and inline code or HTML.
- */
-export function markdownBlocks(content: string): MarkdownBlocks {
-  if (typeof Bun.markdown?.render !== "function" || typeof Bun.markdown.html !== "function") {
-    throw new Error(`Markdown analysis requires Bun.markdown (Bun 1.3.8 or newer); this is Bun ${Bun.version}`);
-  }
-  const raw = content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
-  // Bun.markdown (through at least 1.4.2) continues a GFM table through a line
-  // that starts a heading, fence or HTML block; GFM ends the table there.
-  // Render such a line after a blank one (keeping its quote markers) and map
-  // positions back to the source.
-  let rendered = raw;
-  let origin = raw.map((_, index) => index);
-  // It also closes a quote's or list item's fenced block at a fence line
-  // outside that container, where CommonMark ends the container and opens a
-  // new fence; an HTML comment line there ends the container first. And it
-  // opens an HTML block at a tag indented four or more columns under a
-  // paragraph, which CommonMark continues; a no-break space in place of the
-  // last indentation column keeps the line's columns and makes it text. Each
-  // round repairs at least one line that can never need it again.
-  for (let round = 0; ; round++) {
-    const { repairs, ...blocks } = classifyMarkdownLines(rendered);
-    if (repairs.size === 0 || round >= raw.length) {
-      return rendered === raw ? blocks : withSourceLines(blocks, origin, raw, rendered);
-    }
-    const next: string[] = [];
-    const nextOrigin: number[] = [];
-    rendered.forEach((line, index) => {
-      const repair = repairs.get(index);
-      if (repair?.insert !== undefined) {
-        next.push(repair.insert);
-        nextOrigin.push(-1);
-      }
-      next.push(repair?.replace ?? line);
-      nextOrigin.push(origin[index]);
-    });
-    rendered = next;
-    origin = nextOrigin;
-  }
-}
-
-interface MarkdownRepair {
-  // A line to render before this one, or a same-length replacement for it.
-  insert?: string;
-  replace?: string;
-}
-
-// Repairs that make Bun.markdown end a table, a container or a paragraph
-// where CommonMark/GFM does.
-function markdownRepairs(
-  raw: string[],
-  blocks: MarkdownBlocks,
-  fences: Array<{ opener: number; closer: number }>,
-  indentedHtml: number[],
-  fenceLineInside: (closer: number) => boolean,
-): Map<number, MarkdownRepair> {
-  const repairs = new Map<number, MarkdownRepair>();
-  const quotes = (line: string): string => /^(?:[ \t]{0,3}>[ \t]?)*/.exec(line)![0];
-  // A heading or fence ends the table without changing how the lines after it
-  // read, so every such break is repaired at once; an HTML block may run over
-  // the rest of the table, which is then repaired next round.
-  const stopped = new Set<number>();
-  blocks.lines.forEach((line, index) => {
-    const previous = blocks.lines[index - 1];
-    if (line.kind !== "table" || previous?.kind !== "table" || previous.block !== line.block || stopped.has(line.block)) return;
-    const content = raw[index].slice(line.contentStart);
-    if (!MARKDOWN_TABLE_BREAK.test(content)) return;
-    if (content.startsWith("<")) stopped.add(line.block);
-    repairs.set(index, { insert: quotes(raw[index]).replace(/[ \t]+$/, "") });
-  });
-  for (const index of indentedHtml) {
-    const start = blocks.lines[index].contentStart;
-    // Bun opens such a block only under paragraph text, placed or not.
-    const previous = blocks.lines[index - 1]?.kind;
-    if ((previous !== "paragraph" && previous !== "unknown") || !/[ \t]/.test(raw[index][start - 1] ?? "")) continue;
-    repairs.set(index, { replace: `${raw[index].slice(0, start - 1)}\u00A0${raw[index].slice(start)}` });
-  }
-  for (const { opener, closer } of fences) {
-    // A fence line is never a lazy continuation, so the opener carries every
-    // quote marker of its container path; a fence placed only lexically has
-    // no container path, so its own markers are the evidence.
-    const containers = blocks.lines[opener].containers;
-    const openerQuotes = quotes(raw[opener]);
-    const closerQuotes = quotes(raw[closer]);
-    const count = (prefix: string): number => prefix.match(/>/g)?.length ?? 0;
-    const depth = Math.max(count(openerQuotes), containers.filter((container) => container.kind === "blockQuote").length);
-    const indent = (line: string, prefix: string): number => /^[ \t]*/.exec(line.slice(prefix.length))![0].length;
-    // The item's content column when the opener carries the marker; any
-    // indentation otherwise.
-    const marker = /^[ \t]{0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+/.exec(raw[opener].slice(openerQuotes.length));
-    // An indented opener placed only lexically continues the list item above it.
-    let above = opener - 1;
-    while (above >= 0 && blocks.lines[above].kind === "blank") above--;
-    const listed = marker !== null || containers.some((container) => container.kind === "listItem") ||
-      (containers.length === 0 && indent(raw[opener], openerQuotes) > 0 && above >= 0 &&
-        blocks.lines[above].containers.some((container) => container.kind === "listItem"));
-    // Without the marker on the opener the item's content column is not in
-    // view: a closer indented at least as far as the opener is inside the
-    // item, an unindented one outside it, and Bun places any other.
-    const closerIndent = indent(raw[closer], closerQuotes);
-    const outside = count(closerQuotes) < depth || (listed && (marker
-      ? closerIndent < marker[0].length
-      : closerIndent === 0 || (closerIndent < indent(raw[opener], openerQuotes) && !fenceLineInside(closer))));
-    if (outside) repairs.set(closer, { insert: `${closerQuotes}<!-- -->` });
-  }
-  return repairs;
-}
-
-function withSourceLines(blocks: MarkdownBlocks, origin: number[], raw: string[], rendered: string[]): MarkdownBlocks {
-  const lines: MarkdownLine[] = new Array(raw.length);
-  origin.forEach((source, index) => {
-    if (source < 0) return;
-    const line = blocks.lines[index];
-    // A replaced line's no-break space is source indentation.
-    const contentStart = rendered[index] === raw[source]
-      ? line.contentStart
-      : line.contentStart + /^[ \t]*/.exec(raw[source].slice(line.contentStart))![0].length;
-    lines[source] = {
-      ...line,
-      contentStart,
-      invisible: line.invisible.map((span) => ({
-        ...span, tokenStartLine: origin[span.tokenStartLine], tokenEndLine: origin[span.tokenEndLine],
-      })),
-    };
-  });
-  return {
-    lines,
-    definitions: blocks.definitions.map((definition) => ({
-      ...definition, startLine: origin[definition.startLine], endLine: origin[definition.endLine],
-    })),
-    labels: blocks.labels,
-  };
-}
-
-function classifyMarkdownLines(raw: string[]): MarkdownBlocks & { repairs: Map<number, MarkdownRepair> } {
-  // Tree delimiters and NUL never reach the renderer; one-for-one keeps columns.
-  const source = raw.map((line) => line.replaceAll("\u0000", "\uFFFD").replace(MARKDOWN_TREE_DELIMITERS, "x"));
-  // The probe prefix appears neither in the source nor in its rendering, where
-  // an entity such as `&#101;` could otherwise spell it.
-  const rendering = Bun.markdown.html(source.join("\n"), MARKDOWN_RENDER_OPTIONS).replace(MARKDOWN_TREE_DELIMITERS, "x");
-  let prefix = "aidlcprobe";
-  while (source.some((line) => line.includes(prefix)) || rendering.includes(prefix)) prefix += "x";
-  const { probes, accepted, hits } = probeMarkdown(source, prefix);
-  const located = [...hits.values()].sort((a, b) => a.probe.id - b.probe.id);
-  const labels = markdownDefinedLabels(source.join("\n"), rendering);
-  const labelLine = (index: number): boolean =>
-    /^\[(?:\\.|[^\\[\]])+\]:/.test(raw[index].slice(MARKDOWN_CONTAINER_PREFIX.exec(raw[index])![0].length));
-  // The label line of a link reference definition spanning `index`; its
-  // destination and title lines follow the label.
-  const definitionStart = (index: number): number | null => {
-    for (let line = index; line >= Math.max(0, index - 2) && raw[line].trim() !== ""; line--) {
-      if (labelLine(line)) return line;
-    }
-    return null;
-  };
-  const definitionLines = new Set<number>();
-
-  const containers = new Map<number, MarkdownContainer>();
-  const paths = new Map<number, MarkdownContainer[]>();
-  // One shared array per rendered block, outermost container first.
-  const pathOf = (block: RenderedMarkdownNode): MarkdownContainer[] => {
-    let path = paths.get(block.id);
-    if (path) return path;
-    path = [];
-    for (let node: RenderedMarkdownNode | null = block; node; node = node.parent) {
-      if (node.tag !== "Q" && node.tag !== "L") continue;
-      let container = containers.get(node.id);
-      if (!container) {
-        const list = node.parent?.tag === "LIST" ? node.parent : null;
-        container = node.tag === "Q" ? { kind: "blockQuote" } : {
-          kind: "listItem",
-          ordered: list?.meta[0] === "1",
-          start: list?.meta[1] ? Number(list.meta[1]) : null,
-          id: node.id,
-        };
-        containers.set(node.id, container);
-      }
-      path.unshift(container);
-    }
-    paths.set(block.id, path);
-    return path;
-  };
-  const nearest = (node: RenderedMarkdownNode | null, tags: ReadonlySet<string>): RenderedMarkdownNode | null => {
-    for (let current = node; current; current = current.parent) if (tags.has(current.tag)) return current;
-    return null;
-  };
-
-  // The first source line of each list item is the lowest probe inside it.
-  const itemStarts = new Map<number, number>();
-  for (const hit of located) {
-    for (let node: RenderedMarkdownNode | null = hit.node; node; node = node.parent) {
-      if (node.tag === "L") itemStarts.set(node.id, Math.min(itemStarts.get(node.id) ?? Infinity, hit.probe.line));
-    }
-  }
-  // Lines up to an item's first probe (a bare marker or fence line) carry its marker.
-  const prefixesOf = (index: number, block: RenderedMarkdownNode): Array<"quote" | "marker" | "indent"> =>
-    pathOf(block).map((container) => container.kind === "blockQuote" ? "quote"
-      : index <= (itemStarts.get(container.id) ?? Infinity) ? "marker" : "indent");
-
-  const lines: MarkdownLine[] = raw.map((line) => ({
-    kind: line.trim() === "" ? "blank" : "unknown",
-    block: -1, containers: [], htmlKind: null, contentStart: markdownContentStart(line, []), invisible: [],
-  }));
-  const assigned = new Set<number>();
-  const assign = (index: number, kind: MarkdownLineKind, block: RenderedMarkdownNode, htmlKind: MarkdownLine["htmlKind"] = null): void => {
-    if (index < 0 || index >= lines.length || assigned.has(index)) return;
-    assigned.add(index);
-    lines[index] = {
-      kind, block: block.id, containers: pathOf(block), htmlKind,
-      contentStart: markdownContentStart(raw[index], prefixesOf(index, block)), invisible: [],
-    };
-  };
-  const contentOf = (index: number, block: RenderedMarkdownNode): string =>
-    raw[index].slice(markdownContentStart(raw[index], prefixesOf(index, block)));
-  const lineCount = (text: string): number =>
-    text === "" ? 0 : text.endsWith("\n") ? text.split("\n").length - 1 : text.split("\n").length;
-
-  // Code and HTML blocks render their source text line for line, so one
-  // located probe fixes the whole block's extent.
-  const extents = new Map<number, { start: number; count: number; node: RenderedMarkdownNode; indented: boolean }>();
-  const leading = (text: string): number => /^[ \t]*/.exec(text)![0].length;
-  for (const hit of located) {
-    const block = hit.meta ? null : nearest(hit.node, MARKDOWN_RAW_BLOCKS);
-    if (!block || extents.has(block.id)) continue;
-    const text = renderedMarkdownText(block);
-    const before = withoutMarkdownProbes(text.slice(0, text.indexOf(hit.probe.core)), prefix, probes).split("\n");
-    const after = withoutMarkdownProbes(text.slice(text.indexOf(hit.probe.core)), prefix, probes).split("\n");
-    // Indented code drops four columns of indentation; fenced content keeps
-    // its source indentation. Measurable outside list items, whose own
-    // indentation the renderer also drops.
-    const rendered = before[before.length - 1] + after[0];
-    const quoteless = raw[hit.probe.line].slice(/^(?:[ \t]{0,3}>[ \t]?)*/.exec(raw[hit.probe.line])![0].length);
-    const listed = pathOf(block).some((container) => container.kind === "listItem");
-    extents.set(block.id, {
-      start: hit.probe.line - (before.length - 1),
-      count: lineCount(withoutMarkdownProbes(text, prefix, probes)),
-      node: block,
-      indented: block.tag === "C" && !listed && leading(quoteless) - leading(rendered) >= 4,
-    });
-  }
-  const openers = new Map<number, number>();
-  for (const hit of located) if (hit.meta && hit.node.tag === "C") openers.set(hit.node.id, hit.probe.line);
-  const closers = new Set<number>();
-  const fences: Array<{ opener: number; closer: number }> = [];
-  // HTML blocks whose first line keeps four or more columns of indentation,
-  // which no HTML block start allows.
-  const indentedHtml: number[] = [];
-  for (const { start, count, node, indented } of [...extents.values()].sort((a, b) => a.start - b.start)) {
-    if (node.tag === "X") {
-      const first = withoutMarkdownProbes(renderedMarkdownText(node), prefix, probes).split("\n")[0];
-      if (/^(?: {4}| {0,3}\t)/.test(first)) indentedHtml.push(start);
-      for (let index = start; index < start + count; index++) assign(index, "htmlFlow", node, markdownHtmlKind(first.trimStart()));
-      continue;
-    }
-    const opener = start - 1;
-    const fenced = node.meta[0] !== "" || openers.has(node.id) ||
-      (!indented && opener >= 0 && !closers.has(opener) && MARKDOWN_FENCE.test(contentOf(opener, node)));
-    const kind = fenced ? "codeFenced" : "codeIndented";
-    if (fenced) assign(opener, kind, node);
-    for (let index = start; index < start + count; index++) assign(index, kind, node);
-    const closer = start + count;
-    if (fenced && closer < raw.length && MARKDOWN_FENCE.test(contentOf(closer, node))) {
-      closers.add(closer);
-      assign(closer, kind, node);
-      if (opener >= 0) fences.push({ opener, closer });
-    }
-  }
-  // A fenced block whose content carries no probe is located by its info string.
-  for (const hit of located) {
-    if (!hit.meta || hit.node.tag !== "C" || extents.has(hit.node.id)) continue;
-    const count = lineCount(withoutMarkdownProbes(renderedMarkdownText(hit.node), prefix, probes));
-    for (let index = hit.probe.line; index <= hit.probe.line + count; index++) assign(index, "codeFenced", hit.node);
-    const closer = hit.probe.line + count + 1;
-    if (closer < raw.length && MARKDOWN_FENCE.test(contentOf(closer, hit.node))) {
-      assign(closer, "codeFenced", hit.node);
-      fences.push({ opener: hit.probe.line, closer });
-    }
-  }
-
-  // Blocks with inline content: a probe's line belongs to its leaf block, and
-  // lines between two members of one block are its continuation lines.
-  const members = new Map<number, { node: RenderedMarkdownNode; lines: number[] }>();
-  const blockOf = (hit: MarkdownProbeHit): RenderedMarkdownNode | null => {
-    const leaf = nearest(hit.node, MARKDOWN_LEAF_BLOCKS);
-    return leaf ? nearest(leaf, new Set(["T"])) ?? leaf : null;
-  };
-  const join = (block: RenderedMarkdownNode, line: number): void => {
-    const entry = members.get(block.id) ?? { node: block, lines: [] };
-    entry.lines.push(line);
-    members.set(block.id, entry);
-  };
-  // A GFM table row is one source line after the header and delimiter rows,
-  // so any located row fixes the table's extent, even with no probe in its
-  // header (a row of dashes looks like a delimiter).
-  const tables = new Map<number, { header: number; rows: number }>();
-  for (const hit of located) {
-    if (hit.meta || nearest(hit.node, MARKDOWN_RAW_BLOCKS)) continue;
-    const block = blockOf(hit);
-    if (!block) continue;
-    join(block, hit.probe.line);
-    if (block.tag !== "T") continue;
-    const rows = block.kids.filter((kid) => typeof kid !== "string" && kid.tag === "TR");
-    const row = rows.indexOf(nearest(hit.node, new Set(["TR"]))!);
-    if (row < 0) continue;
-    const header = hit.probe.line - row - (row > 0 ? 1 : 0);
-    tables.set(block.id, { header: Math.min(tables.get(block.id)?.header ?? header, header), rows: rows.length });
-  }
-  for (const hit of located) {
-    if (!hit.meta || hit.node.tag === "C") continue;
-    // A definition's destination and title surface in every link that
-    // references it, not where the definition sits. Only an inline link's
-    // destination continuing its own paragraph's lines joins that paragraph.
-    const block = blockOf(hit);
-    const own = block ? members.get(block.id)?.lines ?? [] : [];
-    if (definitionStart(hit.probe.line) !== null) definitionLines.add(hit.probe.line);
-    else if (block && own.some((line) => Math.abs(line - hit.probe.line) <= 1)) join(block, hit.probe.line);
-  }
-  const ordered = [...members.values()].sort((a, b) => Math.min(...a.lines) - Math.min(...b.lines));
-  const kindOf = (node: RenderedMarkdownNode): MarkdownLineKind =>
-    node.tag === "H" ? "heading" : node.tag === "T" ? "table" : "paragraph";
-  // Each probe's own line first, so one block's range never overwrites a
-  // line another block rendered (a heading inside a tight list item).
-  for (const { node, lines: memberLines } of ordered) {
-    for (const index of memberLines) assign(index, kindOf(node), node);
-  }
-  for (const { node, lines: memberLines } of ordered) {
-    const table = tables.get(node.id);
-    const first = table ? Math.max(0, table.header) : Math.min(...memberLines);
-    const last = table ? Math.min(raw.length - 1, table.header + table.rows) : Math.max(...memberLines);
-    const kind = kindOf(node);
-    for (let index = first; index <= last; index++) assign(index, kind, node);
-    const next = last + 1;
-    if (next >= raw.length) continue;
-    if (node.tag === "H" && !/^#{1,6}(?:[ \t]|$)/.test(contentOf(first, node)) &&
-      MARKDOWN_SETEXT_UNDERLINE.test(contentOf(next, node))) {
-      assign(next, "heading", node);
-    }
-  }
-
-  // An accepted primary probe that rendered nowhere was consumed by a link
-  // reference definition; consecutive consumed lines form one definition.
-  const consumed = new Set(probes
-    .filter((probe) => probe.role === "primary" && accepted.has(probe.id) && !hits.has(probe.id))
-    .map((probe) => probe.line)
-    .concat([...definitionLines])
-    .filter((line) => !assigned.has(line)));
-  const definitions: MarkdownDefinition[] = [];
-  for (let index = 0; index < raw.length; index++) {
-    if (!consumed.has(index)) continue;
-    // Each label line starts its own definition.
-    let end = index;
-    while (consumed.has(end + 1) && !labelLine(end + 1)) end++;
-    const opening = definitionStart(index);
-    const start = opening !== null && opening < index && !assigned.has(opening) ? opening : index;
-    const label = /^\[((?:\\.|[^\\[\]])+)\]:/.exec(raw.slice(start, end + 1).join("\n").slice(MARKDOWN_CONTAINER_PREFIX.exec(raw[start])![0].length));
-    definitions.push({ label: label ? normalizeMarkdownLabel(label[1]) : "", startLine: start, endLine: end });
-    for (let line = start; line <= end; line++) {
-      assigned.add(line);
-      lines[line].kind = "definition";
-    }
-    index = end;
-  }
-  // A fence with neither an info string nor probe-bearing content. Only lines
-  // without letters or digits are still unplaced, so none of them can carry a
-  // heading or control tag.
-  for (let index = 0; index < raw.length; index++) {
-    const opener = MARKDOWN_FENCE.exec(raw[index].slice(MARKDOWN_CONTAINER_PREFIX.exec(raw[index])![0].length));
-    if (assigned.has(index) || !opener) continue;
-    let end = index;
-    for (let line = index; line < raw.length && (line === index || !assigned.has(line)); line++) {
-      end = line;
-      assigned.add(line);
-      lines[line].kind = "codeFenced";
-      const closing = /^(`{3,}|~{3,})[ \t]*$/.exec(raw[line].slice(MARKDOWN_CONTAINER_PREFIX.exec(raw[line])![0].length));
-      if (line > index && closing && closing[1][0] === opener[1][0] && closing[1].length >= opener[1].length) {
-        fences.push({ opener: index, closer: line });
-        break;
-      }
-    }
-    index = end;
-  }
-  for (let index = 0; index < raw.length; index++) {
-    // After any quote and list markers, but keeping plain indentation.
-    const content = raw[index].slice(/^(?:[ \t]{0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)))*/.exec(raw[index])![0].length);
-    if (lines[index].kind === "unknown" && (MARKDOWN_THEMATIC_BREAK.test(raw[index]) || MARKDOWN_THEMATIC_BREAK.test(content))) {
-      lines[index].kind = "thematicBreak";
-    }
-  }
-
-  // Inline code and raw HTML keep their line breaks when rendered, so a located
-  // probe gives exact source columns on every line the span covers.
-  const spans = new Set<number>();
-  for (const hit of located) {
-    const span = hit.meta ? null : nearest(hit.node, MARKDOWN_INLINE_SPANS);
-    if (!span || MARKDOWN_RAW_BLOCKS.has(span.tag) || spans.has(span.id)) continue;
-    // Chunks inside code or a raw HTML block are that block's literal text.
-    if (nearest(span.parent, new Set(["c", "C", "X"]))) continue;
-    spans.add(span.id);
-    const text = renderedMarkdownText(span);
-    // Measure from the whole insertion, which may include a separating space.
-    const inserted = text.includes(hit.probe.insert) ? hit.probe.insert : hit.probe.core;
-    const at = text.indexOf(inserted);
-    const before = withoutMarkdownProbes(text.slice(0, at), prefix, probes).split("\n");
-    const after = withoutMarkdownProbes(text.slice(at + inserted.length), prefix, probes).split("\n");
-    const startLine = hit.probe.line - (before.length - 1);
-    const endLine = hit.probe.line + (after.length - 1);
-    let startColumn = startLine === hit.probe.line
-      ? hit.probe.column - before[0].length
-      : raw[startLine].length - before[0].length;
-    let endColumn = endLine === hit.probe.line
-      ? hit.probe.column + after[0].length
-      : lines[endLine].contentStart + after[after.length - 1].length;
-    const kind: MarkdownSpan["kind"] = span.tag === "c" ? "codeText" : text.startsWith("<!--") ? "htmlComment" : "htmlText";
-    if (kind === "codeText") {
-      // The span includes its backtick runs and any stripped padding space.
-      startColumn -= /(`+) ?$/.exec(raw[startLine].slice(0, startColumn))?.[0].length ?? 0;
-      endColumn += /^ ?(`+)/.exec(raw[endLine].slice(endColumn))?.[0].length ?? 0;
-    }
-    for (let index = startLine; index <= endLine; index++) {
-      lines[index].invisible.push({
-        start: index === startLine ? startColumn : lines[index].contentStart,
-        end: index === endLine ? endColumn : raw[index].length,
-        kind, tokenStartLine: startLine, tokenEndLine: endLine,
-      });
-    }
-  }
-  for (const line of lines) line.invisible.sort((a, b) => a.start - b.start);
-  const blocks = { lines, definitions, labels };
-  // With its fence replaced by a word, a line inside the list item holding an
-  // unclosed fenced block renders inside that code block; outside, it cannot
-  // (a fence content line has no lazy continuation).
-  const fenceLineInside = (closer: number): boolean => {
-    const word = `${prefix}fence${closer}z`;
-    const indentation = /^(?:[ \t]{0,3}>[ \t]?)*[ \t]*/.exec(source[closer])![0];
-    const tree = renderMarkdownTree(source.map((line, index) => index === closer ? indentation + word : line).join("\n"));
-    const holder = (node: RenderedMarkdownNode): RenderedMarkdownNode | null => {
-      for (const kid of node.kids) {
-        const found = typeof kid === "string" ? (kid.includes(word) ? node : null) : holder(kid);
-        if (found) return found;
-      }
-      return null;
-    };
-    return nearest(holder(tree), new Set(["C"])) !== null;
-  };
-  return { ...blocks, repairs: markdownRepairs(raw, blocks, fences, indentedHtml, fenceLineInside) };
-}
-
-// Project parser-owned ranges without changing the historical line/marker API.
-// In particular, same-line code remains verbatim and retained digest input is
-// still raw source; these strings only select headings and control fields.
-export function visibleMarkdownLines(
-	content: string,
-	options: { preserveIndentedCode?: boolean; preserveCommentBoundaries?: boolean } = {},
-): string[] {
-	return projectVisibleMarkdownLines(content, markdownBlocks(content), options);
-}
-
-function projectVisibleMarkdownLines(
-	content: string,
-	blocks: MarkdownBlocks,
-	options: { preserveIndentedCode?: boolean; preserveCommentBoundaries?: boolean },
-): string[] {
-	const raw = content.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
-	return raw.map((source, index) => {
-		const block = blocks.lines[index];
-		const line = source.replaceAll(INVISIBLE_COMMENT_MARKER, RAW_INVISIBLE_COMMENT_MARKER_ESCAPE);
-		if (block.kind === "codeFenced" || (block.kind === "codeIndented" && !options.preserveIndentedCode)) return "";
-		if (block.kind === "htmlFlow" && block.htmlKind !== 2) {
-			if (block.htmlKind! <= 5) return "";
-			return options.preserveCommentBoundaries ? INVISIBLE_LINE_MARKER + line : "";
-		}
-		// Keep the legacy lexical indentation projection, even when indentation
-		// continues a paragraph rather than opening an indented-code block.
-		// Container prefixes and inline continuation eligibility remain parser-owned.
-		if (!options.preserveIndentedCode && block.kind !== "htmlFlow" &&
-			!block.invisible.some((span) => span.tokenStartLine! < index) &&
-			/(?:^|> ?)(?: {4}|\t)/.test(line.slice(0, block.contentStart))) return "";
-		let visible = "";
-		let cursor = 0;
-		if (block.kind === "htmlFlow" && block.htmlKind === 2) {
-			// The parser determines comment-block extent and container exits. Only
-			// project delimiters here; fence/code-looking bytes inside are literal.
-			const previous = blocks.lines[index - 1];
-			// Every leaf block shares one container-path array across its lines.
-			const continued = previous?.kind === "htmlFlow" && previous.htmlKind === 2 &&
-				previous.containers === block.containers;
-			const opening = continued ? -1 : line.indexOf("<!--", block.contentStart);
-			const closing = line.indexOf("-->", opening < 0 ? block.contentStart : opening + 4);
-			if (opening >= 0) visible = line.slice(0, opening) + INVISIBLE_COMMENT_MARKER;
-			if (closing >= 0) visible += INVISIBLE_COMMENT_MARKER + line.slice(closing + 3)
-				.replace(/<!--[\s\S]*?-->/g, INVISIBLE_COMMENT_MARKER + INVISIBLE_COMMENT_MARKER);
-			return options.preserveCommentBoundaries ? visible : restoreVisibleMarkdownMarkers(visible);
-		}
-		for (const span of block.invisible) {
-			const continued = span.tokenStartLine! < index;
-			const continues = span.tokenEndLine! > index;
-			if (span.kind === "codeText") {
-				if (!continued && !continues) continue;
-				if (continued && continues) return "";
-				visible += continued ? INVISIBLE_LINE_MARKER : line.slice(cursor, span.start) + INVISIBLE_LINE_MARKER;
-				cursor = span.end;
-			} else if (span.kind === "htmlComment") {
-				if (continued && !visible.startsWith(INVISIBLE_LINE_MARKER)) visible = INVISIBLE_LINE_MARKER + visible;
-				visible += line.slice(cursor, span.start);
-				if (!continued) visible += INVISIBLE_COMMENT_MARKER;
-				if (!continues) visible += INVISIBLE_COMMENT_MARKER;
-				cursor = span.end;
-			} else if (continued && !visible.startsWith(INVISIBLE_LINE_MARKER)) {
-				visible = INVISIBLE_LINE_MARKER + visible;
-			}
-		}
-		visible += line.slice(cursor);
-		return options.preserveCommentBoundaries ? visible : restoreVisibleMarkdownMarkers(visible);
-	});
-}
-
-export function appendUnderHeading(
-  content: string,
-  heading: string,
-  newContent: string,
-): string {
-  // Inserts `newContent` immediately before the next `## ` heading after
-  // `heading` (or at end-of-file when `heading` is the last `## ` section).
-  // Throws if `heading` is not present in `content`.
-  const headingRegex = new RegExp(
-    `^${escapeRegex(heading)}[ \\t]*$`,
-    "m",
-  );
-  const startMatch = headingRegex.exec(content);
-  if (!startMatch) {
-    throw new Error(`appendUnderHeading: heading not found: ${heading}`);
-  }
-  const afterHeading = startMatch.index + startMatch[0].length;
-  const bodyStart = content[afterHeading] === "\n" ? afterHeading + 1 : afterHeading;
-  const nextHeading = /^## [^\n]*$/m;
-  const remainder = content.slice(bodyStart);
-  const nextMatch = nextHeading.exec(remainder);
-  const insertAt = nextMatch ? bodyStart + nextMatch.index : content.length;
-  // When the insertion point is a following `## ` heading, callers that pass
-  // single-`\n`-terminated content would abut the heading with no separating
-  // blank line, producing malformed markdown (e.g. a bullet directly above
-  // `## Scope Overrides` in project.md). Add exactly one blank line in that
-  // case — but only when a heading actually follows (never in the terminal
-  // end-of-file append) and the content does not already end with a blank line.
-  const separator =
-    nextMatch && newContent.endsWith("\n") && !newContent.endsWith("\n\n")
-      ? "\n"
-      : "";
-  return content.slice(0, insertAt) + newContent + separator + content.slice(insertAt);
-}
-
-export function replaceSection(
-  content: string,
-  heading: string,
-  newContent: string,
-): string {
-  // Replaces the prose between `heading` and the next `## ` heading (or EOF)
-  // with `newContent`. The heading line itself is preserved. Throws if
-  // `heading` is not present. Used by practices-discovery affirmation:
-  // re-runs overwrite aidlc-team.md sections rather than accumulating duplicates.
-  const headingRegex = new RegExp(
-    `^${escapeRegex(heading)}[ \\t]*$`,
-    "m",
-  );
-  const startMatch = headingRegex.exec(content);
-  if (!startMatch) {
-    throw new Error(`replaceSection: heading not found: ${heading}`);
-  }
-  const afterHeading = startMatch.index + startMatch[0].length;
-  const bodyStart = content[afterHeading] === "\n" ? afterHeading + 1 : afterHeading;
-  const nextHeading = /^## [^\n]*$/m;
-  const remainder = content.slice(bodyStart);
-  const nextMatch = nextHeading.exec(remainder);
-  const bodyEnd = nextMatch ? bodyStart + nextMatch.index : content.length;
-  return content.slice(0, bodyStart) + newContent + content.slice(bodyEnd);
 }
 
 // --- Bolt/unit dependency DAG (units-generation 2.7 → runtime compile) ---
