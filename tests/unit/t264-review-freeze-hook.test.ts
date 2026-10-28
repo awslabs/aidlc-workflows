@@ -704,6 +704,15 @@ describe("t264 (a) judgeFreeze decision table", () => {
       expect(followed?.dir.toLowerCase(), command).toBe(resolve(dir).toLowerCase());
       expect(followed?.rest.trim(), command).toBe("aidlc doctor");
     }
+    // Git Bash, Claude Code's shell on Windows, names a drive `/c`; PowerShell
+    // reads `/c` as a folder on the current drive.
+    if (process.platform === "win32") {
+      const gitBash = `/${dir[0].toLowerCase()}${dir.slice(2).replaceAll("\\", "/")}`;
+      for (const command of [`cd ${q(gitBash)} && aidlc doctor`, `cd ${gitBash}; aidlc doctor`]) {
+        expect(move(command)?.dir.toLowerCase(), command).toBe(resolve(dir).toLowerCase());
+      }
+      expect(move(`Set-Location ${q(gitBash)} ; aidlc doctor`, "powershell")).toBeNull();
+    }
     // Folders the lexer would name but the shell would not enter: bash drops a
     // backslash-newline inside quotes, and does not split a word at U+00A0.
     if (process.platform !== "win32") mkdirSync(join(root, "a\nb"));
