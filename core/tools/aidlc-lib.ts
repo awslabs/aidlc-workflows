@@ -54,6 +54,7 @@ import {
   isSwitchableGuardFence,
   guardFenceConfigKey,
   guardFenceFromConfigKey,
+  delegatedAgentOf,
 } from "./aidlc-guard-fences.ts";
 export {
   GUARD_FENCES,
@@ -67,6 +68,7 @@ export {
   CHECK_GLOSS,
   GUARD_POLICY_GLOSS,
   SCOPE_GLOSS,
+  delegatedAgentOf,
 } from "./aidlc-guard-fences.ts";
 import {
   artifactFilename,
@@ -43139,7 +43141,7 @@ export function formatFence(resolution: FenceResolution): string {
 //   - the marker's own kind and delivery: what the engine last put in force.
 //   - a dispatch stamp on the in-flight subagent ledger, so an agent inherits
 //     the authority that was in force when it was dispatched.
-//   - agent_type / subagent_type on the hook payload (a dispatched agent) and
+//   - the delegated agent a hook payload names (delegatedAgentOf) and
 //     AIDLC_UNATTENDED (nobody is watching).
 // ---------------------------------------------------------------------------
 
@@ -43215,22 +43217,6 @@ function stampedDispatchAuthority(
   }
 }
 
-function authorityActorFrom(hookInput: ClaudeCodeHookInput | null | undefined): {
-  actor: AuthorityActor;
-  unattended: boolean;
-} {
-  const unattended = process.env.AIDLC_UNATTENDED === "1";
-  const agentType = (() => {
-    if (!hookInput) return "";
-    const direct = typeof hookInput.agent_type === "string" ? hookInput.agent_type.trim() : "";
-    if (direct.length > 0) return direct;
-    const nested = hookInput.tool_input?.subagent_type;
-    return typeof nested === "string" ? nested.trim() : "";
-  })();
-  if (agentType.length > 0) return { actor: "subagent", unattended };
-  return { actor: unattended ? "unattended" : "main", unattended };
-}
-
 /**
  * The authority covering the action a guard is about to judge. Pure reads: the
  * turn markers, the active-directive marker, and the in-flight dispatch ledger.
@@ -43245,7 +43231,8 @@ export function authorityFor(
     sessionId?: unknown;
   } = {},
 ): Authority {
-  const { actor, unattended } = authorityActorFrom(options.hookInput);
+  const unattended = process.env.AIDLC_UNATTENDED === "1";
+  const actor: AuthorityActor = delegatedAgentOf(options.hookInput) ? "subagent" : unattended ? "unattended" : "main";
   const state = options.stateContent ?? authorityStateText(projectDir);
   let marker: ActiveDirectiveMarker | null = null;
   try {

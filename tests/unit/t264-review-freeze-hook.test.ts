@@ -1024,6 +1024,30 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     expect(runHook(p, writePayload(file)).code).toBe(2);
   });
 
+  test("a session started under a named agent is offered the check's switch; its subagent is not", () => {
+    // Claude Code 2.1.312: the session's agent in agent_type on its own calls,
+    // agent_id on a subagent's, CLAUDE_CODE_SESSION_ID = the payload's session_id.
+    const session = "c9911951-01b9-4524-b912-93aeefda2d8b";
+    const remedyOps = (caller: Record<string, unknown>): string[] => {
+      const p = projBeforeGate();
+      recordReview(p, "READY");
+      openGate(p);
+      const refused = runHook(
+        p,
+        { ...writePayload(raArtifact(p)), session_id: session, ...caller },
+        { CLAUDE_CODE_SESSION_ID: session },
+      );
+      expect(refused.code).toBe(2);
+      return refusalRecords(p).flatMap((record) =>
+        ((JSON.parse(record) as { refusal?: { remedies?: { op: string }[] } }).refusal?.remedies ?? [])
+          .map((remedy) => remedy.op)
+      );
+    };
+    expect(remedyOps({})).toContain("lower-fence");
+    expect(remedyOps({ agent_type: "claude" })).toContain("lower-fence");
+    expect(remedyOps({ agent_type: "general-purpose", agent_id: "a8a30d0b327881676" })).not.toContain("lower-fence");
+  });
+
   test("advisory NOT-READY is terminal and freezes until the human gate", () => {
     const p = projBeforeGate();
     recordReview(p, "NOT-READY");

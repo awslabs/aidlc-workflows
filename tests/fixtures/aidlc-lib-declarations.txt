@@ -696,7 +696,6 @@ auditShardHostSegment
 auditShardName
 auditShards
 authoritativeProjectDescription
-authorityActorFrom
 authorityFor
 authorityStateText
 authorizedConstructionPolicyChange

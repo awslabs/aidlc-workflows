@@ -753,11 +753,12 @@ Every signal is one the framework already keeps: the turn markers
 (`.aidlc-engine/human-turn` against `engine-touch`, through
 `turnMarkersShowConversational`), the active-directive marker's `human_sequence`
 and `engine_sequence` counters where a harness keeps them, the marker's own kind
-and delivery, `agent_type` / `subagent_type` on the hook payload, and
-`AIDLC_UNATTENDED`. The reported `actor` (`main`, `subagent`, `unattended`) sits
-BESIDE `covered` and is never substituted for it: the question is not who is
-acting. A developer agent acts on the conductor's word and the conductor on the
-human's, so authority flows down the delegation chain.
+and delivery, the delegated agent the hook payload names (`delegatedAgentOf`:
+`agent_type`, then `subagent_type`), and `AIDLC_UNATTENDED`. The reported
+`actor` (`main`, `subagent`, `unattended`) sits BESIDE `covered` and is never
+substituted for it: the question is not who is acting. A developer agent acts on
+the conductor's word and the conductor on the human's, so authority flows down
+the delegation chain.
 
 **The dispatch stamp.** `aidlc-deliver-stage-rules.ts` fires on the dispatch
 itself, in the main session, so the authority it reads there is the one that sent
@@ -1676,6 +1677,11 @@ access for artifact work, builds, validation, and read-only state inspection;
 they return their result to the main conductor, which alone owns workflow
 lifecycle and gates. The guard also refuses a delegate `aidlc-machine-config.ts`
 and `aidlc system config global` whole.
+On Claude Code a session started under a named agent (`--agent`, a background
+session) carries that agent's name in `agent_type` on its own calls too; a call
+with no `agent_id` whose `session_id` is the hook's `CLAUDE_CODE_SESSION_ID` is
+that session's own and passes as the main session's, while its subagents' calls
+carry `agent_id` and stay a delegate's (`delegatedAgentOf`, measured on 2.1.312).
 Kiro IDE and Kiro CLI v3 supply no such identity: a delegated agent's own calls
 reach the hook with the conductor's session and no agent name (measured on Kiro
 IDE 1.2.4), so there the guard applies the conductor's rules to them. The
