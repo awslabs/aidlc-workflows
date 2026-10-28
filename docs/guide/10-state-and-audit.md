@@ -160,7 +160,7 @@ the owning commands and the read-only query contract.
 
 ### 127-event taxonomy
 
-Events are organized into 26 categories:
+Events are organized into 27 categories:
 
 | Category | Count | Events |
 |----------|------:|--------|
@@ -179,6 +179,7 @@ Events are organized into 26 categories:
 | **Reviewer Enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED` (reviewer-scope hook), `REVIEW_FREEZE_BLOCKED` (review-freeze hook) |
 | **Plan Approval** | 2 | `PLAN_APPROVAL_BLOCKED`, `GUARD_DISABLED` (plan-approval-guard hook, or a fence you switched off for this piece of work) |
 | **Guard Refusals** | 2 | `STATE_TRANSITION_BLOCKED` (state-transition guard refused a delegated agent's lifecycle or routing command), `STAGE_RULES_BLOCKED` (stage rules refused for size, or a required rule file could not be read); each carries `Guard`, `Reason`, and the `Target`/`Session` it refused, one row per refusal |
+| **System Install** | 2 | `SYSTEM_INSTALL_BLOCKED` (a system package install, such as `sudo apt-get install`, that you had not asked for and your approved plan does not name, held until you say so), `SYSTEM_INSTALL_ALLOWED` (one that ran on your message, with your words) |
 | **Documents** | 3 | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` — space-level shard even when intent-scoped |
 | **Utility** | 1 | `HEALTH_CHECKED` |
 | **Error/Recovery** | 3 | `ERROR_LOGGED`, `RECOVERY_COMPLETED`, `COORDINATION_STOOD_ASIDE` |

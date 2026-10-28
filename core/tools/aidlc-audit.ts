@@ -195,6 +195,11 @@ const VALID_EVENT_TYPES = new Set([
   "PLAN_APPROVAL_BLOCKED",
   "STATE_TRANSITION_BLOCKED",
   "STAGE_RULES_BLOCKED",
+  // A system package install nobody asked for (hook-emitted): held until the
+  // person says so (BLOCKED), and run with their turn standing behind it
+  // (ALLOWED, naming their message).
+  "SYSTEM_INSTALL_BLOCKED",
+  "SYSTEM_INSTALL_ALLOWED",
   // A guard's deterministic off-switch was set while a workflow existed, so a
   // tool call passed without enforcement. One row per streak: the hook appends
   // only when the newest row in its shard is not already this event.
@@ -390,6 +395,8 @@ const EVENT_HEADINGS: Record<string, string> = {
   PLAN_APPROVAL_BLOCKED: "Plan Approval Blocked",
   STATE_TRANSITION_BLOCKED: "State Transition Blocked",
   STAGE_RULES_BLOCKED: "Stage Rules Blocked",
+  SYSTEM_INSTALL_BLOCKED: "System Install Blocked",
+  SYSTEM_INSTALL_ALLOWED: "System Install Allowed",
   GUARD_DISABLED: "Guard Disabled",
   DOCUMENT_INDEXED: "Document Indexed",
   DOCUMENT_UPDATED: "Document Updated",
@@ -629,6 +636,9 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // A stand-aside row is a guard's own account of what it let through; a forged
   // one would make an unauthorized action look covered.
   "GUARD_STOOD_ASIDE",
+  // The person's go-ahead for a system install; a forged one would make an
+  // install nobody asked for look like theirs.
+  "SYSTEM_INSTALL_ALLOWED",
   // Ceremony provenance belongs to the setting verb, not a public audit append.
   "CEREMONY_SET",
 ]);

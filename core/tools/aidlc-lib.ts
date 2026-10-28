@@ -43711,8 +43711,8 @@ export type GuardRefusalEvent =
   | "STATE_TRANSITION_BLOCKED"
   | "STAGE_RULES_BLOCKED"
   | "REVIEW_FREEZE_BLOCKED"
-  | "REVIEWER_SCOPE_BLOCKED";
-
+  | "REVIEWER_SCOPE_BLOCKED"
+  | "SYSTEM_INSTALL_BLOCKED";
 
 export function recordGuardBlockedRow(
   projectDir: string,
