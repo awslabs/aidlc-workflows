@@ -1114,20 +1114,22 @@ function removeOwnedGitBashLauncher(root: string): TransactionOperation[] {
     : [];
 }
 
-// After an update run by a release from before bin\aidlc.exe, the release it
-// made active writes the copy at its first command (aidlc.ts), as its own
-// activation would have.
-export function writeMissingWindowsExeCommand(): void {
+// An activation run by a release from before bin\aidlc.exe leaves none, or
+// writes the Git Bash launcher back beside it. The release it made active
+// catches up at its first command (aidlc.ts), as its own activation would have:
+// it writes a missing copy, and with one there the Git Bash launcher goes.
+export function catchUpWindowsExeCommand(): void {
   try {
     const exe = windowsExeCommandPath();
     if (
-      exe === null || pathEntryExists(exe) || activeVersion() !== AIDLC_VERSION ||
+      exe === null || activeVersion() !== AIDLC_VERSION ||
       resolve(installedExecutablePath(AIDLC_VERSION)).toLowerCase() !== resolve(process.execPath).toLowerCase()
     ) return;
     const root = machineTransactionRoot();
-    const plan = exeCommandPlan(root);
-    if (plan === null || plan.operations.length === 0) return;
-    executePlan({ schemaVersion: 1, root, operations: [...plan.operations, ...removeOwnedGitBashLauncher(root)] });
+    const present = pathEntryExists(exe);
+    const operations = present ? [] : (exeCommandPlan(root)?.operations ?? []);
+    if (present || operations.length > 0) operations.push(...removeOwnedGitBashLauncher(root));
+    if (operations.length > 0) executePlan({ schemaVersion: 1, root, operations });
   } catch {
     // aidlc.cmd still starts aidlc; a later command retries.
   }

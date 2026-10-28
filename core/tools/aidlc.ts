@@ -25,6 +25,7 @@ import {
   heading,
   tipLabel,
 } from "./aidlc-color.ts";
+import { binRoot } from "./aidlc-install-paths.ts";
 import { startNativeLauncher } from "./aidlc-native-launcher.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
@@ -4118,11 +4119,11 @@ export async function main(rawArgv: string[]): Promise<void> {
         const { replacePreviousWindowsShimHelper } = await import("./aidlc-lifecycle.ts");
         replacePreviousWindowsShimHelper();
       }
-      // An update run by a release from before bin\aidlc.exe left none; this
-      // release writes it once.
-      if (!existsSync(join(installRoot, "bin", "aidlc.exe"))) {
-        const { writeMissingWindowsExeCommand } = await import("./aidlc-lifecycle.ts");
-        writeMissingWindowsExeCommand();
+      // An activation run by a release from before bin\aidlc.exe left none, or
+      // left the Git Bash launcher beside it; this release catches up once.
+      if (!existsSync(join(binRoot(), "aidlc.exe")) || existsSync(join(binRoot(), "aidlc"))) {
+        const { catchUpWindowsExeCommand } = await import("./aidlc-lifecycle.ts");
+        catchUpWindowsExeCommand();
       }
     } catch {
       // A binary run from outside an install has no helper to replace.
