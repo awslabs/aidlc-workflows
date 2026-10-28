@@ -61,7 +61,7 @@ const STAGE_OWN_TYPES: ReadonlySet<string> = new Set([
 
 // The rows that ask a question (the ledger lists it) and the one that shows it again.
 const ASKING_ROWS: ReadonlySet<string> = new Set([
-  "STAGE_AWAITING_APPROVAL", "DECISION_RECORDED", "QUESTION_ASKED", "SYSTEM_INSTALL_BLOCKED",
+  "STAGE_AWAITING_APPROVAL", "DECISION_RECORDED", "QUESTION_ASKED",
 ]);
 
 /** `sha256:<hex>` over what a question shows the person, line endings normalized. */
@@ -405,8 +405,6 @@ function answered(event: string, fields: Record<string, string>): ((entry: Ledge
       return typed(["construction-policy"]);
     case "SUMMARY_CONFIRMATION_RECORDED":
       return typed(["summary-confirmation"]);
-    case "SYSTEM_INSTALL_ALLOWED":
-      return (entry) => entry.type === "system-install";
     case "QUESTION_ANSWERED": {
       const type = checkpoint === undefined ? undefined : CHECKPOINT_TYPES[checkpoint];
       return type === undefined ? null : typed([type]);
@@ -430,6 +428,7 @@ export function noteQuestionRow(projectDir: string, auditPath: string, event: st
     if (id === undefined && close === null) return;
     const path = ledgerPath(projectDir, auditPath);
     const ledger = readLedger(path);
+    const before = JSON.stringify(ledger.questions);
     const at = new Date().toISOString();
     let questions = close === null ? ledger.questions : ledger.questions.filter((entry) => !close(entry));
     if (id !== undefined) {
@@ -437,7 +436,7 @@ export function noteQuestionRow(projectDir: string, auditPath: string, event: st
       const shownIn: Record<string, string> = { [chat]: at, ...(fields["Questions File"] ? { file: at } : {}) };
       const listed = questions.find((entry) => entry.id === id);
       if (event === QUESTION_SHOWN && listed !== undefined) {
-        listed.shownIn = { ...listed.shownIn, ...shownIn };
+        questions = questions.map((entry) => entry === listed ? { ...entry, shownIn: { ...entry.shownIn, ...shownIn } } : entry);
       } else if (listed === undefined || event !== QUESTION_SHOWN) {
         const type = fields[QUESTION_TYPE_FIELD] ?? "";
         const stage = fields.Stage ?? null;
@@ -452,7 +451,8 @@ export function noteQuestionRow(projectDir: string, auditPath: string, event: st
         });
       }
     }
-    writeLedger(projectDir, path, { ...ledger, questions });
+    // Written only when it changed: most rows leave it as it is.
+    if (JSON.stringify(questions) !== before) writeLedger(projectDir, path, { ...ledger, questions });
   } catch {
     // The ledger is bookkeeping for the hook's stamp; the row stands without it.
   }

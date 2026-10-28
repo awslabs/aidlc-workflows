@@ -566,7 +566,11 @@ describe("the engine routes a seeded slice of those lines", () => {
 
   test(`routes ${slice.length} of them: no crash, no audit record, and nothing reaches the person`, () => {
     const proj = openWork();
-    const before = readAuditShardEvents(proj).length;
+    // An engine question `next` hands out goes on the record when it is asked
+    // (QUESTION_ASKED, QUESTION_SHOWN: Arden's D1); nothing else is written.
+    const recorded = () => readAuditShardEvents(proj)
+      .filter((row) => row.event !== "QUESTION_ASKED" && row.event !== "QUESTION_SHOWN").length;
+    const before = recorded();
     for (const testCase of slice) {
       const note = where(testCase);
       // The project carries every earlier line of the slice, and a token after
@@ -586,8 +590,8 @@ describe("the engine routes a seeded slice of those lines", () => {
         expect(result.out, note).not.toContain("I could not read");
         expect(newQuestionTexts(proj, questionsBefore), note).not.toContain(testCase.untaken);
       }
-      // `next` reads; it records nothing, whatever the line.
-      expect(readAuditShardEvents(proj).length, note).toBe(before);
+      // `next` reads; it records nothing but the questions it asks, whatever the line.
+      expect(recorded(), note).toBe(before);
     }
   });
 });

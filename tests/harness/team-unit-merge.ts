@@ -313,7 +313,9 @@ export function makeSeed(
       // both real hooks (e.g. session-start) can create on first run in a
       // checkout this fixture never ran them in before. .aidlc-engine/
       // itself stays tracked: reviewAuditExtras writes review records there.
-      "aidlc/active-memory/\n**/.aidlc-engine/hooks-health/\n",
+      "aidlc/active-memory/\n**/.aidlc-engine/hooks-health/\n" +
+      // The engine's own records of the chats, as the shipped block keeps them.
+      "aidlc/.aidlc-sessions/\n",
   );
   git(seed, ["init", "-b", "main"]);
   git(seed, ["config", "user.name", "main"]);

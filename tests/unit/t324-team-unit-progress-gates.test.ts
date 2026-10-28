@@ -501,6 +501,10 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     },
   ];
 
+  const withoutQuestionRows = (audit: string): string => audit.split(/(?=\n## )/)
+    .filter((block) => !/^\*\*Event\*\*: QUESTION_(ASKED|SHOWN)$/m.test(block)).join("")
+    .replace(/^# AI-DLC Audit Log\n?$/, "");
+
   for (const dormant of dormantStates) {
     test(`dormancy [${dormant.name}]: absent, solo, and junk ownership are byte-identical`, () => {
       const results = [undefined, "solo", "team-ish"].map((ownership) => {
@@ -510,7 +514,9 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
         const auditBefore = readAllAuditShards(proj);
         const directive = runNext(proj);
         expect(state(proj)).toBe(stateBefore);
-        expect(readAllAuditShards(proj)).toBe(auditBefore);
+        // The question `next` asks goes on the record when it is asked
+        // (QUESTION_ASKED: Arden's D1); nothing else is written.
+        expect(withoutQuestionRows(readAllAuditShards(proj))).toBe(withoutQuestionRows(auditBefore));
         expect(unitProgress(proj)).toBe("");
         expect("unit_gate" in directive).toBe(false);
         return directive;
