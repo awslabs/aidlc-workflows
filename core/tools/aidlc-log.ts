@@ -5132,8 +5132,12 @@ function handleReview(args: string[]): void {
       fields["Review Record Digest"] = reviewRecordDigest(serialized);
       // The build this verdict covers was finished under the Testing Contract
       // in force now; the completion reads it to tell a practice kept at the
-      // gate from a contract that moved while the build ran.
-      const reviewedContract = flags.stage === "code-generation" ? reviewedTestingContract(pd) : null;
+      // gate from a contract that moved while the build ran. A swarm worker's
+      // checkout resolves its own memory while its approval reads the parent's,
+      // so its verdict records none and its completion reads as main's does.
+      const reviewedContract = flags.stage === "code-generation" && swarmWorkerWorktreeMeta(pd) === null
+        ? reviewedTestingContract(pd)
+        : null;
       if (reviewedContract !== null) fields[REVIEW_TESTING_CONTRACT_FIELD] = reviewedContract;
       recordPath = slot.recordRelative;
       emitAudit(pd, "REVIEW_COMPLETED", fields, intent, space);
