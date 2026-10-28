@@ -66,6 +66,8 @@ import {
   verificationCommandDetails,
   readVerificationCommandFile,
   readAnswerTextFile,
+  REQUEST_TEXT_DIR,
+  isReadOnlyEngineProbe,
   protectedQuestionRelativePath,
   mintProtectedQuestion,
   protectedTargetDigest,
@@ -402,6 +404,10 @@ function emitAudit(
 let recordedRow = false;
 let rowEndsTurn = false;
 let stageWorkRow = true;
+// An answer's --request-file goes once the answer is taken, row or not (the
+// recovery and Plan Approval answers keep their own records); a refusal exits
+// first and leaves it for the same command.
+let spendRequestFile = (): void => {};
 
 // --- Flag parsing ---
 
@@ -584,11 +590,12 @@ const DECISION_OPTIONS: ReadonlySet<string> = new Set([
 // --on-instruction: a stage question the person left to the agent, with
 // --message naming the message that left it.
 // --ends-turn: their reply also asked something, which the agent answers.
+// --request-file: the answer's words in the file `next --request-file` reads.
 // The `config set` keys: a setting the same reply asked for, beside an Approve
 // Plan (settingsBesideDecision).
 const ANSWER_OPTIONS: ReadonlySet<string> = new Set([
   ...LOG_INTERACTION_OPTIONS, "--details", "--units", "--reason", "--park", "--on-instruction",
-  "--details-file", "--on-instruction-file", "--ends-turn", ...CONFIG_KEYS.map((key) => `--${key}`),
+  "--details-file", "--on-instruction-file", "--request-file", "--ends-turn", ...CONFIG_KEYS.map((key) => `--${key}`),
 ]);
 
 // The person has said something in this piece of work: a turn that can carry a
@@ -1982,9 +1989,82 @@ function namedProtectedReply(
   return typed === undefined ? undefined : { message: typed.id, floor };
 }
 
+// REQUEST_TEXT_DIR is the folder where the agent writes a person's words for
+// `next --request-file` (and carries them to `log answer --request-file`), so
+// they reach AI-DLC with no shell on the way: on Windows, cmd.exe ends a
+// command at a line break and replaces a %NAME% pair even inside quotes, and
+// the aidlc launcher is read by cmd.exe again.
+const REQUEST_TEXT_MAX_BYTES = 64 * 1024;
+
+export const REQUEST_FILE_USAGE =
+  `--request-file needs a file directly inside ${REQUEST_TEXT_DIR}/ in this project, for example ` +
+  `${REQUEST_TEXT_DIR}/request.txt.`;
+
+// Only a plain file directly inside the folder, reached through no link, is
+// read. The command removes it once it goes ahead (spend; a probe leaves it),
+// so a command stopped before then runs again exactly as it was written. A
+// string is the refusal.
+export function readRequestFile(
+  projectDir: string,
+  file: string,
+): { text: string; spend(): void; restore(): void } | string {
+  const relativePath = file.replaceAll("\\", "/");
+  const parts = relativePath.split("/");
+  const folder = REQUEST_TEXT_DIR.split("/");
+  const name = parts[parts.length - 1];
+  if (
+    isAbsolute(file) || parts.length !== folder.length + 1 ||
+    folder.some((part, i) => parts[i] !== part) || name === "" || name === "." || name === ".."
+  ) {
+    return REQUEST_FILE_USAGE;
+  }
+  const unread = `AI-DLC could not read the request in ${relativePath}. Send your request again.`;
+  let text: string;
+  try {
+    text = agentFileText(readRegularFileNoFollowOrThrow(
+      recordFileTargetOrThrow(projectDir, relativePath),
+      "The request file",
+      REQUEST_TEXT_MAX_BYTES,
+    )).replace(/\r?\n$/, "");
+  } catch {
+    return unread;
+  }
+  if (text.trim() === "") return `The request in ${relativePath} is empty. Send your request again.`;
+  return {
+    text,
+    spend: () => {
+      if (isReadOnlyEngineProbe()) return;
+      try {
+        removeRecordFileNoFollow(projectDir, relativePath);
+      } catch {
+        // Left in its gitignored folder; the next request replaces it.
+      }
+    },
+    // The words as they were read, for a step that runs the same command again.
+    restore: () => {
+      if (isReadOnlyEngineProbe()) return;
+      try {
+        writeRecordFileNoFollow(projectDir, relativePath, text);
+      } catch {
+        // Not written back: the same command says the request could not be read.
+      }
+    },
+  };
+}
+
 function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
+  // The file an agent wrote for `next --request-file`, carried to the answer.
+  if (flags["request-file"] !== undefined) {
+    if (flags.details !== undefined || flags["details-file"] !== undefined) {
+      error("Pass one of --details, --details-file or --request-file, not two.");
+    }
+    const read = readRequestFile(resolveActiveProjectDir(projectDir, flags.stage), flags["request-file"]);
+    if (typeof read === "string") error(read);
+    flags.details = read.text;
+    spendRequestFile = read.spend;
+  }
   // Text that holds shell characters arrives in a file the agent wrote, so no
   // shell (bash, PowerShell, or cmd.exe through aidlc.cmd) reads it on the way.
   for (const [text, file] of [["details", "details-file"], ["on-instruction", "on-instruction-file"]] as const) {
@@ -5226,7 +5306,7 @@ function logUsage(subcommand: string | undefined): string {
     ],
     answer: [
       `${invoke("answer")} --stage <slug> --details "<the person's exact choice>"`,
-      "  Records the person's answer. Required: --stage, and --details or --details-file.",
+      "  Records the person's answer. Required: --stage, and --details, --details-file or --request-file.",
       `  --checkpoint: ${ANSWER_CHECKPOINTS.join(", ")}. Use the one its question was recorded with.`,
       `  Options: ${flags(ANSWER_OPTIONS)}`,
     ],
@@ -5298,6 +5378,7 @@ export function main(argv: string[]): void {
       default:
         error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review`);
     }
+    spendRequestFile();
     // The stage's work went on through the record, not through `next`: on the
     // hosts with no transcript, the Stop hook reads that from the engine mark.
     // Advisory: a mark that is not written never fails the recorded answer.

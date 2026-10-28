@@ -1986,7 +1986,10 @@ a file instead of the command line: the agent writes it to
 its full path, is read too. The engine reads only that folder, through no link,
 up to 64 KiB, and removes the file once read. `log decision` takes the question the
 same way with `--decision-file`, and `learnings surface` a correction with
-`--correction-file`.
+`--correction-file`. A file the agent wrote for `next --request-file` works for an
+answer too: `log answer --request-file aidlc/.aidlc-request-text/request.txt` reads
+it as `next` does and removes it once the answer is taken, so a refused answer
+keeps it; it is not passed beside `--details` or `--details-file`.
 
 A plain `log answer` needs a reply of the person's in this chat that no
 decision has used yet, sent before or after the question was logged: which

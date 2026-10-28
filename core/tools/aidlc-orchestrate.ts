@@ -239,10 +239,6 @@ import {
   constructionHasStarted,
   owedJumpBack,
   errorMessage,
-  agentFileText,
-  readRegularFileNoFollowOrThrow,
-  recordFileTargetOrThrow,
-  removeRecordFileNoFollow,
   writeRecordFileNoFollow,
   evaluateGuardRefusal,
   filterProducesByKind,
@@ -562,7 +558,7 @@ import {
   optionsList,
   turnsPersonCheckOff,
 } from "./aidlc-lib.ts";
-import { reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
+import { readRequestFile, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
   checkpointPolicyEnabled,
@@ -21017,17 +21013,8 @@ function engineWorkflowSelection(projectDir: string): WorkflowSelection {
   }
 }
 
-// REQUEST_TEXT_DIR is the folder where the agent writes a person's request for
-// `next --request-file`, so the words reach AI-DLC with no shell on the way: on
-// Windows, cmd.exe ends a command at a line break and replaces a %NAME% pair
-// even inside quotes, and the aidlc launcher is read by cmd.exe again.
-const REQUEST_TEXT_MAX_BYTES = 64 * 1024;
-
 // The file's words take the flag's place as one argument after `--`, so none
-// of them is read as a flag. Only a plain file directly inside the folder,
-// reached through no link, is read. It is removed once the command goes ahead
-// (a probe leaves it), so a command stopped before any work runs again exactly
-// as it was written. A string is the refusal.
+// of them is read as a flag (readRequestFile reads it). A string is the refusal.
 function nextArgsWithRequestFile(
   args: readonly string[],
   projectDir: string,
@@ -21037,56 +21024,14 @@ function nextArgsWithRequestFile(
   const options = beforeDelimiter(args);
   const at = options.indexOf("--request-file");
   if (at < 0) return { args: [...args], spend: () => {}, restore: () => {} };
-  const usage =
-    `--request-file needs a file directly inside ${REQUEST_TEXT_DIR}/ in this project, for example ` +
-    `${REQUEST_TEXT_DIR}/request.txt.`;
   const file = options[at + 1];
   const rest = [...args.slice(0, at), ...args.slice(at + 2)];
-  if (file === undefined || file.startsWith("--")) return usage;
+  if (file === undefined || file.startsWith("--")) return REQUEST_FILE_USAGE;
   if (beforeDelimiter(rest).includes("--request-file")) return "Pass --request-file once.";
   if (rest.includes("--")) return "Pass the request either after -- or with --request-file, not both.";
-  const relativePath = file.replaceAll("\\", "/");
-  const parts = relativePath.split("/");
-  const folder = REQUEST_TEXT_DIR.split("/");
-  const name = parts[parts.length - 1];
-  if (
-    isAbsolute(file) || parts.length !== folder.length + 1 ||
-    folder.some((part, i) => parts[i] !== part) || name === "" || name === "." || name === ".."
-  ) {
-    return usage;
-  }
-  const unread = `AI-DLC could not read the request in ${relativePath}. Send your request again.`;
-  let text: string;
-  try {
-    text = agentFileText(readRegularFileNoFollowOrThrow(
-      recordFileTargetOrThrow(projectDir, relativePath),
-      "The request file",
-      REQUEST_TEXT_MAX_BYTES,
-    )).replace(/\r?\n$/, "");
-  } catch {
-    return unread;
-  }
-  if (text.trim() === "") return `The request in ${relativePath} is empty. Send your request again.`;
-  return {
-    args: [...rest, "--", text],
-    spend: () => {
-      if (isReadOnlyEngineProbe()) return;
-      try {
-        removeRecordFileNoFollow(projectDir, relativePath);
-      } catch {
-        // Left in its gitignored folder; the next request replaces it.
-      }
-    },
-    // The request as it was read, for a step that runs the same command again.
-    restore: () => {
-      if (isReadOnlyEngineProbe()) return;
-      try {
-        writeRecordFileNoFollow(projectDir, relativePath, text);
-      } catch {
-        // Not written back: the same command says the request could not be read.
-      }
-    },
-  };
+  const read = readRequestFile(projectDir, file);
+  if (typeof read === "string") return read;
+  return { args: [...rest, "--", read.text], spend: read.spend, restore: read.restore };
 }
 
 // --- CLI entry point ---

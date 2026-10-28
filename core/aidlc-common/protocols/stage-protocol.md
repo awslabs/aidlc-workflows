@@ -336,7 +336,8 @@ recovery protocol's Session resume says, never as Request Changes.
   or a line break goes in a file instead, so no shell reads it at all: write it
   with your file tool to `<record>/.aidlc-engine/answer-text/answer.txt` and
   pass `--details-file .aidlc-engine/answer-text/answer.txt`; the engine reads
-  the file and removes it.
+  the file and removes it. A file you wrote to `aidlc/.aidlc-request-text/` for
+  `next` works the same way with `--request-file <that file>`.
 - **They also asked to stop for now:** record their choice with `--park`, or run
   `park --person-asked`, and tell them how to resume.
 
