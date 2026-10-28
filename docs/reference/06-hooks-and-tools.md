@@ -1766,10 +1766,14 @@ PowerShell, joined by `;`, also `Set-Location`, `sl`, `chdir`, `pushd` or
 `Push-Location`) is read as the rest of
 the line run from that folder when the folder is certain: one absolute path with
 no glob, `.` or `..`, naming a folder that exists and, on Windows, on the drive
-the shell is on (`leadingDirectoryChange` in review-freeze-command.ts). Any other
+the shell is on, Git Bash's `/c/...` read as `C:\...` outside PowerShell
+(`leadingDirectoryChange` in review-freeze-command.ts). Any other
 `cd` that leaves the current folder is not followed: a write after it is read
 from the starting folder too, and AI-DLC's own command after it waits with the
-build. The build waits as before: the developer, and a write to a file the plan
+build. When that command is a `next` that carries the person's words in
+`--request-file`, the refusal names that `next` on its own, with its own
+arguments, in place of a bare `next`, so the words go with it. The build waits
+as before: the developer, and a write to a file the plan
 names or to code inside the project.
 
 **While the engine's Plan Approval question is open.** Only the build waits for
