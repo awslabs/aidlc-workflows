@@ -1749,6 +1749,10 @@ aidlc config flags --show
 
 Use `--project` instead of `--local` to share the recorded switch with the
 project. Real environment variables take precedence over recorded config flags.
+Where a switch's variable is set to anything but `1` (the editor or CLI the
+check runs in), the switch you record does not turn its check off there; when it
+is set where you run `config flags --bypass`, the command says so for each check
+but sensors, learnings and usage tracking, instead of saying the check is off.
 Recording or clearing a switch changes only that settings file (and AI-DLC's
 gitignored note of how it was set,
 `aidlc/.aidlc-sessions/recorded-switches.json`) and refreshes no harness files,

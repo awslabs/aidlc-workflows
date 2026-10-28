@@ -12038,8 +12038,10 @@ function openWorkflowLine(
   const now = settingLeaves(after);
   const changed = [...new Set([...was.keys(), ...now.keys()])]
     .filter((id) => !id.startsWith("models.profiles.") && was.get(id)?.value !== now.get(id)?.value);
+  // A switch whose variable is in the environment is decided there
+  // (resolveProjectFlag), so a file's change to it reaches nothing either.
   const bypasses = (file: AidlcSettingsFile | null | undefined): string =>
-    canonical([...(file?.flags?.bypasses ?? [])].sort());
+    canonical([...(file?.flags?.bypasses ?? [])].filter((name) => !Object.hasOwn(process.env, name)).sort());
   const switched = bypasses(before) !== bypasses(after);
   const rightAway = [
     ...(switched ? ["the switch"] : []),
