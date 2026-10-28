@@ -13464,6 +13464,25 @@ function approvalOverReview(
   }
 }
 
+// The class of the one stage-level request that reviews the stage, or null
+// when no such request does: per Unit with a Unit DAG the Unit routes own the
+// review (team ownership without a DAG is an error the route states, which a
+// review step must not hide), and a class that resolves to none has no review.
+function stageLevelReviewClass(
+  projectDir: string,
+  node: GraphStage,
+  scope: string,
+  stateContent: string,
+): ReviewClass | null {
+  if (!node.reviewer) return null;
+  if (
+    isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, stateContent) &&
+    (resolveBoltDag(projectDir).state !== "none" || isTeamUnitOwnership(stateContent))
+  ) return null;
+  const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent);
+  return reviewClass === "none" ? null : reviewClass;
+}
+
 // A stage that works on the whole project (not once per Unit) and whose review
 // is open: the step that gets it finished, in place of the stage body. Its
 // documents are written, since a request was made on them, so the body has
@@ -13478,13 +13497,8 @@ function stageReviewStep(
   stateContent: string | null,
 ): { text: string; endsTurn: boolean; finished: boolean } | null {
   if (stateContent === null || !node.reviewer || isReadOnlyEngineProbe()) return null;
-  if (isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, stateContent)) {
-    // Per Unit with a Unit DAG, the Unit routes own the review. Team ownership
-    // without a DAG is an error the route states, which a review step must not hide.
-    if (resolveBoltDag(projectDir).state !== "none" || isTeamUnitOwnership(stateContent)) return null;
-  }
-  const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent);
-  if (reviewClass === "none") return null;
+  const reviewClass = stageLevelReviewClass(projectDir, node, scope, stateContent);
+  if (reviewClass === null) return null;
   const review = freshReviewReceipts(projectDir, stateContent, node, { reviewClass });
   const pending = review.stagePending;
   if (pending === null || pending === undefined) {
@@ -17634,6 +17648,24 @@ function personsFeedbackSentence(theirs: boolean): string {
   return theirs ? " The feedback is on the record in the person's own words; revise from what they asked for." : "";
 }
 
+// After Request Changes the agent revises in the same turn and has the
+// reviewer look again before it reports revised, with no `next` in between,
+// so this reply is the step it has for that request, and the review log counts
+// passes again from the rejection. Named only where one stage-level request
+// reviews the stage.
+function reReviewRequestSentence(pd: string, node: GraphStage, scope: string): string {
+  try {
+    const state = loadStateFileIfPresent(pd);
+    if (state === null || stageLevelReviewClass(pd, node, scope, state) === null) return "";
+    const { attempt } = guardAttemptState(pd, state, node);
+    if (!attempt.requestReview) return "";
+    return ` When the revision changes the stage's outputs, request their review with \`${attempt.requestReview}\`.`;
+  } catch {
+    // Unreadable records leave the request to the review log's own answer.
+    return "";
+  }
+}
+
 /** A directive with the notices attached, or unchanged when there are none. */
 function withChangeNotices<T extends Directive>(directive: T, notices: string[]): T {
   return notices.length > 0 ? { ...directive, change_notices: notices } : directive;
@@ -19993,7 +20025,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           ? pipelineRejectedMessage(pd, node, slug) +
             personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout))
           : `Recorded ${flags.result} for "${slug}".` +
-            personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout)),
+            personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout)) +
+            (flags.result === "rejected" ? reReviewRequestSentence(pd, node, scope) : ""),
       ),
       changeNoticesFromToolOutput(res.stdout),
     );
