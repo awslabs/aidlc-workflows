@@ -10551,7 +10551,9 @@ function onboardDocumentInput(
       ? ` I couldn't read any text from it: ${documentInputNoTextReason(shown)}.`
       : "") +
     (truncated
-      ? ` Its text is cut off at ${shown.extraction.chars ?? kb.EXTRACT_OUTPUT_CHAR_CAP} characters.`
+      ? shown.extraction.pages_kept !== undefined
+        ? ` Only its first ${shown.extraction.pages_kept} pages were read.`
+        : ` Its text is cut off at ${shown.extraction.chars ?? kb.EXTRACT_OUTPUT_CHAR_CAP} characters.`
       : "");
 
   process.stdout.write(

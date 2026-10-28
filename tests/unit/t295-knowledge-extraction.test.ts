@@ -40,6 +40,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { stubPdfText, stubPdftotextPath } from "../harness/stub-pdftotext.ts";
 import {
   DEFAULT_SUBPROCESS_TIMEOUT_MS,
   LONG_SUBPROCESS_TIMEOUT_MS,
@@ -494,6 +495,73 @@ describe("t295 each outcome is a DISTINCT state with its own remedy", () => {
       const bytes = typeof body === "string" ? body.length : body.length;
       expect(() => extractDocument(abs, mime, bytes, DIGEST), name).not.toThrow();
     }
+  });
+});
+
+/** Run extractDocument on the default PDF argv with the stand-in `pdftotext`
+ *  first on PATH, in a child so this process's PATH is left alone. */
+function extractWithStubPdftotext(
+  project: string,
+  pages: number,
+  opts: { pageBreaks?: boolean; xpdf?: boolean } = {},
+): ReturnType<typeof extractDocument> {
+  const abs = doc(project, "long.pdf", "%PDF-1.4\n");
+  const tool = pathToFileURL(
+    join(import.meta.dir, "../../dist/claude/.claude/tools/aidlc-knowledge.ts"),
+  ).href;
+  const result = spawnSync(process.execPath, ["-e", `
+    import { extractDocument } from ${JSON.stringify(tool)};
+    console.log(JSON.stringify(extractDocument(${JSON.stringify(abs)}, "application/pdf", 9, ${JSON.stringify(DIGEST)})));
+  `], {
+    env: { ...process.env, PATH: stubPdftotextPath(project, pages, opts) },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout);
+}
+
+// The stand-in is a POSIX shell script.
+describe.skipIf(process.platform === "win32")("t295 the PDF page cap sets truncated", () => {
+  test("a 60-page PDF keeps 50 pages and records that the page cap cut it", () => {
+    const out = extractWithStubPdftotext(scratchProject(), 60);
+    expect(out.record.state).toBe("extracted");
+    expect(out.record.truncated).toBe(true);
+    expect(out.record.pages_kept).toBe(EXTRACT_PAGE_CAP);
+    expect(out.text).toBe(stubPdfText(EXTRACT_PAGE_CAP));
+    expect(out.record.chars).toBe(stubPdfText(EXTRACT_PAGE_CAP).length);
+  });
+
+  test("with page breaks turned off, the cut is still seen", () => {
+    // The page-51 check reads pdftotext's exit status, not form feeds.
+    const out = extractWithStubPdftotext(scratchProject(), 60, { pageBreaks: false });
+    expect(out.record.truncated).toBe(true);
+    expect(out.record.pages_kept).toBe(EXTRACT_PAGE_CAP);
+    expect(out.text).toBe(stubPdfText(EXTRACT_PAGE_CAP, { pageBreaks: false }));
+  });
+
+  test("a 50-page PDF is complete", () => {
+    const out = extractWithStubPdftotext(scratchProject(), EXTRACT_PAGE_CAP);
+    expect(out.record.truncated).toBe(false);
+    expect(out.record.pages_kept).toBeUndefined();
+    expect(out.text).toBe(stubPdfText(EXTRACT_PAGE_CAP));
+  });
+
+  test.each([
+    ["Poppler, page breaks off", { pageBreaks: false }],
+    ["Xpdf, which exits 0 for a page past the last", { xpdf: true }],
+    ["Xpdf, page breaks off", { xpdf: true, pageBreaks: false }],
+  ])("a 50-page PDF is complete with %s", (_label, opts) => {
+    const out = extractWithStubPdftotext(scratchProject(), EXTRACT_PAGE_CAP, opts);
+    expect(out.record.truncated).toBe(false);
+    expect(out.record.pages_kept).toBeUndefined();
+  });
+
+  test("a 60-page PDF is cut under Xpdf too", () => {
+    const out = extractWithStubPdftotext(scratchProject(), 60, { xpdf: true });
+    expect(out.record.truncated).toBe(true);
+    expect(out.record.pages_kept).toBe(EXTRACT_PAGE_CAP);
   });
 });
 

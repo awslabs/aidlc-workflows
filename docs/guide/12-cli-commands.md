@@ -554,10 +554,12 @@ installing the tool and running `/aidlc knowledge sync`. Re-running `onboard` on
 same unchanged path reports `already` and does NOT retry extraction — only `sync`
 re-probes rows in this state. Nothing is silently skipped.
 
-**Extraction is capped**: 50 pages for PDF (`pdftotext -l 50`) and 200,000
+**Extraction is capped**: 50 pages for PDF with the default extractor
+(`pdftotext -l 50`, then a check for a page 51) and 200,000
 characters of extractor output. Past a cap the text is cut and the row records
-`truncated` — `show` prints a `truncated  yes` line above the content and the
-`--json` payload carries the flag inside `extraction`. Treat a truncated
+`truncated` — `show` prints a `truncated  yes` line above the content (`after
+page 50` when the page cap cut it) and the `--json` payload carries the flag
+inside `extraction`, with `pages_kept` for a page cut. Treat a truncated
 extraction as a partial view: "the document does not mention X" is not a safe
 conclusion from one.
 
