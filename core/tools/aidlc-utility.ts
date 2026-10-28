@@ -12492,6 +12492,48 @@ function stagesSkippedInThisWork(projectDir: string, intent?: string, space?: st
   return skipped;
 }
 
+// The plans that reopen this finished work, each with the stages it runs from
+// the one the scope change starts (stageReopenedByScopeChange decides whether
+// and where). Empty while the work runs. Recompose's refusal over finished work
+// and `next compose` there both name these, so the person hears the same way
+// on from either (#3207).
+export function plansReopeningFinishedWork(stateContent: string): Array<{ scope: string; stages: StageEntry[] }> {
+  const own = (getField(stateContent, "Scope") ?? "").trim();
+  const boxes = new Map(parseCheckboxes(stateContent).map((c) => [c.slug, c.state]));
+  const graph = loadStageGraph();
+  const mapping = loadScopeMapping();
+  return [...validScopes()].sort().flatMap((scope) => {
+    const first = scope === own ? null : stageReopenedByScopeChange(stateContent, scope);
+    if (first === null) return [];
+    const grid = scopeGridOnProject(mapping[scope], stateContent);
+    const stages = graph.slice(graph.findIndex((s) => s.slug === first.slug)).filter((s) =>
+      grid[s.slug] === "EXECUTE" && boxes.get(s.slug) !== "completed" && boxes.get(s.slug) !== "skipped");
+    return [{ scope, stages }];
+  });
+}
+
+// Recompose over finished work: its own plan takes no more stages, and a plan
+// that runs the ones asked for after the last stage reopens it there.
+function finishedWorkRecomposeRefusal(content: string, added: string[]): string {
+  const graph = loadStageGraph();
+  const name = (slug: string): string => graph.find((s) => s.slug === slug)?.name || slug;
+  const listed = (slugs: string[]): string => {
+    const names = slugs.map(name);
+    return names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  };
+  const last = name((getField(content, "Current Stage") ?? "").trim());
+  if (added.length === 0) return "Cannot recompose: this work is finished, so nothing on its plan is left to skip.";
+  const plans = plansReopeningFinishedWork(content)
+    .filter(({ stages }) => added.every((slug) => stages.some((s) => s.slug === slug)))
+    .map(({ scope }) => scope);
+  const typed = (args: string): string => `\`${entrySkillInvocation()} ${args}\``;
+  return plans.length > 0
+    ? `Cannot recompose: this work is finished, so its own plan takes no more stages. A plan that runs ${listed(added)} ` +
+      `after ${last} reopens it there, keeping what is done: ${plans.join(", ")}. To switch to one, type ${typed("--scope <plan>")}.`
+    : `Cannot recompose: this work is finished, so its own plan takes no more stages, and no plan runs ${listed(added)} ` +
+      `after ${last}. To run a stage on its own, type ${typed("--stage <stage> --single")}; for more, start new work.`;
+}
+
 function handleRecompose(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
   const usage = (message: string): never => die(
     `${message}\nUsage: recompose [--skip <slug,...>] [--add <slug,...>] ` +
@@ -12586,8 +12628,9 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     // leave no cursor to ever reach the added stage — a corrupted record,
     // not a plan change. (With no cursor, the behind-cursor guard below is
     // also inert, so this check is the only thing standing between recompose
-    // and a finished workflow.)
+    // and a finished workflow.) Finished work is told which plans reopen it.
     const wfStatus = getField(content, "Status") || "";
+    if (wfStatus.trim() === "Completed") die(finishedWorkRecomposeRefusal(content, addList));
     if (wfStatus !== "Running") {
       die(
         `Cannot recompose: workflow Status is "${wfStatus || "unknown"}", not Running. ` +

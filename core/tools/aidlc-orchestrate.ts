@@ -609,6 +609,7 @@ import {
   documentInputLooksSecret,
   GREENFIELD_RE_SKIP_LABEL,
   greenfieldWorkspaceGainedCode,
+  plansReopeningFinishedWork,
   projectTypeRecordedAsPersons,
   scanSummary,
 } from "./aidlc-utility.ts";
@@ -7219,6 +7220,31 @@ function reshapeReplyArgument(): string {
   return routingReshapeReply === null ? "" : ` -- ${quoteCommandArgument(routingReshapeReply)}`;
 }
 
+// `next compose` over finished work: its own plan takes no more stages
+// (recompose refuses it), so no composer runs. A plan that runs more after the
+// last stage reopens it there (the scope change, #2261), and which one is the
+// person's pick (#3207).
+function finishedWorkComposeStep(stateContent: string): PrintDirective {
+  const last = nodeForSlug((getField(stateContent, "Current Stage") ?? "").trim())?.name ?? "its last stage";
+  const plans = plansReopeningFinishedWork(stateContent);
+  const newWork = " and offer to start what they asked for as new work; on their yes run " +
+    `\`${aidlcToolInvocation("orchestrate")} next --new-intent "<their words>"\` and follow what it returns.`;
+  if (plans.length === 0) {
+    return turnEndingPrint(
+      `Run nothing. This work is finished and no plan runs a stage after ${last}, so its plan takes no more stages: ` +
+        `tell the person that in one line,${newWork}`,
+    );
+  }
+  const listed = plans.map(({ scope, stages }) => `${scope} (${stages.map((stage) => stage.name).join(", ")})`).join("; ");
+  return turnEndingPrint(
+    `Run nothing yet. This work is finished, so its own plan takes no more stages. A plan that runs more after ${last} ` +
+      `reopens it there, keeping what is done, and runs: ${listed}. Offer the person the plans that run what they ` +
+      "asked for, in plain words, with what each adds, your recommendation first, then stop. On their pick, run " +
+      `\`${aidlcToolInvocation("orchestrate")} next --scope <plan>\` with nothing else (their words beside it would ` +
+      `start new work) and follow what it returns. When none of them runs it, tell them that in one line,${newWork}`,
+  );
+}
+
 function composeDispatchDirective(
   flags: ParsedFlags,
   inFlight: boolean,
@@ -11374,6 +11400,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           `${unnamed ? messageFill(pd, reshapeSettings) : ""}, ` +
           `then run \`${aidlcToolInvocation("orchestrate")} next compose --request ${question.id}${reshapeReplyArgument()}\` and follow what it returns.`,
       ));
+      return;
+    }
+    if (stateContent !== null && inFlight && !flags.newScope && !flags.report &&
+        (getField(stateContent, "Status") ?? "").trim() === "Completed") {
+      emit(finishedWorkComposeStep(stateContent));
       return;
     }
     // Only a front composition continues into creation, which needs the
