@@ -8,6 +8,8 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import {
   ORCH,
   STATE,
@@ -31,6 +33,17 @@ function claimRefs(remote: string): string {
   return git(remote, ["for-each-ref", "--format=%(refname)", "refs/heads/claim/"]);
 }
 
+// Every file in the checkout outside .git, ignored engine files included.
+function checkoutFiles(dir: string): Record<string, string> {
+  const files: Record<string, string> = {};
+  for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    const path = join(entry.parentPath, entry.name);
+    if (!entry.isFile() || path.slice(dir.length + 1).split(/[\\/]/)[0] === ".git") continue;
+    files[path] = readFileSync(path, "utf-8");
+  }
+  return files;
+}
+
 describe("t326 an unscoped checkout after a team Unit lands", () => {
   test("shows the board, not the next Unit's stage, and claims only on the person's word", () => {
     const { seed, remote } = makeSeed();
@@ -46,6 +59,11 @@ describe("t326 an unscoped checkout after a team Unit lands", () => {
     expect(lead.kind).toBe("notice");
     expect(lead.message as string).toContain("# Team Construction Dispatcher");
     expect(lead.message as string).toContain("`/aidlc --claim beta`");
+    const beforeProbe = checkoutFiles(seed);
+    const probe = runMergeTool(ORCH, ["next"], seed, false, { AIDLC_STOP_HOOK_PROBE: "1" });
+    expect(probe.status, probe.out).toBe(0);
+    expect(JSON.parse(probe.stdout)).toMatchObject({ kind: "notice", message: lead.message });
+    expect(checkoutFiles(seed)).toEqual(beforeProbe);
 
     // The guard's refusal names the person's step.
     const unscopedStart = runMergeTool(

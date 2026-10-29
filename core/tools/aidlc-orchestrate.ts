@@ -5172,13 +5172,14 @@ export function buildTeamConstructionBoard(
   options: {
     readOnly?: boolean;
     overview?: UnitClaimOverview;
+    model?: TeamUnitProgressModel;
   } = {},
 ): TeamConstructionBoard {
   const overview = options.overview ??
     cachedUnitClaimOverview(projectDir, {
       writeCache: options.readOnly !== true,
     });
-  const model = deriveTeamUnitProgressModel(
+  const model = options.model ?? deriveTeamUnitProgressModel(
     projectDir,
     stateContent,
     undefined,
@@ -12265,16 +12266,25 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           emit(unitClaimAskDirective(overview));
           return;
         }
+        const model = deriveTeamUnitProgressModel(
+          pd,
+          stateContent,
+          undefined,
+          undefined,
+          { readOnly: readOnlyBoard },
+        );
         const board = buildTeamConstructionBoard(pd, stateContent, {
           readOnly: readOnlyBoard,
           overview,
+          model,
         });
         // While the guard's fan-out check holds (a landed Unit's claim
         // included) it refuses Unit work in this checkout, so the board stays
-        // up until every Unit is complete.
-        const unitsOpen = overview.claimable.length > 0 || overview.claimed.length > 0 ||
-          overview.waiting.length > 0;
-        if (board.awaitingMerge.length > 0 || (unitsOpen && cachedClaimFanoutActive(pd))) {
+        // up until the walk has no Unit left to take: every Unit merged.
+        const dag = resolveBoltBatches(pd);
+        const unitWorkLeft = dag.state === "ok" &&
+          dag.batches.flat().some((unit) => !model.mergedUnits.has(unit));
+        if (board.awaitingMerge.length > 0 || (unitWorkLeft && cachedClaimFanoutActive(pd))) {
           emit(noticeDirective(
             renderTeamConstructionBoard(board, "dispatcher"),
           ));
