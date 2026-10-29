@@ -16179,6 +16179,23 @@ function claimedCheckoutMove(
     target = resolved.targetSlug;
   }
   const name = findStageBySlug(target)?.name ?? target;
+  // A stage asked to run on its own, or with a plan change or new work beside
+  // it, is not a reopen: those stay refused here, with nothing written.
+  if (flags.single) {
+    return errorDirective(
+      `This checkout holds the claim on Unit "${claimedUnit}", so a stage does not run on its own here. ` +
+        claimedCheckoutMovesElsewhere(claimedUnit, `run ${name || "it"} on its own`),
+    );
+  }
+  if (
+    (flags.scope !== undefined && flags.scope !== scope) || flags.planChanges !== undefined ||
+    flags.compose || flags.newScope || flags.report || flags.newIntent || flags.intent?.trim()
+  ) {
+    return errorDirective(
+      `This checkout holds the claim on Unit "${claimedUnit}", so a plan change or other work asked beside a ` +
+        `stage does not run here. ${claimedCheckoutMovesElsewhere(claimedUnit, "ask for it")}`,
+    );
+  }
   const unitStages = unitMajorConstructionStageSlugs(scope, stateContent, true);
   if (target && flags.everyUnit && claimedCheckoutReopens(claimedUnit, unitStages, target)) {
     return errorDirective(
@@ -16215,7 +16232,7 @@ function claimedCheckoutMove(
   const what = flags.phase ? `the ${canonicalisePhase(flags.phase) ?? flags.phase} phase` : name;
   return errorDirective(
     `This checkout holds the claim on Unit "${claimedUnit}", so it reopens only ${claimedUnit}'s own stages, and ` +
-      `${what} is not one of them. ${claimedCheckoutMovesElsewhere(claimedUnit, what)}`,
+      `${what} is not one of them. ${claimedCheckoutMovesElsewhere(claimedUnit, `go to ${what}`)}`,
   );
 }
 

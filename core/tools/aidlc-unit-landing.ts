@@ -73,7 +73,7 @@ export function claimedCheckoutReopens(
 // clone alike: the checkout makes the move itself once the Unit has landed
 // there (scopeStampLanded), so it never sends the person to "the main
 // checkout", where they may already be.
-export function claimedCheckoutMovesElsewhere(claimedUnit: string, target: string): string {
+export function claimedCheckoutMovesElsewhere(claimedUnit: string, action: string): string {
   return `Run \`${entrySkillInvocation()}\` here to carry on with Unit "${claimedUnit}"; once ${claimedUnit} has landed ` +
-    `and this checkout has pulled main, go to ${target} from here.`;
+    `and this checkout has pulled main, ${action} from here.`;
 }

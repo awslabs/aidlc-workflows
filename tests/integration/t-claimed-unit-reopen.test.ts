@@ -332,6 +332,15 @@ describe("a claimed checkout reopens its own Unit's stages", () => {
       const everyUnit = next(checkout, ["--stage", FD, "--every-unit"]);
       expect(everyUnit).toMatchObject({ kind: "error" });
       expect(everyUnit.message).toContain(`--stage ${FD}\` to reopen Functional Design for alpha`);
+      // A stage asked to run on its own, or a move with more asked beside it, is
+      // not a reopen: refused as before, with nothing written.
+      const alone = next(checkout, ["--stage", FD, "--single"]);
+      expect(alone.kind, JSON.stringify(alone)).toBe("error");
+      expect(alone.message).toContain("a stage does not run on its own here");
+      expect(alone.message).toContain("run Functional Design on its own from here");
+      const more = next(checkout, ["--stage", FD, "--scope", "bugfix"]);
+      expect(more.kind, JSON.stringify(more)).toBe("error");
+      expect(more.message).toContain("does not run here");
       const foreign = next(checkout, ["--stage", FD, "--unit", "beta"]);
       expect(foreign).toMatchObject({ kind: "error" });
       expect(foreign.message).toContain('refusing foreign Unit "beta"');
