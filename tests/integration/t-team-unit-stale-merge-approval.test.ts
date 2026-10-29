@@ -17,7 +17,6 @@ import {
   UNIT,
   approveMerge,
   cleanupTempDirs,
-  dispatchMerge,
   git,
   makeSeed,
   prepareCandidate,
@@ -91,7 +90,6 @@ describe("a stale approved Unit merge", () => {
       expect(early.status).not.toBe(0);
       expect(early.out).toContain("merge is not approved");
 
-      dispatchMerge(seed, "alpha", payload.pinned_oid, payload.generation);
       const gate = runMergeTool(
         UNIT,
         ["gate", "alpha", "--decision", "approve", "--user-input", "Approve the reworked alpha"],
