@@ -16189,7 +16189,7 @@ function claimedCheckoutMove(
   }
   if (
     (flags.scope !== undefined && flags.scope !== scope) || flags.planChanges !== undefined ||
-    flags.compose || flags.newScope || flags.report || flags.newIntent || flags.intent?.trim()
+    flags.compose || flags.newScope || flags.report || flags.newIntent
   ) {
     return errorDirective(
       `This checkout holds the claim on Unit "${claimedUnit}", so a plan change or other work asked beside a ` +
