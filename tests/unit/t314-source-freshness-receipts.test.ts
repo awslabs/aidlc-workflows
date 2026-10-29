@@ -6373,6 +6373,35 @@ process.stdin.on("end", () => server.stop(true));
     expect(r.out).not.toContain("no longer matches the final reviewed swarm merge");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  // A file Git ignores and does not track (a dev server's log) is no part of
+  // the person's source while the Units are built side by side: the stage
+  // completes past it under strict, and relaxed does not say it was kept.
+  function ignoringLogs(): string {
+    const proj = makeFixture();
+    appendFileSync(join(proj, ".gitignore"), "*.log\n");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "ignore logs"]);
+    restartBaseline(proj);
+    return proj;
+  }
+
+  test("an ignored log written after the last merge does not stop the stage completing, and is not said as kept", () => {
+    for (const policy of ["strict", "relaxed (set by you)"]) {
+      const proj = ignoringLogs();
+      if (policy !== "strict") setPolicy(proj, policy);
+      finalizeKeptUnit(proj);
+      const merged = mergeUnit(proj, "kept");
+      expect(merged.status, merged.out).toBe(0);
+      const path = seededStateFile(proj);
+      writeFileSync(path, readFileSync(path, "utf-8").replace(
+        /^- \*\*Construction Autonomy Mode\*\*: .*$/m, "- **Construction Autonomy Mode**: autonomous"));
+      writeFileSync(join(proj, "dev-server.log"), "listening\n", "utf-8");
+      const r = guarded(proj, ["gate-start", "code-generation"]);
+      expect(r.out, policy).not.toContain("no longer matches the final reviewed swarm merge");
+      expect(r.out, policy).not.toContain("Kept them.");
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS * 2);
+
   test("under strict, the person's own edit beside an AI-DLC update is the only file the merge names", () => {
     const proj = installedProject();
     finalizeKeptUnit(proj);
