@@ -5916,10 +5916,6 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
     const said = args.join(" ").replace(ENTRY_WORD_PREFIX, "").trim();
     return { readingStep: reading, ...(said.length > 0 ? { intent: said } : {}) };
   }
-  // A Unit command owns its whole argv, options included (`unit land alpha
-  // --step git`), so nothing on it is read as one of next's own flags.
-  const unitCommand = unitCommandArgv(splitFlagShapedArguments(args));
-  if (unitCommand !== null) return { unitCommand };
   // A SOLE bare `help` / `-h` token is a help REQUEST, not intent text. Without
   // this, the token falls into intentWords and the freeform funnel offers to
   // create an intent literally named "help" (fresh workspace) or silently
@@ -5995,6 +5991,10 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   if (pluginCommand.kind !== "not-plugin") return { pluginCommand };
   const knowledgeCommand = parseKnowledgeCommand(args);
   if (knowledgeCommand.kind !== "not-knowledge") return { knowledgeCommand };
+  // A Unit command owns its whole argv, options included (`unit land alpha
+  // --step git`), so nothing on it is read as one of next's own flags.
+  const unitCommand = unitCommandArgv(splitFlagShapedArguments(args));
+  if (unitCommand !== null) return { unitCommand };
   // The pick question's answer, `next --pick <record>`: select that record and
   // carry on in the same turn, so picking work up takes one step. Words the
   // agent adds after the name, or the `--request <id>` of the step that kept

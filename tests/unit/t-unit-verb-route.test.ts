@@ -166,6 +166,15 @@ describe("every reader of the line agrees, and none runs a Unit command off-band
   });
 });
 
+describe("a Unit line with `--config` on it is the config refusal for every reader, as for the other nouns", () => {
+  test("the engine and the read-only reading agree", () => {
+    const line = ["unit", "pin", "alpha", "--config"];
+    expect(parseNextFlags(line).unitCommand).toBeUndefined();
+    expect(parseNextFlags(line).config).toBe(true);
+    expect(isReadOnlyNextArgv(line)).toBe(true);
+  });
+});
+
 describe("one list of Unit verbs", () => {
   test("the dispatcher's unit route takes exactly the verbs `next` reads", () => {
     const route = ROUTES.find((entry) => entry.id === "unit");
