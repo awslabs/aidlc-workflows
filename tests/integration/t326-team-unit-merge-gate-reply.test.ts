@@ -139,7 +139,8 @@ describe("t326 a pinned Unit's merge gate row keeps what the person said", () =>
     const row = mergeGateRow(seed);
     expect(auditBlockField(row, "Message Id")).toBe(message);
     expect(auditBlockField(row, "Message Ids")).toBeNull();
-    expect(auditBlockField(row, "Person Reply") ?? "").not.toContain("land alpha");
+    // Their words joined with the earlier line would not be the gate's alone.
+    expect(auditBlockField(row, "Person Reply")).toBeNull();
   });
 
   test("with the human-presence guard off, the row is as it was", () => {

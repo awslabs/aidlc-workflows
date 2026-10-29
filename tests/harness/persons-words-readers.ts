@@ -1003,6 +1003,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${LOG}#handleAnswers`]: { use: "keeps", why: "the audit writer: a batch of answers, blank details left out" },
   [`${LOG}#handleAnswer`]: { use: "keeps", why: "the audit writer: an answer's Person Reply, the message named or every unspent reply of this chat an earlier answer did not record" },
   "core/tools/aidlc-jump.ts#handleReopen": { use: "keeps", why: "the audit writer: a reopen for a change keeps their words as Feedback" },
+  "core/tools/aidlc-unit.ts#mergeGateReplyFields": { use: "keeps", why: "the audit writer: the pinned merge gate row's Person Reply and Message Id from S1's window, kept only when every reply in it came after the pin" },
   [`${STATE}#parkedWords`]: { use: "keeps", why: "the audit writer: the park row's Person Reply" },
   // The recorded answer's Details is the choice the agent recorded, never the file's [Answer]: line (S2a's R31).
   [`${LIB}#offeredChoiceLabel`]: { use: "decides", why: "the agent's --details, or a recorded answer's Details, against the labels the question offered (O4)", from: [`${LIB}#blockingSensorPicks`, `${ORCH}#learningsSinceStageStart`, "core/tools/aidlc-sensor-claim-sources.ts#assumptionsAcceptedOnRecord"] },

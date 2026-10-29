@@ -63,11 +63,13 @@ import {
   readUnitScopeStamp,
   parseReviewRecordBytes,
   pairedReviewRecordForCompletion,
+  personsGateReply,
   relativeRecordDir,
   REVIEW_RECORDS_DIR,
   reviewRecordDigest,
   type ReviewRecord,
   requireLiveClaimForTeamUnit,
+  resolveInvokingSessionId,
   resolveProjectDir,
   resolveReviewClass,
   teamSkeletonOn,
@@ -83,6 +85,7 @@ import {
   unitParticipantPath,
   unitReleasePendingPath,
   validateUnitName,
+  windowMessageIds,
   withAuditLock,
   writeUnitClaimRegistryCache,
   writeUnitMergeTransaction,
@@ -2202,29 +2205,63 @@ function approvedLandStep(transaction: UnitMergeTransaction): Record<string, str
 
 // The person's reply to the gate the pin showed: a typed turn in main's own
 // shard stamped after the pin, so the turn that ran the pin is not it, and
-// after the last gate decision, which spent the turns before it.
+// after the last gate decision, which spent the turns before it. Returns the
+// messages those turns came in; null with the human-presence guard off.
 function requireReplyAfterPin(
   projectDir: string,
   transaction: UnitMergeTransaction,
-): void {
-  if (humanPresenceGuardDisabled()) return;
+): ReadonlySet<string> | null {
+  if (humanPresenceGuardDisabled()) return null;
   const all = mainAuthorityAuditRows(projectDir);
   const previousGateIndex = all.findLastIndex(
     (row) =>
       (row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED") &&
       auditBlockField(row.block, "Stage") !== null,
   );
-  if (
-    !all
-      .slice(previousGateIndex + 1)
-      .some(
-        (row) =>
-          row.event === "HUMAN_TURN" && row.timestamp > transaction.pinned_at,
-      )
-  ) {
+  const turns = all
+    .slice(previousGateIndex + 1)
+    .filter(
+      (row) =>
+        row.event === "HUMAN_TURN" && row.timestamp > transaction.pinned_at,
+    );
+  if (turns.length === 0) {
     fail(
       `Unit "${transaction.unit}" merge gate requires a typed human turn after the pin.`,
     );
+  }
+  return new Set(
+    turns.flatMap((row) => auditBlockField(row.block, "Message Id") ?? []),
+  );
+}
+
+// What the person said at the merge gate, for its row as a stage gate's row
+// keeps it (personsGateReply, in this chat): their words, the message they
+// came in and, when several, every message. Only a message sent after the pin
+// answers it. Pin writes no stage start to bound the window, so when it
+// reaches back past the pin its words are not all the gate's: the row names
+// the messages after the pin and leaves the words to their records. A record
+// or a chat the engine cannot read leaves the row as it was, never a refusal.
+function mergeGateReplyFields(
+  projectDir: string,
+  afterPin: ReadonlySet<string>,
+): Record<string, string> {
+  try {
+    const reply = personsGateReply(
+      projectDir,
+      resolveInvokingSessionId(projectDir),
+      "unit-merge",
+    );
+    const replies = reply.replies.filter((entry) => afterPin.has(entry.id));
+    const latest = replies.at(-1)?.id;
+    return {
+      ...(reply.words && replies.length === reply.replies.length
+        ? { "Person Reply": reply.words }
+        : {}),
+      ...(latest ? { "Message Id": latest } : {}),
+      ...windowMessageIds({ replies }),
+    };
+  } catch {
+    return {};
   }
 }
 
@@ -2427,7 +2464,7 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
     }));
     return;
   }
-  requireReplyAfterPin(pd, transaction);
+  const afterPin = requireReplyAfterPin(pd, transaction);
   const terms = pinnedMergeGate(transaction);
   appendAuditEntry(
     decision === "approve" ? "GATE_APPROVED" : "GATE_REJECTED",
@@ -2444,6 +2481,7 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
       ...(decision === "approve"
         ? { "User Input": userInput }
         : { Feedback: userInput }),
+      ...(afterPin ? mergeGateReplyFields(pd, afterPin) : {}),
     },
     pd,
   );
