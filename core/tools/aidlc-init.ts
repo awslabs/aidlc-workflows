@@ -360,6 +360,7 @@ import {
   type CompletionShell,
   type ConfigOutstandingAction,
   type DiagnosticIssue,
+  type ModelsAnswerRecord,
   type ProjectChoicesRecord,
   type ProvidersRecord,
   type RuntimeRecord,
@@ -471,8 +472,10 @@ type ModelsMutationContext = {
   summaryLines: string[];
   notes: string[];
   // Absent when the recorded policy is unchanged: a repair of the kiro-ide
-  // agent files that lost what the policy applies.
+  // agent files that lost what the policy applies, or the models answer alone.
   settings?: SettingsMutation;
+  // The models answer in harness.json, recorded or cleared with the policy.
+  overrides?: ConfigDiagnosticOverrides;
 };
 
 type DiagnosticSection = "runtime" | "providers" | "trust";
@@ -653,6 +656,7 @@ const MODELS_BARE_FLAGS = new Set([
   "--help",
   "--global",
   "--json",
+  "--keep",
   "--local",
   "--no-color",
   "--project",
@@ -958,6 +962,7 @@ function validateModelsArgs(argv: readonly string[]): string | null {
     "--deciding-effort",
     "--effort",
     "--from",
+    "--keep",
     "--model",
     "--preset",
     "--reset",
@@ -969,6 +974,10 @@ function validateModelsArgs(argv: readonly string[]): string | null {
   const modes = validateConfigMutationModes(argv, "models", mutationFlags) ??
     validateSettingsTargets(argv);
   if (modes) return modes;
+  const withKeep = argv.includes("--keep")
+    ? mutationFlags.find((flag) => flag !== "--keep" && argv.includes(flag))
+    : undefined;
+  if (withKeep) return `--keep cannot be combined with ${withKeep}`;
   if (argv.includes("--preset") && argv.includes("--from")) {
     return "--preset and --from are mutually exclusive";
   }
@@ -1149,6 +1158,7 @@ function modelPolicyHelp(): string {
     "  --writing-up-effort <low|medium|high|xhigh|max>",
     "  --agent <name> [--effort <value>] [--model <raw-id>]  (one or both)",
     "  --agent <name> --effort default | --model default   remove that agent's own setting, so the preset or group applies again",
+    "  --keep    keep the models as they are and record that answer, so setup stops asking",
     "  --reset",
     "",
     heading("KIRO CLI", out),
@@ -2938,10 +2948,13 @@ function setupMapRows(
     providerAnswerIsTheSession(modelHarness(distribution));
   const providerNeeds = providerManaged && !sessionAccess &&
     (providers.length > 0 || records.providers === null);
-  const modelsUnrecorded = !sessionSet && (!policy || modelPolicyIsEmpty(policy));
+  const noPolicy = !policy || modelPolicyIsEmpty(policy);
+  const modelsUnrecorded = !sessionSet && noPolicy && !records.modelsAnswer;
   const modelDetail = sessionSet
     ? sessionModelsDetail(modelHarness(distribution), policy)
-    : !policy || modelPolicyIsEmpty(policy)
+    : noPolicy && records.modelsAnswer
+    ? "agents inherit your session model and effort (your answer)"
+    : noPolicy
     ? "no recorded policy; agents inherit your session model and effort"
     : policy.preset
     ? `preset ${policy.preset}`
@@ -3143,13 +3156,19 @@ function setupLedgerActions(
   actions: readonly ConfigOutstandingAction[],
 ): ConfigOutstandingAction[] {
   const next = [...actions];
+  let records: ConfigDiagnosticRecords | null = null;
+  try {
+    records = readConfigDiagnosticRecords(join(projectDir, harnessDir));
+  } catch {
+    // The shared outstanding-action collector already reports unreadable data.
+  }
   if (
     !presetsChangeNothing(harness) &&
     !next.some((action) => action.section === "models")
   ) {
     const resolved = resolveAidlcSettings(projectDir);
     const policy = modelPolicyForHarness(resolved.models, harness);
-    if (!policy || modelPolicyIsEmpty(policy)) {
+    if ((!policy || modelPolicyIsEmpty(policy)) && !records?.modelsAnswer) {
       next.push({
         section: "models",
         id: "models-policy-unrecorded",
@@ -3161,23 +3180,16 @@ function setupLedgerActions(
     }
   }
   if (next.some((action) => action.section === "providers")) return next;
-  try {
-    const record = readConfigDiagnosticRecords(
-      join(projectDir, harnessDir),
-    ).providers;
-    // Only chase a missing answer where AI-DLC configures the model provider.
-    // Asking a subscription-harness user to "choose and configure a model
-    // provider" is a instruction they cannot complete and never needed.
-    if (record === null && !harnessOwnsModelAccess(harness) && !providerAnswerIsTheSession(harness)) {
-      next.push({
-        section: "providers",
-        id: "provider-record-missing",
-        message: "Choose and configure a model provider, then record the completed setup.",
-        command: configCommandForHarness(harnessDir, "providers"),
-      });
-    }
-  } catch {
-    // The shared outstanding-action collector already reports unreadable data.
+  // Only chase a missing answer where AI-DLC configures the model provider.
+  // Asking a subscription-harness user to "choose and configure a model
+  // provider" is a instruction they cannot complete and never needed.
+  if (records?.providers === null && !harnessOwnsModelAccess(harness) && !providerAnswerIsTheSession(harness)) {
+    next.push({
+      section: "providers",
+      id: "provider-record-missing",
+      message: "Choose and configure a model provider, then record the completed setup.",
+      command: configCommandForHarness(harnessDir, "providers"),
+    });
   }
   return next;
 }
@@ -6857,7 +6869,7 @@ function prepareRefreshSource(
   }
   delete staged.models;
   delete staged.flags;
-  for (const key of ["runtime", "providers", "trust", "project"] as const) {
+  for (const key of ["runtime", "providers", "trust", "project", "modelsAnswer"] as const) {
     if (!diagnosticsOverride || !Object.hasOwn(diagnosticsOverride, key)) continue;
     const value = diagnosticsOverride[key];
     if (value === null) delete staged[key];
@@ -8647,6 +8659,18 @@ function applyFirstRunChoices(
       `--${choices.target}`,
       "--preset",
       choices.preset,
+      "--yes",
+      "--json",
+    ], projectDir, snapshot);
+  } else if (!presetsChangeNothing(modelHarness(choices.candidate.stamp.distribution))) {
+    // "unchanged" is the person's models answer, so a refresh does not ask it again.
+    runConfigChild([
+      "models",
+      "--project-dir",
+      projectDir,
+      "--harness",
+      choices.candidate.stamp.distribution,
+      "--keep",
       "--yes",
       "--json",
     ], projectDir, snapshot);
@@ -11301,6 +11325,32 @@ function prepareModelsSection(
     );
     return null;
   }
+  // Enter at the models question, Kiro CLI's keep, first-run "unchanged" and
+  // --keep are one answer, recorded while no policy is so setup stops asking
+  // it. harness.json is not layered, so a --reset at any layer clears it.
+  // Either changes no agent, so neither asks to apply.
+  const answerRecorded = readConfigDiagnosticRecords(selected.root).modelsAnswer != null;
+  const modelsAnswerOnly = (modelsAnswer: ModelsAnswerRecord | null): PreparedModelsSection | null => {
+    if (modelsAnswer && (answerRecorded || presetsChangeNothing(harness) || !modelPolicyIsEmpty(current))) {
+      emitResult(success("model policy unchanged"), options);
+      return null;
+    }
+    return {
+      argv: modelsPipelineArgv(argv),
+      context: {
+        harness,
+        harnessDir: selected.harnessDir,
+        previous: current,
+        next: current,
+        tiers,
+        summaryLines: [],
+        notes: [],
+        overrides: { modelsAnswer },
+      },
+    };
+  };
+  const kept: ModelsAnswerRecord = { schemaVersion: 1, kept: true };
+  if (argv.includes("--keep")) return modelsAnswerOnly(kept);
 
   const kiroCli = selected.distribution === "kiro";
   // Kiro IDE's row takes a session model for Kiro CLI too, the model only.
@@ -11317,10 +11367,7 @@ function prepareModelsSection(
   if (kiroCli && !hasMutationFlags && configInputIsTty()) {
     const kiro = kiroSessionFor(selected.distribution);
     const pick = kiroModelsMenu(current, kiro);
-    if (pick === "keep" || pick === "unchanged") {
-      emitResult(success("model policy unchanged"), options);
-      return null;
-    }
+    if (pick === "keep" || pick === "unchanged") return modelsAnswerOnly(kept);
     if (pick === "session") {
       if (!kiro) {
         emitResult(
@@ -11381,7 +11428,7 @@ function prepareModelsSection(
   if (!hasMutationFlags && !configInputIsTty()) {
     emitResult(
       usage(
-        "non-interactive model configuration requires a policy flag: --preset, --from, a group effort flag, --agent, --session-model, or --reset; --yes confirms but never chooses a policy",
+        "non-interactive model configuration requires a policy flag: --preset, --from, a group effort flag, --agent, --session-model, --keep, or --reset; --yes confirms but never chooses a policy",
         configCommand("models --help"),
       ),
       options,
@@ -11446,6 +11493,8 @@ function prepareModelsSection(
       }
       if (planned.plan) return { kiroOnly: planned.plan };
     }
+    if (argv.includes("--reset") && answerRecorded) return modelsAnswerOnly(null);
+    if (!hasMutationFlags) return modelsAnswerOnly(kept);
     emitResult(success("model policy unchanged"), options);
     return null;
   }
@@ -11512,6 +11561,7 @@ function prepareModelsSection(
           next: targetNextSettings,
         },
       }),
+      ...(argv.includes("--reset") && answerRecorded ? { overrides: { modelsAnswer: null } } : {}),
     },
   };
 }
@@ -11537,6 +11587,7 @@ function handleSettingsOnlySection(
     "--deciding-effort",
     "--effort",
     "--from",
+    "--keep",
     "--model",
     "--preset",
     "--reset",
@@ -12036,6 +12087,17 @@ function stillRecordedAfter(
     return (change.previous?.flags?.bypasses ?? []).filter((name) => !after.has(name));
   });
   return [...new Set([...cleared, ...clears])].flatMap((name) => stillRecordedLines(projectDir, name, harness));
+}
+
+// The models answer recorded or cleared, with the command that undoes a record.
+function modelsAnswerLines(projectDir: string, context: ModelsMutationContext): string[] {
+  if (!context.overrides || !Object.hasOwn(context.overrides, "modelsAnswer")) return [];
+  const file = `${context.harnessDir}/tools/data/harness.json`;
+  return context.overrides.modelsAnswer
+    ? [`Recorded the models answer in ${file}. To undo: ${configInvocationFor(projectDir)} config models --reset --project --yes${
+      namedHarness(projectDir, context.harness)
+    }${projectTarget(projectDir)}`]
+    : [`Cleared the models answer in ${file}.`];
 }
 
 // What a harness.json answer changed, with the command that puts the earlier
@@ -13459,7 +13521,7 @@ export async function main(
       projectedSettings.flags,
       recordOnly,
       Boolean(selected.projectProjection),
-      diagnosticsContext?.overrides ?? choicesContext?.overrides,
+      diagnosticsContext?.overrides ?? choicesContext?.overrides ?? modelsContext?.overrides,
       argv.includes("--force"),
     );
     prepared.notes.unshift(...sourceNotes);
@@ -14136,6 +14198,7 @@ export async function main(
         ? settingsChangeLines(projectDir, [settingsMutation], descriptor.distribution, choicesContext?.clears)
         : []),
       ...(diagnosticsContext ? recordChangeLines(projectDir, diagnosticsContext) : []),
+      ...(modelsContext ? modelsAnswerLines(projectDir, modelsContext) : []),
     ];
     // A model policy reaches running work only through the agent files it
     // rewrites; a harness whose agents inherit the session says so in a note.
