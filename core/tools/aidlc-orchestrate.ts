@@ -15159,8 +15159,8 @@ function emitTeamUnitMajorRunStage(
     return;
   }
   if (scopeStamp) {
-    // Named, so the step on record says which Unit is done here: on Copilot
-    // the notice is that step, and the plan-approval guard reads it.
+    // Named, so the step on record says which Unit is done here: the notice
+    // is that step on every harness, and the plan-approval guard reads it.
     emit({
       ...noticeDirective(
         `Unit "${scopeStamp.unit}" is complete and approved in this checkout. ` +

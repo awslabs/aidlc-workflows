@@ -2640,9 +2640,9 @@ export function codeGenerationIssuance(
  * the engine's notice that the Unit this checkout claims is complete and
  * approved here: the Unit's stages are the checkout's whole walk, so Code
  * Generation is over there, as it is once a workflow's walk moves past it,
- * though Current Stage stays on it. Only Copilot keeps a notice as the step on
- * record (its Stop hook ends the turn on it); elsewhere the Unit's approved
- * build stays on record. A stamp that cannot be read leaves the step as it was.
+ * though Current Stage stays on it. The engine records that notice as the step
+ * on record on every harness (prepareEmission), the one notice it records. A
+ * stamp that cannot be read leaves the step as it was.
  */
 export function codeGenerationStepOnRecord(
   projectDir: string,
