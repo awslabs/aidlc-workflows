@@ -108,7 +108,8 @@ describe("a repo name is its folder's name as the person gave it", () => {
   test("a space, an accent in either spelling, another script, an apostrophe and other letters are taken", () => {
     for (const name of [
       "my lib", CAFE_NFC, CAFE_NFD, "\u65e5\u672c", "c++ lib", "Portal App 2", "it's lib", "C# lib", "lib!", "a=b",
-      "~home", "@scope", "-lib", ".hidden", "x.", "a..b", "portal-app", "My.App_1",
+      "~home", "@scope", "-lib", ".hidden", "x.", "a..b", "portal-app", "My.App_1", "lib (copy)", "lib [old]",
+      "{repo}", "a;b", "a$b", "a`b", "it's (old)",
     ]) {
       expect(repoNameProblem(name), name).toBeNull();
       expect(isValidRepoName(name), name).toBe(true);
@@ -133,12 +134,6 @@ describe("a repo name is its folder's name as the person gave it", () => {
       ["R&D", 'has "&", which breaks AI-DLC\'s commands on Windows'],
       ["50%", 'has "%", which breaks AI-DLC\'s commands on Windows'],
       ["a^b", 'has "^", which breaks AI-DLC\'s commands on Windows'],
-      ["lib (copy)", 'has "(", which stops AI-DLC\'s commands on Cursor'],
-      ["lib [old]", 'has "[", which stops AI-DLC\'s commands on Cursor'],
-      ["{repo}", 'has "{", which stops AI-DLC\'s commands on Cursor'],
-      ["a;b", 'has ";", which stops AI-DLC\'s commands on Cursor'],
-      ["a$b", 'has "$", which stops AI-DLC\'s commands on Cursor'],
-      ["a`b", 'has "`", which stops AI-DLC\'s commands on Cursor'],
       ["a,b", 'has ",", which AI-DLC puts between repo names'],
       ["-", 'is "-", which AI-DLC\'s records use for no repo'],
       ["--lib", 'starts with "--", which AI-DLC\'s commands read as an option'],
@@ -148,6 +143,8 @@ describe("a repo name is its folder's name as the person gave it", () => {
       ["it's!", "which AI-DLC cannot quote one way for both PowerShell and Git Bash on Windows"],
       ["it\u2019s!", "which AI-DLC cannot quote one way for both PowerShell and Git Bash on Windows"],
       ["it's \u201cnew\u201d", "which AI-DLC cannot quote one way for both PowerShell and Git Bash on Windows"],
+      ["it's $x", "which AI-DLC cannot quote one way for both PowerShell and Git Bash on Windows"],
+      ["it's `x`", "which AI-DLC cannot quote one way for both PowerShell and Git Bash on Windows"],
     ];
     for (const [name, reason] of reasons) {
       expect(repoNameProblem(name) ?? "", JSON.stringify(name)).toContain(reason);
@@ -163,7 +160,7 @@ describe("a repo name is its folder's name as the person gave it", () => {
 });
 
 describe("work in a workspace whose repo folder has a space or another character", () => {
-  for (const name of ["my lib", CAFE_NFC, "it's lib", "C# lib", "c++ lib"]) {
+  for (const name of ["my lib", CAFE_NFC, "it's lib", "C# lib", "c++ lib", "lib (copy)"]) {
     test(`${JSON.stringify(name)} beside api: the work is created with both, and the folder keeps its name`, () => {
       const proj = workspace(name, "api");
       expect(discoverSiblingRepos(proj)).toEqual(["api", name].sort());

@@ -687,7 +687,7 @@ export const ROUTES: readonly Route[] = [
     group: "audit",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["append", "append-batch", "append-raw", "history"],
+    verbs: ["append", "append-batch", "append-raw", "history", "turns"],
     tool: TOOLS.audit,
     ...HIDDEN_ENGINE,
   },

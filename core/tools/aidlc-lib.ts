@@ -2,6 +2,7 @@ import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { lockFolderHeldGiveUpMs, lockFolderHeldLine } from "./aidlc-lock-line.ts";
 import { reviewManifestForms } from "./aidlc-review-manifest.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
+import { KIRO_SESSION_DIR_RE, kiroChatRecordPaths } from "./aidlc-kiro-chat-record.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
@@ -54,6 +55,7 @@ import {
   isSwitchableGuardFence,
   guardFenceConfigKey,
   guardFenceFromConfigKey,
+  delegatedAgentOf,
 } from "./aidlc-guard-fences.ts";
 export {
   GUARD_FENCES,
@@ -67,6 +69,7 @@ export {
   CHECK_GLOSS,
   GUARD_POLICY_GLOSS,
   SCOPE_GLOSS,
+  delegatedAgentOf,
 } from "./aidlc-guard-fences.ts";
 import {
   artifactFilename,
@@ -1757,7 +1760,7 @@ export function splitKiroCommandArgs(raw: string): string[] {
 // whitespace lies between one token's end and the next one's start.
 interface CommandArgSpan { text: string; start: number; end: number }
 
-function commandArgSpans(raw: string): CommandArgSpan[] {
+export function commandArgSpans(raw: string): CommandArgSpan[] {
   const tokens: CommandArgSpan[] = [];
   let current = "";
   let quote: "'" | '"' | null = null;
@@ -2403,21 +2406,6 @@ function newestUserEntry(
     if (entryText(content).trim() === want) return record;
   }
   return null;
-}
-
-// Kiro's own chat record (Kiro IDE and Kiro CLI v3 alike):
-// ~/.kiro/sessions/<workspace id>/<session id>/messages.jsonl, found by the
-// session id alone, so the workspace hash (which follows how the folder path is
-// spelled on Windows) is never computed.
-const KIRO_SESSION_DIR_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
-function kiroChatRecordPaths(sessionId: string | undefined): string[] {
-  if (!sessionId || !KIRO_SESSION_DIR_RE.test(sessionId)) return [];
-  const root = join(homedir(), ".kiro", "sessions");
-  try {
-    return readdirSync(root).map((workspace) => join(root, workspace, sessionId, "messages.jsonl")).filter(existsSync);
-  } catch {
-    return [];
-  }
 }
 
 // Each row is `{id, timestamp, payload}`, the entry in `payload`. A typed
@@ -16803,7 +16791,10 @@ function readAuditShardTexts(
 }
 
 // The block sequence every shard parser walks; positions index into it.
-function auditShardBlocks(content: string): string[] {
+// Exported so a reader outside this file (the Unit candidate walk and the
+// publish-side projection in aidlc-unit.ts) splits a shard the same way rather
+// than carrying its own copy of the grammar.
+export function auditShardBlocks(content: string): string[] {
   return content.replace(/\r\n/g, "\n").split(/\n---\n/);
 }
 
@@ -40376,7 +40367,9 @@ export function scopeGridOnProject(def: { stages: Record<string, string> }, stat
 
 // The stage a scope change to `scope` starts on FINISHED work: the first stage
 // after the cursor that the scope runs and that is not already done or skipped
-// (with the greenfield reverse-engineering adjustment the plan grid applies).
+// (with the greenfield reverse-engineering adjustment the plan grid applies),
+// passing each stage in `skipped`: skips the person typed beside the switch,
+// which it takes off the plan before it starts a stage (skipsBeforeReopen).
 // Null for running work, and when nothing the scope runs follows the cursor.
 // Shared by the scope change, which starts that stage as it rewrites the plan,
 // and by `next`, which then carries on into it instead of ending the turn, so
@@ -40384,6 +40377,7 @@ export function scopeGridOnProject(def: { stages: Record<string, string> }, stat
 export function stageReopenedByScopeChange(
   stateContent: string,
   scope: string,
+  skipped: readonly string[] = [],
 ): StageEntry | null {
   if ((getField(stateContent, "Status") ?? "").trim() !== "Completed") return null;
   const cursor = (getField(stateContent, "Current Stage") ?? "").trim();
@@ -40400,7 +40394,7 @@ export function stageReopenedByScopeChange(
     const box = boxes.find((c) => c.slug === stage.slug)?.state;
     if (box === "completed" || box === "skipped") continue;
     if (stage.slug === "reverse-engineering" && greenfield) continue;
-    if (mapping.stages[stage.slug] === "EXECUTE") return stage;
+    if (mapping.stages[stage.slug] === "EXECUTE" && !skipped.includes(stage.slug)) return stage;
   }
   return null;
 }
@@ -43139,7 +43133,7 @@ export function formatFence(resolution: FenceResolution): string {
 //   - the marker's own kind and delivery: what the engine last put in force.
 //   - a dispatch stamp on the in-flight subagent ledger, so an agent inherits
 //     the authority that was in force when it was dispatched.
-//   - agent_type / subagent_type on the hook payload (a dispatched agent) and
+//   - the delegated agent a hook payload names (delegatedAgentOf) and
 //     AIDLC_UNATTENDED (nobody is watching).
 // ---------------------------------------------------------------------------
 
@@ -43215,22 +43209,6 @@ function stampedDispatchAuthority(
   }
 }
 
-function authorityActorFrom(hookInput: ClaudeCodeHookInput | null | undefined): {
-  actor: AuthorityActor;
-  unattended: boolean;
-} {
-  const unattended = process.env.AIDLC_UNATTENDED === "1";
-  const agentType = (() => {
-    if (!hookInput) return "";
-    const direct = typeof hookInput.agent_type === "string" ? hookInput.agent_type.trim() : "";
-    if (direct.length > 0) return direct;
-    const nested = hookInput.tool_input?.subagent_type;
-    return typeof nested === "string" ? nested.trim() : "";
-  })();
-  if (agentType.length > 0) return { actor: "subagent", unattended };
-  return { actor: unattended ? "unattended" : "main", unattended };
-}
-
 /**
  * The authority covering the action a guard is about to judge. Pure reads: the
  * turn markers, the active-directive marker, and the in-flight dispatch ledger.
@@ -43245,7 +43223,8 @@ export function authorityFor(
     sessionId?: unknown;
   } = {},
 ): Authority {
-  const { actor, unattended } = authorityActorFrom(options.hookInput);
+  const unattended = process.env.AIDLC_UNATTENDED === "1";
+  const actor: AuthorityActor = delegatedAgentOf(options.hookInput) ? "subagent" : unattended ? "unattended" : "main";
   const state = options.stateContent ?? authorityStateText(projectDir);
   let marker: ActiveDirectiveMarker | null = null;
   try {
@@ -43711,8 +43690,8 @@ export type GuardRefusalEvent =
   | "STATE_TRANSITION_BLOCKED"
   | "STAGE_RULES_BLOCKED"
   | "REVIEW_FREEZE_BLOCKED"
-  | "REVIEWER_SCOPE_BLOCKED";
-
+  | "REVIEWER_SCOPE_BLOCKED"
+  | "SYSTEM_INSTALL_BLOCKED";
 
 export function recordGuardBlockedRow(
   projectDir: string,

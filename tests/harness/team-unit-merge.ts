@@ -138,6 +138,74 @@ export function runMergeTool(
   };
 }
 
+// Publish a candidate the way a forger would: a claim commit over whatever
+// the worktree holds, pushed straight to the claim ref with the same
+// compare-and-swap `aidlc unit publish` uses. Publish itself projects the
+// claim-bound audit shard onto the transportable evidence before it builds the
+// candidate tree, so it is not the path that puts a withheld row in front of
+// pin - this is. Pin's own refusals are what this exercises.
+export function pushUnprojectedCandidate(checkout: string, unit: string): void {
+  const stamp = JSON.parse(
+    readFileSync(join(checkout, "aidlc", ".aidlc-unit-scope.json"), "utf-8"),
+  ) as { claim_ref: string };
+  const claimOid = git(checkout, ["ls-remote", "origin", stamp.claim_ref])
+    .split(/\s+/)[0] ?? "";
+  expect(claimOid, `no claim tip at ${stamp.claim_ref} for Unit ${unit}`)
+    .toMatch(/^[0-9a-f]{40}$/);
+  const payload = JSON.parse(
+    git(checkout, ["show", `${claimOid}:.aidlc-unit-claim.json`, "--"]),
+  );
+  const headOid = git(checkout, ["rev-parse", "HEAD"]);
+  const headTree = git(checkout, ["rev-parse", "HEAD^{tree}"]);
+  // Only the candidate identity moves; the claim keeps the base and
+  // integration ref publish already recorded, so pin reads a live candidate.
+  const forged = `${JSON.stringify({
+    ...payload,
+    predecessor_oid: claimOid,
+    candidate_tree_oid: headTree,
+    candidate_head_oid: headOid,
+  }, null, 2)}\n`;
+  const scratch = mkdtempSync(join(tmpdir(), "aidlc-inc3-forge-"));
+  tempDirs.push(scratch);
+  const index = join(scratch, "index");
+  const plumb = (args: string[], input?: string): string => {
+    const result = spawnSync("git", args, {
+      cwd: checkout,
+      encoding: "utf-8",
+      input,
+      env: { ...process.env, GIT_INDEX_FILE: index },
+    });
+    if ((result.status ?? 1) !== 0) {
+      throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+    }
+    return (result.stdout ?? "").trim();
+  };
+  plumb(["read-tree", headTree]);
+  const blob = plumb(["hash-object", "-w", "--stdin"], forged);
+  plumb([
+    "update-index",
+    "--add",
+    "--cacheinfo",
+    `100644,${blob},.aidlc-unit-claim.json`,
+  ]);
+  const commit = plumb([
+    "commit-tree",
+    plumb(["write-tree"]),
+    "-p",
+    claimOid,
+    "-p",
+    headOid,
+    "-m",
+    `forged publish: ${unit}`,
+  ]);
+  git(checkout, [
+    "push",
+    "origin",
+    `--force-with-lease=${stamp.claim_ref}:${claimOid}`,
+    `${commit}:${stamp.claim_ref}`,
+  ]);
+}
+
 export function stateBody(): string {
   return `# AI-DLC State Tracking
 
@@ -238,7 +306,14 @@ export function makeSeed(
     "aidlc/.aidlc-clone-id\naidlc/.aidlc-unit-scope.json\n" +
       "aidlc/.aidlc-unit-parked\naidlc/.aidlc-claim-generations.json\n" +
       "aidlc/.aidlc-unit-participant\naidlc/.aidlc-claim-registry.json\n" +
-      "aidlc/.aidlc-unit-releases/\naidlc/.aidlc-unit-merges/\n",
+      "aidlc/.aidlc-unit-releases/\naidlc/.aidlc-unit-merges/\n" +
+      // Matches the real shipped .gitignore: active-memory/ is the engine's
+      // own local copy of the active space's method, and hooks-health/ (at
+      // any depth under .aidlc-engine/) carries per-clone hook heartbeats -
+      // both real hooks (e.g. session-start) can create on first run in a
+      // checkout this fixture never ran them in before. .aidlc-engine/
+      // itself stays tracked: reviewAuditExtras writes review records there.
+      "aidlc/active-memory/\n**/.aidlc-engine/hooks-health/\n",
   );
   git(seed, ["init", "-b", "main"]);
   git(seed, ["config", "user.name", "main"]);
@@ -438,6 +513,10 @@ export function prepareCandidate(
     /** The recorded Plan Approval answer line; the engine's recorder writes the
      *  chosen option with its letter by default. */
     answerLine?: string;
+    /** Runs right after claim, before any stage work or audit receipt is
+     *  written - lets a case mint a real event (e.g. a session-start hook)
+     *  into the fresh checkout's shard before anything else exists there. */
+    afterClaim?: (checkout: string) => void;
   } = {},
 ): {
   checkout: string;
@@ -449,6 +528,7 @@ export function prepareCandidate(
   if (options.crlf) git(checkout, ["config", "core.autocrlf", "false"]);
   const claim = runMergeTool(UNIT, ["claim", unit, "--team", label], checkout);
   expect(claim.status, claim.out).toBe(0);
+  options.afterClaim?.(checkout);
   const claimPayload = JSON.parse(claim.stdout);
   const generation = claimPayload.generation as number;
   const intentUuid = claimPayload.intent_uuid as string;
@@ -634,7 +714,12 @@ export function prepareCandidate(
     );
   }
   const auditShard = auditShardName(checkout);
-  writeFileSync(join(seededAuditDir(checkout), auditShard), audit);
+  const shardPath = join(seededAuditDir(checkout), auditShard);
+  // afterClaim may have already minted a real event into this shard (e.g. a
+  // session-start hook): keep it rather than clobber it, so a case can put a
+  // real event ahead of these hand-written receipts.
+  const priorShard = existsSync(shardPath) ? readFileSync(shardPath, "utf-8") : "";
+  writeFileSync(shardPath, priorShard + audit);
   git(checkout, ["add", "-A"]);
   git(checkout, ["commit", "-m", `complete ${unit}`]);
   const published = runMergeTool(UNIT, ["publish", unit], checkout);

@@ -147,7 +147,7 @@ describe("t-skip-undo-window: a skip says how long its undo holds", () => {
     expect(getField(state(proj), "Status")).toBe("Completed");
     const late = await runNamed(proj, undo);
     expect(late.status).not.toBe(0);
-    expect(`${late.stdout}${late.stderr}`).toContain("Completed");
+    expect(`${late.stdout}${late.stderr}`).toContain("this work is finished");
   });
 
   // At the open gate of the stage before it, the same reply usually approves that gate too ("approve, and skip

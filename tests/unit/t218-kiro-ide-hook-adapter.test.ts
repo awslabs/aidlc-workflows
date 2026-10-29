@@ -38,7 +38,7 @@ import {
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { canonicalWriteTool, isKiroShellTool, KIRO_HOOK_GROUPS } from "../../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 import {
   readAllAuditShards,
@@ -8343,6 +8343,140 @@ describe("t218 the person-message card names the first engine step on an /aidlc 
       expect(runner.stdout).not.toContain("do only what it prints");
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// Kiro IDE opens every new chat on its Default agent, where Kiro asks the
+// person to approve each AI-DLC command. Kiro's own record of the chat
+// (~/.kiro/sessions/<workspace id>/<chat>/session.json, written when the chat
+// opens) names the agent; Kiro keeps an Always allow in
+// ~/.kiro/workspace-roots/<workspace id>/permissions.yaml (This workspace) or
+// ~/.kiro/settings/permissions.yaml or .json (All workspaces), as Kiro IDE
+// 1.4.51 wrote them in a live run.
+describe("t218 a chat on Kiro's Default agent hears once how to stop the approval cards", () => {
+  const WORKSPACE = "315c17f7ffe49446";
+  const said = (name: string) =>
+    `Tell the person this once, in their language, then go on with their request: "This chat is on Kiro's ${name} ` +
+    `agent, so Kiro asks you to approve each AI-DLC command. To stop those approval cards for AI-DLC's own commands, ` +
+    `pick aidlc in the agent menu under the chat box (it says ${name} now)."`;
+  const kiroChat = (home: string, session: string, record: string, workspace = WORKSPACE) => {
+    const dir = join(home, ".kiro", "sessions", workspace, session);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "session.json"), record, "utf-8");
+  };
+  const onAgent = (agentMode: string) =>
+    `${JSON.stringify({ schemaVersion: "1.0.0", id: "sess", agentMode, workspacePaths: ["c:\\work\\notes"] }, null, 2)}\n`;
+  const shellRule = (pattern: string, extra = "") =>
+    `rules:\n  - capability: shell\n    effect: allow\n    match:\n      - ${pattern}\n${extra}`;
+  const prompt = (dir: string, home: string, session: string, line: string) =>
+    runIdeStdin(dir, "person-message", JSON.stringify({
+      session_id: session,
+      hook_event_name: "UserPromptSubmit",
+      cwd: dir,
+      prompt: line,
+    }), { HOME: home, USERPROFILE: home });
+  const timesSaid = (stdout: string) => stdout.split("agent, so Kiro asks you to approve each AI-DLC command").length - 1;
+
+  test("an /aidlc request on Default or Default v2 says it once per chat; any other agent, no record, a utility or plain words say nothing", () => {
+    const dir = scratchProject(false);
+    const home = join(dir, "kiro-home");
+    try {
+      kiroChat(home, "sess_default", onAgent("vibe"));
+      const first = prompt(dir, home, "sess_default", "/aidlc fix the docs: they say old backups are deleted");
+      expect(first.code, first.stderr).toBe(0);
+      expect(first.stdout).toContain(said("Default"));
+      expect(timesSaid(first.stdout)).toBe(1);
+      const second = prompt(dir, home, "sess_default", "/aidlc and the readme too");
+      expect(second.code, second.stderr).toBe(0);
+      expect(timesSaid(second.stdout)).toBe(0);
+
+      kiroChat(home, "sess_default_v2", onAgent("default-v2"));
+      expect(prompt(dir, home, "sess_default_v2", "/aidlc fix the docs").stdout).toContain(said("Default v2"));
+
+      // Plain words and a utility the hook runs itself leave the once for the request.
+      kiroChat(home, "sess_default_later", onAgent("vibe"));
+      expect(timesSaid(prompt(dir, home, "sess_default_later", "1").stdout)).toBe(0);
+      const status = prompt(dir, home, "sess_default_later", "/aidlc --status");
+      expect(status.code, status.stderr).toBe(0);
+      expect(status.stdout).toContain("has already run");
+      expect(timesSaid(status.stdout)).toBe(0);
+      expect(prompt(dir, home, "sess_default_later", "/aidlc fix the docs").stdout).toContain(said("Default"));
+
+      kiroChat(home, "sess_aidlc", onAgent("aidlc"));
+      kiroChat(home, "sess_unreadable", "{\n");
+      for (const session of ["sess_aidlc", "sess_unreadable", "sess_no_record"]) {
+        const r = prompt(dir, home, session, "/aidlc fix the docs");
+        expect(r.code, r.stderr).toBe(0);
+        expect(timesSaid(r.stdout), session).toBe(0);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // dist/kiro-ide runs AI-DLC as `bun .kiro/tools/aidlc.ts`, so Kiro's card
+  // offers `bun *` or the exact command for it (a native install: `aidlc *`).
+  test("the person who chose Always allow for AI-DLC's commands hears nothing; any other rule keeps the line", () => {
+    const dir = scratchProject(false);
+    const home = join(dir, "kiro-home");
+    const workspaceRules = join(home, ".kiro", "workspace-roots", WORKSPACE);
+    const allRules = join(home, ".kiro", "settings");
+    mkdirSync(workspaceRules, { recursive: true });
+    mkdirSync(allRules, { recursive: true });
+    let chats = 0;
+    const heard = (file: string, text: string): number => {
+      rmSync(join(workspaceRules, "permissions.yaml"), { force: true });
+      rmSync(join(allRules, "permissions.json"), { force: true });
+      writeFileSync(file, text, "utf-8");
+      const session = `sess_rules_${++chats}`;
+      kiroChat(home, session, onAgent("vibe"));
+      const r = prompt(dir, home, session, "/aidlc fix the docs");
+      expect(r.code, r.stderr).toBe(0);
+      return timesSaid(r.stdout);
+    };
+    try {
+      // Kiro's own defaults: Pattern `bun *`, Apply to: This workspace.
+      expect(heard(join(workspaceRules, "permissions.yaml"), shellRule("bun *"))).toBe(0);
+      expect(heard(join(workspaceRules, "permissions.yaml"), shellRule("bun .kiro/tools/aidlc.ts *"))).toBe(0);
+      expect(heard(join(allRules, "permissions.json"), `${JSON.stringify({ rules: [{ capability: "shell", effect: "allow", match: ["*"] }] }, null, 2)}\n`)).toBe(0);
+      // Kiro still asks: one exact command, a rule with more to it, a deny, another
+      // capability, another workspace's rules, a file Kiro cannot read.
+      expect(heard(join(workspaceRules, "permissions.yaml"), shellRule("bun .kiro/tools/aidlc.ts engine orchestrate next 'fix the docs'"))).toBe(1);
+      expect(heard(join(workspaceRules, "permissions.yaml"), shellRule("bun *", "    exclude:\n      - bun .kiro/tools/aidlc.ts *\n"))).toBe(1);
+      expect(heard(join(workspaceRules, "permissions.yaml"), shellRule("bun *").replace("effect: allow", "effect: deny"))).toBe(1);
+      expect(heard(join(workspaceRules, "permissions.yaml"), "rules:\n  - capability: skill\n    effect: allow\n    match:\n      - aidlc\n")).toBe(1);
+      mkdirSync(join(home, ".kiro", "workspace-roots", "0123456789abcdef"), { recursive: true });
+      expect(heard(join(home, ".kiro", "workspace-roots", "0123456789abcdef", "permissions.yaml"), shellRule("bun *"))).toBe(1);
+      expect(heard(join(workspaceRules, "permissions.yaml"), "rules:\n  - capability: shell\n    effect: allow\n    match: [bun *\n")).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A native install runs AI-DLC as `aidlc`, and Kiro's card writes `aidlc *`
+  // by default (the live run's own rule). Bun keeps the home it started with,
+  // so the reader runs in a process of its own.
+  test("a native install's Always allow, `aidlc *`, is read the same way", () => {
+    const home = mkdtempSync(join(tmpdir(), "t218-kiro-home-"));
+    const reader = pathToFileURL(join(KIRO_IDE_TREE, "tools", "aidlc-kiro-chat-record.ts")).href;
+    const agentName = (): string => spawnSync("bun", ["-e",
+      `import { kiroDefaultAgentName } from ${JSON.stringify(reader)};\n` +
+      'process.stdout.write(kiroDefaultAgentName("sess_native", "aidlc engine orchestrate next") || "-");',
+    ], {
+      encoding: "utf-8",
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    }).stdout;
+    try {
+      kiroChat(home, "sess_native", onAgent("vibe"));
+      expect(agentName()).toBe("Default");
+      const rules = join(home, ".kiro", "workspace-roots", WORKSPACE);
+      mkdirSync(rules, { recursive: true });
+      writeFileSync(join(rules, "permissions.yaml"), shellRule("aidlc *"), "utf-8");
+      expect(agentName()).toBe("-");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
   });
 });

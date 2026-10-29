@@ -624,6 +624,8 @@ function validateIntentSettingsArgs(
 ): void {
   const allowed = new Set<string>([...CONFIG_KEYS, ...Object.keys(RETIRED_CONFIG_KEYS), "intent", "space", "project-dir"]);
   if (command === "scope-change") allowed.add("scope");
+  // The skips typed beside a switch that land before it reopens finished work.
+  if (command === "scope-change") allowed.add("skip");
   // The message the person asked in (--message), which the setter proves before
   // it records the setting as theirs; the words form from before it is taken as
   // the agent's own text.
@@ -2027,7 +2029,7 @@ To get started:
   // or the engine's own) stands where the cursor stands, whatever the checkbox
   // says, so it is read first; a park the work has since moved past is stale
   // and holds nothing, the same rule the router uses (parkedWhereItStands in
-  // aidlc-orchestrate.ts). The line carries the way back, in the harness's own
+  // aidlc-testing-posture.ts). The line carries the way back, in the harness's own
   // entry word. A live run read "Status: Running" over paused work and the
   // agent had to correct it.
   // Read for the work this status is for, the one named or the selected one.
@@ -3112,12 +3114,13 @@ function projectedFileRepair(
   return `restore ${relativePath} from git, or re-copy \`dist/${distribution}/${relativePath}\` from the aidlc-workflows checkout`;
 }
 
-// Issue #1146: Kiro IDE compiles each ignore file into its own matcher. Checking
-// the project with git would let a repo negation mask a global deny; doctor's
-// subprocess reads are not IDE fs_read calls, so evaluate each source alone.
+// Issue #1146: Kiro (the IDE and Kiro CLI v3) compiles each ignore file into its
+// own matcher. Checking the project with git would let a repo negation mask a
+// global deny; doctor's subprocess reads are not Kiro fs_read calls, so evaluate
+// each source alone.
 // Doctor output reaches the model verbatim, so rows name each source by a fixed
 // identifier and never echo a path, a pattern, or git's own diagnostics.
-const KIRO_IGNORE_PREFIX = "Kiro IDE ignore sources:";
+const KIRO_IGNORE_PREFIX = "Kiro ignore sources:";
 const GLOBAL_EXCLUDES_ID = "git's global excludes file";
 
 type IgnoreSource = { id: string; file: string; workspace: boolean };
@@ -3209,8 +3212,9 @@ function gitRepositoryOnDisk(
   return { onDisk: false, linkedGitDir: false };
 }
 
-// The ignore files Kiro IDE honours, each on its own. Kiro applies git's global
-// excludes only in a git repository; git's own yes to that wins. Git exits 128
+// The ignore files Kiro honours, each on its own (Kiro CLI v3 skips .gitignore,
+// which only Kiro IDE's kiroAgent.agentIgnoreFiles turns on). Kiro applies git's
+// global excludes only in a git repository; git's own yes to that wins. Git exits 128
 // both outside a repository and when it refuses one (dubious ownership, for
 // example), so a failed probe means "not a repository" only when nothing is on
 // disk either; otherwise the global file cannot be ruled out and is skipped.
@@ -3330,15 +3334,15 @@ function defaultGlobalExcludesId(env: NodeJS.ProcessEnv): string {
   return env.XDG_CONFIG_HOME ? "$XDG_CONFIG_HOME/git/ignore" : "~/.config/git/ignore";
 }
 
-// The files Kiro IDE's agent reads through fs_read, from the roster the engine
+// The files the Kiro conductor reads through fs_read, from the roster the engine
 // hands it: for every stage harness.json selects in the compiled graph, the stage
 // file and the persona and knowledge the conductor holds inline (the shared
 // inline-context roster at Standard and Minimal depth, each under the directive's
 // byte cap), plus stage-protocol.md and its stage-protocol-<name>.md modules
 // (contributor-only protocol files such as stage-definition.md are not loaded)
 // and the files the skills name beside SKILL.md. SKILL.md files, the
-// IDE conductor agent (agents/aidlc-aidlc.md), and aidlc-common/conductor.md are loaded
-// by the IDE or the engine, not through fs_read. Without a readable graph, every
+// conductor agent (agents/aidlc-aidlc.md), and aidlc-common/conductor.md are loaded
+// by Kiro itself or the engine, not through fs_read. Without a readable graph, every
 // stage file, persona, and knowledge file stands in for the stage roster; without
 // an installed tree, one read of each kind does.
 function kiroIdeFrameworkReads(projectDir: string, harness: string): string[] {
@@ -3494,13 +3498,18 @@ function hiddenReadRows(
       const what = all ? `${harness}/` : `${hidden.length} of ${probes.length} framework files (${named.join(", ")})`;
       const denies = all ? "every stage, agent, and protocol read" : "those framework reads";
       const locate = id === "core.excludesFile" ? ` (${lookup} prints its path)` : "";
+      // Kiro CLI v3 applies .kiroignore with no setting and never .gitignore;
+      // Kiro IDE applies either only when kiroAgent.agentIgnoreFiles names it.
+      const applies = id === ".kiroignore"
+        ? "Kiro CLI v3 applies .kiroignore; Kiro IDE applies it when kiroAgent.agentIgnoreFiles names it"
+        : "applies when Kiro IDE's kiroAgent.agentIgnoreFiles names .gitignore, as the default does; Kiro CLI v3 does not apply it";
       rows.push({
         pass: false,
         severity: workspace ? "warn" : undefined,
         label: workspace
-          ? `${KIRO_IGNORE_PREFIX} ${at} hides ${what} (advisory - applies when Kiro IDE's kiroAgent.agentIgnoreFiles names ${id}; the default includes .gitignore)`
-          : `${KIRO_IGNORE_PREFIX} ${at} hides ${what} - the IDE's fs_read guard denies ${denies}`,
-        fix: `remove or narrow the ${lines.size > 1 ? "rules" : "rule"} at ${at}${locate}; Kiro IDE evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then run doctor again`,
+          ? `${KIRO_IGNORE_PREFIX} ${at} hides ${what} (advisory - ${applies})`
+          : `${KIRO_IGNORE_PREFIX} ${at} hides ${what} - Kiro's fs_read guard (Kiro IDE and Kiro CLI v3) denies ${denies}`,
+        fix: `remove or narrow the ${lines.size > 1 ? "rules" : "rule"} at ${at}${locate}; Kiro evaluates each ignore file on its own, so a "!${harness}/" in another file and a permissions.yaml fs_read allow do not override it (Kiro applies deny-overrides across scopes); keep per-repo ignores in that repo's .git/info/exclude, which git honours and Kiro does not list as an ignore source; then run doctor again`,
       });
     }
   } catch {
@@ -4641,7 +4650,7 @@ export async function collectDoctorReport(
 
   // 4. Harness wiring config present. Claude Code: settings.json (hooks +
   // permissions live there). Kiro CLI: agents/aidlc.json plus
-  // settings/cli.json; Kiro IDE: agents/aidlc-aidlc.md. Codex CLI: config.toml +
+  // settings/cli.json; Kiro IDE and Kiro CLI v3: agents/aidlc-aidlc.md. Codex CLI: config.toml +
   // hooks.json (the hook wiring) + rules/default.rules (permissions).
   if (harness === ".kiro") {
     const jsonAgentPath = join(projectDir, harness, "agents", "aidlc.json");
@@ -4650,7 +4659,7 @@ export async function collectDoctorReport(
     results.push({
       pass: hasJsonAgent || existsSync(markdownAgentPath) || existsSync(join(projectDir, harness, "agents", "aidlc.md")),
       label: "agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)",
-      fix: `${projectedFileRepair("kiro", ".kiro/agents/aidlc.json")} (Kiro CLI) or ${projectedFileRepair("kiro-ide", ".kiro/agents/aidlc-aidlc.md")} (Kiro IDE)`,
+      fix: `${projectedFileRepair("kiro", ".kiro/agents/aidlc.json")} (Kiro CLI) or ${projectedFileRepair("kiro-ide", ".kiro/agents/aidlc-aidlc.md")} (Kiro IDE and Kiro CLI v3)`,
     });
     results.push(...kiroDisabledHookChecks(projectDir, harness));
     if (hasJsonAgent) {
@@ -10551,7 +10560,9 @@ function onboardDocumentInput(
       ? ` I couldn't read any text from it: ${documentInputNoTextReason(shown)}.`
       : "") +
     (truncated
-      ? ` Its text is cut off at ${shown.extraction.chars ?? kb.EXTRACT_OUTPUT_CHAR_CAP} characters.`
+      ? shown.extraction.pages_kept !== undefined
+        ? ` Only its first ${shown.extraction.pages_kept} pages were read.`
+        : ` Its text is cut off at ${shown.extraction.chars ?? kb.EXTRACT_OUTPUT_CHAR_CAP} characters.`
       : "");
 
   process.stdout.write(
@@ -12095,6 +12106,18 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     }
     const oldScope = getField(contentBefore, "Scope");
     if (!oldScope) die("Cannot read current Scope from state file.");
+    // The person's skips that land before the reopen picks a stage, the only
+    // ones `next` names here; recompose takes every other skip after the switch.
+    const typedSkips = splitSlugList(flags.skip);
+    const skippedFirst = oldScope === newScope ? [] : skipsBeforeReopen(contentBefore, newScope, typedSkips);
+    const strays = typedSkips.filter((slug) => !skippedFirst.includes(slug));
+    if (strays.length > 0) {
+      die(
+        `scope-change --skip takes only the stages the switch would reopen finished work at, and ${strays.join(", ")} ` +
+          `${strays.length === 1 ? "is" : "are"} not: run it without ${strays.length === 1 ? "that one" : "them"}, then ` +
+          `\`${aidlcDispatcherInvocation("recompose")} --skip ${strays.join(",")}\`.`,
+      );
+    }
     const requested = intentSettingsFromFlags(flags);
     let keptPolicyLine: string | null = null;
     if (oldScope !== newScope) {
@@ -12148,16 +12171,18 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     const auditEntries = update.audit;
     let outputLines = update.lines;
     // Finished work the new scope extends past its last stage is reopened at
-    // the first stage it adds (#2261); `next` reads the same predicate.
+    // the first stage it adds that the person did not skip with the switch
+    // (#2261); `next` reads the same predicate.
     let reopened: StageEntry | null = null;
     if (oldScope === newScope) {
       if (outputLines.length === 0) outputLines = [`Scope is already ${newScope}`];
     } else {
       const graph = loadStageGraph();
       const projectType = getField(content, "Project Type") || "Greenfield";
-      reopened = stageReopenedByScopeChange(contentBefore, newScope);
+      reopened = stageReopenedByScopeChange(contentBefore, newScope, skippedFirst);
 
       const adjustedMapping = scopeGridOnProject(newScopeDef, content);
+      for (const slug of skippedFirst) adjustedMapping[slug] = "SKIP";
 
       const executeStages: string[] = [];
       const skipStages: string[] = [];
@@ -12319,6 +12344,17 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
             "Skip Kind": "scope-change",
           },
         })),
+        // The person's skips this switch carried out, as recompose records one.
+        ...(skippedFirst.length === 0 ? [] : [{
+          eventType: "RECOMPOSED",
+          fields: {
+            Scope: newScope,
+            "Stages skipped": skippedFirst.join(", "),
+            "Stages added": "none",
+            "Stages in Scope": String(executeStages.length),
+            Reason: PERSON_ASKED_SKIP_REASON,
+          },
+        }]),
       );
       if (reopened) {
         auditEntries.push({
@@ -12483,6 +12519,62 @@ function stagesSkippedInThisWork(projectDir: string, intent?: string, space?: st
   return skipped;
 }
 
+// The plans that reopen this finished work, each with the stages it runs from
+// the one the scope change starts (stageReopenedByScopeChange decides whether
+// and where). Empty while the work runs. Recompose's refusal over finished work
+// and `next compose` there both name these, so the person hears the same way
+// on from either (#3207).
+export function plansReopeningFinishedWork(stateContent: string): Array<{ scope: string; stages: StageEntry[] }> {
+  const own = (getField(stateContent, "Scope") ?? "").trim();
+  const boxes = new Map(parseCheckboxes(stateContent).map((c) => [c.slug, c.state]));
+  const graph = loadStageGraph();
+  const mapping = loadScopeMapping();
+  return [...validScopes()].sort().flatMap((scope) => {
+    const first = scope === own ? null : stageReopenedByScopeChange(stateContent, scope);
+    if (first === null) return [];
+    const grid = scopeGridOnProject(mapping[scope], stateContent);
+    const stages = graph.slice(graph.findIndex((s) => s.slug === first.slug)).filter((s) =>
+      grid[s.slug] === "EXECUTE" && boxes.get(s.slug) !== "completed" && boxes.get(s.slug) !== "skipped");
+    return [{ scope, stages }];
+  });
+}
+
+// The skips typed beside a switch to `scope` on finished work that land before
+// its reopen picks a stage: each stage it would start, in turn, while the person
+// skipped it. Once a stage has started recompose can no longer skip it, so the
+// scope change takes these off the plan itself and starts the first stage after
+// them; `next` hands it these and every other typed skip to recompose.
+export function skipsBeforeReopen(stateContent: string, scope: string, skipped: readonly string[]): string[] {
+  const passed: string[] = [];
+  for (let at = stageReopenedByScopeChange(stateContent, scope); at !== null && skipped.includes(at.slug);
+    at = stageReopenedByScopeChange(stateContent, scope, passed)) {
+    passed.push(at.slug);
+  }
+  return passed;
+}
+
+// Recompose over finished work: its own plan takes no more stages, and a plan
+// that runs the ones asked for after the last stage reopens it there.
+function finishedWorkRecomposeRefusal(content: string, added: string[]): string {
+  const graph = loadStageGraph();
+  const name = (slug: string): string => graph.find((s) => s.slug === slug)?.name || slug;
+  const listed = (slugs: string[]): string => {
+    const names = slugs.map(name);
+    return names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  };
+  const last = name((getField(content, "Current Stage") ?? "").trim());
+  if (added.length === 0) return "Cannot recompose: this work is finished, so nothing on its plan is left to skip.";
+  const plans = plansReopeningFinishedWork(content)
+    .filter(({ stages }) => added.every((slug) => stages.some((s) => s.slug === slug)))
+    .map(({ scope }) => scope);
+  const typed = (args: string): string => `\`${entrySkillInvocation()} ${args}\``;
+  return plans.length > 0
+    ? `Cannot recompose: this work is finished, so its own plan takes no more stages. A plan that runs ${listed(added)} ` +
+      `after ${last} reopens it there, keeping what is done: ${plans.join(", ")}. To switch to one, type ${typed("--scope <plan>")}.`
+    : `Cannot recompose: this work is finished, so its own plan takes no more stages, and no plan runs ${listed(added)} ` +
+      `after ${last}. To run a stage on its own, type ${typed("--stage <stage> --single")}; for more, start new work.`;
+}
+
 function handleRecompose(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
   const usage = (message: string): never => die(
     `${message}\nUsage: recompose [--skip <slug,...>] [--add <slug,...>] ` +
@@ -12577,8 +12669,9 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     // leave no cursor to ever reach the added stage — a corrupted record,
     // not a plan change. (With no cursor, the behind-cursor guard below is
     // also inert, so this check is the only thing standing between recompose
-    // and a finished workflow.)
+    // and a finished workflow.) Finished work is told which plans reopen it.
     const wfStatus = getField(content, "Status") || "";
+    if (wfStatus.trim() === "Completed") die(finishedWorkRecomposeRefusal(content, addList));
     if (wfStatus !== "Running") {
       die(
         `Cannot recompose: workflow Status is "${wfStatus || "unknown"}", not Running. ` +

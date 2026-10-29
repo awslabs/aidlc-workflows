@@ -43,7 +43,7 @@
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
 // (Same idiom as codex's t149.)
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -236,6 +236,11 @@ function overlayAuthoredCopilotSources(dir: string): void {
 }
 
 const RECEIPT_PATTERN = /^[A-Za-z0-9_-]{8}$/;
+// The receipt construction: the first 8 base64url characters of
+// HMAC-SHA256(key, JSON(payload)).
+function receiptFor(payload: unknown, key: Buffer): string {
+  return createHmac("sha256", key).update(JSON.stringify(payload), "utf-8").digest("base64url").slice(0, 8);
+}
 // The refusal a superseded tracked `continue` prints, in the person's terms.
 const SUPERSEDED_CONTINUE = "This `continue` was overtaken before it could answer.";
 
@@ -2629,6 +2634,55 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       dir, session, commandSpec(dir, "direct", ["continue", token1, token1]).text, "doubled-continue",
     ));
     expect(doubled.stdout).toContain('"permissionDecision":"deny"');
+  });
+
+  // About 1 receipt in 64 starts with `-`, and an agent marks such a word with
+  // `--` (#3206). The key is chosen so part 1's receipt is one of them.
+  test("21j2: a receipt behind `--` continues to the next part, as one that starts with `-` does alone", () => {
+    const dir = orchestrationProject();
+    inflateRules(dir);
+    const session = "dash-receipt-owner";
+    const first = runLifecycle(dir, session, "direct", ["next"], "dash-next");
+    expect(first.directive).toMatchObject({ kind: "load-steering", part: 1 });
+    const payload = marker(dir).steering_payload;
+    let key = Buffer.alloc(32);
+    for (let seed = 0; !receiptFor(payload, key).startsWith("-"); seed++) {
+      key = createHash("sha256").update(`t249-dash-receipt-${seed}`).digest();
+    }
+    // Off part 1 first: a marker still on part 1 is handed back as it was
+    // issued, under the key it was minted with.
+    const off = runLifecycle(dir, session, "direct", ["continue", String(first.directive.receipt)], "dash-off-part-1");
+    expect(off.directive).toMatchObject({ kind: "load-steering", part: 2 });
+    writeFileSync(join(seededRecordDir(dir), ".aidlc-engine", "steering-token-key"), `${key.toString("base64url")}\n`, {
+      mode: 0o600,
+    });
+    const dashReceipt = receiptFor(payload, key);
+    for (const [form, args] of [
+      ["direct", ["continue", "--", dashReceipt]],
+      ["source", ["continue", "--", dashReceipt]],
+      ["direct", ["continue", dashReceipt]],
+    ] as const) {
+      const spelling = `${form} ${args.join(" ")}`;
+      const issued = runLifecycle(dir, session, "direct", ["next"], `dash-issue-${form}-${args.length}`);
+      expect(issued.directive, spelling).toMatchObject({ kind: "load-steering", part: 1, receipt: dashReceipt });
+      const attempt = `dash-continue-${form}-${args.length}`;
+      const answer = runLifecycle(dir, session, form, [...args], attempt);
+      expect(answer.directive, spelling).toMatchObject({ kind: "load-steering", part: 2 });
+      expect(marker(dir), spelling).toMatchObject({
+        kind: "load-steering",
+        part: 2,
+        delivery: "delivered",
+        active_attempt: { id: attempt, command_kind: "continue", status: "settled" },
+      });
+    }
+    // Two words behind the mark, or an option behind it, are still not a
+    // continuation the adapter claims.
+    for (const args of [["continue", "--", dashReceipt, dashReceipt], ["continue", "--", dashReceipt, "--project-dir", dir]]) {
+      const refused = runAdapter(dir, "guard-tool-call", commandPayload(
+        dir, session, commandSpec(dir, "direct", args).text, `dash-refused-${args.length}`,
+      ));
+      expect(refused.stdout, args.join(" ")).toContain("`continue` takes only the receipt");
+    }
   });
 
   test("21k: a continue superseded by a newer command, another chat, or a compaction is refused and changes nothing", () => {

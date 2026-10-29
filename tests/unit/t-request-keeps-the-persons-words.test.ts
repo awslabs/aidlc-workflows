@@ -22,8 +22,14 @@ import {
   runOrchestrateNext,
   seedStateFile,
 } from "../harness/fixtures.ts";
-import { auditBlockField, getField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  auditBlockField,
+  getField,
+  readAuditShardEvents,
+  splitKiroCommandArgs,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { parseNextFlags, requestAsTyped } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
 
 setDefaultTimeout(120_000);
 
@@ -120,8 +126,7 @@ describe("the request is recorded in the person's own words", () => {
   test("with no plan named, a plan the agent reads routes as passed and the request is their whole line", () => {
     says(proj, `/aidlc I want to build "Northwind Mini Bank", a small demo of a bank's core money handling`);
     create(proj, next(proj, ["--scope", "classic", "--", "Northwind Mini Bank: a small demo of a banks core money handling"]));
-    // The words as the engine's parse reads the line: the double quotes quote.
-    const theirs = "I want to build Northwind Mini Bank, a small demo of a bank's core money handling";
+    const theirs = `I want to build "Northwind Mini Bank", a small demo of a bank's core money handling`;
     const record = recorded(proj);
     expect(record.description).toBe(theirs);
     expect(record.project).toBe(theirs);
@@ -170,6 +175,100 @@ describe("the request is recorded in the person's own words", () => {
     expect(id).toBeDefined();
     const again = next(proj, ["--request", id as string, "--propose", "poc"]);
     expect(JSON.stringify(again)).toContain(TYPED);
+  });
+});
+
+// Live on Claude Code: the person's request quoted an empty argument, which was
+// the bug itself, and the plan question and the work's record dropped the quote
+// marks. The request is their line as they typed it, quote marks included.
+describe("the request keeps the quote marks the person typed", () => {
+  const SLUGIT = `slugit "" prints an empty line, it should print the usage error and exit 2`;
+  const SAVE = `fix the "Save" button, it saves nothing`;
+  let proj: string;
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createOrchestrationTestProject();
+  });
+  afterEach(() => cleanupTestProject(proj));
+
+  test("with no plan named, the plan question quotes their line with its quote marks", () => {
+    says(proj, `/aidlc ${SLUGIT}`);
+    const step = next(proj, [SLUGIT]);
+    expect(step.message).toContain(`The person asked for new work: "${SLUGIT}"`);
+    const id = String(step.message).match(/--request ([0-9a-f]{8})/)?.[1];
+    expect(id, String(step.message)).toBeDefined();
+    const question = next(proj, ["--request", id as string, "--propose", "bugfix"]) as { question?: string };
+    expect(question.question, JSON.stringify(question)).toContain(`plan for: "${SLUGIT}"`);
+  });
+
+  // Live on opencode: a quoted phrase with a space in it.
+  test("with no plan named, a quoted phrase inside the request keeps its quote marks", () => {
+    const typed = `parseDuration throws on "1h 30m" (with a space) and on "45s"`;
+    says(proj, `/aidlc ${typed}`);
+    expect(next(proj, [typed]).message).toContain(`The person asked for new work: "${typed}"`);
+  });
+
+  test("with no plan named, the work the agent starts is recorded with their quote marks", () => {
+    says(proj, `/aidlc ${SAVE}`);
+    create(proj, next(proj, ["--scope", "bugfix", "--", "fix the Save button, it saves nothing"]));
+    const record = recorded(proj);
+    expect(record.description).toBe(SAVE);
+    expect(record.project).toBe(SAVE);
+    expect(record.requests.length).toBeGreaterThan(0);
+    for (const request of record.requests) expect(request).toBe(`/aidlc ${SAVE}`);
+  });
+
+  test("a plan named first, the agent routing on it: the rest of their line keeps its quote marks", () => {
+    says(proj, `/aidlc bugfix ${SLUGIT}`);
+    create(proj, next(proj, ["bugfix", SLUGIT]));
+    expect(recorded(proj).description).toBe(SLUGIT);
+  });
+
+  test("a plan named first, a request that ends in an empty argument keeps it", () => {
+    const typed = `slugit should reject ""`;
+    says(proj, `/aidlc bugfix ${typed}`);
+    create(proj, next(proj, ["bugfix", typed]));
+    expect(recorded(proj).description).toBe(typed);
+  });
+
+  test("a plan's name opening their request, the agent routing on no plan: the whole line keeps an ending empty argument", () => {
+    says(proj, `/aidlc bugfix slugit should reject ""`);
+    const step = next(proj, [`bugfix slugit should reject ""`]);
+    expect(step.message).toMatch(/next -- ['"]bugfix slugit should reject ""['"]/);
+  });
+
+  test("a plan named by its flag: the request keeps its quote marks", () => {
+    says(proj, `/aidlc --scope bugfix ${SAVE}`);
+    create(proj, next(proj, ["--scope", "bugfix", SAVE]));
+    expect(recorded(proj).description).toBe(SAVE);
+  });
+
+  test("the agent runs next with nothing: the line it takes keeps its quote marks", () => {
+    says(proj, `/aidlc ${SAVE}`);
+    expect(next(proj, []).message).toContain(`The person asked for new work: "${SAVE}"`);
+  });
+
+  test("the request is the stretch of their line the parse read as it, as typed", () => {
+    const cases: Array<[string, string | null]> = [
+      [`"" prints an empty line`, `"" prints an empty line`],
+      [`slugit prints ""`, `slugit prints ""`],
+      [`--plan-approval off ${SAVE}`, SAVE],
+      [`${SAVE} --plan-approval off`, SAVE],
+      [`-- ${SAVE}`, SAVE],
+      [`bugfix: ${SLUGIT}`, SLUGIT],
+      [`fix  the\t"Save"\nbutton`, `fix  the\t"Save" button`],
+      // Escapes are the person's characters too.
+      [String.raw`say \"hi\" and one\ two`, String.raw`say \"hi\" and one\ two`],
+      // One argument is that argument: the quotes around it only made it one.
+      [`classic 'fix the "Save" button'`, `fix the "Save" button`],
+      // Two stretches spell it: no reading of the line wins.
+      ["--scope a a", null],
+    ];
+    for (const [typed, request] of cases) {
+      const said = parseNextFlags(splitKiroCommandArgs(typed)).intent;
+      expect(said, typed).toBeDefined();
+      expect(requestAsTyped(said as string, typed), typed).toBe(request);
+    }
   });
 });
 

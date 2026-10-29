@@ -258,7 +258,6 @@ KIRO_CLI_STEER_READ_MAX_BYTES
 KIRO_CONDUCTOR_AGENT_FILE
 KIRO_CONDUCTOR_AGENT_FILES
 KIRO_REPLY_HOOK
-KIRO_SESSION_DIR_RE
 KIRO_WORKFLOW_HOST_TEMPLATES
 KNOWLEDGE_VERBS
 KNOWN_HARNESS_DIRS
@@ -696,7 +695,6 @@ auditShardHostSegment
 auditShardName
 auditShards
 authoritativeProjectDescription
-authorityActorFrom
 authorityFor
 authorityStateText
 authorizedConstructionPolicyChange
@@ -1175,7 +1173,6 @@ keptSummaryOutputs
 keptUnderConfirmation
 killSwitchSource
 kiroChatRecordOrigin
-kiroChatRecordPaths
 kiroCliSteers
 kiroCliSteersRecorded
 kiroCliSteersRecordedPath

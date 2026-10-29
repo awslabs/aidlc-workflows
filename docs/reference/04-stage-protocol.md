@@ -1446,6 +1446,11 @@ the recovery bound only the passes the conductor starts on its own. When they
 spoke but the flag is missing, the refusal is the conductor's step: it names
 the flag first, then the usual way on if they did not ask, and puts no question
 to the person.
+After Request Changes at a stage gate the count usually starts again from the
+rejection, and the conductor re-reviews the revision before it reports
+revised, with no `next` in between: the rejection's reply names that request's
+exact command when one stage-level request reviews the stage (not where each
+Unit has its own review, on a pipeline stage, or on a stage with no review).
 When Construction runs one Unit at a time and a Unit's finished step loses its
 work, the walk hands the step back and the Unit starts it again (`unit start`
 after its `UNIT_COMPLETED`, a wave completion included). That run of the step

@@ -239,10 +239,6 @@ import {
   constructionHasStarted,
   owedJumpBack,
   errorMessage,
-  agentFileText,
-  readRegularFileNoFollowOrThrow,
-  recordFileTargetOrThrow,
-  removeRecordFileNoFollow,
   writeRecordFileNoFollow,
   evaluateGuardRefusal,
   filterProducesByKind,
@@ -517,6 +513,7 @@ import {
   type WorkspaceNoun,
   type WorkflowSelection,
   withdrawProtectedReplyWords,
+  commandArgSpans,
   withTypedSpacing,
   writeActiveDirectiveMarker,
   writeEngineFileNoFollow,
@@ -561,7 +558,7 @@ import {
   optionsList,
   turnsPersonCheckOff,
 } from "./aidlc-lib.ts";
-import { reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
+import { readRequestFile, REQUEST_FILE_USAGE, reviewRecoverySpentMessage, reviewVerdictStep } from "./aidlc-log.ts";
 import { LOCK_FOLDER_HELD_STEP_KEY, lockFolderHeldAgentStep } from "./aidlc-lock-line.ts";
 import {
   checkpointPolicyEnabled,
@@ -608,8 +605,10 @@ import {
   documentInputLooksSecret,
   GREENFIELD_RE_SKIP_LABEL,
   greenfieldWorkspaceGainedCode,
+  plansReopeningFinishedWork,
   projectTypeRecordedAsPersons,
   scanSummary,
+  skipsBeforeReopen,
 } from "./aidlc-utility.ts";
 import { checkboxIsUnitProjection, ledgerStageActivity } from "./aidlc-doctor-bundle.ts";
 import {
@@ -661,6 +660,7 @@ import {
   codeGenerationResumeNarration,
   codeGenerationStartNarration,
   notePlanApprovalOverrideOffered,
+  parkedWhereItStands,
   promotableTestingPosture,
   setTestingPostureRoute,
   stepNextCommand,
@@ -5530,14 +5530,6 @@ function workflowParkedDirective(
       );
 }
 
-// Whether the workflow is parked where it stands. A park the workflow has
-// since moved past is stale and holds nothing.
-function parkedWhereItStands(stateContent: string): boolean {
-  const parkedAt = (getField(stateContent, "Parked At Stage") ?? "").trim();
-  return (getField(stateContent, "Parked") ?? "").trim().length > 0 && parkedAt.length > 0 &&
-    parkedAt === (getField(stateContent, "Current Stage") ?? "").trim();
-}
-
 // What the person hears after a change made over parked work.
 function stillParkedLine(): string {
   return "Your work is still paused. Do you want to pick it back up now?";
@@ -7216,6 +7208,31 @@ function subagentCallShape(agent: string): string | null {
 // answer on to `next compose`.
 function reshapeReplyArgument(): string {
   return routingReshapeReply === null ? "" : ` -- ${quoteCommandArgument(routingReshapeReply)}`;
+}
+
+// `next compose` over finished work: its own plan takes no more stages
+// (recompose refuses it), so no composer runs. A plan that runs more after the
+// last stage reopens it there (the scope change, #2261), and which one is the
+// person's pick (#3207).
+function finishedWorkComposeStep(stateContent: string): PrintDirective {
+  const last = nodeForSlug((getField(stateContent, "Current Stage") ?? "").trim())?.name ?? "its last stage";
+  const plans = plansReopeningFinishedWork(stateContent);
+  const newWork = " and offer to start what they asked for as new work; on their yes run " +
+    `\`${aidlcToolInvocation("orchestrate")} next --new-intent "<their words>"\` and follow what it returns.`;
+  if (plans.length === 0) {
+    return turnEndingPrint(
+      `Run nothing. This work is finished and no plan runs a stage after ${last}, so its plan takes no more stages: ` +
+        `tell the person that in one line,${newWork}`,
+    );
+  }
+  const listed = plans.map(({ scope, stages }) => `${scope} (${stages.map((stage) => stage.name).join(", ")})`).join("; ");
+  return turnEndingPrint(
+    `Run nothing yet. This work is finished, so its own plan takes no more stages. A plan that runs more after ${last} ` +
+      `reopens it there, keeping what is done, and runs: ${listed}. Offer the person the plans that run what they ` +
+      "asked for, in plain words, with what each adds, your recommendation first, then stop. On their pick, run " +
+      `\`${aidlcToolInvocation("orchestrate")} next --scope <plan>\` (their words beside it would ` +
+      `start new work) and follow what it returns. When none of them runs it, tell them that in one line,${newWork}`,
+  );
 }
 
 function composeDispatchDirective(
@@ -9880,8 +9897,9 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 // word is also a plan's name, all of them when the agent routes on no plan and
 // the rest after that word when it routes on that plan. Any other reading keeps
 // the agent's words, and so does a line with a flag `next` does not take (a
-// mistyped one the agent corrected is not part of the request). Whichever
-// words stand, the spacing between them is the one their line typed
+// mistyped one the agent corrected is not part of the request). Their words
+// are the request as the line typed it, quote marks and spacing included
+// (requestAsTyped); words it cannot line up keep the spacing their line typed
 // (withTypedSpacing): Kiro CLI's call carries one argument per word, so the
 // parse joined their "Hello,  World!" with one space. Only the request's words
 // change: every other flag and the command's arguments stay the agent's.
@@ -9895,16 +9913,23 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
     if (typed === null || typed.length === 0 || lineHandedOut(pd, engineSessionId, message.id)) return null;
     if (loadStateFileIfPresent(pd) !== null && !turnIsLatestRow(pd, message.id)) return null;
     flags.intent = withTypedSpacing(flags.intent, typed);
-    const own = parseNextFlags(splitKiroCommandArgs(typed));
+    const argv = splitKiroCommandArgs(typed);
+    const own = parseNextFlags(argv);
     if (own.parseError || own.intent === undefined || own.untakenFlag !== undefined) return null;
     const plan = flags.scope ?? flags.positionalScope ?? null;
     const words = personsWordsText(message.words);
     const step = own.readingStep;
+    // A plan-word reading takes no flag and trims its line: the arguments' own
+    // join keeps an empty `""` that ends it.
+    const asTyped = requestAsTyped(step?.kind === "plan-word" ? argv.join(" ") : own.intent, typed);
     if (step === undefined) {
-      if (message.route.scope === plan || message.route.scope === null) flags.intent = words;
+      if (message.route.scope === plan || message.route.scope === null) flags.intent = asTyped ?? words;
     } else if (step.kind === "plan-word") {
-      if (plan === null) flags.intent = words;
-      else if (plan === step.scope) flags.intent = words.slice(step.scope.length).trim();
+      if (plan === null) flags.intent = asTyped ?? words;
+      else if (plan === step.scope) {
+        flags.intent = requestAsTyped(argv.join(" ").slice(step.scope.length + 1), typed) ??
+          words.slice(step.scope.length).trim();
+      }
     }
     return null;
   }
@@ -9952,11 +9977,53 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   // a question and marked the message) is not read again: the bare `next` the
   // agent runs after that step goes on from it.
   if (own.intent !== undefined && lineHandedOut(pd, engineSessionId, message.id)) return null;
-  // A plain-chat line went whole behind `--`, with the spacing it was typed with.
-  if (own.intent !== undefined && typed !== null) own.intent = withTypedSpacing(own.intent, typed);
+  // A plain-chat line went whole behind `--`; an `/aidlc` line's request is
+  // taken as it was typed.
+  if (own.intent !== undefined && typed !== null) {
+    const said = own.readingStep?.kind === "plan-word" ? argv.join(" ") : own.intent;
+    own.intent = requestAsTyped(said, typed) ?? withTypedSpacing(own.intent, typed);
+  }
   for (const key of Object.keys(flags)) delete (flags as unknown as Record<string, unknown>)[key];
   Object.assign(flags, own);
   return argv;
+}
+
+// The request as the person's line typed it. The split reads quote marks and
+// escapes as syntax, so the parse's words had lost them (`slugit "" prints`
+// came back as `slugit  prints`, the bug itself gone). `said` is the parse's
+// own join of the request's arguments, one space apart, untrimmed so an empty
+// `""` at either end still lines up; the one stretch of the line's arguments that
+// spells it comes back as typed, with the spaces and tabs typed between them and
+// any other gap one space, as withTypedSpacing keeps them. A request of one
+// argument is that argument: the quotes around it only made it one. Null when
+// no stretch, or more than one, spells it.
+export function requestAsTyped(said: string, typed: string): string | null {
+  const spans = commandArgSpans(typed);
+  let found: [number, number] | null = null;
+  for (let first = 0; first < spans.length; first++) {
+    // An argument reads no longer than it was typed, so a stretch cannot start
+    // where less of the line is left than `said` holds.
+    if (typed.length - spans[first].start < said.length) break;
+    for (let k = first, at = 0; k < spans.length && said.startsWith(spans[k].text, at); k++) {
+      at += spans[k].text.length;
+      if (at === said.length) {
+        if (found !== null) return null;
+        found = [first, k];
+        break;
+      }
+      if (said[at] !== " ") break;
+      at++;
+    }
+  }
+  if (found === null) return null;
+  const [first, last] = found;
+  if (first === last) return spans[first].text;
+  let request = typed.slice(spans[first].start, spans[first].end);
+  for (let k = first + 1; k <= last; k++) {
+    const gap = typed.slice(spans[k - 1].end, spans[k].start);
+    request += (/^[ \t]+$/.test(gap) ? gap : " ") + typed.slice(spans[k].start, spans[k].end);
+  }
+  return request;
 }
 
 // A settings-only line is handed out once, and `next`, which hands it out,
@@ -11325,6 +11392,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       ));
       return;
     }
+    if (stateContent !== null && inFlight && !flags.newScope && !flags.report &&
+        (getField(stateContent, "Status") ?? "").trim() === "Completed") {
+      emit(finishedWorkComposeStep(stateContent));
+      return;
+    }
     // Only a front composition continues into creation, which needs the
     // request by id; an in-flight reshape carries its text in the dispatch.
     // A request typed straight to compose passed no question, so how its
@@ -11589,13 +11661,17 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         ));
         return;
       }
+      // The skips typed with the switch of the stages it would reopen finished
+      // work at go with the change itself: once the switch has started a
+      // stage, recompose can no longer skip it.
+      const skippedFirst = planChanges ? skipsBeforeReopen(stateContent, flags.scope, planChanges.skip) : [];
       // On finished work the change starts the first stage the new scope adds
-      // after the last one (the tool reads the same predicate), so nothing
-      // waits on the person and the agent carries on into it (#2261). Over
-      // running work a setting's rule decides (see settingEndsTurn): a live
-      // run ended the turn after a switch made while the stage ran, and the
-      // agent asked the person to say go on.
-      const carriesOn = stageReopenedByScopeChange(stateContent, flags.scope) !== null ||
+      // after the last one, past those skips (the tool reads the same
+      // predicate), so nothing waits on the person and the agent carries on
+      // into it (#2261). Over running work a setting's rule decides (see
+      // settingEndsTurn): a live run ended the turn after a switch made while
+      // the stage ran, and the agent asked the person to say go on.
+      const carriesOn = stageReopenedByScopeChange(stateContent, flags.scope, skippedFirst) !== null ||
         (stillParked === null && !settingEndsTurn(pd, currentStateScope, stateContent));
       const keepsPlace = !carriesOn && scopeSwitchKeepsPlace(pd, currentStateScope, stateContent, flags.scope);
       // At the open gate of a stage the new scope still runs, the same reply
@@ -11614,8 +11690,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           ? `Run \`${command}\` to change scope${fill}, then print its output verbatim. ` +
             openGateAnswerStep(current, practicesApprovalHeld(pd, current, stateContent))
           : `Run \`${command}\` to change scope${fill}, then ${verbatimThenStop}`);
-      const switching = { ...plan, switchedTo: flags.scope, carriesOn };
-      emit(planChanges ? planChangeDirective(planChanges, command, switching, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
+      const switching = { ...plan, switchedTo: flags.scope, carriesOn, skippedFirst };
+      const withSkips = skippedFirst.length === 0 ? command : `${command} --skip ${skippedFirst.join(",")}`;
+      emit(planChanges ? planChangeDirective(planChanges, withSkips, switching, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
         keepsPlace ? withWorkPicksUpLine(switched, pd, currentStateScope, stateContent) : switched,
         planApprovalAskIsOpen(pd),
       ));
@@ -13464,6 +13541,25 @@ function approvalOverReview(
   }
 }
 
+// The class of the one stage-level request that reviews the stage, or null
+// when no such request does: per Unit with a Unit DAG the Unit routes own the
+// review (team ownership without a DAG is an error the route states, which a
+// review step must not hide), and a class that resolves to none has no review.
+function stageLevelReviewClass(
+  projectDir: string,
+  node: GraphStage,
+  scope: string,
+  stateContent: string,
+): ReviewClass | null {
+  if (!node.reviewer) return null;
+  if (
+    isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, stateContent) &&
+    (resolveBoltDag(projectDir).state !== "none" || isTeamUnitOwnership(stateContent))
+  ) return null;
+  const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent);
+  return reviewClass === "none" ? null : reviewClass;
+}
+
 // A stage that works on the whole project (not once per Unit) and whose review
 // is open: the step that gets it finished, in place of the stage body. Its
 // documents are written, since a request was made on them, so the body has
@@ -13478,13 +13574,8 @@ function stageReviewStep(
   stateContent: string | null,
 ): { text: string; endsTurn: boolean; finished: boolean } | null {
   if (stateContent === null || !node.reviewer || isReadOnlyEngineProbe()) return null;
-  if (isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, stateContent)) {
-    // Per Unit with a Unit DAG, the Unit routes own the review. Team ownership
-    // without a DAG is an error the route states, which a review step must not hide.
-    if (resolveBoltDag(projectDir).state !== "none" || isTeamUnitOwnership(stateContent)) return null;
-  }
-  const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent);
-  if (reviewClass === "none") return null;
+  const reviewClass = stageLevelReviewClass(projectDir, node, scope, stateContent);
+  if (reviewClass === null) return null;
   const review = freshReviewReceipts(projectDir, stateContent, node, { reviewClass });
   const pending = review.stagePending;
   if (pending === null || pending === undefined) {
@@ -16493,9 +16584,11 @@ function planChangeDirective(
   // rebuilds the plan from that scope's grid and keeps every checkbox, so
   // `stateContent` says where the work stands and the grid what it runs.
   // `carriesOn`: the switch alone goes on with the work rather than ending the turn.
+  // `skippedFirst`: the skips `before` itself carries out, the stages the switch
+  // would have reopened finished work at (skipsBeforeReopen).
   plan: {
     scope: string; stateContent: string; walk?: PlanChangeWalk | null; together?: string[]; passedOver?: string[];
-    switchedTo?: string; carriesOn?: boolean;
+    switchedTo?: string; carriesOn?: boolean; skippedFirst?: string[];
   } | null,
   // The code plan's question is open: it stays the open step, so what the
   // person says next is kept as their answer to it.
@@ -16584,8 +16677,13 @@ function planChangeDirective(
     : walk.at === "paused" ? `paused on ${name(walk.stage)}`
     : walk.at === "checkpoint" ? "at its checkpoint"
     : `on ${name(walk.stage)}`;
+  // The skips the scope change carries out itself: the stage it reopens is the
+  // one after them, so they are behind the work, as a stage skipped where it
+  // stands is.
+  const skippedFirst = plan?.skippedFirst ?? [];
   const planSkip = skip.filter((slug) =>
-    slug !== started && slug !== firstStep && (unitStep === null || slug !== unitStep.stage || unitStep.others));
+    slug !== started && slug !== firstStep && !skippedFirst.includes(slug) &&
+    (unitStep === null || slug !== unitStep.stage || unitStep.others));
   // The walk's first step for every Unit from here, when another Unit still owes it.
   const firstSkip = firstStep === null || !unitStep?.others ? null
     : `${aidlcToolInvocation("orchestrate")} report --stage ${firstStep} --result skipped ` +
@@ -16785,7 +16883,7 @@ function planChangeDirective(
     : `${listed(notHere.map(name))} ${notHere.length === 1 ? "is a step" : "are steps"} each Unit takes, so this ` +
       "change covers every Unit. If the person's words mean one Unit only, run nothing and tell them in one line: " +
       `"${notNow(notHere)}" and stop. Otherwise: `;
-  const lead = `${aheadNote}${before === null ? run : `Run \`${before}\`${filled} and print its output verbatim, ${run}`}`;
+  const lead = `${aheadNote}${before === null ? run : `Run \`${before}\`${filled} and print its output verbatim${run === "" ? "" : `, ${run}`}`}`;
   // The way back: a plan flip is undone by the opposite flip while the work
   // runs; a stage skipped where it stood is run on its own, the route
   // recompose itself names for a skipped stage, and a Unit's step skipped for
@@ -16794,11 +16892,11 @@ function planChangeDirective(
   // (t-offers-are-plain-questions).
   const wayBack = unitStep !== null
     ? forTheUnit
-    : started === null
+    : started === null && skippedFirst.length === 0
       ? undoHolds()
       : ownForm(skip);
   const line = `"${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ${wayBack}${noted ? ` ${noted}` : ""}${parkedTail}"`;
-  const undo = `If they later ask to undo it, run \`${undone}\`.`;
+  const undo = planSkip.length === 0 && add.length === 0 ? "" : ` If they later ask to undo it, run \`${undone}\`.`;
   // The question named the stages after the skipped one too, and the same
   // reply can approve them: "skip Functional Design and approve the rest".
   const rest = started !== null && currentState === "awaiting-approval"
@@ -16809,11 +16907,13 @@ function planChangeDirective(
       `\`${aidlcToolInvocation("orchestrate")} report --stage ${rest[0]} --result approved --user-input Approve\`, ` +
       "which approves them together.";
   const message =
-    `${lead}, and do not show ${commands.length > 1 ? "their" : "its"} output: the one line below says what changed. ` +
+    `${lead}${commands.length === 0 ? "" : `, and do not show ${commands.length > 1 ? "their" : "its"} output: the one line below says what changed`}. ` +
     "If a command refuses, tell the person in plain words why it could not, and the way it names to do it " +
     "instead, then stop. " +
     `Otherwise tell the person in one line: ${line}${approveRest}`;
-  if (started !== null || unitStep !== null) {
+  // The scope change that took the skips reopens the work past them, so the
+  // work goes on into that stage, as it does after the switch alone.
+  if (started !== null || unitStep !== null || (skippedFirst.length > 0 && plan?.carriesOn === true)) {
     // Parked work stays parked: the line already says so and asks whether to
     // pick it back up, so the turn ends on that question instead of carrying
     // on with the work the person paused.
@@ -16826,17 +16926,17 @@ function planChangeDirective(
   // when the add comes before the approval.
   if (add.some((slug) => plan?.passedOver?.includes(slug))) {
     return kept(stillParked === null
-      ? printDirective(`${message} Then re-run \`next\` to carry on with the work. ${undo}`)
-      : turnEndingPrint(`${message}${end} ${undo}${resume}`));
+      ? printDirective(`${message} Then re-run \`next\` to carry on with the work.${undo}`)
+      : turnEndingPrint(`${message}${end}${undo}${resume}`));
   }
   if (gateOpen !== null) {
     // Practices Discovery's approval waits for the practices the person
     // approved to be saved (an approval report would be refused in engine
     // words), so there only a change request is handed over.
     const held = engineProjectDir !== undefined && practicesApprovalHeld(engineProjectDir, gateOpen, plan!.stateContent);
-    return kept(turnEndingPrint(`${message} ${openGateAnswerStep(gateOpen, held)} ${undo}${resume}`));
+    return kept(turnEndingPrint(`${message} ${openGateAnswerStep(gateOpen, held)}${undo}${resume}`));
   }
-  return kept(turnEndingPrint(`${message}${end} ${undo}${resume}`));
+  return kept(turnEndingPrint(`${message}${end}${undo}${resume}`));
 }
 
 // A jump to a stage the running plan skips. Ahead of the cursor, the jump
@@ -17632,6 +17732,24 @@ function personsFeedbackFromToolOutput(stdout: string): boolean {
 // their words are on the record, and in the chat for the agent to read.
 function personsFeedbackSentence(theirs: boolean): string {
   return theirs ? " The feedback is on the record in the person's own words; revise from what they asked for." : "";
+}
+
+// After Request Changes the agent revises in the same turn and has the
+// reviewer look again before it reports revised, with no `next` in between,
+// so this reply is the step it has for that request, and the review log counts
+// passes again from the rejection. Named only where one stage-level request
+// reviews the stage.
+function reReviewRequestSentence(pd: string, node: GraphStage, scope: string): string {
+  try {
+    const state = loadStateFileIfPresent(pd);
+    if (state === null || stageLevelReviewClass(pd, node, scope, state) === null) return "";
+    const { attempt } = guardAttemptState(pd, state, node);
+    if (!attempt.requestReview) return "";
+    return ` When the revision changes the stage's outputs, request their review with \`${attempt.requestReview}\`.`;
+  } catch {
+    // Unreadable records leave the request to the review log's own answer.
+    return "";
+  }
 }
 
 /** A directive with the notices attached, or unchanged when there are none. */
@@ -19993,7 +20111,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
           ? pipelineRejectedMessage(pd, node, slug) +
             personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout))
           : `Recorded ${flags.result} for "${slug}".` +
-            personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout)),
+            personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout)) +
+            (flags.result === "rejected" ? reReviewRequestSentence(pd, node, scope) : ""),
       ),
       changeNoticesFromToolOutput(res.stdout),
     );
@@ -20521,7 +20640,10 @@ function answerAsNext(
 // `next --scope <scope> --stage <stage>` instead of trusting the stored route.
 // Old receipts never skip parts, and a conductor that lost its parts restarts
 // from part one whenever the current route can be verified.
-function handleContinue(args: string[], projectDir: string | undefined): void {
+function handleContinue(line: string[], projectDir: string | undefined): void {
+  // A receipt can start with `-`, so the agent may mark it with `--`, as a
+  // shell expects; the mark is not part of the receipt.
+  const args = line[0] === "--" ? line.slice(1) : line;
   const receipt = (args[0] ?? "").trim();
   const pd = resolveProjectDir(projectDir);
   const liveState = loadStateFileIfPresent(pd);
@@ -20933,17 +21055,8 @@ function engineWorkflowSelection(projectDir: string): WorkflowSelection {
   }
 }
 
-// REQUEST_TEXT_DIR is the folder where the agent writes a person's request for
-// `next --request-file`, so the words reach AI-DLC with no shell on the way: on
-// Windows, cmd.exe ends a command at a line break and replaces a %NAME% pair
-// even inside quotes, and the aidlc launcher is read by cmd.exe again.
-const REQUEST_TEXT_MAX_BYTES = 64 * 1024;
-
 // The file's words take the flag's place as one argument after `--`, so none
-// of them is read as a flag. Only a plain file directly inside the folder,
-// reached through no link, is read. It is removed once the command goes ahead
-// (a probe leaves it), so a command stopped before any work runs again exactly
-// as it was written. A string is the refusal.
+// of them is read as a flag (readRequestFile reads it). A string is the refusal.
 function nextArgsWithRequestFile(
   args: readonly string[],
   projectDir: string,
@@ -20953,56 +21066,14 @@ function nextArgsWithRequestFile(
   const options = beforeDelimiter(args);
   const at = options.indexOf("--request-file");
   if (at < 0) return { args: [...args], spend: () => {}, restore: () => {} };
-  const usage =
-    `--request-file needs a file directly inside ${REQUEST_TEXT_DIR}/ in this project, for example ` +
-    `${REQUEST_TEXT_DIR}/request.txt.`;
   const file = options[at + 1];
   const rest = [...args.slice(0, at), ...args.slice(at + 2)];
-  if (file === undefined || file.startsWith("--")) return usage;
+  if (file === undefined || file.startsWith("--")) return REQUEST_FILE_USAGE;
   if (beforeDelimiter(rest).includes("--request-file")) return "Pass --request-file once.";
   if (rest.includes("--")) return "Pass the request either after -- or with --request-file, not both.";
-  const relativePath = file.replaceAll("\\", "/");
-  const parts = relativePath.split("/");
-  const folder = REQUEST_TEXT_DIR.split("/");
-  const name = parts[parts.length - 1];
-  if (
-    isAbsolute(file) || parts.length !== folder.length + 1 ||
-    folder.some((part, i) => parts[i] !== part) || name === "" || name === "." || name === ".."
-  ) {
-    return usage;
-  }
-  const unread = `AI-DLC could not read the request in ${relativePath}. Send your request again.`;
-  let text: string;
-  try {
-    text = agentFileText(readRegularFileNoFollowOrThrow(
-      recordFileTargetOrThrow(projectDir, relativePath),
-      "The request file",
-      REQUEST_TEXT_MAX_BYTES,
-    )).replace(/\r?\n$/, "");
-  } catch {
-    return unread;
-  }
-  if (text.trim() === "") return `The request in ${relativePath} is empty. Send your request again.`;
-  return {
-    args: [...rest, "--", text],
-    spend: () => {
-      if (isReadOnlyEngineProbe()) return;
-      try {
-        removeRecordFileNoFollow(projectDir, relativePath);
-      } catch {
-        // Left in its gitignored folder; the next request replaces it.
-      }
-    },
-    // The request as it was read, for a step that runs the same command again.
-    restore: () => {
-      if (isReadOnlyEngineProbe()) return;
-      try {
-        writeRecordFileNoFollow(projectDir, relativePath, text);
-      } catch {
-        // Not written back: the same command says the request could not be read.
-      }
-    },
-  };
+  const read = readRequestFile(projectDir, file);
+  if (typeof read === "string") return read;
+  return { args: [...rest, "--", read.text], spend: read.spend, restore: read.restore };
 }
 
 // --- CLI entry point ---

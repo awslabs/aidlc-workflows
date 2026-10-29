@@ -1,7 +1,7 @@
 // covers: function:routeCodeGenerationPlanApproval, function:publishPlanApprovalAsk, function:notePlanApprovalAskReply, function:recordPlanApprovalAnswer, function:requestPlanApprovalReviewNow, function:codeGenerationPlanReadiness, function:planSummaryLines,
 // function:PLAN_APPROVAL_ASK_TYPE, function:planApprovalRuntimeFile, function:readPlanApprovalRuntimeRecord,
 // function:writePlanApprovalRuntimeRecord, function:removePlanApprovalRuntimeRecord, function:releaseTakenGuardRecoveryReply, function:runStateContent,
-// function:keepPlanApprovalAskOverStateWrite, function:planNote, function:preparePlanRecordFolders
+// function:keepPlanApprovalAskOverStateWrite, function:planNote, function:preparePlanRecordFolders, function:parkedWhereItStands
 //
 // The engine asks for Plan Approval itself. These cases drive the real `next`,
 // the real human-turn hook, and the real plan-approval guard over one poc
@@ -36,7 +36,8 @@
 //     asks again; an answer typed after the chat compacts still counts;
 //   - stopping for now: the park and the unpark the engine names get through
 //     the guard, and coming back builds an approved plan or asks about the
-//     same plan again.
+//     same plan again; while the work is parked, the person's other work in
+//     the project goes on and the files the plan names and its developer wait.
 //   - the zero-Unit lockout reported in #1172 (refactor and bugfix, Brownfield,
 //     rules in parts): one approval reaches the build, each refusal while a
 //     part is the step names that part's `continue`, the stage-level handoff
@@ -183,11 +184,11 @@ function stageDir(proj: string, unit: string | null = null): string {
   return join(seededRecordDir(proj), "construction", ...(unit ? [unit] : []), "code-generation");
 }
 
-function writePlan(proj: string, extra = "", unit: string | null = null): void {
+function writePlan(proj: string, extra = "", unit: string | null = null, touches = "src/slugify.ts"): void {
   mkdirSync(stageDir(proj, unit), { recursive: true });
   writeFileSync(
     join(stageDir(proj, unit), "code-generation-plan.md"),
-    "# Code Generation Plan\n\n## Summary\n\n- Builds: slugify for titles\n- Touches: src/slugify.ts\n" +
+    `# Code Generation Plan\n\n## Summary\n\n- Builds: slugify for titles\n- Touches: ${touches}\n` +
       `- Tests: 3 unit tests\n\n## Steps\n\n- [ ] Step 1: write slugify\n${extra}\n` +
       renderTestingContract(resolveTestingPosture(proj)),
     "utf-8",
@@ -3739,6 +3740,107 @@ describe("stopping for now at Code Generation", () => {
     expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
   });
+
+  // #3227: work parked at Code Generation is not being built, so the person's
+  // other work in the project goes on under every Guard Policy, before and
+  // after `next` says it is parked; the files the plan names and its developer
+  // wait for the resume.
+  test.each([
+    ["at the plan question", "strict"],
+    ["at the plan question", "relaxed"],
+    ["after approval", "strict"],
+    ["after approval", "off"],
+  ] as const)("parked %s, other work in the project goes on and the plan's own files wait (%s)", (when, policy) => {
+    const proj = project(policy);
+    cpSync(join(AIDLC_SRC, "tools"), join(proj, ".claude", "tools"), { recursive: true });
+    askFor(proj);
+    if (when === "after approval") {
+      reply(proj, "Approve the plan, but let's stop there for today");
+      expect(answer(proj, "Approve Plan", ["--park"]).message).toContain("parked");
+    } else {
+      reply(proj, "let's stop here for today");
+      const park = "bun .claude/tools/aidlc.ts engine orchestrate park --person-asked";
+      expect(JSON.parse(runInstalled(proj, park)).kind).toBe("parked");
+    }
+    const otherWorkGoesOn = (point: string): void => {
+      for (const command of [
+        `python3 -c "open('notes.txt','w').write('x')"`,
+        // The commit the way the agent writes one, its message in a here-document.
+        "git commit -m \"$(cat <<'EOF'\nanother feature\nEOF\n)\"",
+        "printf x > src/other.ts",
+      ]) {
+        const result = guardBash(proj, command);
+        expect(result.code, `${point}: ${command}\n${result.stderr}`).toBe(0);
+      }
+      const edit = guardWrite(proj, join(proj, "src", "inline.ts"));
+      expect(edit.code, `${point}\n${edit.stderr}`).toBe(0);
+      const planned = guardWrite(proj, join(proj, "src", "slugify.ts"));
+      expect(planned.code, point).toBe(2);
+      expect(planned.stderr, point).toContain(" next`");
+      expect(guardDispatch(proj, "AIDLC-STAGE: code-generation\n").code, point).toBe(2);
+    };
+    otherWorkGoesOn("parked");
+    expect(next(proj).kind).toBe("parked");
+    otherWorkGoesOn("after next says parked");
+  });
+
+  // A built Unit's files are not the parked build: with unit-a built and the
+  // work parked at unit-b's Code Generation, a file only unit-a's plan names is
+  // the person's other work, as it is at unit-b's plan question; unit-b's own
+  // file and the developer wait for the resume.
+  test.each(["at the plan question", "after approval"] as const)(
+    "parked %s of a later Unit, a file only a built Unit's plan names goes on and the parked Unit's waits",
+    (when) => {
+      const proj = unitProject("unit-a", "unit-b");
+      cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+      const state = seededStateFile(proj);
+      writeFileSync(state, readFileSync(state, "utf-8")
+        .replace("## Scope Configuration", "## Runtime State\n- **Revision Count**: 0\n\n## Scope Configuration")
+        .replace("### CONSTRUCTION PHASE", "### INCEPTION PHASE\n- [x] units-generation \u2014 EXECUTE\n\n### CONSTRUCTION PHASE"));
+      writePlan(proj, "", "unit-a", "src/a.ts");
+      expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+      replyAndRecord(proj, "1", "Approve Plan");
+      expect(next(proj)).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+      runInstalled(proj, "bun .claude/tools/aidlc-state.ts unit start --stage code-generation --unit unit-a");
+      expect(next(proj)).toMatchObject({ kind: "run-stage", unit: "unit-a" });
+      writeFileSync(join(proj, "src", "a.ts"), "export const a = 1;\n");
+      for (const name of ["code-summary", "traceability"]) {
+        writeFileSync(join(stageDir(proj, "unit-a"), artifactFilename(name)), `# ${name}\nBuilt unit-a.\n`);
+      }
+      const stage = findStageBySlug("code-generation")!;
+      const fields = {
+        Stage: stage.slug, Unit: "unit-a", Reviewer: stage.reviewer!, Iteration: "1",
+        "Artifact Fingerprint": reviewArtifactFingerprint(proj, stage, "unit-a")!,
+      };
+      appendAuditEntry("REVIEW_REQUESTED", fields, proj);
+      appendAuditEntry("REVIEW_COMPLETED", { ...fields, Verdict: "READY" }, proj);
+      next(proj);
+      runInstalled(proj, "bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit unit-a");
+      expect(unitCompletedReceipts(proj, "code-generation").has("unit-a")).toBe(true);
+      expect(next(proj)).toMatchObject({ kind: "run-stage", unit: "unit-b", plan_approval: { status: "plan" } });
+      writePlan(proj, "", "unit-b", "src/b.ts");
+      expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+      if (when === "after approval") {
+        reply(proj, "Approve the plan, but let's stop there for today");
+        expect(answer(proj, "Approve Plan", ["--park"]).message).toContain("parked");
+      } else {
+        reply(proj, "let's stop here for today");
+        expect(JSON.parse(runInstalled(proj, "bun .claude/tools/aidlc.ts engine orchestrate park --person-asked")).kind)
+          .toBe("parked");
+      }
+      const builtUnitsFilesGoOn = (point: string): void => {
+        const built = guardWrite(proj, join(proj, "src", "a.ts"));
+        expect(built.code, `${point}\n${built.stderr}`).toBe(0);
+        const parked = guardWrite(proj, join(proj, "src", "b.ts"));
+        expect(parked.code, point).toBe(2);
+        expect(parked.stderr, point).toContain(" next`");
+        expect(guardDispatch(proj, "AIDLC-UNIT: unit-b\n").code, point).toBe(2);
+      };
+      builtUnitsFilesGoOn("parked");
+      expect(next(proj).kind).toBe("parked");
+      builtUnitsFilesGoOn("after next says parked");
+    },
+  );
 });
 
 // From a live run under production guards: at the plan question the person
@@ -3988,9 +4090,9 @@ describe("the zero-Unit Code Generation lockout reported in #1172", () => {
       const parkAdmitted = guardBash(proj, park);
       expect(parkAdmitted.code, parkAdmitted.stderr).toBe(0);
       expect(JSON.parse(runInstalled(proj, park)).kind).toBe("parked");
-      // Parked, a write to the code is refused; the refusal names `next`, and
-      // `next --resume` names the unpark, which the guard lets through.
-      const parked = guardBash(proj, "printf changed > src/inline.ts");
+      // Parked, a write to a file the plan names waits; the refusal names
+      // `next`, and `next --resume` names the unpark, which the guard lets through.
+      const parked = guardBash(proj, "printf changed > src/slugify.ts");
       expect(parked.code).toBe(2);
       expect(parked.stderr).toContain(" next`");
       const unpark = resumeNamesUnpark(proj);

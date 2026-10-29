@@ -1130,7 +1130,7 @@ export function buildPlanProfile(
     );
   } else if (methodology === "atdd") {
     steps.push(
-      "Acceptance Red - write executable acceptance tests for the complete feature before implementation.",
+      "Acceptance Red - write executable acceptance tests for the complete feature before implementation, run them, and record the failing command output.",
       "Feature implementation - implement the required layers against the acceptance contract.",
       "Acceptance Green - run the acceptance tests until they pass.",
       "Feature Refactor - improve the cross-layer implementation while acceptance stays green.",
@@ -3176,6 +3176,14 @@ export function codeGenerationExecutionAllowed(
   const current = approval ?? evaluateCodeGenerationApproval(projectDir, target, issued);
   return !current.executionFailure &&
     (current.ok || codeGenerationContinuation(projectDir, target, issued) !== null);
+}
+
+// Whether the workflow is parked where it stands. A park the workflow has
+// since moved past is stale and holds nothing.
+export function parkedWhereItStands(stateContent: string): boolean {
+  const parkedAt = (getField(stateContent, "Parked At Stage") ?? "").trim();
+  return (getField(stateContent, "Parked") ?? "").trim().length > 0 && parkedAt.length > 0 &&
+    parkedAt === (getField(stateContent, "Current Stage") ?? "").trim();
 }
 
 /** Code Generation is the current stage and its gate is open, waiting for the person's answer. */
