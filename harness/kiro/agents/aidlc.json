@@ -29,7 +29,9 @@
         "aidlc/.aidlc-compose-pending",
         "./[!.]*",
         "[!.]*/**",
-        ".aidlc/worktrees/*/aidlc/spaces/**"
+        ".aidlc/worktrees/*/aidlc/spaces/**",
+        ".aidlc/worktrees/*/[!.]*",
+        ".aidlc/worktrees/*/[!.]*/**"
       ]
     },
     "subagent": {
