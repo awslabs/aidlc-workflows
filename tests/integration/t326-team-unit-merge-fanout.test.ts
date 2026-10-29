@@ -4,7 +4,9 @@
 // fan-out as active in every unscoped checkout. `next` reads that same check:
 // it shows the dispatcher board (or a participant's claim question) instead of
 // the next Unit's stage, so a claim runs only on the person's own
-// `/aidlc --claim`, and the guard's refusal names that step.
+// `/aidlc --claim`, and the guard's refusal names that step. The board's
+// header lists as claimed only Units still being worked, as its Claimable and
+// Waiting lists read them.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -54,10 +56,12 @@ describe("t326 an unscoped checkout after a team Unit lands", () => {
     expect(refsAfterLanding).toContain("/alpha");
     expect(refsAfterLanding).not.toContain("/beta");
 
-    // The lead's main, where alpha landed: the board with beta's claim step.
+    // The lead's main, where alpha landed: the board with beta's claim step,
+    // and alpha, landed, is no longer listed as claimed.
     const lead = nextDirective(seed);
     expect(lead.kind).toBe("notice");
     expect(lead.message as string).toContain("# Team Construction Dispatcher");
+    expect(lead.message as string).toContain("**Claimed:** none. **Claimable:** beta. **Waiting:** none.");
     expect(lead.message as string).toContain("`/aidlc --claim beta`");
     const beforeProbe = checkoutFiles(seed);
     const probe = runMergeTool(ORCH, ["next"], seed, false, { AIDLC_STOP_HOOK_PROBE: "1" });
@@ -79,6 +83,7 @@ describe("t326 an unscoped checkout after a team Unit lands", () => {
     const freshNext = nextDirective(fresh);
     expect(freshNext.kind).toBe("notice");
     expect(freshNext.message as string).toContain("`/aidlc --claim beta`");
+    expect(freshNext.message as string).toContain("**Claimed:** none. **Claimable:** beta.");
 
     // A participant clone gets the claim question.
     const participant = clone(remote, "participant");
@@ -111,6 +116,6 @@ describe("t326 an unscoped checkout after a team Unit lands", () => {
     git(seed, ["fetch", "origin"]);
     const taken = nextDirective(seed);
     expect(taken.kind).toBe("notice");
-    expect(taken.message as string).toContain("beta (beta-team)");
+    expect(taken.message as string).toContain("**Claimed:** beta (beta-team). **Claimable:** none.");
   });
 });

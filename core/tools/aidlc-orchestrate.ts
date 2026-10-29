@@ -5113,6 +5113,9 @@ function unitClaimAskDirective(
 
 export interface TeamConstructionBoard {
   grid: string;
+  // The Units being worked under a claim, as the overview's opening rule reads
+  // them (a landed Unit is done, though its claim record still says claimed).
+  claimed: Array<{ unit: string; owner: string }>;
   claims: Array<{
     unit: string;
     status: "claimed" | "released";
@@ -5322,6 +5325,9 @@ function assembleTeamConstructionBoard(
     .sort((a, b) => compareBoardKeys(a.unit, b.unit));
   return {
     grid,
+    claimed: overview.claimed
+      .map((row) => ({ unit: row.unit, owner: row.owner }))
+      .sort((a, b) => compareBoardKeys(a.unit, b.unit)),
     claims,
     awaitingMerge,
     claimable,
@@ -5354,8 +5360,7 @@ export function renderTeamConstructionBoard(
     : board.blocked.map(
       (row) => `| ${row.unit} | ${row.blockedBy.join(", ")} |`,
     );
-  const claimedSummary = board.claims
-    .filter((claim) => claim.status === "claimed")
+  const claimedSummary = board.claimed
     .map((claim) => `${claim.unit} (${claim.owner})`)
     .join(", ") || "none";
   const blockedSummary = board.blocked
