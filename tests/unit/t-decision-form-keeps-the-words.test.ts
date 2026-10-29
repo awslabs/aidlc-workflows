@@ -1,5 +1,6 @@
-// The decision command the engine prints, filled in the way the agent fills it,
-// keeps a choice's words through the shell that runs it. On a Windows golden
+// The decision command the engine prints, and the answer form log answer's
+// usage prints, filled in the way the agent fills them, keep a choice's words
+// through the shell that runs them. On a Windows golden
 // journey the double-quoted form carried the choice "$0.00": bash read $0 as
 // its own name, Claude Code asked to allow AI-DLC's own command, and the record
 // said "/usr/bin/bash.00". The forms are read from the shipped protocol and
@@ -66,4 +67,30 @@ describe("t-decision-form-keeps-the-words: a choice that names a price is record
       expect(recorded(p, "Options")).toContain("Show $0.00");
     });
   }
+
+  // The answer form log answer's usage prints, which the agent copies with the person's pick.
+  test.skipIf(skip !== null)("the answer form log answer's usage shows, run through bash", () => {
+    const printed = readFileSync(LOG, "utf-8").match(/answer"\)\} --stage <slug> (--details \S*<their exact choice>\S*)`/);
+    expect(printed, "aidlc-log.ts prints the answer form").not.toBeNull();
+    const p = createTestProject();
+    projects.push(p);
+    seedStateFile(p, "state-mid-ideation.md");
+    const quote = (value: string) => `'${value}'`;
+    const run = (args: string) => spawnSync(process.platform === "win32" ? gitBashPath() : "bash", [
+      "-c", `${[process.execPath, LOG].map(quote).join(" ")} ${args} --project-dir ${quote(p)}`,
+    ], { cwd: p, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    const asked = run(`decision --stage feasibility --decision ${quote(QUESTION)} --options ${quote(CHOICES)}`);
+    expect(asked.status, `${asked.stdout}${asked.stderr}`).toBe(0);
+    // The person replies, as the human-turn hook keeps it.
+    const turn = spawnSync(process.execPath, [join(SHIPPED, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      cwd: p, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "01995000-7a11-7000-8000-000000000001", prompt: "the first one" }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: p, AIDLC_PROJECT_DIR: p },
+    });
+    expect(turn.status, turn.stderr).toBe(0);
+    const answered = run(`answer --stage feasibility ${printed![1].replace("<their exact choice>", "Q1: Show $0.00")}`);
+    expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
+    const row = readAllAuditShards(p).split(/\n---\n/).filter((block) => block.includes("**Event**: QUESTION_ANSWERED")).at(-1);
+    expect(row).toContain("Q1: Show $0.00");
+  });
 });
