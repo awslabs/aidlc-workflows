@@ -2827,6 +2827,171 @@ describe("t294 post-apply outstanding actions", () => {
 });
 
 describe("t294 instruction-file doctor row", () => {
+  for (const setup of ["configured", "copy"] as const) {
+    function codexProject(): string {
+      if (setup === "configured") return install("codex");
+      const project = temp("aidlc-t294-copy-override-");
+      cpSync(join(DIST, "codex", ".codex"), join(project, ".codex"), { recursive: true });
+      cpSync(join(DIST, "codex", "aidlc"), join(project, "aidlc"), { recursive: true });
+      const part = readFileSync(join(project, ".codex", "tools", "data", "root-blocks", "agents"), "utf-8").trim();
+      writeFileSync(join(project, "AGENTS.md"), `# Shop\n\n<!-- BEGIN AI-DLC:agents -->\n${part}\n<!-- END AI-DLC:agents -->\n`);
+      return project;
+    }
+
+    test(`${setup}: Codex override without the block cannot pass on AGENTS.md's block`, () => {
+      const project = codexProject();
+      expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+      const overridePath = join(project, "AGENTS.override.md");
+      writeFileSync(overridePath, "# Team instructions\n\nKeep these instructions.\n");
+      const paths = ["AGENTS.md", "AGENTS.override.md", ".codex/config.toml", ".codex/onboarding.md"];
+      if (setup === "configured") paths.push(".codex/tools/data/aidlc-manifest.json");
+      const before = paths.map((path) => readFileSync(join(project, path)));
+
+      const result = instructionFileDoctorCheck(project, ".codex");
+      expect(result.pass).toBe(false);
+      expect(result.severity).toBe("warn");
+      expect(result.label).toContain("AGENTS.override.md");
+      expect(result.fix).toContain("AGENTS.md");
+      expect(result.fix).toContain("AGENTS.override.md");
+      expect(result.fix).toContain("copy");
+      expect(result.fix).not.toContain("--force");
+      expect(paths.map((path) => readFileSync(join(project, path)))).toEqual(before);
+    });
+
+    test(`${setup}: Codex override holds the block even without AGENTS.md`, () => {
+      const project = codexProject();
+      const agentsPath = join(project, "AGENTS.md");
+      const block = readFileSync(agentsPath, "utf-8");
+      const overridePath = join(project, "AGENTS.override.md");
+      const content = `# Team instructions\n\n${block}\nKeep this team's closing note.\n`;
+      writeFileSync(overridePath, content);
+      rmSync(agentsPath);
+
+      const result = instructionFileDoctorCheck(project, ".codex");
+      expect(result.pass).toBe(true);
+      expect(result.label).toContain("AGENTS.override.md");
+      expect(existsSync(agentsPath)).toBe(false);
+      expect(readFileSync(overridePath, "utf-8")).toBe(content);
+    });
+
+    test(`${setup}: Codex override validates its block rather than the hidden block`, () => {
+      const project = codexProject();
+      const block = readFileSync(join(project, "AGENTS.md"), "utf-8");
+      const overridePath = join(project, "AGENTS.override.md");
+      for (const content of [
+        block.replace("<!-- END AI-DLC:agents -->", "changed guidance\n<!-- END AI-DLC:agents -->"),
+        block.replace("<!-- END AI-DLC:agents -->", ""),
+        `${block}\n${block}`,
+      ]) {
+        writeFileSync(overridePath, content);
+        const result = instructionFileDoctorCheck(project, ".codex");
+        expect(result.pass).toBe(false);
+        expect(result.label).toContain("AGENTS.override.md");
+        expect(result.fix).toContain("replace");
+        expect(result.fix).toContain("markers");
+        expect(result.fix).not.toContain("--force");
+        expect(readFileSync(overridePath, "utf-8")).toBe(content);
+      }
+      const repaired = `# Keep this team's instructions\n\n${block}\nKeep the closing note too.\n`;
+      writeFileSync(overridePath, repaired);
+      expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+      expect(readFileSync(overridePath, "utf-8")).toBe(repaired);
+    });
+
+    test(`${setup}: empty Codex override still hides AGENTS.md`, () => {
+      const project = codexProject();
+      for (const content of ["", " \t\r\n"]) {
+        writeFileSync(join(project, "AGENTS.override.md"), content);
+        const result = instructionFileDoctorCheck(project, ".codex");
+        expect(result.pass).toBe(false);
+        expect(result.label).toContain("missing (AGENTS.override.md)");
+        expect(result.fix).toContain("copy");
+      }
+    });
+
+    test(`${setup}: a directory is not a Codex override file`, () => {
+      const project = codexProject();
+      const before = instructionFileDoctorCheck(project, ".codex");
+      mkdirSync(join(project, "AGENTS.override.md"));
+      expect(instructionFileDoctorCheck(project, ".codex")).toEqual(before);
+    });
+
+    // Windows file symlinks require privileges a contributor may not have.
+    test.skipIf(process.platform === "win32")(`${setup}: Codex override follows a file symlink`, () => {
+      const project = codexProject();
+      const before = instructionFileDoctorCheck(project, ".codex");
+      const target = join(project, "team-instructions.md");
+      cpSync(join(project, "AGENTS.md"), target);
+      symlinkSync(target, join(project, "AGENTS.override.md"));
+      expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+      expect(instructionFileDoctorCheck(project, ".codex").label).toContain("AGENTS.override.md");
+      writeFileSync(target, "");
+      expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(false);
+      rmSync(target);
+      expect(instructionFileDoctorCheck(project, ".codex")).toEqual(before);
+    });
+
+    test(`${setup}: Codex override does not hide an AGENTS.md refresh conflict`, () => {
+      const project = codexProject();
+      const agentsPath = join(project, "AGENTS.md");
+      const block = readFileSync(agentsPath, "utf-8");
+      const overridePath = join(project, "AGENTS.override.md");
+      writeFileSync(overridePath, block);
+      const broken = block.replace("<!-- END AI-DLC:agents -->", "");
+      writeFileSync(agentsPath, broken);
+      const conflict = instructionFileDoctorCheck(project, ".codex");
+      expect(conflict.pass).toBe(false);
+      expect(conflict.label).toContain("conflict (AGENTS.md)");
+      expect(conflict.label).toContain("Codex reads AGENTS.override.md");
+      expect(conflict.fix).toContain("move AGENTS.md");
+      expect(conflict.fix).not.toContain("--force");
+      expect(readFileSync(agentsPath, "utf-8")).toBe(broken);
+
+      writeFileSync(overridePath, "# Team instructions\n");
+      const both = instructionFileDoctorCheck(project, ".codex");
+      expect(both.pass).toBe(false);
+      expect(both.label).toContain("AGENTS.md");
+      expect(both.label).toContain("missing (AGENTS.override.md)");
+      expect(both.fix).toContain("copy");
+      expect(both.fix).toContain("AGENTS.override.md");
+      writeFileSync(agentsPath, "# Personal instructions\n");
+      writeFileSync(overridePath, block);
+      expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+    });
+
+    if (setup === "copy") {
+      test("copy: Codex override cannot rely on automatic legacy adoption", () => {
+        const project = codexProject();
+        const descriptorPath = join(project, ".codex/tools/data/aidlc-projection.json");
+        const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+        const legacy = "# Earlier shipped AI-DLC guidance\n";
+        const integration = descriptor.rootIntegrations.find((item: { path: string }) => item.path === "AGENTS.md");
+        integration.legacySignatures.wholeFileHashes.push(sha256Bytes(legacy));
+        writeFileSync(descriptorPath, JSON.stringify(descriptor));
+        const overridePath = join(project, "AGENTS.override.md");
+        writeFileSync(overridePath, legacy);
+        const result = instructionFileDoctorCheck(project, ".codex");
+        expect(result.pass).toBe(false);
+        expect(result.label).toContain("AGENTS.override.md");
+        expect(readFileSync(overridePath, "utf-8")).toBe(legacy);
+        rmSync(overridePath);
+        writeFileSync(join(project, "AGENTS.md"), legacy);
+        expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+      });
+    }
+  }
+
+  test("non-Codex instruction checks ignore AGENTS.override.md", () => {
+    for (const harness of ["claude", "kiro", "kiro-ide", "cursor", "opencode", "copilot"]) {
+      const project = install(harness);
+      const harnessDir = runtimePaths.discoverProjectHarnesses(project)[0].harnessDir;
+      const before = instructionFileDoctorCheck(project, harnessDir);
+      expect(before.pass, harness).toBe(true);
+      writeFileSync(join(project, "AGENTS.override.md"), "# Unrelated Codex instructions\n");
+      expect(instructionFileDoctorCheck(project, harnessDir), harness).toEqual(before);
+    }
+  });
+
   test("copied Codex instructions require both root guidance and onboarding without config", () => {
     const project = temp("aidlc-t294-copy-instructions-");
     cpSync(join(DIST, "codex", "AGENTS.md"), join(project, "AGENTS.md"));
