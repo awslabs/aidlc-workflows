@@ -3678,6 +3678,8 @@ interface ComposerScores {
   plan?: KeptComposerPlan;
   // The plans kept before `plan`, oldest first.
   earlier?: KeptComposerPlan[];
+  // Creation named the approval of the plan the person saw (markComposerPlanNamed).
+  named?: true;
 }
 const isProjectTypeWord = (value: unknown): value is ProjectTypeWord => value === "brownfield" || value === "greenfield";
 export interface KeptComposerPlan {
@@ -3737,6 +3739,7 @@ function readComposerScores(projectDir: string): ComposerScores | null {
     if (plan !== null) record.plan = plan;
     const earlier = Array.isArray(parsed.earlier) ? parsed.earlier.flatMap((entry) => keptPlanOf(entry) ?? []) : [];
     if (plan !== null && earlier.length > 0) record.earlier = earlier.slice(-KEPT_EARLIER_MAX);
+    if (plan !== null && parsed.named === true) record.named = true;
     return record;
   } catch {
     return null;
@@ -3792,6 +3795,7 @@ function fillComposerScores(projectDir: string, scores: Record<ArsComponent, num
     ...(method ? { method } : {}),
     ...(open.plan ? { plan: open.plan } : {}),
     ...(open.earlier ? { earlier: open.earlier } : {}),
+    ...(open.named ? { named: open.named } : {}),
   };
   try {
     writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify(record)}\n`);
@@ -3802,13 +3806,14 @@ function fillComposerScores(projectDir: string, scores: Record<ArsComponent, num
 
 /** A routed `validate-grid` run that passes keeps its plan in a record a
  *  dispatch opened, with the time it kept it; a different plan moves the one
- *  kept before it to `earlier`, and the same plan again keeps its first time.
- *  With no record open it writes nothing. */
+ *  kept before it to `earlier` and clears the named mark, and the same plan
+ *  again keeps its first time. With no record open it writes nothing. */
 function keepComposerPlan(projectDir: string, plan: KeptComposerPlan): void {
   const open = readComposerScores(projectDir);
   if (open === null || (open.plan !== undefined && sameKeptPlan(open.plan, plan))) return;
+  const { named: _named, ...kept } = open;
   const record: ComposerScores = {
-    ...open,
+    ...kept,
     plan: { ...plan, at: new Date().toISOString() },
     ...(open.plan ? { earlier: [...(open.earlier ?? []), open.plan].slice(-KEPT_EARLIER_MAX) } : {}),
   };
@@ -3822,17 +3827,30 @@ function keepComposerPlan(projectDir: string, plan: KeptComposerPlan): void {
 /** The plans kept for one of `requests` (a creation's request and the one it
  *  was composed from): `shown`, the newest the person replied after (`seen`
  *  says whether they replied since a time; a plan an older version kept counts
- *  as seen), the one their gate showed; and `unseen`, the newest plan when it
- *  was kept after that reply. Null when the record belongs to other work or
- *  keeps no plan. */
+ *  as seen), the one their gate showed; `unseen`, the newest plan when it was
+ *  kept after that reply; and `named`, whether creation named the shown plan's
+ *  approval since. Null when the record belongs to other work or keeps no plan. */
 export function keptComposerPlans(
   projectDir: string,
   requests: readonly string[],
   seen: (at: string) => boolean,
-): { shown: KeptComposerPlan | null; unseen: KeptComposerPlan | null } | null {
+): { shown: KeptComposerPlan | null; unseen: KeptComposerPlan | null; named: boolean } | null {
   const record = readComposerScores(projectDir);
   if (record?.plan === undefined || !requests.includes(record.request)) return null;
-  return shownAndUnseen(record.plan, record.earlier ?? [], seen);
+  return { ...shownAndUnseen(record.plan, record.earlier ?? [], seen), named: record.named === true };
+}
+
+/** Creation named the approval of the plan the person saw for one of
+ *  `requests`: once said, a creation typed with that plan's stages is created
+ *  as typed, with any setting the person asked for in their own words. */
+export function markComposerPlanNamed(projectDir: string, requests: readonly string[]): void {
+  const record = readComposerScores(projectDir);
+  if (record?.plan === undefined || !requests.includes(record.request) || record.named) return;
+  try {
+    writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify({ ...record, named: true })}\n`);
+  } catch {
+    // Unwritten: the step is said again at the next creation.
+  }
 }
 
 function shownAndUnseen(

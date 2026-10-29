@@ -418,6 +418,51 @@ describe("Approve creates the plan the gate showed, even when the plan is compos
     expect(suffixOf(state, SKIPPED)).toBe("EXECUTE");
   });
 
+  test("a later plan with the same stages and other settings: the plan shown is named with its own, and a setting the person asked for rides once", () => {
+    const proj = installedProject();
+    const request = tailor(proj);
+    const shown = customPlan(proj, SHOWN, { depth: "standard", flip: "sensors" });
+    const approve = personSays(proj, "Approve", before(proj, request));
+    const again = customPlan(proj, SHOWN, { depth: "comprehensive", flip: "learnings" });
+    expect(again.changes).toEqual(shown.changes);
+
+    const step = nextAsPerson(proj, ["--scope", again.base, ...lists(again.changes), ...shapeFlags(again), "--request", request]);
+    expect(step.message).not.toContain("intent create");
+    expect(step.message).toContain("worked out after the person's last message on record");
+    expect(step.message).toContain("adding the flag for any setting their reply asked for in their own words");
+    nothingCreated(proj);
+    const approval = commandIn(step, ` next --scope ${shown.base}`);
+    for (const [flag, value] of pairs(shapeFlags(shown))) expect(approval).toContain(`${flag} ${value}`);
+    for (const [flag, value] of pairs(shapeFlags(again))) expect(approval).not.toContain(`${flag} ${value}`);
+
+    // The person's "Approve, and turn learnings on" rides as its flag on the named approval, which creates at once.
+    const [learnings, value] = pairs(shapeFlags(again)).find(([flag]) => flag === "--learnings") as [string, string];
+    const created = nextAsPerson(proj, [...runNamedArgs(approval), learnings, value]);
+    const creation = commandIn(created, "intent create");
+    expect(creation).toContain(`${learnings} ${value}`);
+    for (const [flag, shownValue] of pairs(shapeFlags(shown))) expect(creation).toContain(`${flag} ${shownValue}`);
+    create(proj, created, approve);
+  });
+
+  test("a setting the person asked for, carried by the later plan too, is the agent's to add to the plan shown", () => {
+    const proj = installedProject();
+    const request = tailor(proj);
+    const shown = customPlan(proj, SHOWN);
+    personSays(proj, "Approve, and turn sensors off", before(proj, request));
+    const again = customPlan(proj, RECOMPOSED, { flip: "sensors" });
+    const [sensors, value] = pairs(shapeFlags(again)).find(([flag]) => flag === "--sensors") as [string, string];
+
+    const step = nextAsPerson(proj, ["--scope", again.base, ...lists(again.changes), sensors, value, "--request", request]);
+    expect(step.message).not.toContain("intent create");
+    expect(step.message).toContain("adding the flag for any setting their reply asked for in their own words");
+    const approval = commandIn(step, ` next --scope ${shown.base}`);
+    expect(approval).not.toContain(sensors);
+    const created = nextAsPerson(proj, [...runNamedArgs(approval), sensors, value]);
+    const creation = commandIn(created, "intent create");
+    expect(creation).toContain(lists(shown.changes).join(" "));
+    expect(creation).toContain(`${sensors} ${value}`);
+  });
+
   test("a plan composed again on another scope names the plan shown on its own scope, without the other plan's Guard Policy", () => {
     const proj = installedProject();
     const request = tailor(proj);

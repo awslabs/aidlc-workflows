@@ -583,9 +583,11 @@ import {
   keptComposerPlans,
   type KeptComposerPlan,
   loadGraph,
+  markComposerPlanNamed,
   memoryDirFor,
   openComposerScores,
   producersOf,
+  scopeSettingsOf,
   subgraphForScope,
 } from "./aidlc-graph.ts";
 // The plan for a request the person described in their own words is proposed
@@ -6716,10 +6718,14 @@ function composedPlanChangeStep(
 // plan is gone between `codex exec` turns) or in a new chat. Nothing is created
 // from it, as nothing says they saw it. The step names the approval of the
 // plan kept before that message, for the agent that showed that plan and read
-// an approval; otherwise the agent shows this plan with its gate, and the next
-// reply makes it the plan shown, so the same creation runs. Null when the plan
-// typed is the one shown, is not the one kept after the message, or the record
-// is other work's (keptComposerPlans).
+// an approval: that plan's own stages, depth, settings and Guard Policy, with
+// any setting the person asked for in their own words added by the agent, who
+// read them; otherwise the agent shows this plan with its gate, and the next
+// reply makes it the plan shown. The later plan typed with the shown plan's own
+// stages gets the step too while a value typed is not the shown plan's, until
+// the step is said once (markComposerPlanNamed); then it is created as typed.
+// Null when the plan typed is the one shown, is not the one kept after the
+// message, or the record is other work's (keptComposerPlans).
 function unseenComposedPlanStep(
   flags: ParsedFlags,
   scope: string,
@@ -6731,7 +6737,9 @@ function unseenComposedPlanStep(
   const kept = keptComposerPlans(projectDir, requests, composerPlanSeen(projectDir));
   const typed = flags.planChanges ?? { skip: [], add: [] };
   const isTyped = (plan: KeptComposerPlan): boolean => plan.scope === scope && sameStageChanges(typed, plan.changes);
-  if (!kept?.unseen || !isTyped(kept.unseen) || (kept.shown !== null && isTyped(kept.shown))) return null;
+  if (!kept?.unseen || !isTyped(kept.unseen)) return null;
+  const onShown = kept.shown !== null && isTyped(kept.shown);
+  if (kept.shown !== null && onShown && (kept.named || !typedOffPlan(flags, kept.shown))) return null;
   const typedPlan = `${scope} with ${stageChangesListed(typed)}`;
   if (kept.shown === null) {
     return printDirective(
@@ -6741,34 +6749,43 @@ function unseenComposedPlanStep(
         "prose, and end your turn: their next reply creates it.",
     );
   }
-  // A depth, setting or Guard Policy typed here that is the later plan's own
-  // came with that plan, not from the person: it is left off, and the shown
-  // plan's are typed in its place, as its own approval types them. The record
-  // keeps a Guard Policy only above its scope's default, which is typed too.
-  const unseenSettings = kept.unseen.settings ?? {};
-  const unseenPolicy = kept.unseen.guardPolicy ?? scopeGuardPolicyDefault(kept.unseen.scope);
-  const asShown: ParsedFlags = {
-    ...flags,
-    ...(flags.depth !== undefined && flags.depth === kept.unseen.depth ? { depth: undefined } : {}),
-    ...(flags.review !== undefined && flags.review === unseenSettings.review ? { review: undefined } : {}),
-    ...(flags.changeControl !== undefined && flags.changeControl === unseenPolicy ? { changeControl: undefined } : {}),
-    ceremony: undefined,
-  };
-  for (const key of CEREMONY_KEYS) {
-    const value = flags.ceremony?.[key];
-    if (value !== undefined && value !== unseenSettings[key]) asShown.ceremony = { ...asShown.ceremony, [key]: value };
-  }
+  // The shown plan's own values, from the record, never one typed here: which
+  // typed value is the person's is the agent's reading of their reply. A
+  // setting they asked for earlier in this chat still comes from their words.
+  const asShown: ParsedFlags = { ...flags, depth: undefined, review: undefined, changeControl: undefined, ceremony: undefined };
   fillApprovedPlanSettings(asShown, kept.shown, projectDir);
   const approval = composedApprovalCommand(asShown, kept.shown.scope, kept.shown.changes, described);
+  markComposerPlanNamed(projectDir, requests);
+  const shownPlan = `${kept.shown.scope} with ${stageChangesListed(kept.shown.changes)}`;
   return printDirective(
-    `Nothing is created yet: the plan typed here (${typedPlan}) was worked out after the person's last message on ` +
-      `record, and the plan kept before that message is ${kept.shown.scope} with ${stageChangesListed(kept.shown.changes)}. ` +
+    (onShown
+      ? `Nothing is created yet: the depth or settings typed here are those of a plan worked out after the person's ` +
+        `last message on record, and the plan kept before that message (${shownPlan}) has its own. `
+      : `Nothing is created yet: the plan typed here (${typedPlan}) was worked out after the person's last message on ` +
+        `record, and the plan kept before that message is ${shownPlan}. `) +
       "If that is the plan you showed them and their reply approved it, run " +
-      `\`${approval}\`${described ? ", with the same creationDescription as one shell-safe argument," : ""} and follow ` +
-      "what it returns: it creates the plan they approved. Otherwise (they asked for a change, or you showed them this " +
-      "plan), show them this plan as composer.md shows an offer, with its gate as numbered prose, and end your turn: " +
-      "their next reply creates it.",
+      `\`${approval}\`${described ? ", with the same creationDescription as one shell-safe argument" : ""}, adding the ` +
+      "flag for any setting their reply asked for in their own words, and follow what it returns: it creates the plan " +
+      "they approved. Otherwise (they asked for a change of stages, or you showed them this plan), show them this plan " +
+      "as composer.md shows an offer, with its gate as numbered prose, and end your turn: their next reply creates it.",
   );
+}
+
+// Whether a depth, review level, Guard Policy or switch typed here is not the
+// plan's own: its kept value, or its scope's where the record keeps none
+// (it keeps only what differs from that scope).
+function typedOffPlan(flags: ParsedFlags, plan: KeptComposerPlan): boolean {
+  const stock = scopeSettingsOf(plan.scope);
+  const depth = plan.depth ?? (loadScopeMapping()[plan.scope]?.depth ?? "").toLowerCase();
+  if (flags.depth !== undefined && flags.depth.toLowerCase() !== depth) return true;
+  if (flags.review !== undefined && flags.review !== (plan.settings?.review ?? stock?.review_cap)) return true;
+  if (flags.changeControl !== undefined && flags.changeControl !== (plan.guardPolicy ?? scopeGuardPolicyDefault(plan.scope))) {
+    return true;
+  }
+  return CEREMONY_KEYS.some((key) => {
+    const value = flags.ceremony?.[key];
+    return value !== undefined && value !== (plan.settings?.[key] ?? stock?.[key]);
+  });
 }
 
 const PLAN_WORKED_OUT_AGAIN =
