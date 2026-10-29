@@ -246,7 +246,7 @@ that reply and never counts in the chat, so the count holds across a park.
 With `accept_as_is: "offered"`, the gate adds a third option:
 
 ```
-{ label: "Accept as-is", description: "Archive current version and move on" }
+{ label: "Accept as-is", description: "Approve it as it is and move on" }
 ```
 
 The question text changes to include the cycle count, `[N]` from

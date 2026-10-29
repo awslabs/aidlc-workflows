@@ -373,7 +373,7 @@ options:
   - label: Request Changes
     description: Provide further revision feedback
   - label: Accept as-is
-    description: Archive current version and move on
+    description: Approve it as it is and move on
 ```
 
 If the person chooses "Accept as-is": report it as the gate's approval, for example `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "Accept as-is"`; the engine records the choice (`GATE_APPROVED`) and completes the stage. Never write the decision into the audit trail yourself.

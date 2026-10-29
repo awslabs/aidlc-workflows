@@ -557,7 +557,7 @@ On Kiro IDE, if you already replied and the workflow still waits, see
 
 ### Revision loop escape hatch
 
-After 3 revision cycles on the same stage, a third option appears: **Accept as-is**. This archives the current version and moves on. AI-DLC keeps the count in its record of the work, so the option still appears after you stop and resume, or continue in a new chat.
+After 3 revision cycles on the same stage, a third option appears: **Accept as-is**. This approves the stage as it is and moves on. AI-DLC keeps the count in its record of the work, so the option still appears after you stop and resume, or continue in a new chat.
 
 ### Skipping a stage
 
