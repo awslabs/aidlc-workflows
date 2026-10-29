@@ -233,6 +233,24 @@ describe("t-team-unit-skip-handed-out-step: a team Unit's skip of the step the e
     expect(landed).toContain("Unit Skipped");
   });
 
+  test("under the unit-end rhythm the skipped step is pinned as owing nothing and the Unit lands", () => {
+    const { seed, remote } = teamSeed();
+    prepareCandidate(remote, "alpha", "alpha-team", {
+      stages: WORKED,
+      unitEnd: true,
+      beforeCommit: (checkout) => {
+        expect(JSON.parse(skipReport(checkout, ["--unit", "alpha"]).stdout).kind).toBe("done");
+        appendFileSync(join(checkout, ".git", "info", "exclude"), "**/.aidlc-engine/engine-touch\n");
+      },
+    });
+    const pin = runMergeTool(UNIT, ["pin", "alpha"], seed);
+    expect(pin.status, pin.out).toBe(0);
+    expect(JSON.parse(pin.stdout).evidence.stages_skipped).toEqual([{ stage: STAGE, reason: AGENT_REASON }]);
+    gateAndLand(seed, "alpha");
+    const cells = unitProgressRow(seed, "alpha").split("|").slice(1, -1).map((cell) => cell.trim());
+    expect(cells.slice(2)).toEqual(cells.slice(2).map(() => "[x]"));
+  });
+
   test("the person's skip of Code Generation, with no plan written, is pinned, gated and landed", () => {
     const { seed, remote } = teamSeed();
     prepareCandidate(remote, "alpha", "alpha-team", {
