@@ -753,7 +753,7 @@ preserving any \`--request\` id rather than rebuilding the request.
   new-work text:
 
   \`\`\`bash
-  ${aidlcDispatcherInvocation("orchestrate next")} --new-intent --scope <the confirmed scope> "<the new-work description>"
+  ${aidlcDispatcherInvocation("orchestrate next")} --new-intent --scope <the confirmed scope> '<the new-work description>'
   \`\`\`
 
   The engine returns a \`print\` directive naming the \`intent-create\` command

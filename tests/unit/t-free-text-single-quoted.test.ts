@@ -46,10 +46,11 @@ function shippedFiles(dir: string): string[] {
 // the value on the flag's line or wrapped onto the next; not the `"|<A>|<B>"` list.
 const GAP = String.raw`(?:[ \t]+|[ \t]*\n[ \t]*)`;
 const FLAG_VALUE = new RegExp(String.raw`--([a-z][a-z-]*)${GAP}\\{0,3}"(?!\|)[^"\n]*<`, "g");
-// The words `next` (after any flags) and `next compose` take, and each of
-// `audit append-raw`'s two.
+// The words `next` (after any flags, a placeholder value with spaces too) and
+// `next compose` take, and each of `audit append-raw`'s two; `next` also where
+// the engine builds the command (`${aidlcDispatcherInvocation("orchestrate next")}`).
 const POSITIONAL_WORDS = new RegExp(
-  String.raw`\b(?:next(?: --[a-z-]+(?: <[^>\s]+>)?)*(?: compose)?|append-raw(?:${GAP}'[^'\n]*')?)${GAP}\\{0,3}"[^"\n]*<`,
+  String.raw`\b(?:next(?:"\)\})?(?: --[a-z-]+(?: <[^>\n]+>)?)*(?: compose)?|append-raw(?:${GAP}'[^'\n]*')?)${GAP}\\{0,3}"[^"\n]*<`,
   "g",
 );
 
@@ -71,7 +72,8 @@ describe("words on an AI-DLC command line are single-quoted in everything AI-DLC
       "`next --new-intent --scope <scope> \"<text>\"`",
       "`audit append-raw 'Error: <brief>' \"<body>\"`",
       "`report --result skipped --reason\n  \"<why>\"`",
-    ].join("\n"))).toHaveLength(7);
+      "${aidlcDispatcherInvocation(\"orchestrate next\")} --new-intent --scope <the confirmed scope> \"<the words>\"",
+    ].join("\n"))).toHaveLength(8);
     expect(doubleQuotedWords([
       "`report --stage x --result skipped --reason '<why>'`",
       "`--unit \"<directive.unit>\" --stage \"<directive.stage>\"`",
