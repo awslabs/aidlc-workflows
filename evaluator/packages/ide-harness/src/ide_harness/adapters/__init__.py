@@ -1,0 +1,1 @@
+"""IDE-specific adapter implementations."""

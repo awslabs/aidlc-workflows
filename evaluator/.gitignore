@@ -1,0 +1,28 @@
+# Evaluation outputs
+runs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.semgrep/
+.coverage
+htmlcov/
+
+# Node (bun-driven tools)
+node_modules/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
