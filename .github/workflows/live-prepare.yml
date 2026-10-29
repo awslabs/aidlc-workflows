@@ -14,7 +14,7 @@ defaults:
   run:
     shell: bash
 env:
-  BUN_VERSION: 1.4.2
+  BUN_VERSION: 1.4.4
   NODE_VERSION: 22.23.2
   CLAUDE_CODE_VERSION: 2.1.278
   CODEX_VERSION: 0.151.0

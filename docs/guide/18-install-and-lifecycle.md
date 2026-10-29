@@ -1902,11 +1902,14 @@ the practices you affirmed, and `project.md`, where your project rules and
 learnings go) and your chosen space (`aidlc/active-space`). Copying a newer
 release, or a second harness, over a project therefore keeps them. In a fresh
 copy, AI-DLC creates the two memory files from its bundled copy the first time
-you start work. Bun is the runtime prerequisite; the native
-`aidlc` executable is not required. Markdown analysis (summary confirmation,
+you start work. Use **Bun 1.4.4 or newer**, which includes the Brotli decoder fix
+for CVE-2026-111497; the native `aidlc` executable is not required. Updating
+a copied runtime does not update the Bun installation that runs it.
+Native installations instead need an AI-DLC release built with the fixed Bun:
+updating a separate Bun installation does not replace the runtime embedded in
+the `aidlc` executable. Markdown analysis (summary confirmation,
 Plan Approval tags, and the claim-sources sensor) uses Bun's built-in
-`Bun.markdown` renderer, so it needs Bun 1.3.8 or newer and follows the installed
-Bun's rendering:
+`Bun.markdown` renderer and follows the installed Bun's rendering:
 
 ```bash
 tag=vX.Y.Z
