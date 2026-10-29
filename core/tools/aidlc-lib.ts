@@ -19770,6 +19770,9 @@ export function candidateReviewCoverageProjection(
     artifactPrefix: string;
     expectedFingerprint: string;
     completionRecord?: (block: string) => ReviewRecord | null;
+    // Whether the person's approval decided the stage's open findings; an
+    // approval that asked for one to be fixed accepted no concern.
+    approvalAccepts?: (block: string) => boolean;
   },
 ): "ready" | "approved" | null {
   const events = sortAttemptEvents(rows);
@@ -19837,8 +19840,10 @@ export function candidateReviewCoverageProjection(
       continue;
     }
     if (event.event === "GATE_APPROVED") {
-      if (concernOpen) coverage = "approved";
-      concernOpen = false;
+      if (concernOpen && (options.approvalAccepts?.(event.block) ?? true)) {
+        coverage = "approved";
+        concernOpen = false;
+      }
       continue;
     }
     if (

@@ -104,6 +104,7 @@ import {
   recordedApprovalFingerprint,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
+import { approvalDecidesOpenFindings } from "./aidlc-review-brief.ts";
 import {
   aidlcEngineCommand,
   aidlcInvocation,
@@ -1152,6 +1153,7 @@ function candidateReviewCoverage(
   stage: {
     slug: string;
     reviewer?: string;
+    review_artifact?: string;
     produces?: string[];
     optional_produces?: string[];
     produces_kinds?: Record<string, string[]>;
@@ -1183,6 +1185,7 @@ function candidateReviewCoverage(
     artifactPrefix,
     expectedFingerprint,
     completionRecord,
+    approvalAccepts: (block) => approvalDecidesOpenFindings(block, stage.review_artifact),
   });
 }
 

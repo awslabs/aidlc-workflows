@@ -667,9 +667,14 @@ function findingIsOpen(finding: ReviewFinding): boolean {
   return finding.status === "New" || finding.status === "Unresolved";
 }
 
+// The statuses that are a decision on a finding: the person accepted it or
+// rejected it. Every other disposition leaves it open for the next review.
+function dispositionIsDecision(status: string): boolean {
+  return status === "Accepted risk" || status.startsWith("Rejected: ");
+}
+
 function findingIsDecided(finding: ReviewFinding): boolean {
-  return finding.status === "Accepted risk" ||
-    finding.status.startsWith("Rejected: ");
+  return dispositionIsDecision(finding.status);
 }
 
 // What one review said about a finding (its note, not re-checked mark, and
@@ -773,8 +778,7 @@ function applyDisposition(
   if (!findingIsOpen(finding)) return;
   // `Changed after review`, `Approved autonomously` and `Fix requested` are no
   // decision: the finding stays open, so the next review re-checks it.
-  const status = disposition.status === "Accepted risk" ||
-      disposition.status.startsWith("Rejected: ")
+  const status = dispositionIsDecision(disposition.status)
     ? disposition.status as ReviewFindingStatus
     : null;
   if (status === null) return;
@@ -1219,6 +1223,16 @@ function parseDispositionField(
   });
 }
 
+// Whether an approval decided every open finding it recorded on one review
+// artifact. A finding the person asked to have fixed, or whose work changed
+// after its review, is still open; an approval that records none stands for
+// its own decision.
+export function approvalDecidesOpenFindings(block: string, artifact: string | undefined): boolean {
+  return parseDispositionField(auditBlockField(block, REVIEW_FINDING_DISPOSITIONS_FIELD))
+    .filter((disposition) => disposition.artifact === artifact)
+    .every((disposition) => dispositionIsDecision(disposition.status));
+}
+
 export function readReviewFindingDispositions(
   projectDir: string,
   stageSlug: string,
@@ -1324,8 +1338,7 @@ export function hydrateReviewArtifactContexts(
       ) {
         return finding;
       }
-      const status = disposition.status === "Accepted risk" ||
-          disposition.status.startsWith("Rejected: ")
+      const status = dispositionIsDecision(disposition.status)
         ? disposition.status as ReviewFindingStatus
         : finding.status;
       return {

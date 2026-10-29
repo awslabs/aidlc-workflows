@@ -39,6 +39,11 @@ import { basename, dirname, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 import {
+  approvalDecidesOpenFindings,
+  REVIEW_FINDING_DISPOSITIONS_FIELD,
+  serializeReviewFindingDispositions,
+} from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
+import {
   worktreePath,
   type ActiveDirectiveGuardRemedy,
   type AttemptView,
@@ -2230,6 +2235,31 @@ describe("AttemptView projections and refusal streaks", () => {
         File: "aidlc/construction/alpha/nfr-design/nfr-design-patterns.md",
       }, "a.md", 0, 3),
     ])).toBe(null);
+    // An approval decides the concern only when it accepted every open finding
+    // it recorded, as the review-disposition owner reads it.
+    type Status = "Accepted risk" | "Fix requested" | "Changed after review";
+    const decided = (status: Status, other?: Status) =>
+      candidateReviewCoverageProjection([...review("NOT-READY", 1, 0), approval(2, {
+        [REVIEW_FINDING_DISPOSITIONS_FIELD]: serializeReviewFindingDispositions([
+          { artifact: "nfr-design", id: "R-01", fingerprint: `sha256:${"b".repeat(64)}`, status },
+          // One unit-end approval records every stage's findings; another
+          // stage's are not this stage's.
+          ...(other ? [{ artifact: "logical-components", id: "R-01", fingerprint: `sha256:${"c".repeat(64)}`, status: other }] : []),
+        ])!,
+      })], {
+        unit: "alpha",
+        generation: 1,
+        stage: "nfr-design",
+        reviewer: "reviewer",
+        artifactPrefix: "construction/alpha/nfr-design/",
+        expectedFingerprint: fingerprint,
+        approvalAccepts: (block) => approvalDecidesOpenFindings(block, "nfr-design"),
+      });
+    expect(decided("Accepted risk")).toBe("approved");
+    expect(decided("Fix requested")).toBe(null);
+    expect(decided("Changed after review")).toBe(null);
+    expect(decided("Accepted risk", "Fix requested")).toBe("approved");
+    expect(decided("Fix requested", "Accepted risk")).toBe(null);
     // A rejection after the approval opens the stage again.
     expect(coverage([
       ...review("NOT-READY", 1, 0),

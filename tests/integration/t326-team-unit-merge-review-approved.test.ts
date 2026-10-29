@@ -16,6 +16,10 @@ import {
   loadStageGraphAll,
   reviewArtifactFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  REVIEW_FINDING_DISPOSITIONS_FIELD,
+  serializeReviewFindingDispositions,
+} from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
 import { seededAuditDir, seededRecordDir } from "../harness/fixtures.ts";
 import {
   UNIT,
@@ -118,6 +122,36 @@ describe("t326 pin and a stage approved over an open review concern", () => {
         "alpha (not this one), have it reviewed again, then publish alpha again.",
     );
     expect(pin.out).not.toContain("READY receipts");
+  });
+
+  test("an approval that asked for the open finding to be fixed accepted no concern, and refuses", () => {
+    const fixture = makeSeed();
+    const candidate = prepareCandidate(fixture.remote, "alpha", "fix-team");
+    reviewLeftNotReady(candidate, "fix-team");
+    // "Approve, but fix R-01": the approval records the fix the person asked
+    // for, and the finding stays open for the next review.
+    const dispositions = serializeReviewFindingDispositions([{
+      artifact: nfrDesign.review_artifact!,
+      id: "R-01",
+      fingerprint: `sha256:${"b".repeat(64)}`,
+      status: "Fix requested",
+      decided_at_severity: "Major",
+    }]);
+    const approval = `**Gate Stages**: ${STAGE}\n**User Input**: Approve\n`;
+    const shard = readFileSync(shardPath(candidate), "utf-8");
+    expect(shard).toContain(approval);
+    writeFileSync(
+      shardPath(candidate),
+      shard.replace(approval, `${approval}**${REVIEW_FINDING_DISPOSITIONS_FIELD}**: ${dispositions}\n`),
+    );
+    publishAgain(candidate, "NFR Design approved with R-01 to be fixed");
+
+    const pin = runMergeTool(UNIT, ["pin", "alpha"], fixture.seed);
+    expect(pin.status).not.toBe(0);
+    expect(pin.out).toContain(
+      "NFR Design has no review that stands for it as published: in the checkout where fix-team claimed " +
+        "alpha (not this one), have it reviewed again, then publish alpha again.",
+    );
   });
 
   test("a change to the stage's documents after the approval over a concern refuses", () => {
