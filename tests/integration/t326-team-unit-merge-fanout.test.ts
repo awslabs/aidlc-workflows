@@ -7,7 +7,7 @@
 // `/aidlc --claim`, and the guard's refusal names that step. The board's
 // header, its Claim Registry and its list of claimed Units name as claimed only
 // Units still being worked, as its Claimable and Waiting lists read them; a
-// landed Unit's kept claim reads as landed.
+// landed Unit's kept claim reads as landed, and only once main has merged it.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -50,7 +50,13 @@ function checkoutFiles(dir: string): Record<string, string> {
 describe("t326 an unscoped checkout after a team Unit lands", () => {
   test("shows the board, not the next Unit's stage, and claims only on the person's word", () => {
     const { seed, remote } = makeSeed();
-    prepareCandidate(remote, "alpha", "alpha-team");
+    const team = prepareCandidate(remote, "alpha", "alpha-team");
+    // The team's own clone, its work done and published, before main merges
+    // it: the claim is still being worked toward landing.
+    const published = runMergeTool(ORCH, ["team-board", "--snapshot"], team.checkout);
+    expect(published.status, published.out).toBe(0);
+    expect(published.stdout).toContain("| alpha | claimed | alpha-team | 1 |");
+    expect(published.stdout).not.toContain("| alpha | landed |");
     gateAndLand(seed, "alpha");
     git(seed, ["push", "origin", "main"]);
     const refsAfterLanding = claimRefs(remote);

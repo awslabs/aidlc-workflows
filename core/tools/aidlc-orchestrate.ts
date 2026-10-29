@@ -5255,8 +5255,8 @@ export interface TeamConstructionBoard {
   claimed: Array<{ unit: string; owner: string }>;
   claims: Array<{
     unit: string;
-    // The claim record's status, or "landed" where the overview's opening
-    // rule reads the Unit as done (the record keeps the claim after landing).
+    // The claim record's status, or "landed" where the overview reads the
+    // Unit's row as merged (the record keeps the claim after landing).
     status: "claimed" | "released" | "landed";
     owner: string;
     generation: number;

@@ -193,8 +193,8 @@ export interface UnitClaimView {
   ref: string;
   observedAt?: string;
   movementObserved?: boolean;
-  // Set by the opening rule (buildOverview): the Unit is done, and its claim,
-  // kept after landing, is not one being worked.
+  // Set by buildOverview when the Unit's row is merged: its claim, kept after
+  // landing, is not one being worked.
   landed?: boolean;
   payload: UnitClaimPayload;
 }
@@ -679,6 +679,9 @@ type OpeningStatus = {
   units: string[];
   blockers: Map<string, string[]>;
   completed: Set<string>;
+  // Completed and merged into main. A row is complete in a team's own clone
+  // once its stages are approved, before the Unit is landed.
+  landed: Set<string>;
   skeleton: string;
 };
 
@@ -712,7 +715,8 @@ function openingStatusFrom(state: string, dependencyBody: string): OpeningStatus
     if (skeletonBlocked) waiting.unshift("walking-skeleton");
     blockers.set(edge.name, [...new Set(waiting)]);
   }
-  return { units: parsed.units.map((edge) => edge.name), blockers, completed, skeleton };
+  const landed = new Set([...completed].filter((unit) => unitRowMerged(state, unit)));
+  return { units: parsed.units.map((edge) => edge.name), blockers, completed, landed, skeleton };
 }
 
 function allClaims(
@@ -742,7 +746,7 @@ function buildOverview(
   for (const unit of opening.units) {
     const claim = claims.get(unit);
     if (opening.completed.has(unit)) {
-      if (claim?.status === "claimed") claim.landed = true;
+      if (claim?.status === "claimed" && opening.landed.has(unit)) claim.landed = true;
       continue;
     }
     if (claim?.status === "claimed") {
