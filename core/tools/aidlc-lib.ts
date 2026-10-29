@@ -32209,8 +32209,8 @@ export function validateLiveUnitScope(
   if (!stamp) {
     if (cachedClaimFanoutActive(pd)) {
       throw new Error(
-        "This checkout holds no Unit claim, so no Unit's work runs here. " +
-          `To work on a Unit here, type \`${entrySkillInvocation()} --claim <unit> --team <label>\`.`,
+        "This checkout holds no Unit claim, so no Unit's work runs here; a Unit is worked here once it is " +
+          `claimed with \`${entrySkillInvocation()} --claim <unit> --team <label>\`.`,
       );
     }
     return null;
