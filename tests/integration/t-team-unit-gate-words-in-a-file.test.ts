@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readUnitMergeTransaction } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { gitBashPath, gitBashSkipReason } from "../harness/git-bash.ts";
-import { UNIT, cleanupTempDirs, dispatchMerge, makeSeed, prepareCandidate, runMergeTool } from "../harness/team-unit-merge.ts";
+import { UNIT, cleanupTempDirs, makeSeed, prepareCandidate, replyAfterPin, runMergeTool } from "../harness/team-unit-merge.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTempDirs);
@@ -27,8 +27,7 @@ describe("a Unit merge decision in the person's words, from a request file", () 
     prepareCandidate(remote, "alpha", "gate-words-file");
     const pin = runMergeTool(UNIT, ["pin", "alpha"], seed);
     expect(pin.status, pin.out).toBe(0);
-    const pinned = JSON.parse(pin.stdout) as { pinned_oid: string; generation: number };
-    dispatchMerge(seed, "alpha", pinned.pinned_oid, pinned.generation);
+    replyAfterPin(seed, "alpha");
     const folder = join(seed, "aidlc", ".aidlc-request-text");
     mkdirSync(folder, { recursive: true });
     const file = join(folder, "gate-alpha.txt");

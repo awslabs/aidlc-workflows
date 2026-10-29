@@ -115,7 +115,8 @@ acts as it always has. A Unit command is exact by its shape (`unitCommandArgv`,
 name that verb takes, as the Unit tool reads the rest (`unit pin alpha`, `unit
 land alpha --step git`, or the same line as one argument, quotes included, as
 Kiro IDE hands it over); `next` names that command for the agent to run, and no
-seam runs it off-band. Any other line that opens with `unit` (`unit tests for
+seam runs it off-band. A gate's `--user-input` words go in a request file the
+gate reads (`--request-file`), as a next step's words do. Any other line that opens with `unit` (`unit tests for
 the parser`, `unit pin alpha -- why first`, `unit` alone, `unit help`, a
 misspelt verb) is their words, with no refusal naming the verbs as the `plugin`
 and `knowledge` nouns give. **Words**: nothing on the line was read, so it is a

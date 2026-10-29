@@ -2420,6 +2420,7 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
     ) &&
     existingDecision === decision
   ) {
+    spend();
     console.log(JSON.stringify({
       gated: true,
       recovered: true,
