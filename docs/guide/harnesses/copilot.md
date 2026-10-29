@@ -234,11 +234,12 @@ then use the ignored local `dist/copilot/` output.
     the same way: no chaining, pipe, redirect other than one trailing `2>&1`,
     environment assignment in front, or shell expansion, and no character any
     of those shells treats specially (such as `$`, a backtick, `%`, `^`, `!`,
-    `#`, braces, `@`, `\`, or a typographic quote), even inside quotes. A
-    quoted word may hold spaces, `?`, parentheses, and `;`, and an apostrophe
-    inside double quotes. Double-quoted text may also hold `|`, `&`, `<`, or
-    `>` when it has a space, as in
-    `--details "Q1: A - both ends included (closed range)"` or
+    `#`, braces, `@`, `\`, or a typographic quote), even inside quotes, except
+    a `$` in single quotes, which no shell expands there (a price in a choice,
+    as in `--option 'Show $0.00, with tax'`). A quoted word may hold spaces,
+    `?`, parentheses, and `;`, and an apostrophe inside double quotes.
+    Double-quoted text may also hold `|`, `&`, `<`, or `>` when it has a space,
+    as in `--details "Q1: A - both ends included (closed range)"` or
     `--options "Keep the note|Skip it"`; outside quotes, in single quotes, or
     in double quotes with no space, those keep the prompt. Text outside plain
     ASCII (accented letters, for example) also keeps the prompt. On Windows,
