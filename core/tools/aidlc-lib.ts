@@ -19760,8 +19760,9 @@ function candidateAttemptEventMatches(
 // verified review is READY on the candidate's documents, "approved" when it is
 // NOT-READY on them and the person's approval of the stage (the GATE_APPROVED
 // the stage gate writes) comes after it and decided its open findings, null
-// otherwise. A change to the
-// documents, a rejection or a revision after either undoes it.
+// otherwise; with the latest approval of the stage since that review, whose
+// recorded findings pin's evidence names. A change to the documents, a
+// rejection or a revision after either undoes it.
 export function candidateReviewCoverageProjection(
   rows: ReadonlyArray<AuditShardEvent>,
   options: {
@@ -19776,7 +19777,7 @@ export function candidateReviewCoverageProjection(
     // approval that asked for one to be fixed accepted no concern.
     approvalAccepts?: (block: string) => boolean;
   },
-): "ready" | "approved" | null {
+): { coverage: "ready" | "approved"; approval: string | null } | null {
   const events = sortAttemptEvents(rows);
   const relevantByTimestamp = new Map<string, Set<string>>();
   for (const event of events) {
@@ -19810,6 +19811,7 @@ export function candidateReviewCoverageProjection(
   // A NOT-READY verdict on the candidate's documents: the stage gate takes the
   // person's approval over it, and their approval after it is what covers it.
   let concernOpen = false;
+  let approval: string | null = null;
   for (const event of events) {
     if (
       event.event === "ARTIFACT_CREATED" ||
@@ -19819,6 +19821,7 @@ export function candidateReviewCoverageProjection(
       if (file.includes(options.artifactPrefix)) {
         coverage = null;
         concernOpen = false;
+        approval = null;
       }
       continue;
     }
@@ -19839,6 +19842,7 @@ export function candidateReviewCoverageProjection(
       pending.clear();
       coverage = null;
       concernOpen = false;
+      approval = null;
       continue;
     }
     if (event.event === "GATE_APPROVED") {
@@ -19846,6 +19850,9 @@ export function candidateReviewCoverageProjection(
         coverage = "approved";
         concernOpen = false;
       }
+      // An approval that left the concern open (a fix asked for) covers
+      // nothing, so it is not the stage's approval either.
+      if (coverage !== null) approval = event.block;
       continue;
     }
     if (
@@ -19879,8 +19886,9 @@ export function candidateReviewCoverageProjection(
         options.expectedFingerprint;
     coverage = verdict === "READY" && current ? "ready" : null;
     concernOpen = verdict === "NOT-READY" && current;
+    approval = null;
   }
-  return coverage;
+  return coverage === null ? null : { coverage, approval };
 }
 
 // A person's Request Changes that changed nothing of the stage: the stage is
@@ -29604,9 +29612,14 @@ export interface UnitMergeEvidence {
   gates_approved: string[];
   reviewers_expected: string[];
   reviewers_ready: string[];
-  // Reviewed stages the person approved after a NOT-READY review; written only
-  // when there is one, so evidence pinned before it compares the same.
-  reviewers_approved_over_concerns?: string[];
+  // Reviewed stages the person approved with a finding open, or after a
+  // NOT-READY review, each with the findings that approval recorded on its
+  // documents; written only when there is one, so evidence pinned before it
+  // compares the same.
+  reviewers_approved_over_concerns?: Array<{
+    stage: string;
+    findings: Array<{ id: string; severity?: string; status: string }>;
+  }>;
   plan_fingerprint: string | null;
   artifact_paths: string[];
   audit_shards: string[];

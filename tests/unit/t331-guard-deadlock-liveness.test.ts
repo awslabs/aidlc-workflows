@@ -2,7 +2,8 @@
 // function:attemptEventDefinitelyBefore, function:maximalAttemptEvents,
 // function:reviewInvalidationAttemptView, function:attemptEventAfterFrontier,
 // function:reviewAttemptAccounting, function:worktreeReviewAttemptProjection,
-// function:candidateReviewCoverageProjection, function:evaluateGuardRefusal,
+// function:candidateReviewCoverageProjection, function:approvalOpenFindings,
+// function:evaluateGuardRefusal,
 // function:requestChangesResetIsExecutable, function:requestChangesReportArgs,
 // function:requestChangesReportCommand,
 // function:guardRefusalStreakView,
@@ -40,6 +41,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 import {
   approvalDecidesOpenFindings,
+  approvalOpenFindings,
   REVIEW_FINDING_DISPOSITIONS_FIELD,
   serializeReviewFindingDispositions,
 } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
@@ -2157,7 +2159,7 @@ describe("AttemptView projections and refusal streaks", () => {
         artifactPrefix: "construction/alpha/functional-design/",
         expectedFingerprint: `sha256:${"a".repeat(64)}`,
       }),
-    ).toBe("ready");
+    ).toEqual({ coverage: "ready", approval: null });
     expect(
       candidateReviewCoverageProjection(
         [
@@ -2204,7 +2206,7 @@ describe("AttemptView projections and refusal streaks", () => {
         ...attempt, Stage: "nfr-design", "Gate Scope": "per-stage", "Gate Stages": "nfr-design",
         "User Input": "Approve", ...fields,
       }, "a.md", 0, pos);
-    const coverage = (rows: AuditShardEvent[]) =>
+    const project = (rows: AuditShardEvent[]) =>
       candidateReviewCoverageProjection(rows, {
         unit: "alpha",
         generation: 1,
@@ -2213,11 +2215,18 @@ describe("AttemptView projections and refusal streaks", () => {
         artifactPrefix: "construction/alpha/nfr-design/",
         expectedFingerprint: fingerprint,
       });
+    const coverage = (rows: AuditShardEvent[]) => project(rows)?.coverage ?? null;
 
     expect(coverage(review("NOT-READY", 1, 0))).toBe(null);
     expect(coverage([...review("NOT-READY", 1, 0), approval(2)])).toBe("approved");
     // A READY review stands with or without the approval after it.
     expect(coverage([...review("READY", 1, 0), approval(2)])).toBe("ready");
+    // The approval since the review that stands is the one whose recorded
+    // findings pin names; one before a newer review is not, as that review
+    // carries the findings the approval decided.
+    expect(project([...review("READY", 1, 0), approval(2)])?.approval).toBe(approval(2).block);
+    expect(project([...review("READY", 1, 0), approval(2), ...review("READY", 2, 3)]))
+      .toEqual({ coverage: "ready", approval: null });
     // One unit-end approval names every stage it covers.
     expect(coverage([...review("NOT-READY", 1, 0), approval(2, {
       Stage: "code-generation", "Gate Scope": "unit-end",
@@ -2263,12 +2272,26 @@ describe("AttemptView projections and refusal streaks", () => {
         artifactPrefix: "construction/alpha/nfr-design/",
         expectedFingerprint: fingerprint,
         approvalAccepts: (block) => approvalDecidesOpenFindings(block, "construction/alpha/nfr-design/"),
-      });
+      })?.coverage ?? null;
     expect(decided("Accepted risk")).toBe("approved");
     expect(decided("Fix requested")).toBe(null);
     expect(decided("Changed after review")).toBe(null);
     expect(decided("Accepted risk", "Fix requested")).toBe("approved");
     expect(decided("Fix requested", "Accepted risk")).toBe(null);
+    // What pin's evidence names: this stage's findings as the approval recorded
+    // them, never another stage's.
+    expect(approvalOpenFindings(approval(2, {
+      [REVIEW_FINDING_DISPOSITIONS_FIELD]: serializeReviewFindingDispositions([
+        {
+          artifact: "aidlc/construction/alpha/nfr-design/security-design.md",
+          id: "R-01", fingerprint: `sha256:${"b".repeat(64)}`, status: "Accepted risk", decided_at_severity: "Major",
+        },
+        {
+          artifact: "aidlc/construction/alpha/nfr-requirements/nfr-requirements.md",
+          id: "R-02", fingerprint: `sha256:${"c".repeat(64)}`, status: "Fix requested",
+        },
+      ])!,
+    }).block, "construction/alpha/nfr-design/")).toEqual([{ id: "R-01", severity: "Major", status: "Accepted risk" }]);
     // A rejection after the approval opens the stage again.
     expect(coverage([
       ...review("NOT-READY", 1, 0),

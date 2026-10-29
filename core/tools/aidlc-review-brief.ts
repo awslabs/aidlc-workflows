@@ -1223,17 +1223,37 @@ function parseDispositionField(
   });
 }
 
-// Whether an approval decided every open finding it recorded on the documents
-// under one folder (`construction/<unit>/<stage>/`); a disposition names its
-// document by its path in the project. A finding the person asked to have
-// fixed, or whose work changed after its review, is still open; an approval
-// that records none stands for its own decision.
-export function approvalDecidesOpenFindings(block: string, documents: string): boolean {
+// The open findings an approval recorded on the documents under one folder
+// (`construction/<unit>/<stage>/`); a disposition names its document by its
+// path in the project.
+function approvalDispositionsOn(block: string, documents: string): ReviewFindingDisposition[] {
   return parseDispositionField(auditBlockField(block, REVIEW_FINDING_DISPOSITIONS_FIELD))
     .filter((disposition) =>
       disposition.artifact.startsWith(documents) || disposition.artifact.includes(`/${documents}`)
-    )
+    );
+}
+
+// Whether an approval decided every open finding it recorded on those
+// documents. A finding the person asked to have fixed, or whose work changed
+// after its review, is still open; an approval that records none stands for
+// its own decision.
+export function approvalDecidesOpenFindings(block: string, documents: string): boolean {
+  return approvalDispositionsOn(block, documents)
     .every((disposition) => dispositionIsDecision(disposition.status));
+}
+
+// The findings an approval recorded open on those documents, as the merge
+// gate's evidence names them: id, the severity it was approved at, and what
+// the approval recorded for it.
+export function approvalOpenFindings(
+  block: string,
+  documents: string,
+): Array<{ id: string; severity?: string; status: string }> {
+  return approvalDispositionsOn(block, documents).map((disposition) => ({
+    id: disposition.id,
+    ...(disposition.decided_at_severity ? { severity: disposition.decided_at_severity } : {}),
+    status: disposition.status,
+  }));
 }
 
 export function readReviewFindingDispositions(
