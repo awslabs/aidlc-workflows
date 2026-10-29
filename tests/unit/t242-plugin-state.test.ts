@@ -797,6 +797,34 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     ]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A lock another computer left is refused with the folder to delete; a
+  // plugin select or sync says that step too, not only the refusal.
+  test("a plugin select and sync that meet another computer's lock name the folder to delete", async () => {
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+    const lock = join(project, ".aidlc-transaction.lock");
+    mkdirSync(lock);
+    writeFileSync(join(lock, "owner.json"), JSON.stringify({
+      schemaVersion: 1, pid: process.pid, host: "another-host", machine: "another-machine",
+      token: "another-token", staging: ".aidlc-txn-another",
+    }));
+    const step = `delete the folder ${lock} first`;
+    const selected = spawnSync(process.execPath, [join(project, ".claude", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"], {
+      cwd: project,
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(selected.status).not.toBe(0);
+    expect(`${selected.stdout}${selected.stderr}`).toContain(step);
+    const synced = spawnSync(process.execPath, [join(project, ".claude", "tools", "aidlc-plugin.ts"), "sync", "--project-dir", project], {
+      cwd: project,
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(synced.status).not.toBe(0);
+    expect(`${synced.stdout}${synced.stderr}`).toContain(step);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("public JSON and doctor expose the shared exact comparator state", () => {
     const project = installedProject();
     withClaudeFixture(TEST_PRO);

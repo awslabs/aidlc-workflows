@@ -540,7 +540,7 @@ import {
   withFileLineEndings,
 } from "./aidlc-plugin.ts";
 import { pluginTestCommand, renderPluginTestHelp, resolveHookPath } from "./aidlc.ts";
-import { executePlan } from "./aidlc-transaction.ts";
+import { executePlan, withTransactionFix } from "./aidlc-transaction.ts";
 import {
   aidlcDispatcherInvocation,
   aidlcInvocation,
@@ -1504,7 +1504,7 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
       }
     } catch (err) {
       resetSelectionSensitiveCaches();
-      die(`select-plugins failed: ${errorMessage(err)}`);
+      die(`select-plugins failed: ${withTransactionFix(err, errorMessage(err))}`);
     } finally {
       rmSync(stagingRoot, { recursive: true, force: true });
     }
@@ -1745,7 +1745,7 @@ async function handlePluginSync(projectDir: string, pluginRoot: string | undefin
         }
         await mod.compose();
       } catch (error) {
-        die(`plugin-sync failed for ${item.root}: ${errorMessage(error)}`);
+        die(`plugin-sync failed for ${item.root}: ${withTransactionFix(error, errorMessage(error))}`);
       } finally {
         for (const key of envKeys) {
           const value = previous[key];

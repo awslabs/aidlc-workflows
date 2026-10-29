@@ -48,6 +48,7 @@ import {
 import {
   executePlan,
   TransactionBusyError,
+  withTransactionFix,
   transactionState,
   writeOperation,
   type TransactionOperation,
@@ -2653,7 +2654,7 @@ export async function main(argv: string[]): Promise<void> {
     }
     throw new Error("usage: aidlc engine plugin <list|sync [--prune-missing]>");
   } catch (error) {
-    const message = errorMessage(error);
+    const message = withTransactionFix(error, errorMessage(error));
     const code = error instanceof PluginUsageError ? 2 : 1;
     if (flags.json === "true") process.stdout.write(jsonEnvelope(code, message, null));
     else process.stderr.write(`aidlc engine plugin: ${message}\n`);

@@ -513,6 +513,12 @@ export class TransactionLockError extends TransactionFilesystemError {
   }
 }
 
+// For a command that prints its failure as one line (plugin select and sync):
+// a transaction error keeps its fix, as config's error and fix pair does.
+export function withTransactionFix(error: unknown, message: string): string {
+  return error instanceof TransactionFilesystemError ? `${message} fix: ${error.remediation}` : message;
+}
+
 // A lock this command cannot clear by itself, in the person's words, with the
 // way on. Its own message and fix replace the storage words of its parent,
 // whose branch in the config handler prints them.

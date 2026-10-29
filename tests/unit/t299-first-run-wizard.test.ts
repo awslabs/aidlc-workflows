@@ -2179,7 +2179,8 @@ describe("t299 first-run setup wizard", () => {
           env: { AIDLC_TEST_CONFIG_TTY: undefined },
         });
         expect(result.status, result.stdout + result.stderr).toBe(0);
-        expect(result.stdout).toContain(`configured ${result.project} for Claude Code`);
+        const said = mode === "json" ? String(JSON.parse(result.stdout).message) : result.stdout;
+        expect(said).toContain(`configured ${result.project} for Claude Code`);
         expect(existsSync(join(result.project, ".claude", "CLAUDE.md"))).toBe(true);
       }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
