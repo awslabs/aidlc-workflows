@@ -97,12 +97,20 @@ by default. AI-DLC's own plugin catalogue sits beside the versions, at
 `${XDG_DATA_HOME:-$HOME/.local/share}/aidlc/plugins/`; the installer prints its
 full path (see [Plugins](#plugins)).
 
-The installer does not edit a shell startup file unless
-`--profile <absolute-path-under-$HOME>` is explicit. That option writes or
-updates one `BEGIN AI-DLC:PATH` block transactionally and preserves the rest
-of the file. The profile cannot be inside the AI-DLC install or command roots;
-existing markers must be unique, exact full lines, and ordered begin-before-end.
-Malformed marker layouts are refused without changing the profile.
+When `$HOME/.local/bin` is not on `PATH`, the installer offers to add it: at a
+terminal it names the login shell's startup file (`~/.zshrc`, or
+`~/.bash_profile` when that exists, else `~/.bashrc`), shows the exact block, and
+asks once before writing it. `--yes` accepts the offer without asking, and
+`--no-modify-path` declines it without asking, the way `-NoModifyPath` does on
+Windows. A non-interactive run, `--json`, or `--quiet` keeps the earlier
+behaviour and only prints the `export PATH=…` line.
+
+Either way the file is edited through the same transactional write as
+`--profile <absolute-path-under-$HOME>`: one `BEGIN AI-DLC:PATH` block, the rest
+of the file preserved. The profile cannot be inside the AI-DLC install or command
+roots; existing markers must be unique, exact full lines, and ordered
+begin-before-end. Malformed marker layouts are refused without changing the
+profile.
 
 ### Windows PowerShell
 
