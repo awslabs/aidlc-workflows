@@ -5640,7 +5640,10 @@ function publishCodeGenerationStart(
     // retry writes it again), and their sweep is for receipts of this
     // attempt, not of the one the approval was given in.
     if (continuation?.carried && started !== null && started !== receipt.startedFingerprint) {
-      writePlanApprovalReceipt(projectDir, { ...receipt, startedFingerprint: started });
+      // The receipt as it stands now: the batch start may have marked it
+      // (`carriedInto`) since it was read, and that mark must stay.
+      const current = readPlanApprovalReceipt(projectDir, receipt) ?? receipt;
+      writePlanApprovalReceipt(projectDir, { ...current, startedFingerprint: started });
     }
     return changeNotices;
   }
