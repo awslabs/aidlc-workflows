@@ -11,14 +11,17 @@ import {
   closeSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -87,6 +90,54 @@ function treeSnapshot(root: string): Record<string, string> {
   };
   visit(root, "");
   return snapshot;
+}
+
+// Every entry below root as lstat sees it: a link by its target, never
+// followed, so a link the person keeps reads as theirs before and after.
+function linkTree(root: string): Record<string, string> {
+  const entries: Record<string, string> = {};
+  const visit = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory).sort()) {
+      const path = join(directory, entry);
+      const rel = prefix ? `${prefix}/${entry}` : entry;
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) {
+        entries[rel] = `link:${readlinkSync(path)}`;
+      } else if (stat.isDirectory()) {
+        entries[`${rel}/`] = "";
+        visit(path, rel);
+      } else {
+        entries[rel] = readFileSync(path).toString("base64");
+      }
+    }
+  };
+  visit(root, "");
+  return entries;
+}
+
+// A folder link: a junction on Windows, where it needs no privilege.
+function folderLink(target: string, path: string): void {
+  symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir");
+}
+
+// A checkout of the person's own where Claude Code keeps its worktrees, with
+// the links a worktree of a repo with a tracked AGENTS.md -> CLAUDE.md, or of
+// one with node_modules, holds. `clone` gives it a .git folder of its own
+// instead of a worktree's .git file.
+function claudeWorktree(project: string, name: string, clone = false): string {
+  const tree = join(project, ".claude", "worktrees", name);
+  mkdirSync(join(tree, "docs"), { recursive: true });
+  if (clone) {
+    mkdirSync(join(tree, ".git"));
+    writeFileSync(join(tree, ".git", "HEAD"), "ref: refs/heads/main\n");
+  } else {
+    writeFileSync(join(tree, ".git"), `gitdir: ${join(project, ".git", "worktrees", name)}\n`);
+  }
+  writeFileSync(join(tree, "CLAUDE.md"), "# Project notes\n");
+  writeFileSync(join(tree, "docs", "guide.md"), "guide\n");
+  if (process.platform !== "win32") symlinkSync("CLAUDE.md", join(tree, "AGENTS.md"));
+  folderLink(join(tree, "docs"), join(tree, "shared"));
+  return tree;
 }
 
 function detection(
@@ -251,13 +302,6 @@ function filesystemPreload(
       symlinkSync: observeMutation("symlinkSync", 1),
       unlinkSync: observeMutation("unlinkSync"),
       rmdirSync: observeMutation("rmdirSync"),
-      linkSync(source, destination) {
-        if (inProject(source) || inProject(destination)) {
-          record("link", { source: pathOf(source), destination: pathOf(destination), code: "EMLINK" });
-          throw Object.assign(new Error("simulated project hard-link failure"), { code: "EMLINK" });
-        }
-        return actual.linkSync(source, destination);
-      },
       openSync(path, flags, ...rest) {
         if (inProject(path)) {
           const append = typeof flags === "string"
@@ -528,9 +572,6 @@ function expectDirectoryTransaction(
 ): void {
   const lock = join(project, ".aidlc-transaction.lock");
   expect(events).toContainEqual(expect.objectContaining({
-    event: "link", pid, destination: lock, code: "EMLINK",
-  }));
-  expect(events).toContainEqual(expect.objectContaining({
     event: "directory-lock",
     pid,
     path: lock,
@@ -538,9 +579,18 @@ function expectDirectoryTransaction(
       schemaVersion: 1,
       pid,
       host: expect.any(String),
+      machine: expect.any(String),
       token: expect.any(String),
     }),
   }));
+}
+
+// The wizard's storage check makes its probe folders in the project; a
+// transaction makes none.
+function storageChecksBy(events: FilesystemTrace[], pid: number): FilesystemTrace[] {
+  return events.filter((event) =>
+    event.event === "mkdtemp" && event.pid === pid && basename(event.path!).startsWith(".aidlc-lock-probe-")
+  );
 }
 
 function expectFilesystemRemediation(message: string, remediation: string, fault: FilesystemFailure): void {
@@ -1777,8 +1827,7 @@ describe("t299 first-run setup wizard", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // First-run setup stops in plain words: before any question when the
-  // project's storage lacks an operation transactions need (a hard-link
-  // rejection alone now falls back to a directory lock), and after apply when a
+  // project's storage lacks an operation transactions need, and after apply when a
   // step fails, here on an AI-DLC file the user wrote over. The stop and its fix
   // wrap the same way; a fix that is a command stays whole.
   const firstRunStops = (env: NodeJS.ProcessEnv = {}) => ({
@@ -1975,7 +2024,7 @@ describe("t299 first-run setup wizard", () => {
     expect(treeSnapshot(result.project)).toEqual(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("recommended first-run and installed workflow writes succeed with project hardlinks refused in every config child", () => {
+  test("recommended first-run and installed workflow writes succeed on the directory lock in every config child", () => {
     const { preload, trace } = filesystemPreload();
     const result = runWizard("\n", { preload });
     const output = result.stdout + result.stderr;
@@ -1987,11 +2036,7 @@ describe("t299 first-run setup wizard", () => {
     expectConfiguredProject(result.project, "defaults", "current");
 
     const events = filesystemTrace(trace);
-    const probeLinks = events.filter((event) => event.event === "link" && event.pid === result.pid);
-    expect(probeLinks.length).toBeGreaterThan(0);
-    for (const link of probeLinks) {
-      expect(basename(dirname(link.destination!))).toMatch(/^\.aidlc-lock-probe-/);
-    }
+    expect(storageChecksBy(events, result.pid)).toHaveLength(1);
     const children = events.filter((event) =>
       event.event === "spawn" && event.pid === result.pid && event.args?.includes("config")
     );
@@ -2008,11 +2053,12 @@ describe("t299 first-run setup wizard", () => {
         event: "preload", pid: child.childPid,
       }));
       expectDirectoryTransaction(events, result.project, child.childPid!);
+      expect(storageChecksBy(events, child.childPid!)).toEqual([]);
     }
     expectInstalledWorkflowWrites(result, trace);
   }, 120_000);
 
-  test("noninteractive JSON apply and refresh keep settings, models, providers, and baseline valid without hardlinks", () => {
+  test("noninteractive JSON apply and refresh keep settings, models, providers, and baseline valid", () => {
     const { preload, trace } = filesystemPreload();
     const result = runWizard("", {
       preload,
@@ -2114,17 +2160,35 @@ describe("t299 first-run setup wizard", () => {
         expect(events).toContainEqual(expect.objectContaining({
           event: "refused", code: fault.code,
         }));
-        const links = events.filter((event) => event.event === "link");
-        expect(links).toHaveLength(1);
-        expect(basename(dirname(links[0].source!))).toMatch(/^\.aidlc-lock-probe-/);
-        expect(dirname(links[0].source!)).toBe(dirname(links[0].destination!));
-        expect(links[0].destination).not.toBe(join(result.project, ".aidlc-transaction.lock"));
+        expect(storageChecksBy(events, result.pid)).toHaveLength(1);
         expect(events.some((event) => event.event === "spawn")).toBe(false);
         expect(treeSnapshot(result.project)).toEqual(before);
       }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
 
-    for (const mode of ["json", "quiet", "human"] as const) {
+    // Scripted config runs no storage check of its own (the wizard's is the
+    // one, as on 2.11.2): storage that cannot rename files stops it at the
+    // first rename with the same storage line, and storage that lacks only
+    // what config never does sets the project up.
+    for (const mode of fault.operation === "file-rename" ? [] : ["json", "human"] as const) {
+      test(`noninteractive ${mode} config sets up a project on storage that refuses ${fault.operation}, which config does not use`, () => {
+        const { preload } = filesystemPreload(fault);
+        const result = runWizard("", {
+          preload,
+          configArgs: [
+            "--from", join(RUNTIME, "claude"), "--harness", "claude", "--mcp", "none", "--yes",
+            ...(mode === "json" ? ["--json"] : []),
+          ],
+          env: { AIDLC_TEST_CONFIG_TTY: undefined },
+        });
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        const said = mode === "json" ? String(JSON.parse(result.stdout).message) : result.stdout;
+        expect(said).toContain(`configured ${result.project} for Claude Code`);
+        expect(existsSync(join(result.project, ".claude", "CLAUDE.md"))).toBe(true);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+    }
+
+    for (const mode of fault.operation === "file-rename" ? ["json", "quiet", "human"] as const : []) {
       test(`noninteractive ${mode} config preserves ${fault.operation} remediation without persistent writes`, () => {
         const { preload, trace } = filesystemPreload(fault);
         let before: Record<string, string> = {};
@@ -2170,14 +2234,18 @@ describe("t299 first-run setup wizard", () => {
           event: "refused", code: fault.code,
         }));
         expectDirectoryTransaction(events, result.project, result.pid);
-        expect(treeSnapshot(result.project)).toEqual(before);
+        // The plan's first folder is made before its first rename fails, and
+        // stays empty.
+        const { ".claude/": madeFolder, ...after } = treeSnapshot(result.project);
+        expect(madeFolder).toBe("");
+        expect(after).toEqual(before);
       }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
   }
 
   for (const fault of [undefined, ...REQUIRED_FILESYSTEM_FAILURES]) {
     for (const mode of ["human", "json"] as const) {
-      test(`${mode} dry-run does not probe or write with ${fault?.operation ?? "hardlinks"} refused`, () => {
+      test(`${mode} dry-run does not probe or write${fault ? ` with ${fault.operation} refused` : ""}`, () => {
         const { preload, trace } = filesystemPreload(fault);
         let before: Record<string, string> = {};
         const result = runWizard("", {
@@ -2313,6 +2381,115 @@ describe("t299 first-run setup wizard", () => {
     expect(recovery).toBeDefined();
     expect(existsSync(recovery as string)).toBe(true);
     temporary.push(recovery as string);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // #3212: the rollback snapshot took .claude whole and refused the first link
+  // in a Claude Code worktree under it, so setup stopped after the menu.
+  // The menu's recommended preset is a record-only config step, which read the
+  // project's own copy and refused the worktree's link as well.
+  test("setup beside Claude Code worktrees that hold links completes and leaves them as they were", () => {
+    const trees: string[] = [];
+    let before: Record<string, string>[] = [];
+    let inodes: number[] = [];
+    const result = runWizard("\n", {
+      prepare: (project) => {
+        trees.push(claudeWorktree(project, "example"), claudeWorktree(project, "clone", true));
+        // A clone the release writes into stays AI-DLC's to read.
+        mkdirSync(join(project, ".claude", "skills", ".git"), { recursive: true });
+        writeFileSync(join(project, ".claude", "skills", ".git", "HEAD"), "ref: refs/heads/main\n");
+        before = trees.map(linkTree);
+        inodes = trees.map((tree) => lstatSync(tree).ino);
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Writing project files ... done");
+    expect(result.stdout).toContain("Recording model preset ... done");
+    expect(result.stdout).not.toContain("is a link");
+    const manifestPath = join(result.project, ".claude", "tools", "data", "aidlc-manifest.json");
+    const recorded = (): string[] =>
+      Object.keys(JSON.parse(readFileSync(manifestPath, "utf-8")).files).sort();
+    const setUp = recorded();
+    expect(setUp.filter((rel) => rel.startsWith(".claude/worktrees/"))).toEqual([]);
+    expect(setUp).toContain(".claude/skills/aidlc/SKILL.md");
+
+    // A later model change reads the same copy.
+    const later = runCli(result, INIT, [
+      "config", "models", "--project", "--preset", "thorough", "--yes", "--json",
+    ]);
+    expect(later.status, later.stdout + later.stderr).toBe(0);
+    expect(recorded()).toEqual(setUp);
+    expect(existsSync(join(result.project, ".claude", "skills", "aidlc", "SKILL.md"))).toBe(true);
+    expect(trees.map(linkTree)).toEqual(before);
+    // A junction's lstat inode is not stable on Windows.
+    if (process.platform !== "win32") {
+      expect(trees.map((tree) => lstatSync(tree).ino)).toEqual(inodes);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("late first-run failure beside a worktree restores what setup changed and leaves the worktree as it was", () => {
+    let tree = "";
+    let before: Record<string, string> = {};
+    let inode = 0;
+    const result = runWizard("\n", {
+      env: { AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD: "3" },
+      prepare: (project) => {
+        tree = claudeWorktree(project, "example");
+        const harness = join(project, ".claude");
+        mkdirSync(join(harness, "user"), { recursive: true });
+        writeFileSync(join(harness, "user", "keep.txt"), "keep\n");
+        writeFileSync(join(harness, "settings.local.json"), "{\"env\":{\"MINE\":\"1\"}}\n");
+        // Setup merges its entries into this one.
+        writeFileSync(join(harness, "settings.json"), "{\"permissions\":{\"allow\":[\"Bash(ls)\"]}}\n");
+        before = linkTree(harness);
+        inode = lstatSync(tree).ino;
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain(
+      "  Setup stopped: injected first-run failure after child 3.\n  No setup changes were kept.",
+    );
+    expect(linkTree(join(result.project, ".claude"))).toEqual(before);
+    if (process.platform !== "win32") expect(lstatSync(tree).ino).toBe(inode);
+    expect(existsSync(join(result.project, "aidlc"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a link the person keeps in .claude stays as it is through a late first-run failure", () => {
+    const outside = temp("aidlc-t299-linked-");
+    writeFileSync(join(outside, "notes.md"), "shared\n");
+    let before: Record<string, string> = {};
+    const result = runWizard("\n", {
+      env: { AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD: "3" },
+      prepare: (project) => {
+        mkdirSync(join(project, ".claude"));
+        folderLink(outside, join(project, ".claude", "shared"));
+        before = linkTree(join(project, ".claude"));
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain("No setup changes were kept.");
+    expect(linkTree(join(result.project, ".claude"))).toEqual(before);
+    expect(linkTree(outside)).toEqual({ "notes.md": Buffer.from("shared\n").toString("base64") });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A clone at a path the release writes into is setup's to restore, even
+  // beside a worktree the snapshot goes around.
+  test("late first-run failure restores a clone the release writes into", () => {
+    let before: Record<string, string> = {};
+    const result = runWizard("\n", {
+      env: { AIDLC_TEST_FIRST_RUN_FAIL_AFTER_CHILD: "3" },
+      prepare: (project) => {
+        claudeWorktree(project, "example");
+        const skills = join(project, ".claude", "skills");
+        mkdirSync(join(skills, ".git"), { recursive: true });
+        writeFileSync(join(skills, ".git", "HEAD"), "ref: refs/heads/main\n");
+        mkdirSync(join(skills, "my-skill"));
+        writeFileSync(join(skills, "my-skill", "SKILL.md"), "# mine\n");
+        before = linkTree(skills);
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain("No setup changes were kept.");
+    expect(linkTree(join(result.project, ".claude", "skills"))).toEqual(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Bun's global prompt() returns null for an empty line, which the wizard read

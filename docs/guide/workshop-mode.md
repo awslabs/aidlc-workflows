@@ -185,7 +185,10 @@ aidlc unit claim payments --team "Payments team"
 ```
 
 Exactly one concurrent claimant wins. The command stamps the checkout with
-space, intent, Unit, generation, nonce, and gate rhythm.
+space, intent, Unit, generation, nonce, and gate rhythm. A checkout whose own
+audit shard is already on main (the lead's own checkout, or a copy of it) keeps
+the Unit's evidence in a new shard of the claim's own, so it publishes and pins
+like a fresh clone.
 
 To hand the same attempt to a teammate on another machine, push the claim ref.
 The teammate fetches and checks out the exact local `claim/<intent-id8>/<unit>`
@@ -228,7 +231,10 @@ aidlc unit publish payments
 
 `publish` creates a candidate commit whose tree is the team's committed work and
 whose parents bind both the claim history and the implementation history. It
-CAS-updates the claim ref. Publication is not integration.
+CAS-updates the claim ref. Publication is not integration. The candidate carries
+the claim's audit shard with the rows pin accepts and every other audit shard as
+main has it; the rows left out stay in the checkout's own history, and publish
+says how many.
 
 ---
 
@@ -271,19 +277,16 @@ cannot prove the pin was not tombstoned.
 
 ### 2. Present the merge gate
 
-Before the gate, the harness follows the existing merge-dispatch seam: it emits
-`MERGE_DISPATCH_INVOKED`, asks the pipeline-deploy agent to resolve the affirmed
-target/strategy from the active practices, then emits
-`MERGE_DISPATCH_RETURNED` or `MERGE_DISPATCH_FALLBACK`. The pinned OID and Unit
-attempt generation and pin transaction ID are passed to every dispatch-event
-call through `--pinned-oid`, `--attempt-generation`, and `--pin-id`; the gate
-ignores unbound or older rows, including a bracket from an earlier pin of the
-same candidate. The gate is not presented until that bracket is complete. Pinned Unit
-landing requires strategy `merge` so the reviewed OID is a direct parent; a
-squash/rebase result is refused and must be reconciled before the gate.
+Pin's output carries the merge gate (`merge_gate`): the question, its strategy
+and target, and the command that records each answer. The agent asks it in the
+pin's own turn, once. A pinned Unit lands with a regular merge (strategy
+`merge`) into the integration branch pin fetched, so the reviewed OID is a
+direct parent; that is not put to the person as a choice, and the team's merge
+default (squash in the shipped `org.md`) holds for every other merge. The
+person's reply after the pin is the answer the gate records.
 
 The integration lead presents the evidence summary and pinned OID to the human,
-then records the exact answer:
+then records their answer:
 
 ```bash
 aidlc unit gate payments \
@@ -291,7 +294,8 @@ aidlc unit gate payments \
   --user-input "Approve pinned candidate"
 ```
 
-A rejection keeps the candidate unmerged. A candidate carrying
+An approval's output names the land command, run in the same turn with no
+further question. A rejection keeps the candidate unmerged. A candidate carrying
 `Merge-Held: true` is refused until the team resolves the HOLD-MERGE sequence,
 publishes again, and main re-pins.
 
@@ -317,6 +321,10 @@ Landing is ordered and resumable:
    other rows, then emit `UNIT_MERGED`.
 3. **Audit/finalize.** Commit the main state and merge lifecycle rows, then mark
    the local transaction complete.
+
+Once the checkout that claimed the Unit pulls the landed main, it is no longer
+held to that Unit: its record shows the Unit merged and its history holds the
+merged claim, so `/aidlc`, pin and a next claim work there as on main.
 
 The steps can be driven separately for recovery:
 
@@ -449,8 +457,8 @@ registry.
 3. The facilitator repeats pin/gate/land for Bob's pinned candidate.
 4. When the final row is merged, `/aidlc` on main routes Build and Test, then
    CI Pipeline.
-5. The group reviews `UNIT_MERGED`, gate, reviewer, and merge-dispatch rows in
-   the combined audit shards.
+5. The group reviews `UNIT_MERGED`, gate, and reviewer rows in the combined
+   audit shards.
 
 The teams never race to push main. Candidate refs can move only through
 claim-bound CAS publication; main serializes the reviewed pinned OIDs.

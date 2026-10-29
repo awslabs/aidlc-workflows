@@ -58,6 +58,7 @@ import {
   type FreshReviewReceipts,
   checkSummaryConfirmationEvidence,
   decideFence,
+  delegatedAgentOf,
   errorMessage,
   evaluateGuardRefusal,
   guardStandAsideSpeaks,
@@ -400,8 +401,7 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
     // This refusal IS the fence holding, so the ask carries the switch that
     // lowers it for this piece of work beside the workflow's own remedies.
     fence: "review-freeze",
-    fenceSwitch: (parsed.agent_type?.trim() ?? "").length > 0 ||
-      (typeof parsed.tool_input?.subagent_type === "string" && parsed.tool_input.subagent_type.trim().length > 0) ||
+    fenceSwitch: delegatedAgentOf(parsed) !== "" ||
       memoryStrictHoldsGuardPolicy(projectDir, stateContent) ? "withhold" : "offer",
   });
   // The sentence above already says to quote a suggestion at the gate, so the

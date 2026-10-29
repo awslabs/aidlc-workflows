@@ -939,4 +939,77 @@ describe("t296 first-run config setup walk", () => {
       .toContain("[needs]  Models      no recorded policy; agents inherit your session model and effort");
     expect(kiroRun.stdout).toContain("models       bun .kiro/tools/aidlc.ts config models");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Enter at Models is an answer: the next walk asks nothing about models", () => {
+    const path = project("aidlc-t296-models-kept-");
+    const env = hookPathEnv("aidlc", true);
+    expect(run(scaffoldArgs(path), path, env, "n\n").status).toBe(0);
+    const providers = run(
+      ["config", "providers", "--project-dir", path, "--harness", "claude", "--provider", "current", "--yes"],
+      path,
+      env,
+    );
+    expect(providers.status, providers.stdout + providers.stderr).toBe(0);
+    // The walk's gate, the settings layer, then Enter: keep everything.
+    const first = run(["config", "--project-dir", path], path, env, "\n\n\n");
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    expect(first.stdout).toContain("Setup check - 1 of 8 sections need you.");
+    expect(first.stdout).toContain(
+      "Recorded the models answer in .claude/tools/data/harness.json. To undo: bun .claude/tools/aidlc.ts config models --reset --project --yes",
+    );
+    expect(first.stdout).not.toContain("Apply model policy changes?");
+    expect(first.stdout).toContain("Setup complete. 0 actions still need you");
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).modelsAnswer).toEqual({ schemaVersion: 1, kept: true });
+    expect(existsSync(join(path, "aidlc.settings.json"))).toBe(false);
+
+    const second = run(["config", "--project-dir", path], path, env, "y\n");
+    expect(second.status, second.stdout + second.stderr).toBe(0);
+    expect(second.stdout).toContain("Setup check - 0 of 8 sections need you.");
+    expect(setupRows(second.stdout).find((line) => line.includes("Models")))
+      .toContain("[ok]     Models      agents inherit your session model and effort (your answer)");
+    expect(second.stdout).not.toContain("Fix the");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("closed input at Models is no answer: nothing is recorded and setup still names models", () => {
+    const path = project("aidlc-t296-models-closed-");
+    const env = hookPathEnv("aidlc", true);
+    expect(run(scaffoldArgs(path), path, env, "n\n").status).toBe(0);
+    expect(run(
+      ["config", "providers", "--project-dir", path, "--harness", "claude", "--provider", "current", "--yes"],
+      path,
+      env,
+    ).status).toBe(0);
+    // The walk's gate and the settings layer, then the input ends at Models.
+    const walk = run(["config", "--project-dir", path], path, env, "\n\n");
+    expect(walk.status, walk.stdout + walk.stderr).toBe(0);
+    expect(walk.stdout).toContain("model policy unchanged");
+    expect(walk.stdout).not.toContain("Recorded the models answer");
+    expect(walk.stdout).toMatch(/^\s+models\s+bun \.claude\/tools\/aidlc\.ts config models/m);
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).modelsAnswer).toBeNull();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("--keep records the models answer for a script, and --reset is the way back", () => {
+    const path = project("aidlc-t296-models-keep-flag-");
+    // A terminal, so the refresh prints its map and ledger; --yes asks nothing.
+    const env = hookPathEnv("aidlc", true);
+    expect(run(scaffoldArgs(path), path, env).status).toBe(0);
+    const keep = run(["config", "models", "--project-dir", path, "--keep", "--yes"], path, env);
+    expect(keep.status, keep.stdout + keep.stderr).toBe(0);
+    expect(keep.stdout).toContain("Recorded the models answer in .claude/tools/data/harness.json.");
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).modelsAnswer).toEqual({ schemaVersion: 1, kept: true });
+    const ledger = run(["config", "--project-dir", path, "--from", CLAUDE_RELEASE, "--yes"], path, env);
+    expect(ledger.status, ledger.stdout + ledger.stderr).toBe(0);
+    expect(ledger.stdout).not.toMatch(/^\s+models\s+bun/m);
+    // A second keep has nothing to record.
+    const again = run(["config", "models", "--project-dir", path, "--keep", "--yes"], path, env);
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    expect(again.stdout).toContain("model policy unchanged");
+
+    const reset = run(["config", "models", "--project-dir", path, "--reset", "--project", "--yes"], path, env);
+    expect(reset.status, reset.stdout + reset.stderr).toBe(0);
+    expect(reset.stdout).toContain("Cleared the models answer in .claude/tools/data/harness.json.");
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).modelsAnswer).toBeNull();
+    const asked = run(["config", "--project-dir", path, "--from", CLAUDE_RELEASE, "--yes"], path, env);
+    expect(asked.stdout).toMatch(/^\s+models\s+bun \.claude\/tools\/aidlc\.ts config models/m);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

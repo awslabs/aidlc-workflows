@@ -161,7 +161,7 @@ user-invocable: true
 ${nativeRunnerFrontmatter()}\
 ---
 
-# AI-DLC Stage Runner — ${node.slug}
+# AI-DLC Stage Runner - ${node.slug}
 
 ${bodyLead}
 \`/aidlc --stage ${node.slug} --single\`; the same stage is always reachable via
@@ -206,7 +206,7 @@ that flag without this skill.
    \`\`\`
 
    This records a STAGE_STARTED / STAGE_COMPLETED pair under a synthetic workflow
-   id and stops. It NEVER writes the main workflow's \`Current Stage\` — a
+   id and stops. It NEVER writes the main workflow's \`Current Stage\` - a
    single-stage run is isolated by design (the tool refuses to advance the main
    workflow).
 `;
@@ -231,7 +231,7 @@ export function renderInitRunner(): string {
 name: ${INIT_RUNNER_DIR}
 generated-by: aidlc-runner-gen
 description: >
-  Start an AI-DLC workflow — run the whole Initialization phase (mint the
+  Start an AI-DLC workflow - run the whole Initialization phase (mint the
   intent, detect the workspace, build state) in one step, without typing a
   stage. The engine normally auto-creates the first intent; this is opt-in
   packaging over that move. Pass \`--scope <name>\` to seed the initial scope. A freeform description without a scope first gets the same plan offer as \`${entrySkill}\`, then continues as \`${entrySkill}\` does.
@@ -245,7 +245,7 @@ ${nativeRunnerFrontmatter()}\
 Start a fresh AI-DLC workflow. The workspace shell ships in \`dist/\` (no setup
 command), and the engine auto-creates the first intent when you describe what to
 build - this skill is opt-in packaging over that creation move. Initialization is a
-PHASE, not a single stage — it mints the intent, detects the workspace
+PHASE, not a single stage - it mints the intent, detects the workspace
 (greenfield/brownfield), and builds \`aidlc-state.md\` together, in one
 deterministic call. There is no per-init-stage runner because an init stage has
 no standalone meaning.
@@ -646,7 +646,7 @@ export function renderRunner(scope: string, description: string): string {
 name: ${dir}
 generated-by: aidlc-runner-gen
 description: >
-  Run the AI-DLC workflow with the ${scope} scope baked in — no scope
+  Run the AI-DLC workflow with the ${scope} scope baked in - no scope
   detection. ${desc} Packaging over \`${entrySkill} --scope ${scope}\`, which works
   without this skill.
 argument-hint: "[description | --status | --stage <slug|#> | --phase <name|#>]"
@@ -654,7 +654,7 @@ user-invocable: true
 ${nativeRunnerFrontmatter()}\
 ---
 
-# AI-DLC — ${scope} scope
+# AI-DLC - ${scope} scope
 
 Drive the AI-DLC engine with the **${scope}** scope fixed. This is the same
 deterministic forwarding loop the \`${entrySkill}\` orchestrator runs, with \`--scope
@@ -836,7 +836,7 @@ function handleScopes(rest: string[]): void {
       );
       process.exit(1);
     }
-    console.log(`OK — ${batch.length} scope-runner(s) in sync: ${batch.join(", ")}`);
+    console.log(`OK - ${batch.length} scope-runner(s) in sync: ${batch.join(", ")}`);
     return;
   }
 

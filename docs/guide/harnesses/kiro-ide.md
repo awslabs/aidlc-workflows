@@ -310,6 +310,9 @@ and Kiro IDE does not read that file. So in each new Kiro IDE chat:
    uses. If the chat is still on **Default**, AI-DLC's first move on your
    first request is its own command, which Kiro asks you to approve, and then
    each command it runs asks. To avoid that, choose **aidlc** in the agent picker first (step 1).
+   On **Default** (or **Default v2**), AI-DLC says this once in the chat when you
+   type an `/aidlc` request, unless you already chose **Always allow** for
+   AI-DLC's commands on one of Kiro's approval cards.
    The `aidlc-...-agent` entries in the `/` menu are the specialists AI-DLC
    brings in during a workflow; you do not start them yourself.
 
@@ -535,9 +538,15 @@ copy opens no other Unit's file, not even one the Unit's design names as an
 integration point: the reviewer notes that point as a finding instead. The
 copy shows in Kiro's agent list and `/` menu while the review runs; AI-DLC
 dispatches it, so there is no need to pick it. It is deleted when its verdict
-is recorded; AI-DLC's `.gitignore` block keeps it out of commits, and you can
-delete one left by a review that never finished (one you approved the Unit
-without, or one a closed chat stopped). When AI-DLC cannot write a copy it
+is recorded. A copy whose review is over without a verdict (you approved the
+Unit or the stage without it, outside an isolated `--single` run) goes later:
+while that piece of work is the folder's current one, AI-DLC deletes it when a
+chat in it starts or a review in it is asked for or recorded, once it can read
+the work's record. A copy of a review you sent back can stay until you approve
+that Unit or its stage.
+A copy a closed chat left, with nothing done since, stays: AI-DLC cannot tell
+it from a review still running in another chat, and you can delete it.
+AI-DLC's `.gitignore` block keeps a copy out of commits. When AI-DLC cannot write a copy it
 should write, or Kiro has no agent by the copy's name (an older Kiro build may
 not load it), AI-DLC dispatches the reviewer itself, as without the copy,
 and says in one line that this review runs without the check. Doctor then

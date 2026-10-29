@@ -88,6 +88,7 @@ import {
 } from "../../core/tools/aidlc-release.ts";
 import {
   executePlan,
+  TransactionBusyError,
   transactionSourceHash,
   transactionState,
   writeOperation,
@@ -560,7 +561,7 @@ describe("t243 archive and transaction safety", () => {
       schemaVersion: 1,
       root,
       operations: [writeOperation("blocked.txt", "no", "absent")],
-    })).toThrow("another AI-DLC mutation holds");
+    })).toThrow(TransactionBusyError);
     expect(existsSync(join(root, "blocked.txt"))).toBe(false);
     expect(existsSync(join(root, ".aidlc-transaction.lock"))).toBe(true);
   });
@@ -620,14 +621,15 @@ describe("t243 archive and transaction safety", () => {
       operations: [writeOperation("blocked.txt", "no", "absent")],
     }, {
       validateCandidates() {
-        rmSync(lockPath);
-        writeFileSync(lockPath, replacement);
+        rmSync(lockPath, { recursive: true });
+        mkdirSync(lockPath);
+        writeFileSync(join(lockPath, "owner.json"), replacement);
         throw new Error("replacement installed");
       },
     })).toThrow("replacement installed");
-    expect(readFileSync(lockPath, "utf-8")).toBe(replacement);
+    expect(readFileSync(join(lockPath, "owner.json"), "utf-8")).toBe(replacement);
     expect(existsSync(join(root, "blocked.txt"))).toBe(false);
-    rmSync(lockPath);
+    rmSync(lockPath, { recursive: true });
   });
 
   test("route mutation policy blocks a plan before it creates destination bytes", () => {
@@ -2716,7 +2718,7 @@ describe("t243 project initialization", () => {
     expect(addCodex.status).toBe(4);
     expect(addCodex.stdout).toContain("predates shared onboarding");
     expect(addCodex.stdout).toContain(
-      "run aidlc config --harness kiro-v2 first — if it still refuses afterwards, its AGENTS.md is exclusive and they cannot coexist in one project",
+      "run aidlc config --harness kiro-v2 first - if it still refuses afterwards, its AGENTS.md is exclusive and they cannot coexist in one project",
     );
     expect(existsSync(join(project, ".codex"))).toBe(false);
     expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
@@ -3038,7 +3040,7 @@ describe("t243 project initialization", () => {
     for (const [version, message] of [
       [
         `${AIDLC_VERSION}-preview.20260101.1`,
-        "predates shared onboarding; run aidlc config --harness copilot first — if it still refuses afterwards, its AGENTS.md is exclusive and they cannot coexist in one project",
+        "predates shared onboarding; run aidlc config --harness copilot first - if it still refuses afterwards, its AGENTS.md is exclusive and they cannot coexist in one project",
       ],
       ["99.0.0-preview.20260101.1", "cannot coexist"],
     ]) {

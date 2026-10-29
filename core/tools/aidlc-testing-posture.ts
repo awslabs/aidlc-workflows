@@ -7,6 +7,7 @@
 // approved plan + unit test instructions. Both the dispatch guard and autonomous
 // swarm referee consume the same contract.
 
+import { gitSubmoduleNames } from "./aidlc-git.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -20,11 +21,16 @@ import {
   decideFence,
   aidlcOwnedSourceKey,
   isLinkTargetListingKey,
-  sourcePathIsRegistered,
   attemptEventDefinitelyBefore,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
   boltSlugForUnit,
+  freshReviewReceipts,
+  loadStageGraph,
+  resolveReviewClass,
+  latestReviewRecordRefs,
+  reviewAttemptWindow,
+  setField,
   collectStalePlanApprovalReceipts,
   commitPlanApprovalBatch,
   planApprovalBatchCommitted,
@@ -37,6 +43,9 @@ import {
   guardStandAsideSpeaks,
   guardStoodAsideLine,
   gitCommitSourceListing,
+  GIT_PLATFORM_ARGS,
+  gitTreeLeafEntries,
+  isGitRepoDir,
   latestLedgerSession,
   latestMainWorkflowStageRunFloorForProject,
   legacyBoltName,
@@ -45,14 +54,15 @@ import {
   mainCheckoutChangeAllowed,
   mainCheckoutChangeAskedKey,
   mainCheckoutChangesAsked,
-  onlyAidlcFilesChangedInSwarmStage,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
   clearPlanApprovalChallenge,
   clearPlanApprovalLegacyOffer,
   clearEngineAskMark,
   clearPlanApprovalReceipt,
   isolatedCodeGenerationTestStrategy,
+  codeGenerationIsTheStep,
   readActiveDirectiveMarker,
+  readApplicableTeamUnitScopeStamp,
   singleStageAttemptIsOpen,
   singleStageAttemptScope,
   authorizedVerificationCommand,
@@ -168,7 +178,10 @@ import {
   PLAN_APPROVAL_ASKED_BY_ENGINE,
   planApprovalAskIsOpen,
   TESTING_POSTURE_SUBCOMMANDS,
+  readWorkspaceSourceSnapshot,
+  recordedSourceListingUnderCurrentBoundary,
 } from "./aidlc-lib.ts";
+import { swarmSourceChanged, swarmSourceUnchangedInStage, withoutGitIgnored } from "./aidlc-swarm-source.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import { withoutLearnedDate } from "./aidlc-learned-date.ts";
 import { noReplySince, personTurnStands, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
@@ -1130,7 +1143,7 @@ export function buildPlanProfile(
     );
   } else if (methodology === "atdd") {
     steps.push(
-      "Acceptance Red - write executable acceptance tests for the complete feature before implementation.",
+      "Acceptance Red - write executable acceptance tests for the complete feature before implementation, run them, and record the failing command output.",
       "Feature implementation - implement the required layers against the acceptance contract.",
       "Acceptance Green - run the acceptance tests until they pass.",
       "Feature Refactor - improve the cross-layer implementation while acceptance stays green.",
@@ -1574,6 +1587,48 @@ export function approvalFingerprint(
     run_floor: authority.runFloor,
   });
   return `${APPROVAL_FINGERPRINT_PREFIX}${digest.slice("sha256:".length)}`;
+}
+
+// Whether the plan and instructions are still what the person sent back with a
+// change request: the content the build in `closed` (the run floor of the
+// attempt their rejection closed) started on. In a later attempt than the
+// approval's, that is the revision a lowered fence built there for their
+// previous change request; in the approval's own attempt, the content it
+// started on there, or the approved content. Only that one: a revision that
+// lands back on the plan they first approved is a revision. While it holds,
+// the change they asked for has not been carried out yet.
+export function planAsSentBack(
+  plan: string,
+  instructions: string,
+  contractHash: string,
+  receipt: PlanApprovalRuntimeReceipt,
+  closed: string,
+): boolean {
+  const at = (runFloor: string): string => approvalFingerprint(plan, instructions, contractHash, { ...receipt, runFloor });
+  return closed !== receipt.runFloor && receipt.startedFingerprint !== undefined
+    ? at(closed) === receipt.startedFingerprint
+    : at(receipt.runFloor) === (receipt.startedFingerprint ?? receipt.fingerprint);
+}
+
+// The attempt the person's rejection closed: the stage's run floor as it stood
+// just before their `GATE_REJECTED` row, read the way the attempt's own floor
+// is. Null when the row is not among `rows` or there is no workflow state.
+export function attemptRejectionClosed(
+  projectDir: string,
+  rows: readonly AuditShardEvent[],
+  rejection: AuditShardEvent,
+  unit: string | null,
+): string | null {
+  const state = runStateContent(projectDir);
+  const ordered = sortAttemptEvents(rows);
+  const at = ordered.indexOf(rejection);
+  if (state === null || at < 0) return null;
+  return latestMainWorkflowStageRunFloorForProject(
+    projectDir, CODE_GENERATION_STAGE,
+    getField(state, "Construction Iteration")?.trim() === "unit-major" ||
+      getField(state, "Construction Checkpoints") === "enabled",
+    unit ?? undefined, ordered.slice(0, at),
+  );
 }
 
 // --- The worker brief ------------------------------------------------------------
@@ -2628,6 +2683,31 @@ export function codeGenerationIssuance(
 }
 
 /**
+ * Whether Code Generation is the step on record (codeGenerationIsTheStep: the
+ * step the engine issued, current for this state, or Current Stage), as the
+ * plan-approval guard and `next --stage` both read it. Not once that step is
+ * the engine's notice that the Unit this checkout claims is complete and
+ * approved here: the Unit's stages are the checkout's whole walk, so Code
+ * Generation is over there, as it is once a workflow's walk moves past it,
+ * though Current Stage stays on it. The engine records that notice as the step
+ * on record on every harness (prepareEmission), the one notice it records. A
+ * stamp that cannot be read leaves the step as it was.
+ */
+export function codeGenerationStepOnRecord(
+  projectDir: string,
+  stateContent: string,
+  marker: ActiveDirectiveMarker | null,
+): boolean {
+  if (!codeGenerationIsTheStep(marker?.stage ?? "", getField(stateContent, "Current Stage") ?? "")) return false;
+  if (marker?.version !== 2 || marker.kind !== "notice" || !marker.unit) return true;
+  try {
+    return readApplicableTeamUnitScopeStamp(projectDir, stateContent)?.unit !== marker.unit;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * How every command AI-DLC names is to be run: as printed and alone. A `cd`, a
  * pipe, or a second command around an admitted command makes the whole line a
  * shell the plan-approval guard cannot read.
@@ -2874,10 +2954,119 @@ function planApprovedOnRecord(projectDir: string, targetId: string, fingerprint:
   return last !== undefined && last.event !== "QUESTION_ANSWERED";
 }
 
+/**
+ * How an approval is read: for a build to start or go on (`build`), or for the
+ * build that already ran to be reported complete (`completion`). They differ in
+ * one thing only, the Testing Contract the approval is checked against.
+ */
+export type CodeGenerationApprovalUse = "build" | "completion";
+
+/** The review row field that keeps the Testing Contract in force when a Code Generation verdict was recorded. */
+export const REVIEW_TESTING_CONTRACT_FIELD = "Testing Contract";
+
+/**
+ * The Testing Contract in force for a Code Generation review being recorded:
+ * the boundary that says the build it reviews was finished under it. Null when
+ * the posture cannot be read, so the row carries no boundary.
+ */
+export function reviewedTestingContract(projectDir: string): string | null {
+  try {
+    return resolveTestingPosture(projectDir).contract_sha256;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The class the scope's review on record ran under, or null with none on record
+ * in this attempt. The review is the REVIEW_COMPLETED latestReviewRecordRefs
+ * names, inside the attempt window (for a legacy embedded review, the newest one
+ * there for the stage, reviewer and Unit); its class is the state's
+ * Scope and Review Override with every later REVIEW_CLASS_CHANGED and
+ * SCOPE_CHANGED row undone, since a setting changed after a review governs
+ * later work, not the review on record. The gate's retained review and the
+ * Code Generation completion both read it here.
+ */
+export function reviewClassOnRecord(
+  projectDir: string,
+  stateContent: string,
+  node: ReturnType<typeof loadStageGraph>[number],
+  unit: string | null,
+): "adversarial" | "advisory" | null {
+  if (!node.reviewer) return null;
+  const ref = latestReviewRecordRefs(projectDir, node).get(unit ?? "");
+  if (ref === undefined) return null;
+  const attempt = reviewAttemptWindow(projectDir, stateContent, node);
+  const completion = attempt.events.slice(attempt.floorIdx + 1).findLast((event) =>
+    event.event === "REVIEW_COMPLETED" &&
+    (ref !== null
+      ? event.block === ref.completion
+      : auditBlockField(event.block, "Stage") === node.slug &&
+        auditBlockField(event.block, "Reviewer") === node.reviewer &&
+        (auditBlockField(event.block, "Unit") ?? "") === (unit ?? "") &&
+        auditBlockField(event.block, "Workflow") === null)
+  );
+  if (!completion) return null;
+  return reviewClassAtReview(node, stateContent, attempt.allEvents, completion.block);
+}
+
+// A state edited by hand carries no setting-change row, and a review on record
+// still proves one ran, so a class that reads `none` there is the stage's
+// declared one.
+function reviewClassAtReview(
+  node: { review_class?: "adversarial" | "advisory" },
+  stateContent: string,
+  allEvents: AuditShardEvent[],
+  completionBlock: string,
+): "adversarial" | "advisory" {
+  let reviewState = stateContent;
+  for (const event of sortAttemptEvents(allEvents).reverse()) {
+    if (event.block === completionBlock) break;
+    if (event.event === "REVIEW_CLASS_CHANGED") {
+      const old = auditBlockField(event.block, "Old Override");
+      if (old !== null) reviewState = setField(reviewState, "Review Override", old === "none set" ? "" : old);
+    } else if (event.event === "SCOPE_CHANGED") {
+      const old = auditBlockField(event.block, "Old Scope");
+      if (old !== null) reviewState = setField(reviewState, "Scope", old);
+    }
+  }
+  const reviewClass = resolveReviewClass(node.review_class, getField(reviewState, "Scope") ?? "", reviewState);
+  return reviewClass === "none" ? node.review_class ?? "adversarial" : reviewClass;
+}
+
+/**
+ * Whether the target's build was finished under this contract: the terminal
+ * review freshReviewReceipts keeps for it still covers the work, and was
+ * recorded while this contract was in force. A practice kept at the gate (or
+ * any other posture move) after that review is for the next build; a review
+ * recorded after a move, or one with no contract on record, keeps the build
+ * waiting. Whether the source still matches is the completion's own check.
+ * An isolated run reads as the main workflow's receipts never cover it.
+ */
+function reviewedUnderContract(projectDir: string, authority: CodeGenerationAuthority, contractHash: string): boolean {
+  try {
+    const node = loadStageGraph().find((stage) => stage.slug === CODE_GENERATION_STAGE);
+    if (!node?.reviewer || singleStageAttemptIsOpen(projectDir, CODE_GENERATION_STAGE)) return false;
+    const state = readFileSync(stateFilePath(projectDir), "utf-8");
+    const unit = authority.unit;
+    const reviewClass = reviewClassOnRecord(projectDir, state, node, unit);
+    if (reviewClass === null) return false;
+    const fresh = freshReviewReceipts(projectDir, state, node, { reviewClass });
+    const covered = unit === null
+      ? fresh.stageVerdict !== null && !fresh.stageStale
+      : fresh.unitVerdicts.has(unit) && !fresh.unitStale.has(unit);
+    const block = covered ? fresh.verdictBlocks?.get(unit ?? "") : undefined;
+    return block !== undefined && auditBlockField(block, REVIEW_TESTING_CONTRACT_FIELD) === contractHash;
+  } catch {
+    return false;
+  }
+}
+
 function codeGenerationApprovalArtifacts(
   projectDir: string,
   authority: CodeGenerationAuthority,
   contractProjectDir = projectDir,
+  use: CodeGenerationApprovalUse = "build",
 ): {
   plan: string;
   instructions: string;
@@ -2886,6 +3075,8 @@ function codeGenerationApprovalArtifacts(
   instructionsExist: boolean;
   approvedAnswer: boolean;
   contractValid: boolean;
+  /** At completion: the contract moved after the build was reviewed under the plan's own. */
+  builtUnderPlanContract: boolean;
   contractHash: string | null;
   expectedFingerprint: string | null;
   recordedFingerprint: string | null;
@@ -2920,12 +3111,17 @@ function codeGenerationApprovalArtifacts(
     embedded !== null &&
     current !== null &&
     embedded.contract_sha256 === current.contract_sha256;
+  // A delegated approval (validateWorktreeDelegation) reads the parent's
+  // contract while the review rows here are the worker checkout's, so the
+  // exception is not read for it; handleReview records none in a swarm worker.
+  const builtUnderPlanContract = use === "completion" && !contractValid && embedded !== null &&
+    contractProjectDir === projectDir && reviewedUnderContract(projectDir, authority, embedded.contract_sha256);
   const expectedFingerprint =
-    planExists && instructionsExist && contractValid && current
+    planExists && instructionsExist && embedded !== null && (contractValid || builtUnderPlanContract)
       ? approvalFingerprint(
           plan,
           instructions,
-          current.contract_sha256,
+          embedded.contract_sha256,
           authority,
         )
       : null;
@@ -2937,6 +3133,7 @@ function codeGenerationApprovalArtifacts(
     instructionsExist,
     approvedAnswer,
     contractValid,
+    builtUnderPlanContract,
     contractHash,
     expectedFingerprint,
     recordedFingerprint,
@@ -2996,11 +3193,13 @@ interface CodeGenerationContinuation {
  * person turns it on they get the question they asked for.
  *
  * And only once the plan has actually been revised. While it still reads as the
- * plan they approved, their change request has not been carried out yet, and
- * `next` owes them the `revise` step that hands the agent their words; carrying
- * the approval then would skip it and build the unchanged plan. Ticking a step
- * is not a revision: the fingerprint's projection already leaves task markers
- * out, so the build that their rejection closed does not look like a change.
+ * plan the build their rejection closed started on (the one they approved, or
+ * the revision built for their previous change request), their change request
+ * has not been carried out yet, and `next` owes them the `revise` step that
+ * hands the agent their words; carrying the approval then would skip it and
+ * build the unchanged plan. Ticking a step is not a revision: the fingerprint's
+ * projection already leaves task markers out, so the build that their rejection
+ * closed does not look like a change.
  */
 function approvalFromTheirChangeRequest(
   projectDir: string,
@@ -3009,11 +3208,11 @@ function approvalFromTheirChangeRequest(
 ): PlanApprovalRuntimeReceipt | null {
   const floor = /^GATE_REJECTED:(.+)#\d+$/.exec(authority.runFloor);
   if (floor === null) return null;
-  const rejection = rejectionAtRunFloor(
-    readAuditShardEvents(projectDir), "code-generation", authority.unit ?? undefined, authority.runFloor,
-  );
+  const rows = readAuditShardEvents(projectDir);
+  const rejection = rejectionAtRunFloor(rows, "code-generation", authority.unit ?? undefined, authority.runFloor);
   if (rejection === undefined) return null;
   if (rejectionIsFreshAttempt(rejection.block)) return null;
+  const closed = attemptRejectionClosed(projectDir, rows, rejection, authority.unit);
   const plan = readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8");
   const instructions = readFileSync(join(authority.stageDir, "unit-test-instructions.md"), "utf-8");
   const contract = parseTestingContract(plan);
@@ -3024,9 +3223,8 @@ function approvalFromTheirChangeRequest(
     receipt.choice === "Approve Plan" &&
     receipt.skipped === undefined && receipt.session !== "engine" &&
     runtimeIdentityMatches(receipt, { ...identity, runFloor: receipt.runFloor, promptSha256: receipt.promptSha256 }) &&
-    // Judged against that approval's own attempt, the way the revision route
-    // judges it: equal means the plan is still the one they approved.
-    approvalFingerprint(plan, instructions, contract.contract_sha256, receipt) !== receipt.fingerprint
+    // The same judgement the revision route makes.
+    !planAsSentBack(plan, instructions, contract.contract_sha256, receipt, closed ?? receipt.runFloor)
   ) ?? null;
 }
 
@@ -3178,6 +3376,14 @@ export function codeGenerationExecutionAllowed(
     (current.ok || codeGenerationContinuation(projectDir, target, issued) !== null);
 }
 
+// Whether the workflow is parked where it stands. A park the workflow has
+// since moved past is stale and holds nothing.
+export function parkedWhereItStands(stateContent: string): boolean {
+  const parkedAt = (getField(stateContent, "Parked At Stage") ?? "").trim();
+  return (getField(stateContent, "Parked") ?? "").trim().length > 0 && parkedAt.length > 0 &&
+    parkedAt === (getField(stateContent, "Current Stage") ?? "").trim();
+}
+
 /** Code Generation is the current stage and its gate is open, waiting for the person's answer. */
 export function codeGenerationGateHeld(state: string): boolean {
   return (getField(state, "Current Stage") ?? "").trim().toLowerCase().replace(/\s+/g, "-") === CODE_GENERATION_STAGE &&
@@ -3254,7 +3460,9 @@ function recordContinuedStaleContract(projectDir: string, continuation: CodeGene
 /**
  * Whether the plan behind a Code Generation completion still waits on the
  * person: a target has no approval that lets it build (no plan yet, not
- * approved, or changed since under strict), the check the build itself meets.
+ * approved, or changed since under strict), the check the build itself meets,
+ * except that a Testing Contract that moved after the build was reviewed under
+ * the plan's own (a testing practice kept at the gate) does not hold it.
  * Each target is judged as its own build step would be, never through the step
  * marker, which the gate's opening retires. A judgement that throws counts as
  * no wait, so the completion's own checks decide.
@@ -3263,11 +3471,31 @@ export function codeGenerationPlanWaits(projectDir: string, units: ReadonlyArray
   return units.some((unit) => {
     try {
       const issued: CodeGenerationIssuance = unit === null ? { kind: "run-stage" } : { kind: "run-stage", unit };
-      return !codeGenerationExecutionAllowed(projectDir, { unit }, undefined, issued);
+      const approval = evaluateCodeGenerationApproval(projectDir, { unit }, issued, "completion");
+      return !codeGenerationExecutionAllowed(projectDir, { unit }, approval, issued);
     } catch {
       return false;
     }
   });
+}
+
+/**
+ * Whether the target's build is finished as its plan stands: the build reading
+ * refuses because the Testing Contract moved, while the completion reading
+ * holds because the build was reviewed under the plan's own contract (a
+ * practice kept after the review). Whether its next step is the finish also
+ * depends on the person not having asked to see the plan again
+ * (codeGenerationBuildFinishes).
+ */
+export function codeGenerationFinishedUnderPlanContract(projectDir: string, unit: string | null): boolean {
+  try {
+    const issued: CodeGenerationIssuance = unit === null ? { kind: "run-stage" } : { kind: "run-stage", unit };
+    const approval = evaluateCodeGenerationApproval(projectDir, { unit }, issued, "completion");
+    return approval.ok && !approval.contractValid &&
+      codeGenerationExecutionAllowed(projectDir, { unit }, approval, issued);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -3302,9 +3530,11 @@ export function stepNextCommand(projectDir: string, step: { single?: boolean; st
  * The step a completion gets while its plan waits: the plan's question is
  * `next`'s, and an isolated run's is its own (isolatedCodeGenerationNext).
  */
-export function codeGenerationPlanWaitsStep(isolated?: { scope: string }): string {
+export function codeGenerationPlanWaitsStep(isolated?: { scope: string }, reviewAsked = false): string {
   const next = isolated === undefined ? `${aidlcToolInvocation("orchestrate")} next` : isolatedCodeGenerationNext(isolated.scope);
-  return `The code plan is not approved yet: run \`${next}\` and follow the step it prints.`;
+  // An approved plan the person asked to see again is not "not approved".
+  const why = reviewAsked ? "The person asked to see the code plan again" : "The code plan is not approved yet";
+  return `${why}: run \`${next}\` and follow the step it prints.`;
 }
 
 function recordCodeGenerationContinuation(
@@ -3837,14 +4067,16 @@ export function recordPlanApprovalBatchReceipts(
   });
 }
 
-function assertPlanApprovalBatchCurrent(projectDir: string, receipt: PlanApprovalRuntimeReceipt): void {
+function assertPlanApprovalBatchCurrent(
+  projectDir: string, receipt: PlanApprovalRuntimeReceipt, use: CodeGenerationApprovalUse = "build",
+): void {
   const batch = receipt.batch as BoundPlanApprovalBatch;
   const marker = assertPlanApprovalBatchLifecycle(projectDir, receipt);
   const batchPeers = { units: batch.members.map((member) => member.unit), markerSha256: hashObject(marker) };
   const members = batch.members.map((member) => {
     const evidence = planApprovalQuestionEvidence(
       projectDir, codeGenerationAuthority(projectDir, { unit: member.unit }, batchPeers),
-      member.questionsFile, "Approve Plan", { breakGlass: true },
+      member.questionsFile, "Approve Plan", { breakGlass: true, use },
     );
     const current = planApprovalBatchMember(evidence);
     const peer = readPlanApprovalReceipt(projectDir, current);
@@ -4488,6 +4720,8 @@ export interface PlanApprovalEvidenceOptions {
   breakGlass?: boolean;
   /** Group validation must not re-baseline one member before validating others. */
   batch?: boolean;
+  /** A completion reads each member against the contract its build ran under. */
+  use?: CodeGenerationApprovalUse;
 }
 
 export function codeGenerationPlanApprovalQuestionEvidence(
@@ -4520,11 +4754,11 @@ function planApprovalQuestionEvidence(
       `Plan Approval questions file must be the active target's canonical file: ${toPosix(relative(projectDir, expectedPath))}`,
     );
   }
-  const artifacts = codeGenerationApprovalArtifacts(projectDir, authority);
+  const artifacts = codeGenerationApprovalArtifacts(projectDir, authority, projectDir, options.use);
   if (!artifacts.planExists || !artifacts.instructionsExist) {
     throw new Error("Plan Approval requires non-empty plan and unit-test instructions");
   }
-  if (!artifacts.contractValid || artifacts.expectedFingerprint === null) {
+  if ((!artifacts.contractValid && !artifacts.builtUnderPlanContract) || artifacts.expectedFingerprint === null) {
     throw new Error(
       `Plan Approval requires the current Testing Contract: ${testingContractDefectReason(artifacts.plan) ??
         "the embedded contract is stale because memory, scope, test strategy, project type, or the installed AIDLC version changed. " +
@@ -4773,39 +5007,6 @@ export function captureCodeGenerationDiscardApproval(
   }
 }
 
-// A live listing without the paths Git ignores and does not track in the
-// checkout it was read from (a .env, a log): no commit holds them and no
-// checkout of a Unit gets them, so a worktree is never asked to reproduce them.
-// check-ignore without --no-index never reports a path that checkout's own
-// index tracks, and the person's own ignore rules are read as Git reads them.
-// A path registered as source in .aidlc-source-paths.json stays, as it does
-// for a Unit's claims. Commit listings are never passed here: they hold only
-// what was tracked. When Git cannot answer, nothing is left out.
-function withoutGitIgnored(
-  repoDir: string, carriesWorkspaceShell: boolean,
-): (listing: ReadonlyMap<string, string>) => Map<string, string> {
-  const ignored = new Map<string, boolean>();
-  const pathOf = (key: string): string => key.slice(key.indexOf("\0") + 1);
-  return (listing) => {
-    const unknown = [...new Set([...listing.keys()].map(pathOf))].filter((path) => !ignored.has(path));
-    if (unknown.length > 0) {
-      const checked = spawnSync("git", ["-C", repoDir, "check-ignore", "-z", "--stdin"], {
-        input: `${unknown.join("\0")}\0`,
-        encoding: "utf-8",
-        maxBuffer: 512 * 1024 * 1024,
-        timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
-      });
-      if (checked.status === 0 || checked.status === 1) {
-        const hits = new Set(checked.stdout.split("\0").filter(Boolean));
-        for (const path of unknown) {
-          ignored.set(path, hits.has(path) && !sourcePathIsRegistered(repoDir, carriesWorkspaceShell, path));
-        }
-      }
-    }
-    return new Map([...listing].filter(([key]) => ignored.get(pathOf(key)) !== true));
-  };
-}
-
 interface DiscardedWorktreeApproval {
   commit: string;
   listingSha256: string;
@@ -4977,20 +5178,26 @@ function approvedWorktreeSource(
   // Approval is kept, as on the single-agent path: generation start records it
   // and says it in one line. So is source that moved after the engine built a
   // plan with plan approval off (a skipped receipt): nobody approved it, and
-  // `next` would never ask. An AI-DLC update the person took moves only
-  // AI-DLC's own files, which is no reason to approve the plan again, and
-  // neither are files the person asked to change (swarm allow-change) that
-  // this Unit's plan does not name.
+  // `next` would never ask. An AI-DLC update the person took, or a file Git
+  // ignores written since (a test run's log), is no change to their source
+  // (aidlc-swarm-source.ts) and no reason to approve the plan again; neither
+  // are files the person asked to change (swarm allow-change) that this Unit's
+  // plan does not name.
   const named = unitPlanNamedPaths(parent, unit);
-  if (
-    !approved.continuing &&
+  const certified = approved.receipt.certifiedSourceSha256;
+  const held = !approved.continuing &&
     approved.receipt.skipped === undefined &&
-    !sameWorkspaceSource(approved.receipt.certifiedSourceSha256, parentSource.fingerprint) &&
-    !guardPolicyAcceptsChanges(parent) &&
-    !onlyAidlcFilesChangedInSwarmStage(parent, CODE_GENERATION_STAGE, parentSource) &&
-    mainCheckoutChangeAllowed(parent, workspaceSourceChangedPaths(
-      parent, CODE_GENERATION_STAGE, approved.receipt.certifiedSourceSha256, parentSource, true,
-    ), {}, named) === null
+    !sameWorkspaceSource(certified, parentSource.fingerprint) &&
+    !guardPolicyAcceptsChanges(parent);
+  const recorded = held ? readWorkspaceSourceSnapshot(parent, CODE_GENERATION_STAGE, certified) : null;
+  const changed = recorded === null ? null : swarmSourceChanged(
+    parent, recordedSourceListingUnderCurrentBoundary(recorded, parentSource.listing), parentSource.listing,
+  );
+  if (
+    held &&
+    changed?.length !== 0 &&
+    !swarmSourceUnchangedInStage(parent, CODE_GENERATION_STAGE, parentSource) &&
+    mainCheckoutChangeAllowed(parent, changed, {}, named) === null
   ) {
     throw new Error("Parent source has changed since Plan Approval or cannot be bound. Re-present and approve the plan against the current parent source.");
   }
@@ -5013,6 +5220,40 @@ function approvedWorktreeSource(
     .filter(([key]) => key.startsWith(prefix))
     .map(([key, value]) => [key.slice(prefix.length - 1), value])));
   return { parentSource, expectedBytes: theirs(expected), theirs };
+}
+
+// Commit listings can read an embedded repo's own objects even when Git cannot
+// initialize that repo in a new worktree. Match the initializer's .gitmodules
+// lookup, and only consider gitlinks that carry selected source files.
+function unregisteredWorktreeSourcePaths(repoDir: string, commit: string, source: ReadonlyMap<string, string>): string[] {
+  const sourceKeys = [...source.keys()];
+  const missing: string[] = [];
+  const walk = (dir: string, oid: string, prefix: string, depth: number): void => {
+    if (depth > 16) throw new Error(`Submodules nest more than 16 levels deep under ${prefix}. Build this Unit serially.`);
+    const entries = gitTreeLeafEntries(dir, oid);
+    if (entries === null) throw new Error("Selected worktree source cannot be reproduced. Build this Unit serially.");
+    const names = gitSubmoduleNames(dir, GIT_PLATFORM_ARGS, oid);
+    for (const entry of entries) {
+      if (entry.mode !== "160000") continue;
+      const path = `${prefix}${entry.path}`;
+      if (!sourceKeys.some((key) => key.startsWith(`\0${path}/`))) continue;
+      if (!names.has(entry.path)) {
+        missing.push(path);
+        continue;
+      }
+      const nested = join(dir, entry.path);
+      if (isGitRepoDir(nested)) walk(nested, entry.oid, `${path}/`, depth + 1);
+    }
+  };
+  walk(repoDir, commit, "", 1);
+  return missing;
+}
+
+function validateWorktreeSourceSubmodules(repoDir: string, commit: string, source: ReadonlyMap<string, string>): void {
+  const missing = unregisteredWorktreeSourcePaths(repoDir, commit, source);
+  if (missing.length > 0) {
+    throw new Error(`Nested repositories ${missing.map((path) => JSON.stringify(path)).join(", ")} have source files but no .gitmodules entry in the Unit's starting commit, so their Unit worktree cannot be prepared. Register them as Git submodules and choose a starting commit with those entries, or build this Unit serially. No child was created and no parent commit was made.`);
+  }
 }
 
 /**
@@ -5039,11 +5280,14 @@ export function validateCodeGenerationForkApproval(
   const discarded = discardedSha256 === undefined
     ? null : discardedWorktreeApproval(parent, unit, repoCwd, repoName, discardedSha256);
   const { expectedBytes, theirs } = approvedWorktreeSource(parent, unit, approved, repo, discarded);
+  const source = parseSourceListing(expectedBytes)!;
   if (discarded) {
     const base = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "--end-of-options", `${baseCommit}^{commit}`]);
     if (base !== discarded.commit) {
       throw new Error("Discard recovery must fork from the recorded Approval Source Commit.");
     }
+    // Recovery reproduces the recorded approval, even after the parent moved.
+    validateWorktreeSourceSubmodules(repo.cwd, base, source);
     return baseCommit;
   }
   const parentHead = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "HEAD^{commit}"]);
@@ -5054,13 +5298,31 @@ export function validateCodeGenerationForkApproval(
   const base = worktreeApprovalGit(repo.cwd, ["rev-parse", "--verify", "--end-of-options", `${baseCommit}^{commit}`]);
   const baseSource = gitCommitSourceListing(repo.cwd, base, repo.repo === null);
   if (!baseSource) throw new Error("Selected worktree base source cannot be reproduced. Choose a committed base before prepare.");
-  if (theirs(baseSource) === expectedBytes) return baseCommit;
-  try {
-    worktreeApprovalGit(repo.cwd, ["merge-base", "--is-ancestor", base, parentHead]);
-  } catch {
-    throw new Error("Selected worktree base cannot fast-forward to the approved parent source. Choose an ancestor of the approved parent commit before prepare.");
+  const baseMatches = theirs(baseSource) === expectedBytes;
+  if (!baseMatches) {
+    try {
+      worktreeApprovalGit(repo.cwd, ["merge-base", "--is-ancestor", base, parentHead]);
+    } catch {
+      throw new Error("Selected worktree base cannot fast-forward to the approved parent source. Choose an ancestor of the approved parent commit before prepare.");
+    }
   }
-  return parentHead;
+  // The older requested base is never initialized when prepare forks at HEAD.
+  validateWorktreeSourceSubmodules(repo.cwd, baseMatches ? base : parentHead, source);
+  return baseMatches ? baseCommit : parentHead;
+}
+
+// The worktree differs from the approved parent source by what it holds itself
+// (edits not committed, or commits the parent's history does not contain), so
+// an approval cannot be handed to it in place. Swarm prepare tells the person
+// which in their words (planNotHandedOver); the message stays the refusal the
+// other callers print.
+export class WorktreeHoldsItsOwnWorkError extends Error {
+  readonly holds: "uncommitted" | "diverged";
+  constructor(message: string, holds: "uncommitted" | "diverged") {
+    super(message);
+    this.name = "WorktreeHoldsItsOwnWorkError";
+    this.holds = holds;
+  }
 }
 
 function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: string, discardedSha256?: string) {
@@ -5087,7 +5349,7 @@ function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: str
     // The commit holds a link, never what it leads to outside the worktree.
     const live = new Map([...childLive].filter(([key]) => !isLinkTargetListingKey(childSource.listing, key)));
     if (!base || serializeSourceListing(base) !== serializeSourceListing(live)) {
-      throw new Error("Preserved worktree source differs from the approved parent baseline and contains dirty or untracked source. Nothing was changed. Preserve that work, reconcile/review it on the parent, and obtain fresh Plan Approval before retrying.");
+      throw new WorktreeHoldsItsOwnWorkError("Preserved worktree source differs from the approved parent baseline and contains dirty or untracked source. Nothing was changed. Preserve that work, reconcile/review it on the parent, and obtain fresh Plan Approval before retrying.", "uncommitted");
     }
     const parentHead = worktreeApprovalGit(provenance.repo.cwd, ["rev-parse", "HEAD"]);
     const committed = gitCommitSourceListing(provenance.repo.cwd, parentHead, provenance.repo.repo === null);
@@ -5097,7 +5359,7 @@ function worktreeApprovalTransfer(parentDir: string, childDir: string, unit: str
     try {
       worktreeApprovalGit(provenance.child, ["merge-base", "--is-ancestor", childHead, parentHead]);
     } catch {
-      throw new Error("Preserved worktree history cannot fast-forward to the approved parent source. Reconcile its branch without discarding work, then retry.");
+      throw new WorktreeHoldsItsOwnWorkError("Preserved worktree history cannot fast-forward to the approved parent source. Reconcile its branch without discarding work, then retry.", "diverged");
     }
     syncCommit = parentHead;
   }
@@ -5259,9 +5521,11 @@ function delegatedPlanChangedReason(
 
 function validateWorktreeDelegation(
   childDir: string, authority: CodeGenerationAuthority, receipt: PlanApprovalRuntimeReceipt,
+  use: CodeGenerationApprovalUse = "build",
 ): string {
   const parent = worktreeDelegationParent(childDir, authority, receipt);
-  if (!codeGenerationExecutionAllowed(parent, { unit: authority.unit })) {
+  const target = { unit: authority.unit };
+  if (!codeGenerationExecutionAllowed(parent, target, evaluateCodeGenerationApproval(parent, target, undefined, use))) {
     throw new Error("Parent Plan Approval is no longer current and its fence is raised.");
   }
   return parent;
@@ -5295,6 +5559,7 @@ export function evaluateCodeGenerationApproval(
   projectDir: string,
   target: CodeGenerationTarget,
   issued?: CodeGenerationIssuance,
+  use: CodeGenerationApprovalUse = "build",
 ): CodeGenerationApproval {
   let normalizedUnit: string | null = null;
   const empty: CodeGenerationApproval = {
@@ -5327,8 +5592,8 @@ export function evaluateCodeGenerationApproval(
     // A worker executes the parent's approved contract, including for a sibling
     // repository that does not carry the workspace's methodology files.
     const contractProject = candidate?.delegation
-      ? validateWorktreeDelegation(projectDir, authority, candidate) : projectDir;
-    const artifacts = codeGenerationApprovalArtifacts(projectDir, authority, contractProject);
+      ? validateWorktreeDelegation(projectDir, authority, candidate, use) : projectDir;
+    const artifacts = codeGenerationApprovalArtifacts(projectDir, authority, contractProject, use);
     empty.planExists = artifacts.planExists;
     empty.instructionsExist = artifacts.instructionsExist;
     empty.approved = artifacts.approvedAnswer;
@@ -5378,7 +5643,7 @@ export function evaluateCodeGenerationApproval(
       empty.reason = "The Testing Contract has missing or inconsistent executable fields. Repair its methodology, obligations, and plan profile before continuing.";
       return empty;
     }
-    if (!empty.contractValid) {
+    if (!empty.contractValid && !artifacts.builtUnderPlanContract) {
       empty.reason =
         "the approved Testing Contract is stale because memory, scope, test strategy, project type, or the installed AIDLC version changed";
       return empty;
@@ -5437,7 +5702,7 @@ export function evaluateCodeGenerationApproval(
     const receipt = readPlanApprovalReceipt(projectDir, identity);
     if (receipt?.delegation) {
       if (hashObject(receipt) !== hashObject(candidate)) throw new Error("Worktree approval changed while reading.");
-    } else if (receipt?.batch) assertPlanApprovalBatchCurrent(projectDir, receipt);
+    } else if (receipt?.batch) assertPlanApprovalBatchCurrent(projectDir, receipt, use);
     // Source that moved after the receipt certified it never retires the
     // approval: the approval is about the plan, and generation start records
     // the move as one notice line and re-baselines the receipt. Only a source
@@ -5527,15 +5792,31 @@ function publishCodeGenerationStart(
   if (continuation) recordContinuedStaleContract(projectDir, continuation);
   const changeNotices: string[] = continuation && options.recordContinuation !== false
     ? recordCodeGenerationContinuation(projectDir, continuation, "begin") : [];
-  if (receipt.status === "generation") return changeNotices;
-  originals.push(receipt);
-  // A lowered fence building a plan edited after its approval: the receipt
-  // keeps the content the build started on, so an interrupted build of it picks
-  // up (see "Picking up an interrupted build"). A swarm, a worktree delegation
-  // and a batch keep their own continuation rule.
+  // A lowered fence building a plan edited after its approval, or revised for
+  // the person's change request: the receipt keeps the content the build
+  // started on, at the attempt it started in, so an interrupted build in the
+  // approval's own attempt picks up (see "Picking up an interrupted build"),
+  // and their next change request is judged against it (planAsSentBack). A
+  // swarm, a worktree delegation and a batch keep their own continuation rule.
   const started = pickUp && continuation && !receipt.batch
     ? buildContentFingerprint(continuation.artifacts.plan, continuation.artifacts.instructions, authority) : null;
   const startedOn = started !== null && started !== receipt.fingerprint ? { startedFingerprint: started } : {};
+  if (receipt.status === "generation") {
+    // An approval their change request carried was spent by the build their
+    // rejection closed; this build starts on the revision. Not in `originals`:
+    // a start that fails leaves nothing to undo (the value is bound to this
+    // attempt, which no judgement made in this attempt can match, and the
+    // retry writes it again), and their sweep is for receipts of this
+    // attempt, not of the one the approval was given in.
+    if (continuation?.carried && started !== null && started !== receipt.startedFingerprint) {
+      // The receipt as it stands now: the batch start may have marked it
+      // (`carriedInto`) since it was read, and that mark must stay.
+      const current = readPlanApprovalReceipt(projectDir, receipt) ?? receipt;
+      writePlanApprovalReceipt(projectDir, { ...current, startedFingerprint: started });
+    }
+    return changeNotices;
+  }
+  originals.push(receipt);
   if (receipt.override !== undefined) {
     // A break-glass receipt is bound to content and attempt only. There is
     // no certified source to compare or re-certify, and no race window to
@@ -5671,8 +5952,17 @@ export function beginCodeGenerationBatch(
           // receipt stands at `generation` with that build's ticks on the plan.
           // Those ticks are the previous attempt's progress, not this build's:
           // the revised plan starts its steps fresh, as a new approval does.
-          if ((started.receipt.status !== "generation" || started.continuation?.carried) && pickUp) {
+          // Once: this start runs before every change the build makes, and the
+          // carried receipt stays at `generation`, so the first start in this
+          // attempt marks it (`carriedInto`) and later ones keep the ticks the
+          // build has made since.
+          const carriedFresh = started.continuation?.carried === true &&
+            started.receipt.carriedInto !== started.authority.runFloor;
+          if ((started.receipt.status !== "generation" || carriedFresh) && pickUp) {
             clearPlanFileTicks(projectDir, started.authority.stageDir);
+          }
+          if (carriedFresh) {
+            writePlanApprovalReceipt(projectDir, { ...started.receipt, carriedInto: started.authority.runFloor });
           }
           notices.push(...publishCodeGenerationStart(projectDir, started, options, originals, pickUp));
         }

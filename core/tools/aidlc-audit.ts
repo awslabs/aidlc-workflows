@@ -127,6 +127,11 @@ const VALID_EVENT_TYPES = new Set([
   // Engine-owned: the person sent their words to separate new work or a
   // reshape, so they answer no question the work in progress has open.
   "REQUEST_ROUTED",
+  // Engine-owned: an engine question with no row of its own when asked (the
+  // code plan question, the questions `next` asks), and an open question shown
+  // in a chat it was not shown in before, each with its Question Id.
+  "QUESTION_ASKED",
+  "QUESTION_SHOWN",
   "SUMMARY_CONFIRMATION_RECORDED",
   "VERIFICATION_COMMAND_RECORDED",
   "CONSTRUCTION_POLICY_RECORDED",
@@ -195,6 +200,11 @@ const VALID_EVENT_TYPES = new Set([
   "PLAN_APPROVAL_BLOCKED",
   "STATE_TRANSITION_BLOCKED",
   "STAGE_RULES_BLOCKED",
+  // A system package install nobody asked for (hook-emitted): held until the
+  // person says so (BLOCKED), and run with their turn standing behind it
+  // (ALLOWED, naming their message).
+  "SYSTEM_INSTALL_BLOCKED",
+  "SYSTEM_INSTALL_ALLOWED",
   // A guard's deterministic off-switch was set while a workflow existed, so a
   // tool call passed without enforcement. One row per streak: the hook appends
   // only when the newest row in its shard is not already this event.
@@ -362,6 +372,8 @@ const EVENT_HEADINGS: Record<string, string> = {
   QUESTION_ANSWERED: "Question Answered",
   QUESTION_UNANSWERED: "Question Unanswered",
   QUESTION_REPLIED: "Question Replied",
+  QUESTION_ASKED: "Question Asked",
+  QUESTION_SHOWN: "Question Shown",
   REQUEST_ROUTED: "Request Routed",
   SUMMARY_CONFIRMATION_RECORDED: "Summary Confirmation Recorded",
   VERIFICATION_COMMAND_RECORDED: "Verification Command Recorded",
@@ -390,6 +402,8 @@ const EVENT_HEADINGS: Record<string, string> = {
   PLAN_APPROVAL_BLOCKED: "Plan Approval Blocked",
   STATE_TRANSITION_BLOCKED: "State Transition Blocked",
   STAGE_RULES_BLOCKED: "Stage Rules Blocked",
+  SYSTEM_INSTALL_BLOCKED: "System Install Blocked",
+  SYSTEM_INSTALL_ALLOWED: "System Install Allowed",
   GUARD_DISABLED: "Guard Disabled",
   DOCUMENT_INDEXED: "Document Indexed",
   DOCUMENT_UPDATED: "Document Updated",
@@ -557,6 +571,10 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "QUESTION_UNANSWERED",
   "QUESTION_REPLIED",
   "REQUEST_ROUTED",
+  // The engine's record of the questions it asked; what binds an answer to
+  // its question will read them.
+  "QUESTION_ASKED",
+  "QUESTION_SHOWN",
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
@@ -629,6 +647,9 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // A stand-aside row is a guard's own account of what it let through; a forged
   // one would make an unauthorized action look covered.
   "GUARD_STOOD_ASIDE",
+  // The person's go-ahead for a system install; a forged one would make an
+  // install nobody asked for look like theirs.
+  "SYSTEM_INSTALL_ALLOWED",
   // Ceremony provenance belongs to the setting verb, not a public audit append.
   "CEREMONY_SET",
 ]);
@@ -948,6 +969,26 @@ function tapAuditMetric(
   }
 }
 
+// Each row a record gains goes to the open-question ledger the human-turn hook
+// stamps turns from (noteQuestionRow, aidlc-questions.ts), under the lock the
+// append holds. Lazy, like the metrics tap: a fixture without the module, or a
+// ledger that cannot be written, never blocks the row.
+function tapQuestionLedger(
+  eventType: string,
+  fields: Record<string, string>,
+  projectDir: string,
+  shardPath: string,
+): void {
+  try {
+    const questions = require("./aidlc-questions.ts") as {
+      noteQuestionRow: (projectDir: string, auditPath: string, event: string, fields: Record<string, string>) => void;
+    };
+    questions.noteQuestionRow(projectDir, shardPath, eventType, fields);
+  } catch {
+    // Bookkeeping for the hook's stamp only.
+  }
+}
+
 // Core append logic — throws on error instead of exiting. Safe for library callers.
 // CLI caller (main) wraps this in try/catch and translates to jsonError.
 export function appendAuditEntry(
@@ -1044,13 +1085,15 @@ export function appendAuditEntryUnlocked(
   const entry = { eventType, fields };
   validateAuditEntry(entry);
   const ts = isoTimestamp();
+  const shardPath = auditFilePath(projectDir, intent, space);
   appendAuditBlockAtPath(
     projectDir,
-    auditFilePath(projectDir, intent, space),
+    shardPath,
     renderAuditBlock(entry, ts, projectDir),
   );
 
   tapAuditMetric(eventType, fields, projectDir);
+  tapQuestionLedger(eventType, fields, projectDir, shardPath);
 
   return { appended: true, event: eventType, timestamp: ts };
 }
@@ -1245,6 +1288,7 @@ export function appendAuditEntryAtPathUnlocked(
     renderAuditBlock(entry, ts, projectDir),
   );
   tapAuditMetric(eventType, fields, projectDir);
+  tapQuestionLedger(eventType, fields, projectDir, shardPath);
   return { appended: true, event: eventType, timestamp: ts };
 }
 
@@ -1271,9 +1315,11 @@ export function appendAuditEntries(
         renderAuditBlock(entry, timestamps[index], projectDir)
       )
       .join("");
-    appendAuditBlockAtPath(projectDir, auditFilePath(projectDir, intent, space), payload);
+    const shardPath = auditFilePath(projectDir, intent, space);
+    appendAuditBlockAtPath(projectDir, shardPath, payload);
     for (const entry of entries) {
       tapAuditMetric(entry.eventType, entry.fields, projectDir);
+      tapQuestionLedger(entry.eventType, entry.fields, projectDir, shardPath);
     }
     return {
       appended: true,
@@ -1391,7 +1437,7 @@ function handleAppendRaw(
     }
     if (VALID_EVENT_TYPES.has(value)) {
       jsonError(
-        `append-raw refuses a body carrying **Event**: ${value} — that line would register as a ` +
+        `append-raw refuses a body carrying **Event**: ${value} - that line would register as a ` +
           "canonical audit event to every reader. Emit taxonomy events through their owning tool " +
           "(or `append` for diagnostic types); append-raw is for free-form notes only."
       );
@@ -2217,14 +2263,7 @@ function handleHistory(args: string[], projectDir: string): void {
       if ("heading" in row) {
         return { ...entry, heading: row.heading, text: row.text };
       }
-      const fields: Record<string, string> = Object.create(null);
-      for (const match of row.block.matchAll(/^(?:- )?\*\*([^*\n]+)\*\*:/gm)) {
-        const name = match[1];
-        if (name !== "Timestamp" && name !== "Event") {
-          fields[name] = auditBlockField(row.block, name)!;
-        }
-      }
-      return { ...entry, fields };
+      return { ...entry, fields: rowFields(row.block) };
     }).filter(
       (entry) => (stage === undefined || ("fields" in entry && entry.fields.Stage === stage)) &&
         (events.size === 0 || events.has(entry.event)),
@@ -2232,6 +2271,70 @@ function handleHistory(args: string[], projectDir: string): void {
     jsonSuccess({
       data_notice: UNTRUSTED_AUDIT_NOTICE,
       events: limit === undefined ? history : history.slice(-limit),
+    });
+  } catch (e) {
+    jsonError(errorMessage(e));
+  }
+}
+
+function rowFields(block: string): Record<string, string> {
+  const fields: Record<string, string> = Object.create(null);
+  for (const match of block.matchAll(/^(?:- )?\*\*([^*\n]+)\*\*:/gm)) {
+    const name = match[1];
+    if (name !== "Timestamp" && name !== "Event") {
+      fields[name] = auditBlockField(block, name)!;
+    }
+  }
+  return fields;
+}
+
+// --- Subcommand: turns ---
+
+// The person's turns with what they sent. The committed audit keeps no words
+// (#1505): they live in this machine's message record, which the row names by
+// its Message Id, so they read only here. A record expires after a day and
+// never leaves the clone that wrote it, so an older turn, or one from another
+// clone, says its words are not here. A record from another chat is never
+// joined to a row. Read-only, and deliberately not a delegate's verb.
+function handleTurns(args: string[], projectDir: string): void {
+  const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  let limit: number | undefined;
+  for (let i = 0; i < args.length; i += 2) {
+    if (args[i] !== "--limit") jsonError(`Unknown turns argument: ${args[i]}`);
+    const value = args[i + 1];
+    if (!value || !/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+      jsonError("--limit must be a positive integer.");
+    }
+    limit = Number(value);
+  }
+  try {
+    const rows = sortAttemptEvents(readActiveAuditShardEvents(projectDir));
+    const turns = rows.flatMap((row) => {
+      if ("heading" in row || row.event !== "HUMAN_TURN") return [];
+      const fields = rowFields(row.block);
+      const id = fields["Message Id"];
+      const record = id ? readMessage(projectDir, id) : null;
+      const sameChat = record !== null && (record.session ?? undefined) === (fields.Session || undefined);
+      return [{
+        timestamp: row.timestamp,
+        fields,
+        ...(sameChat
+          ? {
+            message: {
+              at: record.at,
+              source: record.source,
+              text: record.text,
+              words: record.words,
+              picker: record.picker,
+              ...(record.cut ? { cut: true } : {}),
+            },
+          }
+          : { message: null, message_unavailable: id ? "not on this machine, or expired" : "no message record" }),
+      }];
+    });
+    jsonSuccess({
+      data_notice: UNTRUSTED_AUDIT_NOTICE,
+      turns: limit === undefined ? turns : turns.slice(-limit),
     });
   } catch (e) {
     jsonError(errorMessage(e));
@@ -2259,12 +2362,16 @@ export function main(argv: string[]): void {
   const subcommand = filteredArgs[0];
 
   if (!subcommand) {
-    jsonError("Usage: aidlc-audit <append|append-batch|append-raw|history|audit-fork|audit-merge> [args...]");
+    jsonError("Usage: aidlc-audit <append|append-batch|append-raw|history|turns|audit-fork|audit-merge> [args...]");
   }
 
   switch (subcommand) {
     case "history":
       handleHistory(filteredArgs.slice(1), projectDir);
+      break;
+
+    case "turns":
+      handleTurns(filteredArgs.slice(1), projectDir);
       break;
 
     case "append": {
@@ -2309,7 +2416,7 @@ export function main(argv: string[]): void {
       break;
 
     default:
-      jsonError(`Unknown subcommand: ${subcommand}. Expected: append, append-batch, append-raw, history, audit-fork, audit-merge`);
+      jsonError(`Unknown subcommand: ${subcommand}. Expected: append, append-batch, append-raw, history, turns, audit-fork, audit-merge`);
   }
 }
 

@@ -35,10 +35,13 @@ script (top-level dispatch, `process.exit`) crashes the session
 
 ## Prerequisites
 
-- **opencode ≥ 1.17** — the plugin hook surface this install relies on
-  (`tool.execute.before`, `tool.execute.after`, `chat.message`, `session.idle`,
-  `experimental.session.compacting`, `shell.env`) and project-local skill/agent discovery.
-  Check with `opencode --version`.
+- **opencode 1.18.29 or newer, or OpenCode 2** — the adapter plugin
+  default-exports one object that both lines load: opencode 1 calls its
+  `server()` (the `tool.execute.before`, `tool.execute.after`, `chat.message`,
+  `session.idle`, `experimental.session.compacting` and `shell.env` hooks;
+  object entry points need 1.18.29), and OpenCode 2 calls its `setup()` (see
+  [On OpenCode 2](#on-opencode-2)). Project-local skill and agent discovery
+  works on both. Check with `opencode --version`.
 - **bun** only when generating or running the source/development `dist/`
   projection. Native installs and versioned release runtimes dispatch through
   the installed `aidlc` executable.
@@ -209,6 +212,54 @@ the project.
   lines at gates.
 - **MCP servers**: none ship; configure your own under `mcp:` in
   `opencode.json` if needed.
+
+## On OpenCode 2
+
+OpenCode 2 does not run opencode 1 plugin functions, so the adapter also
+carries a V2 entry point, `setup(ctx)`. It drives the same hook logic from
+V2's plugin API (live-verified on 2.0.24):
+
+| OpenCode 2 moment | Drives |
+| --- | --- |
+| `session.hook("prompt")` | presence minting and session-start (`chat.message`) |
+| `tool.hook("execute.before")` / `("execute.after")` | the bash boundary, guards, reviewer scope, audit, sensors, stage graph, subagent log |
+| `session.hook("compaction")` | state validation before compaction |
+| `session.execution.succeeded` event | the Stop hook and its nudge (`session.idle`) |
+| `session.execution.interrupted`, `permission.replied` events | no nudge after Esc or a rejected command |
+| `shell.hook("create.before")` | each shell command acts on its own chat's work (`shell.env`) |
+
+V2 renames the built-in tools (`bash` → `shell`, `task` → `subagent`,
+`apply_patch` → `patch`); the adapter maps them back. Its tool events name the
+calling agent, so reviewer identity comes from the event itself. The nudge is
+sent as a synthetic message, which V2 never passes to the prompt hook, so it
+can never count as a human turn. Subagent prompts do reach the prompt hook;
+the adapter recognises child sessions by their parent and skips them.
+
+OpenCode 2's shell event carries the command's environment but no session, so
+the adapter takes the session from the shell tool call that precedes it. A
+command typed in opencode's own terminal has no such call and names no chat,
+as on opencode 1.
+
+The shipped `opencode.json`, agent files and `/aidlc` command keep the
+opencode 1 shapes, which OpenCode 2 reads unchanged. Leave them in that form:
+`aidlc doctor` and `aidlc config` check those shapes.
+
+Degradations compared with opencode 1:
+
+- **No statusline sync.** OpenCode 2 has no todo tool, so the `todowrite`
+  moment that runs `aidlc-sync-workflow-state.ts` never happens. Workflow
+  state still advances through the engine's own commands; only the
+  todo-driven statusline mirror is missing. Use `/aidlc --status`.
+- **`/aidlc` shows its template.** OpenCode 2 has no `command.execute.before`
+  hook, so your chat shows the command's template rather than the line you
+  typed. The adapter reads the line you typed back out of the template, so a
+  switch such as `/aidlc --review none` is kept and a bare `/aidlc` counts as a
+  command, as on opencode 1.
+- **No engine-error toast.** OpenCode 2 gives plugins no TUI toast channel; the
+  conductor skill still prints the engine's error message verbatim.
+- **Default shell dialect.** OpenCode 2 does not expose the `shell` setting to
+  plugins, so the bash boundary reads commands the way the platform's default
+  shell does (POSIX `sh` on Linux and macOS).
 
 ## Verifying an install
 

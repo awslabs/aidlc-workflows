@@ -1416,12 +1416,12 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     const first = nextIn(proj);
     expect(first.kind).toBe("run-stage");
     const said = heard(first);
-    expect(said).toStartWith("Setting up a poc workflow for this");
+    expect(said).toStartWith("Setting up the poc workflow for this");
     expect(said).toContain("The folder has no code yet, so I'm starting this as a new project without Reverse Engineering.");
     // The stage's own line follows.
     expect(said.split("If the work is on existing code, tell me.")[1]?.trim().length ?? 0).toBeGreaterThan(0);
     // Said once: the same step asked for again does not repeat it.
-    expect(heard(nextIn(proj))).not.toContain("Setting up a poc workflow");
+    expect(heard(nextIn(proj))).not.toContain("Setting up the poc workflow");
   });
 
   test("the first stage says the bugfix plan's size, not its settings", () => {
@@ -1435,7 +1435,7 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     ], { encoding: "utf-8", env: chat, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
     const said = heard(nextIn(proj));
-    expect(said).toMatch(/^Setting up a bugfix workflow for this: \d+ stages, \d+ approval gates\./);
+    expect(said).toMatch(/^Setting up the bugfix workflow for this: \d+ stages, \d+ approval gates\./);
     expect(said).not.toContain("lead agent only");
   });
 
@@ -1450,7 +1450,7 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     ], { encoding: "utf-8", env: chat, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
     const said = heard(nextIn(proj));
-    expect(said).toStartWith("Setting up a poc workflow for this");
+    expect(said).toStartWith("Setting up the poc workflow for this");
     expect(said).toContain(
       "I read everything from the first <document> to the last </document> as your pasted document, and only the text outside it as your instructions.",
     );
@@ -1582,7 +1582,7 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     ], { encoding: "utf-8", env: chat, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
     const said = heard(nextIn(proj));
-    expect(said).toStartWith("Setting up a poc workflow for this");
+    expect(said).toStartWith("Setting up the poc workflow for this");
     expect(said).not.toContain(split);
   });
 

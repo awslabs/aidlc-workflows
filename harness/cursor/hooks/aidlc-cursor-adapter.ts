@@ -779,6 +779,42 @@ export async function run(
     return { words, ambiguous: quote !== null };
   }
 
+  // What the host's shell reads as its own in a command: everything outside
+  // quotes, and the "$" and backtick it still expands inside double quotes.
+  // Each shell's quoting is read its own way (shellWords keeps one quote state
+  // for both, and ends a double-quoted word at \" where a POSIX shell goes on):
+  // a POSIX shell escapes with a backslash; PowerShell escapes with a backtick,
+  // keeps a doubled quote inside the word and reads typographic quotes as
+  // quotes. Null when a quote is left open.
+  function shellActiveText(command: string, flavor: PathFlavor): string | null {
+    const singles = flavor === "win32" ? "'\u2018\u2019\u201a\u201b" : "'";
+    const doubles = flavor === "win32" ? '"\u201c\u201d\u201e' : '"';
+    const escapeChar = flavor === "win32" ? "`" : "\\";
+    let active = "";
+    let quote = "";
+    for (let i = 0; i < command.length; i++) {
+      const ch = command[i];
+      if (quote === "") {
+        if (singles.includes(ch)) quote = singles;
+        else if (doubles.includes(ch)) quote = doubles;
+        else {
+          active += ch;
+          if (ch === escapeChar) active += command[++i] ?? "";
+        }
+        continue;
+      }
+      if (quote.includes(ch)) {
+        const next = command[i + 1];
+        if (flavor === "win32" && next !== undefined && quote.includes(next)) i++;
+        else quote = "";
+      } else if (quote === doubles) {
+        if (ch === "$" || ch === "`") active += ch;
+        if (ch === escapeChar) i++;
+      }
+    }
+    return quote === "" ? active : null;
+  }
+
   interface ShellCommandPart {
     text: string;
     operatorAfter: "" | ";" | "\n" | "&&" | "||" | "|" | "&";
@@ -2543,14 +2579,19 @@ export async function run(
     // A POSIX shell reads a line that ends in a backslash as going on (the
     // stage writes its publish that way); PowerShell ends the command there.
     const joined = process.platform === "win32" ? command : command.replace(/\\\r?\n/g, " ");
-    if (agent === AMBIGUOUS_REVIEWER || /[;&|<>(){}[\]`$%*?\r\n]/.test(joined)) return false;
+    const flavor: PathFlavor = process.platform === "win32" ? "win32" : "posix";
+    // These stay refused inside quotes too: on a native Windows install
+    // aidlc.cmd's cmd.exe reads "&" and "%" again whatever the quotes, and a
+    // repo name holds none of them.
+    if (agent === AMBIGUOUS_REVIEWER || /[&|<>%*?\r\n]/.test(joined)) return false;
+    const active = shellActiveText(joined, flavor);
+    if (active === null || /[;(){}[\]`$]/.test(active)) return false;
     // A call this cannot read keeps the denies.
     try {
       const parsed = shellWords(joined);
       if (parsed.ambiguous) return false;
       // The host's own shell reads the words: PowerShell keeps a backslash, a
       // POSIX shell reads it as an escape.
-      const flavor: PathFlavor = process.platform === "win32" ? "win32" : "posix";
       const words = parsed.words.map(({ variants }) =>
         variants.find((variant) => variant.flavor === flavor)?.value ?? ""
       );

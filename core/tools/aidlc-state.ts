@@ -216,9 +216,7 @@ import {
   sourceClaimCovers,
   readUnitSourceManifest,
   aidlcOwnedSourceKey,
-  onlyAidlcFilesChangedSince,
   mainCheckoutChangeAllowed,
-  sourceChangedOutsideAidlcSince,
   sourceBaselineAuditFields,
   sourceListingEntriesEqual,
   resolveProjectDir,
@@ -290,7 +288,9 @@ import {
 import {
   mainCheckoutChangeStep, personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn,
 } from "./aidlc-message-store.ts";
+import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
+import { generateFireId, recordUnfinishedFire, unfinishedFire } from "./aidlc-sensor-record.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
@@ -302,6 +302,14 @@ import {
   workflowUsageAuditFields,
 } from "./aidlc-usage.ts";
 import { codeGenerationCompletionPlanWaits, deriveTeamUnitProgressModel } from "./aidlc-orchestrate.ts";
+import {
+  askedQuestionFields,
+  commandChat,
+  latestAskedQuestion,
+  QUESTION_ID_FIELD,
+  questionShows,
+  shownAgainFields,
+} from "./aidlc-questions.ts";
 import { codeGenerationPlanWaitsStep, promotableTestingPosture } from "./aidlc-testing-posture.ts";
 import { approvedOverUnfinishedReview, approvedUnitChanges } from "./aidlc-construction-checkpoints.ts";
 
@@ -2010,7 +2018,9 @@ function handleRefreshUnitProgress(
         "Refusing Unit Progress refresh: payload does not match authoritative DAG/artifact/receipt/gate evidence.",
       );
     }
-    const section = foldUnit
+    // A fold keeps the other Units' rows as main has them. A main that never
+    // walked Construction has no table to keep: it gets the whole section.
+    const section = foldUnit && unitProgressSectionRange(content)
       ? foldUnitProgressSection(
         currentUnitProgressSection(content),
         authoritative.section,
@@ -2801,7 +2811,7 @@ function handleUnit(args: string[]): void {
       throw new UnitWaveRouteRefusalError(
         `Refusing unit ${action} for "${unit}" of "${slug}": a wave is active for this stage ` +
           "(the orchestration engine currently routes it as a batch). " +
-          "A wave has no single active unit — every entry settles through " +
+          "A wave has no single active unit - every entry settles through " +
           `\`aidlc-state.ts unit complete --wave --stage ${slug} --unit <name>\`. A bare ` +
           `\`${action}\` would append a serial receipt and ` +
           "drop the deterministic batch path for every remaining unit of the stage. " +
@@ -2943,15 +2953,14 @@ function handleUnit(args: string[]): void {
       }
     }
 
-    // A Unit's Code Generation completes only once the plan it builds from lets
-    // it build (approved, or plan approval off); the plan's question is
+    // A Unit's Code Generation completes only once its plan no longer holds it
+    // (codeGenerationCompletionPlanWaits says when); the plan's question is
     // `next`'s. The remedy the person picked at the recovery question is theirs.
-    if (
-      action === "complete" && slug === "code-generation" &&
+    const planWaits = action === "complete" && slug === "code-generation" &&
       !guardRecoveryAnswerAdmits(readActiveDirectiveMarker(pd, content), ["engine", "state", "unit", ...args], pd) &&
-      codeGenerationCompletionPlanWaits(pd, content, [unit])
-    ) {
-      error(`Refusing to complete unit "${unit}" for "${slug}": ${codeGenerationPlanWaitsStep()}`);
+      codeGenerationCompletionPlanWaits(pd, content, [unit]);
+    if (planWaits) {
+      error(`Refusing to complete unit "${unit}" for "${slug}": ${codeGenerationPlanWaitsStep(undefined, planWaits === "plan-review")}`);
     }
 
     // UNIT_COMPLETED is receipt-plus-evidence: the receipt commits only when
@@ -3586,6 +3595,32 @@ function currentAttemptSwarmUnits(
   return [...obligations.units];
 }
 
+// The walking skeleton is built on the main checkout and approved at its own
+// checkpoint before the swarm starts, and the swarm leaves it out of its
+// batches, as it does a Unit the person skipped: no Bolt merge ever lands it,
+// so its approval is its authority and it owes no merge. A Unit a current
+// swarm batch started or converged still owes one, approved or not. Unreadable
+// evidence exempts nothing.
+function unitsOwingNoSwarmMerge(pd: string, slug: string): Set<string> {
+  try {
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(pd, undefined, undefined, unreadable);
+    const floor = latestMainWorkflowStageRunFloorForProject(pd, slug, false, undefined, rows);
+    if (unreadable.length > 0 || floor.startsWith("AMBIGUOUS:")) return new Set();
+    const built = new Set<string>();
+    for (const row of rows) {
+      if (auditBlockField(row.block, "Stage") !== slug || auditBlockField(row.block, "Run floor") !== floor) continue;
+      const names = row.event === "SWARM_STARTED" ? auditBlockField(row.block, "Unit names")
+        : row.event === "SWARM_UNIT_CONVERGED" ? auditBlockField(row.block, "Unit name")
+        : null;
+      for (const unit of (names ?? "").split(",")) if (unit.trim()) built.add(unit.trim());
+    }
+    return new Set([...approvedConstructionUnits(pd, readStateFile(pd))].filter((unit) => !built.has(unit)));
+  } catch {
+    return new Set();
+  }
+}
+
 function verifySettledSwarmSourceBinding(
   pd: string,
   stage: { slug: string; workspace_requires?: boolean },
@@ -3603,6 +3638,9 @@ function verifySettledSwarmSourceBinding(
       `${reviewerPreconditionPrefix(stage.slug, action)}: its settled swarm Unit obligations cannot be resolved for the current attempt.`,
     );
   }
+  const exempt = unitsOwingNoSwarmMerge(pd, stage.slug);
+  const owed = units.filter((unit) => !exempt.has(unit));
+  if (owed.length === 0) return;
   const chain = currentSwarmSourceMergeChain(pd, stage.slug);
   if (chain.state === "none") {
     error(
@@ -3614,17 +3652,20 @@ function verifySettledSwarmSourceBinding(
       `Refusing to complete "${stage.slug}": its post-merge main-checkout source binding chain is invalid (${chain.reason}). Re-run the affected source merge or restart the Bolt attempt.`,
     );
   }
-  const missing = units.filter((unit) => !chain.units.has(unit));
+  const missing = owed.filter((unit) => !chain.units.has(unit));
   if (missing.length > 0) {
     error(
       `Refusing to complete "${stage.slug}": ${missing.length} converged unit(s) have no current-attempt post-merge source binding (${missing.join(", ")}). Merge every reviewed source commit before approval.`,
     );
   }
   const current = workspaceSourceState(pd);
-  // An AI-DLC update the person took after the last merge changed only
-  // AI-DLC's own files: nobody's source moved.
-  const moved = current !== null && !sameWorkspaceSource(chain.fingerprint, current.fingerprint) &&
-    !onlyAidlcFilesChangedSince(pd, stage.slug, chain.listing, current);
+  // An AI-DLC update the person took after the last merge, or a file Git
+  // ignores written since (a dev server's log), is nobody's source
+  // (aidlc-swarm-source.ts).
+  const changed = current === null || sameWorkspaceSource(chain.fingerprint, current.fingerprint)
+    ? []
+    : swarmSourceChangedSince(pd, stage.slug, chain.listing, current);
+  const moved = changed?.length !== 0;
   if (moved && current !== null && guardPolicyAcceptsChanges(pd)) {
     // Kept under relaxed or off: edits made after the last merge stay, once recorded.
     if (changeControlPreflight) return;
@@ -3638,9 +3679,6 @@ function verifySettledSwarmSourceBinding(
   }
   // Under strict, files the person asked to change (swarm allow-change) stay
   // too, recorded with the message they asked in; that step already told them.
-  const changed = moved && current !== null
-    ? sourceChangedOutsideAidlcSince(pd, stage.slug, chain.listing, current)
-    : null;
   const asked = mainCheckoutChangeAllowed(pd, changed);
   if (moved && current !== null && asked !== null) {
     if (changeControlPreflight) return;
@@ -3944,10 +3982,6 @@ function gateSensorDispatchTimeoutMs(): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-function diagnosticSnippet(value: string | null | undefined): string {
-  return (value ?? "").replace(/\s+/g, " ").trim().slice(0, 240);
-}
-
 function gateSensorMatchesOutput(
   sensor: NonNullable<
     NonNullable<ReturnType<typeof findStageBySlug>>["sensors_applicable"]
@@ -4091,6 +4125,7 @@ function fireGateSensors(
         });
         continue;
       }
+      const fireId = generateFireId();
       const args = [
         "fire",
         sensor.id,
@@ -4098,12 +4133,15 @@ function fireGateSensors(
         stage.slug,
         "--output-path",
         outputPath,
+        "--fire-id",
+        fireId,
         ...(choice?.unit ? ["--unit", choice.unit] : []),
         ...(fire.pathSet ? ["--paths-stdin", "json"] : []),
       ];
       const command = executable
         ? [executable, "engine", "sensor", ...args]
         : [process.execPath, sensorTool, ...args];
+      const startedAt = Date.now();
       const result = spawnSync(command[0], command.slice(1), {
         cwd: pd,
         encoding: "utf-8",
@@ -4115,8 +4153,26 @@ function fireGateSensors(
         },
         ...(fire.pathSet ? { input: JSON.stringify(fire.covered) } : {}),
       });
+      // A fire that gave no verdict is recorded whatever the check's severity,
+      // so the gate says it could not run; a blocking one still refuses below.
+      const outcome = unfinishedFire(result, parseSensorFireVerdict(result.stdout ?? ""));
+      if (outcome.unfinished !== null) {
+        try {
+          recordUnfinishedFire(pd, {
+            fireId,
+            sensorId: sensor.id,
+            stageSlug: stage.slug,
+            unit: choice?.unit ?? null,
+            outputPath,
+            durationMs: Date.now() - startedAt,
+            note: outcome.unfinished.note,
+          });
+        } catch (error) {
+          recordHookDrop(pd, "gate-sensors", `sensor ${sensor.id} at ${stage.slug} (Fire id ${fireId}) ${outcome.unfinished.reason}; its could-not-run row was not written: ${errorMessage(error)}`);
+        }
+      }
       if (sensor.default_severity !== "blocking") {
-        const verdict = parseSensorFireVerdict(result.stdout ?? "");
+        const { verdict } = outcome;
         if (verdict?.result === "failed" && verdict.detail_path !== null) failedFires.push(verdict.fire_id);
         continue;
       }
@@ -4130,42 +4186,16 @@ function fireGateSensors(
         });
         continue;
       }
-      if (result.error) {
-        const code = (result.error as NodeJS.ErrnoException).code ?? "unknown";
+      if (outcome.unfinished !== null) {
         issues.push({
           sensorId: sensor.id,
           outputPath,
           detailPath: null,
-          reason:
-            code === "ETIMEDOUT"
-              ? "dispatcher timeout"
-              : `dispatcher spawn failed (${code})`,
+          reason: outcome.unfinished.reason,
         });
         continue;
       }
-      if (result.status !== 0) {
-        const stderr = diagnosticSnippet(result.stderr);
-        issues.push({
-          sensorId: sensor.id,
-          outputPath,
-          detailPath: null,
-          reason:
-            result.status === null
-              ? `dispatcher terminated by ${result.signal ?? "unknown signal"}`
-              : `dispatcher exited ${result.status}${stderr ? `: ${stderr}` : ""}`,
-        });
-        continue;
-      }
-      const verdict = parseSensorFireVerdict(result.stdout ?? "");
-      if (verdict === null) {
-        issues.push({
-          sensorId: sensor.id,
-          outputPath,
-          detailPath: null,
-          reason: "dispatcher returned no valid verdict",
-        });
-        continue;
-      }
+      const { verdict } = outcome;
       let verdictOutputPath: string | null = null;
       try {
         verdictOutputPath = realpathSync(
@@ -6111,7 +6141,7 @@ function handleAdvance(
   const scope = getField(content, "Scope");
   if (!scope) {
     error(
-      `State file has no Scope field. Refusing to advance — fix the state file first.`
+      `State file has no Scope field. Refusing to advance - fix the state file first.`
     );
   }
   if (!validScopes().has(scope)) {
@@ -6358,7 +6388,7 @@ function handleFinalize(args: string[]): void {
   const scope = getField(content, "Scope");
   if (!scope) {
     error(
-      `State file has no Scope field. Refusing to finalize — fix the state file first.`
+      `State file has no Scope field. Refusing to finalize - fix the state file first.`
     );
   }
   if (!validScopes().has(scope)) {
@@ -6494,7 +6524,7 @@ function handleCompleteWorkflow(
   const scope = getField(content, "Scope");
   if (!scope) {
     error(
-      `State file has no Scope field. Refusing to complete workflow — fix the state file first.`
+      `State file has no Scope field. Refusing to complete workflow - fix the state file first.`
     );
   }
   if (!validScopes().has(scope)) {
@@ -6999,7 +7029,33 @@ function gateAskFields(
     fields["Open Decisions"] = "0";
   }
   if (stage.workspace_requires) Object.assign(fields, sourceWorkFields());
+  // The gate's own question record (aidlc-questions.ts): what it shows is the
+  // brief rendered for it and the documents it is about.
+  let outputs: string | null = null;
+  try {
+    outputs = reviewArtifactFingerprint(pd, stage, unit, { stateContent: content });
+  } catch {
+    outputs = null;
+  }
+  Object.assign(fields, askedQuestionFields(pd, {
+    type: "gate",
+    shows: questionShows([fields["Brief Digest"], outputs ?? "none"]),
+  }));
   return fields;
+}
+
+// The gate already open, shown again: its question's id for the step, and a
+// QUESTION_SHOWN row when this chat had not seen it. Record-only.
+function openGateQuestionId(pd: string, slug: string, unit: string | null): string | null {
+  try {
+    const open = latestAskedQuestion(pd, { event: "STAGE_AWAITING_APPROVAL", type: "gate", stage: slug, unit });
+    if (open === null) return null;
+    const shown = shownAgainFields(pd, open.id, commandChat(pd));
+    if (shown !== null) emitAudit(pd, "QUESTION_SHOWN", shown);
+    return open.id;
+  } catch {
+    return null;
+  }
 }
 
 // Where the review-brief CLI keeps the renderings it printed for this gate.
@@ -7505,6 +7561,7 @@ function handleGateStart(args: string[]): void {
       );
     }
     if (status === "awaiting-approval") {
+      const questionId = openGateQuestionId(pd, slug, teamGate.unit);
       console.log(
         JSON.stringify({
           slug,
@@ -7513,19 +7570,21 @@ function handleGateStart(args: string[]): void {
           new_state: "awaiting-approval",
           already_awaiting_approval: true,
           revalidated: true,
+          ...(questionId !== null ? { question_id: questionId } : {}),
         }),
       );
       return;
     }
     const timestamp = isoTimestamp();
     content = setField(content, "Last Updated", timestamp);
+    const asked: Record<string, string> = {
+      ...teamGateFields(stage, teamGate),
+      ...(artifacts ? { Artifacts: artifacts } : {}),
+      ...(recovered ? { Recovered: "true" } : {}),
+      ...gateAskFields(pd, stage, content, teamGate.unit, []),
+    };
     try {
-      emitAudit(pd, "STAGE_AWAITING_APPROVAL", {
-        ...teamGateFields(stage, teamGate),
-        ...(artifacts ? { Artifacts: artifacts } : {}),
-        ...(recovered ? { Recovered: "true" } : {}),
-        ...gateAskFields(pd, stage, content, teamGate.unit, []),
-      });
+      emitAudit(pd, "STAGE_AWAITING_APPROVAL", asked);
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
@@ -7536,6 +7595,7 @@ function handleGateStart(args: string[]): void {
       gate_scope: teamGate.scope,
       new_state: "awaiting-approval",
       timestamp,
+      question_id: asked[QUESTION_ID_FIELD],
     }));
     return;
   }
@@ -7544,6 +7604,7 @@ function handleGateStart(args: string[]): void {
   admitStageAction(pd, content, stage, { action: "present-approval-gate", personCall: personCall() });
   verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
   if (alreadyAwaiting) {
+    let questionId: string | null = null;
     if (
       gateSensorEvaluation.issues.length > 0 &&
       overrideBlockingSensors
@@ -7560,9 +7621,12 @@ function handleGateStart(args: string[]): void {
           true,
         );
         emitAudit(pd, "STAGE_AWAITING_APPROVAL", fields);
+        questionId = fields[QUESTION_ID_FIELD];
       } catch (e) {
         error(`Audit emission failed: ${errorMessage(e)}`);
       }
+    } else {
+      questionId = openGateQuestionId(pd, slug, null);
     }
     console.log(
       JSON.stringify({
@@ -7570,6 +7634,7 @@ function handleGateStart(args: string[]): void {
         new_state: "awaiting-approval",
         already_awaiting_approval: true,
         revalidated: true,
+        ...(questionId !== null ? { question_id: questionId } : {}),
       }),
     );
     return;
@@ -7580,6 +7645,7 @@ function handleGateStart(args: string[]): void {
   const timestamp = isoTimestamp();
   content = setField(content, "Last Updated", timestamp);
 
+  let questionId: string | undefined;
   try {
     const fields: Record<string, string> = {
       Stage: slug,
@@ -7594,6 +7660,7 @@ function handleGateStart(args: string[]): void {
       overrideBlockingSensors,
     );
     emitAudit(pd, "STAGE_AWAITING_APPROVAL", fields);
+    questionId = fields[QUESTION_ID_FIELD];
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
@@ -7604,6 +7671,7 @@ function handleGateStart(args: string[]): void {
     new_state: "awaiting-approval",
     timestamp,
     ...(together.length > 0 ? { approves_together: together } : {}),
+    ...(questionId !== undefined ? { question_id: questionId } : {}),
   }));
   });
 }
@@ -8074,7 +8142,7 @@ function handleApprove(args: string[]): void {
   const scope = getField(content, "Scope");
   if (!scope) {
     error(
-      `State file has no Scope field. Refusing to advance after approve — fix the state file first.`,
+      `State file has no Scope field. Refusing to advance after approve - fix the state file first.`,
     );
   }
   if (!validScopes().has(scope)) {

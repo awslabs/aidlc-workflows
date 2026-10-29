@@ -13,6 +13,7 @@
 // through matching provenance; new worktrees never use legacy names.
 // Nested checkouts are refused; external linked worktrees remain supported.
 
+import { gitSubmoduleNames } from "./aidlc-git.ts";
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -66,15 +67,12 @@ import {
   resolveProjectDir,
   resolveWorkflowSelection,
   serializeSourceListing,
-  sourceChangedOutsideAidlc,
-  sourceChangedOutsideAidlcSince,
   sourceListingEntriesEqual,
   sourceListingSha256,
   swarmUnitCheckpointRejections,
   type WorkspaceSourceState,
   type WorkflowSelection,
   UNBINDABLE_FINGERPRINT,
-  onlyAidlcFilesChangedSince,
   mainCheckoutChangeAllowed,
   validateUnitName,
   workspaceSourceFailureSuffix,
@@ -95,7 +93,9 @@ import {
   asksForHelp,
   printUsageAndExit,
 } from "./aidlc-lib.js";
+import { afterApprovedSkeleton } from "./aidlc-construction-checkpoints.ts";
 import { mainCheckoutChangeStep } from "./aidlc-message-store.ts";
+import { swarmSourceChanged, swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
 import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
 
@@ -231,28 +231,11 @@ function gitlinkPaths(checkoutDir: string): string[] | null {
   return paths;
 }
 
-function submoduleNames(checkoutDir: string): Map<string, string> {
-  const names = new Map<string, string>();
-  if (!existsSync(join(checkoutDir, ".gitmodules"))) return names;
-  const listed = runGit(
-    ["config", "-f", ".gitmodules", "-z", "--get-regexp", "^submodule\\..*\\.path$"],
-    checkoutDir,
-  );
-  if (!listed.ok) return names;
-  for (const record of listed.stdout.split("\0")) {
-    const newline = record.indexOf("\n");
-    if (newline === -1) continue;
-    const key = record.slice(0, newline);
-    names.set(record.slice(newline + 1), key.slice("submodule.".length, -".path".length));
-  }
-  return names;
-}
-
 function initializeBoltSubmodules(sourceDir: string, worktreeDir: string, prefix = "", depth = 1): string | null {
   if (depth > 16) return `submodules nest more than 16 levels deep under ${prefix || "the worktree"}`;
   const paths = gitlinkPaths(worktreeDir);
   if (paths === null) return `cannot list the submodules of ${prefix || "the worktree"}`;
-  const names = submoduleNames(worktreeDir);
+  const names = gitSubmoduleNames(worktreeDir, GIT_PLATFORM_ARGS);
   for (const path of paths) {
     const source = join(sourceDir, path);
     const name = names.get(path);
@@ -2067,12 +2050,11 @@ function assertAggregateSourceBeforeMerge(
       );
     }
     if (resuming) return { state: current, openingFingerprint: chain.fingerprint };
-    if (
-      !sameWorkspaceSource(chain.fingerprint, current.fingerprint) &&
-      !onlyAidlcFilesChangedSince(pd, record.stage, chain.listing, current, intent, space)
-    ) {
+    const changed = sameWorkspaceSource(chain.fingerprint, current.fingerprint)
+      ? []
+      : swarmSourceChangedSince(pd, record.stage, chain.listing, current, intent, space);
+    if (changed?.length !== 0) {
       if (acceptsChanges) return keepChange(chain.fingerprint, null);
-      const changed = sourceChangedOutsideAidlcSince(pd, record.stage, chain.listing, current, intent, space);
       const asked = mainCheckoutChangeAllowed(pd, changed, { intent, space });
       if (asked !== null) return keepChange(chain.fingerprint, changed, asked);
       errorWithSlug(
@@ -2100,12 +2082,22 @@ function assertAggregateSourceBeforeMerge(
     );
   }
   if (resuming) return { state: current, openingFingerprint: opening.fingerprint };
+  // The walking skeleton the person approved at its own checkpoint is where the
+  // swarm starts, never a change of theirs. The link this landing records still
+  // opens at the stage baseline: the chain's first link, as earlier releases
+  // recorded it, though the main checkout already held the skeleton.
   const openingListing = opening.listing === undefined
     ? undefined
-    : recordedSourceListingUnderCurrentBoundary(opening.listing, current.listing);
-  // An AI-DLC update the person took changed only AI-DLC's own files: nobody's source.
+    : recordedSourceListingUnderCurrentBoundary(
+      opening.source === "stage-baseline"
+        ? afterApprovedSkeleton(pd, record.stage, opening.listing, intent, space)
+        : opening.listing,
+      current.listing,
+    );
+  // An AI-DLC update the person took, or a file Git ignores (a dev server's
+  // log), is nobody's source (aidlc-swarm-source.ts).
   const changed = openingListing !== undefined
-    ? sourceChangedOutsideAidlc(pd, openingListing, current.listing)
+    ? swarmSourceChanged(pd, openingListing, current.listing)
     : [];
   if (changed.length > 0) {
     if (acceptsChanges) return keepChange(opening.fingerprint, changed);
@@ -3614,7 +3606,7 @@ function assertNoForeignBoltDirectory(pd: string, identity: BoltIdentity, select
     if (parsed === null || parsed.slug !== identity.slug || name === identity.name) continue;
     errorWithSlug(
       identity.slug,
-      `no Bolt ${identity.slug} belongs to intent ${relativeRecordDirForSelection(selection)}; this checkout holds ${name} (${parsed.intentId8 === null ? "legacy" : `intent ${parsed.intentId8}`}) at ${join(root, name)} — select that intent to discard it`,
+      `no Bolt ${identity.slug} belongs to intent ${relativeRecordDirForSelection(selection)}; this checkout holds ${name} (${parsed.intentId8 === null ? "legacy" : `intent ${parsed.intentId8}`}) at ${join(root, name)} - select that intent to discard it`,
     );
   }
 }
@@ -3722,7 +3714,7 @@ function handleDiscard(args: string[]): void {
   if (identity.legacy && !dirExists && branchExists && authority.legacyMergeRecorded) {
     errorWithSlug(
       slug,
-      `legacy Bolt ${slug} recorded a merge; finish it with merge --slug ${slug} (cleanup-only) instead of discard — the leftover branch ${branchName} may belong to a later attempt`,
+      `legacy Bolt ${slug} recorded a merge; finish it with merge --slug ${slug} (cleanup-only) instead of discard - the leftover branch ${branchName} may belong to a later attempt`,
     );
   }
   const retained = retainedSourceRefs(repoCwd, identity);

@@ -12,6 +12,7 @@ import {
   enterHookWorkflow,
   type ClaudeCodeHookInput,
   decideFence,
+  delegatedAgentOf,
   ENGINE_OWNED_STATE_TRANSITIONS,
   guardStandAsideSpeaks,
   guardStoodAsideLine,
@@ -1175,9 +1176,7 @@ export async function run(input: string): Promise<number> {
       workflow.restore();
     }
   };
-  const agentType = parsed.agent_type?.trim() ||
-    (typeof parsed.tool_input?.subagent_type === "string"
-      ? parsed.tool_input.subagent_type.trim() : "");
+  const agentType = delegatedAgentOf(parsed);
   if (agentType.length === 0) return 0;
   const delegatedCommand = delegatedLifecycleCommand(
     parsed.tool_input?.command ?? "",

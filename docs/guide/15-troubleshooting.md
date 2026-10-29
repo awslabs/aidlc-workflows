@@ -21,7 +21,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | I edited a file by hand; will the agent accept it? | Yes: edit, then say **done** (or carry on). An edit to a finished stage is used as is but not re-approved; to have it approved, jump back with `/aidlc --stage <name>`, which reopens that stage and every stage after it. See [Editing Files Yourself](07-interaction-modes.md#editing-files-yourself) for each case |
 | Claude hooks are restricted by policy | Ask the Claude Code administrator to lift managed `allowManagedHooksOnly`; project settings cannot override it |
 | Cursor: approvals are never recorded | If the project is not in a git repository, run `git init` in it, then fully restart Cursor and trust the folder (see [Cursor project outside a git repository](#cursor-project-outside-a-git-repository)) |
-| Kiro IDE: `deny fs_read matching ".kiro/"` | Run `/aidlc --doctor`; remove the `.kiro/` rule from the ignore file it names (see [Kiro IDE Read Denials](#kiro-ide-read-denials)) |
+| Kiro IDE or Kiro CLI v3: `deny fs_read matching ".kiro/"` | Run `/aidlc --doctor`; remove the `.kiro/` rule from the ignore file it names (see [Kiro Read Denials](#kiro-read-denials)) |
 | Kiro IDE: AI-DLC's reviews and helpers do not run, the chat shows **Approval needed in agent-aidlc-...** panels, or `/aidlc` is handed to a Kiro workflow | Kiro's Workflows feature is on. Ask the agent to turn it off, or run `aidlc config trust --kiro-workflows off --yes`, then **Developer: Reload Window** (see [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers)) |
 | Kiro CLI: AI-DLC's reviews and helpers do not run, and the agent says it has no tool to hand work to | Kiro CLI's Workflows feature is on. Ask the agent to turn it off, or run `aidlc config trust --kiro-cli-workflows off --yes`, then quit Kiro CLI and start it again with `kiro-cli --v3` (see [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers)) |
 | Kiro IDE on Windows: command results end at an `AI-DLC reply:` line and steps take extra turns, or every command shows exit code -1 | Kiro's terminal is Command Prompt. Ask the agent to set it to PowerShell, or run `aidlc config trust --kiro-terminal powershell --yes`, then restart Kiro (see [Command Prompt as Kiro's terminal](harnesses/kiro-ide.md#command-prompt-as-kiros-terminal-on-windows)) |
@@ -51,15 +51,15 @@ This chapter covers common issues and their solutions, organized by symptom.
 |------------------|------------|
 | `Checksum mismatch for <asset>.` or `<asset>: checksum mismatch` | Stop. Do not reuse the downloaded directory. Download the complete release asset set and `checksums.txt` again from the same release. |
 | `command not found: aidlc` after `install.sh` | Add the installer-reported bin directory to `PATH` (normally `export PATH="$HOME/.local/bin:$PATH"`), open a new shell, and run `aidlc doctor`. |
-| `aidlc` is not recognized after `install.ps1` | The default install registers User PATH for the account that ran PowerShell. A terminal app or IDE that was already open during the install (Kiro, VS Code, Cursor) keeps the PATH it started with: quit it fully and reopen it. A new tab or Reload Window inside it is not enough. With [`-NoModifyPath`](18-install-and-lifecycle.md#windows-powershell), use the printed direct command (normally `& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" config`) or rerun the installer without that switch to register PATH. |
-| `aidlc` works in PowerShell or CMD but not in Git Bash (or another MSYS shell) | Those shells resolve a command with Unix `execvp` rules and ignore `PATHEXT`, so a bare `aidlc` never finds `aidlc.cmd`. The installer writes an extensionless `aidlc` launcher beside `aidlc.cmd` in the bin directory (normally `%LOCALAPPDATA%\aidlc\bin`) precisely so the bare name resolves in these shells; if it is missing, rerun the installer or `aidlc use <version>` (from PowerShell or CMD, where `aidlc` already resolves) to rewrite it. One known cause of a hook that `/hooks` lists as registered yet never fires on Windows is this: the hook shell cannot resolve `aidlc`. `aidlc doctor` shows it as a failed `Windows launcher (Git Bash)` row that names the step to take. **If a file named `aidlc` that AI-DLC did not write (for example an earlier hand-made forwarder) is already in that bin directory, the installer, `aidlc update` and `aidlc use` ask once at a terminal whether to replace it, and keep your file as `aidlc.bak-<time>` beside it. `--yes` (`-Yes` for the installer) answers yes. Without a terminal or `--yes`, they leave the file as it is and say to move it aside. A directory named `aidlc` there is never replaced: remove or rename it, then rerun the installer or `aidlc use <version>`.** |
+| `aidlc` is not recognized after `install.ps1` | The default install registers User PATH for the account that ran PowerShell. A terminal app or IDE that was already open during the install (Kiro, VS Code, Cursor) keeps the PATH it started with: quit it fully and reopen it. A new tab or Reload Window inside it is not enough. With [`-NoModifyPath`](18-install-and-lifecycle.md#windows-powershell), use the printed direct command (normally `& "$env:LOCALAPPDATA\aidlc\bin\aidlc.exe" config`) or rerun the installer without that switch to register PATH. |
+| `aidlc` works in PowerShell or CMD but not in Git Bash (or another MSYS shell) | Those shells resolve a command with Unix `execvp` rules and ignore `PATHEXT`, so a bare `aidlc` finds `aidlc.exe` in the bin directory (normally `%LOCALAPPDATA%\aidlc\bin`) but never `aidlc.cmd`. An install from before `aidlc.exe` has an extensionless `aidlc` launcher beside `aidlc.cmd` instead, so the bare name resolves in these shells; if neither is there, rerun the installer or `aidlc use <version>` (from PowerShell or CMD, where `aidlc` already resolves) to write `aidlc.exe`. One known cause of a hook that `/hooks` lists as registered yet never fires on Windows is this: the hook shell cannot resolve `aidlc`. `aidlc doctor` shows it as a failed `Windows launcher (Git Bash)` row that names the step to take. **If a file named `aidlc` that AI-DLC did not write (for example an earlier hand-made forwarder) is already in that bin directory, the installer, `aidlc update` and `aidlc use` ask once at a terminal whether to replace it, and keep your file as `aidlc.bak-<time>` beside it. `--yes` (`-Yes` for the installer) answers yes. Without a terminal or `--yes`, they leave the file as it is and say to move it aside. A directory named `aidlc` there is never replaced: remove or rename it, then rerun the installer or `aidlc use <version>`.** |
 | `This PowerShell window is running as administrator` | For the safest install, answer N, open PowerShell normally (not "Run as administrator"), and run the installer again. To continue as administrator anyway, answer y, or pass `-Yes` to the installer. `aidlc uninstall` asks nothing: it prints the same warning and goes ahead, so for the safest uninstall run it from a normal PowerShell window. AI-DLC is per-user and does not need admin rights. The built-in Administrator on Windows Server and other sessions without UAC elevation see no warning. |
 | Windows install reports a PATH conflict | The files are installed, but persistent PATH selects another command. Use the printed full command path for `config`, or resolve the reported conflict. JSON reports `status: "warning"` and `data.ready: false` even though the exit code is 0. |
 | Windows install reports that it could not configure PATH | The files are installed; the PATH step failed with exit code 1. Follow the printed recovery instruction, or rerun with `-NoModifyPath` and use the direct command. JSON reports `data.installed: true` and `data.ready: false`. |
 | User PATH entry remains after Windows uninstall | Uninstall removes only an entry owned through `windows-path.json`. A pre-existing entry or an install without that ownership record leaves User PATH unchanged. See [Uninstall](18-install-and-lifecycle.md#uninstall). |
 | Files remain after uninstall | Uninstall deletes individually verified files and removes directories only when empty. Unlisted or changed files are preserved and reported, including files without an ownership inventory in older installs. Review the reported paths; `--purge` does not delete unrelated content. |
 | `--offline requires --from <release-directory>` | Offline mode never falls back to a network release. Transfer the complete release asset set, then pass its directory with `--from` / `-From`; the installer verifies it. |
-| `aidlc.cmd` exits 4 or the Windows active pointer is invalid | The launcher prints one `aidlc:` line naming the file it could not use (the active version marker, the active command target, or the active executable) followed by `Rerun the AI-DLC installer (install.ps1) to repair the aidlc command.` After `aidlc update` from an earlier release, that release's launcher, which exits 4 without printing anything, stays until the next `aidlc` command other than `aidlc doctor` or `aidlc uninstall` replaces it; that one command still runs through the old launcher, which splits a value with spaces into separate words. While it is there, `aidlc doctor` shows a `Windows launcher` row; when AI-DLC cannot replace it (for example because `aidlc.cmd` or `aidlc-shim.ps1` was changed after install), the row says why and names the step that fixes it. If the old launcher exits 4 before any command starts, rerun the installer. Do not edit `%LOCALAPPDATA%\aidlc\active-executable`. Rerun the same verified installer or use `aidlc use <version>` from a working retained executable. A line that says PowerShell runs the launcher in `ConstrainedLanguage` mode means an application control policy (AppLocker or WDAC) blocks it: ask your administrator to allow `aidlc-shim.ps1`, or run `%LOCALAPPDATA%\aidlc\versions\<version>\aidlc.exe` directly. |
+| `aidlc` exits 4 or the Windows active pointer is invalid | The launcher (`aidlc.exe` or `aidlc.cmd` in bin) prints one `aidlc:` line naming the file it could not use (the active version marker, the active command target, or the active executable) followed by `Rerun the AI-DLC installer (install.ps1) to repair the aidlc command.` After `aidlc update` from an earlier release, that release's launcher, which exits 4 without printing anything, stays until the next `aidlc` command other than `aidlc doctor` or `aidlc uninstall` replaces it; that one command still runs through the old launcher, which splits a value with spaces into separate words. While it is there, `aidlc doctor` shows a `Windows launcher` row; when AI-DLC cannot replace it (for example because `aidlc.cmd` or `aidlc-shim.ps1` was changed after install), the row says why and names the step that fixes it. If the old launcher exits 4 before any command starts, rerun the installer. Do not edit `%LOCALAPPDATA%\aidlc\active-executable`. Rerun the same verified installer or use `aidlc use <version>` from a working retained executable. A line that says PowerShell runs the launcher in `ConstrainedLanguage` mode means an application control policy (AppLocker or WDAC) blocks it: ask your administrator to allow `aidlc-shim.ps1`, or run `%LOCALAPPDATA%\aidlc\versions\<version>\aidlc.exe` directly. |
 | `aidlc-shim.ps1 cannot be loaded` or `is not digitally signed` | A Group Policy execution policy overrides the `-ExecutionPolicy Bypass` that `aidlc.cmd` passes, so PowerShell refuses the launcher before it runs. Run `Get-ExecutionPolicy -List`: a `MachinePolicy` or `UserPolicy` row other than `Undefined` is the cause. Ask your administrator to allow the script, or run `%LOCALAPPDATA%\aidlc\versions\<version>\aidlc.exe` directly. |
 | `pending Windows uninstall` or a Windows uninstall recovery failure | Close active AI-DLC commands and run `aidlc doctor`. A pending cleanup resumes on the next command. If doctor reports a failed cleanup, resolve the reason it shows and run `aidlc uninstall` again by the full path doctor prints (normally `& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" uninstall`, since the PATH entry may already be gone; add `--purge` if the original used it): a cleanup that failed before removing files is planned again from disk, and one that had begun resumes. If that command no longer runs, run the installer again; it retries the pending cleanup first, so you may need to run it twice. Older or altered journals without a bound file plan are refused; keep the temp journal, cleanup script, machine fence, and remaining files for inspection. |
 | `the last AI-DLC uninstall is still finishing` | Windows removes AI-DLC's files after `aidlc uninstall` ends: under a minute for one or two installed versions, longer for more or on a slower machine. Nothing was changed; run the installer again when the line says. A cleanup that stopped without finishing is started again by the first AI-DLC command other than doctor ten minutes after it began. |
@@ -94,10 +94,11 @@ This chapter covers common issues and their solutions, organized by symptom.
 | `.aidlc-version must contain one release version id` | The committed pin file holds something other than one release id, such as extra text or a stray command. `aidlc config` and the dispatcher refuse it without printing its contents. Fix the file to the intended release id (for example `2.10.0`), or run `aidlc config --unpin` to stop pinning the project. |
 | `AI-DLC can't run in <folder>. Start the session from your project's folder.` when you ask for AI-DLC | The session started in a folder that holds AI-DLC's machine install or command directory, such as your home folder, or in a folder inside one. AI-DLC does not run there, so its hooks stand aside and your other work in that folder goes on as usual. Start the session from your project's folder to use AI-DLC. |
 | An update was interrupted and `aidlc version` still shows the prior release | This is the safe restored state: the old command remains active. Run `aidlc doctor`, then rerun the same `aidlc update --version <version>` command. |
-| `another AI-DLC mutation holds .../.aidlc-transaction.lock`, `cannot verify` a lock, or `belongs to another host or boot` | Let an active owner finish; otherwise follow [Transaction lock ownership](#transaction-lock-ownership). |
+| `another AI-DLC command is still working in <project>.` | Another AI-DLC command (another chat, tool or terminal on this project) holds it. Wait for it to finish, then run your command again. If it repeats while nothing else runs, follow [Transaction lock ownership](#transaction-lock-ownership). |
+| `an AI-DLC command on another computer ... is working in <project> ... or left its lock there.`, or `.../.aidlc-transaction.lock cannot be read.` | The lock was left by another computer that shares the folder (or by this one before it restarted), or it cannot be read. If no AI-DLC command is running there, delete the folder the line names, then run your command again; see [Transaction lock ownership](#transaction-lock-ownership). |
 | `an earlier AI-DLC command stopped before it finished, so its lock was cleared` | Nothing to do for the command you ran. The earlier command did not finish: rerun it if you still need it. |
 | `another AI-DLC command is still changing this machine's install, so this ran on aidlc <version> without waiting for it to finish` | Nothing to do: a command or hook in a pinned project waited up to 30 seconds for an update, uninstall, or other machine change, then ran on its pinned release anyway. If it repeats while no other `aidlc` command is running, follow [Transaction lock ownership](#transaction-lock-ownership). |
-| `EMLINK` (`too many links`), `Cannot create an AI-DLC transaction lock`, or `Cannot use the filesystem at ...` during config | Hard links have an automatic fallback; other filesystem requirements still apply. See [Config fails with a hard-link error](#config-fails-with-a-hard-link-error). |
+| `Cannot create an AI-DLC transaction lock` or `Cannot use the filesystem at ...` during config | The project's storage lacks an operation AI-DLC needs. See [Config fails with a storage error](#config-fails-with-a-storage-error). |
 | `existing aidlc is managed by Homebrew` / `Nix`, or the destination command is `not owned by the AI-DLC installer` | Upgrade through the reported owner. To keep a separate native install, set `AIDLC_BIN_DIR` explicitly to an empty user-owned directory. This release does not itself ship Homebrew or Nix packaging and never replaces a mixed-ownership command. |
 | `update cache is invalid` or machine settings are rejected | Run `aidlc system config global list`. Repair or remove only the named `%LOCALAPPDATA%\aidlc\aidlc.settings.json` (Windows) or `${XDG_DATA_HOME:-$HOME/.local/share}/aidlc/aidlc.settings.json` (macOS/Linux); unknown keys and stored credentials are rejected. |
 | `HTTPS_PROXY must use HTTP or HTTPS` or a release URL is rejected | Use an HTTP(S) proxy URL and an HTTPS release mirror without credentials, query, or fragment. The native client reads `HTTPS_PROXY` and `NO_PROXY`, not `HTTP_PROXY`, and redacts secret-like URL parts in errors. |
@@ -125,21 +126,24 @@ If that is not what you intended, narrow the named rule, preserving unrelated
 ignores. A deliberate rule, such as one keeping a personal scratch space out of
 Git, can stay. Outside Git, or without the Git executable, there is no check.
 
-### Config fails with a hard-link error
+### Config fails with a storage error
 
-`aidlc config` first attempts a hard-link transaction lock. If the mount rejects
-it with `EMLINK`, `ENOTSUP`, `EOPNOTSUPP`, `ENOSYS`, or `EPERM`, config automatically
-tries a directory lock at the same `.aidlc-transaction.lock` path. No flag is
-needed, and config never proceeds with unlocked writes.
+AI-DLC makes no hard links. Its project lock is an owner-stamped
+`.aidlc-transaction.lock` folder, and it puts a file at a name only when nothing
+is there, by an exclusive create and a rename, so exFAT drives, network shares
+and WSL `/mnt/c` need nothing extra. Config never proceeds with unlocked writes.
 
 The first-run wizard probes the required filesystem operations before offering
 setup choices, then removes its temporary probe files. A failed probe stops
 setup with nothing written; if a probe itself cannot be removed, setup names
 it and says nothing else was written. Human output names the failure and the fix;
-`--quiet` prints the fix, and `--json` returns a structured failure. Passing
-probes cannot certify atomicity or crash durability. See the capabilities and
-support matrix in [Transactions and Recovery](18-install-and-lifecycle.md#transactions-and-recovery).
-An S3 mount name or hard-link error alone does not identify its driver, version,
+`--quiet` prints the fix, and `--json` returns a structured failure. A scripted
+`aidlc config --harness <name>` runs no probe of its own: on storage that cannot
+rename files it stops at the first rename with the same `Cannot use the
+filesystem at ...` line and fix, rolls back, and leaves only the empty folder it
+had made. Passing probes cannot certify atomicity or crash durability. See the
+capabilities and support matrix in [Transactions and Recovery](18-install-and-lifecycle.md#transactions-and-recovery).
+An S3 mount name or a storage error alone does not identify its driver, version,
 or options.
 
 For an incompatible mount, move or clone the project onto compatible local
@@ -156,22 +160,26 @@ command clears a lock whose owner has stopped and says so in one line. An owner
 has stopped when its PID is dead, or when the system has since given that PID
 to a later process (Windows reuses PIDs quickly): one whose start record
 differs from the one the lock recorded, or, for a lock from a release that
-recorded none, one that started after the lock was written. A directory lock
-also needs its recorded host/boot identity to match. A directory lock whose
-owner stamp never finished (no `owner.json`, an empty one, or one cut off
-before it reads as JSON) is what a command stopped while taking the lock
-leaves, and the next command clears it the same way once it is a few seconds
-old. A stamp that reads but names a foreign host, no valid owner, or a live
-process is retained, as is an unverifiable one; a PID absent on this host is
-not proof that a foreign owner has stopped.
+recorded none, one that started after the lock was written. A lock this
+computer stamped before it restarted is cleared the same way, since its owner
+stopped with that boot. A lock whose owner stamp never finished (no
+`owner.json`, an empty one, or one cut off before it reads as JSON) is what a
+command stopped while taking the lock leaves; within its first few seconds it
+reads as another command still working, and after that the next command clears
+it. A live owner is retained. So is a lock stamped by another computer that
+shares the folder, or by a release that recorded no computer and boot, since a
+PID absent here is not proof that its owner stopped; and so is a stamp that
+reads but names no valid owner. Those two say which folder to delete once
+nothing is running there.
 
 For manual diagnosis, preserve the error, lock, and named staging/recovery
 paths. Inspect `.aidlc-transaction.lock/owner.json` (the lock file itself for a
-legacy file lock), and establish the owner process, host/boot, and mount history
-with the operator. All participants must share the same local temporary
-directory (`TMPDIR` on Unix) and PID namespace. Stop writers before corrective
-work and retain the evidence while ownership is uncertain. Do not blindly
-delete the project lock or its local coordination gate to make a retry proceed.
+file lock an older release left), and establish the owner process, computer,
+and mount history with the operator. Commands on one computer must share its
+PID namespace (two containers with one hostname do not). Stop writers before
+corrective work and retain the evidence while ownership is uncertain. Do not
+delete the project lock or its local coordination gate to make a retry proceed
+while an AI-DLC command may still be running.
 
 ---
 
@@ -400,9 +408,9 @@ Kiro lets you switch any project hook off in its Agent Hooks panel, and then wri
 
 ---
 
-## Kiro IDE Read Denials
+## Kiro Read Denials <a id="kiro-ide-read-denials"></a>
 
-### Kiro IDE denies every read under .kiro/ ("Rule: deny fs_read matching")
+### Kiro IDE or Kiro CLI v3 denies every read under .kiro/ ("deny fs_read matching")
 
 **Symptom**: Every stage, agent, and protocol read is denied, blocking the workflow:
 
@@ -410,20 +418,28 @@ Kiro lets you switch any project hook off in its Agent Hooks panel, and then wri
 Tool call denied by user's permissions. Rule: deny fs_read matching ".kiro/" Source: ~/.config/git/ignore
 ```
 
-[Kiro IDE honours](https://kiro.dev/docs/kiroignore/) git's global excludes file
-(in git repositories) and `~/.kiro/settings/kiroignore` automatically. Workspace
-ignore files apply only when the IDE's `kiroAgent.agentIgnoreFiles` setting names
-them (the default includes `.gitignore`; `[]` disables workspace sources).
-It evaluates each ignore file on its own: a project `!.kiro/` negation does not
+Kiro CLI v3 says it as:
+
+```text
+Blocked by a permission rule (deny fs_read matching ".kiro/"); the user did not reject it. Source: ~/.config/git/ignore.
+```
+
+[Kiro IDE and Kiro CLI v3 honour](https://kiro.dev/docs/kiroignore/) git's global
+excludes file (in git repositories) and `~/.kiro/settings/kiroignore`
+automatically. Kiro CLI v3 also applies the project `.kiroignore`, and not
+`.gitignore`. In Kiro IDE, workspace ignore files apply only when its
+`kiroAgent.agentIgnoreFiles` setting names them (the default includes
+`.gitignore`; `[]` disables workspace sources).
+Kiro evaluates each ignore file on its own: a project `!.kiro/` negation does not
 undo a global `.kiro/` rule, even when `git check-ignore` reports the path as not
 ignored. A `permissions.yaml` `fs_read` allow does **not** clear the denial:
 [Kiro applies deny-overrides across scopes](https://kiro.dev/docs/permissions/).
 
-Run `/aidlc --doctor`. For an IDE install (`.kiro/agents/aidlc-aidlc.md` present), it
+Run `/aidlc --doctor`. For a Kiro IDE or Kiro CLI v3 install (`.kiro/agents/aidlc-aidlc.md` present), it
 reports the offending source as:
 
 ```text
-Kiro IDE ignore sources: <source>:<line> hides .kiro/
+Kiro ignore sources: <source>:<line> hides .kiro/
 ```
 
 Doctor tests the reads the engine sends the agent to make through `fs_read`,
@@ -433,16 +449,18 @@ holds inline (at Standard and Minimal depth, within the directive's 8 KiB
 `inline_context_paths` cap), plus `stage-protocol.md` and its
 `stage-protocol-<name>.md` modules and the files beside each skill's `SKILL.md`.
 Plugins count however they were composed. Contributor-only protocol files such as
-`stage-definition.md` are not loaded. `SKILL.md` files, the IDE conductor agent (`agents/aidlc-aidlc.md`),
+`stage-definition.md` are not loaded. `SKILL.md` files, the conductor agent (`agents/aidlc-aidlc.md`),
 `aidlc-common/conductor.md`, and `tools/`, `sensors/`, `hooks/`, `scopes/`, and
-`steering/` are loaded by the IDE or the engine, not through `fs_read`, and are
+`steering/` are loaded by Kiro itself or the engine, not through `fs_read`, and are
 not counted. A rule that hides only some of them is
 reported with a count and the framework folders it touches, for example
 `hides 11 of 110 framework files (.kiro/agents/)`.
 
 Global-source matches fail doctor. Project `.gitignore` and `.kiroignore` matches
-warn instead, because doctor cannot read the IDE setting that governs whether
-those workspace files apply.
+warn instead, because doctor cannot tell which Kiro you run, and cannot read the
+IDE setting that governs whether those workspace files apply in Kiro IDE. The
+warning says where each applies: Kiro CLI v3 applies `.kiroignore`, so there a
+`.kiroignore` match denies those reads, and does not apply `.gitignore`.
 
 `<source>` is a fixed name: `~/.config/git/ignore` (or
 `$XDG_CONFIG_HOME/git/ignore`), `core.excludesFile` (run
@@ -553,7 +571,7 @@ On Kiro IDE, if you already replied and the workflow still waits, see
 
 ### Revision loop escape hatch
 
-After 3 revision cycles on the same stage, a third option appears: **Accept as-is**. This archives the current version and moves on. AI-DLC keeps the count in its record of the work, so the option still appears after you stop and resume, or continue in a new chat.
+After 3 revision cycles on the same stage, a third option appears: **Accept as-is**. This approves the stage as it is and moves on. AI-DLC keeps the count in its record of the work, so the option still appears after you stop and resume, or continue in a new chat.
 
 ### Skipping a stage
 
@@ -678,7 +696,9 @@ If you are asked again, check what changed and which rule applies:
   to the developer in full, so they bind byte-exactly, and a section appended to
   them after approval reopens it when the plan-approval fence is on
 - the Testing Posture, scope, test strategy, or project type while the
-  plan-approval fence is on
+  plan-approval fence is on (a Testing Posture change made after the build's
+  review, such as a testing practice you keep at the learnings step, applies
+  from the next plan and does not reopen approval for that build)
 - the active intent, Unit, or stage target
 - the stage attempt: a backward jump, a Request Changes, a gate rejection, or a
   workflow restart
@@ -1004,7 +1024,7 @@ The `--doctor` utility command validates your setup. Run it whenever something s
 
 It checks: prerequisite (`bun`), hook availability (every framework hook wired by `settings.json` must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly; a valid custom non-AI-DLC `statusLine` intentionally exempts the unwired `aidlc-statusline.ts`), hooks-not-globally-disabled (a resolved `disableAllHooks: true` in any Claude Code settings layer fails loudly), managed project-hook policy (`allowManagedHooksOnly: true`), project structure (`settings.json`), workspace shell readiness (`.claude/` + `aidlc/spaces/default/memory/`), state/audit consistency (the workflow Status against a recorded `WORKFLOW_COMPLETED`, and each Stage Progress checkbox against the stage starts and completions the audit recorded for the current attempt. A stage the audit shows as started whose checkbox still reads `[ ]` is what makes the workflow refuse to finish it, and the warning names the exact line to change. Under team Unit Ownership the per-unit Construction checkboxes are derived from Unit Progress, so they are not compared), hook heartbeats, graph integrity (no cycles, every graph entry has a file), the **Composed plugin surface** (enabled plugin stages are compiled; contribution sidecars and targets are valid; recorded structural additions and prose fragments remain present and unchanged), selection-aware plugin-authored checks, scope validation across all 11 scopes, **Composed scope durability** (every composer-authored scope resolves to a real plan: a scope file with no grid column, a durable `aidlc/scopes/<name>.md` record not yet projected, or a runnable workflow naming an unresolvable scope all fail, with `graph compile` as the remedy wherever compile can reach the cause; a missing column with no record behind it is reported apart, since compile emits a column only for a scope some stage declares), stage schema + graph references, and keyword overlap across scopes. Passing advisory rows include **Duplicate producers** for consumed artifacts whose producer is ambiguous by graph load order, **Rule drift** (with lifecycle-stale overlaps reported separately as stale-suppressed), **Paired sensor coverage**, stage/gate ledgers with no `HUMAN_TURN`, approval gates waiting for a human for more than 24 hours, plugin advisory checks, uncommitted workspace records, fresh in-flight compose/background-subagent state, and, when `repos.json` exists, declared-repo and managed-`.gitignore` drift. A compose marker older than 24 hours or background-subagent entry older than 2 hours fails with the exact `rm aidlc/.aidlc-*` remediation; doctor never deletes either surface. **Hook drops** is conditional: a hook that silently degraded (e.g. a plugin compose that could not apply a contribution, or a failed recompile) records a severity-tagged line to `<hooks-health>/<hook>.drops`; a `[degraded]` drop **fails** doctor (so a CI gate catches a half-applied plugin), while any other drop is a passing row naming each hook's most frequent reasons (each up to its first colon; the detail stays in the file), raised to a `Hook failures, the latest within the last day` warning while the hook's latest failure is under 24 hours old (it clears a day later or when you delete the file; an `[advisory]` line never raises it). A hook's normal decisions, such as the Stop hook letting a turn end because you have to answer first, go to `<hook>.trace` and are never counted. The plugin compose hook rewrites its drops file each run, so fixing the cause and re-composing self-clears it. Clean and warnings-only reports exit 0; any failed check exits 1. Healthy rows collapse by section unless `--verbose` is present, while every warning and failure remains visible. The report writes to stdout either way. Core checks are **read-only**: on a fresh shell with no intent yet they create nothing, so the command is safe to run before the first intent is created. Plugin checks execute installed plugin code that is required by convention to be read-only, but the runtime cannot enforce that property. Once an intent exists doctor records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
 
-On Kiro IDE, it also checks each ignore source independently for rules hiding `.kiro/`, naming the file and line. Global-source matches fail; workspace-source matches warn because `kiroAgent.agentIgnoreFiles` governs whether they apply. See [Kiro IDE Read Denials](#kiro-ide-read-denials). On every harness but Cursor it also warns "AIDLC hooks have not run in this project yet" when no AI-DLC hook has run in the project. That is expected before your first chat message; after one, its fix names your tool's step (see, for example, [Kiro IDE hooks not running](#kiro-ide-hooks-not-running) or [GitHub Copilot hooks not running](#github-copilot-hooks-not-running)). On Kiro CLI, a workflow whose hooks never ran fails "Hooks have never executed" with the engine its hooks need; see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running).
+On Kiro IDE and Kiro CLI v3, it also checks each ignore source independently for rules hiding `.kiro/`, naming the file and line. Global-source matches fail; workspace-source matches warn because doctor cannot tell which Kiro you run: Kiro IDE's `kiroAgent.agentIgnoreFiles` governs whether they apply there, and Kiro CLI v3 applies `.kiroignore` but not `.gitignore`. See [Kiro Read Denials](#kiro-read-denials). On every harness but Cursor it also warns "AIDLC hooks have not run in this project yet" when no AI-DLC hook has run in the project. That is expected before your first chat message; after one, its fix names your tool's step (see, for example, [Kiro IDE hooks not running](#kiro-ide-hooks-not-running) or [GitHub Copilot hooks not running](#github-copilot-hooks-not-running)). On Kiro CLI, a workflow whose hooks never ran fails "Hooks have never executed" with the engine its hooks need; see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running).
 
 The **Workspace record visibility** advisory, beside the uncommitted-records
 row, catches user ignore rules added after config. It names the rule's file,

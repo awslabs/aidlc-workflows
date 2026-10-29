@@ -1,4 +1,4 @@
-// covers: file:settings.json
+// covers: file:settings.json, file:tools/data/scope-grid.json, file:tools/data/stage-graph.json
 //
 // Schema-validation check on the SHIPPED dist/claude/.claude/settings.json: the
 // permission entries, and the absence of a statusLine, a session model/effort,
@@ -31,6 +31,10 @@
 //                                             in tools/data/harness.json)
 //     .model / .effortLevel                -- ABSENT (session values inherit)
 //     .env provider/model overrides         — absent
+//     .companyAnnouncements[0]              — the welcome message; its Scopes
+//                                             table is checked against the
+//                                             compiled grid and stage graph
+//                                             under tools/data/
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -70,6 +74,7 @@ interface Settings {
   model?: string;
   effortLevel?: string;
   env?: Record<string, string>;
+  companyAnnouncements?: string[];
 }
 const settings: Settings = JSON.parse(RAW);
 
@@ -391,5 +396,93 @@ describe("provider-neutral env block [.sh tests 12-16]", () => {
     ]) {
       expect(Object.hasOwn(env, key), key).toBe(false);
     }
+  });
+});
+
+describe("companyAnnouncements — the Scopes table says what each plan runs", () => {
+  // The welcome message's Scopes table is written by hand next to the compiled
+  // grid (tools/data/scope-grid.json, the transpose of each stage's `scopes:`
+  // frontmatter), so a plan can gain a stage without the table following. Here
+  // the table is derived from the grid and the stage graph, in the two-letter
+  // codes the announcement's own Stages legend defines, and compared as a
+  // whole, so every drifted row is named at once. The legend's codes are taken
+  // by position within each phase; what pins them is the count per phase and
+  // each code's first letter against the stage's name. Both tables' rows are
+  // held to one width, so no row runs past its table in the terminal.
+  const lines = (settings.companyAnnouncements ?? [])[0]?.split("\n") ?? [];
+  const grid = JSON.parse(readFileSync(join(AIDLC_SRC, "tools", "data", "scope-grid.json"), "utf-8")) as Record<
+    string,
+    { stages: Record<string, "EXECUTE" | "SKIP"> }
+  >;
+  const graph = JSON.parse(readFileSync(join(AIDLC_SRC, "tools", "data", "stage-graph.json"), "utf-8")) as {
+    slug: string;
+    name: string;
+    phase: string;
+  }[];
+  const PHASES = ["ideation", "inception", "construction", "operation"];
+  const cells = (line: string) =>
+    line
+      .trim()
+      .slice(1, -1)
+      .split("|")
+      .map((cell) => cell.trim());
+  const tableFrom = (start: number) => {
+    let end = start;
+    while (end < lines.length && lines[end].startsWith("|")) end++;
+    return lines.slice(start, end);
+  };
+  const legendRows = tableFrom(lines.findIndex((line) => /^\| Phase\s+\| Stages\s+\|$/.test(line)));
+  const scopeRows = tableFrom(lines.findIndex((line) => line.startsWith("| Scope")));
+  const stagesOf = (ph: string) => graph.filter((stage) => stage.phase === ph);
+
+  // phase -> the legend's codes in the order it lists them; continuation rows
+  // leave the phase cell empty.
+  const legendCodes = new Map<string, string[]>();
+  let phase = "";
+  for (const row of legendRows.slice(2)) {
+    const [phaseCell, stagesCell] = cells(row);
+    if (phaseCell) phase = phaseCell.toLowerCase();
+    const codes = [...stagesCell.matchAll(/\b([A-Z]{2})=/g)].map((match) => match[1]);
+    legendCodes.set(phase, [...(legendCodes.get(phase) ?? []), ...codes]);
+  }
+  // slug -> code, by position within the phase.
+  const codeOf = new Map<string, string>();
+  for (const ph of PHASES) {
+    stagesOf(ph).forEach((stage, index) => {
+      codeOf.set(stage.slug, (legendCodes.get(ph) ?? [])[index] ?? "");
+    });
+  }
+
+  test("the Stages legend names every stage of every phase, in stage order", () => {
+    for (const ph of PHASES) expect(legendCodes.get(ph)?.length, ph).toBe(stagesOf(ph).length);
+    for (const stage of graph) {
+      if (stage.phase === "initialization") continue;
+      expect(codeOf.get(stage.slug)?.[0], `${stage.slug} reads as ${codeOf.get(stage.slug)}`).toBe(stage.name[0]);
+    }
+    expect(new Set(codeOf.values()).size).toBe(codeOf.size);
+  });
+
+  test("every scope row lists the stages its compiled plan runs", () => {
+    const expected = (scope: string) =>
+      PHASES.map((ph) => {
+        const slugs = stagesOf(ph).map((stage) => stage.slug);
+        const run = slugs.filter((slug) => grid[scope]?.stages[slug] === "EXECUTE");
+        if (run.length === slugs.length) return "all";
+        if (run.length === 0) return "-";
+        return run.map((slug) => codeOf.get(slug)).join(", ");
+      });
+    const rows = scopeRows.slice(2).map(cells);
+    expect(rows.map(([scope]) => scope).sort()).toEqual(Object.keys(grid).sort());
+    expect(rows.map(([scope, , ...phaseCells]) => [scope, ...phaseCells])).toEqual(
+      rows.map(([scope]) => [scope, ...expected(scope)]),
+    );
+  });
+
+  test("every row of the Stages and Scopes tables is as wide as its header", () => {
+    const tables = [legendRows, scopeRows];
+    expect(tables.map((rows) => rows.length > 2)).toEqual([true, true]);
+    expect(tables.map((rows) => rows.map((row) => row.length))).toEqual(
+      tables.map((rows) => rows.map(() => rows[0].length)),
+    );
   });
 });
