@@ -678,8 +678,8 @@ export function mutationBlockReason(
   // A build reviewed under its plan, whose contract moved after the review, and
   // whose plan the person has not asked to see again (codeGenerationBuildFinishes):
   // the moved contract is for the next plan, so no approval is promised. A
-  // developer handoff refused for such a build keeps main's refusal, which names
-  // `next` too (기현님 2026-10-28: two review passes read that line opposite ways).
+  // developer handoff refused for such a build keeps the ordinary refusal, which
+  // names `next` too.
   if (finished) {
     return (
       `Code generation cannot ${action} for ${scope}: its build was reviewed under the approved plan, and ` +
