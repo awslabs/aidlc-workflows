@@ -7,9 +7,9 @@
 import { expect } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   artifactFilename,
   auditShardName,
@@ -28,8 +28,11 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import {
   AIDLC_SRC,
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
   cleanupTestProject,
   createTestProject,
+  intentsDirOf,
   seedAidlcMemory,
   seededAuditDir,
   seededRecordDir,
@@ -301,21 +304,11 @@ export function makeSeed(
       'export const right = "base";\n',
   );
   completeUnitOnMain(seed, "skeleton");
+  // The block AI-DLC ships, so the fixture commits exactly what a real
+  // clone's `git add -A` commits (its engine folders stay out).
   writeFileSync(
     join(seed, ".gitignore"),
-    "aidlc/.aidlc-clone-id\naidlc/.aidlc-unit-scope.json\n" +
-      "aidlc/.aidlc-unit-parked\naidlc/.aidlc-claim-generations.json\n" +
-      "aidlc/.aidlc-unit-participant\naidlc/.aidlc-claim-registry.json\n" +
-      "aidlc/.aidlc-unit-releases/\naidlc/.aidlc-unit-merges/\n" +
-      // Matches the real shipped .gitignore: active-memory/ is the engine's
-      // own local copy of the active space's method, and hooks-health/ (at
-      // any depth under .aidlc-engine/) carries per-clone hook heartbeats -
-      // both real hooks (e.g. session-start) can create on first run in a
-      // checkout this fixture never ran them in before. .aidlc-engine/
-      // itself stays tracked: reviewAuditExtras writes review records there.
-      "aidlc/active-memory/\n**/.aidlc-engine/hooks-health/\n" +
-      // The engine's own records of the chats, as the shipped block keeps them.
-      "aidlc/.aidlc-sessions/\n",
+    readFileSync(join(AIDLC_SRC, "..", ".gitignore"), "utf-8"),
   );
   git(seed, ["init", "-b", "main"]);
   git(seed, ["config", "user.name", "main"]);
@@ -342,6 +335,10 @@ export function clone(remote: string, label: string): string {
   tempDirs.push(dir);
   git(dir, ["config", "user.name", label]);
   git(dir, ["config", "user.email", `${label}@example.test`]);
+  // The selection is the person's own and stays out of git: in a new clone
+  // they pick the work once.
+  writeFileSync(join(dir, "aidlc", "active-space"), `${DEFAULT_SPACE}\n`);
+  writeFileSync(join(intentsDirOf(dir), "active-intent"), `${DEFAULT_RECORD_DIR}\n`);
   return dir;
 }
 
@@ -585,6 +582,13 @@ export function prepareCandidate(
   const graph = loadStageGraphAll();
   for (const stageSlug of stages) {
     const stage = graph.find((entry) => entry.slug === stageSlug)!;
+    // The stage's shared diary, as bootstrapDirectiveMemory writes it at the
+    // stage's start, outside the Unit's folder.
+    const diary = join(seededRecordDir(checkout), "construction", stageSlug, "memory.md");
+    if (!existsSync(diary)) {
+      mkdirSync(dirname(diary), { recursive: true });
+      copyFileSync(join(AIDLC_SRC, "knowledge", "aidlc-shared", "memory-template.md"), diary);
+    }
     const dir = join(
       seededRecordDir(checkout),
       "construction",
@@ -682,7 +686,7 @@ export function prepareCandidate(
         generation,
         stage,
         `**Details**: Approve Plan\n` +
-          `**Checkpoint**: Code Generation Plan Approval\n` +
+          `**Checkpoint**: plan-approval\n` +
           `**Plan Target**: unit:${unit}\n` +
           `**Intent**: ${intentUuid}\n` +
           `**Directive Epoch**: ${authority.directiveEpoch}\n` +

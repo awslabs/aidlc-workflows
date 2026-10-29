@@ -232,9 +232,10 @@ aidlc unit publish payments
 `publish` creates a candidate commit whose tree is the team's committed work and
 whose parents bind both the claim history and the implementation history. It
 CAS-updates the claim ref. Publication is not integration. The candidate carries
-the claim's audit shard with the rows pin accepts and every other audit shard as
-main has it; the rows left out stay in the checkout's own history, and publish
-says how many.
+the claim's audit shard with the rows pin accepts and the review records its
+receipts name (AI-DLC keeps those out of commits), and every other audit shard
+and the stages' shared diaries as main has them; what is left out stays in the
+checkout's own history, and publish says how many rows.
 
 ---
 

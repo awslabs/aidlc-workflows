@@ -56,6 +56,7 @@ import {
   relativeRecordDir,
   REVIEW_RECORDS_DIR,
   reviewRecordDigest,
+  reviewRecordRefFromBlock,
   type ReviewRecord,
   requireLiveClaimForTeamUnit,
   resolveProjectDir,
@@ -82,7 +83,6 @@ import {
 } from "./aidlc-lib.js";
 import {
   parseTestingContract,
-  PLAN_APPROVAL_CHECKPOINT,
   recordedApprovalFingerprint,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
@@ -1408,12 +1408,14 @@ function transportableCandidateTree(
   };
 }
 
-// Every audit shard but the claim's own, as `baseOid` has it: pin refuses any
-// change to another shard (candidateBoundary). A checkout whose own shard was
-// on main before the claim still recorded its pre-claim rows there, and
-// `git add -A` commits them. Those rows stay in the clone's history and
-// working copy, as the projected ones do.
-function auditShardsAsBase(
+// The record's shared files as `baseOid` has them: every audit shard but the
+// claim's own, and the stages' shared diaries (`<phase>/<stage>/memory.md`,
+// written at each stage start outside any Unit's folder). Pin refuses a change
+// to either (candidateBoundary), and `git add -A` commits both: a checkout
+// whose own shard was on main before the claim still recorded its pre-claim
+// rows there. They stay in the clone's history and working copy, as the
+// projected rows do.
+function sharedRecordFilesAsBase(
   projectDir: string,
   treeOid: string,
   baseOid: string,
@@ -1423,7 +1425,10 @@ function auditShardsAsBase(
   const auditRoot = `${recordPrefix}/audit`;
   const paths = gitOutput(
     projectDir,
-    ["diff", "--no-renames", "--name-only", baseOid, treeOid, "--", auditRoot],
+    [
+      "diff", "--no-renames", "--name-only", baseOid, treeOid, "--",
+      auditRoot, `:(glob)${recordPrefix}/*/*/memory.md`,
+    ],
     "Cannot compare candidate audit shards",
   )
     .split(/\r?\n/)
@@ -1450,7 +1455,7 @@ function auditShardsAsBase(
       const update = git(
         projectDir,
         oid
-          ? ["update-index", "--cacheinfo", `${mode},${oid},${path}`]
+          ? ["update-index", "--add", "--cacheinfo", `${mode},${oid},${path}`]
           : ["update-index", "--force-remove", "--", path],
         env,
       );
@@ -1462,6 +1467,43 @@ function auditShardsAsBase(
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+// The review record each REVIEW_COMPLETED row of the claim's shard names, from
+// this clone's disk: AI-DLC keeps them under the record's engine folder, which
+// its own .gitignore keeps out of every commit, and pin reads each one from
+// the candidate (candidateReviewerReady). Only a record whose digest matches
+// its row is added; nothing else under the engine folder travels. A record
+// that is gone or changed is named back, since pin will refuse without it.
+function withClaimReviewRecords(
+  projectDir: string,
+  treeOid: string,
+  recordPrefix: string,
+  auditShard: string,
+): { tree: string; missing: string[] } {
+  const shardPath = `${recordPrefix}/audit/${auditShard}`;
+  const missing: string[] = [];
+  if (!gitPathExistsAt(projectDir, treeOid, shardPath)) return { tree: treeOid, missing };
+  let tree = treeOid;
+  for (const block of auditShardBlocks(gitTextAt(projectDir, treeOid, shardPath))) {
+    if (auditBlockField(block, "Event") !== "REVIEW_COMPLETED") continue;
+    const ref = reviewRecordRefFromBlock(block);
+    if (!ref) continue;
+    const path = `${recordPrefix}/${ref.path}`;
+    if (gitPathExistsAt(projectDir, tree, path)) continue;
+    let bytes = "";
+    try {
+      bytes = readFileSync(join(projectDir, path), "utf-8");
+    } catch {
+      // gone: named below
+    }
+    if (bytes && reviewRecordDigest(bytes) === ref.digest) {
+      tree = writeTreeWithBlob(projectDir, tree, path, bytes);
+    } else {
+      missing.push(path);
+    }
+  }
+  return { tree, missing };
 }
 
 function candidateBoundary(
@@ -1821,8 +1863,6 @@ function candidateEvidence(
       approvalEvent &&
       auditBlockField(approvalEvent.block, "Details") ===
         (approvalEvent.event === "PLAN_APPROVAL_SKIPPED" ? "Plan approval off" : "Approve Plan") &&
-      auditBlockField(approvalEvent.block, "Checkpoint") ===
-        PLAN_APPROVAL_CHECKPOINT &&
       auditBlockField(approvalEvent.block, "Plan Target") ===
         `unit:${claim.unit}` &&
       auditBlockField(approvalEvent.block, "Intent") ===
@@ -1938,14 +1978,18 @@ function publishUnit(args: string[], projectDir?: string): void {
     unit,
     current.generation,
   );
-  const asBase = auditShardsAsBase(
+  const asBase = sharedRecordFilesAsBase(
     pd,
     projected.tree,
     publicationBaseOid,
     recordPrefix,
     auditShard,
   );
-  const headTree = asBase.tree;
+  const reviews = withClaimReviewRecords(pd, asBase.tree, recordPrefix, auditShard);
+  const headTree = reviews.tree;
+  const missingReviews = reviews.missing.length > 0
+    ? { review_records_missing: reviews.missing }
+    : {};
   const withheld = projected.withheld + asBase.withheld;
   if (
     current.payload.candidate_tree_oid === headTree &&
@@ -1962,6 +2006,7 @@ function publishUnit(args: string[], projectDir?: string): void {
       candidate_oid: current.oid,
       generation: current.generation,
       local_rows_withheld: withheld,
+      ...missingReviews,
     }));
     return;
   }
@@ -2003,6 +2048,7 @@ function publishUnit(args: string[], projectDir?: string): void {
     // Said rather than done quietly: the candidate carries the Unit's evidence,
     // and this many of the clone's own local rows stayed behind.
     local_rows_withheld: withheld,
+    ...missingReviews,
   }));
 }
 

@@ -437,7 +437,7 @@ describe("t326 pinned team Unit merge", () => {
     expect(model.mergedUnits.has("alpha")).toBe(true);
     expect(
       model.section.split("\n").find((line) => line.startsWith("| beta |")),
-    ).toBe("| beta | - | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |");
+    ).toBe("| beta | beta-grid-team | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |");
     expect(nextDirective(beta)).toMatchObject({
       kind: "run-stage",
       stage: "functional-design",
