@@ -2104,7 +2104,7 @@ function pinnedMergeGate(
 function pinMergeGateStep(transaction: UnitMergeTransaction): Record<string, string> {
   const terms = pinnedMergeGate(transaction);
   const record = (decision: "approve" | "reject") =>
-    `${aidlcInvocation()} unit gate ${quoteCommandArgument(transaction.unit)} --decision ${decision} --user-input '<their reply>'`;
+    `${aidlcInvocation()} unit gate ${quoteCommandArgument(transaction.unit)} --decision ${decision} --user-input '<their answer>'`;
   return {
     strategy: terms.strategy,
     target_branch: terms.target,
