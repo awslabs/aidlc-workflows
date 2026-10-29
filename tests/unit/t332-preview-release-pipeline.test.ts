@@ -30,6 +30,8 @@ import {
 } from "../../scripts/plan-preview-release.ts";
 import {
   parsePreviewTagSource,
+  type PreviewPlan,
+  previewPlanJson,
   previewReleaseName,
   previewTagMessage,
   readPreviewPlan,
@@ -328,6 +330,7 @@ function sourceHistory(): { cwd: string; first: string; second: string; third: s
     "Current section summary.",
     "",
     "* Current bullet.",
+    "* A typed key is kept as `password=[masked]` in the record.",
     "",
   ].join("\n");
   writeFileSync(join(cwd, "CHANGELOG.md"), `# Changelog\n\n${older}`);
@@ -494,13 +497,13 @@ describe("t332 preview publication pipeline", () => {
     const warning = "> **Warning:** Full Suite failed for this source. A Full Suite failure report ends these notes.\n\n";
     const stageNotes = async (fullSuite: string, body: string, report: string, update = "success"): Promise<string> => {
       writeFileSync(reportPath, report);
-      const plan = {
+      const plan: PreviewPlan = {
         schemaVersion: 1, version: PREVIEW_ID, tag: `v${PREVIEW_ID}`, sourceRepository: "owner/repo",
         sourceDigest: SOURCE_A, previousSourceDigest: null,
         notes: { name: previewReleaseName(PREVIEW_ID), body },
       };
       const staged = await runWorkflowStep(step("release", "Stage preview notes"), REPO_ROOT, {
-        RUNNER_TEMP: temp, FULL_SUITE_RESULT: fullSuite, PREVIEW_PLAN: JSON.stringify(plan), UPDATE_RESULT: update,
+        RUNNER_TEMP: temp, FULL_SUITE_RESULT: fullSuite, PREVIEW_PLAN: previewPlanJson(plan), UPDATE_RESULT: update,
         GITHUB_SERVER_URL: "https://github.com", GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "77",
       });
       expect(staged.status, staged.stdout + staged.stderr).toBe(0);
@@ -804,10 +807,13 @@ describe("t332 preview publication pipeline", () => {
 
     // A plan round-trips through the JSON record the promote job consumes.
     const planPath = join(history.cwd, "plan.json");
-    writeFileSync(planPath, `${JSON.stringify(planned.plan, null, 2)}\n`);
-    expect(planned.plan).not.toBeNull();
-    expect(readPreviewPlan(planPath)).toEqual(planned.plan as NonNullable<typeof planned.plan>);
-    writeFileSync(planPath, JSON.stringify({ ...planned.plan, tag: "v1.2.3" }));
+    const record = planned.plan as NonNullable<typeof planned.plan>;
+    writeFileSync(planPath, previewPlanJson(record));
+    expect(readPreviewPlan(planPath)).toEqual(record);
+    writeFileSync(planPath, previewPlanJson({ ...record, tag: "v1.2.3" }));
+    expect(() => readPreviewPlan(planPath)).toThrow("invalid fields");
+    // The notes body written out as text is not the record.
+    writeFileSync(planPath, JSON.stringify(record));
     expect(() => readPreviewPlan(planPath)).toThrow("invalid fields");
     writeFileSync(planPath, "null\n");
     expect(() => readPreviewPlan(planPath)).toThrow("must be an object");
@@ -1206,11 +1212,14 @@ describe("t332 preview publication pipeline", () => {
     // Preview Release 36485041152 waited 22 minutes for a runner, main moved,
     // and the run refused to test anything. It now plans its own commit.
     const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf-8")) as {
-      jobs: { validate: { steps: Array<{ id?: string; run?: string }> } };
+      jobs: Record<"validate" | "release", { steps: Array<{ id?: string; name?: string; run?: string }> }>;
     };
     const validateScript = workflow.jobs.validate.steps.find((step) => step.id === "validate")?.run;
     const planScript = workflow.jobs.validate.steps.find((step) => step.id === "plan")?.run;
-    if (!validateScript || !planScript) throw new Error("release validation and planning steps must exist");
+    const stageScript = workflow.jobs.release.steps.find((step) => step.name === "Stage preview notes")?.run;
+    if (!validateScript || !planScript || !stageScript) {
+      throw new Error("release validation, planning and notes staging steps must exist");
+    }
 
     const history = sourceHistory();
     const origin = join(history.cwd, "origin.git");
@@ -1296,6 +1305,23 @@ describe("t332 preview publication pipeline", () => {
           sourceDigest: history.first,
           previousSourceDigest: null,
         });
+        // The runner drops a job output in which it finds anything shaped like a
+        // secret: Preview Release 40777302486 lost its plan to the 2.11.2 entry's
+        // `password=[masked]`. No notes text crosses to the release job as written,
+        // and the release job still stages the whole notes from that row.
+        const row = /^preview_plan=(.*)$/m.exec(planningRows)?.[1] ?? "";
+        expect(row).not.toContain("password=");
+        expect(row).not.toContain("Current bullet");
+        const releaseTemp = join(runnerTemp, "release");
+        mkdirSync(join(releaseTemp, "preview-test-report"), { recursive: true });
+        writeFileSync(join(releaseTemp, "preview-test-report", "preview-test-report.md"), "## Nightly test report\n");
+        const staged = await runWorkflowStep(stageScript, history.cwd, {
+          RUNNER_TEMP: releaseTemp, FULL_SUITE_RESULT: "failure", PREVIEW_PLAN: row, UPDATE_RESULT: "success",
+        });
+        expect(staged.status, staged.stdout + staged.stderr).toBe(0);
+        const notes = readPreviewPlan(join(releaseTemp, "aidlc-preview-plan.json")).notes.body;
+        expect(notes).toContain("* A typed key is kept as `password=[masked]` in the record.");
+        expect(notes).toEndWith("## Nightly test report\n");
       }
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

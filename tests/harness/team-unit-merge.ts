@@ -517,6 +517,9 @@ export function prepareCandidate(
     unitEnd?: boolean;
     /** Claim with the per-stage rhythm by name, as on a main whose own rhythm is unit-end. */
     perStage?: boolean;
+    /** The per-Unit stages the candidate documents, reviews and approves; all
+     *  five by default. A stage left out is one the Unit's kind owes nothing. */
+    stages?: string[];
     /** Runs right after claim, before any stage work or audit receipt is
      *  written - lets a case mint a real event (e.g. a session-start hook)
      *  into the fresh checkout's shard before anything else exists there. */
@@ -543,7 +546,7 @@ export function prepareCandidate(
   const claimPayload = JSON.parse(claim.stdout);
   const generation = claimPayload.generation as number;
   const intentUuid = claimPayload.intent_uuid as string;
-  const stages = [
+  const stages = options.stages ?? [
     "functional-design",
     "nfr-requirements",
     "nfr-design",
