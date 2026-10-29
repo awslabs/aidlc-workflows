@@ -809,20 +809,29 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       token: "another-token", staging: ".aidlc-txn-another",
     }));
     const step = `delete the folder ${lock} first`;
+    // A JSON line's text as the person reads it (Windows paths are escaped in it).
+    const said = (r: { stdout: string; stderr: string }) => `${r.stdout}${r.stderr}`.split("\n").map((line) => {
+      try {
+        const parsed = JSON.parse(line) as { error?: unknown; message?: unknown };
+        return String(parsed.error ?? parsed.message ?? line);
+      } catch {
+        return line;
+      }
+    }).join("\n");
     const selected = spawnSync(process.execPath, [join(project, ".claude", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"], {
       cwd: project,
       encoding: "utf-8",
       env: { ...process.env, CLAUDE_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" },
     });
     expect(selected.status).not.toBe(0);
-    expect(`${selected.stdout}${selected.stderr}`).toContain(step);
+    expect(said(selected)).toContain(step);
     const synced = spawnSync(process.execPath, [join(project, ".claude", "tools", "aidlc-plugin.ts"), "sync", "--project-dir", project], {
       cwd: project,
       encoding: "utf-8",
       env: { ...process.env, CLAUDE_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" },
     });
     expect(synced.status).not.toBe(0);
-    expect(`${synced.stdout}${synced.stderr}`).toContain(step);
+    expect(said(synced)).toContain(step);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("public JSON and doctor expose the shared exact comparator state", () => {
