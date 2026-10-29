@@ -304,6 +304,35 @@ describe("a plan revised only for the person's own change request", () => {
     });
   }
 
+  // The second change request is judged against the plan the first revision
+  // built, not the plan they first approved: until the agent revises it again,
+  // their second words are still to be carried out.
+  for (const policy of ["off", "relaxed"] as const) {
+    test(`Guard Policy ${policy}: a second Request Changes in a row hands the agent their second words`, () => {
+      const proj = project(policy);
+      approved(proj);
+      expect(posture(proj, "begin").status).toBe(0);
+      reply(proj, "rename the test file to price.spec.js please");
+      rejectedAtGate(proj, "rename the test file to price.spec.js please");
+      expect(next(proj).plan_approval?.status).toBe("revise");
+      writePlan(proj, "- [ ] Step 2: rename the test file to price.spec.js\n");
+      expect(next(proj).plan_approval?.status).toBe("approved");
+      expect(posture(proj, "begin").status).toBe(0);
+      reply(proj, "also add a test for an empty title");
+      rejectedAtGate(proj, "also add a test for an empty title");
+      const revise = next(proj);
+      expect(revise.kind, JSON.stringify(revise)).toBe("run-stage");
+      expect(revise.plan_approval).toEqual({ status: "revise", feedback: "also add a test for an empty title" });
+      writePlan(proj, "- [ ] Step 2: rename the test file to price.spec.js\n- [ ] Step 3: test an empty title\n");
+      const build = next(proj);
+      expect(build.plan_approval?.status, JSON.stringify(build)).toBe("approved");
+      expect(build.ask_type).toBeUndefined();
+      const handed = guardAdmitsBuild(proj);
+      expect(handed.code, handed.stderr).toBe(0);
+      expect(posture(proj, "begin").status, posture(proj, "verify").out).toBe(0);
+    });
+  }
+
   test("strict: the plan question comes back for the revised plan", () => {
     const proj = project("strict");
     approved(proj);
@@ -395,6 +424,28 @@ describe("one Unit's own change request and its reopen", () => {
     const build = next(proj);
     expect(build.kind, JSON.stringify(build)).toBe("run-stage");
     expect(build.plan_approval?.status, JSON.stringify(build)).toBe("approved");
+    const handed = guardAdmitsBuild(proj, UNIT);
+    expect(handed.code, handed.stderr).toBe(0);
+  });
+
+  test("off: a second change request for the Unit hands the agent their second words", () => {
+    const proj = unitProject("off", UNIT);
+    approved(proj, UNIT);
+    expect(posture(proj, "begin", UNIT).status).toBe(0);
+    reply(proj, "use a lookup table in that unit please");
+    rejectedAtGate(proj, "use a lookup table in that unit please", UNIT);
+    expect(next(proj).plan_approval?.status).toBe("revise");
+    writePlan(proj, "- [ ] Step 2: use a lookup table\n", UNIT);
+    expect(next(proj).plan_approval?.status).toBe("approved");
+    expect(posture(proj, "begin", UNIT).status).toBe(0);
+    reply(proj, "and keep the old function as an alias");
+    rejectedAtGate(proj, "and keep the old function as an alias", UNIT);
+    const revise = next(proj);
+    expect(revise.plan_approval, JSON.stringify(revise)).toEqual({
+      status: "revise", feedback: "and keep the old function as an alias",
+    });
+    writePlan(proj, "- [ ] Step 2: use a lookup table\n- [ ] Step 3: keep the old function as an alias\n", UNIT);
+    expect(next(proj).plan_approval?.status).toBe("approved");
     const handed = guardAdmitsBuild(proj, UNIT);
     expect(handed.code, handed.stderr).toBe(0);
   });

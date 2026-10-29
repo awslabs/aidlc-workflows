@@ -85,6 +85,7 @@ import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import {
   approvalFingerprint,
   approvedPlanChangeLine,
+  attemptRejectionClosed,
   codeGenerationBuildsWithoutSource,
   clearPlanApprovalOverrideOffered,
   codeGenerationExecutionAllowed,
@@ -94,6 +95,7 @@ import {
   evaluateCodeGenerationApproval,
   keepApprovedPlanCopy,
   PlanApprovalUnbindableError,
+  planAsSentBack,
   readTestingContract,
   replaceTestingContractSection,
   resolveCodeGenerationAuthority,
@@ -828,9 +830,11 @@ export function preparePlanRecordFolders(projectDir: string, directive: Directiv
 /**
  * A rejected gate (the Code Generation completion gate, a Unit checkpoint, or a
  * swarm batch checkpoint) starts a new attempt, so the approval before it no
- * longer counts. While the plan is still exactly the one approved before, the
- * person's rejection is the change to make: the plan is revised first, and the
- * engine asks about the revised plan, never about the one they just sent back.
+ * longer counts. While the plan is still exactly the one the rejected build
+ * started on (the one approved before, or the revision a lowered fence built for
+ * their previous change request), the person's rejection is the change to make:
+ * the plan is revised first, and the engine asks about the revised plan, never
+ * about the one they just sent back.
  *
  * A stage jump or a Redo (`rejectionIsFreshAttempt`) keeps the plan available
  * for approval as it stands. Its reopen notice is not a change request, and an
@@ -855,20 +859,18 @@ function rejectionRevision(projectDir: string, unit: string | null, intentId: st
   }
   const floor = /^GATE_REJECTED:(.+)#\d+$/.exec(runFloor);
   if (floor === null) return null;
-  const rejection = rejectionAtRunFloor(
-    readAuditShardEvents(projectDir), STAGE, unit ?? undefined, runFloor,
-  );
+  const rows = readAuditShardEvents(projectDir);
+  const rejection = rejectionAtRunFloor(rows, STAGE, unit ?? undefined, runFloor);
   if (rejection !== undefined && rejectionIsFreshAttempt(rejection.block)) return null;
+  const closed = rejection ? attemptRejectionClosed(projectDir, rows, rejection, unit) : null;
   const dir = codeGenerationRecordDir(projectDir, unit);
   const plan = readText(join(dir, PLAN_FILE));
   const instructions = readText(join(dir, INSTRUCTIONS_FILE));
   const read = readTestingContract(plan);
   if ("defect" in read) return null;
-  // The fingerprint binds the attempt too, so compare the files as they are
-  // against each earlier approval at that approval's own attempt.
-  const approvedBefore = stalePlanApprovalReceiptsForTarget(projectDir, intentId, targetId, runFloor).some((receipt) => receipt.fingerprint ===
-    approvalFingerprint(plan, instructions, read.contract.contract_sha256, receipt));
-  if (!approvedBefore) return null;
+  const unrevised = stalePlanApprovalReceiptsForTarget(projectDir, intentId, targetId, runFloor).some((receipt) =>
+    planAsSentBack(plan, instructions, read.contract.contract_sha256, receipt, closed ?? receipt.runFloor));
+  if (!unrevised) return null;
   const feedback = rejection
     ? (auditBlockField(rejection.block, "Feedback") ?? auditBlockField(rejection.block, "Reason"))?.trim()
     : undefined;

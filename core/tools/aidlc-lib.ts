@@ -5715,9 +5715,11 @@ export interface PlanApprovalRuntimeReceipt
   /** Plan approval was off, so the engine built this plan without asking; `source` says what turned it off. */
   skipped?: { source: string };
   /**
-   * The fingerprint of the plan and instructions the build started on, kept
-   * only when that is not the approved content: a lowered fence built a plan
-   * edited after its approval. An interrupted build picks up only on it.
+   * The fingerprint of the plan and instructions the last build under this
+   * approval started on, at the attempt it started in, kept only when that is
+   * not the approved content: a lowered fence built a plan edited after its
+   * approval, or revised for the person's change request. An interrupted build
+   * picks up only on it, and their next change request is judged against it.
    */
   startedFingerprint?: string;
   /**
