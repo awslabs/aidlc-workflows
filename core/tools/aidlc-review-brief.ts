@@ -1444,15 +1444,18 @@ function endOfUnitGateStages(projectDir: string, stage: ReviewFingerprintStage):
   }
 }
 
-// The current lists of a gate's reviewed stages, for the Units it covers.
+// The current lists of a gate's reviewed stages, for the Units it covers. The
+// gate's brief also keeps a review that did not finish (keepUnfinished), to
+// say so; the approval reads reviews only.
 function reviewedContexts(
   projectDir: string,
   stages: ReviewDispositionStages,
   scopes: ReadonlyArray<string | undefined>,
+  keepUnfinished = false,
 ): ReviewedContext[] {
   return dispositionStages(stages).flatMap((stage) =>
     stage.reviewer
-      ? scopes.flatMap((unit) => readReviewArtifactContexts(projectDir, stage, unit))
+      ? scopes.flatMap((unit) => readReviewArtifactContexts(projectDir, stage, unit, keepUnfinished))
         .map((context) => ({ stage, context }))
       : []
   );
@@ -1621,11 +1624,12 @@ const DECIDE_ONE_WAYS = ["approve and ask for {it} to be fixed", "reject {it} as
 // findings it accepts too: a fix asked reaches only this stage's, so the line
 // could not name all it accepts. At a team Unit's end-of-Unit gate (`unitGate`)
 // it names what that Unit's one Approve records over every stage it decides,
-// the same call the approval makes.
+// the same call the approval makes, labelled by stage when the gate shows
+// open findings on more than one (`labelStages`).
 function approveAcceptsLine(
   projectDir: string,
   stage: ReviewFingerprintStage,
-  unitGate?: { stages: StageEntry[]; unit: string },
+  unitGate?: { stages: StageEntry[]; unit: string; labelStages: boolean },
 ): string | null {
   const acceptedRisk = (of: ReviewDispositionStages, unit?: string): ApprovalDecision[] =>
     approvalDecisions(projectDir, of, unit, "person", [])
@@ -1646,7 +1650,7 @@ function approveAcceptsLine(
   const accepted = unitGate === undefined ? acceptedRisk(stage) : acceptedRisk(unitGate.stages, unitGate.unit);
   if (accepted.length === 0) return null;
   const byUnit = new Set(accepted.map(({ unit }) => unit)).size > 1;
-  const byStage = new Set(accepted.map(({ stage: of }) => of.slug)).size > 1;
+  const byStage = unitGate?.labelStages === true || new Set(accepted.map(({ stage: of }) => of.slug)).size > 1;
   const label = ({ finding, stage: of, unit }: ApprovalDecision): string =>
     [
       ...(byStage ? [findStageBySlug(of.slug)?.name ?? of.slug] : []),
@@ -2454,13 +2458,14 @@ export function renderReviewBrief(
     ? undefined
     : unit;
   // A team Unit's end-of-Unit Approve decides every stage of the Unit's walk,
-  // so its brief shows each earlier stage's review with an open finding ahead
-  // of this stage's own, read as the approval reads them.
+  // so its brief shows each earlier stage's review with an open finding, or
+  // that did not finish, ahead of this stage's own, read as the approval reads
+  // them.
   const endOfUnit = contextUnit === undefined ? null : endOfUnitGateStages(projectDir, stage);
   const earlier = endOfUnit === null
     ? []
-    : reviewedContexts(projectDir, endOfUnit.slice(0, -1), [contextUnit])
-      .filter(({ context }) => context.findings.some(findingIsOpen));
+    : reviewedContexts(projectDir, endOfUnit.slice(0, -1), [contextUnit], true)
+      .filter(({ context }) => context.incompleteReview === true || context.findings.some(findingIsOpen));
   // An open finding on work kept after its review (relaxed or off) shows as
   // Approve records it. The change itself was said once, as change_notices,
   // when it was recorded, so the brief does not say it again. Marked before the
@@ -2469,16 +2474,13 @@ export function renderReviewBrief(
     reviewedWorkChanged(projectDir, of, context)
       ? { ...context, changedAfterReview: context.findings.filter(findingIsOpen).map((finding) => finding.id) }
       : context;
-  const earlierContexts = earlier.map(marked);
-  let contexts = readReviewArtifactContexts(projectDir, stage, contextUnit, true)
-    .map((context) => marked({ stage, context }));
   // The incomplete fallback re-checked nothing: the record says the review did
   // not finish, and the conductor's --fallback-finding, given only when what
-  // the reviewer returned says why, follows it. A list carried from earlier
-  // reviews shows it under the next unused ID so it never lands on an earlier
-  // decision's ID.
-  const unfinished = unfinishedReviewFinding(fallbackFinding);
-  contexts = contexts.map((context) => {
+  // the reviewer returned says why, follows it; that is this stage's reviewer,
+  // so an earlier stage's says only that it did not finish. A list carried
+  // from earlier reviews shows it under the next unused ID so it never lands
+  // on an earlier decision's ID.
+  const withUnfinished = (said: string) => (context: ReviewArtifactContext): ReviewArtifactContext => {
     if (!context.incompleteReview) return context;
     const finding: ReviewFinding = {
       artifact: context.artifact,
@@ -2486,7 +2488,7 @@ export function renderReviewBrief(
       id: nextFindingId(context.findings),
       severity: "Major",
       location: `${context.artifact} > review completion`,
-      finding: unfinished,
+      finding: said,
       requiredAction: "Request changes and rerun the reviewer.",
       status: "Unresolved",
       fingerprint: "",
@@ -2495,7 +2497,11 @@ export function renderReviewBrief(
       ...context,
       findings: [...context.findings, withFingerprint(finding)],
     };
-  });
+  };
+  const unfinished = unfinishedReviewFinding(fallbackFinding);
+  const earlierContexts = earlier.map(marked).map(withUnfinished(unfinishedReviewFinding()));
+  let contexts = readReviewArtifactContexts(projectDir, stage, contextUnit, true)
+    .map((context) => withUnfinished(unfinished)(marked({ stage, context })));
   if (contexts.length === 0 && fallbackFinding) {
     const entry = reviewArtifactEntries(projectDir, stage, unit)?.[0];
     const artifact = entry
@@ -2585,11 +2591,15 @@ export function renderReviewBrief(
   // accepts, so the option does not say it again. A Unit's Construction
   // checkpoint (its command takes no finding flag) and a per-stage team Unit
   // gate keep the option as it was.
+  const openStages = new Set([
+    ...earlier.filter((_, at) => earlierContexts[at].findings.some(findingIsOpen)).map(({ stage: of }) => of.slug),
+    ...(contexts.some((context) => context.findings.some(findingIsOpen)) ? [stage.slug] : []),
+  ]);
   const acceptsLine = contextUnit === undefined
     ? approveAcceptsLine(projectDir, stage)
     : endOfUnit === null
       ? null
-      : approveAcceptsLine(projectDir, stage, { stages: endOfUnit, unit: contextUnit });
+      : approveAcceptsLine(projectDir, stage, { stages: endOfUnit, unit: contextUnit, labelStages: openStages.size > 1 });
   const openChanged = shown.flatMap((context) =>
     context.findings.filter(findingIsOpen).map((finding) => context.changedAfterReview?.includes(finding.id) === true)
   );
