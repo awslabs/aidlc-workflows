@@ -269,6 +269,32 @@ See `docs/reference/11-contributing.md` section "Adding a Utility Handler" befor
 
 IMPORTANT: When adding, removing, or renaming files, directories, commands, or flags, grep `docs/` and `README.md` for stale references and update them in the same commit.
 
+### Roadmap maintenance
+
+Treat [`docs/roadmap.md`](docs/roadmap.md) as the customer-facing record of
+delivered capabilities and planned minor-release outcomes.
+
+- When a PR adds, changes, completes, or defers a roadmap capability, or changes
+  its scope or release target, review and update the roadmap in the same PR.
+  Link the relevant RFC, issue, or implementation PR. Label new release
+  allocations and dates as proposed until maintainers confirm them.
+- Keep availability explicit: work in progress, merged on `main`, available in a
+  preview, or shipped in a stable release. Before marking a capability shipped,
+  verify it is included in a published, non-draft, non-prerelease GitHub Release
+  and link that release. A merge, passing CI, or source version string alone
+  does not establish availability in a stable release.
+- During preview selection, the release owner checks roadmap scope against the
+  selected source and records deferrals or changed targets. After stable
+  publication, update the reviewed date, latest-stable reference, and delivered
+  summary in a documentation PR. Verify each delivered claim against that
+  release; later changes on `main` keep their own availability status.
+- Keep the promotion commit and metadata synchronization PR limited to the
+  release metadata required below. Submit roadmap updates separately through
+  the normal PR process.
+- Keep the roadmap focused on capabilities and milestones. Routine patch-fix
+  details belong in issues and release notes; update the roadmap when a fix
+  changes a listed outcome or target.
+
 ## Release Metadata Policy
 
 IMPORTANT: Feature, fix, documentation, refactor, and test PRs do NOT bump `core/tools/aidlc-version.ts`, change the README version badge, or add a release entry to `CHANGELOG.md`. Those coordinated updates belong to preview promotion and its metadata synchronization PR, which summarize the user-visible changes in the selected preview since the previous stable release. Every PR must preserve existing changelog entries.
