@@ -2480,8 +2480,11 @@ function aidlcOwnRootParts(projectDir: string, paths: readonly string[]): Map<st
     if (block && onlyMarkedPartChanged(path, text, committed, block.marker)) {
       own.set(path, { marker: block.marker });
     } else if (shippedEntries !== undefined) {
+      // Git's copy holds the line endings the repository stores, the file the
+      // checkout's own (core.autocrlf on Windows), so they are left aside.
+      const lf = (value: string) => value.replace(/\r\n/g, "\n");
       const merged = mergeJsonEntries(committed, shippedEntries, { kind: "none" });
-      if (!("conflict" in merged) && merged.text === text) own.set(path, { entries: shippedEntries });
+      if (!("conflict" in merged) && lf(merged.text) === lf(text)) own.set(path, { entries: shippedEntries });
     }
   }
   return own;
@@ -2497,7 +2500,9 @@ interface YieldedRootPart {
 // same bytes included. So before the merge, AI-DLC's own write in a shared
 // root file the candidate also changes is set aside: the file goes back to
 // HEAD's copy (or, AI-DLC's whole, away), and its bytes are kept in `yielded`
-// first, so a stop part way still gives each one back.
+// first, so a stop part way still gives each one back. They are kept in memory
+// only: a landing killed between the merge and its commit leaves the merge's
+// copy, and the next session start writes AI-DLC's part again.
 function yieldOwnRootParts(projectDir: string, candidatePaths: readonly string[], yielded: YieldedRootPart[]): void {
   const touched = worktreeChanges(projectDir, "all", "Cannot inspect main worktree")
     .filter((path) => candidatePaths.includes(path));

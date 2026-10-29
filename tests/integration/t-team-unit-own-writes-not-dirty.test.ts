@@ -111,6 +111,24 @@ describe("publish and land are not stopped by AI-DLC's own part of the root file
     });
   }
 
+  test("a checkout that keeps CRLF line endings (core.autocrlf, as on Windows) publishes with AI-DLC's part in each root file", () => {
+    const { remote } = seedWithRuntime("opencode");
+    let before: Record<string, string | null> = {};
+    prepareCandidate(remote, "alpha", "team-a", {
+      beforePublish: (clone) => {
+        // Git writes the files again in the line endings the checkout keeps.
+        git(clone, ["config", "core.autocrlf", "true"]);
+        for (const path of ROOT_FILES.opencode) rmSync(join(clone, path));
+        git(clone, ["checkout", "--", ...ROOT_FILES.opencode]);
+        expect(git(clone, ["status", "--porcelain"])).toBe("");
+        sessionStarts(clone, "opencode");
+        before = snapshot(clone, ROOT_FILES.opencode);
+        for (const path of ROOT_FILES.opencode) expect(before[path]).toContain("\r\n");
+      },
+    });
+    expect(Object.keys(before)).toEqual(ROOT_FILES.opencode);
+  });
+
   for (const [name, runtime, change] of [
     ["a line of the person's own in .gitignore", "copilot", (checkout: string) => {
       appendLine(checkout, ".gitignore", "coverage/");
@@ -220,7 +238,8 @@ describe("publish and land are not stopped by AI-DLC's own part of the root file
       },
     });
     sessionStarts(seed);
-    // AI-DLC's part here differs from the Unit's, so its bytes must come back.
+    // The file's bytes here differ from the Unit's copy (one more newline after
+    // AI-DLC's part), so only a put-back of these bytes keeps them.
     appendLine(seed, "AGENTS.md", "");
     const files = snapshot(seed, ROOT_FILES.copilot);
     approveMerge(seed, "alpha");
