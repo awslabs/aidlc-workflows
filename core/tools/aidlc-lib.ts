@@ -32140,7 +32140,11 @@ export function worktreeClaimBoundaryMatches(
   return main;
 }
 
-function cachedClaimFanoutActive(projectDir: string): boolean {
+// The one check that team Unit fan-out is active: a claim of the active intent
+// still says `claimed`, a landed Unit's included (land never releases it). The
+// guard below and `next` in an unscoped team checkout (aidlc-orchestrate.ts,
+// routeNext) both read it, so `next` never hands out Unit work the guard refuses.
+export function cachedClaimFanoutActive(projectDir: string): boolean {
   const cache = readUnitClaimRegistryCache(projectDir);
   const space = activeSpace(projectDir);
   const intentUuid = activeIntentUuid(projectDir, space);
@@ -32205,7 +32209,8 @@ export function validateLiveUnitScope(
   if (!stamp) {
     if (cachedClaimFanoutActive(pd)) {
       throw new Error(
-        "Team Unit fan-out is active in an unscoped checkout; claim a Unit before lifecycle or report work.",
+        "Team Units are claimed and this checkout holds no claim, so no Unit's work runs here. " +
+          `To work on a Unit here, type \`${entrySkillInvocation()} --claim <unit> --team <label>\`.`,
       );
     }
     return null;

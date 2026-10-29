@@ -286,6 +286,7 @@ import {
   type PlanChanges,
   planWithChanges,
   splitSlugList,
+  cachedClaimFanoutActive,
   hasAnyUnitClaimRefs,
   harnessDirectiveLimit,
   installedKiroLayout,
@@ -5129,7 +5130,6 @@ export interface TeamConstructionBoard {
   claimable: string[];
   blocked: Array<{ unit: string; blockedBy: string[] }>;
   warning?: string;
-  fanoutActive: boolean;
 }
 
 function observedClaimActivity(
@@ -5326,9 +5326,6 @@ function assembleTeamConstructionBoard(
     claimable,
     blocked,
     ...(overview.warning ? { warning: overview.warning } : {}),
-    fanoutActive:
-      awaitingMerge.length > 0 ||
-      overview.claimed.length > 0,
   };
 }
 
@@ -12272,7 +12269,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           readOnly: readOnlyBoard,
           overview,
         });
-        if (board.fanoutActive) {
+        // While the guard's fan-out check holds (a landed Unit's claim
+        // included) it refuses Unit work in this checkout, so the board stays
+        // up until every Unit is complete.
+        const unitsOpen = overview.claimable.length > 0 || overview.claimed.length > 0 ||
+          overview.waiting.length > 0;
+        if (board.awaitingMerge.length > 0 || (unitsOpen && cachedClaimFanoutActive(pd))) {
           emit(noticeDirective(
             renderTeamConstructionBoard(board, "dispatcher"),
           ));

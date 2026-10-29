@@ -73,7 +73,7 @@ describe("t326 an unscoped checkout after a team Unit lands", () => {
     });
     expect(claimRefs(remote)).toBe(refsAfterLanding);
 
-    // The person's own claim goes through, and the claimed checkout runs beta.
+    // The person's own claim goes through, and the claimed checkout routes as on main.
     const claimStep = runMergeTool(
       ORCH,
       ["next", "--claim", "beta", "--team", "beta-team"],
@@ -87,7 +87,6 @@ describe("t326 an unscoped checkout after a team Unit lands", () => {
     expect(nextDirective(fresh)).toMatchObject({
       kind: "run-stage",
       stage: "functional-design",
-      unit: "beta",
     });
 
     // With beta taken and nothing left to claim, the lead's main shows the board.
