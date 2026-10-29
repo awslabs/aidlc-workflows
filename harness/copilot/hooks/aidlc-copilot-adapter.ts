@@ -563,11 +563,13 @@ export async function run(
   // quote that could end it. Double quotes may also hold | & < >, but only
   // with a space: PowerShell keeps the quotes on such a value when it hands it
   // to a .cmd launcher, so cmd never sees them bare. cmd reads no single
-  // quotes, so single-quoted text never holds them. Any other character ($, `,
-  // %, ^, !, #, braces, @, \, a tab or line break, a typographic quote,
-  // anything outside plain ASCII) means no decision, so the host's prompt
-  // shows the command to the person.
-  const PLAIN_QUOTED = `(?:"[A-Za-z0-9_./:=,+ ?'();|&<>-]*"|'[A-Za-z0-9_./:=,+ ?();-]*')`;
+  // quotes, so single-quoted text never holds them. Single-quoted text may hold
+  // a $ (a price in a question's choice): no POSIX shell or PowerShell expands
+  // it there, and cmd gives it no meaning. Any other character (a $ in double
+  // quotes, `, %, ^, !, #, braces, @, \, a tab or line break, a typographic
+  // quote, anything outside plain ASCII) means no decision, so the host's
+  // prompt shows the command to the person.
+  const PLAIN_QUOTED = `(?:"[A-Za-z0-9_./:=,+ ?'();|&<>-]*"|'[A-Za-z0-9_./:=,+ ?();$-]*')`;
   const PLAIN_WORD = `(?:[A-Za-z0-9_./:=,+-]+${PLAIN_QUOTED}?|${PLAIN_QUOTED})`;
   const PLAIN_COMMAND = new RegExp(`^ *${PLAIN_WORD}(?: +${PLAIN_WORD})* *$`);
   // The shell the command runs in. A shell the call names wins, so Git Bash
@@ -600,7 +602,7 @@ export async function run(
   // double quote, so that pair keeps the prompt, and so does one right before
   // a closing single quote, which PowerShell turns into a double quote when
   // the value holds a space.
-  const WINDOWS_QUOTED = `(?:"[A-Za-z0-9_./:=,+ ?'();|&<>\\\\-]*"|'[A-Za-z0-9_./:=,+ ?();\\\\-]*')`;
+  const WINDOWS_QUOTED = `(?:"[A-Za-z0-9_./:=,+ ?'();|&<>\\\\-]*"|'[A-Za-z0-9_./:=,+ ?();$\\\\-]*')`;
   const WINDOWS_WORD = `(?:[A-Za-z0-9_./:=,+\\\\-]+${WINDOWS_QUOTED}?|${WINDOWS_QUOTED})`;
   const WINDOWS_COMMAND = new RegExp(`^ *${WINDOWS_WORD}(?: +${WINDOWS_WORD})* *$`);
   function plainInEveryShell(command: unknown): boolean {
@@ -632,8 +634,9 @@ export async function run(
     }
   }
   // The person's words in a recorded answer or decision are text, never a
-  // path: on Windows `--options "A: yes,B: no"` would read as drive A:.
-  const FREE_TEXT_FLAGS = new Set(["--options", "--details", "--decision", "--reason"]);
+  // path: on Windows `--options "A: yes,B: no"` would read as drive A:, and so
+  // would one choice of a question given as `--option 'A: yes, fix the end'`.
+  const FREE_TEXT_FLAGS = new Set(["--options", "--option", "--details", "--decision", "--reason"]);
   // So are the words a setter is handed as the reply that asked for it
   // (`--person-words '/aidlc turn the review freeze off'`), on the commands
   // that take them and can run without a click (`scope change` always keeps

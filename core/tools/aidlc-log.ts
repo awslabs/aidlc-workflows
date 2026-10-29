@@ -581,6 +581,7 @@ const LOG_INTERACTION_OPTIONS = [
 ];
 const DECISION_OPTIONS: ReadonlySet<string> = new Set([
   ...LOG_INTERACTION_OPTIONS,
+  "--option",
   "--decision",
   "--decision-file",
   "--rationale",
@@ -1110,8 +1111,21 @@ function keptMessageRefusal(pd: string): string | null {
     `--message ${latest.id}; do not ask them again.` + (missed === "" ? "" : ` If no message of theirs answers it:${missed}`);
 }
 
+// A question's choices given one --option each, so a choice may hold a comma
+// with no separator on the command line for a shell to read: they join any
+// --options list in the grammar optionsList reads.
+function withEachOption(args: string[], flags: Record<string, string>): void {
+  const each: string[] = [];
+  for (let i = 0; i < args.length - 1; i++) if (args[i] === "--option") each.push(args[++i]);
+  delete flags.option;
+  if (each.length === 0) return;
+  const choices = [...(flags.options === undefined ? [] : optionsList(flags.options)), ...each];
+  flags.options = choices.some((choice) => choice.includes(",")) ? `|${choices.join("|")}` : choices.join(",");
+}
+
 function handleDecision(args: string[]): void {
   const { flags } = parseFlags(args);
+  withEachOption(args, flags);
   if (!flags.stage) error("Missing --stage <slug>");
   // A question holding the person's words arrives in a file the agent wrote, as
   // an answer's text does, so no shell reads it on the way.
@@ -5321,7 +5335,7 @@ function logUsage(subcommand: string | undefined): string {
     decision: [
       `${invoke("decision")} --stage <slug> --decision '<the question>' --options '<choice>,<choice>'`,
       "  Records a question before it is shown to the person. Required: --stage, --decision.",
-      "  When a choice holds a comma, start the list with | and separate the choices with it: \"|<choice>|<choice>\".",
+      "  When a choice holds a comma, pass each choice as its own --option '<choice>' in place of --options.",
       `  --checkpoint: ${DECISION_CHECKPOINTS.join(", ")}. An ordinary question, the learnings one included, takes none.`,
       `  Options: ${flags(DECISION_OPTIONS)}`,
     ],

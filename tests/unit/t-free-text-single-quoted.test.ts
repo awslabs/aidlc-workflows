@@ -12,8 +12,6 @@
 // check of that rule. What stays, and why the patterns leave it alone:
 //   - a flag whose value is a name the engine gave (a slug, an id or a path,
 //     ENGINE_NAMED), such as `--questions-file \"<path>\"` in core/tools;
-//   - the `"|<A>|<B>"` list form, since the Copilot adapter's VS Code allow
-//     takes a `|` only inside double quotes;
 //   - a slash command typed in the chat (`/aidlc compose "<task>"`), which no
 //     shell reads;
 //   - the cmd.exe sentence in the Copilot and opencode skills, which shows no
@@ -43,9 +41,11 @@ function shippedFiles(dir: string): string[] {
 }
 
 // A flag's double-quoted value holding a placeholder, escaped quotes included,
-// the value on the flag's line or wrapped onto the next; not the `"|<A>|<B>"` list.
+// the value on the flag's line or wrapped onto the next. A question whose
+// choice holds a comma passes each choice as its own `--option`, so no `|`
+// list is left for a shell to read.
 const GAP = String.raw`(?:[ \t]+|[ \t]*\n[ \t]*)`;
-const FLAG_VALUE = new RegExp(String.raw`--([a-z][a-z-]*)${GAP}\\{0,3}"(?!\|)[^"\n]*<`, "g");
+const FLAG_VALUE = new RegExp(String.raw`--([a-z][a-z-]*)${GAP}\\{0,3}"[^"\n]*<`, "g");
 // The words `next` (after any flags, a placeholder value with spaces too) and
 // `next compose` take, and each of `audit append-raw`'s two; `next` also where
 // the engine builds the command (`${aidlcDispatcherInvocation("orchestrate next")}`).
@@ -73,11 +73,12 @@ describe("words on an AI-DLC command line are single-quoted in everything AI-DLC
       "`audit append-raw 'Error: <brief>' \"<body>\"`",
       "`report --result skipped --reason\n  \"<why>\"`",
       `\${aidlcDispatcherInvocation("orchestrate next")} --new-intent --scope <the confirmed scope> "<the words>"`,
-    ].join("\n"))).toHaveLength(8);
+      "--options \"|<A>|<B>|<C>\"",
+    ].join("\n"))).toHaveLength(9);
     expect(doubleQuotedWords([
       "`report --stage x --result skipped --reason '<why>'`",
       "`--unit \"<directive.unit>\" --stage \"<directive.stage>\"`",
-      "--options \"|<A>|<B>|<C>\"",
+      "--option '<A>' --option '<B>'",
       "--user-input \"Approve\"",
       "`/aidlc compose \"<task>\"`",
       "`next compose '<their words>'`",

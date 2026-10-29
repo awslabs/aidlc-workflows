@@ -15625,7 +15625,7 @@ export function isSummaryConfirmationChoice(text: string | undefined): boolean {
 /** A decision whose offered options are the summary's two choices. */
 /**
  * The choices a question's Options field (or the `--options` it was logged
- * with) lists, in order and trimmed. A list that starts with `|` separates
+ * with, its `--option` choices joined in) lists, in order and trimmed. A list that starts with `|` separates
  * its choices with `|`, so a choice may hold a comma ("|Refuse it, with a
  * message|Save it as Untitled"); any other list is split on commas, as every
  * list was written before, and a `|` inside it is part of its choice ("Use

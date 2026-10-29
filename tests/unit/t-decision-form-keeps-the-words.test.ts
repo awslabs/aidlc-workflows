@@ -10,7 +10,7 @@ import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { optionsList, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, createTestProject, seedStateFile } from "../harness/fixtures.ts";
 import { gitBashPath, gitBashSkipReason } from "../harness/git-bash.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
@@ -65,6 +65,38 @@ describe("t-decision-form-keeps-the-words: a choice that names a price is record
       expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
       expect(recorded(p, "Decision")).toBe(QUESTION);
       expect(recorded(p, "Options")).toContain("Show $0.00");
+    });
+  }
+
+  // A question whose choice holds a comma, recorded in the form the protocol
+  // shows for it, then its choices read back as a resumed question reads them.
+  // PowerShell (where it is installed) reads the same command line as well as
+  // bash: the agent's shell on Windows may be either.
+  const commaForm = (): string => {
+    const printed = readFileSync(join(SHIPPED, "aidlc-common/protocols/stage-protocol.md"), "utf-8")
+      .match(/When a choice holds a comma, [^(]*\(`([^`]+)`\)/);
+    expect(printed, "the protocol shows the form for a choice that holds a comma").not.toBeNull();
+    const form = printed![1].startsWith("--") ? printed![1] : `--options ${printed![1]}`;
+    return form.replace("<A>", "Show $0.00, with tax").replace("<B>", "Hide it").replace("<C>", "Other");
+  };
+  const powerShell = ["pwsh", "powershell"].find((name) => spawnSync(name, ["-NoProfile", "-Command", "exit 0"]).status === 0);
+  for (const shell of ["bash", "PowerShell"] as const) {
+    const skipShell = shell === "bash" ? skip : powerShell === undefined ? "no PowerShell here" : null;
+    test.skipIf(skipShell !== null)(`a choice that holds a comma and a price, run through ${shell}`, () => {
+      const p = createTestProject();
+      projects.push(p);
+      seedStateFile(p, "state-mid-ideation.md");
+      const quote = (value: string) => `'${value}'`;
+      const args = `decision --stage feasibility --decision ${quote(QUESTION)} ${commaForm()} --project-dir ${quote(p)}`;
+      const r = shell === "bash"
+        ? spawnSync(process.platform === "win32" ? gitBashPath() : "bash", [
+          "-c", `${[process.execPath, LOG].map(quote).join(" ")} ${args}`,
+        ], { cwd: p, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) })
+        : spawnSync(powerShell!, ["-NoProfile", "-Command", `& ${[process.execPath, LOG].map(quote).join(" ")} ${args}`], {
+          cwd: p, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+      expect(optionsList(recorded(p, "Options"))).toEqual(["Show $0.00, with tax", "Hide it", "Other"]);
     });
   }
 
