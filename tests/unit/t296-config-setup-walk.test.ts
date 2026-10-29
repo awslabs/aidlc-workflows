@@ -969,6 +969,24 @@ describe("t296 first-run config setup walk", () => {
     expect(second.stdout).not.toContain("Fix the");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("closed input at Models is no answer: nothing is recorded and setup still names models", () => {
+    const path = project("aidlc-t296-models-closed-");
+    const env = hookPathEnv("aidlc", true);
+    expect(run(scaffoldArgs(path), path, env, "n\n").status).toBe(0);
+    expect(run(
+      ["config", "providers", "--project-dir", path, "--harness", "claude", "--provider", "current", "--yes"],
+      path,
+      env,
+    ).status).toBe(0);
+    // The walk's gate and the settings layer, then the input ends at Models.
+    const walk = run(["config", "--project-dir", path], path, env, "\n\n");
+    expect(walk.status, walk.stdout + walk.stderr).toBe(0);
+    expect(walk.stdout).toContain("model policy unchanged");
+    expect(walk.stdout).not.toContain("Recorded the models answer");
+    expect(walk.stdout).toMatch(/^\s+models\s+bun \.claude\/tools\/aidlc\.ts config models/m);
+    expect(readConfigDiagnosticRecords(join(path, ".claude")).modelsAnswer).toBeNull();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("--keep records the models answer for a script, and --reset is the way back", () => {
     const path = project("aidlc-t296-models-keep-flag-");
     // A terminal, so the refresh prints its map and ledger; --yes asks nothing.

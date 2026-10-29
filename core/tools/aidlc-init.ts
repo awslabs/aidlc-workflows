@@ -1545,7 +1545,7 @@ function modelsWizard(
   harness: ModelHarness,
   projectDir: string,
   resolved: ResolvedAidlcSettings,
-): ModelPolicyRecord | null {
+): ModelPolicyRecord | null | undefined {
   showModels(current, tiers, harness, projectDir, resolved, {
     mode: "human",
     color: false,
@@ -1556,9 +1556,12 @@ function modelsWizard(
   writeMenuText(
     "Pins bind in both directions, and shipped tiers never raise an agent above the session.\n",
   );
-  const choice = configPrompt(
+  const answer = configPrompt(
     "Models [Enter keep everything, 1 preset, 2 group efforts, 3 set each one myself]:",
-  )?.trim();
+  );
+  // Closed input is no answer (undefined), so it records no kept answer.
+  if (answer === null) return undefined;
+  const choice = answer.trim();
   if (!choice) return current;
   if (choice === "1") {
     writeMenuText(
@@ -11134,7 +11137,7 @@ function kiroModelsPlan(input: {
 function kiroModelsMenu(
   current: ModelPolicyRecord | null,
   kiro: FirstRunKiroSession | null,
-): "keep" | "session" | KiroPreset | "unchanged" {
+): "keep" | "session" | KiroPreset | "unchanged" | "closed" {
   const preset = isKiroPreset(current?.preset) ? current.preset : null;
   const model = kiro ? kiro.session.model : null;
   writeMenuRow(
@@ -11154,7 +11157,9 @@ function kiroModelsMenu(
       : "none recorded",
   );
   if (kiro && !model) writeMenuRow("  ", kiroAutoRecommendation(preset));
-  const choice = configPrompt("Models [Enter keep everything, 1 session model, 2 preset]:")?.trim();
+  const answer = configPrompt("Models [Enter keep everything, 1 session model, 2 preset]:");
+  if (answer === null) return "closed";
+  const choice = answer.trim();
   if (!choice) return "keep";
   if (choice === "1") return "session";
   if (choice !== "2") throw new Error("models selection cancelled");
@@ -11367,6 +11372,10 @@ function prepareModelsSection(
   if (kiroCli && !hasMutationFlags && configInputIsTty()) {
     const kiro = kiroSessionFor(selected.distribution);
     const pick = kiroModelsMenu(current, kiro);
+    if (pick === "closed") {
+      emitResult(success("model policy unchanged"), options);
+      return null;
+    }
     if (pick === "keep" || pick === "unchanged") return modelsAnswerOnly(kept);
     if (pick === "session") {
       if (!kiro) {
@@ -11446,7 +11455,7 @@ function prepareModelsSection(
   if (hasMutationFlags) {
     targetNext = applyModelsFlags(targetCurrent, argv, tiers, current);
   } else {
-    targetNext = modelsWizard(
+    const picked = modelsWizard(
       current,
       targetCurrent,
       tiers,
@@ -11454,6 +11463,11 @@ function prepareModelsSection(
       projectDir,
       resolved,
     );
+    if (picked === undefined) {
+      emitResult(success("model policy unchanged"), options);
+      return null;
+    }
+    targetNext = picked;
   }
   const targetModels = settingsModelsFromHarnessPolicy(
     targetCurrentSettings?.models ?? null,

@@ -520,11 +520,12 @@ aidlc config models --session-model claude-opus-4.8   # Kiro CLI: your personal 
 A change ends with what changed, its undo command and who picks it up (plus
 any setup step still outstanding); `--json` and `--quiet` output are unchanged.
 
-While no policy is recorded, setup asks about models at each refresh until you
-answer. Keeping the models as they are is an answer too: Enter at the models
-question, `unchanged` at first-run setup, or `--keep` records it in
-`<harness>/tools/data/harness.json` beside the providers answer, so setup stops
-asking; `--reset` clears it.
+On Claude Code, Codex, opencode and Kiro CLI, while no policy is recorded, setup
+asks about models at each refresh until you answer (on Kiro IDE, Cursor and
+GitHub Copilot it never asks). Keeping the models as they are is an answer too:
+Enter at the models question, `unchanged` at first-run setup, or `--keep`
+records it in `<harness>/tools/data/harness.json` beside the providers answer,
+so setup stops asking; `--reset` clears it.
 
 `--show --json` prints every agent's effective model, effort, and provenance.
 `--check` is the CI inverse and exits non-zero when the recorded policy is not
